@@ -436,3 +436,17 @@ export function detectFramework(content: string): string | null {
   }
   return null
 }
+
+
+/** OLA200_WAVE_F FE-050 — stacktrace paste must not auto-fire /code generate. */
+const STACKTRACE_RE = /(?:^|\n)\s*(?:at\s+\S+|Traceback \(most recent call last\)|File "[^"]+", line \d+|Exception in thread|Caused by:|TypeError:|ReferenceError:|UnhandledPromiseRejection)/m
+
+export function isStacktracePaste(text: string): boolean {
+  const raw = String(text || "")
+  if (raw.length < 24) return false
+  return STACKTRACE_RE.test(raw)
+}
+
+export function shouldConfirmCodeGenerateFromPaste(text: string): boolean {
+  return isStacktracePaste(text)
+}

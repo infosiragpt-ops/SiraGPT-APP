@@ -39,6 +39,7 @@ test('/api/version returns the expected shape', async () => {
     assert.equal(typeof json.version, 'string');
     assert.equal(typeof json.backend, 'string');
     assert.equal(typeof json.commit, 'string');
+    assert.match(json.commit, /^(unknown|[0-9a-f]{40})$/i);
     assert.equal(typeof json.buildTime, 'string');
     assert.equal(typeof json.node, 'string');
     // Backend semver pinned in package.json — value-level smoke check.

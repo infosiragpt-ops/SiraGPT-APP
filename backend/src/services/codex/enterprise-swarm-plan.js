@@ -1,7 +1,7 @@
 'use strict';
 
-const MAX_LOGICAL_TASKS = 1000;
-const DEFAULT_LOGICAL_TASKS = 24;
+const MAX_LOGICAL_TASKS = 10_000;
+const DEFAULT_LOGICAL_TASKS = 128;
 
 const AUDIT_PERSPECTIVES = Object.freeze([
   'arquitectura y límites de módulos',

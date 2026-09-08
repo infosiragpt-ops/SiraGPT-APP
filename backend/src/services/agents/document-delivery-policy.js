@@ -12,6 +12,7 @@ const WORD_OUTPUT_COMMAND_RE = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|ex
 const WORD_SOURCE_TO_OTHER_FORMAT_RE = /\b(?:convierte|convertir|exporta(?:r|me)?|pasa(?:r|me)?|transforma(?:r|me)?)\b[^.?!]{0,140}\b(?:(?:mi|este|ese|el|la|su)\s+)?(?:documento\s+)?(?:word|docx|documento\s+word)\b[^.?!]{0,100}\b(?:a|como|en|formato|formato\s+de)\s+(?:pdf|excel|xlsx|pptx?|power\s*point|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/i;
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
+const DOCUMENT_SYNTHESIS_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir)\b/i;
 const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|exportes?|exportar|prepares?|preparar|descargues?|descargar)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivos?|documentos?|word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|entregables?)|responde(?:r)?\s+(?:solo|solamente)?\s*(?:en\s+)?(?:el\s+)?chat|solo\s+en\s+chat|sin\s+(?:archivos?|documentos?|descarga|entregables?))\b/i;
 // Read/inquiry intents about a previously-shared document. Matches
 // phrases like "cuál es el título del word", "de qué trata el
@@ -52,6 +53,8 @@ function isSourcePreservingEditLight(requestText, files) {
   if (!hasFiles) return false;
   const text = normalizeIntentText(requestText);
   if (!text) return false;
+  // "realiza una ppt de 30 diapositivas de la tesis.pdf" is a NEW deck, not a PDF edit.
+  if (wantsNewPresentationDeliverable(requestText)) return false;
   const hay = withCollapsedRepeats(text);
   if (requestWantsMinimalProofreadingLight(text)) return true;
 
@@ -61,7 +64,7 @@ function isSourcePreservingEditLight(requestText, files) {
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const documentRegion = /\b(portada|caratula|titulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo|anexo|anexos|apendice)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
-  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?)\b/.test(text);
   if (explicitFreshDeliverable && !/\b(mi|mismo|misma|este|esta|ese|esa|adjunto|subido|cargado)\b/.test(text) && !documentRegion && !preservation) return false;
   return existingDocRef || documentRegion || preservation;
 }
@@ -123,11 +126,48 @@ function estimateWords({ goal, displayGoal, finalText } = {}) {
   return estimate;
 }
 
+/**
+ * True when the user wants a NEW PowerPoint deck (not a surgical edit of an
+ * uploaded .pptx). PDF/Word/images may be attached as *sources*, but the
+ * deliverable is a fresh .pptx — never "preserve PDF + annexes".
+ *
+ * Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf" was
+ * routed through source-preserving PDF edit and returned the PDF with a
+ * generic annex page in under a second.
+ */
+function wantsNewPresentationDeliverable(text) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  const deckNoun = /\b(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|slides?|deck)\b/.test(t);
+  if (!deckNoun) return false;
+  // "agrega 5 ppts más en estas mismas/mimas diapositivas" is an EDIT of the
+  // attached deck, not "create 5 new PowerPoints". The live bug routed that
+  // through docintel + a fresh deck instead of source-preserving add_slide.
+  const addMoreSlides = /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(t);
+  const sameDeckCue = /\b(?:estas?|estos?|mism[oa]s?|mim[oa]s)\s+(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|laminas?)\b/.test(t)
+    || /\ben\s+(?:estas?|estos?|la|el|mi)\s+(?:mism[oa]s?|mim[oa]s\s+)?(?:ppt|pptx|diapositiv\w*|presentaci[oó]n)\b/.test(t)
+    || /##\s*\S+\.(?:pptx?|ppt)\b/.test(t);
+  if (addMoreSlides || sameDeckCue) return false;
+  // Explicit edit of an existing deck → not a *new* deliverable.
+  const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa|estas|estos)\s+(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(t)
+    || /\b(?:edita|modifica|corrige|actualiza|cambia|mejora|reemplaza|borra|elimina|agrega|inserta|anade)\b[^.?!]{0,120}\b(?:(?:en|de|del|la|el|mi|este|esta|estas|mism\w*|mim\w*)\s+)?(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(t)
+    || /\b(?:en|de)\s+(?:la\s+)?diapositiva\s+\d+\b/.test(t);
+  if (editExistingDeck) return false;
+  const createVerb = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame|arlo|arla)?|elabora(?:r|me)?|prepara(?:r|me)?|arma(?:r|me)?|dise[nñ]a(?:r|me)?|dame|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito|construy(?:e|a|e)\w*)\b/.test(t);
+  const slideCount = /\b\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(t)
+    || /\ben\s+\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(t)
+    || /\b(?:de|con)\s+\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(t);
+  return createVerb || slideCount;
+}
+
 function detectFormat(text, requestedFormat) {
   const explicitWordOutput = WORD_OUTPUT_COMMAND_RE.test(text) && !WORD_SOURCE_TO_OTHER_FORMAT_RE.test(text);
   if (explicitWordOutput) return 'docx';
   const requested = compactText(requestedFormat).toLowerCase().replace(/^\./, '');
   if (['docx', 'xlsx', 'pptx', 'pdf'].includes(requested)) return requested;
+  // New-deck creation always wins over "pdf" / "tesis" tokens in the prompt
+  // (those are sources, not the output format).
+  if (wantsNewPresentationDeliverable(text)) return 'pptx';
   const explicitDeck = EXPLICIT_DECK_OUTPUT_RE.test(text);
   const explicitPdf = EXPLICIT_PDF_OUTPUT_RE.test(text);
   const explicitSheet = EXPLICIT_SHEET_OUTPUT_RE.test(text);
@@ -169,6 +209,11 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
     || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
     || EXPLICIT_PDF_OUTPUT_RE.test(requestText);
+  // "resume el Word adjunto en el chat" is an explicit chat answer, even
+  // if a source-preserving edit heuristic would otherwise fire.
+  if (/\ben\s+el\s+chat\b/i.test(requestText) && !explicitOutput) {
+    return 'chat_only';
+  }
   if (Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText) && !explicitFileFormat) {
     return 'chat_only';
   }
@@ -186,6 +231,13 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     return 'chat_only';
   }
   if (documentUnderstanding && !explicitOutput) {
+    // Uploaded Office/PDF + "dame un resumen" / "análisis" must produce a
+    // downloadable file. The live failure was a finished task that only
+    // painted the chat summary — the Word card never appeared.
+    // Short questions ("qué dice el PDF") stay in chat.
+    if (Array.isArray(files) && files.length > 0 && DOCUMENT_SYNTHESIS_RE.test(requestText)) {
+      return 'doc_required';
+    }
     return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
   }
   if (Array.isArray(files) && files.length > 0 && !explicitOutput) {
@@ -269,7 +321,13 @@ function buildDocumentDeliveryPolicy({
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
     if (chatOnlyDirective) return 'El usuario pidio responder en chat y no generar archivos.';
     if (sourceMapChat) return 'Solicitud de mapa de fuentes sobre adjuntos; se responde en chat y no se genera archivo.';
-    if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
+    if (
+      DOCUMENT_UNDERSTANDING_RE.test(requestText)
+      && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)
+      && mode !== 'doc_required'
+    ) {
+      return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
+    }
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     // Los motivos de "sugerencia" (documento opcional, no automático) deben
     // quedar confinados a doc_suggested. Si se filtran a doc_required el
@@ -319,5 +377,6 @@ module.exports = {
   estimateWords,
   hasChatOnlyDirective,
   hasExplicitDocumentOutputRequest,
+  wantsNewPresentationDeliverable,
   wordCount,
 };

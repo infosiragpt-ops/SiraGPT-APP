@@ -25,9 +25,17 @@ const defaultPrisma = (() => {
 // Per-run next-seq cache and append serialization chain (process-local).
 const seqCache = new Map(); // runId -> next seq (Int)
 const appendChains = new Map(); // runId -> Promise (tail of the serialized chain)
+// Durable inserts may finish before an earlier append has completed its
+// best-effort Redis publish. Keep publication FIFO per process as well, so a
+// local fan-out cannot observe seq N before seq N-1. The client still performs
+// gap recovery for cross-instance Redis races.
+const publishChains = new Map(); // runId -> Promise (tail of the publish chain)
 const transcriptSinks = new Map(); // runId -> async (envelope) => void
 
 const MAX_COLLISION_RETRIES = 5;
+const DEFAULT_REPLAY_PAGE_SIZE = 5000;
+const MAX_REPLAY_PAGE_SIZE = 20000;
+const MAX_REPLAY_EVENTS = 100000;
 
 function requireDb(db) {
   if (!db || !db.codexEvent) throw new Error('database unavailable');
@@ -131,9 +139,27 @@ async function appendEvent(runId, type, data, { prisma = defaultPrisma, publish,
     ts: row.createdAt ? new Date(row.createdAt).toISOString() : undefined,
   });
 
-  // Best-effort live fan-out (never blocks the durable path).
+  // Best-effort live fan-out (never blocks the durable path). Publish in the
+  // same order as the per-run durable append chain. Without this second chain,
+  // append N+1 could publish while append N is still waiting on Redis, which
+  // lets a single process create an observable SSE gap.
   const doPublish = publish || ((rid, env_) => pubsub.publishEvent(rid, env_, { env }));
-  await publishWithinDeadline(doPublish, runId, envelope, env);
+  const previousPublish = publishChains.get(runId) || Promise.resolve();
+  const publishTask = previousPublish
+    .catch(() => {})
+    .then(() => publishWithinDeadline(doPublish, runId, envelope, env));
+  publishChains.set(runId, publishTask);
+  // Do not make the durable append wait for the fan-out queue. Each publish
+  // is bounded and ordered, while the caller gets its committed envelope
+  // immediately; replay/gap recovery covers a slow or unavailable publisher.
+  publishTask.then(
+    () => {
+      if (publishChains.get(runId) === publishTask) publishChains.delete(runId);
+    },
+    () => {
+      if (publishChains.get(runId) === publishTask) publishChains.delete(runId);
+    },
+  );
 
   const transcriptSink = transcriptSinks.get(runId);
   if (transcriptSink) {
@@ -151,15 +177,46 @@ async function appendEvent(runId, type, data, { prisma = defaultPrisma, publish,
  * Replay: events with seq > afterSeq, ordered ascending. Returns wire
  * envelopes ready to write to an SSE stream.
  */
-async function listEvents(runId, { afterSeq = 0, limit = 5000, prisma = defaultPrisma } = {}) {
+async function listEvents(runId, options = {}) {
+  const {
+    afterSeq = 0,
+    limit,
+    prisma = defaultPrisma,
+  } = options;
   const db = requireDb(prisma);
-  const rows = await db.codexEvent.findMany({
-    where: { runId, seq: { gt: Number(afterSeq) || 0 } },
-    orderBy: { seq: 'asc' },
-    // `Number(limit) || 5000` turned an explicit limit of 0 into 5000; use a
-    // NaN-only fallback then clamp to [1, 20000].
-    take: Math.max(1, Math.min(20000, Number.isFinite(Number(limit)) ? Number(limit) : 5000)),
-  });
+  // `limit: undefined` is equivalent to omitting the option. In particular it
+  // must not disable the paginated default replay path.
+  const hasExplicitLimit = Object.prototype.hasOwnProperty.call(options, 'limit')
+    && options.limit !== undefined;
+  const requestedLimit = Number(limit);
+  const pageSize = Math.max(
+    1,
+    Math.min(
+      MAX_REPLAY_PAGE_SIZE,
+      hasExplicitLimit && Number.isFinite(requestedLimit)
+        ? requestedLimit
+        : DEFAULT_REPLAY_PAGE_SIZE,
+    ),
+  );
+  const rows = [];
+  let cursor = Number(afterSeq) || 0;
+
+  // A caller that supplies `limit` gets one bounded page for compatibility.
+  // The default path transparently follows pages so a terminal run with more
+  // than 5000 events is fully replayable before the SSE route closes it.
+  do {
+    const page = await db.codexEvent.findMany({
+      where: { runId, seq: { gt: cursor } },
+      orderBy: { seq: 'asc' },
+      take: pageSize,
+    });
+    rows.push(...page);
+    if (!page.length || hasExplicitLimit || page.length < pageSize) break;
+    const nextCursor = page[page.length - 1]?.seq;
+    if (!Number.isInteger(nextCursor) || nextCursor <= cursor) break;
+    cursor = nextCursor;
+  } while (rows.length < MAX_REPLAY_EVENTS);
+
   return rows.map((r) =>
     buildEnvelope({
       runId,
@@ -196,9 +253,11 @@ function _resetSeqCache(runId) {
   if (runId === undefined) {
     seqCache.clear();
     appendChains.clear();
+    publishChains.clear();
   } else {
     seqCache.delete(runId);
     appendChains.delete(runId);
+    publishChains.delete(runId);
   }
 }
 
@@ -210,7 +269,11 @@ function _resetSeqCache(runId) {
  */
 function forgetRun(runId) {
   if (runId === undefined) return;
-  _resetSeqCache(runId);
+  // Keep a queued publish chain alive until its bounded fan-out settles. A
+  // terminal run normally has no later events, but dropping the chain here
+  // would let a late append create a second chain and overtake the tail.
+  seqCache.delete(runId);
+  appendChains.delete(runId);
   transcriptSinks.delete(runId);
 }
 

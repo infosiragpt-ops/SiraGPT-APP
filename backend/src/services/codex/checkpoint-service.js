@@ -30,6 +30,57 @@ const SHA_RE = /^[0-9a-f]{7,40}$/;
 const RECOVERY_REF_RE = /^refs\/sira\/recovery\/[a-z0-9][a-z0-9._-]{7,119}$/;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'; // git hash-object of the empty tree
 const DIFF_CAP = 500_000;
+// Shared with run-service's createRun project-mutation lock. Rollback and
+// restore must take the same distributed lock, otherwise an active-run count
+// can become stale before the first workspace mutation.
+const CODEX_PROJECT_MUTATION_LOCK_CLASS = 0x0c0de;
+const mergeLockTails = new Map();
+
+function mergeLockId(projectId) {
+  const value = String(projectId || '');
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash | 0;
+}
+
+async function withLocalMergeLock(projectId, work) {
+  const key = String(projectId);
+  const previous = mergeLockTails.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  mergeLockTails.set(key, current);
+  await previous.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    release();
+    if (mergeLockTails.get(key) === current) mergeLockTails.delete(key);
+  }
+}
+
+async function withProjectMutationLock(prisma, projectId, work) {
+  return withLocalMergeLock(projectId, async () => {
+    const canAdvisoryLock = prisma
+      && typeof prisma.$transaction === 'function'
+      && typeof prisma.$queryRawUnsafe === 'function';
+    if (!canAdvisoryLock) return work(prisma);
+    return prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'WITH _lock AS (SELECT pg_advisory_xact_lock($1::int, $2::int)) SELECT 1::int AS locked FROM _lock',
+        CODEX_PROJECT_MUTATION_LOCK_CLASS,
+        mergeLockId(projectId),
+      );
+      return work(tx);
+    }, { maxWait: 30_000, timeout: 180_000 });
+  });
+}
+
+async function withProjectMergeLock(prisma, projectId, work) {
+  return withProjectMutationLock(prisma, projectId, () => work());
+}
 
 function isValidSha(sha) {
   return typeof sha === 'string' && SHA_RE.test(sha);
@@ -272,6 +323,23 @@ function requireDb(db) {
   return db;
 }
 
+/** Never mutate a shared project workspace while a Codex run can edit it. */
+async function activeRunGuard(prisma, projectId) {
+  if (typeof prisma?.codexRun?.count !== 'function') return null;
+  try {
+    const active = await prisma.codexRun.count({
+      where: { projectId, status: { in: ['queued', 'running', 'waiting_approval'] } },
+    });
+    return active > 0 ? { error: 'run_in_progress', status: 409 } : null;
+  } catch (error) {
+    return {
+      error: 'run_state_unavailable',
+      status: 503,
+      detail: String(error?.message || error).slice(0, 200),
+    };
+  }
+}
+
 function parseShortstat(text) {
   const out = { additions: 0, deletions: 0, filesChanged: 0 };
   const s = String(text || '');
@@ -387,7 +455,7 @@ async function createCheckpoint({ run, project, deps = {} }) {
   // Hybrid "export to disk": mirror the just-committed source to the host
   // folder. Best-effort and non-blocking — a runner without export support
   // (older sidecar / test mocks) or an export failure must never fail the run.
-  if (typeof runner.exportWorkspace === 'function') {
+  if (!runner.scope?.run && typeof runner.exportWorkspace === 'function') {
     Promise.resolve(runner.exportWorkspace(projectId)).catch(() => {});
   }
   return checkpoint;
@@ -473,16 +541,18 @@ async function finalizeRunCheckpoint({
     }
   }
 
-  const merge = await mergeRunBranch({
-    runner: deps.runner,
-    projectId,
-    runId: run.id,
-    baseBranch,
-    verification,
-    verify,
-    expectedCommitSha: checkpoint?.commitSha || null,
-    expectedTreeSha: deps.expectedTreeSha || null,
-  });
+  const merge = await withProjectMergeLock(deps.prisma || defaultPrisma, projectId, () => (
+    mergeRunBranch({
+      runner: deps.runner,
+      projectId,
+      runId: run.id,
+      baseBranch,
+      verification,
+      verify,
+      expectedCommitSha: checkpoint?.commitSha || null,
+      expectedTreeSha: deps.expectedTreeSha || null,
+    })
+  ));
   return {
     ok: merge.ok,
     status: merge.status,
@@ -492,32 +562,7 @@ async function finalizeRunCheckpoint({
   };
 }
 
-/**
- * Rollback the workspace to a checkpoint: stop dev (if running) → git reset
- * --hard <sha> → restart dev (only if it was running). Idempotent (resetting to
- * the current HEAD is a no-op). Ownership enforced via the project relation.
- */
-async function rollbackCheckpoint({
-  checkpointId,
-  userId,
-  projectId: expectedProjectId = null,
-  runId: expectedRunId = null,
-  deps = {},
-}) {
-  const { runner, prisma = defaultPrisma } = deps;
-  const db = requireDb(prisma);
-  const cp = await db.codexCheckpoint.findFirst({
-    where: {
-      id: checkpointId,
-      project: { userId },
-      ...(expectedProjectId ? { projectId: expectedProjectId } : {}),
-      ...(expectedRunId ? { runId: expectedRunId } : {}),
-    },
-  });
-  if (!cp) return { error: 'not_found', status: 404 };
-  if (!isValidSha(cp.commitSha)) return { error: 'invalid_sha', status: 400 };
-  const projectId = cp.projectId;
-
+async function mutateRollbackCheckpoint({ runner, projectId, cp }) {
   const previous = await runner.exec(projectId, ['git', 'rev-parse', 'HEAD']).catch(() => null);
   const previousSha = isValidSha(String(previous?.stdout || '').trim())
     ? String(previous.stdout).trim()
@@ -573,38 +618,77 @@ async function rollbackCheckpoint({
   };
 }
 
+/**
+ * Rollback the workspace to a checkpoint: stop dev (if running) → git reset
+ * --hard <sha> → restart dev (only if it was running). Idempotent (resetting to
+ * the current HEAD is a no-op). Ownership enforced via the project relation.
+ */
+async function rollbackCheckpoint({
+  checkpointId,
+  userId,
+  projectId: expectedProjectId = null,
+  runId: expectedRunId = null,
+  deps = {},
+}) {
+  const { runner, prisma = defaultPrisma } = deps;
+  const db = requireDb(prisma);
+  const cp = await db.codexCheckpoint.findFirst({
+    where: {
+      id: checkpointId,
+      project: { userId },
+      ...(expectedProjectId ? { projectId: expectedProjectId } : {}),
+      ...(expectedRunId ? { runId: expectedRunId } : {}),
+    },
+  });
+  if (!cp) return { error: 'not_found', status: 404 };
+  if (!isValidSha(cp.commitSha)) return { error: 'invalid_sha', status: 400 };
+  const projectId = cp.projectId;
+  return withProjectMutationLock(db, projectId, async (lockedDb) => {
+    // Recheck after taking the same project lock used by createRun. The count
+    // and the reset are now one serialized mutation, not a TOCTOU pair.
+    const active = await activeRunGuard(lockedDb, projectId);
+    if (active) return active;
+    return mutateRollbackCheckpoint({ runner, projectId, cp });
+  });
+}
+
 async function restoreWorkspaceSha({ projectId, commitSha, deps = {} }) {
   if (!isValidSha(commitSha)) return { ok: false, error: 'invalid_sha' };
-  let preservation;
-  try {
-    preservation = await preserveWorkspaceChanges({ runner: deps.runner, projectId });
-  } catch (error) {
-    return {
-      ok: false,
-      error: 'workspace_preservation_failed',
-      detail: String(error?.code || error?.message || error).slice(0, 400),
-    };
-  }
-  const reset = await deps.runner.exec(projectId, ['git', 'reset', '--hard', commitSha]);
-  if (reset?.exitCode === 0) {
-    return {
-      ok: true,
-      commitSha,
-      recovery: preservation.preserved
-        ? { ref: preservation.recoveryRef, files: preservation.files }
-        : null,
-    };
-  }
-  let recoveryRestored = !preservation.preserved;
-  if (preservation.preserved) {
-    const recovered = await recoverWorkspaceChanges({
-      runner: deps.runner,
-      projectId,
-      recoveryRef: preservation.recoveryRef,
-    }).catch(() => null);
-    recoveryRestored = recovered?.ok === true;
-  }
-  return { ok: false, error: 'reset_failed', recoveryRestored };
+  const db = deps.prisma || defaultPrisma;
+  return withProjectMutationLock(db, projectId, async (lockedDb) => {
+    const active = await activeRunGuard(lockedDb, projectId);
+    if (active) return { ok: false, ...active };
+    let preservation;
+    try {
+      preservation = await preserveWorkspaceChanges({ runner: deps.runner, projectId });
+    } catch (error) {
+      return {
+        ok: false,
+        error: 'workspace_preservation_failed',
+        detail: String(error?.code || error?.message || error).slice(0, 400),
+      };
+    }
+    const reset = await deps.runner.exec(projectId, ['git', 'reset', '--hard', commitSha]);
+    if (reset?.exitCode === 0) {
+      return {
+        ok: true,
+        commitSha,
+        recovery: preservation.preserved
+          ? { ref: preservation.recoveryRef, files: preservation.files }
+          : null,
+      };
+    }
+    let recoveryRestored = !preservation.preserved;
+    if (preservation.preserved) {
+      const recovered = await recoverWorkspaceChanges({
+        runner: deps.runner,
+        projectId,
+        recoveryRef: preservation.recoveryRef,
+      }).catch(() => null);
+      recoveryRestored = recovered?.ok === true;
+    }
+    return { ok: false, error: 'reset_failed', recoveryRestored };
+  });
 }
 
 /** Unified diff of a checkpoint vs its parent (or the empty tree for the first commit). */
@@ -662,5 +746,7 @@ module.exports = {
   captureWorkspaceTree,
   commitTreeSha,
   publicCheckpoint,
+  withProjectMutationLock,
+  withProjectMergeLock,
   EMPTY_TREE,
 };

@@ -1,8 +1,8 @@
 'use strict';
 
-const DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS = 400;
-const MAX_SAFE_SIMULTANEOUS_DOCUMENTS = 500;
-const DEFAULT_MAX_DOCUMENTS_PER_FAMILY = 100;
+const DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS = 1000;
+const MAX_SAFE_SIMULTANEOUS_DOCUMENTS = 1000;
+const DEFAULT_MAX_DOCUMENTS_PER_FAMILY = 250;
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -13,10 +13,9 @@ function clampPositiveInt(value, fallback, max) {
   return Math.min(parsePositiveInt(value, fallback), max);
 }
 
-// Product contract: SiraGPT can upload/read up to 400 documents in one turn:
-// 100 PDFs + 100 Word + 100 PowerPoint + 100 Excel. Keep a hard safety cap so
-// one request cannot accidentally fan out thousands of files and overwhelm
-// extraction, RAG indexing, or prompt planning.
+// Product contract: SiraGPT can upload/read up to 1000 documents in one turn
+// (250 per family: PDF, Word, PowerPoint, Excel). Analyze one-by-one; the
+// safety cap prevents unbounded fan-out.
 const MAX_SIMULTANEOUS_DOCUMENTS = Math.min(
   MAX_SAFE_SIMULTANEOUS_DOCUMENTS,
   parsePositiveInt(process.env.SIRAGPT_MAX_SIMULTANEOUS_DOCUMENTS, DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS),

@@ -97,6 +97,7 @@ describe('system-cron', () => {
         'detect-idle-orgs',
         'detect-idle-users',
         'failed-email-retry',
+        'growth-gauges',
         'hard-delete-deleted-users',
         'prune-api-usage',
         'research-saved-search-alerts',

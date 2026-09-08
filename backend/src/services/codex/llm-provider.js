@@ -16,11 +16,15 @@
  */
 
 const { getCerebrasConfig, createCerebrasClient } = require('../ai/cerebras-client');
-const { toAnthropicMessages } = require('./anthropic-turn');
+const { toAnthropicMessages, cacheStableTranscriptPrefix, cacheEnabled } = require('./anthropic-turn');
 
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.6';
 const FAILOVER_TTL_MS = 5 * 60 * 1000;
+// Anthropic silently ignores cache breakpoints on prefixes under ~1024 tokens,
+// and each request only gets 4 breakpoints — don't spend one on a system
+// prompt too small to ever cache. Codex system prompts are many KB in practice.
+const CACHE_MIN_SYSTEM_CHARS = 1024;
 
 const LADDER = ['anthropic', 'openrouter', 'cerebras'];
 
@@ -130,10 +134,20 @@ async function callAnthropic({
   const client = new Anthropic({ apiKey });
   const model = modelFor('anthropic', env, modelOverride);
   const { system, messages: turns } = toAnthropicPayload(messages);
+  // Prompt caching (CODEX_PROMPT_CACHE, default ON — GA, no beta header):
+  // breakpoint on the system block plus the last completed turn of the stable
+  // transcript prefix, so each agent step re-reads the shared prefix from
+  // cache instead of re-processing it as full-price input.
+  const useCache = cacheEnabled(env);
+  const cacheSystem = useCache && typeof system === 'string' && system.length >= CACHE_MIN_SYSTEM_CHARS;
   const request = {
     model,
-    system: system || undefined,
-    messages: turns,
+    system: system
+      ? (cacheSystem
+        ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+        : system)
+      : undefined,
+    messages: useCache ? cacheStableTranscriptPrefix(turns) : turns,
     temperature,
     max_tokens: maxTokens,
   };

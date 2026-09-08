@@ -5,9 +5,9 @@
  *
  * Departments are stored in CodexProject.brief.companyDepartments so the
  * company survives browser changes and the proactive backend can actually use
- * units created by the user. `desiredAgents` is logical capacity: research and
- * review work may fan out, while workspace writers remain serialized until the
- * sandbox provider supplies one isolated worktree per writer.
+ * units created by the user. `desiredAgents` is logical capacity; durable
+ * DepartmentPool rows hold bounded physical capacity for isolated worktree
+ * writers.
  *
  * Built-in edits/hides live in brief.companyDepartmentOverrides and
  * brief.companyDepartmentHidden so core units can be customized without
@@ -16,7 +16,11 @@
 
 const MAX_CUSTOM_DEPARTMENTS = 40;
 const MAX_AGENTS_PER_DEPARTMENT = 1000;
-const { mutateProjectBrief } = require('./project-brief-store');
+const {
+  coerceBriefRecord,
+  mutateProjectBrief,
+} = require('./project-brief-store');
+const departmentPools = require('./department-pools');
 
 const BUILT_IN_DEPARTMENTS = Object.freeze([
   {
@@ -259,7 +263,7 @@ function applyOverride(base, override) {
 }
 
 function readDepartments(project) {
-  const brief = asRecord(project?.brief);
+  const brief = coerceBriefRecord(project?.brief);
   const custom = normalizeCustomDepartments(brief.companyDepartments);
   const overrides = normalizeOverrides(brief.companyDepartmentOverrides);
   const hidden = new Set(normalizeHidden(brief.companyDepartmentHidden));
@@ -275,22 +279,46 @@ function readDepartments(project) {
   ];
 }
 
-function capacitySummary(departments) {
+function capacitySummary(departments, pools = []) {
   const enabled = (Array.isArray(departments) ? departments : []).filter((item) => item?.enabled !== false);
   const logicalAgents = enabled.reduce((sum, item) => sum + boundedAgents(item?.desiredAgents, 1), 0);
+  const physical = departmentPools.poolCapacity(pools);
   return {
     departments: enabled.length,
     logicalAgents,
-    writerConcurrency: 1,
-    strategy: 'parallel_readers_serialized_writer',
+    departmentPools: physical.pools,
+    physicalAgents: physical.physicalAgents,
+    writerConcurrency: physical.writerConcurrency,
+    dailyBudgetUsd: physical.dailyBudgetUsd,
+    strategy: 'isolated_worktrees_serialized_merge',
   };
+}
+
+async function syncPoolForDepartment({ prisma, project, departments, requestedId, payload }) {
+  const normalizedId = slug(requestedId);
+  const row = departments.find((department) => (
+    department.id === normalizedId
+    || department.id === `custom-${normalizedId}`
+    || department.name.toLowerCase() === boundedText(payload?.name, 90).toLowerCase()
+  ));
+  if (!row) return null;
+  return departmentPools.upsertDepartmentPool({
+    prisma,
+    project,
+    departmentId: row.id,
+    size: payload?.poolSize ?? row.desiredAgents,
+    dailyBudgetUsd: Object.prototype.hasOwnProperty.call(asRecord(payload), 'dailyBudgetUsd')
+      ? payload.dailyBudgetUsd
+      : undefined,
+    enabled: row.enabled !== false,
+  });
 }
 
 async function writeDepartments({ prisma, project, departments }) {
   if (!prisma?.codexProject?.update || !project?.id) return [];
   const custom = normalizeCustomDepartments(departments);
   let source = project;
-  let nextBrief = asRecord(project.brief);
+  let nextBrief = coerceBriefRecord(project.brief);
   await mutateProjectBrief({
     prisma,
     projectId: project.id,
@@ -307,7 +335,7 @@ async function writeDepartments({ prisma, project, departments }) {
 async function mutateDepartmentMeta({ prisma, project, mutate }) {
   if (!prisma?.codexProject?.update || !project?.id) return readDepartments(project);
   let source = project;
-  let nextBrief = asRecord(project.brief);
+  let nextBrief = coerceBriefRecord(project.brief);
   await mutateProjectBrief({
     prisma,
     projectId: project.id,
@@ -335,7 +363,7 @@ async function upsertDepartment({ prisma, project, department }) {
     const base = BUILT_IN_DEPARTMENTS.find((item) => item.id === requestedId);
     const name = boundedText(payload.name, 90) || base?.name || '';
     if (!name) throw new Error('department_name_required');
-    return mutateDepartmentMeta({
+    const rows = await mutateDepartmentMeta({
       prisma,
       project: source,
       mutate: (brief) => {
@@ -364,16 +392,32 @@ async function upsertDepartment({ prisma, project, department }) {
         };
       },
     });
+    await syncPoolForDepartment({
+      prisma,
+      project: source,
+      departments: rows,
+      requestedId,
+      payload,
+    });
+    return rows;
   }
 
-  const current = normalizeCustomDepartments(asRecord(source.brief).companyDepartments);
+  const current = normalizeCustomDepartments(coerceBriefRecord(source.brief).companyDepartments);
   const normalized = normalizeDepartment(department, { custom: true, index: current.length });
   if (!normalized) throw new Error('department_name_required');
   const next = [
     ...current.filter((item) => item.id !== normalized.id && item.name.toLowerCase() !== normalized.name.toLowerCase()),
     normalized,
   ];
-  return writeDepartments({ prisma, project: source, departments: next });
+  const rows = await writeDepartments({ prisma, project: source, departments: next });
+  await syncPoolForDepartment({
+    prisma,
+    project: source,
+    departments: rows,
+    requestedId: normalized.id,
+    payload,
+  });
+  return rows;
 }
 
 async function deleteDepartment({ prisma, project, departmentId }) {
@@ -387,7 +431,7 @@ async function deleteDepartment({ prisma, project, departmentId }) {
 
   const builtInIds = new Set(BUILT_IN_DEPARTMENTS.map((item) => item.id));
   if (builtInIds.has(id)) {
-    return mutateDepartmentMeta({
+    const rows = await mutateDepartmentMeta({
       prisma,
       project: source,
       mutate: (brief) => {
@@ -402,12 +446,16 @@ async function deleteDepartment({ prisma, project, departmentId }) {
         };
       },
     });
+    await departmentPools.removeDepartmentPool({ prisma, project: source, departmentId: id });
+    return rows;
   }
 
-  const current = normalizeCustomDepartments(asRecord(source.brief).companyDepartments);
+  const current = normalizeCustomDepartments(coerceBriefRecord(source.brief).companyDepartments);
   if (!current.some((item) => item.id === id)) throw new Error('department_not_found');
   const next = current.filter((item) => item.id !== id);
-  return writeDepartments({ prisma, project: source, departments: next });
+  const rows = await writeDepartments({ prisma, project: source, departments: next });
+  await departmentPools.removeDepartmentPool({ prisma, project: source, departmentId: id });
+  return rows;
 }
 
 module.exports = {

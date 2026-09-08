@@ -13,6 +13,7 @@ const {
   DiscordAdapter,
   SlackAdapter,
   WhatsAppAdapter,
+  EmailAdapter,
   KINDS,
 } = require('../src/channels');
 
@@ -59,11 +60,15 @@ describe('ChannelMetrics', () => {
 // ── ChannelAdapter base ──────────────────────────────────────────────────────
 
 describe('ChannelAdapter', () => {
-  it('allowlist permits all when empty', () => {
+  it('fails closed with pairing policy when the allowlist is empty', () => {
     class A extends ChannelAdapter {}
     const a = new A('x');
-    assert.equal(a.isAllowed(undefined), true);
-    assert.equal(a.isAllowed('any'), true);
+    assert.equal(a.isAllowed(undefined), false);
+    assert.equal(a.isAllowed('any'), false);
+    const opened = new A('open', { dmPolicy: 'open', allowFrom: ['*'] });
+    assert.equal(opened.isAllowed('any'), true);
+    const unsafeOpen = new A('open-without-wildcard', { dmPolicy: 'open' });
+    assert.equal(unsafeOpen.isAllowed('any'), false);
   });
 
   it('allowlist enforces membership when configured', () => {
@@ -84,12 +89,35 @@ describe('ChannelAdapter', () => {
   });
 });
 
+describe('EmailAdapter', () => {
+  it('implements receive, send and listThreads without accepting untrusted web input', async () => {
+    const adapter = new EmailAdapter({
+      dmPolicy: 'allowlist',
+      allowFrom: ['customer@example.test'],
+      receiveImpl: async () => ({
+        id: 'mail-1',
+        from: 'customer@example.test',
+        threadId: 'thread-1',
+        body: 'Necesito una cotización',
+      }),
+      sendImpl: async (message) => ({ id: 'sent-1', message }),
+      listThreadsImpl: async () => [{ id: 'thread-1' }],
+    });
+    assert.equal(await adapter.receive({ trustedInternal: false }), null);
+    const inbound = await adapter.receive({ trustedInternal: true });
+    assert.equal(inbound.id, 'mail-1');
+    assert.equal(inbound.chatId, 'thread-1');
+    assert.equal((await adapter.send({ text: 'Borrador' })).id, 'sent-1');
+    assert.deepEqual(await adapter.listThreads(), [{ id: 'thread-1' }]);
+  });
+});
+
 // ── TelegramAdapter ──────────────────────────────────────────────────────────
 
 describe('TelegramAdapter', () => {
-  it('verify accepts when no secret configured', async () => {
+  it('verify fails closed when no secret is configured', async () => {
     const a = new TelegramAdapter({ botToken: 't' });
-    assert.equal(await a.verify({ headers: {} }), true);
+    assert.equal(await a.verify({ headers: {} }), false);
   });
 
   it('verify checks secret token header', async () => {

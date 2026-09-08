@@ -1,0 +1,223 @@
+'use strict';
+
+/**
+ * business-channels/pairing — shared DM pairing policy and primitives.
+ *
+ * Native rewrite of OpenClaw's channel-pairing security model (MIT,
+ * github.com/openclaw/openclaw src/pairing). This module stays storage
+ * agnostic: the in-memory service is useful for adapters/tests, while the
+ * Codex business-channel service persists the same policy in Prisma.
+ *
+ * Security decisions preserved from the reference implementation:
+ *  - 8-char codes from a 32-symbol alphabet without I/O/0/1.
+ *  - Pending requests expire after 60 minutes.
+ *  - At most 3 pending requests per channel account.
+ *  - Re-contact while pending returns the same code.
+ *  - `open` still requires the explicit `*` wildcard.
+ */
+
+const crypto = require('node:crypto');
+
+const PAIRING_CODE_LENGTH = 8;
+const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PAIRING_CODE_MAX_ATTEMPTS = 500;
+const PENDING_TTL_MS = 60 * 60 * 1000;
+const PENDING_MAX_PER_ACCOUNT = 3;
+const DM_POLICIES = new Set(['pairing', 'allowlist', 'open', 'closed']);
+
+function normalizeDmPolicy(value) {
+  return DM_POLICIES.has(value) ? value : 'pairing';
+}
+
+function normalizeAllowFrom(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => typeof entry === 'string' && entry.length > 0);
+}
+
+function accountKey(channel, accountId) {
+  return `${channel}\0${accountId || 'default'}`;
+}
+
+/**
+ * One fail-closed policy predicate shared by the generic adapters and the
+ * Prisma-backed business-channel runtime.
+ */
+function isSenderAllowed({
+  senderId,
+  dmPolicy = 'pairing',
+  allowFrom = [],
+  storedAllow = new Set(),
+}) {
+  if (!senderId) return false;
+  const policy = normalizeDmPolicy(dmPolicy);
+  if (policy === 'closed') return false;
+
+  const configured = new Set(normalizeAllowFrom(allowFrom));
+  const stored = storedAllow instanceof Set
+    ? storedAllow
+    : new Set(normalizeAllowFrom(storedAllow));
+  if (configured.has(senderId) || stored.has(senderId)) return true;
+  return policy === 'open' && (configured.has('*') || stored.has('*'));
+}
+
+function createMemoryStore() {
+  const pending = new Map(); // accountKey -> Map<senderId, {code, createdAt, meta}>
+  const allow = new Map(); // accountKey -> Set<senderId | '*'>
+  return {
+    async listPending(key) { return pending.get(key) || new Map(); },
+    async setPending(key, map) { pending.set(key, map); },
+    async listAllow(key) { return allow.get(key) || new Set(); },
+    async addAllow(key, senderId) {
+      if (!allow.has(key)) allow.set(key, new Set());
+      allow.get(key).add(senderId);
+    },
+    async removeAllow(key, senderId) { allow.get(key)?.delete(senderId); },
+  };
+}
+
+function generatePairingCode(existingCodes = new Set()) {
+  for (let attempt = 0; attempt < PAIRING_CODE_MAX_ATTEMPTS; attempt += 1) {
+    let out = '';
+    for (let i = 0; i < PAIRING_CODE_LENGTH; i += 1) {
+      out += PAIRING_CODE_ALPHABET[crypto.randomInt(0, PAIRING_CODE_ALPHABET.length)];
+    }
+    if (!existingCodes.has(out)) return out;
+  }
+  throw new Error(`failed to generate unique pairing code after ${PAIRING_CODE_MAX_ATTEMPTS} attempts`);
+}
+
+/**
+ * Derive a recoverable, stable code without storing plaintext. The alphabet
+ * has exactly 32 symbols, so masking five bits per digest byte is uniform.
+ */
+function derivePairingCode({ secret, scope }) {
+  if (typeof secret !== 'string' || secret.length === 0) {
+    throw new Error('pairing_secret_required');
+  }
+  if (typeof scope !== 'string' || scope.length === 0) {
+    throw new Error('pairing_scope_required');
+  }
+  const digest = crypto.createHmac('sha256', secret).update(scope).digest();
+  let code = '';
+  for (let index = 0; index < PAIRING_CODE_LENGTH; index += 1) {
+    code += PAIRING_CODE_ALPHABET[digest[index] & 31];
+  }
+  return code;
+}
+
+function createPairingService({ store = createMemoryStore(), now = () => Date.now() } = {}) {
+  function pruneExpired(map, nowMs) {
+    for (const [senderId, request] of map) {
+      if (
+        !request
+        || typeof request.createdAt !== 'number'
+        || nowMs - request.createdAt > PENDING_TTL_MS
+      ) {
+        map.delete(senderId);
+      }
+    }
+    while (map.size > PENDING_MAX_PER_ACCOUNT) {
+      let oldest = null;
+      for (const [senderId, request] of map) {
+        if (!oldest || request.createdAt < oldest.createdAt) {
+          oldest = { senderId, createdAt: request.createdAt };
+        }
+      }
+      if (!oldest) break;
+      map.delete(oldest.senderId);
+    }
+    return map;
+  }
+
+  async function isAllowed({
+    channel,
+    accountId,
+    senderId,
+    dmPolicy = 'pairing',
+    allowFrom = [],
+  }) {
+    const storedAllow = await store.listAllow(accountKey(channel, accountId));
+    return isSenderAllowed({
+      senderId,
+      dmPolicy,
+      allowFrom,
+      storedAllow,
+    });
+  }
+
+  async function gateInbound({
+    channel,
+    accountId,
+    senderId,
+    dmPolicy = 'pairing',
+    allowFrom = [],
+    meta = {},
+  }) {
+    if (!channel || !senderId) return { status: 'dropped', reason: 'invalid_sender' };
+    const policy = normalizeDmPolicy(dmPolicy);
+    if (await isAllowed({ channel, accountId, senderId, dmPolicy: policy, allowFrom })) {
+      return { status: 'allowed' };
+    }
+    if (policy !== 'pairing') return { status: 'dropped', reason: 'not_allowlisted' };
+
+    const key = accountKey(channel, accountId);
+    const map = pruneExpired(await store.listPending(key), now());
+    const existing = map.get(senderId);
+    if (existing) {
+      await store.setPending(key, map);
+      return { status: 'pairing_required', code: existing.code, created: false };
+    }
+
+    const inUse = new Set([...map.values()].map((request) => request.code));
+    const code = generatePairingCode(inUse);
+    map.set(senderId, { code, createdAt: now(), meta });
+    await store.setPending(key, pruneExpired(map, now()));
+    return { status: 'pairing_required', code, created: true };
+  }
+
+  async function approve({ channel, accountId, code }) {
+    const key = accountKey(channel, accountId);
+    const map = pruneExpired(await store.listPending(key), now());
+    for (const [senderId, request] of map) {
+      if (request.code === String(code || '').trim().toUpperCase()) {
+        map.delete(senderId);
+        await store.setPending(key, map);
+        await store.addAllow(key, senderId);
+        return { ok: true, senderId };
+      }
+    }
+    await store.setPending(key, map);
+    return { ok: false, error: 'code_not_found' };
+  }
+
+  async function revoke({ channel, accountId, senderId }) {
+    await store.removeAllow(accountKey(channel, accountId), senderId);
+    return { ok: true };
+  }
+
+  async function listPending({ channel, accountId }) {
+    const key = accountKey(channel, accountId);
+    const map = pruneExpired(await store.listPending(key), now());
+    await store.setPending(key, map);
+    return [...map.entries()].map(([senderId, request]) => ({
+      senderId,
+      code: request.code,
+      createdAt: request.createdAt,
+    }));
+  }
+
+  return { gateInbound, approve, revoke, isAllowed, listPending };
+}
+
+module.exports = {
+  createPairingService,
+  createMemoryStore,
+  derivePairingCode,
+  generatePairingCode,
+  isSenderAllowed,
+  normalizeDmPolicy,
+  PAIRING_CODE_LENGTH,
+  PAIRING_CODE_ALPHABET,
+  PENDING_TTL_MS,
+  PENDING_MAX_PER_ACCOUNT,
+};

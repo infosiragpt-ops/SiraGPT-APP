@@ -53,3 +53,15 @@ test('parallel agents are read-only and writers are serialized into the integrat
   assert.ok(tasks.slice(0, -1).every((task) => task.role !== 'writer'));
   assert.equal(tasks.filter((task) => task.role === 'integrator').length, 1);
 });
+
+test('scales to 10_000 logical research agents with a single integrator', () => {
+  const tasks = buildEnterpriseSwarmTasks({
+    plan: plan(),
+    objective: 'Escalar la flota a capacidad enterprise.',
+    logicalTasks: 10_000,
+  });
+  assert.equal(tasks.length, 10_000);
+  assert.equal(tasks.filter((task) => task.role === 'integrator').length, 1);
+  assert.equal(tasks.at(-1).key, 'swarm-integrate');
+  assert.ok(tasks.filter((task) => task.role === 'read-only').length >= 9_000);
+});

@@ -18,6 +18,32 @@
 
 import type { CodeFiles } from "./code-workspace-utils"
 
+// OLA200_WAVE_F FE-051 — cancel the previous preview build before starting another.
+let __previewBuildGeneration = 0
+let __previewBuildAbort: AbortController | null = null
+
+export function currentPreviewBuildGeneration(): number {
+  return __previewBuildGeneration
+}
+
+export function cancelPreviewBuild(reason = "superseded"): void {
+  try { __previewBuildAbort?.abort() } catch { /* ignore */ }
+  __previewBuildAbort = null
+  void reason
+}
+
+export function beginPreviewBuild(): { generation: number; signal: AbortSignal } {
+  cancelPreviewBuild("superseded")
+  __previewBuildGeneration += 1
+  __previewBuildAbort = new AbortController()
+  return { generation: __previewBuildGeneration, signal: __previewBuildAbort.signal }
+}
+
+export function isCurrentPreviewBuild(generation: number): boolean {
+  return generation === __previewBuildGeneration
+}
+
+
 export type PreviewKind = "html" | "react" | "markdown" | "svg" | "unsupported" | "empty"
 
 export type PreviewResult = {
@@ -27,6 +53,51 @@ export type PreviewResult = {
   entry: string | null
   /** Optional human note for unsupported/empty states. */
   note?: string
+}
+
+const PREVIEW_REVISION_OFFSET = 0x811c9dc5
+const PREVIEW_REVISION_PRIME = 0x01000193
+const previewFileRevisionCache = new WeakMap<CodeFiles[string], string>()
+
+function hashPreviewValue(value: string, seed = PREVIEW_REVISION_OFFSET): number {
+  let hash = seed
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, PREVIEW_REVISION_PRIME) >>> 0
+  }
+  return hash
+}
+
+function previewFileRevision(file: CodeFiles[string]): string {
+  const cached = previewFileRevisionCache.get(file)
+  if (cached) return cached
+
+  const content = file.content ?? ""
+  const hash = hashPreviewValue(content).toString(16).padStart(8, "0")
+  const revision = `${content.length}:${hash}`
+  previewFileRevisionCache.set(file, revision)
+  return revision
+}
+
+/**
+ * Stable, content-sensitive revision for preview auto-run de-duplication.
+ *
+ * CodeFile objects are immutable in the workspace reducer, so a WeakMap lets
+ * unchanged files reuse their content hash while an edited file gets a fresh
+ * hash. Sorting paths makes the result independent of object insertion order.
+ */
+export function workspacePreviewRevision(files: CodeFiles): string {
+  const paths = Object.keys(files).sort()
+  let workspaceHash = PREVIEW_REVISION_OFFSET
+
+  for (const path of paths) {
+    const file = files[path]
+    if (!file) continue
+    const entry = `${path.length}:${path}:${previewFileRevision(file)}\u0000`
+    workspaceHash = hashPreviewValue(entry, workspaceHash)
+  }
+
+  return `${paths.length}:${workspaceHash.toString(16).padStart(8, "0")}`
 }
 
 function ext(path: string): string {
@@ -44,15 +115,20 @@ const REACT_PREVIEW_EXTS = new Set(["jsx", "tsx"])
 // Forwarded into every previewed document — captures console + errors and
 // posts them to the parent window. Uses string concat (no backticks) so it
 // stays safe inside this module's template literals.
-const CONSOLE_BRIDGE = `<script>
+function consoleBridge(nonce: string): string {
+  const safeNonce = JSON.stringify(String(nonce || ""))
+  return `<script>
 (function(){
+  var nonce=${safeNonce};
+  window.__sgptPreviewNonce=nonce;
   function ser(a){try{if(a instanceof Error)return a.stack||a.message;return typeof a==='object'?JSON.stringify(a):String(a)}catch(e){return String(a)}}
-  function send(level,args){try{parent.postMessage({type:'sgpt-preview-console',level:level,text:Array.prototype.map.call(args,ser).join(' ')},'*')}catch(e){}}
+  function send(level,args){try{parent.postMessage({type:'sgpt-preview-console',level:level,nonce:nonce,text:Array.prototype.map.call(args,ser).join(' ')},'*')}catch(e){}}
   ['log','info','warn','error','debug'].forEach(function(k){var o=console[k]?console[k].bind(console):function(){};console[k]=function(){send(k,arguments);o.apply(null,arguments)}});
   window.addEventListener('error',function(e){send('error',[(e.message||'Error')+' ('+(e.filename||'preview').split('/').pop()+':'+e.lineno+')'])});
   window.addEventListener('unhandledrejection',function(e){send('error',['Unhandled rejection: '+ser(e.reason)])});
 })();
 </script>`
+}
 
 const PREVIEW_SELECTOR_BRIDGE = `<script>
 (function(){
@@ -65,7 +141,7 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
   var pendingTarget = null;
   var frame = 0;
   var style = null;
-  function send(type, extra){try{var payload=extra||{};payload.type=type;parent.postMessage(payload,'*')}catch(e){}}
+  function send(type, extra){try{var payload=extra||{};payload.type=type;payload.nonce=window.__sgptPreviewNonce||'';parent.postMessage(payload,'*')}catch(e){}}
   function norm(value, limit){
     return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, limit || 220);
   }
@@ -278,13 +354,16 @@ const PREVIEW_SELECTOR_BRIDGE = `<script>
   }
   window.addEventListener('message', function(event){
     var msg = event.data || {};
+    if (msg.nonce !== (window.__sgptPreviewNonce || '')) return;
     if (msg.type === 'sgpt-preview-select-start') start();
     if (msg.type === 'sgpt-preview-select-cancel') cleanup('Selección cancelada.');
   });
 })();
 </script>`
 
-const PREVIEW_BRIDGES = `${CONSOLE_BRIDGE}\n${PREVIEW_SELECTOR_BRIDGE}`
+function previewBridges(nonce: string): string {
+  return `${consoleBridge(nonce)}\n${PREVIEW_SELECTOR_BRIDGE}`
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -300,7 +379,7 @@ function findFile(files: CodeFiles, ref: string): string | null {
   return null
 }
 
-function buildHtmlDocument(files: CodeFiles, entry: string): string {
+function buildHtmlDocument(files: CodeFiles, entry: string, nonce = ""): string {
   let html = files[entry]?.content ?? ""
 
   // Inline local stylesheets: <link rel="stylesheet" href="styles.css">
@@ -322,11 +401,11 @@ function buildHtmlDocument(files: CodeFiles, entry: string): string {
 
   // Inject the console bridge as early as possible.
   if (/<head[^>]*>/i.test(html)) {
-    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${PREVIEW_BRIDGES}`)
+    html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${previewBridges(nonce)}`)
   } else if (/<html[^>]*>/i.test(html)) {
-    html = html.replace(/<html[^>]*>/i, (m) => `${m}\n${PREVIEW_BRIDGES}`)
+    html = html.replace(/<html[^>]*>/i, (m) => `${m}\n${previewBridges(nonce)}`)
   } else {
-    html = `${PREVIEW_BRIDGES}\n${html}`
+    html = `${previewBridges(nonce)}\n${html}`
   }
   return html
 }
@@ -339,10 +418,14 @@ function stripModuleSyntax(code: string): string {
     .replace(/^\s*import\s*\{[\s\S]*?\}\s*from\s*['"][^'"]+['"]\s*;?\s*$/gm, "")
     .replace(/^\s*import\s+[\w*\s,{}]*\s+from\s*['"][^'"]+['"]\s*;?\s*$/gm, "")
     .replace(/^\s*import\s+['"][^'"]+['"]\s*;?\s*$/gm, "")
-    .replace(/export\s+default\s+(function|class)/g, "$1")
-    .replace(/export\s+default\s+/g, "window.__sgpt_default = ")
-    .replace(/export\s+(const|let|var|async\s+function|function|class)/g, "$1")
-    .replace(/^\s*export\s*\{[^}]*\}\s*;?\s*$/gm, "")
+    .replace(
+      /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*['"][^'"]+['"]\s*;?\s*$/gm,
+      "",
+    )
+    .replace(
+      /^\s*export\s+(?:type\s+)?\{[\s\S]*?\}\s*from\s*['"][^'"]+['"]\s*;?\s*$/gm,
+      "",
+    )
 }
 
 // Last top-level Capitalized declaration — a render fallback when the code
@@ -355,7 +438,7 @@ function lastComponentName(code: string): string | null {
   return names.length ? names[names.length - 1] : null
 }
 
-function buildReactDocument(files: CodeFiles, entry: string | null): string {
+function buildReactDocument(files: CodeFiles, entry: string | null, nonce = ""): string {
   const jsPaths = Object.keys(files).filter((p) => JS_EXTS.has(ext(p)))
   // Order: dependencies first, entry last, so component consts are defined
   // before the entry renders them.
@@ -402,6 +485,7 @@ function buildReactDocument(files: CodeFiles, entry: string | null): string {
   const footer = `
 const __sgptTarget = (typeof App !== 'undefined' && App)
   || window.__sgpt_default
+  || (typeof exports !== 'undefined' && exports.default)
   || (typeof Page !== 'undefined' && Page)
   || (typeof Main !== 'undefined' && Main)
   ${fallbackComp ? `|| (typeof ${fallbackComp} !== 'undefined' && ${fallbackComp})` : ""}
@@ -423,7 +507,7 @@ try {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-${PREVIEW_BRIDGES}
+${previewBridges(nonce)}
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   html,body{margin:0;padding:0;background:#fff;font-family:Inter,system-ui,sans-serif}
@@ -451,7 +535,7 @@ ${workspaceCss}
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react,typescript">
+<script id="sgpt-react-source" type="text/plain">
 const { useState, useEffect, useMemo, useRef, useCallback, useReducer, useContext, useLayoutEffect, Fragment, createContext } = React;
 const _ = window._;
 const Recharts = window.Recharts;
@@ -465,11 +549,37 @@ ${bundle}
 
 ${footer}
 </script>
+<script>
+(function () {
+  try {
+    const source = document.getElementById('sgpt-react-source').textContent || '';
+    const compiled = Babel.transform(source, {
+      filename: 'workspace.tsx',
+      presets: [['react', { runtime: 'classic' }], 'typescript'],
+      plugins: ['transform-modules-commonjs'],
+      sourceType: 'module',
+    }).code;
+    window.__sgptModule = { exports: {} };
+    window.exports = window.__sgptModule.exports;
+    window.module = window.__sgptModule;
+    const executable = document.createElement('script');
+    executable.textContent = compiled;
+    document.body.appendChild(executable);
+    window.__sgpt_default = window.__sgpt_default || window.__sgptModule.exports.default;
+  } catch (e) {
+    const o = document.createElement('div');
+    o.id = 'sgpt-error';
+    o.innerHTML = '<b>⚠ Error de compilación</b>\\n\\n' + String((e && e.stack) || e).replace(/[<>&]/g, function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];});
+    document.body.appendChild(o);
+    console.error(e);
+  }
+})();
+</script>
 </body>
 </html>`
 }
 
-function buildMarkdownDocument(files: CodeFiles, entry: string): string {
+function buildMarkdownDocument(files: CodeFiles, entry: string, nonce = ""): string {
   const raw = files[entry]?.content ?? ""
   const json = JSON.stringify(raw).replace(/<\/script/gi, "<\\/script")
   return `<!DOCTYPE html>
@@ -477,7 +587,7 @@ function buildMarkdownDocument(files: CodeFiles, entry: string): string {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-${PREVIEW_BRIDGES}
+${previewBridges(nonce)}
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   body{margin:0;background:#fff;color:#111;font-family:Inter,system-ui,sans-serif;line-height:1.65}
@@ -500,10 +610,10 @@ ${PREVIEW_BRIDGES}
 </html>`
 }
 
-function buildSvgDocument(files: CodeFiles, entry: string): string {
+function buildSvgDocument(files: CodeFiles, entry: string, nonce = ""): string {
   const svg = files[entry]?.content ?? ""
   return `<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8" />${PREVIEW_BRIDGES}
+<html lang="es"><head><meta charset="UTF-8" />${previewBridges(nonce)}
 <style>html,body{margin:0;height:100%}body{display:flex;align-items:center;justify-content:center;background:#fafafa}svg{max-width:96vw;max-height:96vh}</style>
 </head><body>${svg}</body></html>`
 }
@@ -602,7 +712,8 @@ export function projectNeedsDevServer(files: CodeFiles): boolean {
 }
 
 /** Pick the best entry + kind given the active file and the whole project. */
-export function buildPreviewDocument(files: CodeFiles, activePath: string | null): PreviewResult {
+export function buildPreviewDocument(files: CodeFiles, activePath: string | null, nonce = ""): PreviewResult {
+  beginPreviewBuild()
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 
@@ -637,7 +748,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
     // the real dev server is ready.
     if (selfContainedIndex) {
       return {
-        html: buildHtmlDocument(files, selfContainedIndex),
+        html: buildHtmlDocument(files, selfContainedIndex, nonce),
         kind: "html",
         entry: selfContainedIndex,
       }
@@ -654,19 +765,19 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   // 1) Follow the active file when it is directly previewable.
   if (activePath) {
     if (activeExt === "html" || activeExt === "htm") {
-      return { html: buildHtmlDocument(files, activePath), kind: "html", entry: activePath }
+      return { html: buildHtmlDocument(files, activePath, nonce), kind: "html", entry: activePath }
     }
     if (activeExt === "md" || activeExt === "mdx") {
-      return { html: buildMarkdownDocument(files, activePath), kind: "markdown", entry: activePath }
+      return { html: buildMarkdownDocument(files, activePath, nonce), kind: "markdown", entry: activePath }
     }
     if (activeExt === "svg") {
-      return { html: buildSvgDocument(files, activePath), kind: "svg", entry: activePath }
+      return { html: buildSvgDocument(files, activePath, nonce), kind: "svg", entry: activePath }
     }
     if (REACT_PREVIEW_EXTS.has(activeExt)) {
-      return { html: buildReactDocument(files, activePath), kind: "react", entry: activePath }
+      return { html: buildReactDocument(files, activePath, nonce), kind: "react", entry: activePath }
     }
     if (JS_EXTS.has(activeExt) && activeFile && looksLikeRenderableReact(activeFile.content)) {
-      return { html: buildReactDocument(files, activePath), kind: "react", entry: activePath }
+      return { html: buildReactDocument(files, activePath, nonce), kind: "react", entry: activePath }
     }
   }
 
@@ -674,7 +785,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   const htmlEntry =
     paths.find((p) => stripLead(p).toLowerCase() === "index.html") ??
     paths.find((p) => ext(p) === "html" || ext(p) === "htm")
-  if (htmlEntry) return { html: buildHtmlDocument(files, htmlEntry), kind: "html", entry: htmlEntry }
+  if (htmlEntry) return { html: buildHtmlDocument(files, htmlEntry, nonce), kind: "html", entry: htmlEntry }
 
   const jsPaths = paths.filter((p) => JS_EXTS.has(ext(p)))
   if (jsPaths.length > 0) {
@@ -684,14 +795,14 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
       paths.find((p) => /(^|\/)app\.(t|j)sx?$/i.test(p)) ??
       paths.find((p) => /(^|\/)(src\/)?(main|index)\.(t|j)sx?$/i.test(p)) ??
       null
-    if (reactEntry) return { html: buildReactDocument(files, reactEntry), kind: "react", entry: reactEntry }
+    if (reactEntry) return { html: buildReactDocument(files, reactEntry, nonce), kind: "react", entry: reactEntry }
   }
 
   if (activePath && (activeExt === "md" || activeExt === "mdx")) {
-    return { html: buildMarkdownDocument(files, activePath), kind: "markdown", entry: activePath }
+    return { html: buildMarkdownDocument(files, activePath, nonce), kind: "markdown", entry: activePath }
   }
   const mdEntry = paths.find((p) => ext(p) === "md" || ext(p) === "mdx")
-  if (mdEntry) return { html: buildMarkdownDocument(files, mdEntry), kind: "markdown", entry: mdEntry }
+  if (mdEntry) return { html: buildMarkdownDocument(files, mdEntry, nonce), kind: "markdown", entry: mdEntry }
 
   return {
     html: placeholder("Este archivo no es una pantalla web renderizable. Abre index.html, App.tsx o pulsa App/Build para que el agente cree un proyecto completo con preview."),

@@ -118,14 +118,17 @@ function buildServer({ createSession = createDockerSession, isDockerAvailable = 
     // ── everything else requires Bearer ──
     if (!authorized(req)) return send(res, 401, { error: 'unauthorized' });
 
-    // POST /v1/sessions
+    // POST /v1/sessions  { workspaceKey? } — named volume persists /workspace
+    // across sessions so follow-ups reopen the last conversation files.
     if (req.method === 'POST' && url.pathname === '/v1/sessions') {
       if (sessions.size >= MAX_CONCURRENCY) return send(res, 429, { error: 'at_capacity', maxConcurrency: MAX_CONCURRENCY });
       if (!(await isDockerAvailable())) return send(res, 503, { error: 'docker_unavailable' });
-      const session = await createSession();
+      const body = await readJson(req).catch(() => ({}));
+      const workspaceKey = String(body.workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
+      const session = await createSession({ workspaceKey });
       const id = crypto.randomUUID();
-      sessions.set(id, { session, expiresAt: Date.now() + SESSION_TTL_MS });
-      return send(res, 201, { sessionId: id, ttlMs: SESSION_TTL_MS });
+      sessions.set(id, { session, expiresAt: Date.now() + SESSION_TTL_MS, workspaceKey });
+      return send(res, 201, { sessionId: id, ttlMs: SESSION_TTL_MS, workspaceKey });
     }
 
     // /v1/sessions/:id/*

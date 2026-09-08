@@ -146,8 +146,10 @@ export default function CreateGPTPage() {
   // Set default model when available models are loaded
   useEffect(() => {
     if (availableModels.length > 0 && !formData.modelName) {
-      // Prefer GPT-4o mini as default, fallback to first available
-      const defaultModel = availableModels.find(m => m.name === 'gpt-4o-mini') || availableModels[0]
+      // 3H6 leftover candado: prefer DeepSeek Flash/Pro, never gpt-4o-mini.
+      const defaultModel = availableModels.find(m => m.name === 'deepseek-v4-flash')
+        || availableModels.find(m => m.name === 'deepseek-v4-pro')
+        || availableModels[0]
       setFormData(prev => ({ ...prev, modelName: defaultModel.name }))
     }
   }, [availableModels, formData.modelName])

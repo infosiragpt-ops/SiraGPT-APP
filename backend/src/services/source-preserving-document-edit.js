@@ -6,6 +6,8 @@ const { createHash } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
+const { parsePresentationTitleEdit, isScopedSlideMutation, resolveSlideScope } = require('./document-editing/presentation-title-intent');
+const { verifySlideTitleEdit, assertBoundedOfficePackage } = require('./document-editing/edit-output-proof');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { renderPreview } = require('./doc-preview');
@@ -23,6 +25,17 @@ const {
   resolveContentClients,
   hasAnyContentKey,
 } = require('./document-pipeline/content/llm-client');
+const {
+  buildAddRowOperations,
+  buildAddSectionOperations,
+  buildAddSlideOperations,
+  extractSourceCitations,
+  inferTheme,
+  looksLikePromptDump,
+  parseOfficeUserIntent,
+  parseRequestedSourceCount,
+  planContentUnits,
+} = require('./document-editing/user-intent-parser');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 const execFileAsync = promisify(execFile);
@@ -83,9 +96,39 @@ function requestWantsProfessionalEditing(prompt = '') {
   return transformPhrase || (action && (quality || documentScope));
 }
 
+function wantsNewPresentationDeliverable(prompt = '') {
+  try {
+    const { wantsNewPresentationDeliverable: detect } = require('./agents/document-delivery-policy');
+    return Boolean(detect(prompt));
+  } catch {
+    const text = normalizeText(prompt);
+    if (!text) return false;
+    const deckNoun = /\b(?:ppt|pptx|ppts?|power\s*point|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|slides?|deck)\b/.test(text);
+    if (!deckNoun) return false;
+    const addMoreSlides = /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(text);
+    const sameDeckCue = /\b(?:estas?|estos?|mism[oa]s?|mim[oa]s)\s+(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(text);
+    if (addMoreSlides || sameDeckCue) return false;
+    const editExistingDeck = /\b(?:mi|mismo|misma|este|esta|ese|esa|estas)\s+(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(text)
+      || /\b(?:edita|modifica|corrige|actualiza|agrega)\b[^.?!]{0,100}\b(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositiv\w*)\b/.test(text);
+    if (editExistingDeck) return false;
+    const createVerb = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|elabora(?:r|me)?|prepara(?:r|me)?|dame|quiero|necesito)\b/.test(text);
+    const slideCount = /\b\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(text)
+      || /\ben\s+\d+\s*(?:ppt|ppts?|diapositivas?|slides?)\b/.test(text);
+    return createVerb || slideCount;
+  }
+}
+
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
+  // Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf + imágenes"
+  // must create a NEW .pptx from sources — never "preserve PDF + anexos".
+  if (wantsNewPresentationDeliverable(prompt)) return false;
+  if (isScopedSlideMutation(prompt)) return true;
+  try {
+    const { isTemplateTransformRequest } = require('./doc-engine/flags');
+    if (isTemplateTransformRequest(prompt, files)) return true;
+  } catch { /* flags optional in isolated tests */ }
   const verbHay = withCollapsedRepeats(text);
   const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
@@ -125,27 +168,37 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // conjugación del prompt del bug ("deseo que lo reemplaces por color azul").
   const imageEditVerb = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|sustitu\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/.test(editVerbHay);
   const imageEditIntent = imageNoun && imageEditVerb;
+  const styleEditIntent = /\b(uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*|pasa\w*|pon(?:er|ga|le|me|lo|la)?|cambia\w*)\b/.test(editVerbHay)
+    && (
+      /\b(color(?:es)?|fondo|fondos|background|paleta|tipograf\w*)\b/.test(text)
+      || (/\btema\b/.test(text) && /\b(ppt|pptx|ppts?|diapositiv\w*|presentaci[oó]n|slides?)\b/.test(text))
+    );
   // PDF page-level safe ops (rota/gira/extrae/divide/une/combina las páginas…)
   // — their verbs aren't in the generic edit lists, so a "rota la página 2 del
   // pdf" used to fall through to plain chat.
   const pdfOpIntent = /\b(rota\w*|gira\w*|rotate)\b/.test(text)
     || (/\b(extrae\w*|extract|divide\w*|separa\w*|split)\b/.test(text) && /\bp[aá]ginas?\b/.test(text))
     || (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(text) && /\bpdfs?\b/.test(text));
-  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || professionalEditingIntent || imageEditIntent || pdfOpIntent;
-  const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
-  const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
-  const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || professionalEditingIntent || imageEditIntent || pdfOpIntent || styleEditIntent;
+  const existingDocRef = /\b(mi|mism[oa]s?|mim[oa]s|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx?|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|slides?|pdf|tesis)\b/.test(text);
+  const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx?|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|slides?|pdf|tesis)\b/.test(text);
+  const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva|nuevas?\s+diapositiv\w*)\b/.test(text);
+  const sameDocumentCue = /\b(?:estas?|estos?)\s+(?:mism[oa]s?|mim[oa]s)\s+(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|laminas?|archivo|documento|word|docx|excel|xlsx|pdf)\b/.test(text)
+    || /\ben\s+(?:estas?|estos?|la|el|mi)\s+(?:mism[oa]s?|mim[oa]s\s+)?(?:ppt|pptx|diapositiv\w*|presentaci[oó]n|documento|archivo|word|excel)\b/.test(text)
+    || /##\s*\S+\.(?:pptx?|docx?|xlsx?|pdf)\b/.test(text)
+    || /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
-  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
-    || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|dise[nñ]a(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/.test(text)
+    || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?)\b/.test(text)
+    || wantsNewPresentationDeliverable(prompt);
   const explicitAttachedMutation = hasFiles && (
     /\b(reemplaz\w*|sustitu\w*|quit\w*|elimin\w*|borr\w*|suprim\w*|remov\w*|tach\w*)\b/.test(editVerbHay)
     || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(editVerbHay))
   );
   const instrument = requestWantsInstrument(text) || /\banexos?\b/.test(text);
-  const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
+  const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiv\w*|slides?|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
-  const continuationDocRef = /\b(mi|mismo|misma|documento|archivo|word|docx|tesis|general|principal)\b/.test(text);
+  const continuationDocRef = /\b(mi|mism[oa]s?|mim[oa]s|documento|archivo|word|docx|tesis|general|principal|pptx?|presentaci[oó]n|diapositiv\w*)\b/.test(text);
   const followUpDocumentEdit = continuationDocRef
     && primaryEditVerb
     && /\b(documento|archivo|word|docx|tesis|general|principal|contenido)\b/.test(text);
@@ -160,12 +213,14 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // enumeración de creación ("genera un word: incluye tabla, índice…") no.
   const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
+  if (sameDocumentCue && (structuralEditVerb || strongStructuralVerb)) return true;
   if (hasFiles) {
     if (professionalEditingIntent) return true;
     if (editorialCorrectionIntent) return true;
     // Image noun + image-edit verb on an attachment turn is unambiguous: the
     // only editable image surface the user can mean is inside the attachment.
     if (imageEditIntent) return true;
+    if (styleEditIntent) return true;
     // PDF page ops on an attachment turn target the attached PDF.
     if (pdfOpIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
@@ -182,6 +237,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     // "traduce esta frase" / "cambia de tema" stay normal chat answers.
     return structuralEditVerb && existingDocRef;
   }
+  if (styleEditIntent && (existingDocRef || documentNoun)) return true;
   return preservation
     || followUpDocumentEdit
     || (existingDocRef && (appendLocation || instrument || documentRegion))
@@ -345,6 +401,33 @@ function isPotentialEditableAttachmentRef(file) {
     || /\b(word|wordprocessingml|spreadsheet|excel|presentation|powerpoint|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
 }
 
+function extractReferencedSourceFilenames(prompt = '') {
+  const names = [];
+  const re = /##\s*([^\n#]+?\.(?:pptx?|docx?|xlsx?|pdf))\b/gi;
+  let match = re.exec(String(prompt || ''));
+  while (match) {
+    const name = String(match[1] || '').trim().toLowerCase();
+    if (name) names.push(name);
+    match = re.exec(String(prompt || ''));
+  }
+  return names;
+}
+
+function fileNameMatchesReference(fileName = '', referencedNames = []) {
+  const name = String(fileName || '').trim().toLowerCase();
+  if (!name || !Array.isArray(referencedNames) || referencedNames.length === 0) return false;
+  return referencedNames.some((ref) => name === ref || name.endsWith(ref) || ref.endsWith(name));
+}
+
+function matchReferencedSourceFile(files = [], requestText = '') {
+  const referenced = extractReferencedSourceFilenames(requestText);
+  if (!referenced.length) return null;
+  return (files || []).find((file) => fileNameMatchesReference(
+    file && (file.originalName || file.filename || file.name),
+    referenced,
+  )) || null;
+}
+
 async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
   if (!chatId || !prisma?.message?.findMany || !isSourcePreservingEditRequest(prompt, [])) return [];
   const messages = await prisma.message.findMany({
@@ -354,18 +437,25 @@ async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
     take: 25,
   }).catch(() => []);
   const seen = new Set();
-  const ids = [];
+  const candidates = [];
   for (const message of messages) {
     for (const file of parseMessageFiles(message.files)) {
       if (!isPotentialEditableAttachmentRef(file)) continue;
       const id = fileRefId(file);
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      ids.push(id);
-      if (ids.length >= MAX_SIMULTANEOUS_DOCUMENTS) return ids;
+      candidates.push({
+        id,
+        name: String(file.name || file.originalName || file.filename || '').trim().toLowerCase(),
+      });
     }
   }
-  return ids;
+  const referenced = extractReferencedSourceFilenames(prompt);
+  const preferred = referenced.length
+    ? candidates.filter((item) => fileNameMatchesReference(item.name, referenced))
+    : [];
+  const chosen = preferred.length ? preferred : candidates;
+  return chosen.map((item) => item.id).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 }
 
 function isImageAttachmentRow(row = {}) {
@@ -658,7 +748,14 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
 
   let sourceFile = null;
   let selectionReason = 'first_supported_file';
-  if (targetedSection && currentDocx.length) {
+  const referencedFile = (!wantsGeneral && !wantsReferenceIntegration)
+    ? (matchReferencedSourceFile(currentSupported, requestText)
+      || matchReferencedSourceFile(priorSupported, requestText))
+    : null;
+  if (referencedFile) {
+    sourceFile = referencedFile;
+    selectionReason = 'referenced_filename';
+  } else if (targetedSection && currentDocx.length) {
     sourceFile = currentDocx[0];
     selectionReason = 'current_docx_target_section';
   } else if (hasExplicitCurrentUpload && !wantsReferenceIntegration && currentDocx.length) {
@@ -692,6 +789,64 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
     wantsReferenceIntegration,
     wantsGeneralDocument: wantsGeneral,
   };
+}
+
+const BATCH_DOCUMENT_FAMILY_SELECTORS = [
+  { terms: 'words?|docx', matches: isDocxFile },
+  { terms: 'pdfs?', matches: isPdfFile },
+  { terms: 'excels?|xlsx', matches: isXlsxFile },
+  { terms: 'powerpoints?|pptx|presentacion(?:es)?', matches: isPptxFile },
+  { terms: 'txt|markdown|md|csv|html|svg|json|xml|yaml|yml', matches: isTextLikeFile },
+];
+
+function batchScopeMentionsFamily(text = '', terms = '') {
+  const family = `(?:${terms})`;
+  return new RegExp(`\\b(?:todos|todas|ambos|ambas|estos|estas|esos|esas|varios|varias)\\s+(?:(?:los|las)\\s+)?(?:(?:mismos?|mismas?)\\s+)?(?:(?:documentos?|archivos?)\\s+)?${family}\\b`).test(text)
+    || new RegExp(`\\b(?:cada|en\\s+cada)\\s+(?:(?:documento|archivo)\\s+)?${family}\\b`).test(text)
+    || new RegExp(`\\b(?:los|las)\\s+(?:dos|tres|cuatro|cinco|\\d+)\\s+(?:(?:documentos?|archivos?)\\s+)?${family}\\b`).test(text)
+    || new RegExp(`\\b(?:los|las|mis)\\s+(?:(?:documentos?|archivos?)\\s+)?${family}\\b`).test(text);
+}
+
+function selectBatchDocumentSources(prompt = '', sourceFiles = []) {
+  const currentSupported = (Array.isArray(sourceFiles) ? sourceFiles : [])
+    .filter((file) => file?.source === 'current_upload')
+    .filter(isSupportedSourcePreservingFile);
+  const text = normalizeText(prompt);
+  const explicitFamilies = BATCH_DOCUMENT_FAMILY_SELECTORS
+    .filter((family) => batchScopeMentionsFamily(text, family.terms));
+  if (!explicitFamilies.length) return currentSupported;
+  return currentSupported.filter((file) => explicitFamilies.some((family) => family.matches(file)));
+}
+
+function requestWantsBatchDocumentEdit(prompt = '', sourceFiles = []) {
+  const batchSources = selectBatchDocumentSources(prompt, sourceFiles);
+  // Plural wording is not enough: "ambos Word" needs at least two Word
+  // sources. Other attached families are references, not extra batch targets.
+  if (batchSources.length < 2) return false;
+  if (requestWantsReferenceIntegration(prompt)) return false;
+
+  const text = normalizeText(prompt);
+  // A merge/integration request has one combined output, not one edited copy
+  // per source. Keep it on the existing document-merge/reference path.
+  if (/\b(?:fusion\w*|combina\w*|une|unir|mezcla\w*|consolida\w*)\b[^.?!]{0,100}\b(?:en\s+)?(?:un|uno|solo|[uú]nico)\b/.test(text)) return false;
+
+  // The selector already resolved explicit family wording such as "ambos
+  // PowerPoint" or "en cada Excel". Reuse its vocabulary here so this
+  // activation gate cannot drift behind the family-specific selector.
+  if (BATCH_DOCUMENT_FAMILY_SELECTORS.some((family) => batchScopeMentionsFamily(text, family.terms))) return true;
+
+  // Users commonly refer to a multi-upload selection without a quantifier:
+  // "edita los documentos adjuntos" / "en los archivos subidos". At this
+  // point we already proved there are at least two editable current uploads,
+  // and the reference/merge vetoes above keep this from consuming inputs that
+  // should instead feed a single combined deliverable.
+  if (/\b(?:en\s+)?(?:los|las|mis)\s+(?:documentos?|archivos?)\s+(?:adjunt\w*|cargad\w*|subid\w*)\b/.test(text)) return true;
+
+  return /\b(?:todos|todas|ambos|ambas)\s+(?:(?:los|las)\s+)?(?:documentos?|archivos?|words?|docx|pdfs?|excels?|xlsx|presentaciones?|pptx)\b/.test(text)
+    || /\b(?:estos|estas|esos|esas|varios|varias)\s+(?:mismos?\s+)?(?:documentos?|archivos?|words?|docx|pdfs?|excels?|xlsx|presentaciones?|pptx)\b/.test(text)
+    || /\b(?:cada\s+(?:uno|una|documento|archivo)|en\s+cada\s+(?:documento|archivo|word|docx|pdf|excel|presentaci[oó]n))\b/.test(text)
+    || /\b(?:los|las)\s+(?:dos|tres|cuatro|cinco|\d+)\s+(?:documentos?|archivos?|words?|docx|pdfs?|excels?|presentaciones?)\b/.test(text)
+    || /\b(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*)\b[^.?!]{0,100}\b(?:ambos|ambas|todos|todas)\b/.test(text);
 }
 
 function xmlEscape(value) {
@@ -852,7 +1007,47 @@ function buildInstrumentAppendix(options = {}) {
   ];
 }
 
-function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '' } = {}) {
+function buildPptxContinuationBlocks({ prompt = '', sourceText = '', originalName = '' } = {}) {
+  const intent = parseOfficeUserIntent(prompt, { format: 'pptx' }) || {
+    kind: 'add_slides',
+    count: 1,
+    topic: '',
+    lastIsBibliography: false,
+    wantsBibliography: false,
+  };
+  const slides = buildAddSlideOperations(intent, {
+    sourceText,
+    originalName,
+    requestText: prompt,
+  });
+  const first = slides[0] || {
+    title: inferDocumentTitle(sourceText, originalName) || 'Continuación',
+    bullets: ['Decisión, evidencia y próximo paso, sin copiar la petición del usuario.'],
+  };
+  return [
+    block('heading1', first.title),
+    ...(first.bullets || []).map((item) => block('normal', `• ${item}`)),
+  ];
+}
+
+function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '', format = '' } = {}) {
+  if (format === 'pptx') {
+    return buildPptxContinuationBlocks({ prompt, sourceText, originalName });
+  }
+  const intent = parseOfficeUserIntent(prompt, { format: format === 'xlsx' ? 'xlsx' : 'docx' });
+  if (intent && intent.count) {
+    const units = planContentUnits(intent, {
+      sourceText,
+      originalName,
+      requestText: prompt,
+    });
+    const blocks = [];
+    for (const unit of units) {
+      blocks.push(block('heading2', unit.title));
+      for (const bullet of unit.bullets || []) blocks.push(block('normal', `• ${bullet}`));
+    }
+    if (blocks.length) return blocks;
+  }
   const title = inferDocumentTitle(sourceText, originalName);
   return [
     block('pageBreak', ''),
@@ -864,7 +1059,7 @@ function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '' 
 }
 
 function buildAppendixBlocks(options = {}) {
-  if (requestWantsInstrument(options.prompt)) {
+  if (requestWantsInstrument(options.prompt) && options.format !== 'pptx') {
     return buildInstrumentAppendix(options);
   }
   return buildGenericAppendix(options);
@@ -1921,14 +2116,218 @@ function replaceNeedleText(text = '', needle = '', replacement = '') {
   if (!exact) return source;
   const exactRe = new RegExp(escapeRegExp(exact), 'gi');
   if (exactRe.test(source)) return source.replace(exactRe, String(replacement || ''));
-  const normalizedNeedle = normalizeText(exact);
-  if (normalizedNeedle && normalizeText(source).includes(normalizedNeedle)) {
-    return String(replacement || '');
-  }
-  return source;
+  // Normalized fallback must replace ONLY the matched span — never wipe the
+  // whole paragraph when the needle is a substring (that used to turn surgical
+  // edits into full-paragraph rewrites).
+  const span = findNeedleSpanInText(source, exact);
+  if (!span) return source;
+  return `${source.slice(0, span.start)}${String(replacement || '')}${source.slice(span.end)}`;
 }
 
-function replaceTextInDocxBuffer(buffer, needle, replacement) {
+/**
+ * Build a map from normalized-text indices back to original character offsets.
+ * Mirrors normalizeText: lower-case, strip diacritics, collapse whitespace.
+ */
+function buildNormalizedCharMap(text = '') {
+  const source = String(text || '');
+  const chars = [];
+  const map = [];
+  let prevSpace = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const stripped = source[i]
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (!stripped) continue;
+    for (const ch of stripped) {
+      if (/\s/.test(ch)) {
+        if (prevSpace || chars.length === 0) continue;
+        chars.push(' ');
+        map.push(i);
+        prevSpace = true;
+        continue;
+      }
+      prevSpace = false;
+      chars.push(ch);
+      map.push(i);
+    }
+  }
+  while (chars.length && chars[chars.length - 1] === ' ') {
+    chars.pop();
+    map.pop();
+  }
+  return { normalized: chars.join(''), map };
+}
+
+/**
+ * Locate needle inside source as an exclusive [start, end) span.
+ * Prefers case-insensitive exact match; falls back to accent/whitespace-normalized.
+ */
+function findNeedleSpanInText(source = '', needle = '') {
+  const hay = String(source || '');
+  const exact = String(needle || '').trim();
+  if (!exact || !hay) return null;
+  const lowerHay = hay.toLowerCase();
+  const lowerNeedle = exact.toLowerCase();
+  const exactIdx = lowerHay.indexOf(lowerNeedle);
+  if (exactIdx >= 0) {
+    return { start: exactIdx, end: exactIdx + exact.length };
+  }
+  const { normalized, map } = buildNormalizedCharMap(hay);
+  const normNeedle = normalizeText(exact);
+  if (!normNeedle || !normalized) return null;
+  const normIdx = normalized.indexOf(normNeedle);
+  if (normIdx < 0 || !map.length) return null;
+  const start = map[normIdx];
+  const endNorm = normIdx + normNeedle.length - 1;
+  if (endNorm < 0 || endNorm >= map.length) return null;
+  // Exclusive end: one past the last original character that mapped into the needle.
+  const end = map[endNorm] + 1;
+  if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) return null;
+  return { start, end };
+}
+
+/**
+ * Enumerate every <w:t> node in a paragraph, with char offsets into the
+ * concatenated visible text (same order as paragraphText()).
+ */
+function extractWtNodes(paragraphXml = '') {
+  const nodes = [];
+  const re = /<w:t\b([^>]*)>([\s\S]*?)<\/w:t>/g;
+  let match;
+  let offset = 0;
+  while ((match = re.exec(String(paragraphXml || '')))) {
+    const text = xmlUnescape(match[2]);
+    nodes.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      attrs: match[1] || '',
+      text,
+      charStart: offset,
+      charEnd: offset + text.length,
+    });
+    offset += text.length;
+  }
+  return nodes;
+}
+
+function wtNodeXml(attrs = '', text = '') {
+  const value = String(text || '');
+  // Preserve xml:space="preserve" when the run needs leading/trailing spaces,
+  // otherwise keep the original attribute string as-is.
+  let finalAttrs = String(attrs || '');
+  if ((/^\s|\s$/.test(value) || value.includes('  ')) && !/\bxml:space=/.test(finalAttrs)) {
+    finalAttrs = `${finalAttrs} xml:space="preserve"`;
+  }
+  return `<w:t${finalAttrs}>${xmlEscape(value)}</w:t>`;
+}
+
+/**
+ * Surgical in-paragraph mutation: replace the first occurrence of `needle` with
+ * `replacement` (empty string = delete) while keeping pPr, rPr, drawings,
+ * hyperlinks, and non-text XML byte-identical. Only <w:t> payloads change.
+ *
+ * Needle split across runs is handled by writing the replacement into the first
+ * affected run and emptying intermediate runs (same contract as the sandbox
+ * docx skill / Claude-style surgical edit).
+ *
+ * Returns { xml, changed } or null when the needle is absent.
+ */
+function mutateParagraphTextSurgical(paragraphXml = '', needle = '', replacement = '') {
+  const sourceXml = String(paragraphXml || '');
+  const exact = String(needle || '').trim();
+  if (!exact || !sourceXml) return null;
+  const nodes = extractWtNodes(sourceXml);
+  if (!nodes.length) return null;
+  const fullText = nodes.map((node) => node.text).join('');
+  const span = findNeedleSpanInText(fullText, exact);
+  if (!span) return null;
+
+  const newText = String(replacement ?? '');
+  // Identify affected w:t nodes (character ranges that overlap the span).
+  const firstIdx = nodes.findIndex((node) => node.charEnd > span.start && node.charStart < span.end);
+  if (firstIdx < 0) return null;
+  let lastIdx = firstIdx;
+  for (let i = firstIdx; i < nodes.length; i += 1) {
+    if (nodes[i].charStart < span.end) lastIdx = i;
+    else break;
+  }
+
+  const first = nodes[firstIdx];
+  const last = nodes[lastIdx];
+  const prefix = first.text.slice(0, Math.max(0, span.start - first.charStart));
+  const suffix = last.text.slice(Math.max(0, span.end - last.charStart));
+
+  // Rewrite from the end so earlier offsets stay valid.
+  let updated = sourceXml;
+  for (let i = lastIdx; i >= firstIdx; i -= 1) {
+    const node = nodes[i];
+    let nextText;
+    if (i === firstIdx && i === lastIdx) {
+      nextText = `${prefix}${newText}${suffix}`;
+    } else if (i === firstIdx) {
+      nextText = `${prefix}${newText}`;
+    } else if (i === lastIdx) {
+      nextText = suffix;
+    } else {
+      nextText = '';
+    }
+    updated = `${updated.slice(0, node.start)}${wtNodeXml(node.attrs, nextText)}${updated.slice(node.end)}`;
+  }
+  if (updated === sourceXml) return null;
+  return { xml: updated, changed: true };
+}
+
+/**
+ * Apply an arbitrary full-paragraph text rewrite while preserving the first
+ * run's formatting (and emptying subsequent text runs). Used by proofreading
+ * when the whole paragraph body changes but structure must stay intact.
+ */
+function applyFullParagraphTextSurgical(paragraphXml = '', newText = '') {
+  const sourceXml = String(paragraphXml || '');
+  const nodes = extractWtNodes(sourceXml);
+  if (!nodes.length) {
+    // No text nodes — fall back to the simpler first-w:t rewrite helper.
+    return replaceParagraphTextPreservingFormatting(sourceXml, newText);
+  }
+  let updated = sourceXml;
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const node = nodes[i];
+    const nextText = i === 0 ? String(newText ?? '') : '';
+    updated = `${updated.slice(0, node.start)}${wtNodeXml(node.attrs, nextText)}${updated.slice(node.end)}`;
+  }
+  return updated;
+}
+
+const DOCX_TITLE_STYLE_RE = /<w:pStyle\b[^>]*w:val=["'](?:title|titulo|t[ií]tulo|heading\s*1|heading1|titulo\s*1|t[ií]tulo\s*1)["']/iu;
+
+function isDocxTitleParagraph(paragraph = {}) {
+  return DOCX_TITLE_STYLE_RE.test(String(paragraph.xml || ''));
+}
+
+function selectDocxReplacementParagraphs(paragraphs = [], needle = '', scope = 'document') {
+  const normalizedNeedle = normalizeText(needle);
+  const matches = paragraphs
+    .map((paragraph, index) => ({ ...paragraph, documentIndex: index }))
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle));
+  if (scope !== 'title') return matches;
+
+  // A title can be explicitly styled, centered on a cover, or simply be the
+  // first matching paragraph in older academic templates. Select exactly one
+  // target so references to the same city/institution in the body stay intact.
+  const earlyLimit = Math.max(24, Math.ceil(paragraphs.length * 0.15));
+  const titleParagraph = matches.find(isDocxTitleParagraph)
+    || matches.find((paragraph) => (
+      !paragraph.inTable
+      && paragraph.documentIndex <= earlyLimit
+      && /<w:jc\b[^>]*w:val=["']center["']/iu.test(paragraph.xml)
+    ))
+    || matches.find((paragraph) => !paragraph.inTable && paragraph.documentIndex <= earlyLimit)
+    || matches.find((paragraph) => paragraph.documentIndex <= earlyLimit);
+  return titleParagraph ? [titleParagraph] : [];
+}
+
+function replaceTextInDocxBuffer(buffer, needle, replacement, { scope = 'document' } = {}) {
   const normalizedNeedle = normalizeText(needle);
   if (!normalizedNeedle || normalizedNeedle.length < 3) {
     const err = new Error('No se especificó el texto exacto que debo reemplazar dentro del DOCX.');
@@ -1939,22 +2338,33 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   let documentXml = documentFile.asText();
-  const matches = extractDocxParagraphs(documentXml)
-    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const matches = selectDocxReplacementParagraphs(paragraphs, normalizedNeedle, scope)
     .sort((a, b) => b.start - a.start);
 
   let changedCount = 0;
   for (const paragraph of matches) {
-    const updatedText = replaceNeedleText(paragraph.text, needle, replacement);
-    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
-    const updatedParagraph = paragraphXml({ kind: 'normal', text: updatedText }, template);
-    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    // Surgical path: mutate only the matching span inside existing <w:t>
+    // nodes. Never rebuild the paragraph — that used to drop bold/italic mid-
+    // sentence, bookmarks, hyperlinks and list numbering.
+    const matchedSpan = findNeedleSpanInText(paragraph.text, needle);
+    const matchedText = matchedSpan
+      ? paragraph.text.slice(matchedSpan.start, matchedSpan.end)
+      : String(needle || '');
+    const scopedReplacement = scope === 'title'
+      ? preserveCaseReplacement(matchedText, replacement)
+      : replacement;
+    const mutated = mutateParagraphTextSurgical(paragraph.xml, needle, scopedReplacement);
+    if (!mutated) continue;
+    documentXml = `${documentXml.slice(0, paragraph.start)}${mutated.xml}${documentXml.slice(paragraph.end)}`;
     changedCount += 1;
   }
 
-  if (changedCount === 0) {
+  if (changedCount === 0 && scope !== 'title') {
+    // Last-resort: needle appears as a contiguous escaped fragment inside the
+    // raw XML (single run). Still avoids rebuilding the paragraph structure.
     const escapedNeedle = xmlEscape(needle);
-    if (documentXml.includes(escapedNeedle)) {
+    if (escapedNeedle && documentXml.includes(escapedNeedle)) {
       documentXml = documentXml.split(escapedNeedle).join(xmlEscape(replacement));
       changedCount = 1;
     }
@@ -1967,9 +2377,14 @@ function replaceTextInDocxBuffer(buffer, needle, replacement) {
   }
 
   zip.file('word/document.xml', documentXml);
+  const remainingMatchCount = extractDocxParagraphs(documentXml)
+    .filter((paragraph) => normalizedTextIncludes(paragraph.text, normalizedNeedle))
+    .length;
   return {
     buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
     changedCount,
+    remainingMatchCount,
+    scope,
   };
 }
 
@@ -1998,9 +2413,7 @@ function setDocxDocumentTitleBuffer(buffer, newTitle) {
   let documentXml = documentFile.asText();
   const visibleParagraphs = extractDocxParagraphs(documentXml)
     .filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
-  const styledTitle = visibleParagraphs.find((paragraph) => (
-    /<w:pStyle\b[^>]*w:val=["'](?:title|titulo|t[ií]tulo|heading\s*1|heading1|titulo\s*1|t[ií]tulo\s*1)["']/iu.test(paragraph.xml)
-  ));
+  const styledTitle = visibleParagraphs.find(isDocxTitleParagraph);
   const titleParagraph = styledTitle || visibleParagraphs[0];
   if (!titleParagraph) {
     const err = new Error('No encontré un título visible dentro del DOCX.');
@@ -2113,9 +2526,24 @@ function proofreadMinimalDocxBuffer(buffer) {
   for (const paragraph of paragraphs) {
     const proofread = applyMinimalProofreadingToText(paragraph.text);
     if (!proofread.changed) continue;
-    const template = buildFormattingTemplate({ bodyXml: paragraph.xml });
-    const updatedParagraph = paragraphXml({ kind: 'normal', text: proofread.text }, template);
-    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedParagraph}${documentXml.slice(paragraph.end)}`;
+    // Surgical proofreading: keep pPr/rPr/runs; only rewrite text payloads.
+    // Prefer per-sample needle swaps so mixed-format paragraphs stay intact.
+    let updatedXml = paragraph.xml;
+    let appliedAny = false;
+    for (const correction of proofread.corrections) {
+      for (const sample of correction.samples || []) {
+        const mutated = mutateParagraphTextSurgical(updatedXml, sample.needle, sample.replacement);
+        if (mutated) {
+          updatedXml = mutated.xml;
+          appliedAny = true;
+        }
+      }
+    }
+    if (!appliedAny) {
+      updatedXml = applyFullParagraphTextSurgical(paragraph.xml, proofread.text);
+      if (updatedXml === paragraph.xml) continue;
+    }
+    documentXml = `${documentXml.slice(0, paragraph.start)}${updatedXml}${documentXml.slice(paragraph.end)}`;
     changedParagraphs += 1;
 
     for (const correction of proofread.corrections) {
@@ -2515,7 +2943,16 @@ function deleteTextFromDocxBuffer(buffer, needle) {
 
   let removedCount = 0;
   for (const paragraph of paragraphs) {
-    documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+    // Surgical delete: remove only the needle span. Drop the whole paragraph
+    // only when nothing visible remains (true "borra este párrafo" case).
+    const mutated = mutateParagraphTextSurgical(paragraph.xml, needle, '');
+    if (!mutated) continue;
+    const remaining = paragraphText(mutated.xml).replace(/\s+/g, ' ').trim();
+    if (!remaining) {
+      documentXml = `${documentXml.slice(0, paragraph.start)}${documentXml.slice(paragraph.end)}`;
+    } else {
+      documentXml = `${documentXml.slice(0, paragraph.start)}${mutated.xml}${documentXml.slice(paragraph.end)}`;
+    }
     removedCount += 1;
   }
 
@@ -3203,7 +3640,7 @@ function sourceDocumentParallelism() {
 async function buildCombinedSourceText(sourceFiles = []) {
   const chunks = await mapWithConcurrency(sourceFiles, sourceDocumentParallelism(), async (file) => {
     const name = file.originalName || file.filename || file.id || 'documento';
-    const text = compact(await extractTextFromFile(file), 5000);
+    const text = compact(await extractTextFromFile(file), 24000);
     if (!text) return '';
     return `Fuente: ${name}\n${text}`;
   });
@@ -3331,6 +3768,11 @@ function sectionFallbackBlocks({ prompt = '', target, sourceText = '', sourceFil
     .split(/\n{2,}|---/)
     .map((item) => compact(item, 360))
     .filter((item) => item.length >= 50)
+    // The source summary often contains status text such as "ANEXO 3
+    // pendiente". Re-inserting that marker into the section we just filled
+    // makes the semantic validator correctly reject the artifact. Keep the
+    // substantive reference excerpts and drop only placeholder/status chunks.
+    .filter((item) => !/\b(?:pendiente(?:\s+de\s+completar)?|por\s+completar|completar\s+aqui|rellenar\s+aqui)\b/i.test(item))
     .slice(0, 4);
 
   const blocks = [
@@ -3463,41 +3905,6 @@ async function appendToPdfBuffer(buffer, blocks) {
   return Buffer.from(await pdf.save());
 }
 
-async function buildPdfFromPlainText({ title = 'Documento editado', text = '' } = {}) {
-  const pdf = await PDFDocument.create();
-  let page = pdf.addPage([612, 792]);
-  let { width, height } = page.getSize();
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
-  const margin = 54;
-  let y = height - margin;
-  let maxWidth = width - (margin * 2);
-
-  const addPageIfNeeded = () => {
-    if (y >= margin) return;
-    page = pdf.addPage([612, 792]);
-    ({ width, height } = page.getSize());
-    maxWidth = width - (margin * 2);
-    y = height - margin;
-  };
-  const drawWrapped = (value, currentFont, fontSize, lineHeight) => {
-    const lines = wrapPdfText(value, currentFont, fontSize, maxWidth);
-    for (const line of lines) {
-      addPageIfNeeded();
-      page.drawText(line || ' ', { x: margin, y, size: fontSize, font: currentFont, color: rgb(0.08, 0.1, 0.14) });
-      y -= line ? lineHeight : Math.ceil(lineHeight / 2);
-    }
-  };
-
-  drawWrapped(String(title || 'Documento editado').slice(0, 180), boldFont, 15, 20);
-  y -= 8;
-  for (const paragraph of String(text || '').split(/\n{2,}/)) {
-    drawWrapped(paragraph, font, 10.5, 14);
-    y -= 6;
-  }
-  return Buffer.from(await pdf.save());
-}
-
 async function extractTextFromPdfBuffer(buffer) {
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'siragpt-pdf-text-'));
   const pdfPath = path.join(tmp, 'input.pdf');
@@ -3513,43 +3920,26 @@ async function extractTextFromPdfBuffer(buffer) {
   }
 }
 
-async function executePdfOperations({ input, requestText, sourceText, blocks, sourceFile } = {}) {
+async function executePdfOperations({ input, requestText, blocks } = {}) {
   const ops = planGenericOfficeOperations({ requestText, format: 'pdf' });
   const textEditOps = ops.filter((op) => op.kind === 'replace_text' || op.kind === 'delete_text');
-  if (textEditOps.length === 0) {
-    return {
-      buffer: await appendToPdfBuffer(input, blocks),
-      steps: [{ kind: 'append_generic', mode: 'pdf_append_page' }],
-      validationBlocks: blocks,
-      ops,
-    };
-  }
-
-  let text = String(sourceFile?.extractedText || sourceText || '').trim();
-  if (!text) text = (await extractTextFromPdfBuffer(input)).trim();
-  let edited = text;
-  const steps = [];
-  const validationBlocks = [];
-  for (const op of textEditOps) {
-    const changedCount = countNeedleMatches(edited, op.needle);
-    if (op.kind === 'replace_text') {
-      edited = replaceNeedleText(edited, op.needle, op.replacement);
-      validationBlocks.push(block('normal', op.replacement));
-      steps.push({ kind: 'replace_text', mode: 'pdf_text_rewrite', changedCount });
-    } else {
-      edited = replaceNeedleText(edited, op.needle, '');
-      steps.push({ kind: 'delete_text', mode: 'pdf_text_rewrite', removedCount: changedCount });
-    }
+  if (textEditOps.length > 0) {
+    const error = new Error(
+      'No puedo reemplazar ni eliminar texto dentro de un PDF conservando fielmente su diseño, imágenes y estructura. Adjunta la versión DOCX/Word para editar el contenido o pide una superposición visible sobre una página del PDF.',
+    );
+    error.code = 'PDF_TEXT_EDIT_PRESERVATION_UNSUPPORTED';
+    // Consumers that support the legacy sandbox fallback must keep this
+    // failure closed instead of regenerating a visually different document.
+    error.validationOnlyFailure = true;
+    error.format = 'pdf';
+    throw error;
   }
 
   return {
-    buffer: await buildPdfFromPlainText({
-      title: `${sourceFile?.originalName || sourceFile?.filename || 'PDF'} editado`,
-      text: edited,
-    }),
-    steps,
-    validationBlocks: validationBlocks.length ? validationBlocks : blocks,
-    ops: textEditOps,
+    buffer: await appendToPdfBuffer(input, blocks),
+    steps: [{ kind: 'append_generic', mode: 'pdf_append_page' }],
+    validationBlocks: blocks,
+    ops,
   };
 }
 
@@ -3571,7 +3961,10 @@ async function persistEditedArtifact({
     validation,
   });
   let previewHtml = null;
-  if (['docx', 'xlsx', 'csv'].includes(format)) {
+  // DOCX/PPTX preview is soffice→PDF at /api/agent/artifact/:id/preview.pdf.
+  // Attaching Mammoth HTML made the chat open a data:text/html dump (wrong
+  // page size/margins) and skip the paginated PDF viewer.
+  if (['xlsx', 'csv'].includes(format)) {
     try {
       const preview = await renderPreview(format, buffer.toString('base64'));
       previewHtml = preview?.html || null;
@@ -3757,19 +4150,26 @@ function validateConsistencyMatrixInsertion(buffer) {
   }
 }
 
-function validateDocxOperationCriteria(buffer, operations = []) {
+function validateDocxOperationCriteria(buffer, operations = [], { beforeBuffer = null } = {}) {
   const text = extractDocxTextFromBuffer(buffer);
   const normalized = normalizeText(text);
   const checks = [];
   for (const op of operations || []) {
     if (op.kind === 'set_document_title') {
+      let visibleTitle = '';
+      try {
+        const paragraphs = extractDocxParagraphs(readDocxDocumentXml(buffer))
+          .filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
+        visibleTitle = (paragraphs.find(isDocxTitleParagraph) || paragraphs[0])?.text?.trim() || '';
+      } catch { /* handled by the failed criterion below */ }
       checks.push({
         id: 'document_title_changed',
         label: 'Título del documento actualizado',
-        passed: normalizedTextIncludes(text, op.newTitle),
+        passed: normalizeText(visibleTitle) === normalizeText(op.newTitle),
         details: {
           previousTitle: compact(op.previousTitle, 120),
           newTitle: compact(op.newTitle, 120),
+          visibleTitle: compact(visibleTitle, 120),
         },
       });
       continue;
@@ -3874,10 +4274,49 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       continue;
     }
     if (op.kind === 'append_generic' || op.kind === 'append_labeled') {
-      // Generic append (non-instrument): the ANEXOS section must exist and the
-      // document must have grown with real content beyond the anchor heading.
-      const passed = normalized.includes('anexo') && text.length > 200;
-      checks.push({ id: 'content_appended', label: 'Contenido agregado al Word', passed });
+      // Generic append (non-instrument): prove that the package actually grew.
+      // Looking only for the word "anexo" produced false positives whenever
+      // the uploaded document already contained an annex before this request.
+      let beforeParagraphs = null;
+      let afterParagraphs = null;
+      let beforeTextLength = null;
+      let afterTextLength = text.length;
+      let beforeMarkerCount = null;
+      let afterMarkerCount = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const beforeItems = beforeXml ? extractDocxParagraphs(beforeXml) : [];
+        const afterItems = extractDocxParagraphs(readDocxDocumentXml(buffer));
+        beforeParagraphs = beforeXml ? beforeItems.length : null;
+        afterParagraphs = afterItems.length;
+        beforeTextLength = beforeXml ? extractDocxTextFromBuffer(beforeBuffer).length : null;
+        const isAppendMarker = op.kind === 'append_generic'
+          ? (paragraph) => normalizeText(paragraph.text) === 'anexos'
+          : (paragraph) => Boolean(op.target && matchesTargetHeading(paragraph.normalized, op.target));
+        beforeMarkerCount = beforeXml ? beforeItems.filter(isAppendMarker).length : null;
+        afterMarkerCount = afterItems.filter(isAppendMarker).length;
+      } catch { /* null measurements fail closed */ }
+      const passed = Number.isInteger(beforeParagraphs)
+        && Number.isInteger(afterParagraphs)
+        && Number.isInteger(beforeTextLength)
+        && Number.isInteger(beforeMarkerCount)
+        && Number.isInteger(afterMarkerCount)
+        && afterParagraphs > beforeParagraphs
+        && afterTextLength > beforeTextLength
+        && afterMarkerCount > beforeMarkerCount;
+      checks.push({
+        id: 'content_appended',
+        label: 'Contenido agregado al Word',
+        passed,
+        details: {
+          beforeParagraphs,
+          afterParagraphs,
+          beforeTextLength,
+          afterTextLength,
+          beforeMarkerCount,
+          afterMarkerCount,
+        },
+      });
       continue;
     }
     if (op.kind === 'integrate_references') {
@@ -3892,6 +4331,63 @@ function validateDocxOperationCriteria(buffer, operations = []) {
         label: 'Matriz de consistencia agregada al Word',
         passed: result.ok,
         details: result,
+      });
+      continue;
+    }
+    if (op.kind === 'insert_visual') {
+      let beforeDrawings = null;
+      let afterDrawings = null;
+      let beforeMediaParts = null;
+      let afterMediaParts = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const afterXml = readDocxDocumentXml(buffer);
+        beforeDrawings = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:drawing') : null;
+        afterDrawings = countXmlNodes(afterXml, 'w:drawing');
+        const countMediaParts = (candidate) => Object.entries(new PizZip(candidate).files || {})
+          .filter(([name, entry]) => name.startsWith('word/media/') && entry && !entry.dir)
+          .length;
+        beforeMediaParts = Buffer.isBuffer(beforeBuffer) ? countMediaParts(beforeBuffer) : null;
+        afterMediaParts = countMediaParts(buffer);
+      } catch { /* failed counts remain null and the criterion fails closed */ }
+      const passed = Number.isInteger(beforeDrawings)
+        && Number.isInteger(afterDrawings)
+        && Number.isInteger(beforeMediaParts)
+        && Number.isInteger(afterMediaParts)
+        && afterDrawings > beforeDrawings
+        && afterMediaParts > beforeMediaParts;
+      checks.push({
+        id: 'visual_inserted',
+        label: 'Gráfico insertado en el Word original',
+        passed,
+        details: { beforeDrawings, afterDrawings, beforeMediaParts, afterMediaParts },
+      });
+      continue;
+    }
+    if (op.kind === 'insert_table') {
+      let beforeTables = null;
+      let afterTables = null;
+      let beforeRows = null;
+      let afterRows = null;
+      try {
+        const beforeXml = Buffer.isBuffer(beforeBuffer) ? readDocxDocumentXml(beforeBuffer) : '';
+        const afterXml = readDocxDocumentXml(buffer);
+        beforeTables = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:tbl') : null;
+        afterTables = countXmlNodes(afterXml, 'w:tbl');
+        beforeRows = Buffer.isBuffer(beforeBuffer) ? countXmlNodes(beforeXml, 'w:tr') : null;
+        afterRows = countXmlNodes(afterXml, 'w:tr');
+      } catch { /* failed counts remain null and the criterion fails closed */ }
+      const passed = Number.isInteger(beforeTables)
+        && Number.isInteger(afterTables)
+        && Number.isInteger(beforeRows)
+        && Number.isInteger(afterRows)
+        && afterTables > beforeTables
+        && afterRows > beforeRows;
+      checks.push({
+        id: 'native_table_inserted',
+        label: 'Tabla editable insertada en el Word original',
+        passed,
+        details: { beforeTables, afterTables, beforeRows, afterRows },
       });
       continue;
     }
@@ -3948,12 +4444,30 @@ function validateDocxOperationCriteria(buffer, operations = []) {
       continue;
     }
     if (op.kind === 'replace_text') {
-      const passed = !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement);
+      const scope = op.scope || 'document';
+      const executionChanged = op.changedCount == null || Number(op.changedCount) > 0;
+      const replacementPresent = scope === 'title'
+        ? selectDocxReplacementParagraphs(
+          extractDocxParagraphs(readDocxDocumentXml(buffer)),
+          op.replacement,
+          'title',
+        ).length > 0
+        : normalizedTextIncludes(text, op.replacement);
+      // A title-only edit may legitimately leave the same place/name in the
+      // body. Global replacements still require the old value to disappear.
+      const needleCriterion = scope === 'title' || !normalizedTextIncludes(text, op.needle);
+      const passed = executionChanged && replacementPresent && needleCriterion;
       checks.push({
         id: 'specific_text_replaced',
-        label: 'Texto específico reemplazado',
+        label: scope === 'title' ? 'Texto del título reemplazado' : 'Texto específico reemplazado',
         passed,
-        details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
+        details: {
+          needle: compact(op.needle, 120),
+          replacement: compact(op.replacement, 120),
+          scope,
+          changedCount: Number(op.changedCount || 0),
+          remainingMatchCount: Number(op.remainingMatchCount || 0),
+        },
       });
     }
   }
@@ -3961,6 +4475,125 @@ function validateDocxOperationCriteria(buffer, operations = []) {
     checks,
     passed: checks.every((check) => check.passed !== false),
   };
+}
+
+function validateDocxRequestContract(beforeBuffer, afterBuffer, requestText = '', operations = []) {
+  if (!Buffer.isBuffer(beforeBuffer) || !Buffer.isBuffer(afterBuffer)) return null;
+  const hasTextMutationOperation = operations.some((op) => (
+    op?.kind === 'replace_text' || op?.kind === 'set_document_title'
+  ));
+  const hasImageMutationOperation = operations.some((op) => (
+    op?.kind === 'replace_image' || op?.kind === 'recolor_image'
+  ));
+  // "reemplaza la figura por la imagen adjunta" is an image operation, not a
+  // request to replace the visible words "figura" and "imagen adjunta". Keep
+  // the independent text contract active for suspicious appendix/section
+  // fallbacks, but do not apply it to a specialized image mutation.
+  if (hasImageMutationOperation && !hasTextMutationOperation) return null;
+  const replacement = extractReplacementPair(requestText);
+  const titleChange = replacement ? null : extractDocxTitleChange(requestText);
+  if (!replacement && !titleChange) return null;
+
+  try {
+    const beforeParagraphs = extractDocxParagraphs(readDocxDocumentXml(beforeBuffer));
+    const afterParagraphs = extractDocxParagraphs(readDocxDocumentXml(afterBuffer));
+
+    if (replacement) {
+      const scope = extractReplacementScope(requestText);
+      const plannedOperation = operations.find((op) => (
+        op?.kind === 'replace_text'
+        && normalizeText(op.needle) === normalizeText(replacement.needle)
+        && normalizeText(op.replacement) === normalizeText(replacement.replacement)
+        && (op.scope || 'document') === scope
+      ));
+      let beforeTargetPresent;
+      let replacementPresent;
+      let needleAbsentFromTarget;
+      let targetTransformationMatches = true;
+      let targetParagraphIndex = null;
+      let afterTargetText = '';
+
+      if (scope === 'title') {
+        const beforeTarget = selectDocxReplacementParagraphs(beforeParagraphs, replacement.needle, 'title')[0] || null;
+        targetParagraphIndex = beforeTarget?.documentIndex ?? null;
+        const afterTarget = Number.isInteger(targetParagraphIndex) ? afterParagraphs[targetParagraphIndex] : null;
+        beforeTargetPresent = Boolean(beforeTarget);
+        afterTargetText = afterTarget?.text || '';
+        replacementPresent = normalizedTextIncludes(afterTargetText, replacement.replacement);
+        const matchedSpan = beforeTarget ? findNeedleSpanInText(beforeTarget.text, replacement.needle) : null;
+        const matchedText = matchedSpan
+          ? beforeTarget.text.slice(matchedSpan.start, matchedSpan.end)
+          : replacement.needle;
+        const scopedReplacement = preserveCaseReplacement(matchedText, replacement.replacement);
+        const expectedAfterTargetText = beforeTarget && matchedSpan
+          ? `${beforeTarget.text.slice(0, matchedSpan.start)}${scopedReplacement}${beforeTarget.text.slice(matchedSpan.end)}`
+          : '';
+        targetTransformationMatches = Boolean(expectedAfterTargetText)
+          && normalizeText(afterTargetText) === normalizeText(expectedAfterTargetText);
+        needleAbsentFromTarget = normalizedTextIncludes(replacement.replacement, replacement.needle)
+          || !normalizedTextIncludes(afterTargetText, replacement.needle);
+      } else {
+        const beforeText = beforeParagraphs.map((paragraph) => paragraph.text).join('\n');
+        const afterText = afterParagraphs.map((paragraph) => paragraph.text).join('\n');
+        beforeTargetPresent = normalizedTextIncludes(beforeText, replacement.needle);
+        replacementPresent = normalizedTextIncludes(afterText, replacement.replacement);
+        needleAbsentFromTarget = !normalizedTextIncludes(afterText, replacement.needle);
+      }
+
+      const executionChanged = Number(plannedOperation?.changedCount || 0) > 0;
+      return {
+        type: 'replace_text',
+        scope,
+        passed: Boolean(plannedOperation)
+          && executionChanged
+          && beforeTargetPresent
+          && replacementPresent
+          && needleAbsentFromTarget
+          && targetTransformationMatches,
+        details: {
+          needle: compact(replacement.needle, 120),
+          replacement: compact(replacement.replacement, 120),
+          plannedOperation: Boolean(plannedOperation),
+          executionChanged,
+          beforeTargetPresent,
+          replacementPresent,
+          needleAbsentFromTarget,
+          targetTransformationMatches,
+          targetParagraphIndex,
+          afterTargetText: compact(afterTargetText, 180),
+        },
+      };
+    }
+
+    const beforeVisible = beforeParagraphs.filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
+    const afterVisible = afterParagraphs.filter((paragraph) => !paragraph.inTable && paragraph.text.trim());
+    const beforeTitle = (beforeVisible.find(isDocxTitleParagraph) || beforeVisible[0])?.text?.trim() || '';
+    const afterTitle = (afterVisible.find(isDocxTitleParagraph) || afterVisible[0])?.text?.trim() || '';
+    const plannedOperation = operations.find((op) => (
+      op?.kind === 'set_document_title'
+      && normalizeText(op.newTitle) === normalizeText(titleChange.newTitle)
+    ));
+    return {
+      type: 'set_document_title',
+      scope: 'title',
+      passed: Boolean(plannedOperation)
+        && normalizeText(afterTitle) === normalizeText(titleChange.newTitle)
+        && normalizeText(afterTitle) !== normalizeText(beforeTitle),
+      details: {
+        plannedOperation: Boolean(plannedOperation),
+        beforeTitle: compact(beforeTitle, 180),
+        afterTitle: compact(afterTitle, 180),
+        requestedTitle: compact(titleChange.newTitle, 180),
+      },
+    };
+  } catch (error) {
+    return {
+      type: replacement ? 'replace_text' : 'set_document_title',
+      scope: replacement ? extractReplacementScope(requestText) : 'title',
+      passed: false,
+      details: { error: String(error?.message || error || '').slice(0, 240) },
+    };
+  }
 }
 
 async function extractVisibleTextForFormat(buffer, format) {
@@ -4051,6 +4684,24 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         passed: normalizedTextIncludes(text, op.title),
         details: { slideNumber: op.slideNumber || null, title: compact(op.title, 120) },
       });
+    } else if (op.kind === 'set_slide_background' && format === 'pptx') {
+      let passed = false;
+      let hit = 0;
+      try {
+        const zip = new PizZip(buffer);
+        const hex = String(op.color || '').replace(/^#/, '').toUpperCase();
+        for (const name of Object.keys(zip.files)) {
+          if (!/^ppt\/slides\/slide\d+\.xml$/.test(name)) continue;
+          if ((zip.file(name)?.asText() || '').includes(`val="${hex}"`)) hit += 1;
+        }
+        passed = hit > 0 && (!op.changed || hit >= Number(op.changed));
+      } catch { passed = false; }
+      checks.push({
+        id: 'pptx_slide_background_changed',
+        label: 'Fondo de diapositivas actualizado',
+        passed,
+        details: { color: op.color || null, colorName: op.colorName || null, slidesWithColor: hit },
+      });
     } else if ((op.kind === 'recolor_image' || op.kind === 'replace_image') && format === 'pptx') {
       // Byte-level proof on the final buffer: the target media part must hold
       // different bytes (recolor) / exactly the replacement bytes (replace).
@@ -4089,6 +4740,14 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         label: 'Formato aplicado al rango',
         passed: stylesHasCode && Number(op.cellsChanged || 0) > 0,
         details: { formatCode: op.formatCode || null, cellsChanged: op.cellsChanged || 0, sheetName: op.sheetName || null },
+      });
+    } else if (op.kind === 'add_slide' && format === 'pptx') {
+      const titleOk = op.title ? normalizedTextIncludes(text, String(op.title).slice(0, 120)) : false;
+      checks.push({
+        id: 'pptx_slide_added',
+        label: 'Diapositiva PowerPoint agregada',
+        passed: titleOk,
+        details: { title: compact(op.title, 120) },
       });
     } else if (op.kind === 'append_generic' && format === 'pptx') {
       const hasAnyAddedText = nonPageBreakBlocks(blocks)
@@ -4133,6 +4792,114 @@ function buildAgenticDocumentCycle({ operations = [], semanticCriteria, previewH
   };
 }
 
+function zipPartBuffer(zip, name) {
+  const entry = zip?.files?.[name];
+  if (!entry || entry.dir) return null;
+  try {
+    return Buffer.from(entry.asUint8Array());
+  } catch {
+    return null;
+  }
+}
+
+function ooxmlPartNames(zip) {
+  return Object.entries(zip?.files || {})
+    .filter(([, entry]) => entry && !entry.dir)
+    .map(([name]) => name)
+    .sort();
+}
+
+function countXmlNodes(xml = '', tag = '') {
+  if (!tag) return 0;
+  const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return (String(xml || '').match(new RegExp(`<${escaped}(?:\\s|>)`, 'g')) || []).length;
+}
+
+/**
+ * Prove that the generated Office file is an edited copy of the uploaded
+ * package instead of a newly reconstructed document. For a title-only DOCX
+ * edit the proof is deliberately strict: every package part except the two
+ * title-bearing XML parts must remain byte-identical, while paragraph/table/
+ * drawing structure must remain unchanged.
+ */
+function assessSourcePreservation(beforeBuffer, afterBuffer, format, operations = []) {
+  if (!Buffer.isBuffer(beforeBuffer) || !Buffer.isBuffer(afterBuffer) || !beforeBuffer.length || !afterBuffer.length) {
+    return { passed: false, reason: 'missing_source_or_output_buffer' };
+  }
+
+  if (format === 'pptx' && operations.length === 1 && operations[0]?.kind === 'set_slide_title') {
+    return { ...verifySlideTitleEdit(beforeBuffer, afterBuffer, operations[0]), strictTitleOnly: true };
+  }
+  if (!['docx', 'xlsx', 'pptx'].includes(format)) {
+    const signaturePreserved = format === 'pdf'
+      ? beforeBuffer.slice(0, 5).toString('latin1') === '%PDF-' && afterBuffer.slice(0, 5).toString('latin1') === '%PDF-'
+      : afterBuffer.length > 0;
+    return { passed: signaturePreserved, signaturePreserved, strictTitleOnly: false };
+  }
+
+  try {
+    const beforeZip = new PizZip(beforeBuffer);
+    const afterZip = new PizZip(afterBuffer);
+    const beforeParts = ooxmlPartNames(beforeZip);
+    const afterPartSet = new Set(ooxmlPartNames(afterZip));
+    const missingParts = beforeParts.filter((name) => !afterPartSet.has(name));
+    const requiredPart = format === 'docx'
+      ? 'word/document.xml'
+      : format === 'xlsx'
+        ? 'xl/workbook.xml'
+        : 'ppt/presentation.xml';
+    const packageStructurePreserved = missingParts.length === 0 && afterPartSet.has(requiredPart);
+
+    const titleOnly = format === 'docx'
+      && operations.length > 0
+      && operations.every((operation) => operation?.kind === 'set_document_title'
+        || (operation?.kind === 'replace_text' && operation?.scope === 'title'));
+    if (!titleOnly) {
+      return {
+        passed: packageStructurePreserved,
+        packageStructurePreserved,
+        missingParts,
+        strictTitleOnly: false,
+      };
+    }
+
+    const allowedChangedParts = new Set(['word/document.xml', 'docProps/core.xml']);
+    const unexpectedlyChangedParts = beforeParts.filter((name) => {
+      if (allowedChangedParts.has(name)) return false;
+      const beforePart = zipPartBuffer(beforeZip, name);
+      const afterPart = zipPartBuffer(afterZip, name);
+      return !beforePart || !afterPart || !beforePart.equals(afterPart);
+    });
+    const beforeDocumentXml = beforeZip.file('word/document.xml')?.asText() || '';
+    const afterDocumentXml = afterZip.file('word/document.xml')?.asText() || '';
+    const structuralCounts = {
+      paragraphs: [countXmlNodes(beforeDocumentXml, 'w:p'), countXmlNodes(afterDocumentXml, 'w:p')],
+      tables: [countXmlNodes(beforeDocumentXml, 'w:tbl'), countXmlNodes(afterDocumentXml, 'w:tbl')],
+      drawings: [countXmlNodes(beforeDocumentXml, 'w:drawing'), countXmlNodes(afterDocumentXml, 'w:drawing')],
+      sections: [countXmlNodes(beforeDocumentXml, 'w:sectPr'), countXmlNodes(afterDocumentXml, 'w:sectPr')],
+    };
+    const documentStructurePreserved = Object.values(structuralCounts).every(([before, after]) => before === after);
+    const passed = packageStructurePreserved
+      && unexpectedlyChangedParts.length === 0
+      && documentStructurePreserved;
+    return {
+      passed,
+      packageStructurePreserved,
+      documentStructurePreserved,
+      strictTitleOnly: true,
+      missingParts,
+      unexpectedlyChangedParts,
+      structuralCounts,
+    };
+  } catch (error) {
+    return {
+      passed: false,
+      reason: `invalid_${format}_package`,
+      error: String(error?.message || error || '').slice(0, 240),
+    };
+  }
+}
+
 async function validateEditedBuffer(buffer, format, blocks, context = {}) {
   const appendedNeedle = blocks
     .map((item) => String(item.text || '').trim())
@@ -4172,16 +4939,41 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
     return buffer.includes(Buffer.from(appendedNeedle.slice(0, Math.min(20, appendedNeedle.length))));
   })();
   const semanticCriteria = format === 'docx'
-    ? validateDocxOperationCriteria(buffer, context.operations || [])
+    ? validateDocxOperationCriteria(buffer, context.operations || [], { beforeBuffer: context.beforeBuffer })
     : await validateOfficeOperationCriteria(buffer, format, context.operations || [], blocks);
   const hasSemanticCriteria = semanticCriteria.checks.length > 0;
   const operationEffectApplied = semanticCriteria.checks.length > 0 ? semanticCriteria.passed : appendedTextPresent;
+  const hasAppendOperation = (context.operations || []).some((op) => (
+    op?.kind === 'append_generic' || op?.kind === 'append_labeled'
+  ));
+  // Structural growth alone is insufficient for an append operation. Prove
+  // that a fingerprint from the exact blocks produced for this run is visible
+  // in the resulting document, otherwise an unrelated paragraph/heading could
+  // still be presented to the user as a validated edit.
+  const appendFingerprintPresent = !hasAppendOperation || appendedTextPresent;
+  const sourcePreservation = assessSourcePreservation(
+    context.beforeBuffer,
+    buffer,
+    format,
+    context.operations || [],
+  );
   const checks = {
-    source_preserved: true,
-    content_appended: hasSemanticCriteria ? operationEffectApplied : (appendedNeedle ? appendedTextPresent : operationEffectApplied),
+    source_preserved: sourcePreservation.passed,
+    content_appended: hasSemanticCriteria
+      ? operationEffectApplied && appendFingerprintPresent
+      : (appendedNeedle ? appendedTextPresent : operationEffectApplied),
     operation_criteria: semanticCriteria.passed,
     non_empty: buffer.length > 0,
   };
+  const requestContract = format === 'docx'
+    ? validateDocxRequestContract(
+      context.beforeBuffer,
+      buffer,
+      context.requestText || '',
+      context.operations || [],
+    )
+    : null;
+  if (requestContract) checks.request_contract = requestContract.passed;
   if (Buffer.isBuffer(context.beforeBuffer)) {
     checks.bytes_changed = !buffer.equals(context.beforeBuffer);
   }
@@ -4209,6 +5001,8 @@ async function validateEditedBuffer(buffer, format, blocks, context = {}) {
       appendedBlocks: blocks.filter((item) => item.kind !== 'pageBreak').length,
       sizeBytes: buffer.length,
       operationCriteria: semanticCriteria.checks,
+      requestContract,
+      sourcePreservation,
       agenticCycle: buildAgenticDocumentCycle({
         operations: context.operations || [],
         semanticCriteria,
@@ -4266,7 +5060,15 @@ function clauseIsFill(clauseNorm) {
 
 function clauseIsAppend(clauseNorm) {
   clauseNorm = withCollapsedRepeats(clauseNorm);
-  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|adjunt\w*|coloc\w*)\b/.test(clauseNorm)
+  // `adjunt\w*` used to treat the adjective in "documentos adjuntos" as an
+  // append command. In a compound request ("edita los documentos adjuntos y
+  // cambia el título") that manufactured an ANEXOS page after the surgical
+  // title edit. Keep real "adjunta/agrega" actions, but exclude attachment
+  // descriptors that merely identify the files to edit.
+  const attachmentDescriptor = /\b(?:documentos?|archivos?|imagenes?|fotos?|contenido)\s+adjunt(?:o|a|os|as)\b/.test(clauseNorm);
+  const attachAction = /\badjunt(?:a|ar|e|en|emos|ando|ado)\w*\b/.test(clauseNorm) && !attachmentDescriptor;
+  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|coloc\w*)\b/.test(clauseNorm)
+    || attachAction
     || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
 }
 
@@ -4347,52 +5149,205 @@ function extractQuotedValues(text = '') {
   return values.filter(Boolean);
 }
 
-function extractReplacementPair(text = '') {
+/**
+ * Extract EVERY quoted replace pair from the ORIGINAL prompt, preserving the
+ * user's casing/accents. Compound instructions like:
+ *   reemplaza "Introducción original" por "Introducción mejorada" y cambia
+ *   "BORRADOR" por "APROBADO"
+ * used to lose the 2nd pair's casing because clause-splitting runs on
+ * normalizeText() (lowercased). Scanning the raw prompt keeps surgical
+ * replacements byte-faithful to what the user typed.
+ */
+function extractAllQuotedReplacementPairs(text = '') {
   const raw = String(text || '');
-  const quoted = extractQuotedValues(raw);
-  if (quoted.length >= 2 && /\b(reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i.test(raw)) {
-    return { needle: quoted[0], replacement: quoted[1] };
-  }
-  const normalized = normalizeText(raw);
-  const match = normalized.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/);
-  if (!match) return null;
-  const needle = match[1]
-    .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  let replacement = match[2].replace(/[.;!?]+$/g, '').trim();
-  // Preserve the user's original casing/accents for the REPLACEMENT. The match
-  // above runs on normalizeText() output (lowercased, accents stripped), which
-  // would emit "introduccion" instead of "Introducción". Re-run the same
-  // pattern on the raw text and trust the raw capture only when it normalizes
-  // to the same span (guards against the raw regex matching a different range).
-  // The needle stays normalized — downstream replaceNeedleText matches it
-  // case-insensitively, so only the replacement's casing reaches the output.
-  const rawMatch = raw.match(/\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(.{3,120}?)\s+(?:por|con|a)\s+(.{3,220})$/iu);
-  if (rawMatch && rawMatch[2]) {
-    const rawReplacement = rawMatch[2].replace(/[.;!?]+$/g, '').trim();
-    if (rawReplacement && normalizeText(rawReplacement) === normalizeText(replacement)) {
-      replacement = rawReplacement;
+  if (!raw) return [];
+  const pairs = [];
+  const re = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]\s+(?:por|con|al|a\s+(?:la|el)|a)\s+["“”'‘’]([^"“”'‘’]{1,500})["“”'‘’]/giu;
+  let match;
+  while ((match = re.exec(raw))) {
+    const needle = cleanQuotedReplacementValue(match[1]);
+    const replacement = cleanQuotedReplacementValue(match[2]);
+    if (needle.length >= 2 && replacement.length >= 1) {
+      pairs.push({ needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) });
     }
   }
+  return pairs;
+}
+
+// Spanish "cambia DE X por Y" leaves a residual "de " in the capture group.
+// Also strip role noise that sometimes leaks in ("título del word …").
+function cleanReplacementNeedle(needle = '') {
+  let value = String(needle || '').trim();
+  if (!value) return '';
+  value = value
+    // Leading Spanish prepositions from "cambia de / del / de la X"
+    .replace(/^(?:de\s+la|de\s+el|del|de|el|la|los|las|un|una)\s+/i, '')
+    // "en el título del word/documento" noise before the real needle
+    .replace(/^(?:en\s+el\s+|el\s+)?(?:t[ií]tulo|title)(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:del|de)?\s*/i, '')
+    .replace(/^(?:texto|frase|palabra|contenido|que\s+dice|donde\s+dice)\s+/i, '')
+    .replace(/^(?:de\s+la|de\s+el|del|de|el|la)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return value;
+}
+
+function cleanReplacementValue(value = '') {
+  let text = String(value || '')
+    .replace(/[.;!?]+$/g, '')
+    .replace(/\s+(?:por\s+favor|gracias|sin\s+tocar.*|conserva\w*.*|devu[eé]lv\w*.*)$/iu, '')
+    // Delivery/scope language is not part of the replacement itself. Live
+    // example: "cajamarca en mi mismo word" must write only "cajamarca".
+    .replace(/\s+(?:en|sobre|dentro\s+de)\s+(?:(?:mi|el|la|este|esta|ese|esa)\s+)?(?:(?:mismo|misma)\s+)?(?:word|docx|documento|archivo)(?:\s+(?:original|adjunto|completo|editado))?\s*$/iu, '')
+    .replace(/[.;!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Typo: "Judicial de de Cajamarca" → "Judicial de Cajamarca"
+  text = text.replace(/\bde\s+de\b/gi, 'de');
+  return text;
+}
+
+// Quotation marks are an explicit literal boundary. Do not run semantic
+// cleanup rules over quoted text: a legitimate value such as
+// "La política conserva tus datos" must remain byte-faithful to the user.
+function cleanQuotedReplacementValue(value = '') {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+// Unquoted replacement prompts often continue with delivery or preservation
+// instructions. Those clauses describe how the edit must be performed; they
+// are never part of the replacement value itself. Keep quoted replacement
+// values literal by applying this cleanup only to the unquoted parser paths.
+function cleanUnquotedReplacementValue(value = '') {
+  return cleanReplacementValue(String(value || '')
+    .replace(/\s+(?:y\s+)?(?:solo|solamente|[uú]nicamente)\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:eso|esto|ello|el\s+t[ií]tulo|esa\s+parte)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?no\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?sin\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*|alter\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*|regres\w*)\b[\s\S]*$/iu, '')
+    .trim())
+    // Commas/colons commonly separate the replacement from a preservation
+    // clause ("a 2027, solo modifica ello"); they are not document content.
+    .replace(/[,;:]+$/g, '')
+    .trim();
+}
+
+function extractReplacementScope(text = '') {
+  const normalized = normalizeText(text);
+  if (/\b(?:titulo|title)\b/.test(normalized)) return 'title';
+  return 'document';
+}
+
+const REPLACE_VERB_RE = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\b/i;
+// Optional "de/del/de la" after the verb so "cambia de X por Y" does not glue
+// the preposition onto the needle (live bug: needle became "de judicial de ayacucho").
+const REPLACE_PAIR_CAPTURE_RE = /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(?:(?:del|de(?:\s+(?:la|el))?)\b)?\s*(.{3,160}?)\s+(?:por|con|al|a\s+(?:la|el)|a)\s+(.{3,220})$/iu;
+
+function extractReplacementPair(text = '') {
+  const raw = String(text || '');
+  // Prefer the first quoted pair from the RAW text so casing survives even when
+  // callers pass a normalized clause.
+  const allQuoted = extractAllQuotedReplacementPairs(raw);
+  if (allQuoted.length) return allQuoted[0];
+  const quoted = extractQuotedValues(raw);
+  if (quoted.length >= 2 && REPLACE_VERB_RE.test(raw)) {
+    const needle = cleanQuotedReplacementValue(quoted[0]);
+    const replacement = cleanQuotedReplacementValue(quoted[1]);
+    if (needle.length >= 2 && replacement.length >= 1) {
+      return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
+    }
+  }
+
+  // Prefer the RAW capture (casing/accents intact), then fall back to the
+  // normalized form for typo-tolerant matching.
+  const rawMatch = raw.match(REPLACE_PAIR_CAPTURE_RE);
+  if (rawMatch) {
+    const needle = cleanReplacementNeedle(rawMatch[1]);
+    const replacement = cleanUnquotedReplacementValue(rawMatch[2]);
+    if (needle.length >= 3 && replacement.length >= 1) {
+      return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
+    }
+  }
+
+  const normalized = normalizeText(raw);
+  const match = normalized.match(
+    /\b(?:reemplaz\w*|sustitu\w*|cambi\w*|modific\w*|corrig\w*)\s+(?:(?:del|de(?:\s+(?:la|el))?)\b)?\s*(.{3,160}?)\s+(?:por|con|al|a\s+(?:la|el)|a)\s+(.{3,220})$/,
+  );
+  if (!match) return null;
+  const needle = cleanReplacementNeedle(match[1]
+    .replace(/\b(?:el|la|los|las|texto|frase|palabra|contenido|que dice|donde dice)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+  const replacement = cleanUnquotedReplacementValue(match[2]);
   if (needle.length < 3 || replacement.length < 1) return null;
   return { needle: needle.slice(0, 180), replacement: replacement.slice(0, 500) };
 }
 
+const DOCX_TITLE_WRITE_VERB_RE = /\b(?:cambi\w*|modifi(?:c|q)\w*|reemplaz\w*|actualiz\w*|corrig\w*|col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*)\b/iu;
+
+function cleanDocxTitleAssignmentValue(value = '') {
+  return cleanReplacementValue(String(value || '')
+    // Scope/preservation clauses describe what must NOT change; they are not
+    // part of the requested title. This is the exact live phrasing that used
+    // to create the title "2027 solo modifica ello" (or, worse, an appendix).
+    .replace(/\s+(?:y\s+)?(?:solo|solamente|[uú]nicamente)\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:eso|esto|ello|el\s+t[ií]tulo|esa\s+parte)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?no\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?sin\s+(?:modifi(?:c|q)\w*|cambi\w*|edit\w*|to(?:c|q)\w*|alter\w*)\s+(?:nada\s+m[aá]s|lo\s+dem[aá]s|el\s+resto)\b[\s\S]*$/iu, '')
+    .replace(/\s+(?:y\s+)?(?:devu[eé]lv\w*|entr[eé]g\w*|retorn\w*|regres\w*)\b[\s\S]*$/iu, '')
+    .trim());
+}
+
 function extractDocxTitleChange(text = '') {
   const raw = String(text || '').trim();
-  if (!/\b(?:cambi\w*|modific\w*|reemplaz\w*|actualiz\w*|corrig\w*)\b/iu.test(raw)) return null;
-  const match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
+  if (!DOCX_TITLE_WRITE_VERB_RE.test(raw) && !/\b(?:t[ií]tulo|title)\b[^.?!]{0,80}\b(?:que\s+diga|debe\s+ser)\b/iu.test(raw)) return null;
+  // Full title assignment: "cambia el título a / por / : Nuevo Título"
+  // (NOT "cambia de A por B" — that is a surgical span replace, even when the
+  // user says "en el título").
+  const dePor = /\bcambia\w*\s+de\b.+\bpor\b/iu.test(raw)
+    || /\breemplaz\w*\s+.+\bpor\b/iu.test(raw);
+  if (dePor && /\b(?:t[ií]tulo|title)\b/iu.test(raw)) {
+    // Title-scoped partial replace is handled as replace_text, not a full title rewrite.
+    return null;
+  }
+  let match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:a|por|:)\s+([\s\S]{2,220})$/iu);
+  // Natural owner phrasing used in chat: "el título le coloques 2027",
+  // "el título debe ser 2027" or "el título que diga Informe final".
+  if (!match) {
+    match = raw.match(/\b(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:(?:le|lo)\s+)?(?:col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*|que\s+diga|debe\s+ser)\s*(?:a|por|con|como|en|:)?\s+([\s\S]{1,220})$/iu);
+  }
+  // Verb-first forms: "coloca en el título 2027" / "pon el título como 2027".
+  if (!match) {
+    match = raw.match(/\b(?:col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*)\s+(?:(?:en|como|a)\s+)?(?:el\s+)?(?:t[ií]tulo|title)\b(?:\s+(?:del|de\s+la|de\s+el)\s+(?:documento|archivo|word|docx|informe|reporte))?\s*(?:a|por|con|como|en|:)?\s+([\s\S]{1,220})$/iu);
+  }
+  // Value-first forms: "ponle 2027 al título" / "coloca 2027 como título".
+  if (!match) {
+    const valueFirst = raw.match(/\b(?:col[oó](?:c|q)\w*|pon\w*|asign\w*|estable[cz]\w*|fij\w*|dej\w*|escrib\w*)\s+([\s\S]{1,180}?)\s+(?:al|como\s+(?:el\s+)?|en\s+(?:el\s+)?)\s*(?:t[ií]tulo|title)\b/iu);
+    if (valueFirst) match = valueFirst;
+  }
   if (!match) return null;
   const nextAction = /\s+(?:y|e)\s+(?=(?:agreg\w*|a[nñ]ad\w*|inclu\w*|incorpor\w*|conserv\w*|mant\w*|devu[eé]lv\w*|entreg\w*|quit\w*|elimin\w*|borr\w*|revis\w*|verific\w*)\b)/iu;
-  const newTitle = match[1]
+  const newTitle = cleanDocxTitleAssignmentValue(match[1]
     .split(nextAction)[0]
     .split(/[.;\n]/)[0]
     .replace(/^['"“”‘’`]+|['"“”‘’`]+$/g, '')
     .replace(/\s+(?:y|e)$/iu, '')
-    .trim();
+    .trim());
   if (newTitle.length < 2) return null;
   return { newTitle: newTitle.slice(0, 180) };
+}
+
+function requestHasUnresolvedTargetedDocxEdit(text = '') {
+  const raw = String(text || '').trim();
+  const normalized = normalizeText(raw);
+  if (!normalized) return false;
+  if (extractReplacementPair(raw) || extractDocxTitleChange(raw)) return false;
+  if (requestWantsProfessionalEditing(normalized) || requestWantsMinimalProofreading(normalized)) return false;
+
+  const hasMutationVerb = REPLACE_VERB_RE.test(raw)
+    || (DOCX_TITLE_WRITE_VERB_RE.test(raw) && /\b(?:titulo|title)\b/.test(normalized));
+  if (!hasMutationVerb) return false;
+
+  const hasTargetCue = /\b(?:titulo|title|texto|frase|palabra|nombre|fecha|ano|numero|dato|valor)\b/.test(normalized);
+  const hasTransitionCue = /\b(?:de|desde)\b.{1,160}\b(?:al|a|por|con|hasta)\b/.test(normalized);
+  return hasTargetCue || hasTransitionCue;
 }
 
 function cleanupXlsxCellWriteValue(value = '') {
@@ -4519,7 +5474,8 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   }
 
   if (replacement) {
-    return { kind: 'replace_text', ...replacement };
+    const scope = extractReplacementScope(clauseNorm);
+    return { kind: 'replace_text', ...replacement, ...(scope === 'title' ? { scope } : {}) };
   }
 
   if (requestWantsMinimalOnlyProofreading(clauseNorm)) {
@@ -4587,7 +5543,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.address || ''}:${op.slideNumber || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || op.title || '')}:${op.scope || ''}:${op.address || ''}:${op.slideNumber || ''}:${normalizeText((op.bullets || []).join('|'))}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -4608,13 +5564,66 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   if (rawTitleChange) add({ kind: 'set_document_title', ...rawTitleChange });
   const rawNamedSection = extractNamedSectionAppend(requestText);
   if (rawNamedSection) add({ kind: 'append_section', ...rawNamedSection });
-  const rawReplacement = extractReplacementPair(requestText);
-  if (rawReplacement && !rawTitleChange) add({ kind: 'replace_text', ...rawReplacement });
+  const xmlPlainText = String(documentXml || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const structuralIntent = !rawNamedSection
+    ? parseOfficeUserIntent(requestText, { format: 'docx' })
+    : null;
+  if (structuralIntent?.kind === 'add_sections' && (structuralIntent.count > 1 || structuralIntent.lastIsBibliography)) {
+    for (const section of buildAddSectionOperations(structuralIntent, {
+      requestText,
+      sourceText: xmlPlainText,
+    })) {
+      add(section);
+    }
+  }
+  // All quoted replace pairs from the ORIGINAL prompt (casing preserved).
+  // Doing this before the normalized-clause loop means compound prompts keep
+  // "APROBADO" instead of collapsing to "aprobado".
+  const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  const replacementScope = extractReplacementScope(requestText);
+  if (quotedPairs.length && !rawTitleChange) {
+    for (const pair of quotedPairs) add({
+      kind: 'replace_text',
+      ...pair,
+      ...(replacementScope === 'title' ? { scope: replacementScope } : {}),
+    });
+  } else {
+    const rawReplacement = extractReplacementPair(requestText);
+    if (rawReplacement && !rawTitleChange) add({
+      kind: 'replace_text',
+      ...rawReplacement,
+      ...(replacementScope === 'title' ? { scope: replacementScope } : {}),
+    });
+  }
   const norm = normalizeText(requestText);
   if (requestWantsMinimalProofreading(norm) && !requestWantsProfessionalEditing(norm)) {
     add({ kind: 'proofread_minimal' });
   }
-  for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
+  for (const clause of clauses) {
+    const operation = buildOperationFromClause(clause, documentXml);
+    // A title-assignment phrase containing "coloca" was historically treated
+    // as an append request by clauseIsAppend(), yielding an unwanted ANEXOS
+    // page. Once the title assignment was parsed, that same clause is fully
+    // accounted for and must not also append generic content.
+    if (rawTitleChange && operation?.kind === 'append_generic' && extractDocxTitleChange(clause)) continue;
+    if (operation?.kind === 'append_generic' && !operation.wantsInstrument
+      && ops.some((item) => item.kind === 'append_section')) {
+      continue;
+    }
+    add(operation);
+  }
+
+  // A targeted mutation that we could not understand must never degrade into
+  // an appendix. That produced a downloadable, "validated" DOCX while leaving
+  // the requested title unchanged. Fail closed before any bytes are written.
+  const hasUnresolvedMutationClause = clauses.length
+    ? clauses.some((clause) => requestHasUnresolvedTargetedDocxEdit(clause))
+    : requestHasUnresolvedTargetedDocxEdit(requestText);
+  if (hasUnresolvedMutationClause) {
+    const error = new Error('No pude identificar con seguridad el texto exacto que deseas cambiar en el Word. Indica el valor actual y el nuevo valor.');
+    error.code = 'SOURCE_EDIT_INTENT_UNRESOLVED';
+    throw error;
+  }
 
   // Broader understanding: "completa / rellena las tablas vacías / los anexos /
   // todo lo que falte" with no explicit number → fill every empty-table or empty
@@ -5069,7 +6078,13 @@ function requestedSectionPointCount(requestText = '', fallback = 2) {
   return Math.max(1, Math.min(10, value));
 }
 
-function namedSectionFallbackBlocks({ sectionTitle = '', requestText = '', sourceText = '' } = {}) {
+function namedSectionFallbackBlocks({ sectionTitle = '', requestText = '', sourceText = '', bullets = [] } = {}) {
+  if (Array.isArray(bullets) && bullets.length) {
+    return [
+      block('heading1', sectionTitle),
+      ...bullets.map((item) => block('bullet', item)),
+    ];
+  }
   const normalizedTitle = normalizeText(sectionTitle);
   if (normalizedTitle.includes('recomendacion')) {
     const recommendations = [
@@ -5129,6 +6144,7 @@ async function runAppendSectionOperation({ buffer, op, requestText, sourceText, 
       sectionTitle: op.sectionTitle,
       requestText,
       sourceText: sourceText || sourceFile.extractedText || '',
+      bullets: op.bullets,
     });
   }
   blocks = normalizeNamedSectionBlocks(blocks, {
@@ -5174,6 +6190,131 @@ function formatReferenceApa(paper) {
   return [authorPart, year, `${String(paper.title).trim()}.`, venue ? `${venue}.` : '', link]
     .filter(Boolean)
     .join(' ');
+}
+
+function isBibliographyOfficeOp(op = {}) {
+  return /referenc|bibliograf/i.test(String(op.title || op.sectionTitle || ''));
+}
+
+async function fillVerifiedBibliographyOp(op, { requestText, sourceText, originalName, signal }) {
+  if (!op || !isBibliographyOfficeOp(op)) return op;
+  const wanted = Number(op.needsVerifiedSources)
+    || parseRequestedSourceCount(requestText)
+    || 0;
+  const fromDoc = extractSourceCitations(sourceText, wanted || 5);
+  const target = wanted > 0 ? wanted : (fromDoc.length ? fromDoc.length : 2);
+  const remaining = Math.max(0, target - fromDoc.length);
+  const topic = inferTheme(sourceText, originalName, requestText);
+  const papers = remaining > 0
+    ? await fetchVerifiedReferences({ topic, count: remaining, signal })
+    : [];
+  const bullets = [
+    ...fromDoc.map((item) => `${item}.`),
+    ...papers.map(formatReferenceApa),
+  ].filter(Boolean);
+  if (!bullets.length) return op;
+  return { ...op, bullets: bullets.slice(0, 8), needsVerifiedSources: 0 };
+}
+
+async function rewriteOfficeUnitsWithLlm({ ops, requestText, sourceText, format, signal }) {
+  if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_OFFICE_CONTENT_LLM !== '1') return null;
+  if (!hasAnyContentKey()) return null;
+  const contentOps = (ops || []).filter((op) => op.kind === 'add_slide' || op.kind === 'append_section');
+  if (!contentOps.length) return null;
+  const resolved = resolveContentClient();
+  if (!resolved) return null;
+  const context = String(sourceText || '').replace(/\s+/g, ' ').slice(0, 8000);
+  try {
+    const completion = await resolved.client.chat.completions.create({
+      model: resolved.model,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Editas el CONTENIDO de unidades nuevas (diapositivas o secciones) de un archivo Office existente.',
+            'Cada unidad debe nacer de ESTE documento y de ESTE pedido. Prohibido rellenar con plantillas pregrabadas',
+            '(no "coordinación entre áreas", "control proporcional", "plan 30-60-90", recetarios APA, ni el prompt copiado).',
+            'Si un hecho no está en el extracto, no lo inventes. No inventes DOI, URLs, autores ni años.',
+            'La bibliografía solo lista citas que ya aparecen en el extracto; si no hay, deja un único aviso honesto.',
+            'Responde SOLO JSON: {"units":[{"title":"...","bullets":["..."]}]} con exactamente el mismo número de unidades.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Formato: ${format || 'office'}`,
+            `Pedido: ${String(requestText || '').slice(0, 1500)}`,
+            '',
+            'Extracto del documento adjunto:',
+            context || '(sin texto extraído)',
+            '',
+            'Unidades estructurales a redactar (conserva el orden; la última es bibliografía si el título lo indica):',
+            JSON.stringify(contentOps.map((op) => ({
+              title: op.title || op.sectionTitle || '',
+              bibliography: isBibliographyOfficeOp(op),
+            }))),
+          ].join('\n'),
+        },
+      ],
+      temperature: 0.3,
+    }, { ...(signal ? { signal } : {}), timeout: 25_000 });
+    const parsed = JSON.parse(completion?.choices?.[0]?.message?.content || '{}');
+    const units = Array.isArray(parsed?.units) ? parsed.units : [];
+    if (units.length !== contentOps.length) return null;
+    return units.map((unit, index) => {
+      const title = String(unit?.title || contentOps[index].title || contentOps[index].sectionTitle || '').trim().slice(0, 120);
+      const bullets = (Array.isArray(unit?.bullets) ? unit.bullets : [])
+        .map((item) => String(item || '').trim().slice(0, 220))
+        .filter(Boolean)
+        .slice(0, 8);
+      if (!title || looksLikePromptDump(`${title} ${bullets.join(' ')}`)) return null;
+      return { title, bullets };
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function enrichOfficeContentOperations(operations, {
+  requestText = '',
+  sourceText = '',
+  originalName = '',
+  format = '',
+  signal,
+} = {}) {
+  const ops = Array.isArray(operations) ? operations.map((op) => ({ ...op })) : [];
+  const rewritable = ops.filter((op) => op.kind === 'add_slide' || op.kind === 'append_section');
+  const rewritten = await rewriteOfficeUnitsWithLlm({
+    ops: rewritable,
+    requestText,
+    sourceText,
+    format,
+    signal,
+  });
+  if (rewritten) {
+    let cursor = 0;
+    for (const op of ops) {
+      if (op.kind !== 'add_slide' && op.kind !== 'append_section') continue;
+      const next = rewritten[cursor];
+      cursor += 1;
+      if (!next) continue;
+      if (op.kind === 'add_slide') op.title = next.title;
+      if (op.kind === 'append_section') op.sectionTitle = next.title;
+      if (next.bullets.length) op.bullets = next.bullets;
+    }
+  }
+  for (let i = 0; i < ops.length; i += 1) {
+    if (!isBibliographyOfficeOp(ops[i])) continue;
+    // eslint-disable-next-line no-await-in-loop
+    ops[i] = await fillVerifiedBibliographyOp(ops[i], {
+      requestText,
+      sourceText,
+      originalName,
+      signal,
+    });
+  }
+  return ops;
 }
 
 async function runAppendReferencesOperation({ buffer, op, sourceText, sourceFile, signal }) {
@@ -5254,15 +6395,19 @@ function runDeleteSectionOperation({ buffer, op }) {
 }
 
 function runReplaceTextOperation({ buffer, op }) {
-  const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement);
+  const result = replaceTextInDocxBuffer(buffer, op.needle, op.replacement, { scope: op.scope || 'document' });
+  op.changedCount = result.changedCount;
+  op.remainingMatchCount = result.remainingMatchCount;
   return {
     buffer: result.buffer,
     validationBlocks: [block('normal', op.replacement)],
     step: {
       kind: 'replace_text',
-      label: 'Texto específico',
-      mode: 'safe_replace',
+      label: op.scope === 'title' ? 'Título del documento' : 'Texto específico',
+      mode: op.scope === 'title' ? 'title_scoped_safe_replace' : 'safe_replace',
       changedCount: result.changedCount,
+      remainingMatchCount: result.remainingMatchCount,
+      scope: op.scope || 'document',
       needle: op.needle,
       replacement: op.replacement,
     },
@@ -5864,37 +7009,107 @@ async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
 // do whole-deck text replacement or append a slide, so title edits degraded
 // to appendix slides.
 const SLIDE_NOUN_RE = /\b(?:diapositiva|l[aá]mina|slide)\s*(?:n(?:ro|umero)?\.?\s*|#\s*)?(\d{1,3})\b/;
-const SLIDE_TITLE_NOUN_RE = /\b(t[ií]tulo|title)\b/;
-const SLIDE_TITLE_VERB_RE = /\b(cambi\w*|pon(?:er|ga|le)?|actualiza\w*|reemplaz\w*|reempla[zc]\w*|edita\w*|escrib\w*|modific\w*|set|change\w*|rename\w*)\b/;
+function parsePresentationEditRequest(requestText = '', context = {}) {
+  return parsePresentationTitleEdit(requestText, context);
+}
 
-function parsePresentationEditRequest(requestText = '') {
+const DECK_COLOR_HEX = Object.freeze({
+  blanco: 'FFFFFF',
+  white: 'FFFFFF',
+  negro: '111111',
+  black: '111111',
+  rosado: 'F8BBD0',
+  rosa: 'F48FB1',
+  pink: 'F48FB1',
+  rojo: 'C62828',
+  red: 'C62828',
+  azul: '1565C0',
+  blue: '1565C0',
+  verde: '2E7D32',
+  green: '2E7D32',
+  amarillo: 'F9A825',
+  yellow: 'F9A825',
+  naranja: 'EF6C00',
+  orange: 'EF6C00',
+  morado: '6A1B9A',
+  violeta: '7B1FA2',
+  purple: '6A1B9A',
+  gris: '757575',
+  gray: '757575',
+  grey: '757575',
+  crema: 'FFF8E1',
+  beige: 'F5F5DC',
+});
+
+function parseNamedColor(text = '') {
+  const hex = /#([0-9a-fA-F]{6})\b/.exec(text);
+  if (hex) return { hex: hex[1].toUpperCase(), name: `#${hex[1].toUpperCase()}` };
+  const t = normalizeText(text);
+  for (const [name, value] of Object.entries(DECK_COLOR_HEX)) {
+    if (new RegExp(`\\b${name}\\b`).test(t)) return { hex: value, name };
+  }
+  return null;
+}
+
+function parseDeckStyleRequest(requestText = '') {
   const text = normalizeText(requestText);
   if (!text) return null;
-  // A quoted replace-pair («reemplaza "X" por "Y"») is replace_text territory
-  // — legacy planner owns it. And the noun "título" must appear OUTSIDE the
-  // quoted spans: in that legacy shape the word often lives INSIDE the needle
-  // ("Título viejo") and used to hijack the request into a title edit.
-  const quotedPairs = (requestText.match(/["“'][^"”']{1,160}["”']/g) || []).length;
-  if (quotedPairs >= 2) return null;
-  const textOutsideQuotes = normalizeText(requestText.replace(/["“'][^"”']{1,160}["”']/g, ' '));
-  if (!SLIDE_TITLE_NOUN_RE.test(textOutsideQuotes) || !SLIDE_TITLE_VERB_RE.test(textOutsideQuotes)) return null;
+  // Image recolor ("cambia la imagen a azul") stays on the image parser.
+  if (/\b(imagen(?:es)?|foto\w*|logo\w*|logotipo\w*|picture|image)\b/.test(text)) return null;
+  const color = parseNamedColor(requestText);
+  if (!color) return null;
+  const styleCue = /\b(color(?:es)?|fondo|fondos|background|paleta)\b/.test(text)
+    || /\b(uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*)\b/.test(text)
+    || (/\btema\b/.test(text) && /\b(ppt|pptx|diapositiv\w*|presentaci[oó]n)\b/.test(text));
+  if (!styleCue) return null;
   const slideMatch = SLIDE_NOUN_RE.exec(text);
-  const slideNumber = slideMatch ? Number(slideMatch[1]) : null;
-  // Capture the new title from the ORIGINAL text (casing/accents preserved):
-  // quoted value wins; otherwise everything after "título … a|por|:" up to a
-  // clause boundary ("y conserva el diseño" must not leak into the title).
-  let title = null;
-  const quoted = /["“']([^"”']{2,120})["”']/.exec(requestText);
-  if (quoted) {
-    title = quoted[1].trim();
-  } else {
-    const tail = /\bt[ií]tulo\b[^,;.]*?\b(?:a|por|:)\s+(.+?)(?:\s+y\s+|\s+and\s+|[,;]|\.\s|\.$|$)/i.exec(requestText);
-    if (tail) title = tail[1].trim();
+  const allSlides = /\b(todas?|todos|entera|completo|whole|every|todas las ppts?|todas las diapositiv)\b/.test(text)
+    || !slideMatch;
+  return {
+    kind: 'set_slide_background',
+    color: color.hex,
+    colorName: color.name,
+    allSlides,
+    slideNumber: slideMatch ? Number(slideMatch[1]) : null,
+    contrastText: true,
+  };
+}
+
+async function runPptxStyleEditFlow({ input, styleEdit, sourceFile }) {
+  const adapter = pptxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
+  if (!adapter?.setSlideBackgrounds) {
+    return { clarification: true, message: 'La edición de estilo de presentaciones no está disponible en este despliegue.' };
   }
-  if (!title || title.length < 2) return null;
-  // "a azul" etc. is an image-edit phrase, not a title — let the image parser own it.
-  if (/^(?:color\s+)?(?:azul|rojo|verde|negro|gris|amarillo|naranja|morado|violeta|blanco|blue|red|green|black|gray|grey|yellow|orange|purple|white)$/i.test(title)) return null;
-  return { kind: 'set_slide_title', slideNumber, title };
+  try {
+    const result = adapter.setSlideBackgrounds({
+      buffer: input,
+      color: styleEdit.color,
+      allSlides: styleEdit.allSlides !== false,
+      slideNumber: styleEdit.slideNumber,
+      contrastText: styleEdit.contrastText !== false,
+    });
+    const scope = result.changed === 1 && styleEdit.slideNumber
+      ? `la diapositiva ${styleEdit.slideNumber}`
+      : `las ${result.changed} diapositivas`;
+    return {
+      buffer: result.buffer,
+      operation: {
+        kind: 'set_slide_background',
+        color: result.color,
+        colorName: styleEdit.colorName,
+        allSlides: styleEdit.allSlides !== false,
+        slideNumber: styleEdit.slideNumber,
+        changed: result.changed,
+      },
+      steps: [{ kind: 'set_slide_background', label: scope, color: result.color, colorName: styleEdit.colorName }],
+      suffix: 'fondo_actualizado',
+      titleSuffix: 'fondo actualizado',
+      summary: `uniformé el fondo de ${scope} a ${styleEdit.colorName || `#${result.color}`} y ajusté el contraste del texto`,
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude cambiar el color de «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
 }
 
 async function runPptxSurgicalEditFlow({ input, slideEdit, sourceFile }) {
@@ -6222,6 +7437,19 @@ function sanitizeOfficeOperations(rawOps, format) {
       const title = str(raw.title, 120);
       const bullets = (Array.isArray(raw.bullets) ? raw.bullets : []).slice(0, 12).map((b) => str(b, 220)).filter(Boolean);
       if (title || bullets.length) ops.push({ kind: 'add_slide', title: title || 'Nueva diapositiva', bullets });
+    } else if (format === 'pptx' && kind === 'set_slide_background') {
+      const parsed = parseNamedColor(str(raw.colorName || raw.color || raw.value, 40));
+      const hex = String(raw.color || parsed?.hex || '').replace(/^#/, '').toUpperCase();
+      if (/^[0-9A-F]{6}$/.test(hex)) {
+        ops.push({
+          kind: 'set_slide_background',
+          color: hex,
+          colorName: str(raw.colorName || parsed?.name || hex, 40),
+          allSlides: raw.allSlides !== false,
+          slideNumber: scopedSlide,
+          contrastText: raw.contrastText !== false,
+        });
+      }
     }
   }
   return ops.length ? ops : null;
@@ -6232,7 +7460,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
   try {
     let summary = '';
     if (format === 'xlsx') summary = await buildXlsxSummaryForPrompt(input);
-    else if (format === 'pptx') summary = String(extractTextFromPptxBuffer(input) || '').slice(0, 3500);
+    else if (format === 'pptx') summary = String(extractTextFromPptxBuffer(input) || '').slice(0, 8000);
     const opsCatalog = format === 'xlsx'
       ? [
         '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
@@ -6245,6 +7473,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
         '{"kind":"replace_text","slideNumber":3,"needle":"texto exacto","replacement":"texto nuevo"}  // limita el cambio a una diapositiva cuando el usuario la indique',
         '{"kind":"delete_text","slideNumber":3,"needle":"texto exacto"}  // elimina solo dentro de esa diapositiva',
         '{"kind":"add_slide","title":"Riesgos del proyecto","bullets":["Riesgo 1...","Riesgo 2..."]}  // diapositiva NUEVA al final',
+        '{"kind":"set_slide_background","color":"FFFFFF","colorName":"blanco","allSlides":true}  // fondo de TODAS o de una diapositiva',
       ];
     const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
@@ -6256,6 +7485,8 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
           content: [
             `Eres el cerebro de un editor de archivos ${format === 'xlsx' ? 'Excel' : 'PowerPoint'} que PRESERVA el archivo original.`,
             'Convierte la petición del usuario en un plan de operaciones concretas sobre el archivo; cuando la petición requiera CONTENIDO (filas, viñetas, valores), redáctalo tú con datos fieles a la petición y al archivo.',
+            'Si el usuario pide N diapositivas, emite N operaciones add_slide (máximo 15). Si pide bibliografía como última, la última add_slide se titula "Referencias bibliográficas".',
+            'NUNCA copies la petición del usuario como contenido. NUNCA uses títulos ANEXOS ni "Contenido agregado según solicitud". NUNCA inventes URLs, DOI ni plantillas pregrabadas (coordinación entre áreas, control proporcional, 30-60-90) si no están en el archivo.',
             'Usa needles EXACTOS copiados del contenido actual. No inventes hojas/celdas que no existan salvo en add_sheet/add_slide/append_rows.',
           ].join(' '),
         },
@@ -6288,7 +7519,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
   }
 }
 
-function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
+function planGenericOfficeOperations({ requestText = '', format = '', sourceText = '', originalName = '' } = {}) {
   const clauses = splitRequestClauses(requestText);
   const ops = [];
   const seen = new Set();
@@ -6301,12 +7532,45 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
   };
   const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
   if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
-  const rawReplacement = extractReplacementPair(requestText);
-  const pptxSlideMatch = format === 'pptx' ? SLIDE_NOUN_RE.exec(normalizeText(requestText)) : null;
-  const pptxSlideNumber = pptxSlideMatch ? Number(pptxSlideMatch[1]) : null;
-  if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
-    add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+  // Keep ordinal locations ("primera diapositiva") scoped to that slide,
+  // but never infer a location from a quoted replacement/title value.
+  const pptxScope = format === 'pptx' ? resolveSlideScope(requestText) : null;
+  if (pptxScope?.ambiguous) {
+    const error = new Error('La instrucción contiene varias diapositivas. Indica una diapositiva y su cambio exacto por turno; no modifiqué el archivo.');
+    error.code = 'PPTX_SLIDE_SCOPE_AMBIGUOUS';
+    throw error;
   }
+  const pptxSlideNumber = pptxScope?.slideNumber ?? null;
+  const quotedPairs = extractAllQuotedReplacementPairs(requestText);
+  if (quotedPairs.length) {
+    for (const pair of quotedPairs) {
+      if (!(format === 'xlsx' && replacementTargetsXlsxCell(pair))) {
+        add({ kind: 'replace_text', ...pair, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+      }
+    }
+  } else {
+    const rawReplacement = extractReplacementPair(requestText);
+    if (rawReplacement && !(format === 'xlsx' && replacementTargetsXlsxCell(rawReplacement))) {
+      add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
+    }
+  }
+  const deckStyle = format === 'pptx' ? parseDeckStyleRequest(requestText) : null;
+  if (deckStyle) add(deckStyle);
+  const officeIntent = parseOfficeUserIntent(requestText, { format });
+  if (officeIntent?.kind === 'add_slides') {
+    for (const slideOp of buildAddSlideOperations(officeIntent, { sourceText, originalName, requestText })) {
+      add(slideOp);
+    }
+  } else if (officeIntent?.kind === 'add_sections') {
+    for (const sectionOp of buildAddSectionOperations(officeIntent, { sourceText, originalName, requestText })) {
+      add(sectionOp);
+    }
+  } else if (officeIntent?.kind === 'add_rows') {
+    for (const rowOp of buildAddRowOperations(officeIntent, { sourceText, originalName, requestText })) {
+      add(rowOp);
+    }
+  }
+  const plannedStructuralAppend = ops.some((op) => ['add_slide', 'append_section', 'append_rows'].includes(op.kind));
   for (const clause of clauses) {
     if (format === 'xlsx') {
       const cellWrite = extractXlsxCellWrite(clause);
@@ -6328,6 +7592,9 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
         add({ kind: 'delete_text', needle, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
         continue;
       }
+    }
+    if (plannedStructuralAppend && (clauseIsAppend(clause) || clauseWantsInstrument(clause))) {
+      continue;
     }
     if (clauseIsAppend(clause) || clauseIsFill(clause) || clauseWantsInstrument(clause)) {
       add({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(clause) });
@@ -6403,9 +7670,32 @@ function executePptxOperations({ input, ops, blocks }) {
       buffer = appendToPptxBuffer(buffer, slideBlocks);
       validationBlocks.push(...slideBlocks);
       steps.push({ kind: 'add_slide', mode: 'pptx_new_slide', label: op.title });
+    } else if (op.kind === 'set_slide_background') {
+      const result = pptxAdapterModule().setSlideBackgrounds({
+        buffer,
+        color: op.color,
+        allSlides: op.allSlides !== false,
+        slideNumber: op.slideNumber,
+        contrastText: op.contrastText !== false,
+      });
+      buffer = result.buffer;
+      steps.push({
+        kind: 'set_slide_background',
+        mode: 'pptx_slide_background',
+        label: result.changed === 1 ? `diapositiva ${op.slideNumber || 1}` : `${result.changed} diapositivas`,
+        color: result.color,
+        colorName: op.colorName,
+      });
     } else {
-      buffer = appendToPptxBuffer(buffer, appendBlocks);
-      validationBlocks.push(...appendBlocks);
+      const dump = looksLikePromptDump(appendBlocks.map((item) => item.text).join('\n'));
+      const safeBlocks = dump
+        ? [
+          block('heading1', op.title || 'Continuación profesional'),
+          block('normal', '• Decisión, evidencia y próximo paso — sin copiar la petición del usuario.'),
+        ]
+        : appendBlocks;
+      buffer = appendToPptxBuffer(buffer, safeBlocks);
+      validationBlocks.push(...safeBlocks);
       steps.push({ kind: 'append_generic', mode: 'pptx_new_slide' });
     }
   }
@@ -6447,6 +7737,9 @@ function describeStep(step) {
   if (step.kind === 'delete_section') return `eliminé ${step.label || 'la sección'} sin alterar el resto del archivo`;
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado${step.slideNumber ? ` en la diapositiva ${step.slideNumber}` : ''} (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'set_document_title') return `actualicé el título del documento a «${step.newTitle}» conservando su formato`;
+  if (step.kind === 'replace_text' && step.scope === 'title') {
+    return `reemplacé el texto solicitado únicamente en el título (${step.changedCount || 0} coincidencia)`;
+  }
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado${step.slideNumber ? ` en la diapositiva ${step.slideNumber}` : ''} (${step.changedCount || 0} coincidencia(s))`;
   if (step.kind === 'proofread_minimal') {
     const count = Number(step.changedCount || 0);
@@ -6460,6 +7753,9 @@ function describeStep(step) {
       ? ` en ${step.label.replace(/^edici[oó]n profesional de\s+/i, '')}`
       : '';
     return `mejoré profesionalmente ${changed} párrafo(s)${scope}, conservando hechos, cifras, citas y estructura`;
+  }
+  if (step.kind === 'set_slide_background') {
+    return `uniformé el fondo de ${step.label || 'las diapositivas'} a ${step.colorName || step.color || 'el color pedido'} y ajusté el contraste del texto`;
   }
   if (step.kind === 'recolor_image') {
     const where = step.scope === 'header' ? ' del encabezado' : step.scope === 'footer' ? ' del pie de página' : '';
@@ -6525,6 +7821,9 @@ function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, ref
       tableKind: op.kind === 'insert_table' ? (op.tableKind || 'table') : undefined,
       needle: (op.kind === 'delete_text' || op.kind === 'replace_text') ? compact(op.needle, 80) : undefined,
       replacement: op.kind === 'replace_text' ? compact(op.replacement, 80) : undefined,
+      scope: op.kind === 'replace_text' ? (op.scope || 'document') : undefined,
+      changedCount: op.kind === 'replace_text' ? Number(op.changedCount || 0) : undefined,
+      remainingMatchCount: op.kind === 'replace_text' ? Number(op.remainingMatchCount || 0) : undefined,
       address: op.kind === 'set_cell' ? op.address : undefined,
       value: op.kind === 'set_cell' ? compact(op.value, 80) : undefined,
       changedParagraphs: op.kind === 'professional_edit' ? Number(op.changedParagraphs || 0) : undefined,
@@ -6609,6 +7908,13 @@ async function generateSourcePreservingDocumentEdit({
         .join('\n\n--- CONTEXTO ADICIONAL ---\n\n');
       const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
       operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
+      operations = await enrichOfficeContentOperations(operations, {
+        requestText,
+        sourceText: docxSourceText,
+        originalName: sourceFile.originalName || sourceFile.filename,
+        format: 'docx',
+        signal,
+      });
       const execution = await executeDocxOperations({
         input,
         ops: operations,
@@ -6636,6 +7942,12 @@ async function generateSourcePreservingDocumentEdit({
       if (professionalStep) {
         suffix = 'editado_profesionalmente';
         titleSuffix = 'editado profesionalmente';
+      } else if (execution.steps.some((step) => [
+        'replace_text',
+        'set_document_title',
+      ].includes(step.kind))) {
+        suffix = 'editado';
+        titleSuffix = 'editado';
       } else if (labels.length) {
         suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
         titleSuffix = `${labels.join(' y ')} completado`;
@@ -6656,6 +7968,7 @@ async function generateSourcePreservingDocumentEdit({
       prompt: requestText,
       sourceText: sourceText || sourceFile.extractedText || '',
       originalName: sourceFile.originalName || sourceFile.filename,
+      format: isPptxFile(sourceFile) ? 'pptx' : isXlsxFile(sourceFile) ? 'xlsx' : isPdfFile(sourceFile) ? 'pdf' : 'docx',
     });
     validationBlocks = blocks;
     if (isXlsxFile(sourceFile)) {
@@ -6685,7 +7998,12 @@ async function generateSourcePreservingDocumentEdit({
         content = `Listo. Conservé el XLSX original: ${xlsxResult.summary}, sin tocar el resto de las hojas, gráficos ni fórmulas.`;
         // fall through to persistence below (skip the ExcelJS text flow)
       } else {
-      operations = planGenericOfficeOperations({ requestText, format });
+      operations = planGenericOfficeOperations({
+        requestText,
+        format,
+        sourceText: sourceText || sourceFile.extractedText || '',
+        originalName: sourceFile.originalName || sourceFile.filename,
+      });
       // When the regexes only produced the generic-appendix fallback, let the
       // LLM planner read the real workbook and build a concrete plan
       // (set_cell / append_rows / add_sheet / replace_text). Heuristic hits
@@ -6694,6 +8012,13 @@ async function generateSourcePreservingDocumentEdit({
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
         if (smart) operations = smart;
       }
+      operations = await enrichOfficeContentOperations(operations, {
+        requestText,
+        sourceText: sourceText || sourceFile.extractedText || '',
+        originalName: sourceFile.originalName || sourceFile.filename,
+        format,
+        signal,
+      });
       const execution = await executeXlsxOperations({ input, ops: operations, blocks });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -6716,16 +8041,34 @@ async function generateSourcePreservingDocumentEdit({
       }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
+      if (resolveSlideScope(requestText).ambiguous) {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'La instrucción contiene varias diapositivas. Indica una diapositiva y su cambio exacto por turno; no modifiqué el archivo.' });
+      }
+      try { assertBoundedOfficePackage(input); }
+      catch {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'No pude abrir esta presentación dentro de los límites seguros. Comprueba el archivo o adjunta una versión más pequeña; no modifiqué el original.' });
+      }
       // Surgical fast paths — resolved BEFORE the text/append planner: slide
       // title edits ("en la diapositiva 3 cambia el título…") and image
       // recolor/replace inside slides. The old planner could only replace
       // text deck-wide or append slides, so these degraded to appendices.
-      const slideEdit = parsePresentationEditRequest(requestText);
+      const slideEdit = parsePresentationEditRequest(requestText, { slides: pptxAdapterModule()?.listPptxSlides(input) || [] });
       const pptxImageEdit = slideEdit ? null : parseImageEditRequest(requestText);
-      if (slideEdit || pptxImageEdit) {
+      const deckStyle = (!slideEdit && !pptxImageEdit) ? parseDeckStyleRequest(requestText) : null;
+      const addSlidesIntent = (!slideEdit && !pptxImageEdit)
+        ? parseOfficeUserIntent(requestText, { format: 'pptx' })
+        : null;
+      // Color + "agrega una de gracias" must both run. The exclusive style
+      // fast-path used to paint backgrounds and drop the new slide.
+      const exclusiveStyleOnly = Boolean(deckStyle) && !(addSlidesIntent && addSlidesIntent.kind === 'add_slides');
+      if (slideEdit || pptxImageEdit || exclusiveStyleOnly) {
         const pptxResult = slideEdit
           ? await runPptxSurgicalEditFlow({ input, slideEdit, sourceFile })
-          : await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles });
+          : pptxImageEdit
+            ? await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles })
+            : await runPptxStyleEditFlow({ input, styleEdit: deckStyle, sourceFile });
         if (pptxResult.clarification) {
           await sourceRead.cleanup().catch(() => {});
           return buildImageEditClarificationResult({ message: pptxResult.message, format });
@@ -6739,13 +8082,36 @@ async function generateSourcePreservingDocumentEdit({
         suffix = pptxResult.suffix;
         titleSuffix = pptxResult.titleSuffix;
         explanation = `Se conservó el PPTX original; ${pptxResult.summary}.`;
-        content = `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
+        content = deckStyle
+          ? `Listo. Conservé el PPTX original: ${pptxResult.summary}.`
+          : `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
       } else {
-      operations = planGenericOfficeOperations({ requestText, format });
+      const livePptxText = [
+        sourceFile.extractedText,
+        sourceText,
+        extractTextFromPptxBuffer(input),
+      ].filter(Boolean).join('\n');
+      operations = planGenericOfficeOperations({
+        requestText,
+        format,
+        sourceText: livePptxText,
+        originalName: sourceFile.originalName || sourceFile.filename,
+      });
+      if (isScopedSlideMutation(requestText) && operations.some((operation) => /^append|^add_slide/.test(operation.kind))) {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'Identifiqué una edición dentro de una diapositiva, pero no el cambio exacto. Indica el texto actual y el texto nuevo; no añadí diapositivas ni regeneré el archivo.' });
+      }
       if (operations.every((op) => op.kind === 'append_generic')) {
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
         if (smart) operations = smart;
       }
+      operations = await enrichOfficeContentOperations(operations, {
+        requestText,
+        sourceText: livePptxText,
+        originalName: sourceFile.originalName || sourceFile.filename,
+        format,
+        signal,
+      });
       const execution = executePptxOperations({ input, ops: operations, blocks });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -6769,7 +8135,8 @@ async function generateSourcePreservingDocumentEdit({
     } else if (isPdfFile(sourceFile)) {
       format = 'pdf';
       // Safe page-level fast paths (rotate/extract/remove/merge/overlay) —
-      // resolved BEFORE the legacy lossy text path.
+      // resolved before the generic dispatcher. Replacement/deletion of
+      // embedded PDF text fails closed because it cannot preserve layout.
       const pdfEdit = parsePdfEditRequest(requestText);
       if (pdfEdit) {
         const pdfResult = await runPdfSurgicalEditFlow({ input, pdfEdit, sourceFile, assetFiles, allSourceFiles });
@@ -6791,9 +8158,7 @@ async function generateSourcePreservingDocumentEdit({
       const execution = await executePdfOperations({
         input,
         requestText,
-        sourceText,
         blocks,
-        sourceFile,
       });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -6857,6 +8222,17 @@ async function generateSourcePreservingDocumentEdit({
       orchestration,
     };
   }
+  // Fail closed before the artifact store is touched. A downloadable URL is a
+  // production claim that the requested edit passed every preservation and
+  // semantic check; persisting a failed candidate made that claim false and
+  // also allowed an invalid row into version history.
+  if (validation?.passed !== true) {
+    const error = new Error('La edición no superó la validación de integridad y no se guardó ningún archivo.');
+    error.code = 'SOURCE_PRESERVING_VALIDATION_FAILED';
+    error.validationOnlyFailure = true;
+    error.validation = validation;
+    throw error;
+  }
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -6901,6 +8277,107 @@ async function generateSourcePreservingDocumentEdit({
   }
 }
 
+async function recordSourcePreservingVersion(prisma, {
+  result,
+  sourceFile,
+  userId,
+  chatId,
+} = {}) {
+  // The source identity is part of artifact delivery semantics, not merely
+  // version-history metadata. Keep it even when Prisma version persistence is
+  // unavailable so same-name files in a batch remain distinct download cards.
+  if (result && sourceFile?.id) result.sourceFileId = sourceFile.id;
+  if (!result || result.clarification || result.validation?.passed !== true || !result.artifact || !sourceFile?.id) return result;
+  try {
+    const { recordFileVersion } = require('./document-editing/versioning');
+    const recorded = await recordFileVersion(prisma, {
+      fileId: sourceFile.id,
+      userId,
+      artifactId: result.artifact.id || null,
+      filename: result.file?.filename || result.artifact.filename || 'documento',
+      summary: result.content ? String(result.content).slice(0, 300) : '',
+      editPlan: result.orchestration?.operations || null,
+      validationPassed: Boolean(result.validation?.passed),
+      createdByChatId: chatId || null,
+    });
+    if (recorded) {
+      result.version = { id: recorded.id, version: recorded.version, sourceFileId: sourceFile.id };
+    }
+  } catch { /* versioning never blocks the edit */ }
+  return result;
+}
+
+function buildBatchEditResult({ attempts = [], requestText = '' } = {}) {
+  const successful = attempts.filter((attempt) => attempt?.ok === true && attempt.result?.validation?.passed === true);
+  const failures = attempts
+    .filter((attempt) => attempt?.ok !== true || attempt.result?.validation?.passed !== true)
+    .map((attempt) => ({
+      sourceFileId: attempt?.sourceFile?.id || null,
+      filename: attempt?.sourceFile?.originalName || attempt?.sourceFile?.filename || 'documento',
+      error: attempt?.error || 'La validación del documento editado no pasó.',
+    }));
+  const results = successful.map((attempt) => attempt.result);
+  const names = results.map((result) => result.file?.filename || result.artifact?.filename).filter(Boolean);
+  const allPassed = results.length > 0 && failures.length === 0;
+  const content = failures.length
+    ? `Edité y validé ${results.length} de ${attempts.length} documentos en segundo plano. Archivos listos: ${names.join(', ')}. No pude completar: ${failures.map((failure) => `${failure.filename} (${failure.error})`).join('; ')}.`
+    : `Listo. Edité y validé ${results.length} documentos en segundo plano, conservando cada archivo original y modificando únicamente lo solicitado. Archivos listos: ${names.join(', ')}.`;
+  const validation = {
+    format: results.every((result) => result.format === results[0]?.format) ? (results[0]?.format || 'multiple') : 'multiple',
+    checks: {
+      every_document_validated: allPassed,
+      edited_artifact_created: results.length > 0,
+      original_files_immutable: results.length > 0,
+    },
+    passed: allPassed,
+    partial: results.length > 0 && failures.length > 0,
+    technicalScore: attempts.length ? Math.round((results.length / attempts.length) * 100) : 0,
+    qualityScore: allPassed ? 100 : 0,
+    overallScore: attempts.length ? Math.round((results.length / attempts.length) * 100) : 0,
+    details: {
+      editMode: 'source_preserving_batch_edit',
+      requestedDocuments: attempts.length,
+      completedDocuments: results.length,
+      failedDocuments: failures,
+      request: compact(requestText, 500),
+      documents: successful.map((attempt) => ({
+        sourceFileId: attempt.sourceFile?.id || null,
+        sourceFilename: attempt.sourceFile?.originalName || attempt.sourceFile?.filename || null,
+        artifactId: attempt.result?.artifact?.id || null,
+        artifactFilename: attempt.result?.artifact?.filename || null,
+        validation: attempt.result?.validation || null,
+      })),
+    },
+  };
+  return {
+    batch: true,
+    partial: validation.partial,
+    content,
+    results,
+    failures,
+    artifacts: results.map((result) => result.artifact),
+    files: results.map((result) => result.file),
+    versions: results.map((result) => result.version).filter(Boolean),
+    artifact: results[0]?.artifact || null,
+    file: results[0]?.file || null,
+    version: results[0]?.version || null,
+    previewHtml: results[0]?.previewHtml || null,
+    format: validation.format,
+    validation,
+    orchestration: {
+      mode: 'source_preserving_document_batch',
+      requestedDocuments: attempts.length,
+      completedDocuments: results.length,
+      failedDocuments: failures.length,
+      perDocument: successful.map((attempt) => ({
+        sourceFileId: attempt.sourceFile?.id || null,
+        sourceFilename: attempt.sourceFile?.originalName || attempt.sourceFile?.filename || null,
+        operations: attempt.result?.orchestration?.operations || [],
+      })),
+    },
+  };
+}
+
 async function tryGenerateSourcePreservingDocumentEdit({
   prisma,
   userId,
@@ -6917,10 +8394,76 @@ async function tryGenerateSourcePreservingDocumentEdit({
   const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
   const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
   const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
+  // Template-transform (UPN / formato / plantilla) runs BEFORE the generic
+  // source-preserving early-return so "pasa este word al formato UPN" never
+  // falls through to editing currentDocx[0] (the empty plantilla).
+  try {
+    const { isTemplateTransformRequest } = require('./doc-engine/flags');
+    const { tryDocEngineAfterSelection } = require('./doc-engine/chat-bridge');
+    if (isTemplateTransformRequest(requestText, sourceFiles.length ? sourceFiles : fileIds)) {
+      const hit = await tryDocEngineAfterSelection({
+        files: sourceFiles,
+        prompt,
+        displayPrompt,
+        userId,
+        chatId,
+        signal,
+      });
+      if (hit) return hit;
+    }
+  } catch (err) {
+    if (err && err.code === 'DOC_ENGINE_TRANSFORM_FAILED') throw err;
+    try { console.warn('[doc-engine] chat hook failed:', err?.message || err); } catch { /* noop */ }
+  }
   if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+
+  // Explicit plural scope ("todos los documentos", "cada archivo", "ambos")
+  // means one immutable edited copy per current upload. The old selector chose
+  // only the first DOCX and silently treated the rest as references.
+  if (requestWantsBatchDocumentEdit(requestText, sourceFiles)) {
+    const batchSources = selectBatchDocumentSources(requestText, sourceFiles);
+    const attempts = await mapWithConcurrency(
+      batchSources,
+      sourceDocumentParallelism(),
+      async (sourceFile) => {
+        try {
+          if (targetedSection && !isDocxFile(sourceFile)) {
+            throw new Error('La sección solicitada requiere un archivo DOCX.');
+          }
+          const result = await generateSourcePreservingDocumentEdit({
+            sourceFile,
+            sourceFiles: [sourceFile],
+            referenceFiles: [],
+            assetFiles,
+            selectionReason: 'explicit_batch_current_upload',
+            prompt,
+            displayPrompt,
+            userId,
+            chatId,
+            signal,
+          });
+          await recordSourcePreservingVersion(prisma, { result, sourceFile, userId, chatId });
+          return { ok: result?.validation?.passed === true, sourceFile, result };
+        } catch (err) {
+          return {
+            ok: false,
+            sourceFile,
+            error: String(err?.message || err || 'No se pudo editar el documento.').slice(0, 500),
+          };
+        }
+      },
+    );
+    const batch = buildBatchEditResult({ attempts, requestText });
+    if (!batch.results.length) {
+      const error = new Error(batch.failures.map((failure) => `${failure.filename}: ${failure.error}`).join('; ') || 'No se pudo editar ningún documento.');
+      error.code = 'DOCUMENT_BATCH_EDIT_FAILED';
+      throw error;
+    }
+    return batch;
+  }
   if (!supported && !sourceFiles.length && !priorArtifacts.length && assetFiles.length) {
     // Solo se adjuntaron imágenes (sin documento base). Para un intent de
     // edición de imagen, explicamos que las imágenes se editan DENTRO de un
@@ -6963,26 +8506,9 @@ async function tryGenerateSourcePreservingDocumentEdit({
     signal,
   });
 
-  // Non-destructive version history (best-effort): a clarification carries no
-  // artifact, so only real edits produce a version. The original upload
-  // (supported.id) is never mutated; this just records the edited artifact so
-  // the user can list/restore prior versions later.
-  if (result && !result.clarification && result.artifact && supported?.id) {
-    try {
-      const { recordFileVersion } = require('./document-editing/versioning');
-      const recorded = await recordFileVersion(prisma, {
-        fileId: supported.id,
-        userId,
-        artifactId: result.artifact.id || null,
-        filename: result.file?.filename || result.artifact.filename || 'documento',
-        summary: result.content ? String(result.content).slice(0, 300) : '',
-        editPlan: result.orchestration?.operations || null,
-        validationPassed: Boolean(result.validation?.passed),
-        createdByChatId: chatId || null,
-      });
-      if (recorded) result.version = { id: recorded.id, version: recorded.version, sourceFileId: supported.id };
-    } catch { /* versioning never blocks the edit */ }
-  }
+  // Non-destructive version history (best-effort): the original upload is
+  // never mutated; the new immutable artifact becomes the next version.
+  await recordSourcePreservingVersion(prisma, { result, sourceFile: supported, userId, chatId });
   return result;
 }
 
@@ -6996,10 +8522,13 @@ module.exports = {
   hasRecentGeneratedArtifactSource,
   inferDocumentTitle,
   isSourcePreservingEditRequest,
+  wantsNewPresentationDeliverable,
   loadEditableSourceFiles,
   parseImageEditRequest,
   parsePdfEditRequest,
+  parseOfficeUserIntent,
   parsePresentationEditRequest,
+  parseDeckStyleRequest,
   parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
   readSourceBuffer,
@@ -7016,6 +8545,9 @@ module.exports = {
     planOfficeOperationsSmart,
     sanitizeOfficeOperations,
     buildCombinedSourceText,
+    extractReferencedSourceFilenames,
+    matchReferencedSourceFile,
+    buildBatchEditResult,
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
     buildDocumentOrchestrationPlan,
@@ -7038,10 +8570,16 @@ module.exports = {
     summarizeStructureForPrompt,
     validateCronogramaCompletion,
     validateDocxOperationCriteria,
+    validateEditedBuffer,
     detectSectionTablePlan,
     extractParagraphProperties,
     extractRunProperties,
     extractDocxTitleChange,
+    extractAllQuotedReplacementPairs,
+    extractReplacementPair,
+    extractReplacementScope,
+    cleanReplacementNeedle,
+    cleanReplacementValue,
     extractNamedSectionAppend,
     extractTextFromPptxBuffer,
     paragraphXml,
@@ -7056,6 +8594,7 @@ module.exports = {
     isTargetedSectionFillRequest,
     locateCronogramaTable,
     locateSectionTable,
+    parseOfficeUserIntent,
     planGenericOfficeOperations,
     planSourcePreservingOperations,
     clauseWantsBibliography,
@@ -7068,10 +8607,16 @@ module.exports = {
     proofreadMinimalDocxBuffer,
     runAppendReferencesOperation,
     describeStep,
+    applyFullParagraphTextSurgical,
+    findNeedleSpanInText,
+    mutateParagraphTextSurgical,
     replaceTextInDocxBuffer,
     replaceTextInPptxBuffer,
     replaceTextInXlsxBuffer,
+    deleteTextFromDocxBuffer,
     requestMentionsGeneralDocument,
+    requestWantsBatchDocumentEdit,
+    selectBatchDocumentSources,
     requestExplicitlyUsesCurrentUploadAsBase,
     requestWantsMinimalProofreading,
     requestWantsMinimalOnlyProofreading,

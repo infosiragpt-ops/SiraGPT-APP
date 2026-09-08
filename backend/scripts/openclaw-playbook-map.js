@@ -12,6 +12,7 @@ const upstreamRootIndex = args.indexOf('--upstream-root');
 const upstreamRepoRoot = upstreamRootIndex >= 0 ? args[upstreamRootIndex + 1] : '';
 const upstreamCommitIndex = args.indexOf('--upstream-commit');
 const upstreamCommit = upstreamCommitIndex >= 0 ? args[upstreamCommitIndex + 1] : '';
+const requireGitTree = args.includes('--require-git-tree');
 const recommendIndex = args.indexOf('--recommend');
 const query = recommendIndex >= 0
   ? args.slice(recommendIndex + 1).filter((arg) => !arg.startsWith('--')).join(' ')
@@ -20,6 +21,7 @@ const query = recommendIndex >= 0
 const matrix = buildOpenClawIntegrationMap({
   upstreamRepoRoot: upstreamRepoRoot || undefined,
   upstreamCommit: upstreamCommit || undefined,
+  requireGitTree,
 });
 
 if (query) {
@@ -42,6 +44,8 @@ if (json) {
 
 console.log(`OpenClaw snapshot: ${matrix.source.repository}@${matrix.source.commit}`);
 console.log(`License: ${matrix.source.license}`);
+console.log(`Inventory mode: ${matrix.source.inventory_mode}`);
+console.log(`Tracked files: ${matrix.source.tracked_files ?? 'working-tree only'}`);
 console.log(`Upstream skills: ${matrix.counts.upstreamSkills}`);
 console.log(`SiraGPT skills: ${matrix.counts.siraSkills}`);
 console.log(`Mapped folders: ${matrix.counts.foldersMapped}`);

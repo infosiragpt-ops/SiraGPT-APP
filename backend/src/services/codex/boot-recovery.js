@@ -33,6 +33,32 @@ const eventStoreDefault = (() => {
 const INTERRUPTED_MSG = 'Corrida interrumpida por reinicio del backend';
 const RESUME_MARKER = 'Reanudando tras reinicio del servidor';
 const MAX_BOOT_RESUMES = 2;
+const queuedRecoveryTails = new Map();
+
+async function conditionalRunUpdate(prisma, where, data) {
+  if (typeof prisma.codexRun.updateMany === 'function') {
+    return prisma.codexRun.updateMany({ where, data });
+  }
+  // Small test doubles and older embedders may only expose update. Production
+  // Prisma always takes the atomic updateMany path above.
+  await prisma.codexRun.update({ where: { id: where.id }, data });
+  return { count: 1 };
+}
+
+async function withQueuedRecoveryLock(runId, work) {
+  const key = String(runId);
+  const previous = queuedRecoveryTails.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  queuedRecoveryTails.set(key, current);
+  await previous.catch(() => {});
+  try {
+    return await work();
+  } finally {
+    release();
+    if (queuedRecoveryTails.get(key) === current) queuedRecoveryTails.delete(key);
+  }
+}
 
 async function recoverCodexRunsAfterBoot({
   prisma = defaultPrisma,
@@ -91,19 +117,28 @@ async function recoverCodexRunsAfterBoot({
           ).length;
         }
         if (!snapshotReady || resumes >= MAX_BOOT_RESUMES || !queue || !queue.enqueueCodexRun) {
-          await prisma.codexRun.update({
-            where: { id: run.id },
-            data: { status: 'error', error: INTERRUPTED_MSG, finishedAt: clock() },
+          const finalized = await conditionalRunUpdate(prisma, {
+            id: run.id,
+            status: 'running',
+          }, {
+            status: 'error',
+            error: INTERRUPTED_MSG,
+            finishedAt: clock(),
           });
+          if (!finalized?.count) continue;
           if (eventStore) {
             await eventStore.appendEvent(run.id, 'run_status', { status: 'error' }, { prisma }).catch(() => {});
           }
           result.erroredRunning += 1;
         } else {
-          await prisma.codexRun.update({
-            where: { id: run.id },
-            data: { status: 'queued', error: null },
+          const claimed = await conditionalRunUpdate(prisma, {
+            id: run.id,
+            status: 'running',
+          }, {
+            status: 'queued',
+            error: null,
           });
+          if (!claimed?.count) continue;
           if (eventStore) {
             await eventStore.appendEvent(run.id, 'narrative_delta', { text: `${RESUME_MARKER} — continúo el build donde quedó.` }, { prisma }).catch(() => {});
             await eventStore.appendEvent(run.id, 'run_status', { status: 'queued' }, { prisma }).catch(() => {});
@@ -133,16 +168,16 @@ async function recoverCodexRunsAfterBoot({
     for (const run of queuedSnapshot) {
       result.scanned += 1;
       try {
-        const peek = queue && (queue.peekLiveCodexJob || queue.peekCodexJob);
-        const job = peek ? await peek.call(queue, run.id) : null;
-        if (!job) {
-          // Unique jobId here too — a dead job record with the runId lingering
-          // in Redis makes q.add(runId) a silent no-op (same trap as above).
-          if (queue && queue.enqueueCodexRun) {
+        await withQueuedRecoveryLock(run.id, async () => {
+          const peek = queue && (queue.peekLiveCodexJob || queue.peekCodexJob);
+          const job = peek ? await peek.call(queue, run.id) : null;
+          if (!job && queue && queue.enqueueCodexRun) {
+            // Unique jobId here too — a dead job record with the runId lingering
+            // in Redis makes q.add(runId) a silent no-op (same trap as above).
             await queue.enqueueCodexRun({ runId: run.id, jobId: `${run.id}:rq${clock().getTime()}` });
+            result.reenqueuedQueued += 1;
           }
-          result.reenqueuedQueued += 1;
-        }
+        });
       } catch (err) {
         if (env.NODE_ENV !== 'test') console.warn('[codex boot-recovery] re-enqueue failed:', err?.message || err);
       }

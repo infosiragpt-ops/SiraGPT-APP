@@ -117,8 +117,9 @@ export function SyncfusionBannerRemover() {
       subtree: true,
     });
 
-    // More aggressive periodic cleanup (every 200ms instead of 500ms)
-    const interval = setInterval(removeBanner, 200);
+    // MutationObserver handles new nags immediately. Keep a slow sweep
+    // (2s) for banners that mutate in place without adding nodes.
+    const interval = setInterval(removeBanner, 2000);
 
     // Also run on various events that might trigger modals
     const events = ['click', 'focus', 'mousedown', 'keydown'];

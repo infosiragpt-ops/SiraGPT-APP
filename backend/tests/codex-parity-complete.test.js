@@ -192,6 +192,9 @@ test('project daily budget aggregates metrics and fails closed in production', a
         return { _sum: { costAppliedUsd: 2.5 } };
       },
     },
+    codexUsageEntry: {
+      findMany: async () => [],
+    },
   };
   const allowed = await checkProjectBudget({
     prisma,
@@ -214,12 +217,23 @@ test('project daily budget aggregates metrics and fails closed in production', a
   assert.equal(blocked.allowed, false);
   assert.equal(blocked.reason, 'budget_query_failed');
   assert.equal(configuredBudgetUsd({}, { NODE_ENV: 'production' }), 10);
+
+  const blockedOutsideProduction = await checkProjectBudget({
+    prisma: {},
+    projectId: 'p1',
+    settings: { budget: { dailyUsd: 3 } },
+    env: { NODE_ENV: 'test' },
+  });
+  assert.equal(blockedOutsideProduction.allowed, false, 'kill switch failures always fail closed');
 });
 
 test('project daily budget includes unpersisted cost from the active run', async () => {
   const prisma = {
     codexRunMetric: {
       aggregate: async () => ({ _sum: { costOriginalUsd: 0.6, costAppliedUsd: 0 } }),
+    },
+    codexUsageEntry: {
+      findMany: async () => [],
     },
   };
   const status = await checkProjectBudget({

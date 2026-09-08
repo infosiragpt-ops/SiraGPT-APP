@@ -54,7 +54,7 @@ test('portfolio routes grounded gaps to professional departments', () => {
     now: new Date('2026-07-27T12:00:00.000Z'),
   });
 
-  assert.equal(portfolio.version, 1);
+  assert.equal(portfolio.version, 2);
   assert.equal(portfolio.summary.total, 9);
   assert.equal(portfolio.summary.highestPriorityMissionId, 'company-purpose');
   assert.equal(
@@ -202,4 +202,83 @@ test('mission selector is bounded and mission context preserves effect policy', 
   assert.ok(wrapped);
   assert.match(formatMissionContext(first), /Misión priorizada por CEO Office/);
   assert.match(formatMissionContext(first), /evidencia verificable/);
+});
+
+test('CEO Office prioritizes audit, failed ledger work and OKRs for the responsible department', () => {
+  const portfolio = deriveCompanyMissionPortfolio({
+    project: {
+      id: 'p1',
+      name: 'SiraGPT.COM',
+      brief: {
+        businessPresenceAudit: {
+          gaps: [{
+            id: 'landing-missing',
+            area: 'website',
+            severity: 'critical',
+            title: 'La empresa no tiene landing',
+            present: false,
+            recommendation: 'Construir una landing verificable con el generador Vite.',
+            evidence: 'La auditoría no encontró una URL empresarial.',
+          }],
+        },
+        ledger: [{
+          runId: 'run-sales-failed',
+          department: 'Ventas',
+          outcome: 'failed',
+          task: 'Calificar prospectos B2B',
+          learnings: ['Faltaron fuentes públicas verificables.'],
+        }],
+        objectives: [{
+          id: 'okr-retention',
+          title: 'Mejorar retención de clientes',
+          ownerDepartmentId: 'customer-success',
+          status: 'at_risk',
+          priority: 1,
+          keyResults: [{ title: 'Reducir churn', target: '3%' }],
+        }],
+      },
+    },
+    context: context(),
+    now: new Date('2026-07-28T12:00:00.000Z'),
+  });
+
+  const website = portfolio.missions.find((item) => item.id === 'business-website');
+  const salesRecovery = portfolio.missions.find((item) => item.id === 'sales-operations');
+  const okr = portfolio.missions.find((item) => item.id === 'okr-okr-retention');
+  assert.equal(website.departmentId, 'product-engineering');
+  assert.ok(website.sourceTypes.includes('audit'));
+  assert.match(website.nextAction, /generador Vite/);
+  assert.equal(salesRecovery.departmentId, 'sales');
+  assert.equal(salesRecovery.executionMode, 'research');
+  assert.equal(okr.departmentId, 'customer-success');
+  assert.deepEqual(okr.objectiveIds, ['okr-retention']);
+  assert.equal(portfolio.summary.sources.auditFindings, 1);
+  assert.equal(portfolio.summary.sources.ledgerBlockers, 1);
+  assert.equal(portfolio.summary.sources.objectives, 1);
+  assert.ok(Math.max(website.priority, salesRecovery.priority, okr.priority) <= 4);
+});
+
+test('audit-derived external work stays blocked without a connected account', () => {
+  const portfolio = deriveCompanyMissionPortfolio({
+    project: {
+      id: 'p1',
+      brief: {
+        presenceAudit: {
+          findings: [{
+            id: 'social-gap',
+            area: 'social',
+            severity: 'high',
+            title: 'Activar presencia social',
+            recommendation: 'Preparar el canal social.',
+          }],
+        },
+      },
+    },
+    context: context(),
+  });
+  const social = portfolio.missions.find((item) => item.id === 'social-operations');
+  assert.equal(social.departmentId, 'marketing');
+  assert.equal(social.status, 'blocked_connection');
+  assert.equal(social.autoExecutable, false);
+  assert.ok(social.sourceTypes.includes('audit'));
 });

@@ -2,9 +2,10 @@
  * Parallel code-agent chat sessions per workspace (localStorage).
  */
 
-import { codexIdForProject } from "./codex-projects"
 import type { AgentState } from "./code-agent/types"
 import { defaultAgentState } from "./code-agent/types"
+import { canonicalCodexWorkspaceId } from "./codex-workspace-identity"
+import type { CodexTurnCancellationState } from "./codex/turn-cancellation"
 
 export type CodeChatTurn = {
   id: string
@@ -16,6 +17,8 @@ export type CodeChatTurn = {
   /** Live Codex-style execution phases for the /code agent turn. */
   agentPhases?: CodeAgentPhase[]
   agentLabel?: string
+  /** Durable stop lifecycle. A turn is terminal only after `cancelled`. */
+  cancellationState?: CodexTurnCancellationState
   /** Real action log + Worked-Summary metrics for a turn that did file work. */
   actions?: import("./code-chat-metrics").CodeChatAction[]
   metrics?: import("./code-chat-metrics").CodeChatMetrics
@@ -60,19 +63,9 @@ const MAX_SESSIONS_PER_WORKSPACE = 12
 
 export const CODE_CHAT_SESSIONS_UPDATED_EVENT = "siragpt:code-chat-sessions-updated"
 
-// Version/variant-agnostic on purpose: legacy stores may hold ids whose
-// version nibble isn't 1-5 (e.g. UUIDv7) — any 8-4-4-4-12 hex shape is a
-// bare project id that must migrate to the canonical `project:` key.
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /** Canonical workspace id for agent sessions (matches Codex tree node ids). */
 export function codexWorkspaceSessionKey(folderId: string | null | undefined): string {
-  const raw = folderId?.trim() || ""
-  if (!raw) return "__default__"
-  if (raw.startsWith("local:") || raw.startsWith("project:")) return raw
-  if (UUID_RE.test(raw)) return codexIdForProject(raw)
-  return raw
+  return canonicalCodexWorkspaceId(folderId)
 }
 
 /** @deprecated Use codexWorkspaceSessionKey — kept for call-site compatibility. */
@@ -83,7 +76,13 @@ export function codeWorkspaceKey(folderId: string | null | undefined): string {
 function migrateSessionStore(parsed: SessionStore): SessionStore {
   const sessions = parsed.sessions.map((s) => {
     const key = codexWorkspaceSessionKey(s.workspaceId)
-    return key === s.workspaceId ? s : { ...s, workspaceId: key }
+    // Empty legacy workspaces shipped with the generic "Agente 1" label. Give
+    // only untouched sessions the executive entry-point name; any real chat or
+    // user-locked title remains exactly as the user left it.
+    const title = s.title === "Agente 1" && s.turns.length === 0 && !s.titleLocked
+      ? "CEO Office"
+      : s.title
+    return key === s.workspaceId && title === s.title ? s : { ...s, workspaceId: key, title }
   })
   const activeByWorkspace: Record<string, string> = {}
   for (const [k, v] of Object.entries(parsed.activeByWorkspace || {})) {
@@ -129,7 +128,11 @@ function sanitizeTurn(raw: unknown): CodeChatTurn | null {
     content: typeof t.content === "string" ? t.content : "",
   }
   if (typeof t.streaming === "boolean") turn.streaming = t.streaming
+  if (typeof t.codexRunId === "string" && t.codexRunId) turn.codexRunId = t.codexRunId
   if (typeof t.agentLabel === "string") turn.agentLabel = t.agentLabel
+  if (t.cancellationState === "cancelling" || t.cancellationState === "failed" || t.cancellationState === "cancelled") {
+    turn.cancellationState = t.cancellationState
+  }
   if (typeof t.voice === "string" && t.voice) turn.voice = t.voice
   if (typeof t.planMs === "number" && Number.isFinite(t.planMs)) {
     turn.planMs = t.planMs
@@ -294,7 +297,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
   const session: CodeChatSession = {
     id: createCodeChatSessionId(),
     workspaceId: key,
-    title: "Agente 1",
+    title: "CEO Office",
     turns: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -431,4 +434,19 @@ export function deleteCodeChatSession(sessionId: string, store = loadStore()): S
   const next: SessionStore = { sessions, activeByWorkspace }
   saveStore(next)
   return next
+}
+
+
+/** OLA200_WAVE_G FE-082 — persist the active session id; refresh must not spawn a duplicate chat. */
+export function persistActiveSessionId(workspaceId: string, sessionId: string, store = loadStore()) {
+  return setActiveCodeChatSession(workspaceId, sessionId, store)
+}
+export function reusePersistedSessionOnRefresh(workspaceId: string, store = loadStore()) {
+  const ensured = ensureDefaultSession(workspaceId, store)
+  const id = getActiveSessionId(workspaceId, ensured)
+  if (!id) return null
+  return ensured.sessions.find((s) => s.id === id) || null
+}
+export function shouldCreateSessionOnRefresh(workspaceId: string, store = loadStore()): boolean {
+  return listSessionsForWorkspace(workspaceId, store).length === 0
 }

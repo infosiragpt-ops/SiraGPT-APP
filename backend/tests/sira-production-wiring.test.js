@@ -176,4 +176,12 @@ describe("production Compose topology", () => {
     assert.match(backend, /STRIPE_PRICE_PRO_MAX:\s+\$\{STRIPE_PRICE_PRO_MAX:-\}/);
     assert.match(backend, /STRIPE_PRICE_ENTERPRISE:\s+\$\{STRIPE_PRICE_ENTERPRISE:-\}/);
   });
+
+  test("Docker backend receives dedicated business-channel secrets from production env", () => {
+    const yaml = readProductionCompose();
+    const backend = extractServiceBlock(yaml, "backend");
+
+    assert.match(backend, /CHANNEL_CREDENTIALS_KEY:\s+\$\{CHANNEL_CREDENTIALS_KEY:-\}/);
+    assert.match(backend, /CHANNEL_PAIRING_PEPPER:\s+\$\{CHANNEL_PAIRING_PEPPER:-\}/);
+  });
 });

@@ -156,3 +156,32 @@ test('agent task plan: explicit million-line commit request uses activation acco
   assert.ok(plan.sourceActivationLedger.stages.some((stage) => stage.id === 'line_accounting'));
   assert.ok(plan.phases.some((phase) => phase.id === 'source_activation_ledger'));
 });
+
+test('agent task plan: all-folder opaque rewrite request becomes auditable native architecture', () => {
+  const goal = 'Todo este codigo de cada carpetita de OpenClaw lo clones y lo reescribas en un lenguaje complejo que solo tu entiendas y lo adaptes a siragpt.com/code; no copies y pegues, reescribe y fusionalo con lo que ya tenemos';
+  const executionProfile = buildExecutionProfile({ goal });
+  const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal });
+  const openclawProfile = openclawCapabilityKernel.buildCapabilityProfile({
+    prompt: goal,
+    toolNames: ['memory_recall', 'host_bash', 'host_file', 'run_tests'],
+  });
+  const plan = buildAgentTaskPlan({
+    goal,
+    executionProfile,
+    intentAlignmentProfile,
+    openclawProfile,
+  });
+
+  assert.equal(plan.openclawFusion.signals.massiveSourceFusion, true);
+  assert.equal(plan.openclawFusion.signals.opaqueImplementationRequested, true);
+  assert.ok(plan.phases.some((phase) => phase.id === 'bulk_source_inventory'));
+  assert.ok(plan.phases.some((phase) => phase.id === 'source_activation_ledger'));
+  assert.ok(plan.phases.some((phase) => phase.id === 'maintainable_source_contract'));
+  assert.ok(plan.successCriteria.some((criterion) => /standard project languages/.test(criterion)));
+  assert.ok(plan.risks.some((risk) => /Intentional code obfuscation/.test(risk)));
+
+  const prompt = buildAgentTaskPlanPrompt(plan);
+  assert.match(prompt, /maintainable_source_contract/);
+  assert.match(prompt, /opaqueImplementationRequested/);
+  assert.match(prompt, /private language/);
+});

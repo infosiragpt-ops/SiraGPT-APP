@@ -28,7 +28,7 @@ const WORKSTREAM_DEPARTMENTS = Object.freeze({
   software_landing: 'product-engineering',
   social_presence: 'marketing',
   inbox_customer_service: 'customer-success',
-  customer_acquisition_sales: 'sales-operations',
+  customer_acquisition_sales: 'sales',
   quality_assurance: 'trust',
 });
 

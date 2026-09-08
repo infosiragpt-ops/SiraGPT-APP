@@ -11,13 +11,27 @@ import {
 } from "../lib/code-agent-company-proactive"
 
 describe("code agent company proactive", () => {
-  it("exposes core matrix-style departments including CEO Office", () => {
+  it("exposes the full matrix-style fleet including CEO Office and all departments", () => {
     const ids = PROACTIVE_CORE_DEPARTMENTS.map((department) => department.id)
     assert.ok(ids.includes("ceo-office"))
     assert.ok(ids.includes("product-engineering"))
+    assert.ok(ids.includes("engineering-01"))
+    assert.ok(ids.includes("engineering-02"))
     assert.ok(ids.includes("growth-engines"))
-    assert.ok(ids.includes("sales-operations"))
+    assert.ok(ids.includes("sales"))
     assert.ok(ids.includes("customer-success"))
+    assert.ok(ids.includes("marketing"))
+    assert.ok(ids.includes("trust"))
+    assert.ok(ids.includes("market-intelligence"))
+    assert.ok(ids.includes("localization"))
+    assert.ok(ids.includes("integrations"))
+    assert.ok(ids.includes("website-distribution"))
+    assert.ok(ids.includes("agent-infrastructure"))
+    // No legacy sales-operations department id; that id is a mission only.
+    assert.equal(ids.includes("sales-operations"), false)
+    // Unique ids and real capacity so office seats are never 0 by default.
+    assert.equal(new Set(ids).size, ids.length)
+    assert.ok(PROACTIVE_CORE_DEPARTMENTS.every((department) => (department.desiredAgents || 0) >= 1))
     assert.equal(departmentBootstrapTitle(PROACTIVE_CORE_DEPARTMENTS[0]), "CEO Office")
   })
 

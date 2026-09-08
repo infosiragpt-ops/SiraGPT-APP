@@ -9,7 +9,10 @@ const workspaceSource = readFileSync("lib/code-workspace-context.tsx", "utf8")
 const previewSource = readFileSync("components/code/preview-pane.tsx", "utf8")
 const socialApiSource = readFileSync("lib/company-social-api.ts", "utf8")
 const resourceKeysSource = readFileSync("lib/company-resource-keys.ts", "utf8")
-const codexApiSource = readFileSync("lib/codex/codex-api.ts", "utf8")
+const codexApiSource = [
+  readFileSync("lib/codex/api/company-associations.ts", "utf8"),
+  readFileSync("lib/codex/api/company.ts", "utf8"),
+].join("\n")
 const postPageSource = readFileSync("app/post/page.tsx", "utf8")
 
 test("company navigation renders operational surfaces inside the preview slot", () => {
@@ -25,8 +28,9 @@ test("company navigation renders operational surfaces inside the preview slot", 
 
 test("company files and resources expose real workspace and social operations", () => {
   assert.match(companySource, /testId="company-files-surface"/)
-  assert.match(companySource, /Object\.values\(files\)/)
-  assert.match(companySource, /Borradores locales\/\$\{department\?\.name \|\| "CEO Office"\}/)
+  assert.match(companySource, /buildCompanyAgentFileArtifacts/)
+  assert.match(companySource, /workers=\{officeModel\.workers\}/)
+  assert.match(companySource, /data-testid="company-files-dept-folders"/)
   assert.match(companySource, /data-testid="company-mission-evidence-ledger"/)
   assert.match(companySource, /codexApi\.getMissionEvidence/)
   assert.match(companySource, /codexApi\.reviewMissionEvidence/)
@@ -160,6 +164,12 @@ test("company dashboard renders the evidence-grounded operating diagnosis", () =
   assert.match(companySource, /companyContext\.portfolio\.missions/)
   assert.match(companySource, /mission\.departmentName/)
   assert.match(companySource, /mission\.nextAction/)
+  assert.match(companySource, /data-testid="company-okr-portfolio"/)
+  assert.match(companySource, /companyContext\.okrs/)
+  assert.match(companySource, /objective\.keyResults/)
+  assert.match(codexApiSource, /getCompanyOkrs/)
+  assert.match(codexApiSource, /reviewCompanyOkrs/)
+  assert.match(codexApiSource, /reprioritizeCompanyOkrs/)
 })
 
 test("company runtime identity is durable and legacy browser links are confirmation hints only", () => {

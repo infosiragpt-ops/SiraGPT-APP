@@ -15,9 +15,7 @@ const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, Tab
 const PptxGenJS = require("pptxgenjs");
 const PDFDocument = require("pdfkit");
 const {
-  addRowsWorksheet,
-  createWorkbook,
-  writeWorkbookBuffer,
+  writeXlsxStream,
 } = require("../xlsx-safe-workbook");
 
 const {
@@ -181,17 +179,18 @@ async function renderXlsx({ title, sections }) {
     ...sections.map(section => [section.heading, section.body, "planificado"]),
     ["Validación", "Workbook XLSX real con hojas y datos", "ok"],
   ];
-  const wb = createWorkbook();
-  wb.creator = "Sira Artifact Engine";
-  wb.created = new Date();
-  addRowsWorksheet(wb, "Resumen", rows);
-  addRowsWorksheet(wb, "Datos", [
-    ["Métrica", "Valor"],
-    ["Secciones", sections.length],
-    ["Generado", new Date().toISOString()],
-    ["Contrato", "Sira Cognitive Task Envelope"],
-  ]);
-  const buffer = await writeWorkbookBuffer(wb);
+  const buffer = await writeXlsxStream(
+    [
+      { name: "Resumen", rows },
+      { name: "Datos", rows: [
+        ["Métrica", "Valor"],
+        ["Secciones", sections.length],
+        ["Generado", new Date().toISOString()],
+        ["Contrato", "Sira Cognitive Task Envelope"],
+      ] },
+    ],
+    { creator: "Sira Artifact Engine", created: new Date() }
+  );
   return { buffer, mime: EXTENSION_TO_MIME.xlsx, contentPreview: toMarkdown(title, sections) };
 }
 

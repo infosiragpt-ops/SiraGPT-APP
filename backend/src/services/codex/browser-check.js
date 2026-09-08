@@ -151,8 +151,9 @@ async function checkApp({
   let puppeteer = puppeteerImpl;
   if (!puppeteer) {
     try {
-      // eslint-disable-next-line global-require
-      puppeteer = require('puppeteer');
+      // Puppeteer 25 is ESM-only; import lazily so loading the backend
+      // neither launches a browser nor fails on an async ESM dependency.
+      puppeteer = (await import('puppeteer')).default;
     } catch (err) {
       return { ok: false, unavailable: true, reason: `puppeteer_unavailable: ${err.message}` };
     }
@@ -287,10 +288,35 @@ function formatObservation(result, url, { supportsVision = false, provider = 'an
   return [{ type: 'text', text: report }, imageBlock];
 }
 
+/**
+ * Tool-layer convenience over `formatObservation` keyed on the ACTIVE model:
+ * a `checkApp` result that carries a screenshot AND a vision-capable model
+ * yields Anthropic-style content blocks
+ * `[{ type: 'text', text }, { type: 'image', source: { type: 'base64', … } }]`;
+ * any other combination (no screenshot, capture degraded to a note, or a
+ * text-only model) returns the exact same plain-text report as before, so
+ * callers can hand the return value to either transport unchanged.
+ */
+function buildVisionObservation({
+  result,
+  modelSupportsVision = false,
+  url = null,
+  provider = 'anthropic',
+} = {}) {
+  const safeResult = result && typeof result === 'object'
+    ? result
+    : { ok: false, unavailable: true, reason: 'no_result' };
+  return formatObservation(safeResult, url ?? safeResult.url ?? '', {
+    supportsVision: modelSupportsVision === true,
+    provider,
+  });
+}
+
 module.exports = {
   checkApp,
   captureBoundedScreenshot,
   screenshotContentBlock,
+  buildVisionObservation,
   formatObservation,
   formatReport,
   devUrlFor,

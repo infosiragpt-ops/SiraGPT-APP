@@ -1,5 +1,13 @@
 // Frontend API client for backend integration
-import { streamSseJson } from "./sse-client"
+import { fetchResumeHeaders, streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
+import {
+  GENERATE_STREAM_CONNECT_MS,
+  GENERATE_STREAM_IDLE_MS,
+  createGenerateStreamStallError,
+  isGenerateStreamStall,
+  readWithIdle,
+  withTimeout,
+} from "./sse-idle"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import {
   authenticatedFetch,
@@ -7,7 +15,19 @@ import {
 } from "./authenticated-fetch"
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
-export { getNormalizedApiBaseUrl } from "./api-base-url"
+import { pinGenerateRequest } from "./chat/catalog-model"
+import {
+  decideEmptyGenerateStreamAction,
+  isSseKeepaliveComment,
+  shouldRecoverOnKeepalive,
+} from "./generate-stream-complete"
+import { consumeLoginHandoffSse } from "./computer-login-handoff"
+import {
+  attachGenerateHttpError,
+  CONNECTION_UNAVAILABLE_MESSAGE,
+  shouldRetryGenerateHttp,
+} from "./generate-stream-errors"
+export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
 // with `node backend/scripts/generate-api-types.js` whenever schemas change.
@@ -83,6 +103,81 @@ export type ChatRunSummary = {
   attempt: number
   snippet: string
 }
+export type AgentTaskPointer = {
+  taskId: string
+  chatId?: string | null
+  status: "queued" | "running" | "completed" | "cancelled" | "error" | string
+  displayGoal?: string | null
+  updatedAt?: string | null
+}
+export type ChatPendingStreamEnvelope = {
+  ok: boolean
+  pending: Record<string, unknown> | null
+  activeTasks: AgentTaskPointer[]
+  latestTask: AgentTaskPointer | null
+}
+
+const RECOVERABLE_AGENT_TASK_STATUSES = new Set([
+  "queued",
+  "running",
+  "planning",
+  "executing",
+  "verifying",
+  "shipping",
+])
+
+export const MAX_AGENT_TASK_RECOVERY_FAILURES = 8
+
+export function isTerminalAgentTaskRecoveryHttpStatus(statusCode: unknown): boolean {
+  return [401, 403, 404, 410].includes(Number(statusCode))
+}
+
+export function shouldDetachAgentTaskRecovery(failedPolls: number): boolean {
+  return Number.isFinite(failedPolls) && failedPolls >= MAX_AGENT_TASK_RECOVERY_FAILURES
+}
+
+/** OLA200_WAVE_G FE-089 — stop ChatPendingStream recovery after 8 failures. */
+export function shouldStopPendingStreamRecovery(failedPolls: number): boolean {
+  return shouldDetachAgentTaskRecovery(failedPolls)
+}
+
+
+/**
+ * Selects the durable task that /chat should reconnect. `latestTask` alone is
+ * intentionally insufficient because every historic agent chat has one; a
+ * terminal latest task is relevant only while the persisted bubble is still
+ * incomplete (the reload-vs-completion race).
+ */
+export function resolveChatAgentTaskForRecovery(
+  envelope: ChatPendingStreamEnvelope,
+  localTaskId: string | null,
+  hasIncompleteBubble: boolean,
+  excludedTaskIds: ReadonlySet<string> = new Set(),
+): AgentTaskPointer | null {
+  const normalizedLocalTaskId = String(localTaskId || "").trim()
+  const activeTasks = (Array.isArray(envelope?.activeTasks) ? envelope.activeTasks : [])
+    .filter(task => (
+      task?.taskId
+      && !excludedTaskIds.has(task.taskId)
+      && RECOVERABLE_AGENT_TASK_STATUSES.has(String(task.status || "").toLowerCase())
+    ))
+  const matchingActiveTask = normalizedLocalTaskId
+    ? activeTasks.find(task => task.taskId === normalizedLocalTaskId)
+    : null
+  if (matchingActiveTask) return matchingActiveTask
+
+  const activeTask = activeTasks[0]
+  if (activeTask) return activeTask
+  if (!hasIncompleteBubble) return null
+
+  if (normalizedLocalTaskId && !excludedTaskIds.has(normalizedLocalTaskId)) {
+    if (envelope?.latestTask?.taskId === normalizedLocalTaskId) return envelope.latestTask
+    return { taskId: normalizedLocalTaskId, status: "running" }
+  }
+  return envelope?.latestTask?.taskId && !excludedTaskIds.has(envelope.latestTask.taskId)
+    ? envelope.latestTask
+    : null
+}
 export type ImpersonateEnvelope = {
   token?: string
   user?: AuthUser
@@ -104,6 +199,9 @@ function sanitizeStreamError(raw: string): string {
   }
   if (/content.*policy|safety/i.test(raw)) {
     return "La solicitud no pudo ser procesada debido a las políticas de contenido."
+  }
+  if (/connection_unavailable|unknown parameter/i.test(raw)) {
+    return CONNECTION_UNAVAILABLE_MESSAGE
   }
   return raw
 }
@@ -490,6 +588,154 @@ const AGENT_STREAM_EVENT_TYPES = new Set([
   'cowork_run_finished',
 ])
 
+/**
+ * Canonical token/cost telemetry emitted by an AI stream.
+ *
+ * Providers and older SiraGPT routes use two wire shapes: flat
+ * (`tokensIn`/`tokensOut`) and nested (`tokens: { in, out }`). Consumers
+ * should only depend on this normalized shape. Cache cost is deliberately
+ * optional: most providers do not expose it and the client must never invent
+ * a zero-cost cache hit.
+ */
+export type AIUsagePayload = {
+  tokensIn: number
+  tokensOut: number
+  model?: string
+  contextTokens?: number
+  contextWindow?: number
+  costTotalUsd?: number
+  costInputUsd?: number
+  costOutputUsd?: number
+  costCacheReadUsd?: number
+  costOriginalUsd?: number
+  costAppliedUsd?: number
+}
+
+type UnknownRecord = Record<string, unknown>
+
+function asUnknownRecord(value: unknown): UnknownRecord | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+  }
+  return undefined
+}
+
+/** Normalize both legacy flat and current nested `usage` SSE frames. */
+export function normalizeAIUsageFrame(frame: unknown): AIUsagePayload | null {
+  const root = asUnknownRecord(frame)
+  if (!root || root.type !== 'usage') return null
+
+  const tokens = asUnknownRecord(root.tokens) || {}
+  const usage = asUnknownRecord(root.usage) || {}
+  const usageTokens = asUnknownRecord(usage.tokens) || {}
+  const costs = asUnknownRecord(root.costs) || asUnknownRecord(root.cost) || {}
+  const usageCosts = asUnknownRecord(usage.costs) || asUnknownRecord(usage.cost) || {}
+
+  const tokensIn = firstFiniteNumber(
+    root.tokensIn,
+    root.inputTokens,
+    tokens.in,
+    tokens.input,
+    usage.tokensIn,
+    usage.inputTokens,
+    usageTokens.in,
+    usageTokens.input,
+  )
+  if (tokensIn === undefined) return null
+
+  const tokensOut = firstFiniteNumber(
+    root.tokensOut,
+    root.outputTokens,
+    tokens.out,
+    tokens.output,
+    usage.tokensOut,
+    usage.outputTokens,
+    usageTokens.out,
+    usageTokens.output,
+  ) ?? 0
+
+  const model = [root.model, usage.model]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  const contextTokens = firstFiniteNumber(
+    root.contextTokens,
+    tokens.context,
+    usage.contextTokens,
+    usageTokens.context,
+  )
+  const contextWindow = firstFiniteNumber(
+    root.contextWindow,
+    root.contextLength,
+    usage.contextWindow,
+    usage.contextLength,
+  )
+  const costOriginalUsd = firstFiniteNumber(root.costOriginalUsd, usage.costOriginalUsd)
+  const costAppliedUsd = firstFiniteNumber(root.costAppliedUsd, usage.costAppliedUsd)
+  const costTotalUsd = firstFiniteNumber(
+    root.costTotalUsd,
+    root.costUSD,
+    root.costUsd,
+    usage.costTotalUsd,
+    usage.costUSD,
+    usage.costUsd,
+    costs.totalUsd,
+    costs.totalUSD,
+    usageCosts.totalUsd,
+    usageCosts.totalUSD,
+    costAppliedUsd,
+    costOriginalUsd,
+  )
+  const costInputUsd = firstFiniteNumber(
+    root.costInputUsd,
+    root.inputCostUsd,
+    usage.costInputUsd,
+    usage.inputCostUsd,
+    costs.inputUsd,
+    costs.inputUSD,
+    usageCosts.inputUsd,
+    usageCosts.inputUSD,
+  )
+  const costOutputUsd = firstFiniteNumber(
+    root.costOutputUsd,
+    root.outputCostUsd,
+    usage.costOutputUsd,
+    usage.outputCostUsd,
+    costs.outputUsd,
+    costs.outputUSD,
+    usageCosts.outputUsd,
+    usageCosts.outputUSD,
+  )
+  const costCacheReadUsd = firstFiniteNumber(
+    root.costCacheReadUsd,
+    root.cacheReadCostUsd,
+    usage.costCacheReadUsd,
+    usage.cacheReadCostUsd,
+    costs.cacheReadUsd,
+    costs.cacheReadUSD,
+    usageCosts.cacheReadUsd,
+    usageCosts.cacheReadUSD,
+  )
+
+  return {
+    tokensIn,
+    tokensOut,
+    ...(model ? { model: model.trim() } : {}),
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(costTotalUsd !== undefined ? { costTotalUsd } : {}),
+    ...(costInputUsd !== undefined ? { costInputUsd } : {}),
+    ...(costOutputUsd !== undefined ? { costOutputUsd } : {}),
+    ...(costCacheReadUsd !== undefined ? { costCacheReadUsd } : {}),
+    ...(costOriginalUsd !== undefined ? { costOriginalUsd } : {}),
+    ...(costAppliedUsd !== undefined ? { costAppliedUsd } : {}),
+  }
+}
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
   onSources?: (payload: WebSourcesPayload) => void
@@ -505,11 +751,16 @@ type AIStreamOptions = {
   onToolCall?: (payload: { index: number; name?: string; argsDelta?: string }) => void
   // Agent harness: typed tool-call / permission / done frames (AgentTrace).
   onAgentEvent?: (event: AgentStreamEvent) => void
+  // Claude-style live activity (tool / thinking beat). One Spanish line.
+  onActivity?: (text: string, event?: { type?: string; tool?: string; label?: string }) => void
   // Real token usage (+ optional USD cost) emitted once at stream end, so a
   // caller can show an honest "Agent Usage" figure. costOriginalUsd is the
   // provider list price; costAppliedUsd is after the plan policy (struck-through
   // original → applied when they differ).
-  onUsage?: (payload: { tokensIn: number; tokensOut: number; model?: string; costOriginalUsd?: number; costAppliedUsd?: number }) => void
+  onUsage?: (payload: AIUsagePayload) => void
+  // When the model already persisted but this tab painted no tokens
+  // ([DONE] / socket close), recover that row immediately.
+  tryRecoverPersistedTurn?: () => Promise<boolean>
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -652,6 +903,67 @@ export type OrganizationInvitationAcceptResult = {
   role?: OrganizationRole
 }
 
+// ── Sira Voz (VoiceStudio) contracts ─────────────────────────────────────
+export interface VoiceStudioStatus {
+  configured: boolean;
+  ok: boolean;
+  status: string;
+  device?: string | null;
+  version?: string | null;
+  voices?: number;
+  limits?: { cloneSampleMb: number; directMediaMb: number; bookFileMb: number; speechPreviewChars: number; maxVoices: number; maxActiveJobs: number };
+  features?: { clone: boolean; dub: boolean; transcribe: boolean; audiobook: boolean; free: boolean; local: boolean };
+}
+
+export interface VoiceStudioVoice {
+  id: string;
+  name: string;
+  language: string;
+  kind: string;
+  createdAt: string;
+  previewUrl: string;
+}
+
+export interface VoiceStudioTranscription {
+  ok: boolean;
+  text: string;
+  language: string | null;
+  duration: number | null;
+  segments: Array<{ start: number; end: number; text: string }>;
+  srt: string;
+  model: string;
+}
+
+export interface VoiceStudioJob {
+  id: string;
+  kind: 'dub' | 'audiobook' | string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | string;
+  stage: string | null;
+  progress: number;
+  title: string | null;
+  chatId: string | null;
+  input: Record<string, unknown> | null;
+  result: {
+    kind?: string;
+    filename?: string;
+    mime?: string;
+    sizeBytes?: number;
+    downloadUrl?: string;
+    summary?: string;
+    title?: string;
+    chapters?: number;
+    segments?: number;
+    durationSeconds?: number | null;
+    targetLanguage?: string;
+    format?: string;
+    messageId?: string | null;
+  } | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -780,11 +1092,29 @@ class ApiClient {
     }
 
     // Idempotency-Key auto-injection. Only for mutating verbs and
-    // only when the caller didn't supply one. safeUUID covers LAN /
-    // plain-HTTP browser contexts where crypto.randomUUID is missing.
+    // only when the caller didn't supply one. When the JSON body already
+    // carries the application-level key, mirror that exact value into the
+    // header; sending an unrelated generated header would make the server
+    // correctly reject the request as an ambiguous identity.
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
     if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
-      headers.set('Idempotency-Key', safeUUID());
+      let bodyIdempotencyKey = '';
+      if (typeof options.body === 'string') {
+        try {
+          const parsedBody = JSON.parse(options.body);
+          let parsedMetadata = parsedBody?.metadata;
+          if (typeof parsedMetadata === 'string') {
+            try {
+              parsedMetadata = JSON.parse(parsedMetadata);
+            } catch {
+              parsedMetadata = null;
+            }
+          }
+          const rawKey = parsedBody?.idempotencyKey ?? parsedMetadata?.idempotencyKey;
+          if (typeof rawKey === 'string' && rawKey.trim()) bodyIdempotencyKey = rawKey.trim();
+        } catch { /* non-JSON body: generate a transport key below */ }
+      }
+      headers.set('Idempotency-Key', bodyIdempotencyKey || safeUUID());
     }
 
     // Track last error for re-throw on final failure
@@ -1036,6 +1366,14 @@ class ApiClient {
       if (includeBearer && this.token) {
         headers.set('Authorization', `Bearer ${this.token}`);
       }
+      try {
+        if (typeof window !== 'undefined') {
+          const family = window.localStorage.getItem('siragpt:refresh-family');
+          const version = window.localStorage.getItem('siragpt:refresh-version');
+          if (family) headers.set('x-refresh-family', family);
+          if (version) headers.set('x-refresh-version', version);
+        }
+      } catch { /* private mode */ }
 
       try {
         const res = await authenticatedFetch(`${this.baseURL}/auth/refresh`, {
@@ -1160,6 +1498,32 @@ class ApiClient {
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
+  // Full-text search across the user's chat history (server-side Postgres
+  // tsvector + GIN, see backend/src/routes/search.js). Returns ranked
+  // message hits with chat context and <mark>-highlighted snippets.
+  async searchChats(q: string, params?: { limit?: number; chatId?: string; signal?: AbortSignal }): Promise<{
+    query: string;
+    lang?: string;
+    total?: number;
+    results?: Array<{
+      messageId: string;
+      chatId: string;
+      chatTitle: string;
+      role: string;
+      snippet: string;
+      timestamp: string;
+      rank: number;
+    }>;
+    fallback?: string;
+  }> {
+    const query = new URLSearchParams({
+      q,
+      ...(params?.limit ? { limit: String(params.limit) } : {}),
+      ...(params?.chatId ? { chatId: params.chatId } : {}),
+    }).toString();
+    return this.request(`/search?${query}`, { signal: params?.signal });
+  }
+
   // getChat / createChat / updateChat all return ChatEnvelope at runtime,
   // but the consumers store the result in the local `Chat` interface
   // (which narrows `id` to `string`). Cycle 42 keeps these as `any` to
@@ -1174,6 +1538,15 @@ class ApiClient {
 
   async getChat(id: string): Promise<any> {
     return this.request(`/chats/${id}`);
+  }
+
+  /**
+   * Durable work associated with a chat. In addition to ordinary streamed
+   * completions, the endpoint exposes queued/running agent tasks so /chat can
+   * reconnect its UI after a reload without restarting or cancelling work.
+   */
+  async getChatPendingStream(chatId: string): Promise<ChatPendingStreamEnvelope> {
+    return this.request(`/chats/${encodeURIComponent(chatId)}/pending-stream`);
   }
 
   async updateChat(id: string, data: { title?: string; model?: string }): Promise<any> {
@@ -1191,6 +1564,10 @@ class ApiClient {
 
   async getActiveChatRuns(): Promise<{ runs: ChatRunSummary[] }> {
     return (await this.request('/chats/active-runs')) as { runs: ChatRunSummary[] };
+  }
+
+  async getActiveAgentTasks(): Promise<{ ok: boolean; tasks: AgentTaskPointer[] }> {
+    return (await this.request('/chats/active-tasks')) as { ok: boolean; tasks: AgentTaskPointer[] };
   }
 
   /** Forget a single recalled memory by id (powers the "Olvidar" action). */
@@ -1231,11 +1608,26 @@ class ApiClient {
 
   // Returns AddMessageEnvelope at runtime — kept as `any` because the
   // local Message interface narrows `id` to `string`.
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string; idempotencyKey?: string }): Promise<any> {
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string | Record<string, unknown>; idempotencyKey?: string; pinnedAppIds?: string[] }): Promise<any> {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  /** Persistent app pins of a conversation (server-side source of truth). */
+  async getChatPins(chatId: string): Promise<string[]> {
+    const res = await this.request(`/chats/${chatId}/pins`, { method: 'GET' });
+    return Array.isArray(res?.pinnedAppIds) ? res.pinnedAppIds.map(String) : [];
+  }
+
+  /** Replace the conversation's pinned apps. Throws with { code, appId } on rejection. */
+  async setChatPins(chatId: string, pinnedAppIds: string[]): Promise<string[]> {
+    const res = await this.request(`/chats/${chatId}/pins`, {
+      method: 'PUT',
+      body: JSON.stringify({ pinnedAppIds }),
+    });
+    return Array.isArray(res?.pinnedAppIds) ? res.pinnedAppIds.map(String) : [];
   }
 
   async clearChat(chatId: string): Promise<SuccessEnvelope | null> {
@@ -1244,8 +1636,14 @@ class ApiClient {
 
 
 
-  async clearMessageById(messageId: string): Promise<SuccessEnvelope | null> {
-    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, { method: 'DELETE' })) as SuccessEnvelope | null;
+  async clearMessageById(
+    messageId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<SuccessEnvelope | null> {
+    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, {
+      method: 'DELETE',
+      signal: options.signal,
+    })) as SuccessEnvelope | null;
   }
 
   async handleFeedbackLikeDislike(messageId: string, feedbackType: 'liked' | 'disliked'): Promise<SuccessEnvelope> {
@@ -1307,10 +1705,15 @@ class ApiClient {
     })) as SuccessEnvelope & { chatId?: string | number };
   }
 
-  async editUserMessage(messageId: string, data: { content: string }) {
+  async editUserMessage(
+    messageId: string,
+    data: { content: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request(`/chats/messages/${messageId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
@@ -1394,6 +1797,84 @@ class ApiClient {
 
       xhr.send(formData);
     });
+  }
+
+  /**
+   * Chunked upload for large media. The production edge rejects request
+   * bodies over 100 MB, so the file is announced (init), sent in ≤64 MB
+   * chunks (PUT, each retried on transient failures) and assembled by the
+   * backend (complete), which then runs the same async pipeline as
+   * `uploadFiles` and answers with the same `{ files: [...] }` shape.
+   */
+  async uploadFileChunked(
+    file: File,
+    opts: {
+      sourceChannel?: string
+      chunkBytes?: number
+      onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+      signal?: AbortSignal
+      maxRetries?: number
+    } = {}
+  ): Promise<FileUploadResponse> {
+    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES } = await import('./composer/chunked-upload');
+    const throwIfAborted = () => {
+      if (opts.signal?.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
+    };
+    // Shared authenticated transport (bearer/CSRF/refresh handling) — the
+    // frontend contract forbids raw fetch for Sira endpoints.
+    const authed = (path: string, init: RequestInit) => this.authenticatedFetch(`${this.baseURL}${path}`, { ...init, signal: opts.signal });
+    const readError = async (res: Response, fallback: string) => {
+      try { const j = await res.json(); return j?.error || fallback; } catch { return fallback; }
+    };
+
+    throwIfAborted();
+    const requestedChunk = opts.chunkBytes || CHUNKED_UPLOAD_CHUNK_BYTES;
+    const initRes = await authed('/files/upload/chunked/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, size: file.size, mimeType: file.type || 'application/octet-stream', chunkSize: requestedChunk, sourceChannel: opts.sourceChannel || null }),
+    });
+    if (!initRes.ok) throw new Error(await readError(initRes, `HTTP ${initRes.status}`));
+    const session = await initRes.json() as { uploadId: string; chunkSize: number; totalChunks: number };
+    const plans = planChunks(file.size, session.chunkSize);
+    const maxRetries = Math.max(0, opts.maxRetries ?? 3);
+    let completedBytes = 0;
+    opts.onProgress?.(0, 0, file.size);
+
+    for (const plan of plans) {
+      let attempt = 0;
+      for (;;) {
+        throwIfAborted();
+        let res: Response | null = null;
+        let networkError: unknown = null;
+        try {
+          res = await authed(`/files/upload/chunked/${session.uploadId}/${plan.index}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file.slice(plan.start, plan.end),
+          });
+        } catch (err) {
+          if ((err as any)?.name === 'AbortError') throw err;
+          networkError = err;
+        }
+        if (res && res.ok) break;
+        const status = res ? res.status : 0;
+        const retriable = networkError ? true : isRetriableChunkStatus(status);
+        if (!retriable || attempt >= maxRetries) {
+          try { await authed(`/files/upload/chunked/${session.uploadId}`, { method: 'DELETE' }); } catch { /* best effort */ }
+          throw new Error(res ? await readError(res, `HTTP ${status}`) : 'Network error during upload');
+        }
+        attempt += 1;
+        await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** attempt)));
+      }
+      completedBytes += plan.bytes;
+      opts.onProgress?.(chunkedUploadPercent(file.size, completedBytes), completedBytes, file.size);
+    }
+
+    throwIfAborted();
+    const doneRes = await authed(`/files/upload/chunked/${session.uploadId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (!doneRes.ok) throw new Error(await readError(doneRes, `HTTP ${doneRes.status}`));
+    return await doneRes.json() as FileUploadResponse;
   }
 
   async getFiles(params?: { page?: number; limit?: number; type?: string }) {
@@ -1505,19 +1986,28 @@ class ApiClient {
 
 
   // Stream chat completions from /ai/generate. Resilient by design:
-  // automatically reconnects at the transport layer BEFORE the user sees
-  // any tokens (HTTP 429, 5xx, network errors), while never duplicating
-  // content that has already been rendered. Mid-stream interruptions
-  // surface to the caller so the UI can show the per-message error +
-  // retry affordance without losing the user's message.
+  // automatically reconnects at the transport layer before the user sees
+  // any tokens (HTTP 429, 5xx, network errors), and resumes mid-stream from
+  // the server cursor when content was already rendered. Mid-stream
+  // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, reasoningEffort?: string, idempotencyKey?: string },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[] },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
     signal?: AbortSignal,
     options: AIStreamOptions = {}
   ) {
+    const locked = pinGenerateRequest({ model: data.model, provider: data.provider });
+    const turnKey = typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()
+      ? data.idempotencyKey.trim()
+      : safeUUID();
+    data = {
+      ...data,
+      provider: locked.provider,
+      model: clampDeepSeekModel(locked.model) || locked.model,
+      idempotencyKey: turnKey,
+    };
     const url = `${this.baseURL}/ai/generate`;
     const baseConfig: RequestInit = {
       method: 'POST',
@@ -1536,14 +2026,39 @@ class ApiClient {
     //    "no se recibió respuesta" (the model stream ended dry — usually
     //    a provider-side hiccup that resolves on retry)
     //  - Honor Retry-After header on 429 if provided
-    //  - Never retry after content has reached the user (no duplicates)
-    //  - Never retry on AbortError (user clicked stop)
+    //  - Never retry after content without a cursor; cursor retries replay
+    //    only the missing tail and therefore do not duplicate rendered text
+    //  - Never retry AbortError when our Stop controller aborted
+    //  - Safari/Cloudflare AbortError without that signal is a transport cut
     //  - Per-attempt timing is logged so we can audit recovery cost
     const MAX_CONNECT_ATTEMPTS = 5;
     const BASE_RECONNECT_DELAY_MS = 1000;
     const MAX_RECONNECT_DELAY_MS = 20000;
     let hasDeliveredAnyContent = false;
     let lastError: any = null;
+    // A fresh turn never starts from a stored cursor: resuming the PREVIOUS
+    // turn's stream on a reconnect replays only its [DONE] and closes this
+    // turn contentless. This turn's cursor comes from the response headers
+    // and `id:` frames below.
+    let lastEventId: string | null = null;
+    let terminalErrorDelivered = false;
+    let streamFinished = false;
+    // Short replies ("Hola, Luis…") used to sit in batchBuffer until [DONE],
+    // which the backend only emits after persistence. Paint the tail on a
+    // short timer so the answer shows as soon as the model stops talking.
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearFlushTimer = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+    };
+
+    const deliverStreamError = (error: Error) => {
+      if (terminalErrorDelivered || streamFinished) return;
+      terminalErrorDelivered = true;
+      onError(error);
+    };
 
     const computeBackoff = (attempt: number, retryAfterSeconds?: number) => {
       if (typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0) {
@@ -1557,16 +2072,30 @@ class ApiClient {
 
     for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
       if (signal?.aborted) { onError(new Error('Request aborted')); return; }
-      if (hasDeliveredAnyContent) break;
 
       try {
-        const response = await this.authenticatedFetch(url, baseConfig);
+        const requestHeaders = new Headers(baseConfig.headers);
+        // Leftover: fresh POST must not send Last-Event-ID (would resume a prior turn).
+        const extraHeaders = attempt === 1 ? freshGenerateHeaders() : fetchResumeHeaders(lastEventId);
+        for (const [key, value] of Object.entries(extraHeaders)) requestHeaders.set(key, value);
+        const response = await withTimeout(
+          (connectSignal) => this.authenticatedFetch(url, {
+            ...baseConfig,
+            headers: requestHeaders,
+            signal: connectSignal,
+          }),
+          {
+            ms: GENERATE_STREAM_CONNECT_MS,
+            signal,
+            createError: () => createGenerateStreamStallError("connect"),
+          },
+        );
         if (signal?.aborted) { onError(new Error('Request aborted')); return; }
 
         if (!response.ok) {
           let details: any = {};
           try { details = await response.json(); } catch { }
-          const message = details.error || `HTTP ${response.status}`;
+          const message = details.message || details.error || `HTTP ${response.status}`;
 
           try {
             if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
@@ -1576,17 +2105,19 @@ class ApiClient {
             console.warn('Failed to dispatch open-upgrade-modal event', e);
           }
 
-          const err: any = new Error(message);
-          err.status = response.status;
-          if (details.code) err.code = details.code;
+          const err = attachGenerateHttpError(response.status, details);
 
-          // Retriable transport failures: 429 (rate-limit), 5xx server
-          // errors, 408 timeout — only BEFORE any content has reached
-          // the user. Anything else bubbles up (401/403 auth, 422
-          // validation, monthly quota exhausted).
-          const retriable = !hasDeliveredAnyContent
-            && (response.status === 429 || response.status >= 500 || response.status === 408)
-            && attempt < MAX_CONNECT_ATTEMPTS;
+          // Empty-body 503 / connection_unavailable stop Pensando now.
+          // 5xx that is not a dead connection, 429, 408, and an explicit
+          // retryable 409 still use the provider reconnect budget. CSRF
+          // 403 is force-refreshed once in authenticatedFetch and must
+          // not land here as a spent attempt.
+          const retriable = shouldRetryGenerateHttp(response.status, details, {
+            hasDeliveredAnyContent,
+            hasResumeCursor: Boolean(lastEventId),
+            attempt,
+            maxAttempts: MAX_CONNECT_ATTEMPTS,
+          });
           if (retriable) {
             // Honor Retry-After header if the server set one (RFC 7231
             // §7.1.3). Value can be either an integer seconds or an
@@ -1608,6 +2139,14 @@ class ApiClient {
         // backend chargeCredits middleware) before we start streaming tokens.
         notifyFreeIaFallback(response);
 
+        const responseStreamId = getResponseHeader(response, 'x-stream-id');
+        const responseCursor = getResponseHeader(response, 'x-stream-cursor');
+        if (responseCursor) {
+          lastEventId = responseCursor;
+        } else if (responseStreamId && !lastEventId) {
+          lastEventId = `${responseStreamId}:0`;
+        }
+
         const reader = response.body?.getReader();
         if (!reader) throw new Error('Response body is not readable');
 
@@ -1624,11 +2163,13 @@ class ApiClient {
         // Armed by a contentless [DONE]: break out of the read loop so the
         // outer attempt loop reconnects (mirrors the abrupt-close retry).
         let retryEmptyStream = false;
+        let doneMessageSeen = false;
         let processedChunks = 0;
         const batchProcessingDelay = 20;
         let lastProcessTime = Date.now();
 
         const flushBatch = () => {
+          clearFlushTimer();
           if (batchBuffer.trim()) {
             onData(batchBuffer);
             hasDeliveredAnyContent = true;
@@ -1640,24 +2181,67 @@ class ApiClient {
         while (true) {
           if (signal?.aborted) { reader.cancel(); throw new Error('Request aborted'); }
 
-          const { done, value } = await reader.read();
+          let done: boolean
+          let value: Uint8Array | undefined
+          try {
+            ({ done, value } = await readWithIdle(() => reader.read(), {
+              idleMs: GENERATE_STREAM_IDLE_MS,
+              signal,
+            }))
+          } catch (idleErr: any) {
+            if (isGenerateStreamStall(idleErr)) {
+              try { reader.cancel() } catch { /* already closed */ }
+            }
+            throw idleErr
+          }
           if (done) {
             flushBatch();
+            if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+              try {
+                if (await options.tryRecoverPersistedTurn()) {
+                  streamFinished = true;
+                  onClose();
+                  return;
+                }
+              } catch { /* persist poll failed; fall through */ }
+            }
+            const emptyAction = decideEmptyGenerateStreamAction({
+              seenDone: doneMessageSeen,
+              hasDeliveredAnyContent,
+              persistedAssistant: false,
+              hasResumeCursor: Boolean(lastEventId),
+            });
+            if (emptyAction === "close" || hasDeliveredAnyContent) {
+              streamFinished = true;
+              onClose();
+              return;
+            }
+            if (!doneMessageSeen && lastEventId && attempt < MAX_CONNECT_ATTEMPTS) {
+              const delay = computeBackoff(attempt);
+              console.warn(`[ai-stream] stream ended before [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — resuming in ${delay}ms`);
+              await new Promise(r => setTimeout(r, delay));
+              lastError = new Error('Stream ended before completion');
+              break;
+            }
+            if (!doneMessageSeen) {
+              deliverStreamError(new Error('El stream terminó antes de completar la respuesta.'));
+              return;
+            }
             if (!hasDeliveredAnyContent) {
-              // The stream ended before producing any token. Treat as
-              // retriable transport failure if we still have attempts
-              // left — provider may have rate-limited mid-handshake or
-              // hit a transient 5xx that the reverse-proxy swallowed.
-              if (attempt < MAX_CONNECT_ATTEMPTS) {
+              // Persist poll already ran. Do not spend the 3–4 min
+              // reconnect budget on a contentless [DONE].
+              if (emptyAction === "retry" && attempt < MAX_CONNECT_ATTEMPTS && Boolean(lastEventId)) {
                 const delay = computeBackoff(attempt);
                 console.warn(`[ai-stream] empty stream on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
                 await new Promise(r => setTimeout(r, delay));
                 lastError = new Error('Empty model stream');
-                break; // jump to outer `for` to retry
+                break;
               }
-              onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+              streamFinished = true;
+              onClose();
               return;
             }
+            streamFinished = true;
             onClose();
             return;
           }
@@ -1670,35 +2254,85 @@ class ApiClient {
           const lines = consumable.split('\n\n');
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const payload = line.substring(6);
+            const eventLines = line.split(/\r?\n/);
+            let eventId: string | null = null;
+            let dataLine: string | null = null;
+            let isKeepalive = false;
+            for (const eventLine of eventLines) {
+              if (eventLine.startsWith('id:')) {
+                eventId = eventLine.substring(3).trim();
+              } else if (eventLine.startsWith('data: ')) {
+                dataLine = eventLine.substring(6);
+              } else if (isSseKeepaliveComment(eventLine)) {
+                isKeepalive = true;
+              }
+            }
+            if (eventId) {
+              lastEventId = eventId;
+              try {
+                if (typeof sessionStorage !== "undefined" && data.chatId) {
+                  sessionStorage.setItem(`siragpt:lastEventId:${data.chatId}`, eventId);
+                }
+              } catch { /* quota / private mode */ }
+            }
+            if (dataLine == null) {
+              // `: ping` keeps the socket open after persist. Recover the
+              // saved assistant now — do not wait for [DONE] + 5 reconnects.
+              if (
+                isKeepalive
+                && shouldRecoverOnKeepalive({ hasDeliveredAnyContent, streamFailed: false })
+                && options.tryRecoverPersistedTurn
+              ) {
+                try {
+                  if (await options.tryRecoverPersistedTurn()) {
+                    streamFinished = true;
+                    onClose();
+                    return;
+                  }
+                } catch { /* persist not ready yet; keep reading tokens */ }
+              }
+              continue;
+            }
+            const payload = dataLine;
             // Sentinel the backend emits at the very end of every stream,
             // including error / recovered cases. Flush pending buffer,
             // close, and return — anything after is a leftover from a
             // broken proxy or a retransmit.
             if (payload === '[DONE]') {
               flushBatch();
-              if (!hasDeliveredAnyContent) {
-                // A clean [DONE] with zero tokens means the PROVIDER produced
-                // nothing (transient provider error the backend closed over).
-                // Retry with the same backoff budget as an abrupt close —
-                // dying on the first empty stream while retrying empty
-                // closes was an inconsistency.
-                if (attempt < MAX_CONNECT_ATTEMPTS) {
-                  // Release the previous connection before reconnecting —
-                  // unlike the abrupt-close path (stream already ended),
-                  // here the body may still be open.
-                  try { await reader.cancel(); } catch { /* already closed */ }
-                  const delay = computeBackoff(attempt);
-                  console.warn(`[ai-stream] contentless [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
-                  await new Promise(r => setTimeout(r, delay));
-                  lastError = new Error('Empty model stream');
-                  retryEmptyStream = true;
-                  break;
-                }
-                onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+              doneMessageSeen = true;
+              if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+                try {
+                  if (await options.tryRecoverPersistedTurn()) {
+                    streamFinished = true;
+                    onClose();
+                    return;
+                  }
+                } catch { /* persist poll failed; still close — [DONE] is terminal */ }
+              }
+              const doneAction = decideEmptyGenerateStreamAction({
+                seenDone: true,
+                hasDeliveredAnyContent,
+                persistedAssistant: false,
+                hasResumeCursor: Boolean(lastEventId),
+              });
+              // [DONE] is emitted after persist. Never spend the reconnect
+              // budget on a contentless terminator — recover or close now.
+              if (doneAction !== "retry" || hasDeliveredAnyContent || !lastEventId) {
+                streamFinished = true;
+                onClose();
                 return;
               }
+              if (attempt < MAX_CONNECT_ATTEMPTS) {
+                try { await reader.cancel(); } catch { /* already closed */ }
+                const delay = computeBackoff(attempt);
+                console.warn(`[ai-stream] contentless [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
+                await new Promise(r => setTimeout(r, delay));
+                lastError = new Error('Empty model stream');
+                retryEmptyStream = true;
+                break;
+              }
+              streamFinished = true;
               onClose();
               return;
             }
@@ -1708,12 +2342,20 @@ class ApiClient {
                 flushBatch();
                 if (options.onReplace) {
                   options.onReplace(jsonData.content);
-                } else {
+                }
+                // Safari can abort the first SSE after Mini finished. A
+                // duplicate_turn_replay must still deliver tokens even if
+                // onReplace no-ops on an aborted controller.
+                if (jsonData.type === 'duplicate_turn_replay' || !options.onReplace) {
                   onData(jsonData.content);
                 }
                 hasDeliveredAnyContent = true;
                 lastProcessTime = Date.now();
-              } else if (jsonData.content) {
+              } else if (
+                (jsonData.type === 'text_delta' || jsonData.type === 'token' || jsonData.content)
+                && typeof jsonData.content === 'string'
+                && jsonData.content
+              ) {
                 batchBuffer += jsonData.content;
                 processedChunks++;
 
@@ -1724,6 +2366,20 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+                else if (!flushTimer) {
+                  flushTimer = setTimeout(() => {
+                    flushTimer = null;
+                    if (!streamFinished && !terminalErrorDelivered) flushBatch();
+                  }, 40);
+                }
+              } else if (jsonData.type === 'computer_login_handoff') {
+                consumeLoginHandoffSse(jsonData)
+                lastProcessTime = Date.now();
+              } else if ((jsonData.type === 'activity' || jsonData.type === 'stage') && (jsonData.text || jsonData.label)) {
+                if (options.onActivity) {
+                  options.onActivity(String(jsonData.text || jsonData.label), jsonData);
+                }
+                lastProcessTime = Date.now();
               } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {
                 // Chain-of-thought delta (ThinkingTrace). Deliberately keyed
                 // `reasoning` (not `content`) so legacy parsers ignore it.
@@ -1748,17 +2404,10 @@ class ApiClient {
                 if (options.onAgentEvent) {
                   options.onAgentEvent(jsonData as AgentStreamEvent);
                 }
-              } else if (jsonData.type === 'usage' && typeof jsonData.tokensIn === 'number') {
+              } else if (jsonData.type === 'usage') {
                 // Real token usage (+ optional USD cost) for the Worked Summary.
-                if (options.onUsage) {
-                  options.onUsage({
-                    tokensIn: jsonData.tokensIn,
-                    tokensOut: typeof jsonData.tokensOut === 'number' ? jsonData.tokensOut : 0,
-                    ...(typeof jsonData.model === 'string' ? { model: jsonData.model } : {}),
-                    ...(typeof jsonData.costOriginalUsd === 'number' ? { costOriginalUsd: jsonData.costOriginalUsd } : {}),
-                    ...(typeof jsonData.costAppliedUsd === 'number' ? { costAppliedUsd: jsonData.costAppliedUsd } : {}),
-                  })
-                }
+                const usage = normalizeAIUsageFrame(jsonData)
+                if (usage && options.onUsage) options.onUsage(usage)
               } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
                 // ChatGPT-style searched-sources frame. Surface to the UI
                 // so it can render the "Fuentes" chip + Activity panel.
@@ -1779,14 +2428,21 @@ class ApiClient {
                     items: jsonData.items,
                   });
                 }
-              } else if (jsonData.error) {
+              } else if (jsonData.error || jsonData.type === 'error') {
                 // When the backend recovered the turn with a localized
                 // fallback message, we've already delivered a useful
                 // reply to the user — don't surface a red toast on top.
                 if (jsonData.recovered) {
                   console.warn('[ai-stream] recovered from provider error:', jsonData.error);
                 } else {
-                  onError(new Error(sanitizeStreamError(jsonData.error)));
+                  // Preserve the already-buffered tail before surfacing the
+                  // terminal error. Returning here is essential: a later
+                  // [DONE]/reader close must not turn fail into complete.
+                  flushBatch();
+                  const userFacing = String(jsonData.message || jsonData.error || '');
+                  deliverStreamError(new Error(sanitizeStreamError(userFacing)));
+                  try { await reader.cancel('stream error'); } catch { /* already closed */ }
+                  return;
                 }
               }
             } catch (e) {
@@ -1797,8 +2453,9 @@ class ApiClient {
         }
       } catch (error: any) {
         lastError = error;
-        if (error?.name === 'AbortError' || signal?.aborted) {
-          onError(error);
+        clearFlushTimer();
+        if (signal?.aborted) {
+          deliverStreamError(error);
           return;
         }
 
@@ -1807,24 +2464,45 @@ class ApiClient {
         // fetch" (TypeError) is the most common one — happens when the
         // backend SSE socket drops mid-handshake, the wifi/network
         // hiccups, or a reverse proxy returns nothing.
-        const isNetworkError = error?.name === 'TypeError'
-          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream/i.test(error?.message || '');
-        if (!hasDeliveredAnyContent && isNetworkError && attempt < MAX_CONNECT_ATTEMPTS) {
+        // Safari/Cloudflare also abort the fetch as AbortError without
+        // aborting our Stop controller — retry that, don't freeze Pensando.
+        const isBrowserAbort = error?.name === 'AbortError';
+        const isNetworkError = isBrowserAbort
+          || error?.name === 'TypeError'
+          || isGenerateStreamStall(error)
+          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || '');
+        const canResume = Boolean(lastEventId);
+        // A transport cut with nothing painted usually means the backend
+        // already persisted the reply (the run keeps going detached). Ask for
+        // it BEFORE spending a reconnect slot — that is what turns minutes of
+        // Pensando into about a second.
+        if (isNetworkError && !hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+          try {
+            if (await options.tryRecoverPersistedTurn()) {
+              streamFinished = true;
+              onClose();
+              return;
+            }
+          } catch { /* not persisted yet — keep reconnecting */ }
+        }
+        // Cookie/CSRF transport reconnect: first-byte Failed to fetch
+        // (and mid-stream resume WITH a cursor) stay retryable.
+        // User Stop (signal.aborted) already returned above. HTTP 503
+        // connection_unavailable is handled in the !response.ok path.
+        if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
           const delay = computeBackoff(attempt);
-          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — auto-reconnecting in ${delay}ms`);
+          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — ${canResume ? 'resuming' : 'reconnecting'} in ${delay}ms`);
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
 
         console.error('API stream failed:', error);
         // Convert raw "Failed to fetch" into a human-friendly message.
-        // The model wasn't able to reply after every retry — surface
-        // an actionable hint instead of a meaningless browser error.
         if (isNetworkError && !hasDeliveredAnyContent) {
-          onError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
+          deliverStreamError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
           return;
         }
-        onError(error);
+        deliverStreamError(error);
         return;
       }
     }
@@ -1834,12 +2512,21 @@ class ApiClient {
     // empty streams — surface the last captured error to the UI with
     // a clean message.
     if (lastError) {
+      if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+        try {
+          if (await options.tryRecoverPersistedTurn()) {
+            streamFinished = true;
+            onClose();
+            return;
+          }
+        } catch { /* fall through to the error below */ }
+      }
       const msg = lastError?.message || 'Stream failed';
       const isQuota = /429|too many|rate/i.test(msg);
       const friendly = isQuota
         ? 'El servidor está procesando muchas solicitudes. Reintenta en unos segundos.'
         : `No se pudo completar la respuesta después de ${MAX_CONNECT_ATTEMPTS} intentos. ${msg}`;
-      onError(new Error(friendly));
+      deliverStreamError(new Error(friendly));
     }
   }
   async generateImage(
@@ -1850,7 +2537,7 @@ class ApiClient {
     const imageRequestStartedAt = Date.now();
     const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest(data)),
       signal: options.signal,
       // Image generation routinely takes 60-180s (gpt-image-2, Seedream,
       // Imagen). The backend enforces its own 200s deadline and answers
@@ -1887,7 +2574,7 @@ class ApiClient {
     const imageRequestStartedAt = Date.now();
     const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest(data)),
       timeoutMs, // > backend 200s deadline; see generateImage
       maxRetries: 0,     // non-idempotent paid generation — never auto-retry
       suppressFailureLog: true,
@@ -2018,7 +2705,8 @@ class ApiClient {
   async generateGmailResponse(data: { prompt: string; chatId?: string; model: string; type: string }) {
     const response = await this.request('/ai/generate-gmail', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model }),
     });
 
     return response;
@@ -2037,8 +2725,8 @@ class ApiClient {
     try {
       const config = await this.prepareMutatingFetch({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
+        body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
         ...(signal && { signal }),
       });
       const response = await this.authenticatedFetch(url, config);
@@ -2146,8 +2834,8 @@ class ApiClient {
     try {
       const config = await this.prepareMutatingFetch({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
+        body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
         ...(signal && { signal }),
       });
       const response = await this.authenticatedFetch(url, config);
@@ -2188,7 +2876,7 @@ class ApiClient {
   // async getAIModels() {
   //   return this.request('/ai/models');
   // }
-  async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO') { // type ko optional parameter banayein
+  async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' | 'VOICE') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
     // Always read the live list: the picker must reflect an admin model
     // activation immediately, so bypass the 5-min server response-cache
@@ -2661,6 +3349,30 @@ class ApiClient {
     return response.text();
   }
 
+  async getAdminSoftwareErrors(params?: {
+    page?: number
+    limit?: number
+    severity?: string
+    service?: string
+    status?: string
+    from?: string
+    to?: string
+    q?: string
+  }) {
+    const query = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+      ) as Record<string, string>,
+    ).toString();
+    return this.request(`/admin/software-errors${query ? `?${query}` : ''}`);
+  }
+
+  async retryAdminSoftwareError(id: string) {
+    return this.request(`/admin/software-errors/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+    });
+  }
+
   // Admin invoices
   async getAdminStripeInvoices(params?: { limit?: number; starting_after?: string }) {
     const query = new URLSearchParams(params as any).toString();
@@ -2788,6 +3500,122 @@ class ApiClient {
     return response.blob();
   }
 
+  // ── Sira Voz — VoiceStudio (open source, local, free) ─────────────────
+  async getVoiceStudioStatus(): Promise<VoiceStudioStatus> {
+    return this.request('/voice-studio/status', { suppressFailureLog: true });
+  }
+
+  async listVoiceStudioVoices(): Promise<{ voices: VoiceStudioVoice[] }> {
+    return this.request('/voice-studio/voices');
+  }
+
+  async cloneVoiceStudioVoice(data: { audio: Blob; filename?: string; name: string; language?: string; refText?: string }): Promise<{ voice: VoiceStudioVoice }> {
+    const formData = new FormData();
+    formData.append('audio', data.audio, data.filename || 'muestra.webm');
+    formData.append('name', data.name);
+    if (data.language) formData.append('language', data.language);
+    if (data.refText) formData.append('refText', data.refText);
+    return this.request('/voice-studio/voices/clone', { method: 'POST', body: formData, timeoutMs: 180000, maxRetries: 0 });
+  }
+
+  async deleteVoiceStudioVoice(voiceId: string): Promise<{ ok: boolean }> {
+    return this.request(`/voice-studio/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' });
+  }
+
+  /** Reference clip of a cloned voice, as a Blob (needs the auth header, so never a bare <audio src>). */
+  async fetchVoiceStudioVoicePreview(voiceId: string): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/voices/${encodeURIComponent(voiceId)}/preview`, {
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+    });
+    if (!response.ok) throw new Error('No se pudo cargar la muestra de la voz');
+    return response.blob();
+  }
+
+  /** Short, non-persisted synthesis to audition a voice (≤ 600 chars). */
+  async previewVoiceStudioSpeech(data: { text: string; voiceId?: string | null; language?: string | null; speed?: number }): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/speech/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      let message = 'No se pudo generar la prueba de voz';
+      try { const body = await response.json(); if (body?.error) message = body.error; } catch { /* non-JSON */ }
+      throw new Error(message);
+    }
+    return response.blob();
+  }
+
+  async transcribeWithVoiceStudio(data: { media?: Blob; filename?: string; fileId?: string; language?: string }): Promise<VoiceStudioTranscription> {
+    if (data.media) {
+      const formData = new FormData();
+      formData.append('media', data.media, data.filename || 'audio.webm');
+      if (data.language) formData.append('language', data.language);
+      return this.request('/voice-studio/transcriptions', { method: 'POST', body: formData, timeoutMs: 30 * 60 * 1000, maxRetries: 0 });
+    }
+    return this.request('/voice-studio/transcriptions', {
+      method: 'POST',
+      body: JSON.stringify({ fileId: data.fileId, language: data.language }),
+      timeoutMs: 30 * 60 * 1000,
+      maxRetries: 0,
+    });
+  }
+
+  async startVoiceStudioDub(data: { media?: Blob; filename?: string; fileId?: string; targetLanguage: string; sourceLanguage?: string; voiceId?: string | null; numSpeakers?: number | null; keepBackground?: boolean; chatId?: string | null }): Promise<{ job: VoiceStudioJob }> {
+    const formData = new FormData();
+    if (data.media) formData.append('media', data.media, data.filename || 'video.mp4');
+    if (data.fileId) formData.append('fileId', data.fileId);
+    formData.append('targetLanguage', data.targetLanguage);
+    if (data.sourceLanguage) formData.append('sourceLanguage', data.sourceLanguage);
+    if (data.voiceId) formData.append('voiceId', data.voiceId);
+    if (data.numSpeakers) formData.append('numSpeakers', String(data.numSpeakers));
+    if (data.keepBackground === false) formData.append('keepBackground', 'false');
+    if (data.chatId) formData.append('chatId', data.chatId);
+    return this.request('/voice-studio/jobs/dub', { method: 'POST', body: formData, timeoutMs: 10 * 60 * 1000, maxRetries: 0 });
+  }
+
+  async startVoiceStudioAudiobook(data: { text?: string; file?: Blob; filename?: string; fileId?: string; title?: string; author?: string; voiceId?: string | null; language?: string; format?: 'm4b' | 'mp3'; chatId?: string | null }): Promise<{ job: VoiceStudioJob }> {
+    const formData = new FormData();
+    if (data.file) formData.append('file', data.file, data.filename || 'libro.txt');
+    if (data.fileId) formData.append('fileId', data.fileId);
+    if (data.text) formData.append('text', data.text);
+    if (data.title) formData.append('title', data.title);
+    if (data.author) formData.append('author', data.author);
+    if (data.voiceId) formData.append('voiceId', data.voiceId);
+    if (data.language) formData.append('language', data.language);
+    if (data.format) formData.append('format', data.format);
+    if (data.chatId) formData.append('chatId', data.chatId);
+    return this.request('/voice-studio/jobs/audiobook', { method: 'POST', body: formData, timeoutMs: 10 * 60 * 1000, maxRetries: 0 });
+  }
+
+  async listVoiceStudioJobs(): Promise<{ jobs: VoiceStudioJob[] }> {
+    return this.request('/voice-studio/jobs', { suppressFailureLog: true });
+  }
+
+  async getVoiceStudioJob(jobId: string): Promise<{ job: VoiceStudioJob }> {
+    return this.request(`/voice-studio/jobs/${encodeURIComponent(jobId)}`, { suppressFailureLog: true });
+  }
+
+  async cancelVoiceStudioJob(jobId: string): Promise<{ job: VoiceStudioJob }> {
+    return this.request(`/voice-studio/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+  }
+
+  async downloadVoiceStudioJob(jobId: string): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/jobs/${encodeURIComponent(jobId)}/download`, {
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+    });
+    if (!response.ok) throw new Error('El resultado todavía no está disponible');
+    return response.blob();
+  }
+
+  async downloadVoiceStudioSubtitles(jobId: string): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/jobs/${encodeURIComponent(jobId)}/subtitles`, {
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+    });
+    if (!response.ok) throw new Error('Este trabajo no tiene subtítulos');
+    return response.blob();
+  }
+
   // ElevenLabs endpoints
   async getVoices() {
     return this.request('/elevenlabs/voices');
@@ -2798,7 +3626,14 @@ class ApiClient {
   }
 
   async getOfficeSoundscape(
-    soundId: 'coast-day' | 'coast-night' | 'terrace-steps',
+    soundId:
+      | 'coast-day'
+      | 'coast-night'
+      | 'terrace-steps'
+      | 'work-start'
+      | 'work-complete'
+      | 'approval-ready'
+      | 'attention',
     options: { signal?: AbortSignal } = {},
   ): Promise<{
     ok: boolean;
@@ -2873,7 +3708,8 @@ class ApiClient {
   }> {
     return this.request('/ai/generate-speech', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify(pinGenerateRequest(data)),
       signal: options.signal,
       // Long narrations can legitimately take longer than the generic 30s
       // API ceiling. Keep the browser alive slightly longer than the
@@ -2906,7 +3742,8 @@ class ApiClient {
   }> {
     return this.request('/ai/generate-music', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify(pinGenerateRequest(data)),
       signal: options.signal,
       // Music generation runs synchronously inside the request and can take a
       // while for long (3–4 min) tracks. Give it a generous ceiling and never
@@ -3041,7 +3878,7 @@ class ApiClient {
         throw new Error('No response body');
       }
 
-      for await (const jsonData of streamSseJson<any>(response.body)) {
+      for await (const jsonData of streamSseJson<any>(response.body, { stopOnDoneMessage: true })) {
         onData(jsonData);
       }
     } catch (error: any) {
@@ -3055,19 +3892,27 @@ class ApiClient {
   async generateVideo(data: {
     prompt: string;
     aspect_ratio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9';
-    resolution?: '480p' | '720p';
-    duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+    resolution?: '480p' | '720p' | '1080p';
+    duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30;
     audio?: boolean;
     negative_prompt?: string;
     chatId?: string;
     files?: string[];
     image_url?: string;
     image_urls?: string[];
+    video_url?: string;
+    video_urls?: string[];
+    audio_url?: string;
+    audio_urls?: string[];
     model?: string;
   }, opts?: { signal?: AbortSignal }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest({
+        ...data,
+        model: data.model,
+        provider: (data as { provider?: string }).provider,
+      })),
       signal: opts?.signal,
       timeoutMs: 120000, // video submit + first-frame can exceed 30s
     });
@@ -3286,24 +4131,35 @@ class ApiClient {
     return res.blob();
   }
 
-  async generateChart(data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string }) {
+  async generateChart(
+    data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request('/ai/generate-chart', {
       method: 'POST',
+      headers: { ...freshGenerateHeaders() },
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
-  async generateFigmaFlowchart(data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] }) {
+  async generateFigmaFlowchart(
+    data: { prompt: string; displayPrompt?: string; chatId?: string; conversationHistory?: any[] },
+    options: { signal?: AbortSignal } = {},
+  ) {
     return this.request('/figma/generate_flowchart', {
+      headers: { ...freshGenerateHeaders() },
       method: 'POST',
       body: JSON.stringify(data),
+      signal: options.signal,
     });
   }
 
   async generatePlan(data: { prompt: string; chatId?: string; model?: string }) {
     return this.request('/plan/generate', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
   }
 
@@ -3336,6 +4192,7 @@ class ApiClient {
       template?: string;
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];
+      lastArtifactId?: string;
       outline?: string[];
       researchSources?: Array<{
         title?: string | null;
@@ -3399,11 +4256,47 @@ class ApiClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...freshGenerateHeaders(),
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          model: clampDeepSeekModel(data?.model) || data?.model,
+          provider: data?.provider,
+        }),
         signal: opts.signal,
       });
       res = await this.authenticatedFetch(`${this.baseURL}${path}`, config);
+
+      // A gateway 502/503/504 before the SSE stream starts means the
+      // backend was restarting (deploy window); nothing has been
+      // generated or persisted yet, so a short retry is safe.
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && !opts.signal?.aborted) {
+        let retried = false;
+        for (let attempt = 0; attempt < 3 && !retried; attempt++) {
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          if (opts.signal?.aborted) break;
+          try {
+            const retryConfig = await this.prepareMutatingFetch({
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...freshGenerateHeaders(),
+              },
+              body: JSON.stringify({
+                ...data,
+                model: clampDeepSeekModel(data?.model) || data?.model,
+                provider: data?.provider,
+              }),
+              signal: opts.signal,
+            });
+            const retryRes = await this.authenticatedFetch(`${this.baseURL}${path}`, retryConfig);
+            if (retryRes.ok || (retryRes.status !== 502 && retryRes.status !== 503 && retryRes.status !== 504)) {
+              res = retryRes;
+              retried = true;
+            }
+          } catch {}
+        }
+      }
 
       if (res.ok) break;
 
@@ -3459,8 +4352,8 @@ class ApiClient {
     const url = `${this.baseURL}/ai/generate-webdev`;
     const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
 
     try {
@@ -3508,7 +4401,8 @@ class ApiClient {
   }) {
     return this.request('/ai/generate-vector-ppt', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
   }
 
@@ -3522,7 +4416,8 @@ class ApiClient {
   }) {
     return this.request('/ai/generate-ppt', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
   }
 
@@ -3653,7 +4548,8 @@ class ApiClient {
 
     return this.request('/ai/generate-google-services', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...payload, model: clampDeepSeekModel(payload.model) || payload.model }),
     });
   }
 
@@ -3696,6 +4592,7 @@ class ApiClient {
   async generateThesis(data: { topics: string[]; chatId?: string }) {
     return this.request('/thesis/generate', {
       method: 'POST',
+      headers: { ...freshGenerateHeaders() },
       body: JSON.stringify(data),
     });
   }

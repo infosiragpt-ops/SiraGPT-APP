@@ -58,6 +58,7 @@ async function runSpecialist({
       tier: deps.tier,
       model: deps.model,
       projectSettings: deps.projectSettings,
+      companySoul: deps.companySoul,
       onUsage: deps.onUsage,
       emitAction: deps.emitAction,
     },

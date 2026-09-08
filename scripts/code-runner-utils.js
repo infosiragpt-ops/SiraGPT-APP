@@ -6,6 +6,7 @@
  */
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 
 // Only boring, non-secret process settings may cross the control-plane ->
 // generated-code boundary. Project-specific HOME/cache/tmp and runtime values
@@ -47,6 +48,11 @@ function commandRejectionReason(cmd) {
 function sanitizeProjectId(raw) {
   const id = String(raw || '').trim();
   return PROJECT_ID_RE.test(id) ? id : null;
+}
+
+function sanitizeRunId(raw) {
+  const id = String(raw || '').trim();
+  return RUN_ID_RE.test(id) ? id : null;
 }
 
 function resolveProjectRelPath(relPath) {
@@ -293,9 +299,13 @@ const IGNORED_EXPORT_DIRS = new Set([
 function shouldIgnoreExportPath(relPath) {
   const p = String(relPath || '').replaceAll('\\', '/').trim();
   if (!p) return true;
-  for (const seg of p.split('/')) {
+  const segments = p.split('/');
+  for (const seg of segments) {
     if (seg && IGNORED_EXPORT_DIRS.has(seg)) return true;
   }
+  // Excluir archivos de entorno con secretos (.env, .env.local…) del export.
+  const leaf = segments[segments.length - 1];
+  if (leaf === '.env' || /^\.env\.[A-Za-z0-9_-]+$/.test(leaf)) return true;
   return false;
 }
 
@@ -442,6 +452,7 @@ function createDevPool({ ports, now = () => Date.now() } = {}) {
 
 module.exports = {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
   previewConfigMigrationMode,

@@ -46,15 +46,20 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
-function get<T>(path: string): Promise<T> {
-  return authenticatedFetch(`${baseUrl}${path}`, { credentials: "include", headers: authHeaders() }).then(handle<T>)
+function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return authenticatedFetch(`${baseUrl}${path}`, {
+    credentials: "include",
+    headers: authHeaders(),
+    signal,
+  }).then(handle<T>)
 }
-function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+function send<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return authenticatedFetch(`${baseUrl}${path}`, {
     method,
     credentials: "include",
     headers: authHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   }).then(handle<T>)
 }
 
@@ -242,9 +247,11 @@ export const githubService = {
   },
 
   // Run / live preview
-  run: (id: string, env?: Record<string, string>) => send<RunStatus & { ok: boolean }>("POST", `/connected/${id}/run`, env ? { env } : undefined),
+  run: (id: string, env?: Record<string, string>, signal?: AbortSignal) =>
+    send<RunStatus & { ok: boolean }>("POST", `/connected/${id}/run`, env ? { env } : undefined, signal),
   stop: (id: string) => send<{ ok: boolean; stopped: boolean }>("POST", `/connected/${id}/stop`),
-  runStatus: (id: string) => get<RunStatus>(`/connected/${id}/run/status`),
+  runStatus: (id: string, signal?: AbortSignal) =>
+    get<RunStatus>(`/connected/${id}/run/status`, signal),
 
   // Files
   files: (id: string) => get<{ tree: FileNode[]; truncated: boolean; count: number }>(`/connected/${id}/files`),

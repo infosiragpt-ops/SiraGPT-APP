@@ -142,6 +142,161 @@ async function buildIteration(runner, projectId, label, { install }) {
   return { indexBytes: Buffer.byteLength(html) };
 }
 
+function featureEnabled(env, key) {
+  return /^(1|true|on|yes)$/i.test(String(env?.[key] ?? '').trim());
+}
+
+function isolationRunId(probeId, suffix) {
+  const safeProbe = String(probeId || 'probe')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 72) || 'probe';
+  return `canary-${safeProbe}-${suffix}`;
+}
+
+async function runWorktreeIsolationCanary({
+  runner,
+  projectId,
+  probeId,
+  baseBranch = 'main',
+  env = process.env,
+} = {}) {
+  if (!featureEnabled(env, 'CODEX_RUN_WORKTREES')) {
+    return { enabled: false, isolated: false, skipped: 'feature_disabled' };
+  }
+  if (
+    typeof runner?.createWorktree !== 'function'
+    || typeof runner?.forRun !== 'function'
+    || typeof runner?.removeWorktree !== 'function'
+  ) {
+    throw new RuntimeCanaryError(
+      'worktree_isolation',
+      'runner does not expose the run-worktree contract',
+    );
+  }
+
+  const runIds = [
+    isolationRunId(probeId, 'a'),
+    isolationRunId(probeId, 'b'),
+  ];
+  const markers = [
+    `SIRA-WORKTREE-${probeId}-A`,
+    `SIRA-WORKTREE-${probeId}-B`,
+  ];
+  const initialized = new Set();
+  let primaryError = null;
+  let result = null;
+
+  try {
+    const baseBefore = await runner.readFile(projectId, 'src/main.jsx');
+    const initResults = await Promise.allSettled(runIds.map((run) => (
+      runner.createWorktree(projectId, run, baseBranch)
+    )));
+    initResults.forEach((entry, index) => {
+      if (entry.status === 'fulfilled' && entry.value?.ok !== false) initialized.add(runIds[index]);
+    });
+    const initFailure = initResults.find((entry) => (
+      entry.status === 'rejected' || entry.value?.ok === false
+    ));
+    if (initFailure) {
+      const detail = initFailure.status === 'rejected'
+        ? initFailure.reason?.message || initFailure.reason
+        : initFailure.value;
+      throw new RuntimeCanaryError(
+        'worktree_isolation.init',
+        'one of the isolated run worktrees could not be created',
+        String(typeof detail === 'string' ? detail : JSON.stringify(detail)).slice(0, 2_000),
+      );
+    }
+
+    const scoped = runIds.map((run) => runner.forRun(run, projectId));
+    await Promise.all(scoped.map((runRunner, index) => (
+      runRunner.writeFiles(projectId, [{
+        path: 'src/main.jsx',
+        content: appSource(markers[index]),
+      }])
+    )));
+    const [viewA, viewB, baseAfter, statusA, statusB, baseStatus] = await Promise.all([
+      scoped[0].readFile(projectId, 'src/main.jsx'),
+      scoped[1].readFile(projectId, 'src/main.jsx'),
+      runner.readFile(projectId, 'src/main.jsx'),
+      checkedExec(scoped[0], projectId, ['git', 'status', '--porcelain'], 'worktree_isolation.status_a', 30_000),
+      checkedExec(scoped[1], projectId, ['git', 'status', '--porcelain'], 'worktree_isolation.status_b', 30_000),
+      checkedExec(runner, projectId, ['git', 'status', '--porcelain'], 'worktree_isolation.base_status', 30_000),
+    ]);
+    const textA = String(viewA?.content || '');
+    const textB = String(viewB?.content || '');
+    const baseTextBefore = String(baseBefore?.content || '');
+    const baseTextAfter = String(baseAfter?.content || '');
+    if (
+      !textA.includes(markers[0])
+      || textA.includes(markers[1])
+      || !textB.includes(markers[1])
+      || textB.includes(markers[0])
+    ) {
+      throw new RuntimeCanaryError(
+        'worktree_isolation.content',
+        'isolated run content crossed workspace boundaries',
+      );
+    }
+    if (
+      baseTextAfter !== baseTextBefore
+      || baseTextAfter.includes(markers[0])
+      || baseTextAfter.includes(markers[1])
+      || String(baseStatus.stdout || '').trim()
+    ) {
+      throw new RuntimeCanaryError(
+        'worktree_isolation.base',
+        'the project base checkout changed during isolated writes',
+        String(baseStatus.stdout || '').slice(0, 2_000),
+      );
+    }
+    if (!String(statusA.stdout || '').trim() || !String(statusB.stdout || '').trim()) {
+      throw new RuntimeCanaryError(
+        'worktree_isolation.status',
+        'isolated writes were not visible in both run worktrees',
+      );
+    }
+    result = {
+      enabled: true,
+      isolated: true,
+      basePreserved: true,
+      runs: runIds,
+      markers,
+    };
+  } catch (error) {
+    primaryError = error;
+  }
+
+  const cleanup = await Promise.allSettled([...initialized].map(async (runId) => {
+    const scoped = runner.forRun(runId, projectId);
+    await checkedExec(
+      scoped,
+      projectId,
+      ['git', 'reset', '--hard', 'HEAD'],
+      'worktree_isolation.reset',
+      30_000,
+    );
+    return runner.removeWorktree(projectId, runId);
+  }));
+  const cleanupFailed = cleanup.some((entry) => (
+    entry.status === 'rejected'
+    || entry.value?.ok === false
+    || entry.value?.removed === false
+  ));
+  if (primaryError) throw primaryError;
+  if (cleanupFailed || initialized.size !== runIds.length) {
+    throw new RuntimeCanaryError(
+      'worktree_isolation.cleanup',
+      'isolated canary worktrees were not cleaned completely',
+    );
+  }
+  return {
+    ...result,
+    cleaned: true,
+  };
+}
+
 async function waitForReady(runner, projectId, {
   timeoutMs = DEFAULT_READY_TIMEOUT_MS,
   delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -260,6 +415,13 @@ async function runRuntimeCanary({
       build: secondBuild,
       render: { ok: true, rootChars: secondView.rootChars, expectedTextFound: true },
     });
+    evidence.worktreeIsolation = await runWorktreeIsolationCanary({
+      runner,
+      projectId,
+      probeId,
+      baseBranch: env.CODEX_RUNTIME_CANARY_BASE_BRANCH || 'main',
+      env,
+    });
     return {
       ok: true,
       ...evidence,
@@ -277,6 +439,7 @@ module.exports = {
   RuntimeCanaryError,
   appSource,
   canaryFiles,
+  runWorktreeIsolationCanary,
   runRuntimeCanary,
   waitForReady,
   waitForRender,

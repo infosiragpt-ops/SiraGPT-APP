@@ -99,6 +99,11 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldEditExistingDocument("reescribe esta frase", history), false)
     assert.equal(shouldEditExistingDocument("reescribe este documento en un tono formal", history), true)
     assert.equal(shouldEditExistingDocument("explica la reescritura del documento", history), false)
+    for (const prompt of ["describe cómo reemplazar un título", "dime si se puede editar", "no edites nada de mi documento",
+      "resume este documento sin modificar el original"]) {
+      assert.equal(shouldEditExistingDocument(prompt, history), false, prompt)
+    }
+    assert.equal(shouldEditExistingDocument("describe el documento y cambia el título", history), true)
   })
 
   it("routes document follow-up questions like title lookup through the agent runtime", async () => {
@@ -174,6 +179,17 @@ describe("ai-service · deterministic intent routing", () => {
       shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files),
       true,
     )
+  })
+
+  it("treats current-turn file objects as document context for first-send edits", () => {
+    const ppt = {
+      id: "file-pptx-live",
+      name: "Gestion.pptx",
+      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    assert.equal(shouldEditExistingDocument("agrega 5 diapositivas", [ppt]), true)
+    assert.equal(shouldEditExistingDocument("corrige la ortografía", [ppt]), true)
+    assert.equal(shouldEditExistingDocument("edita esta presentación", [ppt]), true)
   })
 
   it("routes targeted edits of an uploaded Word document to the agentic document editor", async () => {
@@ -612,5 +628,52 @@ describe("ai-service · deterministic intent routing", () => {
     const enriched = buildProfessionalCapabilityPrompt("artifact", "crea un grader interactivo")
     assert.match(enriched, /no external network calls/i)
     assert.match(enriched, /Never store secrets/i)
+  })
+})
+
+describe("ai-service · computer request and shopping lookups", () => {
+  it("routes «abre tu computadora …» to the agentic runtime, never plain text", () => {
+    assert.equal(
+      classifyIntentFastPath("abre tu computadora y búscame ofertas de prendas de vestir de mujer"),
+      "agent_task",
+    )
+    assert.equal(classifyIntentFastPath("usa tu computadora para entrar a mi panel de ventas"), "agent_task")
+    assert.equal(classifyIntentFastPath("abre el navegador y entra a mercadolibre"), "agent_task")
+  })
+
+  it("routes conjugated búscame lookups to web_search and ofertas to the live-computer agent", () => {
+    assert.equal(classifyIntentFastPath("búscame vuelos baratos a Lima"), "web_search")
+    assert.equal(classifyIntentFastPath("ofertas de laptops hoy"), "agent_task")
+    assert.equal(classifyIntentFastPath("descuentos en zapatillas de mujer"), "web_search")
+    assert.equal(classifyIntentFastPath("cuánto cuesta el iPhone 17 en Perú"), "web_search")
+  })
+})
+
+describe("ai-service · computer request helper", () => {
+  it("detects explicit computer requests for the auto-open panel", async () => {
+    const { isComputerRequestPrompt } = await import("../lib/ai-service")
+    assert.equal(isComputerRequestPrompt("abre tu computadora y búscame ofertas"), true)
+    assert.equal(isComputerRequestPrompt("usa el navegador y entra a mi tienda"), true)
+    assert.equal(isComputerRequestPrompt("hazme un resumen de este pdf"), false)
+  })
+})
+
+describe("ai-service · audio and song generation routing", () => {
+  it("routes audio/song creation to agent_task even when research words appear", () => {
+    assert.equal(
+      classifyIntentFastPath("créame un audio con lo siguiente: Juan vende papas en el mercado"),
+      "agent_task",
+    )
+    assert.equal(classifyIntentFastPath("crea una canción sobre el mercado de flores"), "agent_task")
+    assert.equal(classifyIntentFastPath("genera un audio que investigue el tema"), "agent_task")
+  })
+
+  it("keeps the agent_task contract explicit about audio clarifications and edits", async () => {
+    const { PROFESSIONAL_CAPABILITY_CONTRACTS } = await import("../lib/ai-service")
+    const contract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || ""
+    assert.match(contract, /generate_speech/)
+    assert.match(contract, /UNA sola pregunta corta/)
+    assert.match(contract, /pieza ANTERIOR/)
+    assert.match(contract, /speechSynthesis|Web Speech API/)
   })
 })

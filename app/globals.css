@@ -137,6 +137,26 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --composer-bg: 0 0% 100%;          /* light composer surface */
     --composer-border: 240 6% 90%;     /* light composer outline */
 
+    /* Chat UX tokens — brand, surfaces, WCAG code contrast.
+       Keep shadcn --accent (HSL components) intact; --brand is the
+       chat accent used by the send disc and focus rings. */
+    color-scheme: light;
+    --brand: #5b4dff;
+    --chat-accent: var(--brand);
+    --surface-1: #ffffff;
+    --surface-2: #f4f6f8;
+    --surface-3: #e8ebf0;
+    --code-bg: #1a2332;
+    --code-fg: #e8eef7;
+    --content-max: 46rem;
+
+    /* RunTrace / Pensando stepper — running is brand celeste, never red. */
+    --sira-celeste: #38BDF8;
+    --step-pending: #8A8580;
+    --step-running: #38BDF8;
+    --step-done: #059669;
+    --step-failed: #B45353;
+
     /*
      * Motion tokens — Claude-grade snappy easing. The "smooth" curve
      * is fastest at the start (perceived snappiness) and decays to
@@ -220,6 +240,22 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --sidebar-accent-foreground: 240 4.8% 95%;  /* #f1f1f6 — high-contrast text on accent bg */
     --sidebar-border: 215 21% 11%;     /* #161B22 */
     --sidebar-ring: 253 100% 68%;
+
+    color-scheme: dark;
+    --brand: #7c5cff;
+    --chat-accent: var(--brand);
+    --surface-1: #0b0d12;
+    --surface-2: #141820;
+    --surface-3: #1c222c;
+    --code-bg: #121826;
+    --code-fg: #e8eef7;
+    --content-max: 46rem;
+
+    --sira-celeste: #38BDF8;
+    --step-pending: #8A8580;
+    --step-running: #38BDF8;
+    --step-done: #34D399;
+    --step-failed: #F87171;
   }
 
   /*
@@ -268,6 +304,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
+    color-scheme: light dark;
   }
 
   * {
@@ -278,6 +315,37 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   [role="button"] {
     -webkit-touch-callout: none;
     touch-action: manipulation; /* kills the 300 ms tap delay on older Android */
+  }
+
+  /* Admin/user model toggles: keep a compact iOS switch, not a 44px circle.
+     Syncfusion button CSS + iOS min tap-targets otherwise blow [role=switch]
+     into a huge radio-looking disc. */
+  button[role="switch"],
+  [role="switch"],
+  .admin-model-switch {
+    width: 36px !important;
+    height: 20px !important;
+    min-width: 36px !important;
+    min-height: 20px !important;
+    max-width: 36px !important;
+    max-height: 20px !important;
+    padding: 2px !important;
+    margin: 0 !important;
+    flex: 0 0 36px !important;
+    border-radius: 9999px !important;
+    box-sizing: border-box !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    transform: none !important;
+  }
+  button[role="switch"] > span,
+  [role="switch"] > span,
+  .admin-model-switch > span {
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px !important;
+    min-height: 16px !important;
+    border-radius: 9999px !important;
   }
 
   /*
@@ -329,7 +397,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
       ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
       "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
       "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    font-size: 15px;
+    font-size: clamp(15px, 0.28vw + 14.4px, 16px);
     line-height: 1.6;
     /* Geist is already tightly tracked by design — a small negative
        adjustment keeps paragraphs looking calm without drifting into
@@ -381,7 +449,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      the mobile composer behind the iOS keyboard. */
   width: 100vw;
   width: var(--app-layout-viewport-width, 100vw);
-  height: 100vh;
+  height: 100dvh;
   height: var(--app-viewport-height, 100dvh);
   min-height: 0;
   overflow: hidden;
@@ -402,8 +470,13 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 14px);
   --chat-textarea-max-height: 200px;
   --chat-mobile-gutter: 1rem;
+  /* Single source of truth for the readable conversation rail and composer.
+     --content-max (48rem) matches the approved reference while keeping
+     messages + composer on one readable rail. */
+  --content-max: 48rem;
+  --chat-content-max-width: var(--content-max);
   width: 100%;
-  height: 100vh;
+  height: 100dvh;
   height: var(--chat-viewport-height);
   min-height: 0;
 }
@@ -592,16 +665,36 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-initial-stage {
-  padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
-    calc(1rem + env(safe-area-inset-bottom, 0px));
+  /* Optical center (slightly above geometric mid) + shared rail gutters.
+     Horizontal padding alone owns the side margin; the frame must NOT also
+     subtract 2rem or the empty-state bar becomes narrower than the in-chat dock. */
+  box-sizing: border-box;
+  width: 100%;
+  padding: calc(var(--chat-header-height, 64px) + 6vh) var(--chat-mobile-gutter)
+    calc(10vh + env(safe-area-inset-bottom, 0px));
+  align-items: center;
+  justify-content: center;
 }
 
 .code-target-select-button {
   position: relative;
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  min-height: 2rem;
+  min-width: 2rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
   overflow: visible;
   border: 0 !important;
   background: transparent !important;
   color: hsl(var(--muted-foreground)) !important;
+  padding: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
   box-shadow: none !important;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -628,6 +721,13 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     transform 180ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
+.code-target-select-button__label {
+  display: none;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .code-target-select-button:hover,
 .code-target-select-button:focus-visible {
   background: hsl(var(--muted) / 0.6) !important;
@@ -635,7 +735,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .code-target-select-button--active {
-  background: hsl(var(--accent-violet) / 0.12) !important;
+  background: hsl(var(--accent-violet) / 0.1) !important;
   color: hsl(var(--accent-violet)) !important;
 }
 
@@ -663,6 +763,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   }
 }
 
+@media (max-width: 640px) {
+  .code-target-select-button {
+    width: 2.75rem;
+    min-width: 2.75rem;
+    padding-inline: 0;
+  }
+
+  .code-target-select-button__label {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .code-target-select-button,
   .code-target-select-button__icon {
@@ -673,39 +785,256 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 .chat-message-scroll {
   margin-bottom: 0;
   padding-bottom: 0;
+  overflow-anchor: auto;
+}
+
+.chat-message-scroll [data-radix-scroll-area-viewport] {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-anchor: auto;
+}
+
+.chat-message-scroll [data-radix-scroll-area-viewport] > div {
+  min-height: 100%;
+  /* Radix sets display:table inline. The transcript is vertical-only: its
+     wrapper must fit the viewport, not expand to a message's intrinsic width. */
+  display: flex !important;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0 !important;
 }
 
 .chat-message-scroll-content {
   padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
-    calc(var(--chat-composer-height, 112px) + 1rem);
+    0.25rem;
+  /* Conversación anclada a la línea superior del composer: cuando el
+     contenido es corto, baja hasta tocar la barra en lugar de flotar arriba
+     con un hueco vacío. Con contenido largo el scroll se comporta igual. */
+  flex: 1 1 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow-anchor: auto;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-log-end {
+  height: 0;
+  width: 0;
+  overflow: hidden;
+}
+
+.msg--user {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.msg--user .msg-user-stack {
+  /* Full row width so bubble max-width % has a real containing block.
+     Do not shrink-wrap this stack — that collapsed "hola" to 1ch. */
+  align-self: stretch;
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(100%, var(--content-max, 46rem));
+}
+
+.msg-user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  max-width: min(100%, var(--content-max, 46rem));
+}
+
+.chat-user-image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, var(--img-natural-width, 100%));
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.chat-image-zoom {
+  image-rendering: pixelated;
+}
+
+.chat-code-block,
+.chat-code-block pre,
+.chat-code-block code {
+  background: var(--code-bg);
+  color: var(--code-fg);
+}
+
+.chat-code-block .shiki,
+.chat-code-block .shiki span {
+  background: transparent !important;
+}
+
+.chat-code-block a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/*
+ * Guard anti-píldora-invisible — la transcripción de imágenes suele
+ * devolver fences sin lenguaje (```\nsiragpt.com\n```). Si algún
+ * renderer futuro vuelve a emitir un <code> con fondo pill dentro de
+ * un <pre> oscuro de prose, el texto quedaría claro-sobre-claro
+ * (ilegible en ambos temas, ver /agentes). Esta regla fuerza al
+ * código dentro de bloques pre a heredar los colores del bloque.
+ */
+.prose pre code,
+.chat-assistant-message pre code,
+.sgpt-message-collapsible pre code {
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  font-size: inherit !important;
+  white-space: inherit;
+  word-break: inherit;
+}
+
+.chat-assistant-message :is(p, li, td, blockquote) {
+  line-height: 1.6;
+}
+
+.chat-history-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 32px;
+}
+
+.claude-think-row details > summary,
+.think-disclosure > summary {
+  list-style: none;
+}
+.claude-think-row details > summary::-webkit-details-marker,
+.think-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.think-chevron {
+  display: inline-block;
+  transform-origin: center;
+  transition: transform 180ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+details[open] > summary .think-chevron,
+.think-row[aria-expanded="true"] .think-chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .think-chevron,
+  .claude-think-sunburst {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 .chat-composer-dock {
-  padding: 1rem 1rem calc(1rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
-  /* Floating composer: no fading "band" above the input pill. The pill carries
-     its own solid background, so messages scroll cleanly up to the composer line
-     instead of dissolving into a white gradient strip. */
+  /* Keep sticky/fixed from utility classes — do not force position here.
+     Side padding matches --chat-mobile-gutter so the bar aligns with the
+     empty-state rail and the transcript content box. */
+  padding: 0.25rem var(--chat-mobile-gutter)
+    calc(0.875rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
+  /* Keep the dock transparent so the transcript remains readable all the way
+     to the composer's hairline. The surface itself owns separation/elevation. */
   background: transparent;
+  isolation: isolate;
 }
 
-/* The composer keeps the exact width of the approved empty-chat state in
-   every lifecycle state. The dock already supplies the mobile gutters, while
-   the empty stage needs its own 1rem gutter on either side. */
+.chat-composer-dock::before {
+  content: none;
+  display: none;
+}
+
+/* Shared content rail: stage/dock own the outer gutters; the frame always
+   fills the remaining width up to the approved 828px max so empty and
+   in-chat composers share the same outer edges. */
 .chat-composer-frame {
-  width: min(calc(100% - 2rem), 51.75rem);
+  box-sizing: border-box;
+  width: min(100%, var(--chat-content-max-width));
+  max-width: 100%;
   margin-inline: auto;
 }
 
 .chat-composer-dock .chat-composer-frame {
-  width: min(100%, 51.75rem);
+  width: min(100%, var(--chat-content-max-width));
+}
+
+/* Empty stage already applies --chat-mobile-gutter; keep the frame flush to
+   that padded content box (no second 1rem inset). */
+.chat-initial-stage .chat-composer-frame {
+  width: min(100%, var(--chat-content-max-width));
 }
 
 .chat-conversation-column {
-  max-width: min(100%, 64rem);
+  /* The element owns the transcript's inline gutters. Add those gutters to
+     the shared rail width so its CONTENT box (assistant text on the left,
+     user bubbles on the right) lands exactly on the composer's outer edges.
+     At narrow widths the 100% cap produces the same pane-minus-gutters width
+     as the dock, with no breakpoint-specific arithmetic. */
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: min(
+    100%,
+    calc(
+      var(--chat-content-max-width) + var(--chat-mobile-gutter) + var(--chat-mobile-gutter)
+    )
+  );
+  margin-inline: auto;
 }
 
 .chat-user-bubble {
-  max-width: min(70%, 32rem);
+  /* Hug "hola" horizontally. Never width:auto/min-content + break-all:
+     that resolves min-content to 1ch and stacks h/o/l/a. */
+  display: block;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 44px;
+  max-width: min(80%, 720px);
+  flex: 0 0 auto;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
+}
+
+.chat-user-bubble-inner {
+  display: block;
+  margin: 0;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: break-word;
+  line-height: 1.45;
 }
 
 .chat-assistant-message {
@@ -855,13 +1184,15 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   z-index: 1000;
   isolation: isolate;
   border-radius: 12px !important;
-  border: 1px solid hsl(220 13% 86% / 0.66) !important;
-  background: hsl(var(--popover) / 0.99) !important;
+  border: 1px solid hsl(220 13% 86% / 0.72) !important;
+  /* Solid professional light surface: black text on white, not washed glass. */
+  background: #ffffff !important;
+  color: #0a0a0a !important;
   box-shadow:
-    0 14px 30px -26px hsl(220 30% 12% / 0.22),
-    0 1px 0 hsl(0 0% 100% / 0.92) inset !important;
-  backdrop-filter: blur(14px) saturate(1.04);
-  -webkit-backdrop-filter: blur(14px) saturate(1.04);
+    0 18px 40px -28px hsl(220 30% 12% / 0.28),
+    0 1px 0 hsl(0 0% 100% / 0.96) inset !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .model-picker-content::before {
@@ -902,6 +1233,510 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .model-picker-list {
   position: relative;
+}
+
+/* GPT/project "Modelo" submenu — phone-first professional panel */
+.gpt-model-submenu.model-picker-content,
+.gpt-model-submenu {
+  background: #ffffff !important;
+  color: #0a0a0a !important;
+  border-color: hsl(220 13% 86% / 0.85) !important;
+}
+
+.gpt-model-submenu .model-picker-row,
+.gpt-model-submenu [role="menuitem"] {
+  color: #0a0a0a !important;
+}
+
+.gpt-model-submenu .liquid-label {
+  color: #0a0a0a !important;
+}
+
+.gpt-model-submenu .model-provider-heading {
+  color: hsl(220 10% 38% / 0.92);
+}
+
+.gpt-model-submenu .model-provider-count {
+  color: hsl(220 10% 42% / 0.78);
+}
+
+.gpt-model-submenu .model-picker-row::before {
+  background: hsl(220 14% 92% / 0.95);
+}
+
+.gpt-model-submenu .model-picker-row[data-selected="true"]::before {
+  background: hsl(220 16% 90% / 1);
+}
+
+.gpt-context-menu {
+  background: #ffffff !important;
+  color: #0a0a0a !important;
+}
+
+.gpt-context-menu [role="menuitem"],
+.gpt-context-menu [role="menuitemcheckbox"],
+.gpt-context-menu [data-radix-collection-item] {
+  color: #0a0a0a;
+}
+
+.dark .gpt-model-submenu.model-picker-content,
+.dark .gpt-model-submenu {
+  background: hsl(var(--popover) / 0.98) !important;
+  color: hsl(var(--popover-foreground)) !important;
+  border-color: hsl(0 0% 100% / 0.12) !important;
+}
+
+.dark .gpt-model-submenu .model-picker-row,
+.dark .gpt-model-submenu [role="menuitem"],
+.dark .gpt-model-submenu .liquid-label {
+  color: hsl(var(--foreground)) !important;
+}
+
+.dark .gpt-context-menu {
+  background: hsl(var(--background) / 0.96) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+@media (max-width: 640px) {
+  .gpt-model-submenu.model-picker-content,
+  .model-picker-content {
+    width: min(calc(100vw - 1.25rem), 20rem) !important;
+    max-width: calc(100vw - 1.25rem) !important;
+    background: #ffffff !important;
+    color: #0a0a0a !important;
+    border: 1px solid hsl(220 13% 86% / 0.9) !important;
+    box-shadow:
+      0 22px 48px -30px hsl(220 30% 10% / 0.35),
+      0 1px 0 #fff inset !important;
+  }
+
+  .gpt-model-submenu .model-picker-row {
+    min-height: 2.75rem;
+  }
+
+  .gpt-model-submenu .liquid-label,
+  .model-picker-content .liquid-label,
+  .model-picker-content .model-picker-row {
+    color: #0a0a0a !important;
+  }
+
+  .gpt-model-submenu-title {
+    color: hsl(220 10% 40%) !important;
+  }
+
+  .dark .gpt-model-submenu.model-picker-content,
+  .dark .model-picker-content {
+    background: hsl(var(--popover) / 0.98) !important;
+    color: hsl(var(--popover-foreground)) !important;
+  }
+
+  .dark .gpt-model-submenu .liquid-label,
+  .dark .model-picker-content .liquid-label,
+  .dark .model-picker-content .model-picker-row {
+    color: hsl(var(--foreground)) !important;
+  }
+}
+
+
+/* ─── Effort — dithered pixel-dissolve slider ─────────────────────────
+   Fully rounded rail. Starts grey, dissolves into violet through a grid of
+   small square pixels whose density + opacity climb to the right (pure SVG
+   `<pattern>` layers masked by horizontal gradients — see
+   components/chat/effort-dither-track.tsx). The dither is anchored to the
+   whole rail and revealed up to the thumb with clip-path, so a higher effort
+   uncovers more violet. White capsule thumb, hairline border, soft shadow. */
+.effort-section {
+  padding: 0.8rem 1.1rem 0.55rem;
+  border: 0;
+  background: transparent;
+  /* Single source of slider geometry: the track, thumb, fill, ticks and
+     bubble all resolve these by inheritance, so every stop lands on the
+     same x in every element. */
+  --effort-steps: 3;
+  --effort-rail-h: 1.5rem;
+  --effort-thumb-w: 1.25rem;
+  --effort-thumb-h: 1.3rem;
+  --effort-pad: 0.3rem;
+  --effort-rail: hsl(220 10% 92%);
+  --effort-fill-base: hsl(220 8% 83%);
+  --effort-violet: hsl(266 84% 60%);
+  --effort-accent: hsl(266 84% 60%);
+}
+
+.effort-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.effort-title {
+  color: hsl(var(--foreground) / 0.9);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.1;
+}
+
+/* Text readout of the active level (Low … Extra high): the value never
+   relies on color or density alone (WCAG 1.4.1). */
+.effort-level {
+  color: hsl(var(--foreground) / 0.78);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.effort-track {
+  position: relative;
+  display: block;
+  height: 2.25rem;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
+  outline: none;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  --effort-index: 0;
+  /* Declared HERE on purpose: var(--effort-index) inside this expression
+     resolves against the declaring element, and the [data-effort] overrides
+     below also land on the track. Defining it on the section froze the thumb
+     at stop 0 (custom properties substitute at declaration scope). */
+  --effort-x: calc(
+    var(--effort-pad) + var(--effort-thumb-w) / 2 +
+    var(--effort-index) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
+  );
+}
+.effort-track[data-effort="0"] { --effort-index: 0; }
+.effort-track[data-effort="1"] { --effort-index: 1; }
+.effort-track[data-effort="2"] { --effort-index: 2; }
+.effort-track[data-effort="3"] { --effort-index: 3; }
+.effort-track[data-dragging="true"] {
+  cursor: grabbing;
+}
+.effort-track[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.effort-track[data-disabled="true"] .effort-dither-twinkle,
+.effort-track[data-disabled="true"] .effort-sheen {
+  animation: none;
+}
+
+/* Specificity (0,3,0) beats the global [tabindex]:focus-visible rule (0,2,0),
+   whose dark --ring would otherwise win by source order. */
+.effort-section .effort-track:focus-visible {
+  outline: 2px solid var(--effort-accent);
+  outline-offset: 2px;
+}
+/* Thumb focus ring lives after the hover rule (same specificity wins). */
+
+.effort-track-line {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: var(--effort-rail-h);
+  transform: translateY(-50%);
+  border-radius: 999px;
+  pointer-events: none;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--effort-rail);
+}
+.effort-track-fill {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: inherit;
+  pointer-events: none;
+  overflow: hidden;
+  /* Reveal the anchored dither up to the thumb centre. */
+  clip-path: inset(0 calc(100% - var(--effort-x)) 0 0);
+  transition: clip-path 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.effort-dither {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.effort-dither-base {
+  fill: var(--effort-fill-base);
+}
+.effort-dither-ink,
+.effort-dither-px {
+  fill: var(--effort-violet);
+}
+.effort-dither-px {
+  shape-rendering: crispEdges;
+}
+/* Living pixels: the sparse layers breathe with a wave that travels left →
+   right (each pixel's delay is a function of its grid position — see
+   twinkleDelayS). Dense layers and the solid cap stay static so the bar
+   keeps reading as a solid control. Opacity-only: no layout, GPU-cheap. */
+.effort-dither-twinkle {
+  /* Each pixel beats around its own centre (SVG needs an explicit box). */
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: effort-pixel-wave 2.4s ease-in-out infinite;
+}
+/* Heartbeat: quick lub at 10%, dub at 30%, then rest. Opacity follows the
+   thump so the beat reads even at 3 px. Staggered per-pixel delays (see
+   twinkleDelayS) turn the beat into a pulse travelling down the bar. */
+@keyframes effort-pixel-wave {
+  0%   { opacity: 0.85; transform: scale(1); }
+  10%  { opacity: 1;    transform: scale(1.5); }
+  20%  { opacity: 0.55; transform: scale(1); }
+  30%  { opacity: 1;    transform: scale(1.32); }
+  42%  { opacity: 0.7;  transform: scale(1); }
+  100% { opacity: 0.85; transform: scale(1); }
+}
+/* Constant motion: a soft light band glides across the revealed region in a
+   loop (left → right, following the dissolve). Pure background-position
+   animation on an oversized gradient — percentages resolve against the fill
+   box, so it stays responsive at any rail width with zero layout cost. */
+.effort-sheen {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 43%, hsl(0 0% 100% / 0.45) 50%, transparent 57%);
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  animation: effort-sheen-sweep 3.2s linear infinite;
+}
+@keyframes effort-sheen-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -20% 0; }
+}
+
+/* Stops: invisible hit areas centred on each level + a faint tick dot on the
+   part of the rail that is not yet revealed. */
+.effort-stop {
+  --i: 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(
+    var(--effort-pad) + var(--effort-thumb-w) / 2 +
+    var(--i) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
+  );
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 1.5rem;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  transform: translateX(-50%);
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  color: inherit;
+}
+.effort-stop[data-stop="1"] { --i: 1; }
+.effort-stop[data-stop="2"] { --i: 2; }
+.effort-stop[data-stop="3"] { --i: 3; }
+
+.effort-stop::after {
+  content: "";
+  width: 0.2rem;
+  height: 0.2rem;
+  border-radius: 999px;
+  background: hsl(220 8% 70%);
+  transition: opacity 160ms ease, background-color 160ms ease;
+}
+.effort-stop:hover::after {
+  background: hsl(220 8% 52%);
+}
+.effort-stop-reached::after,
+.effort-stop-active::after {
+  opacity: 0;
+}
+.effort-stop-active {
+  background: transparent;
+}
+
+/* White capsule thumb — hairline border + soft shadow. */
+.effort-thumb {
+  position: absolute;
+  top: 50%;
+  left: var(--effort-x);
+  z-index: 2;
+  width: var(--effort-thumb-w);
+  height: var(--effort-thumb-h);
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  /* 3:1 against the white fill inside AND the grey rail outside (WCAG 1.4.11),
+     so the thumb stays perceivable at every stop — including Bajo, where it
+     sits on light grey. */
+  border: 1px solid hsl(220 12% 52%);
+  background: #ffffff;
+  box-shadow:
+    0 1px 2px hsl(220 25% 10% / 0.14),
+    0 3px 8px -2px hsl(220 25% 10% / 0.2);
+  pointer-events: none;
+  transition:
+    left 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+.effort-track[data-dragging="true"] .effort-thumb {
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow:
+    0 2px 4px hsl(220 25% 10% / 0.2),
+    0 6px 14px -4px hsl(220 25% 10% / 0.3);
+}
+.effort-track:hover .effort-thumb {
+  box-shadow:
+    0 1px 2px hsl(220 25% 10% / 0.18),
+    0 4px 10px -2px hsl(220 25% 10% / 0.26);
+}
+.effort-section .effort-track:focus-visible .effort-thumb {
+  box-shadow:
+    0 0 0 2px hsl(0 0% 100%),
+    0 0 0 4px var(--effort-accent),
+    0 3px 8px -2px hsl(220 25% 10% / 0.2);
+}
+
+/* Discrete step marks under the rail: four fixed stops, snapped on
+   release — a second non-color cue next to the header readout. */
+.effort-ticks {
+  position: relative;
+  height: 0.375rem;
+  margin-top: 0.3rem;
+}
+.effort-ticks > span {
+  --i: 0;
+  position: absolute;
+  top: 0;
+  left: calc(
+    var(--effort-pad) + var(--effort-thumb-w) / 2 +
+    var(--i) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
+  );
+  width: 2px;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: hsl(220 8% 68%);
+}
+.effort-ticks > span[data-stop="1"] { --i: 1; }
+.effort-ticks > span[data-stop="2"] { --i: 2; }
+.effort-ticks > span[data-stop="3"] { --i: 3; }
+.dark .effort-ticks > span {
+  background: hsl(0 0% 100% / 0.4);
+}
+
+/* Value bubble that follows the thumb while dragging. Clamped so it never
+   leaves the popover at the end stops. */
+.effort-bubble {
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: clamp(2.75rem, var(--effort-x), calc(100% - 2.75rem));
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.6rem;
+  background: hsl(40 3% 11%);
+  color: hsl(0 0% 100%);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow:
+    0 2px 6px hsl(220 25% 10% / 0.25),
+    0 8px 20px -8px hsl(220 25% 10% / 0.35);
+}
+.effort-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: hsl(40 3% 11%);
+}
+.dark .effort-bubble {
+  background: hsl(0 0% 96%);
+  color: hsl(220 12% 10%);
+  box-shadow:
+    0 2px 6px hsl(0 0% 0% / 0.5),
+    0 8px 20px -8px hsl(0 0% 0% / 0.6);
+}
+.dark .effort-bubble::after {
+  border-top-color: hsl(0 0% 96%);
+}
+
+.effort-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.15rem;
+  /* 5.4:1 on the light popover (WCAG 1.4.3) with margin over the 4.5 floor. */
+  color: hsl(220 9% 42%);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.dark .effort-ends {
+  color: hsl(var(--muted-foreground));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .effort-track-fill,
+  .effort-thumb,
+  .effort-dither-twinkle,
+  .effort-sheen,
+  .effort-bubble,
+  .effort-stop::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.dark .effort-section {
+  background: transparent;
+  --effort-rail: hsl(0 0% 100% / 0.1);
+  --effort-fill-base: hsl(220 8% 30%);
+  --effort-violet: hsl(268 90% 70%);
+  --effort-accent: hsl(268 90% 72%);
+}
+.dark .effort-track:focus-visible .effort-thumb {
+  box-shadow:
+    0 0 0 2px hsl(220 12% 10%),
+    0 0 0 4px var(--effort-accent),
+    0 3px 8px -2px hsl(0 0% 0% / 0.6);
+}
+.dark .effort-stop::after {
+  background: hsl(0 0% 100% / 0.35);
+}
+.dark .effort-stop:hover::after {
+  background: hsl(0 0% 100% / 0.6);
+}
+.dark .effort-thumb {
+  border-color: hsl(0 0% 100% / 0.35);
+  background: hsl(0 0% 96%);
+  box-shadow:
+    0 1px 2px hsl(0 0% 0% / 0.5),
+    0 3px 8px -2px hsl(0 0% 0% / 0.6);
 }
 
 .model-provider-section {
@@ -977,6 +1812,111 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   width: 0.875rem;
   height: 0.875rem;
   opacity: 0.9;
+}
+
+.model-picker-effort {
+  border-top: 1px solid hsl(var(--border) / 0.5);
+  padding: 0.55rem 0.8rem 0.65rem;
+  background: transparent;
+}
+
+.dark .model-picker-effort {
+  border-top-color: hsl(0 0% 100% / 0.08);
+  background: transparent;
+}
+
+.model-picker-effort-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.model-picker-effort-title {
+  color: hsl(var(--foreground) / 0.78);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+
+.model-picker-effort-value {
+  color: hsl(var(--foreground) / 0.92);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.dark .model-picker-effort-value {
+  color: hsl(0 0% 98% / 0.92);
+}
+
+.model-picker-effort-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.model-picker-effort-option {
+  min-width: 0;
+  min-height: 2.375rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--border) / 0.9);
+  border-radius: 0.45rem;
+  background: hsl(var(--background));
+  padding: 0.25rem 0.35rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.model-picker-effort-option:hover {
+  border-color: hsl(var(--border));
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted) / 0.55);
+}
+
+.model-picker-effort-option.is-current {
+  border-color: hsl(var(--accent-violet) / 0.42);
+  background: hsl(var(--accent-violet) / 0.1);
+  color: hsl(var(--accent-violet));
+  box-shadow: 0 1px 3px hsl(var(--accent-violet) / 0.12), inset 0 0 0 1px hsl(var(--accent-violet) / 0.05);
+}
+
+.model-picker-effort-option:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.65);
+  outline-offset: 1px;
+}
+
+.dark .model-picker-effort-option.is-current {
+  border-color: hsl(var(--accent-violet) / 0.52);
+  background: hsl(var(--accent-violet) / 0.16);
+}
+
+@media (pointer: coarse) {
+  .model-picker-effort-option {
+    min-height: 2.75rem;
+  }
+}
+
+.model-picker-effort-description {
+  margin: 0.4rem 0 0;
+  color: hsl(var(--muted-foreground) / 0.88);
+  font-size: 0.6875rem;
+  font-weight: 450;
+  letter-spacing: -0.005em;
+  line-height: 1.35;
 }
 
 .model-logo-chip {
@@ -1133,59 +2073,61 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     radial-gradient(circle at 12% 0%, hsl(0 0% 100% / 0.76), transparent 42%);
 }
 
-.image-liquid-chip {
-  --image-liquid-red: #FF0000;
-  border-color: rgba(255, 0, 0, 0.42);
-  color: var(--image-liquid-red);
-  background:
-    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.98), transparent 22%),
-    radial-gradient(circle at 84% 78%, rgba(255, 0, 0, 0.18), transparent 34%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(255, 0, 0, 0.10));
+/* Composer media-mode chips (Imagenes / Voz / Musica / Video): black fill, white text. */
+.media-mode-chip,
+.image-liquid-chip,
+.voice-mode-chip,
+.music-mode-chip,
+.video-mode-chip {
+  --image-liquid-red: #111111;
+  --media-mode-accent: #111111;
+  border-color: rgba(17, 17, 17, 0.92);
+  color: #ffffff;
+  background: #111111;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.96),
-    inset 0 0 0 1px rgba(255, 0, 0, 0.08),
-    0 14px 34px -24px rgba(255, 0, 0, 0.78),
-    0 0 0 1px rgba(255, 0, 0, 0.05);
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 10px 24px -20px rgba(15, 23, 42, 0.55);
 }
 
-.image-liquid-chip:hover {
-  border-color: rgba(255, 0, 0, 0.68);
-  background:
-    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 1), transparent 22%),
-    radial-gradient(circle at 82% 72%, rgba(255, 0, 0, 0.24), transparent 34%),
-    linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(255, 0, 0, 0.14));
+.media-mode-chip:hover,
+.image-liquid-chip:hover,
+.voice-mode-chip:hover,
+.music-mode-chip:hover,
+.video-mode-chip:hover {
+  border-color: rgba(0, 0, 0, 1);
+  background: #000000;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.98),
-    inset 0 0 0 1px rgba(255, 0, 0, 0.12),
-    0 18px 42px -24px rgba(255, 0, 0, 0.92),
-    0 0 18px -10px rgba(255, 0, 0, 0.65);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 14px 28px -20px rgba(15, 23, 42, 0.7);
 }
 
 .image-liquid-chip__wave,
 .image-liquid-chip__gloss,
 .image-liquid-chip__pulse,
-.image-liquid-chip__spark {
+.image-liquid-chip__spark,
+.media-mode-chip__wave {
   pointer-events: none;
   position: absolute;
   z-index: 0;
 }
 
-.image-liquid-chip__wave {
+.image-liquid-chip__wave,
+.media-mode-chip__wave {
   inset: -95% -34%;
   border-radius: 9999px;
   background:
-    radial-gradient(ellipse at 20% 58%, rgba(255, 0, 0, 0.34), transparent 36%),
-    radial-gradient(ellipse at 72% 42%, rgba(255, 0, 0, 0.24), transparent 32%),
+    radial-gradient(ellipse at 20% 58%, rgba(255, 255, 255, 0.22), transparent 36%),
+    radial-gradient(ellipse at 72% 42%, rgba(255, 255, 255, 0.12), transparent 32%),
     conic-gradient(
       from 90deg,
       transparent 0deg,
-      rgba(255, 0, 0, 0) 58deg,
-      rgba(255, 0, 0, 0.48) 128deg,
-      rgba(255, 0, 0, 0.16) 188deg,
+      rgba(255, 255, 255, 0) 58deg,
+      rgba(255, 255, 255, 0.28) 128deg,
+      rgba(255, 255, 255, 0.10) 188deg,
       transparent 276deg
     );
   filter: blur(7px);
-  opacity: 0.88;
+  opacity: 0.55;
   transform-origin: 50% 50%;
   animation: image-liquid-wave 7s linear infinite;
 }
@@ -1194,9 +2136,9 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   inset: -20% auto -20% -44%;
   width: 42%;
   transform: skewX(-18deg);
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.86), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
   filter: blur(2px);
-  opacity: 0.78;
+  opacity: 0.7;
   animation: image-liquid-gloss 3.8s ease-in-out infinite;
 }
 
@@ -1206,8 +2148,8 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   height: 0.375rem;
   width: 0.375rem;
   border-radius: 9999px;
-  background: var(--image-liquid-red);
-  box-shadow: 0 0 14px rgba(255, 0, 0, 0.82);
+  background: #ffffff;
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.45);
   animation: image-liquid-pulse 1.8s ease-in-out infinite;
 }
 
@@ -1218,93 +2160,90 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   width: 0.25rem;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.7);
   animation: image-liquid-spark 2.4s ease-in-out infinite;
 }
 
 .image-liquid-chip__icon,
-.image-liquid-chip__close {
-  color: var(--image-liquid-red);
+.image-liquid-chip__close,
+.media-mode-chip__close {
+  color: #ffffff;
 }
 
 .image-liquid-chip__icon {
-  filter: drop-shadow(0 0 9px rgba(255, 0, 0, 0.34));
+  filter: none;
 }
 
 .image-liquid-chip__status {
-  background: var(--image-liquid-red);
-  box-shadow: 0 0 12px rgba(255, 0, 0, 0.78);
+  background: #ffffff;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.45);
 }
 
-.dark .image-liquid-chip {
-  border-color: rgba(255, 0, 0, 0.44);
-  color: rgba(255, 92, 92, 0.98);
-  background:
-    radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.16), transparent 24%),
-    radial-gradient(circle at 84% 72%, rgba(255, 0, 0, 0.22), transparent 34%),
-    linear-gradient(145deg, rgba(35, 5, 6, 0.92), rgba(12, 8, 9, 0.86));
+.dark .media-mode-chip,
+.dark .image-liquid-chip,
+.dark .voice-mode-chip,
+.dark .music-mode-chip,
+.dark .video-mode-chip {
+  border-color: rgba(255, 255, 255, 0.82);
+  color: #111111;
+  background: #ffffff;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    inset 0 0 0 1px rgba(255, 0, 0, 0.08),
-    0 16px 38px -26px rgba(255, 0, 0, 0.86);
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 16px 38px -26px rgba(0, 0, 0, 0.7);
+}
+
+.dark .image-liquid-chip__icon,
+.dark .image-liquid-chip__close,
+.dark .media-mode-chip__close {
+  color: #111111;
+}
+
+.dark .image-liquid-chip__status,
+.dark .image-liquid-chip__pulse {
+  background: #111111;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
 }
 
 @keyframes image-liquid-wave {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  50% {
-    transform: rotate(180deg) scale(1.06);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
-  }
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.06); }
+  100% { transform: rotate(360deg) scale(1); }
 }
 
 @keyframes image-liquid-gloss {
-  0%, 24% {
-    transform: translateX(0) skewX(-18deg);
-    opacity: 0;
-  }
-  45% {
-    opacity: 0.88;
-  }
-  72%, 100% {
-    transform: translateX(360%) skewX(-18deg);
-    opacity: 0;
-  }
+  0%, 24% { transform: translateX(0) skewX(-18deg); opacity: 0; }
+  45% { opacity: 0.88; }
+  72%, 100% { transform: translateX(360%) skewX(-18deg); opacity: 0; }
 }
 
 @keyframes image-liquid-pulse {
-  0%, 100% {
-    opacity: 0.48;
-    transform: scale(0.86);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.14);
-  }
+  0%, 100% { opacity: 0.48; transform: scale(0.86); }
+  50% { opacity: 1; transform: scale(1.14); }
 }
 
 @keyframes image-liquid-spark {
-  0%, 100% {
-    opacity: 0.44;
-    transform: translateY(0);
-  }
-  50% {
-    opacity: 1;
-    transform: translateY(-0.125rem);
-  }
+  0%, 100% { opacity: 0.44; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-0.125rem); }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .image-liquid-chip__wave,
   .image-liquid-chip__gloss,
   .image-liquid-chip__pulse,
-  .image-liquid-chip__spark {
+  .image-liquid-chip__spark,
+  .media-mode-chip__wave {
     animation: none;
   }
 }
+
+.voice-stability-slider .bg-primary {
+  background-color: #111111 !important;
+}
+
+.voice-stability-slider .border-primary {
+  border-color: #111111 !important;
+}
+
 
 .dark .media-model-trigger {
   border-color: hsl(0 0% 100% / 0.14);
@@ -1521,33 +2460,22 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   color: hsl(0 0% 100% / 0.94);
 }
 
-.media-model-trigger[data-media-tool="video"],
-.video-settings-trigger,
-.video-mode-chip {
-  border: 1px solid hsl(150 58% 42% / 0.36);
-  color: hsl(154 76% 20%);
+.video-settings-trigger {
+  border: 1px solid hsl(220 14% 88% / 0.78);
+  color: hsl(222 18% 10%);
   background:
-    linear-gradient(145deg, hsl(142 76% 96% / 0.92), hsl(0 0% 100% / 0.78)),
-    linear-gradient(115deg, hsl(151 76% 42% / 0.14), transparent 42%, hsl(166 70% 42% / 0.1));
+    linear-gradient(145deg, hsl(0 0% 100% / 0.86), hsl(0 0% 100% / 0.68)),
+    radial-gradient(circle at 12% 0%, hsl(0 0% 100% / 0.62), transparent 42%);
   box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.86),
-    inset 0 0 0 1px hsl(150 72% 82% / 0.24),
-    0 12px 28px -24px hsl(150 58% 22% / 0.58);
+    inset 0 1px 0 hsl(0 0% 100% / 0.9),
+    0 12px 24px -22px hsl(220 38% 16% / 0.36);
 }
 
-.media-model-trigger[data-media-tool="video"]:hover,
-.video-settings-trigger:hover,
-.video-mode-chip:hover {
-  border-color: hsl(150 62% 38% / 0.48);
-  color: hsl(154 80% 16%);
+.video-settings-trigger:hover {
+  border-color: hsl(220 12% 78% / 0.9);
   background:
-    linear-gradient(145deg, hsl(142 80% 96% / 0.98), hsl(0 0% 100% / 0.82)),
-    linear-gradient(115deg, hsl(151 76% 42% / 0.18), transparent 42%, hsl(166 70% 42% / 0.12));
-}
-
-.video-mode-chip .lucide-video,
-.video-settings-trigger .lucide-settings {
-  filter: drop-shadow(0 0 8px hsl(150 74% 34% / 0.28));
+    linear-gradient(145deg, hsl(0 0% 100% / 0.96), hsl(0 0% 100% / 0.74)),
+    radial-gradient(circle at 12% 0%, hsl(0 0% 100% / 0.76), transparent 42%);
 }
 
 .video-mode-chip-flow {
@@ -1555,33 +2483,24 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     conic-gradient(
       from 90deg,
       transparent 0deg,
-      hsl(150 78% 46% / 0) 70deg,
-      hsl(150 78% 46% / 0.32) 135deg,
-      hsl(166 72% 43% / 0.18) 198deg,
+      rgba(255, 255, 255, 0) 70deg,
+      rgba(255, 255, 255, 0.28) 135deg,
+      rgba(255, 255, 255, 0.10) 198deg,
       transparent 280deg
     );
 }
 
-.dark .media-model-trigger[data-media-tool="video"],
-.dark .video-settings-trigger,
-.dark .video-mode-chip {
-  border-color: hsl(150 72% 48% / 0.28);
-  color: hsl(150 78% 78%);
+.dark .video-settings-trigger {
+  border-color: hsl(0 0% 100% / 0.14);
+  color: hsl(0 0% 100% / 0.9);
   background:
-    linear-gradient(145deg, hsl(154 34% 12% / 0.88), hsl(160 28% 8% / 0.78)),
-    linear-gradient(115deg, hsl(150 76% 48% / 0.16), transparent 44%, hsl(166 70% 42% / 0.09));
+    linear-gradient(145deg, hsl(222 16% 13% / 0.86), hsl(222 16% 8% / 0.78)),
+    radial-gradient(circle at 14% 4%, hsl(0 0% 100% / 0.08), transparent 42%);
   box-shadow:
     inset 0 1px 0 hsl(0 0% 100% / 0.12),
-    inset 0 0 0 1px hsl(150 72% 52% / 0.06),
-    0 14px 30px -24px hsl(0 0% 0% / 0.78);
+    0 14px 30px -24px hsl(0 0% 0% / 0.72);
 }
 
-.dark .media-model-trigger[data-media-tool="video"]:hover,
-.dark .video-settings-trigger:hover,
-.dark .video-mode-chip:hover {
-  border-color: hsl(150 72% 54% / 0.4);
-  color: hsl(150 82% 84%);
-}
 
 .media-model-menu.liquid-menu-surface {
   padding: 0.375rem !important;
@@ -2079,13 +2998,84 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .video-liquid-preview {
   position: relative;
-  height: clamp(8.5rem, 38vw, 13rem);
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: 0.625rem;
   border: 1px solid hsl(150 52% 40% / 0.16);
   background:
     linear-gradient(135deg, hsl(150 50% 24% / 0.13), transparent 35%),
     linear-gradient(160deg, hsl(0 0% 100% / 0.64), hsl(142 76% 96% / 0.5));
+}
+
+.video-liquid-preview[data-aspect="9:16"],
+.video-liquid-player[data-aspect="9:16"] {
+  aspect-ratio: 9 / 16;
+  width: min(100%, 18rem);
+  margin-inline: auto;
+}
+
+.video-liquid-preview[data-aspect="1:1"],
+.video-liquid-player[data-aspect="1:1"] {
+  aspect-ratio: 1 / 1;
+  width: min(100%, 26rem);
+  margin-inline: auto;
+}
+
+.video-liquid-preview[data-aspect="4:3"],
+.video-liquid-player[data-aspect="4:3"] {
+  aspect-ratio: 4 / 3;
+}
+
+.video-liquid-preview[data-aspect="3:4"],
+.video-liquid-player[data-aspect="3:4"] {
+  aspect-ratio: 3 / 4;
+  width: min(100%, 20rem);
+  margin-inline: auto;
+}
+
+.video-liquid-preview[data-aspect="21:9"],
+.video-liquid-player[data-aspect="21:9"] {
+  aspect-ratio: 21 / 9;
+}
+
+.video-liquid-preview[data-aspect="16:9"],
+.video-liquid-preview[data-aspect="auto"],
+.video-liquid-player[data-aspect="16:9"],
+.video-liquid-player[data-aspect="auto"] {
+  aspect-ratio: 16 / 9;
+}
+
+
+.video-liquid-poster,
+.video-liquid-poster-ph {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.video-liquid-poster-ph,
+.video-liquid-thumb-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(160deg, hsl(150 18% 94% / 0.92), hsl(150 10% 88% / 0.78));
+  color: hsl(150 16% 38% / 0.42);
+}
+
+.video-liquid-poster-ph svg {
+  width: 2.35rem;
+  height: 2.35rem;
+}
+
+.video-liquid-thumb-ph svg {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 .video-liquid-scan {
@@ -2184,7 +3174,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .video-liquid-player {
   width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
   max-height: min(68vh, 36rem);
+  object-fit: contain;
   border-radius: 0.75rem;
   border: 1px solid hsl(150 52% 40% / 0.18);
   background: hsl(160 30% 5%);
@@ -2230,6 +3223,13 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   border-color: hsl(150 72% 50% / 0.18);
   background: hsl(150 36% 18% / 0.42);
   color: hsl(150 82% 84%);
+}
+
+.dark .video-liquid-poster-ph,
+.dark .video-liquid-thumb-ph {
+  background:
+    linear-gradient(160deg, hsl(150 22% 16% / 0.72), hsl(150 14% 12% / 0.58));
+  color: hsl(150 40% 78% / 0.38);
 }
 
 .dark .video-liquid-action {
@@ -2302,10 +3302,15 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     white-space: nowrap;
   }
 
+  /* The composer footer is a content-sized grid track, so the model pill is
+     the ONE control capped by the viewport: full width minus the dock
+     gutters, the surface padding and the fixed icon controls
+     (+ · shield · ring · ⚡ · mic · send ≈ 16.1rem on phones). A fixed rem
+     cap used to push the send disc outside the surface on 360–390 px. */
   .composer-model-inline {
     flex: 0 1 auto;
     min-width: 0;
-    max-width: min(46vw, 9.5rem) !important;
+    max-width: min(46vw, max(3.5rem, calc(100vw - 2 * var(--chat-mobile-gutter, 0.75rem) - 16.1rem))) !important;
   }
 
   .composer-model-inline .chat-model-trigger {
@@ -2324,7 +3329,9 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   .composer-model-inline .chat-model-label {
     display: inline-block !important;
     min-width: 0;
-    max-width: min(32vw, 6.25rem) !important;
+    /* The pill (above) already carries the viewport budget; the label only
+       needs the desktop ceiling so tablets do not stretch it endlessly. */
+    max-width: min(100%, 11.25rem) !important;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2341,16 +3348,16 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
   .chat-message-scroll-content {
     padding-top: calc(var(--chat-header-height, 56px) + 0.875rem);
-    padding-bottom: calc(var(--chat-composer-height, 112px) + 0.875rem);
+    padding-bottom: 0.25rem;
   }
 
   .chat-composer-dock {
-    padding: 0.5rem var(--chat-mobile-gutter)
+    padding: 0.125rem var(--chat-mobile-gutter)
       calc(0.625rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
   }
 
   .chat-user-bubble {
-    max-width: min(88%, 32rem);
+    max-width: 88%;
   }
 
   /*
@@ -2520,6 +3527,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
       left: 0;
       right: 0;
       z-index: 40;
+    }
+
+    /* The normal sticky dock participates in layout, so reserving its full
+       height here creates a blank band above the composer. Only the iOS
+       fixed-keyboard state needs extra room to keep the last message clear. */
+    .chat-viewport[data-chat-keyboard="open"] .chat-message-scroll-content,
+    .chat-viewport[data-chat-input-focused="true"] .chat-message-scroll-content {
+      padding-bottom: calc(
+        var(--chat-composer-height, 112px) +
+          var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)) +
+          0.875rem
+      );
     }
 
     /* Reduce bottom clearance as soon as typing starts. The focused state
@@ -2980,7 +3999,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
    Targets #main-content (set in app/layout.tsx around <main>). */
 .skip-to-content {
   position: fixed;
-  top: 0.5rem;
+  top: -5rem;
   left: 0.5rem;
   z-index: 10000;
   padding: 0.625rem 1rem;
@@ -2992,14 +4011,14 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   font-size: 0.875rem;
   font-weight: 600;
   text-decoration: none;
-  /* Visually hidden until focused — uses transform so screen readers
-     still see it (display:none would remove it from the a11y tree). */
-  transform: translateY(-200%);
-  transition: transform 150ms ease-out;
+  /* Keep it in the accessibility tree and tab order outside the viewport. */
+  opacity: 0;
+  pointer-events: none;
 }
-.skip-to-content:focus,
 .skip-to-content:focus-visible {
-  transform: translateY(0);
+  top: 0.5rem;
+  opacity: 1;
+  pointer-events: auto;
   outline: 2px solid hsl(var(--ring));
   outline-offset: 2px;
 }
@@ -5042,92 +6061,157 @@ footer {
 }
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
 
-/* ─── Composer — premium liquid surface ──────────────────────────── */
-.composer-liquid-surface {
+/* Stop keeps a 44px hit target while matching the compact 32px red reference. */
+.composer-stop-button {
+  position: relative;
   isolation: isolate;
-  background: hsl(0 0% 100%);
+  order: 50;
+  color: #dc2626 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
-.composer-liquid-surface::before,
-.composer-liquid-surface::after {
-  content: none;
-  display: none !important;
+.composer-stop-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 0;
+  width: 2rem;
+  height: 2rem;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: #fee2e2;
+  transition: background-color 160ms ease-out, box-shadow 160ms ease-out;
 }
-.composer-liquid-surface::before {
-  inset: 0;
+.composer-stop-button:hover:not(:disabled)::before {
+  background: #fecaca;
+}
+.composer-stop-button:focus-visible {
+  outline: 2px solid hsl(0 72% 51% / 0.42);
+  outline-offset: 1px;
+}
+.composer-stop-button .composer-stop-icon {
+  background-color: #dc2626 !important;
+  box-shadow: none;
+}
+
+/* ─── Composer — quiet, minimal surface ──────────────────────────── */
+.composer-surface {
+  isolation: isolate;
+  border: 1px solid hsl(220 10% 89% / 0.96);
+  border-radius: 1.25rem;
+  background-color: hsl(0 0% 100%);
+  box-shadow:
+    0 1px 2px hsl(220 20% 12% / 0.035),
+    0 8px 24px -20px hsl(220 24% 14% / 0.24);
+  transition:
+    border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Stable paint bounds so focus/hover never shift surrounding gutters. */
+  will-change: border-color, box-shadow;
+}
+
+.composer-liquid-surface,
+.composer-surface.composer-liquid-surface {
+  isolation: isolate;
+  /* Premium liquid glass: clearer translucency + deeper blur/saturation so
+     the bar floats over conversation content with a professional finish. */
+  background-color: transparent;
   background:
-    linear-gradient(120deg, transparent 12%, hsl(0 0% 100% / 0.22) 42%, transparent 66%),
-    radial-gradient(ellipse 54% 32% at 18% 0%, hsl(0 0% 100% / 0.42), transparent 68%);
-  opacity: 0.8;
-  mix-blend-mode: screen;
+    linear-gradient(180deg, hsl(0 0% 100% / 0.88) 0%, hsl(0 0% 100% / 0.72) 100%);
+  backdrop-filter: blur(28px) saturate(1.85);
+  -webkit-backdrop-filter: blur(28px) saturate(1.85);
 }
-.composer-surface.composer-liquid-surface::before {
+/* Single restrained top-glare layer: sells the glass without a second paint. */
+.composer-liquid-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, hsl(0 0% 100% / 0.72) 0%, hsl(0 0% 100% / 0.18) 34%, transparent 58%);
+  opacity: 0.9;
+}
+.composer-liquid-surface::after {
   content: none;
   display: none !important;
 }
-.composer-liquid-surface::after {
-  inset: auto -12% -42% 42%;
-  width: 58%;
-  height: 82%;
-  background: radial-gradient(circle, hsl(var(--primary) / 0.065), transparent 68%);
-  filter: blur(22px);
+.composer-surface.composer-liquid-surface::after {
+  content: none;
+  display: none !important;
 }
 .composer-liquid-surface > * {
   position: relative;
   z-index: 1;
 }
 
-.composer-surface {
-  isolation: isolate;
-  border: 0.5px solid hsl(220 13% 86% / 0.86);
-  border-radius: 1.5rem;
-  background-color: hsl(0 0% 100%);
-  box-shadow:
-    0 1px 2px hsl(220 28% 14% / 0.045),
-    0 14px 34px -24px hsl(220 30% 18% / 0.28);
-  transition:
-    border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
 .composer-surface:hover {
-  border-color: hsl(220 13% 81% / 0.92);
+  border-color: hsl(220 10% 86% / 0.98);
 }
 
 .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.65);
+  border-color: hsl(220 10% 84% / 0.98);
   box-shadow:
-    0 1px 2px hsl(220 28% 14% / 0.045),
-    0 16px 38px -24px hsl(220 30% 18% / 0.32);
+    inset 0 0 0 1px hsl(220 10% 80% / 0.12),
+    0 1px 2px hsl(220 20% 12% / 0.04),
+    0 10px 28px -20px hsl(220 24% 14% / 0.28);
 }
 
-/* Single-row composer: placeholder/text sits on the same vertical band as
-   the + button, model picker, mic and send controls (ChatGPT-style). */
+/* Keep focus on the complete composer boundary. A textarea-local outline is
+   clipped by the rounded surface and leaves four violet corner fragments;
+   the neutral border + inset line above forms one continuous focus contour. */
+.composer-textarea:focus-visible {
+  outline: none !important;
+}
+
+/* The "mic is hot" halo pulses forever while dictation records. For users who
+   asked the OS for reduced motion, freeze the pulse into a steady ring — the
+   recording state stays unmistakable without the repeating animation. */
+@media (prefers-reduced-motion: reduce) {
+  .composer-mic-pulse {
+    animation: none !important;
+    opacity: 0.5;
+  }
+}
+
+/* Idle / single-line: compact ChatGPT-style row
+   [+]  [textarea]  [model · mic · send]
+   Stacked (image/media tools, wrapped text, or data-composer-layout):
+   [full-width textarea]
+   [+]  [chips]                 [mic · send]
+   Growing text never sits beside the chips or clips the model pill. */
 .composer-input-row {
-  display: flex !important;
-  align-items: center;
-  column-gap: 0.625rem;
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "leading text actions";
+  align-items: end;
+  column-gap: 0.35rem;
   row-gap: 0;
-  min-height: 3.75rem;
-  padding: 0.5rem 0.75rem !important;
+  min-height: 3.35rem;
+  /* Symmetric optical inset so + and send share equal margin to the rim. */
+  padding: 0.4rem 0.45rem 0.4rem 0.4rem !important;
 }
 
 /* Attachments and connector controls remain fully available without changing
-   the approved composer dimensions. They use a separate tray above the fixed
-   input surface, so adding context never causes the bar itself to jump. */
+   the approved composer dimensions. The tray renders INSIDE the composer
+   surface (Claude-style), so dropped files sit within the same rounded
+   border as the input instead of floating above it as a separate card. */
 .composer-context-tray:empty {
   display: none;
 }
 
 .composer-context-tray {
   max-height: min(12rem, 28vh);
-  margin-bottom: 0.5rem;
   overflow-x: hidden;
   overflow-y: auto;
-  border: 0.5px solid hsl(220 13% 86% / 0.78);
-  border-radius: 1rem;
-  background: hsl(0 0% 100% / 0.98);
-  box-shadow: 0 12px 30px -26px hsl(220 30% 18% / 0.28);
+  padding: 0.625rem 0.75rem 0.125rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   scrollbar-width: thin;
 }
 
@@ -5137,55 +6221,519 @@ footer {
 
 .composer-context-tray .composer-media-controls-row {
   margin: 0;
-  padding: 0.625rem 0.75rem;
+  padding: 0.25rem 0 0.375rem;
 }
 
-.composer-input-row > :first-child {
-  flex: 0 0 auto;
-  align-self: center;
+.composer-leading-controls {
+  grid-area: leading;
+  display: flex;
+  align-items: center;
+  align-self: end;
+  gap: 0.25rem;
+  min-width: 0;
 }
 
 .composer-input-row .composer-textarea-shell {
-  flex: 1 1 auto;
+  grid-area: text;
   width: auto;
   min-width: 0;
   align-self: center;
 }
 
 .composer-input-row .composer-toolbar-actions {
-  flex: 0 0 auto;
-  align-self: center;
+  grid-area: actions;
+  justify-self: end;
+  align-self: end;
   min-height: 2.75rem;
+  min-width: 0;
   max-width: 100%;
-  gap: 0.375rem !important;
+  flex-wrap: nowrap;
+  gap: 0.25rem !important;
+}
+
+/* Only the model label may give up width. Every icon control keeps its own
+   geometry so a long model name can never squeeze the shield, the ring or
+   the send disc — the label truncates instead. */
+.composer-input-row .composer-toolbar-actions > *:not(.composer-model-inline),
+.composer-leading-controls > * {
+  flex: 0 0 auto;
+}
+.composer-input-row .composer-toolbar-actions > .composer-model-inline {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.composer-input-row .composer-model-inline .chat-model-trigger {
+  min-width: 0;
+  max-width: 100%;
+}
+.composer-input-row .composer-model-inline .chat-model-label {
+  max-width: 100%;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-input-row {
+  grid-template-areas:
+    "text text text"
+    "leading leading actions";
+  align-items: center;
+  row-gap: 1.05rem;
+  padding: 1rem 0.15rem 0.1rem 0.1rem !important;
+}
+
+.composer-surface[data-composer-layout="stacked"] .composer-input-row {
+  grid-template-areas:
+    "text text text"
+    "leading leading actions";
+  align-items: center;
+  row-gap: 1.05rem;
+  padding: 1rem 0.15rem 0.1rem 0.1rem !important;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-textarea-shell,
+.composer-surface[data-composer-layout="stacked"] .composer-textarea-shell {
+  align-self: stretch;
+  width: 100%;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-leading-controls,
+.composer-surface[data-composer-layout="stacked"] .composer-leading-controls {
+  align-self: center;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-toolbar-actions,
+.composer-surface[data-composer-layout="stacked"] .composer-toolbar-actions {
+  align-self: center;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-textarea-shell .composer-textarea,
+.composer-surface[data-composer-stacked="true"] .composer-textarea-highlights,
+.composer-surface[data-composer-layout="stacked"] .composer-textarea-shell .composer-textarea,
+.composer-surface[data-composer-layout="stacked"] .composer-textarea-highlights {
+  padding: 0.1rem 0.35rem 0.45rem 0.9rem !important;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-inline-active-tools,
+.composer-surface[data-composer-layout="stacked"] .composer-inline-active-tools {
+  align-self: center;
+  margin-bottom: 0;
+  max-width: min(72vw, 36rem);
 }
 
 .composer-input-row .composer-toolbar-actions > button {
+  color: hsl(220 10% 38%);
+}
+
+/* Only the icon actions (dictation, send, stop) reserve the 44px target.
+   The compact chips (context meter, effort, permissions) keep their own
+   pill geometry — a blanket 44px width used to crush the effort label to
+   a bare lightning glyph. */
+.composer-input-row .composer-toolbar-actions > button.composer-dictation-button,
+.composer-input-row .composer-toolbar-actions > button.composer-send-button,
+.composer-input-row .composer-toolbar-actions > button.composer-stop-button {
   width: 2.75rem !important;
   min-width: 2.75rem;
   height: 2.75rem !important;
   min-height: 2.75rem;
 }
 
+/* Solid black send disc + white stroke arrow. The shared toolbar color
+   above would otherwise paint the glyph gray on top of the black fill. */
+.composer-input-row .composer-toolbar-actions > button.composer-send-button {
+  background-color: #0d0d0d !important;
+  color: #ffffff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.12),
+    0 6px 14px -6px rgba(0, 0, 0, 0.28);
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:focus-visible {
+  outline: 2px solid #0d0d0d;
+  outline-offset: 2px;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button svg {
+  color: #ffffff;
+  stroke: #ffffff;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:hover:not(:disabled) {
+  background-color: #262626 !important;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled {
+  background-color: hsl(220 10% 90%) !important;
+  color: hsl(220 8% 62%) !important;
+  box-shadow: none !important;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled svg {
+  color: hsl(220 8% 62%);
+  stroke: hsl(220 8% 62%);
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button {
+  background-color: #f5f5f5 !important;
+  color: #0d0d0d !important;
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button svg {
+  color: #0d0d0d;
+  stroke: #0d0d0d;
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button:hover:not(:disabled) {
+  background-color: #e0e0e0 !important;
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled {
+  background-color: hsl(220 8% 22%) !important;
+  color: hsl(220 8% 55%) !important;
+}
+
 .composer-input-row .composer-model-inline .chat-model-trigger {
   min-height: 2.75rem;
-  border-radius: 0.875rem;
-  padding-inline: 0.625rem;
-  background-color: hsl(220 14% 97% / 0.72);
+  border-color: transparent;
+  border-radius: 0.75rem;
+  padding-inline: 0.5rem;
+  background-color: transparent;
+  box-shadow: none;
+  color: hsl(220 8% 46%);
+}
+.composer-input-row .composer-model-inline .chat-model-label {
+  font-weight: 400;
 }
 
 .composer-input-row .composer-model-inline .chat-model-trigger:hover,
 .composer-input-row .composer-model-inline .chat-model-trigger[data-state="open"] {
-  border-color: hsl(220 13% 86% / 0.76);
-  background-color: hsl(220 14% 95% / 0.92);
+  border-color: transparent;
+  background-color: hsl(220 10% 94% / 0.82);
+}
+
+/* OpenClaw-style professional composer chips */
+.composer-permission-chip,
+.composer-effort-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 2rem;
+  max-width: min(42vw, 11rem);
+  padding: 0 0.6rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: hsl(220 10% 36%);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 160ms ease-out, color 160ms ease-out;
+}
+.composer-permission-chip,
+.composer-effort-chip {
+  width: 2rem;
+  max-width: 2rem;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
+.composer-permission-chip:hover,
+.composer-effort-chip:hover,
+.composer-permission-chip[data-state="open"],
+.composer-effort-chip[data-state="open"] {
+  background: hsl(220 10% 94% / 0.9);
+}
+.composer-permission-chip.is-default {
+  color: hsl(220 10% 42%);
+}
+.composer-permission-chip.is-read {
+  color: hsl(198 62% 38%);
+}
+.composer-permission-chip.is-protected {
+  color: hsl(32 78% 40%);
+}
+.composer-permission-chip.is-workspace {
+  color: hsl(221 56% 46%);
+}
+.composer-permission-chip.is-full {
+  color: #dc2626;
+}
+.composer-effort-chip.is-high {
+  color: hsl(220 8% 46%);
+}
+.composer-effort-chip.is-high svg {
+  color: #e89a96;
+}
+.composer-context-trigger {
+  order: 10;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transition: background-color 160ms ease-out;
+}
+.composer-context-trigger:hover,
+.composer-context-trigger[data-state="open"] {
+  background: hsl(220 10% 94% / 0.9);
+}
+.composer-model-inline {
+  order: 20;
+}
+.composer-effort-chip {
+  order: 30;
+}
+.composer-dictation-button {
+  order: 40;
+}
+.composer-send-button {
+  order: 50;
+}
+.composer-context-ring-meter {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 999px;
+  border: 1.5px solid hsl(220 8% 66%);
+  background:
+    conic-gradient(hsl(220 10% 38%) calc(var(--context-ratio, 0) * 360deg), transparent 0);
+}
+.composer-dictation-button:not([aria-pressed="true"]) {
+  color: hsl(220 8% 64%) !important;
+}
+.composer-permission-menu-kicker {
+  padding: 0.15rem 0.4rem 0.4rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: hsl(220 8% 46%);
+}
+.composer-permission-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  width: 100%;
+  border-radius: 0.7rem;
+  padding: 0.55rem 0.55rem;
+  text-align: left;
+  color: inherit;
+}
+.composer-permission-row:hover,
+.composer-permission-row.is-selected {
+  background: hsl(220 14% 96%);
+}
+.composer-fast-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.65rem 1rem 0.75rem;
+  border-top: 1px solid hsl(220 12% 90%);
+}
+.composer-effort-menu[data-effort="2"] .composer-fast-row,
+.composer-effort-menu[data-effort="3"] .composer-fast-row {
+  border-top-color: hsl(278 28% 82%);
+}
+.composer-fast-icon {
+  color: #d83a30;
+}
+.composer-fast-switch {
+  width: 2.1rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  border: 0;
+  background: hsl(220 10% 82%);
+  position: relative;
+  flex-shrink: 0;
+}
+/* Knob lives on ::before — on phones the global 44px tap-target expander
+   claims `button[aria-label]::after`, which used to swallow the knob. */
+.composer-fast-switch::before {
+  content: "";
+  position: absolute;
+  top: 0.12rem;
+  left: 0.12rem;
+  width: 0.96rem;
+  height: 0.96rem;
+  border-radius: 999px;
+  background: white;
+  transition: transform 140ms ease;
+}
+.composer-fast-switch.is-on {
+  background: #e99a91;
+}
+.composer-fast-switch.is-on::before {
+  transform: translateX(0.9rem);
+  background: #302b29;
+}
+
+.composer-effort-menu,
+.composer-context-menu {
+  overflow: hidden;
+  border: 1px solid hsl(36 12% 84%);
+  border-radius: 1rem;
+  background: hsl(40 25% 99% / 0.99);
+  color: hsl(35 7% 20%);
+  box-shadow: 0 8px 28px hsl(30 8% 10% / 0.12), 0 1px 3px hsl(30 8% 10% / 0.06);
+}
+
+.composer-context-menu section {
+  padding: 0.8rem 0.9rem 0.85rem;
+}
+
+.composer-context-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: hsl(35 7% 38%);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.composer-context-header > span {
+  max-width: 6rem;
+}
+
+.composer-context-header strong {
+  color: hsl(35 7% 19%);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-align: right;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.composer-context-progress {
+  position: relative;
+  width: 100%;
+  height: 0.25rem;
+  margin: 0.5rem 0 0.8rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: hsl(35 6% 87%);
+}
+
+.composer-context-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: hsl(35 5% 43%);
+  transition: width 180ms ease;
+}
+
+.composer-context-section {
+  padding: 0.65rem 0 0;
+  border-top: 1px solid hsl(35 9% 88%);
+}
+
+.composer-context-section h3 {
+  margin: 0 0 0.35rem;
+  color: hsl(35 7% 43%);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.composer-context-section p {
+  margin: 0.2rem 0 0;
+  color: hsl(35 6% 48%);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+
+.composer-context-section strong {
+  color: hsl(35 7% 22%);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-context-costs {
+  margin-top: 0.15rem;
+}
+
+.dark .composer-effort-menu,
+.dark .composer-context-menu {
+  border-color: hsl(0 0% 100% / 0.12);
+  background: hsl(220 12% 10% / 0.99);
+  color: hsl(0 0% 96%);
+  box-shadow: 0 12px 32px hsl(0 0% 0% / 0.4);
+}
+
+.dark .composer-context-header,
+.dark .composer-context-section h3,
+.dark .composer-context-section p {
+  color: hsl(0 0% 72%);
+}
+
+.dark .composer-context-header strong,
+.dark .composer-context-section strong {
+  color: hsl(0 0% 96%);
+}
+
+.dark .composer-context-progress {
+  background: hsl(0 0% 100% / 0.15);
+}
+
+.dark .composer-context-progress > span {
+  background: hsl(0 0% 78%);
+}
+
+.dark .composer-context-section,
+.dark .composer-fast-row {
+  border-top-color: hsl(0 0% 100% / 0.1);
+}
+.composer-input-row .composer-model-inline .chat-model-trigger {
+  min-height: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  padding-inline: 0.55rem;
+  border: 1px solid transparent;
+  background-color: transparent;
+  box-shadow: none;
+  font-size: 12.5px;
+  font-weight: 400;
+}
+.composer-input-row .composer-toolbar-actions {
+  gap: 0.2rem !important;
 }
 
 .composer-inline-active-tools {
   flex: 0 1 auto;
-  align-self: center;
+  align-self: flex-end;
   min-width: 0;
-  max-width: min(36vw, 14rem);
+  max-width: min(42vw, 18rem);
   overflow: visible;
+  margin-bottom: 0.15rem;
+}
+
+.composer-footer-active-tools {
+  /* Optical inset for the chip row: it has to clear the 1.75rem corner
+     radius on the sides and leave room under the chips for their soft
+     drop shadow, otherwise they read as glued to the bottom rim.
+     overflow-x keeps everything on ONE row (menus are portaled, so
+     clipping here never hides a dropdown). */
+  padding: 0.5rem 0.9rem 0.9rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.composer-footer-active-tools::-webkit-scrollbar {
+  display: none;
+}
+
+.composer-footer-active-tools > * {
+  flex: 0 0 auto;
 }
 
 .composer-inline-active-tools > div {
@@ -5202,91 +6750,57 @@ footer {
   display: none;
 }
 
+/* Plain attachment glyph with the same 44px hit area as every action. */
 .composer-plus-liquid-button {
   position: relative;
-  isolation: isolate;
-  overflow: hidden;
   width: 2.75rem !important;
   min-width: 2.75rem;
   height: 2.75rem !important;
   min-height: 2.75rem;
-  /* Calm resting state: hairline border + near-flat surface + one soft
-     contact shadow. The embossed-sphere insets read dated next to the
-     otherwise flat composer; the liquid shimmer stays on hover (below). */
-  border: 1px solid hsl(220 13% 88% / 0.9) !important;
-  color: hsl(220 15% 26%);
-  background: linear-gradient(180deg, hsl(0 0% 100%), hsl(220 14% 97.5%));
-  box-shadow: 0 1px 2px hsl(220 30% 18% / 0.06);
+  border: none !important;
+  color: hsl(220 10% 40%);
+  background: transparent;
+  box-shadow: none;
   transition:
-    transform 210ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)),
-    color 180ms ease-out,
-    border-color 180ms ease-out,
-    background-color 180ms ease-out,
-    box-shadow 210ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
-}
-
-.composer-plus-liquid-button::before,
-.composer-plus-liquid-button::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-  border-radius: inherit;
-}
-
-.composer-plus-liquid-button::before {
-  inset: -42%;
-  z-index: -1;
-  background:
-    radial-gradient(circle at 28% 44%, hsl(var(--accent-violet) / 0.18), transparent 32%),
-    radial-gradient(circle at 72% 56%, hsl(203 96% 56% / 0.16), transparent 31%),
-    conic-gradient(from 110deg, transparent, hsl(0 0% 100% / 0.62), transparent 38%);
-  opacity: 0;
-  filter: blur(10px);
-  transform: scale(0.72) rotate(0deg);
-  transition:
-    opacity 240ms ease-out,
-    transform 520ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
-}
-
-.composer-plus-liquid-button::after {
-  inset: 1px;
-  z-index: 0;
-  background: linear-gradient(112deg, transparent 8%, hsl(0 0% 100% / 0.7) 42%, transparent 62%);
-  opacity: 0;
-  transform: translateX(-72%) skewX(-16deg);
-  transition:
-    opacity 180ms ease-out,
-    transform 560ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+    color 160ms ease-out,
+    background-color 160ms ease-out,
+    transform 160ms ease-out;
 }
 
 .composer-plus-liquid-button:hover,
 .composer-plus-liquid-button:focus-visible,
 .composer-plus-liquid-button[data-state="open"] {
-  color: hsl(220 20% 6%);
-  transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.9),
-    inset 0 -12px 22px -22px hsl(var(--accent-violet) / 0.54),
-    0 14px 30px -22px hsl(var(--accent-violet) / 0.38);
+  color: hsl(220 20% 10%);
+  background: hsl(220 10% 94% / 0.82);
 }
 
-.composer-plus-liquid-button:hover::before,
-.composer-plus-liquid-button:focus-visible::before,
-.composer-plus-liquid-button[data-state="open"]::before {
-  opacity: 1;
-  transform: scale(1) rotate(22deg);
-}
-
-.composer-plus-liquid-button:hover::after,
-.composer-plus-liquid-button:focus-visible::after,
-.composer-plus-liquid-button[data-state="open"]::after {
-  opacity: 0.95;
-  transform: translateX(72%) skewX(-16deg);
+.composer-plus-liquid-button:focus-visible,
+.composer-input-row .composer-model-inline .chat-model-trigger:focus-visible,
+.composer-input-row .composer-toolbar-actions > button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.58);
+  outline-offset: 2px;
 }
 
 .composer-plus-liquid-button:active {
-  transform: translateY(0) scale(0.96);
-  transition-duration: 90ms;
+  transform: scale(0.94);
+}
+
+/* Persistent app pins — logo-only chips to the right of the "+" button.
+   The close affordance is hover/focus on desktop and always visible on
+   touch (no hover exists there). Closing never disconnects OAuth. */
+.pinned-chip-close {
+  display: none;
+}
+
+@media (hover: none) {
+  .pinned-chip-close {
+    display: grid;
+  }
+}
+
+.pinned-chip:hover .pinned-chip-close,
+.pinned-chip:focus-visible .pinned-chip-close {
+  display: grid;
 }
 
 .composer-plus-liquid-button:disabled {
@@ -5304,23 +6818,28 @@ footer {
 .composer-textarea-shell {
   position: relative;
   min-width: 0;
-  height: 2.2rem;
-  max-height: 2.2rem;
+  /* Idle height matches a single 15px/1.5 line with comfortable vertical room;
+     multi-line prompts grow via JS up to the shell max-height. */
+  height: auto;
+  min-height: 1.65rem;
+  max-height: min(12.5rem, 42vh);
   overflow: hidden;
 }
 
 .composer-textarea-shell .composer-textarea {
   position: relative;
   z-index: 2;
-  display: block;
-  height: 2.2rem !important;
-  min-height: 2.2rem !important;
-  max-height: 2.2rem !important;
-  overflow-y: auto !important;
-  /* Optical vertical center with 1rem / 1.5 line-height inside 2.2rem. */
-  padding: 0.35rem 0.2rem !important;
+  /* Kill base Textarea `flex` so the first line sits on the top of the shell
+     instead of optically floating mid-band with a white gap above. */
+  display: block !important;
+  height: auto;
+  min-height: 1.65rem !important;
+  max-height: min(12.5rem, 42vh) !important;
+  overflow-y: hidden;
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem !important;
   font-size: 1rem;
   line-height: 1.5;
+  vertical-align: top;
 }
 
 .composer-textarea-highlights {
@@ -5329,10 +6848,11 @@ footer {
   inset: 0;
   z-index: 1;
   box-sizing: border-box;
-  height: 2.2rem;
-  max-height: 2.2rem;
+  height: 100%;
+  max-height: min(12.5rem, 42vh);
   overflow: hidden;
-  padding: 0.35rem 0.2rem;
+  /* Must match .composer-textarea padding so caret/highlights stay locked. */
+  padding: 0.2rem 0.35rem 0.2rem 0.2rem;
   color: hsl(var(--foreground));
   font-size: 1rem;
   font-weight: 400;
@@ -5384,6 +6904,9 @@ footer {
   flex: 0 0 auto;
 }
 @media (max-width: 640px) {
+  .composer-footer-active-tools {
+    padding: 0.375rem 0.75rem 0.75rem;
+  }
   .composer-inline-active-tools {
     max-width: calc(100vw - 8.75rem);
   }
@@ -5461,37 +6984,31 @@ button.anti-bribery-context-chip:not(:disabled):active {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dark .composer-liquid-surface {
-  background: hsl(220 16% 9%);
+.dark .composer-liquid-surface,
+.dark .composer-surface.composer-liquid-surface {
+  background-color: transparent;
+  background:
+    linear-gradient(180deg, hsl(220 18% 12% / 0.78) 0%, hsl(220 16% 8% / 0.62) 100%);
+  backdrop-filter: blur(28px) saturate(1.65);
+  -webkit-backdrop-filter: blur(28px) saturate(1.65);
 }
 .dark .composer-liquid-surface::before {
   background:
-    linear-gradient(120deg, transparent 16%, hsl(0 0% 100% / 0.055) 44%, transparent 68%),
-    radial-gradient(ellipse 58% 36% at 18% 0%, hsl(0 0% 100% / 0.09), transparent 70%);
+    linear-gradient(180deg, hsl(0 0% 100% / 0.12) 0%, hsl(0 0% 100% / 0.03) 36%, transparent 58%);
   opacity: 0.95;
 }
-.dark .composer-liquid-surface::after {
-  background: radial-gradient(circle, hsl(var(--accent-violet) / 0.12), transparent 70%);
-}
 .dark .composer-plus-liquid-button {
-  border: 1px solid hsl(0 0% 100% / 0.1) !important;
-  color: hsl(216 29% 97% / 0.9);
-  background:
-    radial-gradient(circle at 42% 18%, hsl(0 0% 100% / 0.16), transparent 38%),
-    linear-gradient(145deg, hsl(216 24% 17% / 0.78), hsl(220 32% 10% / 0.7));
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.12),
-    inset 0 -12px 22px -22px hsl(var(--accent-violet) / 0.64),
-    0 12px 26px -24px hsl(0 0% 0% / 0.8);
+  border: none !important;
+  color: hsl(216 20% 80%);
+  background: transparent;
+  box-shadow: none;
 }
 .dark .composer-plus-liquid-button:hover,
 .dark .composer-plus-liquid-button:focus-visible,
 .dark .composer-plus-liquid-button[data-state="open"] {
   color: hsl(216 29% 98%);
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.18),
-    inset 0 -12px 22px -22px hsl(var(--accent-violet) / 0.72),
-    0 18px 34px -26px hsl(var(--accent-violet) / 0.55);
+  background: hsl(0 0% 100% / 0.08);
+  box-shadow: none;
 }
 .dark .anti-bribery-context-chip {
   border-color: hsl(0 0% 100% / 0.11);
@@ -5515,35 +7032,105 @@ button.anti-bribery-context-chip:not(:disabled):active {
 }
 @media (max-width: 640px) {
   .composer-surface {
-    border-radius: 1.5rem;
+    border-radius: 1.25rem;
   }
   .composer-input-row {
-    column-gap: 0.5rem;
-    min-height: 3.75rem;
-    padding: 0.5rem 0.625rem !important;
+    column-gap: 0.3rem;
+    min-height: 3.25rem;
+    padding: 0.35rem 0.4rem 0.35rem 0.35rem !important;
+  }
+  .composer-surface[data-composer-stacked="true"] .composer-input-row,
+  .composer-surface[data-composer-layout="stacked"] .composer-input-row {
+    padding: 0.6rem 0.55rem 0.35rem 0.35rem !important;
+    row-gap: 0.35rem;
   }
   .composer-input-row .composer-toolbar-actions {
-    gap: 0.25rem !important;
+    gap: 0.15rem !important;
   }
+  /* Phone footer budget (360–430 px): + · shield | ring · model · ⚡ · mic · send
+     must fit on ONE row inside the surface. Icon controls keep ≥ 40 px touch
+     targets, the effort chip collapses to its lightning glyph, the model
+     trigger drops its chevron and its label is the only element that
+     truncates. Verified at 360 / 390 / 430 px — nothing clips anymore. */
+  .composer-leading-controls {
+    gap: 0.15rem;
+    min-width: 0;
+    flex-wrap: nowrap;
+    /* Extra pinned-app chips scroll inside the leading cluster instead of
+       sliding under the right-hand controls. Menus are portaled, so this
+       never clips a dropdown; the block padding keeps focus rings visible. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 0;
+    margin: -4px 0;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .composer-leading-controls::-webkit-scrollbar {
+    display: none;
+  }
+  .composer-input-row .composer-toolbar-actions > button.composer-dictation-button,
+  .composer-input-row .composer-toolbar-actions > button.composer-send-button,
+  .composer-input-row .composer-toolbar-actions > button.composer-stop-button {
+    width: 2.5rem !important;
+    min-width: 2.5rem;
+    height: 2.5rem !important;
+    min-height: 2.5rem;
+  }
+  .composer-plus-liquid-button {
+    width: 2.5rem !important;
+    min-width: 2.5rem;
+    height: 2.5rem !important;
+    min-height: 2.5rem;
+  }
+  .composer-permission-chip,
+  .composer-effort-chip,
+  .composer-context-trigger {
+    height: 2.5rem;
+  }
+  .composer-permission-chip {
+    width: 2.25rem;
+    max-width: 2.25rem;
+  }
+  .composer-context-trigger {
+    width: 1.9rem;
+  }
+  .composer-effort-chip {
+    width: 2.25rem;
+    max-width: 2.25rem;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+  .composer-effort-chip svg {
+    width: 1rem;
+    height: 1rem;
+  }
+  /* Width budget for the model pill lives in the (max-width: 767px) block
+     above (`.composer-model-inline`). Here: same 40 px height as the other
+     controls and no chevron — the logo + name already read as the picker. */
   .composer-input-row .composer-model-inline .chat-model-trigger {
-    height: 2.75rem !important;
-    min-height: 2.75rem;
+    height: 2.5rem !important;
+    min-height: 2.5rem;
+  }
+  .composer-input-row .composer-model-inline .chat-model-trigger > svg:last-child {
+    display: none;
   }
   .composer-textarea-shell .composer-textarea {
-    height: 2.35rem !important;
-    min-height: 2.35rem !important;
-    max-height: 2.35rem !important;
-    padding: 0.425rem 0.2rem !important;
+    min-height: 1.65rem !important;
+    max-height: min(10.5rem, 38vh) !important;
+    padding: 0.18rem 0.25rem 0.18rem 0.15rem !important;
     font-size: 1rem;
     line-height: 1.5;
   }
-  .composer-textarea-shell,
-  .composer-textarea-highlights {
-    height: 2.35rem;
-    max-height: 2.35rem;
+  .composer-textarea-shell {
+    min-height: 1.65rem;
+    max-height: min(10.5rem, 38vh);
   }
   .composer-textarea-highlights {
-    padding: 0.425rem 0.2rem;
+    height: 100%;
+    max-height: min(10.5rem, 38vh);
+    padding: 0.18rem 0.25rem 0.18rem 0.15rem;
     font-size: 1rem;
     line-height: 1.5;
   }
@@ -5557,28 +7144,72 @@ button.anti-bribery-context-chip:not(:disabled):active {
 }
 
 .dark .composer-context-tray {
-  border-color: hsl(var(--composer-border) / 0.78);
-  background: hsl(var(--composer-bg) / 0.98);
-  box-shadow: 0 14px 32px -24px rgba(0, 0, 0, 0.78);
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
-/* ─── Composer — premium dark surface ────────────────────────────── */
+/* ─── Composer — quiet dark surface ──────────────────────────────── */
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
-  border: 0.5px solid hsl(var(--composer-border) / 0.88);
+  border: 1px solid hsl(var(--composer-border) / 0.96);
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.32),
-    0 16px 36px -24px rgba(0, 0, 0, 0.86);
-  transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
-              background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    0 10px 28px -20px rgba(0, 0, 0, 0.86);
+  transition:
+    border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Re-assert liquid glass after the solid dark surface fallback so the
+   translucent fill is not overwritten by equal-specificity rules above. */
+.dark .composer-surface.composer-liquid-surface {
+  background-color: transparent;
+  background:
+    linear-gradient(180deg, hsl(220 18% 12% / 0.78) 0%, hsl(220 16% 8% / 0.62) 100%);
+  backdrop-filter: blur(28px) saturate(1.65);
+  -webkit-backdrop-filter: blur(28px) saturate(1.65);
 }
 .dark .composer-surface:focus-within {
-  border-color: hsl(var(--accent-violet) / 0.8);
+  border-color: hsl(216 12% 38% / 0.98);
   box-shadow:
-    0 18px 42px -24px rgba(0, 0, 0, 0.92);
+    inset 0 0 0 1px hsl(216 12% 46% / 0.24),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 12px 30px -20px rgba(0, 0, 0, 0.92);
 }
 
+.dark .composer-surface:hover {
+  border-color: hsl(216 12% 31% / 0.98);
+}
+
+.dark .composer-input-row .composer-model-inline .chat-model-trigger:hover,
+.dark .composer-input-row .composer-model-inline .chat-model-trigger[data-state="open"] {
+  border-color: transparent;
+  background-color: hsl(0 0% 100% / 0.08);
+}
+.dark .composer-input-row .composer-model-inline .chat-model-trigger,
+.dark .composer-effort-chip.is-high,
+.dark .composer-dictation-button:not([aria-pressed="true"]) {
+  color: hsl(216 14% 72%) !important;
+}
+.dark .composer-permission-chip.is-default {
+  color: hsl(216 14% 72%);
+}
+.dark .composer-permission-chip.is-read {
+  color: hsl(198 70% 68%);
+}
+.dark .composer-permission-chip.is-protected {
+  color: hsl(36 80% 64%);
+}
+.dark .composer-permission-chip.is-workspace {
+  color: hsl(217 72% 72%);
+}
+.dark .composer-permission-chip.is-full {
+  color: #f87171;
+}
+.dark .composer-effort-chip.is-high svg {
+  color: #fca5a5;
+}
 
 /* ────────────────────────────────────────────────────────────
  * Accessibility toggles applied on <html> via SettingsProvider.
@@ -7067,6 +8698,50 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  * Thinking-trace text shimmer — same sweep as .premium-shimmer but clipped
  * to the glyphs, for the "Pensando…" header of the extended-thinking panel.
  */
+/*
+ * RunTrace semantic colors — independent of brand red. In-progress
+ * steps must never render as --primary / brand red (that reads as failure).
+ */
+:root {
+  --step-pending: #8A8580;
+  --step-running: #2563eb;
+  --step-done: #059669;
+  --step-failed: #dc2626;
+}
+.dark {
+  --step-pending: #9ca3af;
+  --step-running: #60a5fa;
+  --step-done: #34d399;
+  --step-failed: #f87171;
+}
+.run-trace-step--pending { color: var(--step-pending); }
+.run-trace-step--running { color: var(--step-running); }
+.run-trace-step--done { color: var(--step-done); }
+.run-trace-step--failed { color: var(--step-failed); }
+.run-trace-step--cancelled { color: var(--step-pending); }
+
+/* Empresas leftovers: names wrap at default + 1280; noVNC fills its panel. */
+@media (min-width: 1280px) {
+  [data-dept-name-wrap="1"] {
+    overflow: visible !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+}
+
+[data-novnc-fit="cover"] {
+  background: #1b1b1d;
+}
+[data-novnc-fit="cover"] iframe {
+  background: #1b1b1d;
+  border: 0;
+  height: 100% !important;
+  inset: 0;
+  position: absolute;
+  width: 100% !important;
+}
+
 .thinking-shimmer-text {
   background-image: linear-gradient(
     100deg,
@@ -7086,6 +8761,9 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
     animation: none;
     background-image: none;
     color: hsl(var(--muted-foreground));
+  }
+  .celeste-bounce-bars animateTransform {
+    display: none;
   }
 }
 
@@ -7178,4 +8856,658 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 @keyframes brand-wave {
   0%   { background-position: 180% 0; }
   100% { background-position: -40% 0; }
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Admin shell polish (scoped — do not leak into /chat)
+   Marker class: admin-shell-v20260815
+   ────────────────────────────────────────────────────────────────────────── */
+.admin-shell {
+  --admin-fg: #18181b;
+  --admin-muted: #71717a;
+  --admin-line: rgba(228, 228, 231, 0.9);
+  background: #fafafa;
+  color: var(--admin-fg);
+}
+
+.admin-shell-inset,
+.admin-shell-content {
+  background: #fafafa;
+}
+
+.admin-page-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 3.25rem;
+  padding: 0.625rem 1rem;
+  margin: 0;
+  border-bottom: 1px solid var(--admin-line);
+  background: rgba(250, 250, 250, 0.86);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+@media (min-width: 640px) {
+  .admin-page-header {
+    padding: 0.625rem 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .admin-page-header {
+    padding: 0.625rem 1.5rem;
+  }
+}
+
+.admin-page-title {
+  font-size: 0.9375rem;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--admin-fg);
+}
+
+.admin-page-desc {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--admin-muted);
+}
+
+.admin-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.admin-page-actions .h-9,
+.admin-page-actions button {
+  height: 2rem;
+}
+
+.admin-menu-trigger {
+  height: 2.75rem !important;
+  width: 2.75rem !important;
+  color: #3f3f46;
+}
+
+.admin-page-body {
+  padding: 0.875rem 1rem 1.5rem;
+}
+
+@media (min-width: 640px) {
+  .admin-page-body {
+    padding: 1rem 1.25rem 1.75rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .admin-page-body {
+    padding: 1rem 1.5rem 2rem;
+  }
+}
+
+.admin-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--admin-line);
+  border-radius: 0.5rem;
+  background: #fff;
+  box-shadow: none;
+}
+
+.admin-stat-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.admin-stat-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--admin-muted);
+}
+
+.admin-stat-icon {
+  height: 0.875rem;
+  width: 0.875rem;
+  color: #a1a1aa;
+}
+
+.admin-stat-value {
+  font-size: 1.25rem;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--admin-fg);
+}
+
+.admin-stat-desc {
+  font-size: 0.6875rem;
+  color: var(--admin-muted);
+}
+
+.admin-shell .admin-page-body .shadow,
+.admin-shell .admin-page-body .shadow-sm,
+.admin-shell .admin-page-body .shadow-md {
+  box-shadow: none !important;
+}
+
+.admin-nav-item {
+  letter-spacing: -0.01em;
+}
+
+/* Mobile drawer — Sheet portals to body, keyed by unique class */
+.admin-sidebar-drawer[data-mobile="true"] {
+  width: min(86vw, 320px) !important;
+  max-width: 320px;
+  height: 100dvh;
+  padding: 0;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #fff !important;
+  border-right: 1px solid rgba(228, 228, 231, 0.9);
+  box-shadow: none;
+}
+
+body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
+  background: rgba(9, 9, 11, 0.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.admin-shell-v20260815 {
+  --admin-polish: 20260815;
+}
+
+/* composer-pro — professional /code chat composer 20260815 + align 20260815 */
+.code-composer {
+  --code-composer-stack: 8.75rem;
+  --composer-align: 20260815;
+  container-type: inline-size;
+  container-name: code-composer;
+  width: 100%;
+  padding: 0 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: transparent;
+}
+
+.code-composer__surface {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem 0.75rem 0.5rem;
+  border: 1px solid hsl(220 10% 86% / 0.96);
+  border-radius: 1.35rem;
+  background-color: hsl(0 0% 100%);
+  box-shadow:
+    0 1px 2px hsl(220 20% 12% / 0.035),
+    0 8px 24px -20px hsl(220 24% 14% / 0.24);
+  transition:
+    border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.code-composer__surface.is-drop-target {
+  border-color: hsl(166 62% 38% / 0.7);
+  box-shadow: 0 0 0 3px hsl(166 62% 38% / 0.14);
+}
+
+.code-composer__surface:focus-within {
+  border-color: hsl(166 55% 36% / 0.92);
+  box-shadow:
+    0 0 0 3px hsl(166 55% 36% / 0.16),
+    0 1px 2px hsl(220 20% 12% / 0.04),
+    0 10px 28px -18px hsl(220 24% 14% / 0.22);
+}
+
+.code-composer__input {
+  display: block;
+  width: 100%;
+  border: 0 !important;
+  border-bottom: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  field-sizing: content;
+}
+
+.code-composer.is-expanded .code-composer__input {
+  min-height: 8.5rem !important;
+  max-height: 18rem !important;
+}
+
+.code-composer__input:focus,
+.code-composer__input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.code-composer__footer {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  margin-top: 0.45rem;
+  flex-wrap: nowrap;
+}
+
+.code-composer__leading,
+.code-composer__trailing {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: nowrap !important;
+}
+
+.code-composer__leading {
+  flex: 0 1 auto;
+}
+
+.code-composer__trailing {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.code-composer__mic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  width: 32px;
+  flex: 0 0 auto;
+}
+
+.code-composer__mic > button {
+  height: 32px !important;
+  width: 32px !important;
+  min-height: 32px !important;
+  min-width: 32px !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+}
+
+.code-composer__icon-btn {
+  height: 32px !important;
+  width: 32px !important;
+  border-radius: 8px !important;
+  color: hsl(var(--muted-foreground)) !important;
+  background: transparent !important;
+}
+
+.code-composer__icon-btn:hover {
+  background: hsl(var(--muted) / 0.65) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.code-composer__model {
+  height: 32px !important;
+  max-width: 9.5rem;
+}
+
+.code-composer__plan {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 999px;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.code-composer__plan:hover {
+  background: hsl(var(--muted) / 0.55);
+  color: hsl(var(--foreground));
+}
+
+.code-composer__plan.is-active {
+  border-color: hsl(166 55% 36% / 0.45);
+  background: hsl(166 55% 36% / 0.1);
+  color: hsl(166 45% 28%);
+}
+
+.code-composer__plan-box {
+  display: inline-flex;
+  height: 12px;
+  width: 12px;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+}
+
+.code-composer__send {
+  width: 2rem !important;
+  min-width: 2rem;
+  height: 2rem !important;
+  min-height: 2rem;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  background-color: #0a0a0a !important;
+  color: #fff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.14),
+    0 6px 14px -6px rgba(0, 0, 0, 0.32);
+}
+
+.code-composer__send:disabled {
+  opacity: 0.38 !important;
+  box-shadow: none !important;
+  cursor: not-allowed;
+}
+
+.code-composer__send.is-streaming {
+  animation: composer-pro-send-pulse 1.15s ease-in-out infinite;
+}
+
+.code-composer__stop {
+  height: 32px !important;
+  width: 32px !important;
+  border-radius: 999px !important;
+}
+
+.code-composer .code-target-select-button {
+  height: 32px !important;
+  width: 32px !important;
+  min-height: 32px !important;
+  min-width: 32px !important;
+  padding: 0 !important;
+  border-radius: 8px !important;
+}
+
+.code-composer__model-logo {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.code-composer__model-logo img,
+.code-composer__model-logo svg {
+  display: block;
+  object-fit: contain;
+}
+
+.dept-chat-fab-wrap {
+  bottom: calc(var(--code-composer-stack, 8.75rem) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: 0.35rem;
+}
+
+/* Hide leftover square green + FAB at the bottom-left of the chat column.
+   Do NOT hide Bard "Nueva conversación" (dept-chat-fab) or ChatEmpresaFab. */
+[data-testid="dept-chat-bard"] > button.h-12.w-12,
+[data-testid="dept-chat-bard"] > button.h-11.w-11.bg-green-500,
+[data-testid="dept-chat-bard"] > button.h-11.w-11.bg-emerald-500,
+.code-chat-column > button.absolute.left-3,
+.code-chat-column > button.absolute.left-4,
+.code-composer ~ button.h-12.w-12,
+.code-composer ~ button.h-11.w-11.rounded-md.bg-green-500,
+.code-composer ~ button.h-11.w-11.rounded-lg.bg-emerald-500 {
+  display: none !important;
+}
+
+@keyframes composer-pro-send-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.45); transform: scale(1); }
+  50% { box-shadow: 0 0 0 7px rgba(22, 163, 74, 0); transform: scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-composer__send.is-streaming {
+    animation: none !important;
+  }
+}
+
+/* Never wrap the toolbar into a second action row.
+   Shrink labels instead so mic+send stay on the Plan row. */
+@container code-composer (max-width: 520px) {
+  .code-composer__footer,
+  .code-composer__leading,
+  .code-composer__trailing {
+    flex-wrap: nowrap !important;
+  }
+  .code-target-select-button__label {
+    display: none;
+  }
+  .code-composer__model {
+    max-width: 6.75rem;
+  }
+}
+
+@container code-composer (max-width: 430px) {
+  .code-target-select-button__label {
+    display: none;
+  }
+}
+
+@container code-composer (max-width: 360px) {
+  .code-composer__plan-label {
+    display: none;
+  }
+}
+
+.dark .code-composer__surface {
+  background-color: hsl(var(--composer-bg, 220 14% 6%));
+  border-color: hsl(var(--composer-border, 216 12% 22%) / 0.96);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.28),
+    0 10px 28px -18px rgba(0, 0, 0, 0.7);
+}
+
+.dark .code-composer__surface:focus-within {
+  border-color: hsl(166 45% 42% / 0.9);
+  box-shadow:
+    0 0 0 3px hsl(166 45% 42% / 0.2),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.dark .code-composer__plan.is-active {
+  color: hsl(166 55% 72%);
+}
+
+
+/* PROACTIVO live heartbeat — professional lub-dub, not a generic pulse */
+@keyframes sira-proactive-beat {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.0), 0 0 12px rgba(16, 185, 129, 0.18); }
+  12% { transform: scale(1.055); box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.12), 0 0 18px rgba(16, 185, 129, 0.35); }
+  24% { transform: scale(1.01); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.0), 0 0 12px rgba(16, 185, 129, 0.2); }
+  36% { transform: scale(1.08); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0.08), 0 0 22px rgba(16, 185, 129, 0.4); }
+  58% { transform: scale(1); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.0), 0 0 14px rgba(16, 185, 129, 0.22); }
+}
+@keyframes sira-proactive-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  14% { transform: scale(1.45); opacity: 0.9; }
+  28% { transform: scale(1); opacity: 1; }
+  42% { transform: scale(1.3); opacity: 0.92; }
+  70% { transform: scale(1); opacity: 1; }
+}
+@keyframes sira-proactive-ring {
+  0% { transform: scale(0.7); opacity: 0.55; }
+  70% { transform: scale(2.1); opacity: 0; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+@keyframes sira-proactive-sheen {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.sira-proactive-live {
+  position: relative;
+  overflow: hidden;
+  animation: sira-proactive-beat 1.35s cubic-bezier(0.42, 0, 0.18, 1) infinite;
+  border-color: rgba(16, 185, 129, 0.7) !important;
+  background:
+    linear-gradient(110deg, rgba(16, 185, 129, 0.16) 0%, rgba(52, 211, 153, 0.28) 40%, rgba(16, 185, 129, 0.16) 80%) !important;
+  background-size: 200% 100%;
+  color: rgb(4, 120, 87) !important;
+  will-change: transform, box-shadow;
+}
+.dark .sira-proactive-live {
+  color: rgb(167, 243, 208) !important;
+}
+.sira-proactive-live .sira-proactive-dot {
+  position: relative;
+  display: inline-flex;
+  height: 0.55rem;
+  width: 0.55rem;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  animation: sira-proactive-dot 1.35s cubic-bezier(0.42, 0, 0.18, 1) infinite;
+}
+.sira-proactive-live .sira-proactive-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(16, 185, 129, 0.55);
+  animation: sira-proactive-ring 1.35s ease-out infinite;
+}
+.sira-proactive-dept-dot {
+  animation: sira-proactive-dot 1.35s cubic-bezier(0.42, 0, 0.18, 1) infinite;
+  background-color: #10b981 !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sira-proactive-live,
+  .sira-proactive-live .sira-proactive-dot,
+  .sira-proactive-live .sira-proactive-dot::after,
+  .sira-proactive-dept-dot {
+    animation: none !important;
+  }
+}
+
+
+/* Ampliar / Contraer — small overlay on the textarea top-right, gated in JS */
+.composer-expand-button {
+  position: absolute;
+  top: 0.05rem;
+  right: 0.05rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  min-height: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 9999px;
+  color: hsl(220 10% 40%);
+  background: hsl(0 0% 100% / 0.86);
+  box-shadow: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    color 160ms ease-out,
+    background-color 160ms ease-out,
+    transform 160ms ease-out;
+}
+.composer-expand-button:hover,
+.composer-expand-button:focus-visible,
+.composer-expand-button[aria-pressed="true"] {
+  color: hsl(220 20% 10%);
+  background: hsl(220 10% 94% / 0.92);
+}
+.composer-expand-button:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.58);
+  outline-offset: 2px;
+}
+.composer-expand-button:active {
+  transform: scale(0.94);
+  transition-duration: 90ms;
+}
+.dark .composer-expand-button {
+  color: hsl(216 20% 80%);
+  background: hsl(var(--composer-bg) / 0.88);
+}
+.dark .composer-expand-button:hover,
+.dark .composer-expand-button:focus-visible,
+.dark .composer-expand-button[aria-pressed="true"] {
+  color: hsl(216 29% 98%);
+  background: hsl(0 0% 100% / 0.08);
+}
+
+.composer-textarea-shell.has-expand-control .composer-textarea,
+.composer-textarea-shell.has-expand-control .composer-textarea-highlights {
+  padding-right: 2.1rem !important;
+}
+.composer-surface[data-composer-stacked="true"] .composer-textarea-shell.has-expand-control .composer-textarea,
+.composer-surface[data-composer-stacked="true"] .composer-textarea-shell.has-expand-control .composer-textarea-highlights,
+.composer-surface[data-composer-layout="stacked"] .composer-textarea-shell.has-expand-control .composer-textarea,
+.composer-surface[data-composer-layout="stacked"] .composer-textarea-shell.has-expand-control .composer-textarea-highlights {
+  padding-right: 2.1rem !important;
+}
+
+.code-composer__input-shell {
+  position: relative;
+  width: 100%;
+}
+.code-composer__input-shell.has-expand-control .code-composer__input {
+  padding-right: 2.1rem !important;
+}
+
+.composer-surface.is-expanded .composer-textarea-shell {
+  min-height: 8.5rem;
+  max-height: min(18rem, 52vh);
+}
+.composer-surface.is-expanded .composer-textarea-shell .composer-textarea,
+.composer-surface.is-expanded .composer-textarea-highlights {
+  min-height: 8.5rem !important;
+  max-height: min(18rem, 52vh) !important;
+}
+
+@media (max-width: 640px) {
+  .composer-expand-button {
+    width: 1.75rem;
+    min-width: 1.75rem;
+    height: 1.75rem;
+    min-height: 1.75rem;
+  }
+  .composer-textarea-shell.has-expand-control .composer-textarea,
+  .composer-textarea-shell.has-expand-control .composer-textarea-highlights {
+    padding-right: 2rem !important;
+  }
+  .composer-surface.is-expanded .composer-textarea-shell {
+    min-height: 7.5rem;
+    max-height: min(16rem, 48vh);
+  }
+  .composer-surface.is-expanded .composer-textarea-shell .composer-textarea,
+  .composer-surface.is-expanded .composer-textarea-highlights {
+    min-height: 7.5rem !important;
+    max-height: min(16rem, 48vh) !important;
+  }
+}
+
+/* 2026-08-19 scroll unlock: company preview / Recursos. html/body stay locked. */
+[data-testid="agent-company-preview-surface"] > div {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 0%;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
 }

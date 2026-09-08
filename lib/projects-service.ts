@@ -133,6 +133,13 @@ export interface ProjectFilters {
 const apiRoot = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const baseUrl = `${apiRoot}/projects`
 
+export function projectsServiceErrorCode(error: unknown): string | null {
+  const candidate = error as { code?: unknown; status?: unknown } | null
+  if (candidate?.status === 404) return "project_not_found"
+  if (typeof candidate?.code === "string" && candidate.code.trim()) return candidate.code.trim()
+  return null
+}
+
 function authHeaders(): HeadersInit {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
   return {
@@ -144,13 +151,19 @@ function authHeaders(): HeadersInit {
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `HTTP ${res.status}`
+    let code: string | null = null
     try {
       const body = await res.json()
       message = body.error || body.message || message
+      const rawCode = typeof body.code === "string" ? body.code : typeof body.error === "string" ? body.error : null
+      code = rawCode && /^[a-z0-9_]+$/i.test(rawCode) ? rawCode : null
     } catch {
       // response body wasn't JSON — use the status line
     }
-    throw new Error(message)
+    throw Object.assign(new Error(message), {
+      status: res.status,
+      code: res.status === 404 ? "project_not_found" : code,
+    })
   }
   return res.json() as Promise<T>
 }

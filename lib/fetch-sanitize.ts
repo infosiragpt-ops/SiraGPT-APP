@@ -72,6 +72,22 @@ export function sanitizeFetchHeaders(headers: HeadersInit | Record<PropertyKey, 
   return undefined
 }
 
+export function stripUntrustedCookieHeader(url: string, headers?: HeaderRecord): HeaderRecord | undefined {
+  if (!headers) return headers
+  const cookieKey = Object.keys(headers).find((key) => key.toLowerCase() === "cookie")
+  if (!cookieKey) return headers
+  try {
+    const parsed = new URL(url, typeof window !== "undefined" ? window.location.origin : "http://localhost")
+    const trusted = typeof window !== "undefined" && parsed.origin === window.location.origin
+    if (trusted) return headers
+  } catch {
+    /* treat as untrusted */
+  }
+  const next = { ...headers }
+  delete next[cookieKey]
+  return next
+}
+
 export function sanitizeFetchInit(init: RequestInit | null | undefined): RequestInit {
   if (!init || typeof init !== 'object' || Array.isArray(init)) return {}
 

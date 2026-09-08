@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Redfin</title>
+  <rect width="64" height="64" rx="14" fill="#A6192E"/>
+  <path fill="#FFFFFF" d="M32 13 10 32h7v19h13V38h8v13h13V32h7L32 13zm0 8.4 15 12.9V47H39V34H25v13H17V34.3L32 21.4z"/>
+</svg>

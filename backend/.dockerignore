@@ -1,3 +1,5 @@
+# ggml-base.bin is intentionally NOT ignored so Lenovo can pass
+# --build-arg BUNDLE_WHISPER_MODEL=1 with a cached copy in this context.
 node_modules
 .env*
 .mcp.json

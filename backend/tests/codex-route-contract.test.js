@@ -113,6 +113,7 @@ after(() => {
   delete process.env.CODEX_PREVIEW_START_POLL_MS;
   delete process.env.CODEX_PREVIEW_START_TIMEOUT_MS;
   delete process.env.CODEX_PREVIEW_TOKEN_SECRET;
+  delete process.env.CORS_ORIGINS;
 });
 beforeEach(() => {
   authUser = { id: 'u-1', isAdmin: true, isSuperAdmin: false };
@@ -140,7 +141,8 @@ test('Codex router exposes the tokenized preview WebSocket attachment', () => {
 });
 
 test('tokenized preview WebSocket reaches only its runner project', async (t) => {
-  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-preview-websocket-test-secret';
+  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-preview-websocket-test-secret-32-bytes!!';
+  process.env.CORS_ORIGINS = 'http://localhost:3000';
   const upstream = http.createServer();
   const upstreamWss = new WebSocket.Server({ server: upstream });
   upstreamWss.on('connection', (socket) => {
@@ -157,6 +159,7 @@ test('tokenized preview WebSocket reaches only its runner project', async (t) =>
   const payload = Buffer.from(JSON.stringify({
     projectId: 'p1',
     userId: 'u-1',
+    iat: Date.now(),
     exp: Date.now() + 60_000,
   })).toString('base64url');
   const signature = crypto
@@ -167,6 +170,7 @@ test('tokenized preview WebSocket reaches only its runner project', async (t) =>
   const client = new WebSocket(
     `ws://127.0.0.1:${proxy.address().port}/api/codex/projects/p1/preview/${token}/app/`,
     'vite-hmr',
+    { origin: 'http://localhost:3000' },
   );
 
   t.after(async () => {
@@ -320,6 +324,64 @@ test('POST /projects/:id/proactive rejects autonomous execution without isolated
   assert.equal(res.body.error, 'codex_forbidden');
 });
 
+test('DELETE business-channel pairing enforces project ownership and maps static grants', async () => {
+  const companyRegistry = require('../src/services/codex/company-registry');
+  const businessChannels = require('../src/services/codex/business-channels');
+  const originals = {
+    projectFindFirst: codexDb.codexProject.findFirst,
+    ensureCompany: companyRegistry.ensureCompanyForCodexProject,
+    revokePairing: businessChannels.revokePairing,
+  };
+  const calls = [];
+  codexDb.codexProject.findFirst = async ({ where }) => (
+    where?.id === 'p1' && where?.userId === 'u-1'
+      ? { id: 'p1', userId: 'u-1', deletedAt: null }
+      : null
+  );
+  companyRegistry.ensureCompanyForCodexProject = async () => ({
+    id: 'company-1',
+    userId: 'u-1',
+  });
+  businessChannels.revokePairing = async (args) => {
+    calls.push(args);
+    if (args.senderRef === 'static-sender') {
+      throw new Error('sender_statically_allowlisted');
+    }
+    return { id: args.channelId, companyId: args.company.id };
+  };
+
+  try {
+    const revoked = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'dynamic-sender' });
+    assert.equal(revoked.status, 200);
+    assert.equal(revoked.body.channel.id, 'channel-1');
+    assert.equal(calls[0].company.id, 'company-1');
+
+    const idempotent = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'dynamic-sender' });
+    assert.equal(idempotent.status, 200);
+
+    const staticGrant = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'static-sender' });
+    assert.equal(staticGrant.status, 409);
+    assert.equal(staticGrant.body.error, 'sender_statically_allowlisted');
+
+    authUser = { id: 'u-2', isAdmin: true, isSuperAdmin: false };
+    const foreign = await request(buildApp())
+      .delete('/api/codex/projects/p1/business-channels/channel-1/pair')
+      .send({ from: 'dynamic-sender' });
+    assert.equal(foreign.status, 404);
+    assert.equal(calls.length, 3);
+  } finally {
+    codexDb.codexProject.findFirst = originals.projectFindFirst;
+    companyRegistry.ensureCompanyForCodexProject = originals.ensureCompany;
+    businessChannels.revokePairing = originals.revokePairing;
+  }
+});
+
 test('company profile routes return grounded readiness and preserve the owned project brief', async () => {
   const originals = {
     projectFindFirst: codexDb.codexProject.findFirst,
@@ -368,7 +430,10 @@ test('company profile routes return grounded readiness and preserve the owned pr
     assert.equal(initial.status, 200);
     assert.equal(initial.body.company.readiness.evidence.socialConnections[0].platform, 'linkedin');
     assert.equal(initial.body.company.readiness.evidence.gmailConnected, false);
-    assert.equal(initial.body.company.portfolio.version, 1);
+    assert.equal(
+      initial.body.company.portfolio.version,
+      require('../src/services/codex/company-mission-orchestrator').PORTFOLIO_VERSION,
+    );
     assert.equal(initial.body.company.portfolio.missions.length, 9);
 
     const updated = await request(buildApp())
@@ -397,6 +462,70 @@ test('company profile routes return grounded readiness and preserve the owned pr
       .send({ profile: { autonomy: { leadOutreach: 'auto' } }, confirmAuto: true });
     assert.equal(confirmedAuto.status, 200);
     assert.equal(confirmedAuto.body.company.profile.autonomy.leadOutreach, 'auto');
+
+    const emptyOkrs = await request(buildApp()).get('/api/codex/projects/p1/okrs');
+    assert.equal(emptyOkrs.status, 200);
+    assert.equal(emptyOkrs.body.portfolio.revision, 0);
+
+    const reviewedOkrs = await request(buildApp())
+      .put('/api/codex/projects/p1/okrs/review')
+      .send({
+        expectedRevision: 0,
+        rationale: 'CEO Office prioriza activación con una métrica verificable.',
+        objectives: [
+          {
+            id: 'okr-activation',
+            title: 'Aumentar activación',
+            priority: 2,
+            keyResults: [{
+              id: 'kr-activation-rate',
+              title: 'Elevar la tasa de activación',
+              baseline: '20',
+              current: '25',
+              target: '40',
+              unit: '%',
+              status: 'on_track',
+              progress: 25,
+            }],
+          },
+          {
+            id: 'okr-retention',
+            title: 'Mejorar retención',
+            priority: 1,
+            keyResults: [{
+              id: 'kr-week-four',
+              title: 'Retención a cuatro semanas',
+              target: '60',
+              unit: '%',
+            }],
+          },
+        ],
+      });
+    assert.equal(reviewedOkrs.status, 200);
+    assert.equal(reviewedOkrs.body.portfolio.revision, 1);
+    assert.equal(reviewedOkrs.body.portfolio.objectives[0].id, 'okr-retention');
+    assert.equal(reviewedOkrs.body.portfolio.latestReview.source, 'ceo_review');
+
+    const reprioritizedOkrs = await request(buildApp())
+      .post('/api/codex/projects/p1/okrs/reprioritize')
+      .send({
+        expectedRevision: 1,
+        orderedIds: ['okr-activation'],
+        rationale: 'Activación desbloquea el aprendizaje de retención.',
+      });
+    assert.equal(reprioritizedOkrs.status, 200);
+    assert.equal(reprioritizedOkrs.body.portfolio.revision, 2);
+    assert.equal(reprioritizedOkrs.body.portfolio.objectives[0].id, 'okr-activation');
+    assert.equal(reprioritizedOkrs.body.portfolio.latestReview.source, 'ceo_reprioritization');
+
+    const staleReview = await request(buildApp())
+      .put('/api/codex/projects/p1/okrs/review')
+      .send({
+        expectedRevision: 1,
+        objectives: reprioritizedOkrs.body.portfolio.objectives,
+      });
+    assert.equal(staleReview.status, 409);
+    assert.equal(staleReview.body.error, 'okr_revision_conflict');
   } finally {
     codexDb.codexProject.findFirst = originals.projectFindFirst;
     codexDb.codexProject.findUnique = originals.projectFindUnique;
@@ -616,6 +745,43 @@ test('GET /projects/:id/preview/status is never cached', async () => {
   assert.equal(res.body.ready, false);
 });
 
+test('tokenized Codex preview injects the shared DOM selector bridge into HTML', async () => {
+  const upstreamHits = [];
+  const server = http.createServer((req, res) => {
+    upstreamHits.push(req.url);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Length', '95');
+    res.end('<!doctype html><html><head></head><body><button id="codex-target">Elegir</button></body></html>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
+  runnerMockPort = port;
+
+  try {
+    const app = buildApp();
+    const start = await request(app).post('/api/codex/projects/p1/preview/start');
+    assert.equal(start.status, 200);
+    const joiner = start.body.previewUrl.includes('?') ? '&' : '?';
+    const res = await request(app).get(
+      `${start.body.previewUrl}${joiner}__sgpt_preview_nonce=codex-selector-nonce-1234`,
+    );
+
+    assert.equal(res.status, 200);
+    assert.match(res.text, /data-sgpt-preview-bridge/);
+    assert.match(res.text, /data-sgpt-preview-selector-bridge/);
+    assert.match(res.text, /sgpt-preview-select-start/);
+    assert.match(res.text, /sgpt-preview-selection-ready/);
+    assert.match(res.text, /selectionMethod: 'dom'/);
+    assert.match(res.text, /codex-selector-nonce-1234/);
+    assert.doesNotMatch(upstreamHits[0], /__sgpt_preview_nonce/);
+    assert.ok(Number(res.headers['content-length']) > 95);
+  } finally {
+    delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('tokenized preview proxy strips credentials and forces frame headers', async () => {
   const upstreamHits = [];
   const server = http.createServer((req, res) => {
@@ -627,6 +793,9 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
+  const parentKeys = ['CORS_ORIGINS', 'FRONTEND_URL', 'PUBLIC_FRONTEND_URL', 'NEXT_PUBLIC_URL'];
+  const previousParents = Object.fromEntries(parentKeys.map((key) => [key, process.env[key]]));
+  parentKeys.forEach((key) => delete process.env[key]);
   process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
   runnerMockPort = port; // proxy targets the project's runner-assigned port
   try {
@@ -644,6 +813,10 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
     assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
     assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
   } finally {
+    for (const [key, value] of Object.entries(previousParents)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
     await new Promise((resolve) => server.close(resolve));
   }

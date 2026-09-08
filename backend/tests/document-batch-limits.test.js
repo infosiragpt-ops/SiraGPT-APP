@@ -36,49 +36,49 @@ function fakePrismaForFiles(rows) {
   };
 }
 
-test('document batch limit defaults to exactly 400 simultaneous documents', () => {
-  assert.equal(MAX_SIMULTANEOUS_DOCUMENTS, 400);
-  assert.equal(DOCUMENT_FAMILY_LIMITS.pdf, 100);
-  assert.equal(DOCUMENT_FAMILY_LIMITS.word, 100);
-  assert.equal(DOCUMENT_FAMILY_LIMITS.presentation, 100);
-  assert.equal(DOCUMENT_FAMILY_LIMITS.spreadsheet, 100);
+test('document batch limit defaults to exactly 1000 simultaneous documents', () => {
+  assert.equal(MAX_SIMULTANEOUS_DOCUMENTS, 1000);
+  assert.equal(DOCUMENT_FAMILY_LIMITS.pdf, 250);
+  assert.equal(DOCUMENT_FAMILY_LIMITS.word, 250);
+  assert.equal(DOCUMENT_FAMILY_LIMITS.presentation, 250);
+  assert.equal(DOCUMENT_FAMILY_LIMITS.spreadsheet, 250);
 });
 
-test('document batch policy accepts 100 PDFs + 100 Word + 100 PowerPoint + 100 Excel files', () => {
+test('document batch policy accepts 250 PDFs + 250 Word + 250 PowerPoint + 250 Excel files', () => {
   const files = [
-    ...Array.from({ length: 100 }, (_, i) => ({ originalname: `pdf-${i}.pdf`, mimetype: 'application/pdf' })),
-    ...Array.from({ length: 100 }, (_, i) => ({ originalname: `word-${i}.docx`, mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })),
-    ...Array.from({ length: 100 }, (_, i) => ({ originalname: `deck-${i}.pptx`, mimetype: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })),
-    ...Array.from({ length: 100 }, (_, i) => ({ originalname: `sheet-${i}.xlsx`, mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })),
+    ...Array.from({ length: 250 }, (_, i) => ({ originalname: `pdf-${i}.pdf`, mimetype: 'application/pdf' })),
+    ...Array.from({ length: 250 }, (_, i) => ({ originalname: `word-${i}.docx`, mimetype: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })),
+    ...Array.from({ length: 250 }, (_, i) => ({ originalname: `deck-${i}.pptx`, mimetype: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })),
+    ...Array.from({ length: 250 }, (_, i) => ({ originalname: `sheet-${i}.xlsx`, mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })),
   ];
 
   const result = validateDocumentBatch(files);
   assert.equal(result.ok, true);
-  assert.equal(result.total, 400);
+  assert.equal(result.total, 1000);
   assert.deepEqual(result.counts, {
-    pdf: 100,
-    word: 100,
-    presentation: 100,
-    spreadsheet: 100,
+    pdf: 250,
+    word: 250,
+    presentation: 250,
+    spreadsheet: 250,
     other: 0,
   });
 });
 
-test('document batch policy rejects more than 100 files in a document family', () => {
-  const files = Array.from({ length: 101 }, (_, i) => ({ originalname: `pdf-${i}.pdf`, mimetype: 'application/pdf' }));
+test('document batch policy rejects more than 250 files in a document family', () => {
+  const files = Array.from({ length: 251 }, (_, i) => ({ originalname: `pdf-${i}.pdf`, mimetype: 'application/pdf' }));
   const result = validateDocumentBatch(files);
   assert.equal(result.ok, false);
   assert.equal(result.code, 'pdf_document_batch_too_large');
 });
 
-test('document batch policy rejects more than 400 files in one turn', () => {
-  const files = Array.from({ length: 401 }, (_, i) => ({ originalname: `image-${i}.png`, mimetype: 'image/png' }));
+test('document batch policy rejects more than 1000 files in one turn', () => {
+  const files = Array.from({ length: 1001 }, (_, i) => ({ originalname: `image-${i}.png`, mimetype: 'image/png' }));
   const result = validateDocumentBatch(files);
   assert.equal(result.ok, false);
   assert.equal(result.code, 'document_batch_too_large');
 });
 
-test('document pipeline accepts and plans across 400 reference documents', () => {
+test('document pipeline accepts and plans across 1000 reference documents', () => {
   const plan = buildPlan({
     prompt: 'lee y compara todos los documentos adjuntos',
     format: 'docx',
@@ -91,10 +91,10 @@ test('document pipeline accepts and plans across 400 reference documents', () =>
   assert.equal(plan.referenceFiles[399].name, 'documento-400.pdf');
 });
 
-test('agent task snapshots preserve 400 file ids for long multi-document reads', () => {
-  const fileIds = Array.from({ length: 450 }, (_, index) => `file-${index + 1}`);
+test('agent task snapshots preserve 1000 file ids for long multi-document reads', () => {
+  const fileIds = Array.from({ length: 1100 }, (_, index) => `file-${index + 1}`);
   const out = taskStore.sanitizeTaskRecord({
-    taskId: 'task-400-docs',
+    taskId: 'task-1000-docs',
     userId: 'user-1',
     fileIds,
   });
@@ -102,6 +102,7 @@ test('agent task snapshots preserve 400 file ids for long multi-document reads',
   assert.equal(out.fileIds.length, MAX_SIMULTANEOUS_DOCUMENTS);
   assert.equal(out.fileIds[0], 'file-1');
   assert.equal(out.fileIds[399], 'file-400');
+  assert.equal(out.fileIds[999], 'file-1000');
 });
 
 test('uploaded file context includes all 400 document attachments within a bounded prompt budget', async () => {
@@ -116,13 +117,13 @@ test('uploaded file context includes all 400 document attachments within a bound
   const context = await buildUploadedFileContext(fakePrismaForFiles(rows), {
     userId: 'user-1',
     fileIds,
-    query: 'lee los 400 documentos y dame una síntesis comparativa',
-    maxChars: 120000,
+    query: 'lee los 1000 documentos y dame una síntesis comparativa',
+    maxChars: 240000,
   });
 
   assert.match(context, /Archivo adjunto 1: documento-001\.pdf/);
   assert.match(context, /Archivo adjunto 400: documento-400\.pdf/);
-  assert.ok(context.length <= 130000, `context too large: ${context.length}`);
+  assert.ok(context.length <= 260000, `context too large: ${context.length}`);
 });
 
 test('plain transcription context can stitch 400 document texts instead of stopping at 8', async () => {

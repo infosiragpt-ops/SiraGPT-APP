@@ -165,7 +165,7 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
   // ── Render ───────────────────────────────────────────────────
   if (connected === null) {
     return (
-      <div className="flex h-40 items-center justify-center text-muted-foreground">
+      <div className="flex h-40 items-center justify-center text-muted-foreground" role="status" aria-label="Cargando Git">
         <Loader2 className="h-5 w-5 animate-spin" />
       </div>
     )
@@ -210,7 +210,7 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
             <span className="truncate">{bound.fullName}</span>
             {bound.private && <Lock className="h-3 w-3 shrink-0 text-muted-foreground" />}
             {bound.htmlUrl && (
-              <a href={bound.htmlUrl} target="_blank" rel="noreferrer" className="text-muted-foreground">
+              <a href={bound.htmlUrl} target="_blank" rel="noreferrer" className="text-muted-foreground" aria-label={`Abrir ${bound.fullName} en GitHub`}>
                 <ExternalLink className="h-3 w-3" />
               </a>
             )}
@@ -220,6 +220,7 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
               size="sm"
               variant="outline"
               title="Descargar todo el código (.zip)"
+              aria-label="Descargar todo el código en zip"
               onClick={() => {
                 toast.info("Preparando descarga…")
                 githubService
@@ -235,6 +236,7 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
               variant="outline"
               disabled={loadingRepo}
               title="Cargar los archivos del repo en el editor de /code (repo → editor)"
+              aria-label="Cargar los archivos del repositorio en el editor"
               onClick={loadRepoIntoEditor}
             >
               {loadingRepo ? (
@@ -249,6 +251,7 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
               variant="outline"
               disabled={pushingFiles}
               title="Subir los archivos actuales del editor al repo (editor → repo)"
+              aria-label="Subir los archivos del editor al repositorio"
               onClick={uploadWorkspaceToRepo}
             >
               {pushingFiles ? (
@@ -258,10 +261,10 @@ export function RealGitPanel({ projectId }: { projectId: string | null; projectN
               )}
               Subir al repo
             </Button>
-            <Button size="sm" variant="outline" onClick={() => router.push(`/workspace/${bound.id}`)}>
+            <Button size="sm" variant="outline" aria-label="Abrir editor completo" onClick={() => router.push(`/workspace/${bound.id}`)}>
               Abrir editor completo
             </Button>
-            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={unbind} title="Cambiar repositorio">
+            <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={unbind} title="Cambiar repositorio" aria-label="Cambiar repositorio">
               <Unlink className="mr-1 h-3.5 w-3.5" />
               Cambiar
             </Button>
@@ -372,7 +375,7 @@ function RepoBinder({ projectId, onBound }: { projectId: string | null; onBound:
                 className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-3 py-2 text-sm"
               >
                 <span className="truncate">{c.fullName}</span>
-                <Button size="sm" disabled={busyId === c.id} onClick={() => pickConnected(c)}>
+                <Button size="sm" disabled={busyId === c.id} onClick={() => pickConnected(c)} aria-label={`Usar repositorio ${c.fullName}`}>
                   {busyId === c.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Usar"}
                 </Button>
               </div>
@@ -393,6 +396,7 @@ function RepoBinder({ projectId, onBound }: { projectId: string | null; onBound:
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Buscar repos… (vacío = recientes)"
               className="h-9 pl-9 text-sm"
+              aria-label="Buscar repositorios de GitHub"
             />
           </div>
           <Button type="submit" variant="outline" size="sm" className="h-9" disabled={loading}>
@@ -412,7 +416,7 @@ function RepoBinder({ projectId, onBound }: { projectId: string | null; onBound:
                 </div>
                 {r.language && <span className="text-xs text-muted-foreground">{r.language}</span>}
               </div>
-              <Button size="sm" disabled={busyId === r.repoId} onClick={() => pickRepo(r)}>
+              <Button size="sm" disabled={busyId === r.repoId} onClick={() => pickRepo(r)} aria-label={`Usar repositorio ${r.fullName}`}>
                 {busyId === r.repoId ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
@@ -447,7 +451,7 @@ function CloneGate({ connection, onCloned }: { connection: ConnectedRepository; 
   return (
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border p-6 text-center">
       <p className="text-sm text-muted-foreground">El repositorio aún no está clonado en el servidor.</p>
-      <Button size="sm" disabled={busy} onClick={clone}>
+      <Button size="sm" disabled={busy} onClick={clone} aria-label="Clonar repositorio ahora">
         {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}
         Clonar ahora
       </Button>

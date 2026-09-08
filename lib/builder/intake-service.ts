@@ -187,11 +187,11 @@ export const intakeService = {
     // Bound the build: an unresponsive backend must NOT leave the caller's
     // `buildingApp` latch wedged forever (the chat composer would then silently
     // park every later message). A hard timeout aborts the fetch so buildApp's
-    // catch fires and releases the latch; a caller signal (e.g. a session
-    // switch) can also cancel an in-flight build.
+    // catch fires and releases the latch; a caller signal (e.g. Detener or a
+    // session switch) can also cancel an in-flight build. AbortSignal.any is
+    // not available in every browser, so fall back to a linked controller.
     const timeout = AbortSignal.timeout(120_000)
-    const anyOf = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any
-    const composite = signal && typeof anyOf === "function" ? anyOf([signal, timeout]) : timeout
+    const composite = signal ? composeAbortSignals(signal, timeout) : timeout
     const res = await authenticatedFetch(`${baseUrl}/generate`, {
       method: "POST",
       credentials: "include",
@@ -201,4 +201,20 @@ export const intakeService = {
     })
     return handle<GenerateResult>(res)
   },
+}
+
+function composeAbortSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
+  const anyOf = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+  if (typeof anyOf === "function") return anyOf([a, b])
+  const controller = new AbortController()
+  const onAbort = () => {
+    if (!controller.signal.aborted) controller.abort()
+  }
+  if (a.aborted || b.aborted) {
+    controller.abort()
+    return controller.signal
+  }
+  a.addEventListener("abort", onAbort, { once: true })
+  b.addEventListener("abort", onAbort, { once: true })
+  return controller.signal
 }

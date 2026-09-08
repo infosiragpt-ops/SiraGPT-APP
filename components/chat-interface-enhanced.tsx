@@ -6,6 +6,7 @@ import {
   Send,
   Paperclip,
   Mic,
+  Clapperboard,
   Square,
   FileText,
   Video,
@@ -44,18 +45,35 @@ import {
   Flag,
   Settings,
   PenSquare,
-  GraduationCap,
   MessageSquare,
   Star,
   Disc3,
   Menu as MenuIcon,
   BriefcaseBusiness,
+  Maximize2,
+  Minimize2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import {
+  LOGIN_HANDOFF_WINDOW_EVENT,
+  emitLoginHandoff,
+  isLiveComputerUsePrompt,
+  chatMessageFromDetail,
+  shouldPostHandoffChatMessage,
+  buildHandoffAssistantMessage,
+  type LoginHandoffDetail,
+} from "@/lib/computer-login-handoff"
+import {
+  getSpeechRecognitionCtor,
+  isIgnorableSpeechError,
+  isSpeechPermissionError,
+  resolveDictationLanguage,
+  shouldRestartNativeDictation,
+} from "@/lib/chat/composer-dictation"
 import { motion, AnimatePresence } from "framer-motion"
-import { dedupeMessages } from "@/lib/message-preservation"
+import { dedupeMessages, mergeChatPreservingUserMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
 import { ComposerCharCounter } from "@/components/composer-char-counter"
@@ -91,15 +109,53 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .then(mod => mod.prewarmUnifiedDocumentPreview(a))
     .catch(() => null)
 }
-import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
+import { canOpenComposerPreview } from "@/lib/document-preview-gate"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
+import { AppsMentionPicker } from "@/components/AppsMentionPicker"
+import { PinnedAppRail, type PinnedChipView } from "@/components/PinnedAppRail"
+import { useAppPins } from "@/lib/use-app-pins"
+import { MAX_PINS } from "@/lib/apps-pins"
+import {
+  MENTION_COPY,
+  REGISTRY_APP_IDS,
+  buildPickerApps,
+  detectAtMention,
+  filterPickerApps,
+  groupPickerApps,
+  insertMention,
+  resolveMentionedApps,
+  type MentionPickerApp,
+  type MentionTrigger,
+} from "@/lib/apps-mentions"
+import {
+  connectGptStoreApp,
+  resolveConnectPlan,
+} from "@/lib/gpts-apps-connect"
+import { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
+import {
+  ChatComposerPrimaryAction,
+  ChatComposerSurface,
+} from "@/components/chat/ChatComposerSurface"
+import { ComposerContextMenu } from "@/components/chat/composer-context-menu"
+import { ComposerEffortMenu } from "@/components/chat/composer-effort-menu"
+import { ComposerPermissionMenu } from "@/components/chat/composer-permission-menu"
+import {
+  COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
+  COMPOSER_TEXTAREA_MIN_PX,
+  measureComposerTextarea,
+  shouldShowComposerExpandControl,
+} from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
+import { FileProcessingStatusSync } from "@/components/file-processing-status-sync"
+import { DocumentPageThumb } from "@/components/document-page-thumb"
+import { isPagePreviewDocument } from "@/lib/document-first-page"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
-import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
+import { describeComposerDocumentThumb, isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -108,11 +164,18 @@ import {
   logIngest,
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
-import { apiClient } from "@/lib/api"
+import {
+  apiClient,
+  isTerminalAgentTaskRecoveryHttpStatus,
+  resolveChatAgentTaskForRecovery,
+  shouldDetachAgentTaskRecovery,
+} from "@/lib/api"
+import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { clampDeepSeekModel } from "@/lib/sse-client"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -147,10 +210,30 @@ import {
 import MessageComponent from "./message-component"
 import { ErrorBoundary } from "./error-boundary"
 import { Virtuoso } from "react-virtuoso"
-import SpeechToTextComponent from "./speech-to-text-component"
-import TextToSpeechComponent from "./text-to-speech-component"
-import MusicGenerationComponent from "./MusicGenerationComponent"
-import VoiceCatalogModal from "./voice/voice-catalog-modal"
+// Optional media studios are several large client bundles. They are loaded
+// only after the user opens the corresponding tool, keeping the default chat
+// route responsive on first visit.
+const SpeechToTextComponent = dynamic(
+  () => import("./speech-to-text-component"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando transcripción…" /> },
+)
+const TextToSpeechComponent = dynamic(
+  () => import("./text-to-speech-component"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de voz…" /> },
+)
+const MusicGenerationComponent = dynamic(
+  () => import("./MusicGenerationComponent"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de música…" /> },
+)
+const VoiceCatalogModal = dynamic(
+  () => import("./voice/voice-catalog-modal"),
+  { ssr: false, loading: () => null },
+)
+// Sira Voz — Estudio de voz (VoiceStudio, open source, local, gratis).
+const VoiceStudioModal = dynamic(
+  () => import("./voice/voice-studio-modal"),
+  { ssr: false, loading: () => null },
+)
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
@@ -166,25 +249,32 @@ import {
 } from "@/lib/research-artifacts"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
+import { pickLastArtifactId } from "@/lib/document-chat-request"
+import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
+import { DOCUMENT_SANDBOX_NEED_ORIGINAL, historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
+import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { agentsHomeHref, conversationIdFromLocation } from "@/lib/agents-home-path"
 import { safeUUID } from "@/lib/safe-uuid"
 import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
-import VideoGenerationComponent from "./VideoGenerationComponent"
+const VideoGenerationComponent = dynamic(
+  () => import("./VideoGenerationComponent"),
+  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de video…" /> },
+)
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
 import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
-import {
-  SidebarTrigger,
-  useSidebar,
-} from "@/components/ui/sidebar"
+import { useSidebar } from "@/components/ui/sidebar"
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { SourcesPanel } from "@/components/sources-panel"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
+import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
 // Panel "Computer Use": solo aparece cuando el usuario activa esa
@@ -196,6 +286,10 @@ const ComputerUseInterface = dynamic(
 const CoworkPanel = dynamic(
   () => import("@/components/chat/cowork-panel"),
   { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" /> },
+)
+const ChatAgentComputerPanel = dynamic(
+  () => import("@/components/chat/chat-agent-computer-panel"),
+  { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" data-testid="chat-agent-computer-loading" /> },
 )
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
@@ -238,13 +332,125 @@ import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
+import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
+import { shouldUseChunkedUpload } from "@/lib/composer/chunked-upload"
+import {
+  isAssistantMessage,
+  parseMessageFilesForRender,
+  shouldRenderChatMessage,
+} from "@/lib/chat/message-rendering"
+import {
+  attachmentHasPreviewSource,
+  buildAgentFileMetadata,
+  collectUploadFileIds,
+  getAudioMediaMeta,
+  getFileProcessingStage,
+  isAudioComposerFile,
+  isComposerFileProcessingPending,
+  collectProcessingFileIds,
+  isComposerFileUploadFailed,
+  isComposerFileUploadPending,
+  isVideoComposerFile,
+  previewAttachmentKey,
+  resolveComposerMediaSrc,
+  resolveUploadFileId,
+  snapshotComposerFilesForMessage,
+} from "@/lib/chat/composer-files"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
+import {
+  adoptUnboundComposerQueueItems,
+  createPersistedComposerQueueItem,
+  readPersistedComposerQueue,
+  writePersistedComposerQueue,
+  type PersistedComposerQueueItem,
+} from "@/lib/chat/composer-queue"
+import {
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_IMAGE_PROVIDER,
+  DEFAULT_VIDEO_DURATION,
+  DEFAULT_VIDEO_MODEL,
+  IMAGE_ASPECT_RATIO_OPTIONS,
+  IMAGE_COUNT_OPTIONS,
+  IMAGE_QUALITY_OPTIONS,
+  MUSIC_EFFECT_OPTIONS,
+  MUSIC_MOOD_OPTIONS,
+  MUSIC_STYLE_OPTIONS,
+  MUSIC_STYLE_PROFILES,
+  VIDEO_ASPECT_RATIO_OPTIONS,
+  VIDEO_RESOLUTION_OPTIONS,
+  VOICE_ACCENT_OPTIONS,
+  VOICE_COMPOSER_PLACEHOLDER,
+  VOICE_EFFECT_OPTIONS,
+  VOICE_LANGUAGE_OPTIONS,
+  filterAdminVisibleVideoModels,
+  isAdminVisibleVideoModel,
+  isImageModelEntry,
+  isVideoModelEntry,
+  providerForMediaModel,
+  readStoredVoiceSetting,
+  writeStoredVoiceSettings,
+  isSiraVozModel,
+  readStoredVoiceStudioVoice,
+  writeStoredVoiceStudioVoice,
+  type ImageAspectRatio,
+  type ImageGenerationCount,
+  type ImageQuality,
+  type MusicEffect,
+  type MusicModel,
+  type MusicMood,
+  type MusicStyle,
+  type VideoAspectRatio,
+  type VideoDuration,
+  type VideoResolution,
+  type VoiceAccent,
+  type VoiceEffect,
+  type VoiceLanguage,
+  type VoiceModel,
+} from "@/lib/chat/media-composer-config"
+import { detectComposerAutoMode, type ComposerAutoMode } from "@/lib/chat/composer-auto-mode"
+import {
+  MEDIA_MENU_DOT_CLASS,
+  MEDIA_MENU_ICON_GLYPH_CLASS,
+  MEDIA_MENU_ICON_WRAP_CLASS,
+  MEDIA_MODE_CHIP_CLOSE_CLASS,
+  VOICE_STABILITY_SLIDER_CLASS,
+  mediaModeChipChrome,
+} from "@/lib/chat/media-mode-chips"
+import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from "@/lib/chat/video-duration"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
 // contexts (preview iframes, denied permission, insecure origin) and, when not
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
+import {
+  clearPinnedModel,
+  getPinnedModel,
+  isPinnedModel,
+  setLastModel,
+  setPinnedModel,
+} from "@/lib/chat/model-preference"
+import {
+  enrichImageFilesWithClientOcr,
+  isWeakOcrText,
+  looksLikeTranscriptionRequest,
+  recognizeImageWithRetry,
+} from "@/lib/chat/ocr-preprocess"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
+
+function ChatToolPanelLoading({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex min-h-28 items-center justify-center gap-3 rounded-xl border border-border/50 bg-muted/20 p-6 text-sm text-muted-foreground"
+    >
+      <span className="h-2.5 w-2.5 rounded-full bg-primary motion-safe:animate-pulse" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  )
+}
 
 const GPT_RATING_OPTIONS = [
   { value: 1, label: "Muy malo" },
@@ -257,24 +463,6 @@ const GPT_RATING_OPTIONS = [
 const getGptRatingLabel = (rating: number): string =>
   GPT_RATING_OPTIONS.find((option) => option.value === rating)?.label || ""
 
-const resolveUploadFileId = (file: any): string | null => {
-  if (!file) return null
-  if (typeof file === "string") return file
-  return file.id || file.fileId || file.attachmentId || null
-}
-
-const collectUploadFileIds = (files: any[] = []): string[] =>
-  files.map(resolveUploadFileId).filter((id): id is string => Boolean(id))
-
-const attachmentHasPreviewSource = (attachment: AttachmentLike | null | undefined): boolean =>
-  Boolean(attachment?.file || attachment?.url || attachment?.extractedText)
-
-const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): string =>
-  String(attachment?.id || attachment?.url || attachment?.name || "")
-
-const isComposerFileUploadPending = (file: any): boolean =>
-  Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
-
 // Universal ingest: pasted plain text longer than this becomes a "PEGADO"
 // (.txt) chip next to the input — expandable/removable — so the bar stays
 // clean. Shorter pastes insert inline at the caret. Configurable per
@@ -284,120 +472,121 @@ const LONG_PASTE_CHIP_THRESHOLD = (() => {
   return Number.isFinite(n) && n > 0 ? n : 1500
 })()
 
-const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
-const PROCESSING_CONTEXT_MIME_RE =
-  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument|rtf)|text\/(?:plain|markdown|csv|tab-separated-values|html|xml)|application\/(?:json|xml))/i
-
-const shouldWaitForDocumentProcessing = (file: any): boolean => {
-  if (!file || !resolveUploadFileId(file)) return false
-  const name = String(file.name || file.originalName || file.filename || "")
-  const mime = String(file.mimeType || file.type || file.contentType || "")
-  return PROCESSING_CONTEXT_EXT_RE.test(name) || PROCESSING_CONTEXT_MIME_RE.test(mime)
-}
-
-const getFileProcessingStage = (file: any): FileProcessingStage | null => {
-  const stage = file?.processingStage || file?.stage || null
-  return typeof stage === "string" ? stage as FileProcessingStage : null
-}
-
-const isComposerFileProcessingPending = (file: any): boolean =>
-  shouldWaitForDocumentProcessing(file) && isActiveProcessingStage(getFileProcessingStage(file))
-
-const isComposerFileUploadFailed = (file: any): boolean =>
-  Boolean(file && (file.status === "failed" || getFileProcessingStage(file) === "failed"))
-
 const normalizePlanName = (plan?: string | null): string =>
   String(plan || "FREE").trim().toUpperCase()
 
 const isFreePlanName = (plan?: string | null): boolean =>
   normalizePlanName(plan) === "FREE"
 
-const sanitizeLongPasteMetaForMessage = (meta: any) => {
-  if (!meta || meta.kind !== "long_paste_document") return null
-  return {
-    kind: "long_paste_document",
-    title: meta.title,
-    filename: meta.filename,
-    preview: meta.preview,
-    originalCharCount: meta.originalCharCount,
-    originalWordCount: meta.originalWordCount,
-    originalLineCount: meta.originalLineCount,
-    createdAt: meta.createdAt,
-  }
-}
+const AGENT_TASK_STATE_FENCE = /```agent-task-state\s*\n?([\s\S]*?)\n?```/i
 
-const buildAgentFileMetadata = (files: any[] = []) =>
-  files
-    .map((file) => {
-      const id = resolveUploadFileId(file)
-      if (!id) return null
-      const longPasteMeta = getLongPasteMetadata(file)
-      const safeLongPasteMeta = sanitizeLongPasteMetaForMessage(longPasteMeta)
-      const displayName =
-        safeLongPasteMeta?.title ||
-        file?.longPasteTitle ||
-        file?.originalName ||
-        file?.name ||
-        file?.filename ||
-        "archivo"
-
-      return {
-        id,
-        name: displayName,
-        originalName: displayName,
-        filename: file?.filename || file?.name || displayName,
-        mimeType: file?.mimeType || file?.type || file?.contentType || null,
-        type: file?.type || file?.mimeType || file?.contentType || null,
-        size: file?.size ?? null,
-        url: file?.url || null,
-        openaiFileId: file?.openaiFileId || null,
-        sourceChannel: file?.sourceChannel || null,
-        isLongPasteDocument: Boolean(file?.isLongPasteDocument || safeLongPasteMeta),
-        longPasteTitle: safeLongPasteMeta?.title || file?.longPasteTitle || null,
-        longPastePreview: safeLongPasteMeta?.preview || file?.longPastePreview || null,
-        longPasteMeta: safeLongPasteMeta,
-      }
-    })
-    .filter(Boolean)
-
-const parseMessageFilesForRender = (files: any): any[] => {
-  if (!files) return []
-  if (Array.isArray(files)) return files
-  if (typeof files !== "string") return []
+const parseAgentTaskMessageMetadata = (metadata: unknown): Record<string, any> => {
+  if (!metadata) return {}
+  if (typeof metadata === "object") return metadata as Record<string, any>
+  if (typeof metadata !== "string") return {}
   try {
-    const parsed = JSON.parse(files)
-    return Array.isArray(parsed) ? parsed : []
+    const parsed = JSON.parse(metadata)
+    return parsed && typeof parsed === "object" ? parsed : {}
   } catch {
-    return []
+    return {}
   }
 }
 
-const CHAT_UPLOAD_REQUEST_MAX_FILES = 50
-const CHAT_UPLOAD_REQUEST_MAX_BYTES = 220 * 1024 * 1024
+const normalizeRecoveredAgentTaskState = (value: unknown, taskId?: string | null): AgentTaskState => {
+  const parsed = value && typeof value === "object"
+    ? value as Partial<AgentTaskState> & { taskId?: unknown; status?: unknown }
+    : {}
+  const legacyTaskId = typeof parsed.taskId === "string" && parsed.taskId.trim()
+    ? parsed.taskId.trim()
+    : null
+  const normalizedTaskId = taskId || parsed.meta?.taskId || legacyTaskId
+  const normalizedStatus = String(parsed.status || "").toLowerCase()
+  return {
+    ...initialAgentState,
+    ...parsed,
+    meta: normalizedTaskId
+      ? { ...(parsed.meta || {}), taskId: normalizedTaskId }
+      : parsed.meta,
+    steps: Array.isArray(parsed.steps)
+      ? parsed.steps.map(step => ({ ...step, toolCalls: Array.isArray(step?.toolCalls) ? step.toolCalls : [] }))
+      : [],
+    artifacts: Array.isArray(parsed.artifacts) ? parsed.artifacts : [],
+    approvals: Array.isArray(parsed.approvals) ? parsed.approvals : [],
+    checkpoints: Array.isArray(parsed.checkpoints) ? parsed.checkpoints : [],
+    qualityGates: Array.isArray(parsed.qualityGates) ? parsed.qualityGates : [],
+    repairs: Array.isArray(parsed.repairs) ? parsed.repairs : [],
+    documentAnalysisIds: Array.isArray(parsed.documentAnalysisIds) ? parsed.documentAnalysisIds : [],
+    evidenceRefs: Array.isArray(parsed.evidenceRefs) ? parsed.evidenceRefs : [],
+    finalText: typeof parsed.finalText === "string" ? parsed.finalText : "",
+    done: Boolean(parsed.done) || normalizedStatus === "completed",
+  }
+}
 
-function buildChatUploadChunks(files: File[], tempFiles: any[]) {
-  const chunks: Array<{ files: File[]; temps: any[] }> = []
-  let currentFiles: File[] = []
-  let currentTemps: any[] = []
-  let currentBytes = 0
+const parseAgentTaskMessageState = (content: unknown): AgentTaskState | null => {
+  if (typeof content !== "string") return null
+  const match = content.match(AGENT_TASK_STATE_FENCE)
+  if (!match?.[1]) return null
+  try {
+    return normalizeRecoveredAgentTaskState(JSON.parse(match[1]))
+  } catch {
+    return null
+  }
+}
 
-  files.forEach((file, index) => {
-    const fileBytes = Number(file.size || 0)
-    const wouldOverflowCount = currentFiles.length >= CHAT_UPLOAD_REQUEST_MAX_FILES
-    const wouldOverflowBytes = currentFiles.length > 0 && currentBytes + fileBytes > CHAT_UPLOAD_REQUEST_MAX_BYTES
-    if (wouldOverflowCount || wouldOverflowBytes) {
-      chunks.push({ files: currentFiles, temps: currentTemps })
-      currentFiles = []
-      currentTemps = []
-      currentBytes = 0
+const serializeRecoveredAgentTaskState = (state: AgentTaskState): string => {
+  const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```'
+  return state.finalText ? `${fenced}\n\n${state.finalText}` : fenced
+}
+
+const getAgentTaskIdFromMessage = (message: any, state?: AgentTaskState | null): string | null => {
+  const metadata = parseAgentTaskMessageMetadata(message?.metadata)
+  const raw = state?.meta?.taskId || (state as AgentTaskState & { taskId?: unknown } | null)?.taskId || metadata.taskId
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null
+}
+
+const findRecoverableAgentTaskMessage = (messages: any[] = [], taskId?: string | null) => {
+  const unidentified: Array<{ message: any; state: AgentTaskState; taskId: null }> = []
+  let totalCandidates = 0
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    if (parseDocumentJobPointer(message.metadata)) continue // this durable job has its own authenticated recovery contract
+    const state = parseAgentTaskMessageState(message?.content)
+    if (!state || state.done) continue
+    totalCandidates += 1
+    const messageTaskId = getAgentTaskIdFromMessage(message, state)
+    if (taskId) {
+      if (messageTaskId === taskId) return { message, state, taskId: messageTaskId }
+      if (!messageTaskId) unidentified.push({ message, state, taskId: null })
+      continue
     }
-    currentFiles.push(file)
-    currentTemps.push(tempFiles[index])
-    currentBytes += fileBytes
-  })
+    return { message, state, taskId: messageTaskId }
+  }
+  // A single pre-task-id legacy bubble is safe to adopt. With two or more,
+  // creating a fresh task-specific bubble is preferable to overwriting the
+  // wrong historical execution.
+  return taskId && totalCandidates === 1 && unidentified.length === 1 ? unidentified[0] : null
+}
 
-  if (currentFiles.length > 0) chunks.push({ files: currentFiles, temps: currentTemps })
-  return chunks
+const isTerminalAgentTaskStatus = (status: unknown): boolean =>
+  new Set(["completed", "cancelled", "canceled", "error", "failed"])
+    .has(String(status || "").toLowerCase())
+
+const waitForAgentTaskRecoveryPoll = (ms: number, signal: AbortSignal): Promise<void> => {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      signal.removeEventListener("abort", finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal.addEventListener("abort", finish, { once: true })
+  })
 }
 
 const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
@@ -441,25 +630,6 @@ const collectLatestGeneratedImageUrls = (messages: any[] = [], maxImages = 4) =>
   return []
 }
 
-const hasMessageTextForRender = (content: any): boolean => {
-  if (typeof content === "string") return content.trim().length > 0
-  if (content == null) return false
-  return String(content).trim().length > 0
-}
-
-const shouldRenderChatMessage = (message: any, allowEmptyStreamingAssistant = false): boolean => {
-  if (!message) return false
-  const role = String(message.role || "").toUpperCase()
-  if (role === "USER") return true
-  if (message.error || message.progressStage) return true
-  if (hasMessageTextForRender(message.content)) return true
-  if (parseMessageFilesForRender(message.files).length > 0) return true
-  return allowEmptyStreamingAssistant && role === "ASSISTANT"
-}
-
-const isAssistantMessage = (message: any): boolean =>
-  String(message?.role || "").toUpperCase() === "ASSISTANT"
-
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -489,128 +659,6 @@ type SearchActivityState = {
   selectedSources?: AgenticSource[]
   elapsedMs?: number
   entries: SearchActivityEntry[]
-}
-
-type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
-type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
-type ImageQuality = "512px" | "1K" | "2K" | "4K"
-type VideoResolution = "480p" | "720p"
-type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
-type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
-type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
-type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
-type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
-type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
-type MusicModel = "ElevenLabs" | "Lyria 3 Pro" | "Mimo Max 02HD"
-type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orchestral" | "Latin" | "Hip-Hop" | "Jazz"
-type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
-type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
-
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
-  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]", visibleByDefault: true },
-  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8", visibleByDefault: true },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6", visibleByDefault: true },
-  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
-  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9", visibleByDefault: true },
-]
-
-const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
-const IMAGE_COUNT_OPTIONS: ImageGenerationCount[] = [1, 2, 3, 4, 5]
-const VIDEO_RESOLUTION_OPTIONS: VideoResolution[] = ["480p", "720p"]
-const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
-  { value: "auto", label: "Auto", ratio: "Auto", className: "h-6 w-6", visibleByDefault: true },
-  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[16px] w-8", visibleByDefault: true },
-  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[16px]", visibleByDefault: true },
-  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
-  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-[22px] w-8", visibleByDefault: true },
-  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
-  { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
-]
-const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-const VOICE_MODEL_OPTIONS: VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
-const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
-const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
-const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
-const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Max 02HD"]
-const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
-const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
-const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
-const MUSIC_STYLE_PROFILES: Record<MusicStyle, { label: string; description: string; accentClass: string }> = {
-  Auto: {
-    label: "Auto",
-    description: "Deja que el modelo elija el genero segun tu prompt.",
-    accentClass: "bg-zinc-900 dark:bg-white",
-  },
-  Cinematic: {
-    label: "Cinematic",
-    description: "Texturas amplias, tension y final de trailer.",
-    accentClass: "bg-violet-500",
-  },
-  Pop: {
-    label: "Pop",
-    description: "Hook claro, bateria pulida y estructura comercial.",
-    accentClass: "bg-pink-500",
-  },
-  Electronic: {
-    label: "Electronic",
-    description: "Sintetizadores, pulso moderno y energia digital.",
-    accentClass: "bg-cyan-500",
-  },
-  Ambient: {
-    label: "Ambient",
-    description: "Capas suaves, atmosfera y movimiento discreto.",
-    accentClass: "bg-teal-500",
-  },
-  Orchestral: {
-    label: "Orchestral",
-    description: "Cuerdas, metales y dinamica de partitura.",
-    accentClass: "bg-amber-500",
-  },
-  Latin: {
-    label: "Latin",
-    description: "Ritmo calido, percusion marcada y sabor latino.",
-    accentClass: "bg-red-500",
-  },
-  "Hip-Hop": {
-    label: "Hip-Hop",
-    description: "Beat con groove, bajo presente y espacio vocal.",
-    accentClass: "bg-slate-700 dark:bg-slate-300",
-  },
-  Jazz: {
-    label: "Jazz",
-    description: "Armonia rica, swing sutil e instrumentacion organica.",
-    accentClass: "bg-emerald-600",
-  },
-}
-const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"
-
-const DEFAULT_IMAGE_MODEL = ""
-const DEFAULT_IMAGE_PROVIDER = "OpenAI"
-const DEFAULT_VIDEO_MODEL = ""
-const DEFAULT_VIDEO_DURATION: VideoDuration = 8
-
-const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
-  const value = String(modelName || "").toLowerCase()
-  if (value.includes("/")) return "OpenRouter"
-  if (value.includes("openrouter") || value.includes("seedream")) return "OpenRouter"
-  if (value.includes("google") || value.includes("imagen") || value.includes("gemini") || value.includes("veo")) return "Google"
-  if (value.includes("kling")) return "Kling"
-  if (value.includes("openai") || value.includes("dall") || value.includes("gpt-image")) return "OpenAI"
-  return fallback
-}
-
-const isImageModelEntry = (model: any) => {
-  const type = String(model?.type || model?.kind || '').toLowerCase();
-  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
-  return type === 'image' || type === 'images' || type.includes('image') || /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i.test(label);
-}
-
-const isVideoModelEntry = (model: any) => {
-  const type = String(model?.type || model?.kind || '').toLowerCase();
-  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
-  return type === 'video' || type === 'videos' || type.includes('video') || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label);
 }
 
 // `ImageAspectRatioMark` was extracted to
@@ -1154,6 +1202,7 @@ const ActionsDropdown = ({
   setIsExcelConnectorActive,
   setShowAudioPanel,
   setAudioTab,
+  openVoicePanel,
   handleAndUploadFiles,
   isUploading,
   isWebSearching,
@@ -1291,7 +1340,6 @@ const ActionsDropdown = ({
     setChatType('computer-use');
     setIsOpen(false);
   };
-
 
   const isMenuDisabled = isLoading || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
@@ -1552,43 +1600,22 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Subir archivos</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isUploading ? 'Subiendo…' : 'Imágenes, PDFs, documentos'}
+                  {isUploading ? 'Subiendo…' : 'Cualquier formato: documentos, código, datos, imágenes, audio, video'}
                 </div>
               </div>
             </div>
           </DropdownMenuItem>
+          {/* No `accept` filter on purpose: the picker offers every file the OS
+              can hand us. Size caps, Office lock-file detection and the
+              backend byte-level policy still run on every selection. */}
           <input
             ref={fileInputRef}
             type="file"
             multiple
             className="hidden"
-            accept="image/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
+            data-accepts-any-format="true"
             onChange={handleFilesSelected}
           />
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onSelect={(event) => {
-              event.preventDefault();
-              setChatType('text');
-              setIsWorkModeActive(!isWorkModeActive);
-              setIsOpen(false);
-            }}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-950/40">
-                <BriefcaseBusiness className="h-4 w-4 text-[#FF0000]" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">
-                  {isWorkModeActive ? 'Trabajo activo' : 'Trabajo'}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  Planifica, ejecuta y entrega archivos
-                </div>
-              </div>
-              {isWorkModeActive && <div className="h-2 w-2 shrink-0 rounded-full bg-[#FF0000]" />}
-            </div>
-          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -1610,6 +1637,27 @@ const ActionsDropdown = ({
               {isWebSearchActive && (
                 <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
+            </div>
+          </DropdownMenuItem>
+          {/* Voice mode. This used to be reachable only by pressing the
+              composer's primary button while it was empty, where it rendered as
+              a waveform icon sitting right next to the dictation mic — two
+              adjacent speech affordances with no way to tell them apart. The
+              primary button is now always Send, so voice mode lives here. */}
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onClick={() => openVoicePanel?.()}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
+                <AudioLines className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">Modo de voz</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Habla en lugar de escribir
+                </div>
+              </div>
             </div>
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -1683,8 +1731,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-pink-100 dark:bg-pink-900/20 flex items-center justify-center">
-                <Palette className="h-4 w-4 text-pink-600 dark:text-pink-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Palette className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1695,7 +1743,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 shrink-0 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn(MEDIA_MENU_DOT_CLASS, isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1710,8 +1758,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
-                <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <AudioLines className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">{isVoiceGenerationActive ? 'Voz activa' : 'Voz'}</div>
@@ -1720,7 +1768,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isVoiceGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-cyan-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1735,8 +1783,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
-                <Video className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Video className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1747,7 +1795,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isVideoGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1762,8 +1810,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
-                <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Music className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1774,7 +1822,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-rose-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1782,35 +1830,7 @@ const ActionsDropdown = ({
             </div>
           </DropdownMenuItem>
 
-          {/* Thesis Generation */}
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onClick={() => {
-              setChatType('thesis');
-              setIsOpen(false);
-            }}
-            disabled={isPremiumPreviewSwitchDisabled}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
-                <GraduationCap className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">
-                  {chatType === 'thesis' ? 'Generador de tesis activo' : 'Generador de tesis'}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de tesis académica' : 'Genera tesis académicas completas'}
-                </div>
-              </div>
-              {chatType === 'thesis' && (
-                <div className="w-2 h-2 shrink-0 bg-purple-500 rounded-full" />
-              )}
-              {isFreePlan && (
-                <Badge variant="secondary" className="text-xs">Pro</Badge>
-              )}
-            </div>
-          </DropdownMenuItem>      </DropdownMenuContent>
+        </DropdownMenuContent>
       </DropdownMenu>
     </TooltipProvider>
   );
@@ -1900,7 +1920,7 @@ const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
     {peaks.slice(0, 36).map((p, i) => (
       <span
         key={i}
-        className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+        className="w-[2px] rounded-full bg-zinc-900/70 dark:bg-zinc-100/70"
         style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
       />
     ))}
@@ -1956,11 +1976,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
     if (viewingIndex === null) return null;
     const f = uploadedFiles[viewingIndex];
     if (!f) return null;
-    return toDocumentViewerAttachment(f);
-  }, [viewingIndex, uploadedFiles]);
+    return toDocumentViewerAttachmentWithProgress(f, uploadProgress);
+  }, [viewingIndex, uploadedFiles, uploadProgress]);
   const viewerSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles]
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress]
   );
 
   React.useEffect(() => {
@@ -1992,13 +2012,13 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
   if (uploadedFiles.length === 0) return null;
 
   return (
-    <div className="p-3  bg-background">
+    <div className="composer-attachment-rail">
       {/* aria-live announcer so keyboard reordering is narrated. */}
       <span aria-live="polite" className="sr-only">{reorderAnnouncement}</span>
       <div
         role="list"
         aria-label="Archivos adjuntos"
-        className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto"
+        className="flex flex-wrap items-end gap-2"
       >
         <AnimatePresence initial={false}>
         {uploadedFiles.map((file, index) => {
@@ -2011,9 +2031,12 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
             : (rawProgress || 0);
           const isFailed = file.status === 'failed';
           const longPasteMeta = getLongPasteMetadata(file);
-          const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
+          const imageSizeClass = uploadedFiles.length > 1 ? 'h-[4.5rem] w-[4.5rem]' : 'h-20 w-20';
           const attachment = viewerSiblings[index];
-          const canPreview = !isFailed && attachmentHasPreviewSource(attachment);
+          const canPreview = !isFailed
+            && !isUploading
+            && canOpenComposerPreview({ id: resolveUploadFileId(file), status: file.status })
+            && attachmentHasPreviewSource(attachment);
           const openPreview = () => {
             if (!canPreview || !attachment) return;
             if (onPreviewAttachment) {
@@ -2024,9 +2047,19 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           };
 
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
-          const isAudio = (file.type || '').startsWith('audio/');
-          const isVideo = (file.type || '').startsWith('video/');
+          const isAudio = isAudioComposerFile(file);
+          const isVideo = isVideoComposerFile(file);
+          const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
+            && isPagePreviewDocument(file.name, file.type || file.mimeType);
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
+          const thumbProgress = describeComposerDocumentThumb({
+            uploading: isUploading,
+            uploadProgress: progress,
+            status: file.status,
+            stage: getFileProcessingStage(file),
+            error: file.processingError || file.uploadError,
+          });
+          const docBusy = thumbProgress.busy;
           const handleReorder = (delta: -1 | 1) => {
             if (!moveFile) return;
             const target = index + delta;
@@ -2044,15 +2077,29 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
               exit={{ opacity: 0, scale: 0.85, y: 8 }}
               transition={{ type: 'spring', stiffness: 420, damping: 30, mass: 0.7 }}
               className={cn(
-                "relative text-sm rounded-xl",
-                "border",
-                isFailed ? "border-red-300 dark:border-red-700/50" : "border-gray-200 dark:border-border/60",
-                isImage ? `${imageSizeClass} p-0` : "flex items-center gap-2 px-2 py-1",
+                "relative text-sm",
+                "border bg-background/90",
+                isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70",
+                isImage
+                  ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
+                  : isDocPage
+                    ? "h-[7.75rem] w-[5.7rem] overflow-hidden rounded-[0.9rem] p-0 shadow-sm"
+                    : isVideo
+                      ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
+                      : isAudio
+                        ? "min-w-[14.5rem] max-w-[22rem] overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
+                    : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
-                canPreview && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
+                canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
-              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
+              title={isFailed
+                ? `Subida fallida: ${file.uploadError || 'error'}`
+                : isUploading
+                  ? 'Subiendo…'
+                  : canPreview
+                    ? (thumbProgress.busy && thumbProgress.label ? `Ver documento · ${thumbProgress.label}` : 'Ver documento')
+                    : (thumbProgress.label || 'Preparando documento')}
               onClick={openPreview}
               role="listitem"
               aria-label={chipLabel}
@@ -2123,20 +2170,99 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
                   </Button>
                 </>
+              ) : isDocPage ? (
+                <>
+                  <FileProcessingStatusSync
+                    fileId={isUploading ? null : file.id}
+                    onReady={() => toast.success(`Documento listo: ${file.name}`)}
+                    onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
+                  />
+                  <DocumentPageThumb
+                    source={{
+                      id: file.id,
+                      name: file.name,
+                      mimeType: file.type || file.mimeType,
+                      size: file.size,
+                      file: getAttachmentLocalFile(file),
+                      url: file.url,
+                    }}
+                    busy={docBusy}
+                    progress={isUploading ? progress : null}
+                    label={thumbProgress.label}
+                  />
+                  {isFailed && retryUpload && (
+                    <div className="absolute inset-0 bg-red-900/55 flex flex-col items-center justify-center gap-1 rounded-[0.9rem]">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-full bg-white/95 hover:bg-white text-red-600"
+                        onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                        title="Reintentar subida"
+                        aria-label="Reintentar subida"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                      <span className="max-w-[90%] truncate px-1 text-center text-[9.5px] text-white font-medium">
+                        {thumbProgress.label || "Reintentar"}
+                      </span>
+                    </div>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isVideo ? (
+                <>
+                  <ChatVideoPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    poster={file.mediaMeta?.thumbnailDataUrl || file.thumbnailUrl || null}
+                    title={file.name || "video"}
+                    durationSeconds={file.mediaMeta?.durationSeconds}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isAudio ? (
+                <>
+                  <ChatAudioPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    title={file.name || "audio"}
+                    durationSeconds={getAudioMediaMeta(file)?.durationSeconds}
+                    peaks={getAudioMediaMeta(file)?.peaks}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
               ) : (
                 <>
-                  {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
-                    <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
-                      <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
-                      {formatChipDuration(file.mediaMeta?.durationSeconds) && (
-                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
-                          {formatChipDuration(file.mediaMeta?.durationSeconds)}
-                        </span>
-                      )}
-                    </span>
-                  ) : (
-                    getFileIcon(file)
-                  )}
+                  {getFileIcon(file)}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
                       {longPasteMeta && (
@@ -2219,6 +2345,16 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                           <span className="text-muted-foreground">{"\n"}… ({Intl.NumberFormat('es').format(longPasteMeta.originalCharCount)} caracteres en total)</span>
                         )}
                       </pre>
+                    )}
+                    {/* The "PEGADO" card renders no progress bar, but it still
+                        needs the headless poller: without it the chip stays
+                        "processing" after the backend is ready and the send
+                        button keeps asking to wait for the file. */}
+                    {!isFailed && longPasteMeta && !isUploading && file.id && (
+                      <FileProcessingStatusSync
+                        fileId={file.id}
+                        onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
+                      />
                     )}
                     {!isFailed && !longPasteMeta && (isUploading || file.id) && (
                       <div className="mt-1">
@@ -2313,6 +2449,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect,
   onOpenVoiceCatalog,
   selectedVoiceName,
+  onOpenVoiceStudio,
+  selectedSiraVoiceName,
   isMusicGenerationActive,
   setIsMusicGenerationActive,
   selectedMusicModel,
@@ -2404,6 +2542,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
   onOpenVoiceCatalog: () => void;
   selectedVoiceName?: string | null;
+  onOpenVoiceStudio: (tab?: "voices" | "dub" | "transcribe" | "audiobook" | "jobs") => void;
+  selectedSiraVoiceName?: string | null;
   isMusicGenerationActive: boolean;
   setIsMusicGenerationActive: (value: boolean) => void;
   selectedMusicModel: MusicModel;
@@ -2467,7 +2607,6 @@ const ActiveToolsDisplay = ({
 }) => {
   const [showAllImageRatios, setShowAllImageRatios] = React.useState(false);
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
-  const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeComputerUseMode = computerUseAppMode || "computer";
   const computerUseAppMeta: Record<ComputerUseAppMode, { label: string; icon: JSX.Element }> = {
     browser: { label: "Navegador", icon: <AppWindow className="h-4 w-4" /> },
@@ -2597,8 +2736,17 @@ const ActiveToolsDisplay = ({
 
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
-    const pickByKind = (kind: "image" | "video") => {
-      const predicate = kind === "image" ? isImageModelEntry : isVideoModelEntry;
+    const pickByKind = (kind: "image" | "video" | "voice" | "music") => {
+      // Video: admin catalog only (type=VIDEO + isActive). Hidden/unknown = omit.
+      // Voice: the backend answers the Voz chip with AUDIO (TTS) rows — the
+      // VOICE alias never survives Prisma — so both shapes count as voice.
+      const predicate = kind === "image"
+        ? isImageModelEntry
+        : kind === "video"
+          ? isAdminVisibleVideoModel
+          : kind === "voice"
+            ? (model: any) => (model?.type === "VOICE" || model?.type === "AUDIO") && model?.isActive === true
+            : (model: any) => model?.type === kind.toUpperCase() && model?.isActive === true;
       return models.filter(predicate);
     };
     const normalize = (model: any) => ({
@@ -2612,22 +2760,14 @@ const ActiveToolsDisplay = ({
 
     const imageModels = pickByKind("image").map(normalize);
     const videoModels = pickByKind("video").map(normalize);
+    const voiceModels = pickByKind("voice").map(normalize);
+    const musicModels = pickByKind("music").map(normalize);
 
     return {
       image: imageModels,
       video: videoModels,
-      voice: VOICE_MODEL_OPTIONS.map((name) => ({
-        name,
-        displayName: name,
-        provider: name === "ElevenLabs" ? "ElevenLabs" : "Google",
-        iconName: name.startsWith("Gemini") ? "GeminiLogo" : "Bot",
-      })),
-      music: MUSIC_MODEL_OPTIONS.map((name) => ({
-        name,
-        displayName: name,
-        provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
-        iconName: name === "Lyria 3 Pro" ? "GeminiLogo" : "Bot",
-      })),
+      voice: voiceModels,
+      music: musicModels,
     };
   }, [availableModels]);
 
@@ -2655,6 +2795,37 @@ const ActiveToolsDisplay = ({
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
 
+  React.useEffect(() => {
+    if (!isVoiceGenerationActive) return;
+    const voiceOptions = mediaModelOptions.voice;
+    if (!voiceOptions.length) {
+      if (selectedVoiceModel) setSelectedVoiceModel("" as VoiceModel);
+      return;
+    }
+    if (!voiceOptions.some((option: any) => option.name === selectedVoiceModel)) {
+      setSelectedVoiceModel(voiceOptions[0].name as VoiceModel);
+    }
+  }, [isVoiceGenerationActive, mediaModelOptions.voice, selectedVoiceModel, setSelectedVoiceModel]);
+
+  React.useEffect(() => {
+    if (!isMusicGenerationActive) return;
+    const musicOptions = mediaModelOptions.music;
+    if (!musicOptions.length) {
+      if (selectedMusicModel) setSelectedMusicModel("" as MusicModel);
+      return;
+    }
+    if (!musicOptions.some((option: any) => option.name === selectedMusicModel)) {
+      setSelectedMusicModel(musicOptions[0].name as MusicModel);
+    }
+  }, [isMusicGenerationActive, mediaModelOptions.music, selectedMusicModel, setSelectedMusicModel]);
+
+  React.useEffect(() => {
+    const fal = (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal
+    const durationSpec = resolveVideoDurationSpec(selectedVideoModel, fal)
+    const next = clampVideoDuration(selectedVideoDuration, durationSpec, undefined, selectedVideoResolution)
+    if (next != null && next !== selectedVideoDuration) setSelectedVideoDuration(next)
+  }, [availableModels, selectedVideoModel, selectedVideoDuration, selectedVideoResolution, setSelectedVideoDuration]);
+
   // Activate a model chosen from the floating fal.ai model gallery (mounted at
   // the page level, decoupled from this composer). Image/video map onto the
   // string-based pickers; audio/3d selections only surface the launcher toast.
@@ -2663,11 +2834,17 @@ const ActiveToolsDisplay = ({
       const model = (e as CustomEvent).detail as { id?: string; group?: string } | undefined;
       if (!model || !model.id) return;
       if (model.group === "image") setSelectedImageModel(model.id);
-      else if (model.group === "video") setSelectedVideoModel(model.id);
+      else if (model.group === "video") {
+        // Hidden/disabled admin VIDEO rows must not become selectable via the gallery.
+        const allowed = (Array.isArray(availableModels) ? availableModels : []).some(
+          (entry: any) => isAdminVisibleVideoModel(entry) && String(entry?.name || "") === model.id,
+        );
+        if (allowed) setSelectedVideoModel(model.id);
+      }
     };
     window.addEventListener("siragpt:fal-model-selected", handler as EventListener);
     return () => window.removeEventListener("siragpt:fal-model-selected", handler as EventListener);
-  }, [setSelectedImageModel, setSelectedVideoModel]);
+  }, [availableModels, setSelectedImageModel, setSelectedVideoModel]);
 
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
@@ -2676,7 +2853,9 @@ const ActiveToolsDisplay = ({
   ) => {
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
-    const label = selected?.displayName || (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
+    const label = selected
+      ? brandModelLabel(selected)
+      : "Sin modelos activos";
     const disabled = options.length === 0;
 
     return (
@@ -2685,9 +2864,9 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
+            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[200px] sm:max-w-[300px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
             aria-label={`Seleccionar modelo de ${tool}`}
-            title={`Modelo: ${label}`}
+            title={`Modelo: ${label}${selected?.provider ? ` · ${selected.provider}` : ""}`}
             disabled={disabled}
             data-media-tool={tool}
           >
@@ -2695,7 +2874,7 @@ const ActiveToolsDisplay = ({
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
               <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
-            <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
+            <span className="min-w-0 truncate max-w-[60px] sm:max-w-[200px]" title={label}>{label}</span>
             {!disabled && <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />}
           </Button>
         </DropdownMenuTrigger>
@@ -2723,8 +2902,8 @@ const ActiveToolsDisplay = ({
                       <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92">{option.displayName}</span>
-                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62">
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={brandModelLabel(option)}>{brandModelLabel(option)}</span>
+                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62" title={[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}>
                         {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
                       </span>
                     </span>
@@ -2884,8 +3063,8 @@ const ActiveToolsDisplay = ({
       {isImageGenerationActive && (
         <>
           <div
-            className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
-            style={{ "--image-liquid-red": "#FF0000" } as React.CSSProperties}
+            data-testid="imagenes-mode-chip"
+            className={mediaModeChipChrome("image").className}
           >
             <span className="image-liquid-chip__wave" />
             <span className="image-liquid-chip__gloss" />
@@ -2898,10 +3077,10 @@ const ActiveToolsDisplay = ({
               variant="ghost"
               size="sm"
               className={cn(
-                "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
+                MEDIA_MODE_CHIP_CLOSE_CLASS,
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-[rgba(255,0,0,0.10)] dark:hover:bg-[rgba(255,0,0,0.16)]"
+                  : ""
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -3042,16 +3221,16 @@ const ActiveToolsDisplay = ({
 
       {isVoiceGenerationActive && (
         <>
-          <div className="group/voice-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(34,211,238,0.0)_70deg,rgba(34,211,238,0.50)_135deg,rgba(6,182,212,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
-            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
+          <div data-testid="voz-mode-chip" className={mediaModeChipChrome("voice").className}>
+            <span className="media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/20" />
+            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
-            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-cyan-500 motion-safe:animate-pulse" />}
+            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-white motion-safe:animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleVoiceGenerationClose}
               disabled={isGeneratingVoice}
               title={isGeneratingVoice ? "La herramienta sigue activa durante la generación" : "Cerrar voz"}
@@ -3062,7 +3241,7 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Google", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : isSiraVozModel(name) ? "VoiceStudio" : "Google", surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
@@ -3073,11 +3252,41 @@ const ActiveToolsDisplay = ({
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
             aria-label="Abrir catálogo de voces"
-            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-violet-200/80 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-violet-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(124,58,237,0.5)] backdrop-blur-xl transition-all duration-200 hover:border-violet-300 hover:bg-white dark:border-violet-400/30 dark:bg-zinc-900/82 dark:text-violet-200 dark:hover:bg-zinc-800/92"
+            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
           >
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
           </button>}
+
+          {/* Sira Voz (VoiceStudio, local, gratis): the user's cloned voice +
+              the studio (clonar / doblar / transcribir / audiolibro). */}
+          {isSiraVozModel(selectedVoiceModel) && (
+            <>
+              <button
+                type="button"
+                data-testid="sira-voz-voice-pill"
+                onClick={() => onOpenVoiceStudio("voices")}
+                title="Elegir o clonar una voz"
+                aria-label={`Voz de Sira Voz: ${selectedSiraVoiceName || "predeterminada"}. Elegir o clonar una voz`}
+                className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+              >
+                <Mic className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 max-w-[110px] truncate">{selectedSiraVoiceName || "Voz de Sira"}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="sira-voz-studio-button"
+                onClick={() => onOpenVoiceStudio("dub")}
+                title="Estudio de voz: clonar, doblar vídeos, transcribir y crear audiolibros (gratis, 100 % local)"
+                aria-label="Abrir el estudio de voz"
+                className="group/voice-studio relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-950 bg-zinc-950 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-white shadow-[0_10px_24px_-20px_rgba(15,23,42,0.6)] transition-all duration-200 hover:bg-zinc-800 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <Clapperboard className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 hidden sm:inline">Estudio de voz</span>
+                <span className="relative z-10 sm:hidden">Estudio</span>
+              </button>
+            </>
+          )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -3100,21 +3309,24 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 py-1">
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de voz</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceModel}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceModel}>{selectedVoiceModel}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {VOICE_MODEL_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedVoiceModel === option && <Check className="h-3.5 w-3.5" />}
+                      {mediaModelOptions.voice.map((option: any) => (
+                        <DropdownMenuItem key={option.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option.name as VoiceModel)}>
+                          <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                          {selectedVoiceModel === option.name && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
                       ))}
+                      {mediaModelOptions.voice.length === 0 && (
+                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">Sin modelos activos</div>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -3122,7 +3334,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Language</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceLanguage}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceLanguage}>{selectedVoiceLanguage}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3139,7 +3351,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Accent</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceAccent}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceAccent}>{selectedVoiceAccent}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3167,14 +3379,14 @@ const ActiveToolsDisplay = ({
                     min={0}
                     max={100}
                     step={1}
-                    className="mt-2"
+                    className={VOICE_STABILITY_SLIDER_CLASS}
                   />
                 </div>
 
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceEffect}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedVoiceEffect}>{selectedVoiceEffect}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3199,15 +3411,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,63,94,0.0)_70deg,rgba(244,63,94,0.48)_135deg,rgba(225,29,72,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
+          <div data-testid="musica-mode-chip" className={mediaModeChipChrome("music").className}>
+            <span className="media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/20" />
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -3241,7 +3453,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 p-1.5">
                 <div className="px-2 pb-2 pt-1.5">
                   <div className="flex items-center justify-between gap-3">
@@ -3249,7 +3461,7 @@ const ActiveToolsDisplay = ({
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
                       <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
                     </div>
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-rose-200/80 bg-rose-50 text-rose-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200">
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-zinc-200/80 bg-zinc-50 text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-white/20 dark:bg-white/10 dark:text-white">
                       <Music className="h-4 w-4" />
                     </span>
                   </div>
@@ -3258,16 +3470,19 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Modelo de música</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicModel}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicModel}>{selectedMusicModel}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {MUSIC_MODEL_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedMusicModel === option && <Check className="h-3.5 w-3.5" />}
+                      {mediaModelOptions.music.map((option: any) => (
+                        <DropdownMenuItem key={option.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option.name as MusicModel)}>
+                          <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                          {selectedMusicModel === option.name && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
                       ))}
+                      {mediaModelOptions.music.length === 0 && (
+                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">Sin modelos activos</div>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -3278,7 +3493,7 @@ const ActiveToolsDisplay = ({
                       <span className="block leading-none">Estilo</span>
                       <span className="mt-1 block max-w-[150px] truncate text-[10.5px] font-medium leading-none text-zinc-500 dark:text-white/60">{MUSIC_STYLE_PROFILES[selectedMusicStyle].description}</span>
                     </span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72">{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-600 dark:text-white/72" title={MUSIC_STYLE_PROFILES[selectedMusicStyle].label}>{MUSIC_STYLE_PROFILES[selectedMusicStyle].label}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={10} alignOffset={-8} collisionPadding={12} className="liquid-menu-surface max-h-[min(25rem,calc(100vh-2rem))] w-[min(calc(100vw-1rem),19rem)] overflow-y-auto p-1.5">
@@ -3304,7 +3519,7 @@ const ActiveToolsDisplay = ({
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center justify-between gap-2">
                                 <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
-                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-300" />}
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-zinc-900 dark:text-white" />}
                               </span>
                               <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
                             </span>
@@ -3318,7 +3533,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Mood</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicMood}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicMood}>{selectedMusicMood}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3368,7 +3583,7 @@ const ActiveToolsDisplay = ({
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-10 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
                     <span>Effect</span>
-                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicEffect}</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62" title={selectedMusicEffect}>{selectedMusicEffect}</span>
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
@@ -3393,15 +3608,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="video-mode-chip group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]">
-            <span className="video-mode-chip-flow pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
+          <div data-testid="video-mode-chip" className={mediaModeChipChrome("video").className}>
+            <span className="video-mode-chip-flow media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/20" />
             <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-emerald-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -3504,35 +3719,68 @@ const ActiveToolsDisplay = ({
                 </section>
 
                 <section className="video-settings-section">
-                  <h3 className="video-settings-label">Duración</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Duración de video">
-                    {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= DEFAULT_VIDEO_DURATION).map(option => {
-                      const selected = option === selectedVideoDuration;
+                  {(() => {
+                    const durationSpec = resolveVideoDurationSpec(selectedVideoModel, (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal)
+                    const maxLabel = durationSpec.max != null ? `${durationSpec.max}s` : ""
+                    if (durationSpec.audioDriven) {
                       return (
-                        <button
-                          key={option}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setSelectedVideoDuration(option)}
-                          className={cn(
-                            "video-setting-pill min-w-8",
-                            selected && "is-selected"
-                          )}
-                        >
-                          {option}s
-                        </button>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] text-zinc-500 dark:text-white/70">Según audio</span>
+                        </div>
                       )
-                    })}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAllVideoDurations(value => !value)}
-                    className="video-settings-more"
-                    aria-expanded={showAllVideoDurations}
-                  >
-                    {showAllVideoDurations ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
-                  </button>
+                    }
+                    if (!durationSpec.supportsDuration) {
+                      return (
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] text-zinc-500 dark:text-white/70">Auto</span>
+                        </div>
+                      )
+                    }
+                    const step = durationSpec.step || 1
+                    return (
+                      <>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] tabular-nums text-zinc-500 dark:text-white/70">{selectedVideoDuration}s · {maxLabel} máx.</span>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            aria-label="Reducir duración"
+                            className="video-setting-pill min-w-7 px-0"
+                            onClick={() => {
+                              const next = stepVideoDuration(selectedVideoDuration, -1, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          >−</button>
+                          <input
+                            type="range"
+                            min={durationSpec.min ?? 4}
+                            max={durationSpec.max ?? 8}
+                            step={step}
+                            value={selectedVideoDuration}
+                            aria-label="Duración de video"
+                            className="h-1 w-full cursor-pointer accent-zinc-900 dark:accent-white"
+                            onChange={(event) => {
+                              const next = clampVideoDuration(event.target.value, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          />
+                          <button
+                            type="button"
+                            aria-label="Aumentar duración"
+                            className="video-setting-pill min-w-7 px-0"
+                            onClick={() => {
+                              const next = stepVideoDuration(selectedVideoDuration, 1, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          >+</button>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </section>
 
                 <section className="video-settings-section">
@@ -3546,7 +3794,7 @@ const ActiveToolsDisplay = ({
                 </section>
 
                 <div className="video-settings-summary">
-                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration}s / Audio {selectedVideoAudio ? "On" : "Off"}
+                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {resolveVideoDurationSpec(selectedVideoModel).audioDriven ? "Según audio" : `${selectedVideoDuration}s`} / Audio {selectedVideoAudio ? "On" : "Off"}
                 </div>
               </div>
             </DropdownMenuContent>
@@ -3606,13 +3854,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\
 const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
 
 const getModelDisplayLabel = (model: any) => {
-  const provider = resolveModelProviderName(model)
-  const label = String(model?.displayName || model?.name || "Modelo").trim()
-  if (!label || provider === "Otros") return label || "Modelo"
-  return label
-    .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
-    .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
-    .trim() || label
+  return brandModelLabel(model)
 }
 
 const getNavbarModelSelectorChatSignature = (chat: any) => [
@@ -3644,6 +3886,10 @@ function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
     prev.setSelectedModel === next.setSelectedModel &&
     prev.setSelectedProvider === next.setSelectedProvider &&
     prev.setCurrentChat === next.setCurrentChat &&
+    // Without these two the memo would freeze the slider: clicking a stop
+    // updates context state but the dropdown would keep rendering the old one.
+    prev.selectedEffort === next.selectedEffort &&
+    prev.setSelectedEffort === next.setSelectedEffort &&
     getNavbarModelSelectorChatSignature(prev.currentChat) === getNavbarModelSelectorChatSignature(next.currentChat)
   )
 }
@@ -3656,6 +3902,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   chatTypes,
   currentChat,
   setCurrentChat,
+  selectedEffort,
+  setSelectedEffort,
 }: any) {
   const { user } = useAuth()
   const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
@@ -3670,14 +3918,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     lastGoodSelectedModelRef.current = liveSelectedModelData;
   } else if (
     lastGoodSelectedModelRef.current &&
-    lastGoodSelectedModelRef.current.name !== selectedModel
+    (availableModels.length === 0 || lastGoodSelectedModelRef.current.name !== selectedModel)
   ) {
-    // User picked a genuinely different model not yet in the list: drop the
-    // stale entry so we never show a logo for the wrong model.
+    // A confirmed empty catalog or a genuinely different selection invalidates
+    // the old row. Never preserve an admin-disabled model as visual fallback.
     lastGoodSelectedModelRef.current = undefined;
   }
   const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [pinnedModel, setPinnedModelState] = React.useState("")
+  const [rowMenu, setRowMenu] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    setPinnedModelState(getPinnedModel())
+  }, [])
   // Re-fetch the model list when the picker opens so a model an admin just
   // activated shows up without a page reload (live admin → frontend sync).
   // Use the fine-grained models/files context (NOT useChat) — useChat also
@@ -3729,7 +3982,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: nextModel.name });
-      toast.success(`Modelo actualizado: ${nextModel.displayName || nextModel.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(nextModel)}`);
     } catch (error) {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -3751,7 +4004,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat");
       localStorage.setItem("currentChatId", data.chat.id);
-      window.location.href = `/chat?id=${data.chat.id}`;
+      window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el chat");
     }
@@ -3761,7 +4014,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const gpt = currentChat?.customGpt;
     const href = gpt?.shareId
       ? `${window.location.origin}/gpts/share/${gpt.shareId}`
-      : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
+      : `${window.location.origin}${agentsHomeHref(currentChat?.id ? `id=${currentChat.id}` : "")}`;
     const r = await copyTextSafe(href);
     if (r.ok) toast.success("Enlace copiado");
     else toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
@@ -3803,7 +4056,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -3917,7 +4170,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptRatingNote, gptReport]);
 
   const project = currentChat?.project;
-  const projectName = project?.name || String(currentChat?.title || "Proyecto").replace(/^Chat in\s+/i, "");
+  const projectName = project?.name || String(currentChat?.title || "Empresa").replace(/^Chat in\s+/i, "");
   const activeProjectModelName = currentChat?.model || selectedModel;
   const selectedProjectModel = React.useMemo(() => {
     return availableModels.find((m: any) => m.name === activeProjectModelName);
@@ -3938,9 +4191,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo del proyecto actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo de la empresa actualizado: ${brandModelLabel(model)}`);
     } catch {
-      toast.error("No se pudo actualizar el modelo del proyecto");
+      toast.error("No se pudo actualizar el modelo de la empresa");
     }
   }, [currentChat?.id, setCurrentChat, setSelectedModel, setSelectedProvider]);
 
@@ -3962,11 +4215,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       });
       const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/projects/${projectId}/chat`, request);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat del proyecto");
+      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat de la empresa");
       localStorage.setItem("currentChatId", data.chat.id);
-      window.location.href = `/chat?id=${data.chat.id}`;
+      window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat del proyecto");
+      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat de la empresa");
     }
   }, [currentChat?.project?.id, currentChat?.projectId, projectName, activeProjectModelName]);
 
@@ -3974,8 +4227,8 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const projectId = currentChat?.project?.id || currentChat?.projectId;
     if (!projectId) return;
     const r = await copyTextSafe(`${window.location.origin}/projects/${projectId}`);
-    if (r.ok) toast.success("Enlace del proyecto copiado");
-    else toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
+    if (r.ok) toast.success("Enlace de la empresa copiado");
+    else toast.error("No se pudo copiar el enlace de la empresa. Cópialo manualmente.");
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
   const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
@@ -3992,7 +4245,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     return (
       <div className="model-provider-heading">
         <ModelLogo model={sample} compact />
-        <span className="min-w-0 flex-1 truncate">{provider}</span>
+        <span className="min-w-0 flex-1 truncate">{brandProviderLabel(provider)}</span>
         <span className="model-provider-count">{models.length}</span>
       </div>
     );
@@ -4001,11 +4254,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    const videoModels = (Array.isArray(availableModels) ? availableModels : [])
-      .filter((model: any) => {
-        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
-        return String(model?.type || "").toUpperCase() === "VIDEO" || /video|veo|kling|runway|pika|hailuo|luma/i.test(label);
-      });
+    const videoModels = filterAdminVisibleVideoModels(
+      Array.isArray(availableModels) ? availableModels : [],
+    );
     selectedVideoModelData = videoModels.find((m: any) => m.name === selectedModel) || videoModels[0];
 
     // Filter video models based on search
@@ -4020,7 +4271,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       }}>
         <DropdownMenuTrigger className="chat-model-trigger flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
-          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData ? brandModelLabel(selectedVideoModelData) : 'Select Video Model'}</span>
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
             <ChevronDown className="h-4 w-4 opacity-70" />
@@ -4061,7 +4312,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                   >
                     <Video className="h-5 w-5 flex-shrink-0" />
                     <div className="flex flex-col flex-1">
-                      <span className="text-sm">{model.displayName}</span>
+                      <span className="text-sm">{brandModelLabel(model)}</span>
                     </div>
                   </DropdownMenuItem>
                 ))
@@ -4080,7 +4331,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
 
   if ((currentChat?.projectId || currentChat?.project) && !(currentChat?.customGptId || currentChat?.customGpt)) {
-    const activeModelLabel = selectedProjectModel?.displayName || activeProjectModelName || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedProjectModel || activeProjectModelName || "Modelo");
 
     return (
       <>
@@ -4123,11 +4374,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
-                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
-                    Modelos disponibles para este proyecto
+                <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="gpt-model-submenu model-picker-content w-[min(calc(100vw-1.25rem),20rem)] max-h-[min(70dvh,28rem)] overflow-hidden rounded-2xl p-1.5">
+                  <div className="gpt-model-submenu-title relative z-10 px-2.5 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-neutral-500 dark:text-muted-foreground">
+                    Modelos disponibles para esta empresa
                   </div>
-                  <ScrollArea className="relative z-10 h-[420px] pr-1">
+                  <ScrollArea className="gpt-model-submenu-scroll relative z-10 h-[min(58dvh,22rem)] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
@@ -4138,7 +4389,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeProjectModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4153,12 +4404,12 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-1.5">
-                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5 text-neutral-900 dark:text-foreground">{label}</div>
                                         {isComingSoon && (
                                           <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
                                         )}
                                       </div>
-                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-neutral-500 dark:text-muted-foreground">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -4180,7 +4431,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewProjectChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <PenSquare className="mr-3 h-5 w-5" />
-              Nuevo chat en proyecto
+              Nuevo chat en empresa
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setProjectDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <Info className="mr-3 h-5 w-5" />
@@ -4195,7 +4446,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               className="h-12 rounded-2xl px-3 text-[15px]"
             >
               <FolderOpen className="mr-3 h-5 w-5" />
-              Abrir proyecto
+              Abrir empresa
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyProjectLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <Link2 className="mr-3 h-5 w-5" />
@@ -4209,7 +4460,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <DialogHeader>
               <DialogTitle>{projectName}</DialogTitle>
               <DialogDescription>
-                Este chat usa instrucciones, archivos, documentos y memoria aislados del proyecto.
+                Este chat usa instrucciones, archivos, documentos y memoria aislados de la empresa.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 text-sm">
@@ -4238,7 +4489,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               <Button variant="outline" onClick={() => setProjectDialog(null)}>Cerrar</Button>
               {(currentChat?.project?.id || currentChat?.projectId) && (
                 <Button onClick={() => { window.location.href = `/projects/${currentChat?.project?.id || currentChat?.projectId}` }}>
-                  Abrir proyecto
+                  Abrir empresa
                 </Button>
               )}
             </DialogFooter>
@@ -4260,7 +4511,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
     });
     const customGptTextIcon = String(customGptIcon || "").trim();
-    const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedGptModel || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo");
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
     const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
     const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
@@ -4302,7 +4553,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <ChevronDown className="h-4 w-4 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/gpt:rotate-180" />
           </DropdownMenuTrigger>
 
-          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="w-[292px] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border-border/70 bg-background/95 p-1.5 shadow-xl backdrop-blur">
+          <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="gpt-context-menu w-[min(calc(100vw-1rem),18.25rem)] max-w-[calc(100vw-1rem)] overflow-hidden rounded-2xl border border-neutral-200 bg-white p-1.5 text-neutral-900 shadow-xl dark:border-border/70 dark:bg-background/95 dark:text-foreground dark:backdrop-blur">
             <div className="mb-1 flex items-center gap-2.5 rounded-xl px-2.5 py-2">
               <GptIcon />
               <div className="min-w-0 flex-1">
@@ -4319,11 +4570,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
-                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="gpt-model-submenu model-picker-content w-[min(calc(100vw-1.25rem),20rem)] max-h-[min(70dvh,28rem)] overflow-hidden rounded-2xl p-1.5">
+                  <div className="gpt-model-submenu-title relative z-10 px-2.5 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-neutral-500 dark:text-muted-foreground">
                     Todos los modelos disponibles
                   </div>
-                  <ScrollArea className="relative z-10 h-[420px] pr-1">
+                  <ScrollArea className="gpt-model-submenu-scroll relative z-10 h-[min(58dvh,22rem)] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
@@ -4334,7 +4585,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4349,12 +4600,12 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-1.5">
-                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                        <div className="liquid-label truncate text-[13.5px] font-semibold leading-5 text-neutral-900 dark:text-foreground">{label}</div>
                                         {isComingSoon && (
                                           <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pronto</span>
                                         )}
                                       </div>
-                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-neutral-500 dark:text-muted-foreground">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -4644,7 +4895,13 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     setSelectedModel(model.name);
     setSelectedProvider(model.provider);
     recordRecent(model.name);
+    setLastModel(model.name);
     setSearchQuery("");
+    setRowMenu(null);
+    if (currentChat?.id) {
+      setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
+      void apiClient.updateChat(currentChat.id, { model: model.name }).catch(() => {});
+    }
     // Main model-picker funnel event. Programmatic model swaps
     // (auto-fallback, pickModelForTier, etc.) intentionally do NOT
     // emit — only direct user picks do. Dashboards can compare
@@ -4657,22 +4914,43 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     });
   };
 
+  const pinModel = (model: any) => {
+    setPinnedModel(model.name);
+    setPinnedModelState(model.name);
+    onPick(model);
+  };
+
+  const unpinModel = (modelName: string) => {
+    if (!isPinnedModel(modelName, pinnedModel)) return;
+    clearPinnedModel();
+    setPinnedModelState("");
+    setRowMenu(null);
+  };
+
   // ModelRow — single picker entry. Active state = subtle bg + Check on
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
     const isComingSoon = Boolean(model.comingSoon);
+    const isPinned = isPinnedModel(model.name, pinnedModel);
+    const menuOpen = rowMenu === model.name;
     const label = getModelDisplayLabel(model);
-    const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
-        aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
-        title={attribution ? `${label} - ${attribution}` : label}
-        onSelect={isComingSoon ? (e) => e.preventDefault() : () => onPick(model)}
+        aria-label={label}
+        title={label}
+        onSelect={(event) => {
+          const target = event.target as HTMLElement | null
+          if (isComingSoon || target?.closest?.(".model-picker-row-more, .model-picker-row-menu")) {
+            event.preventDefault()
+            return
+          }
+          onPick(model)
+        }}
         data-selected={isSelected ? "true" : undefined}
         disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+          "model-picker-row group/row relative flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
           isComingSoon && "cursor-default opacity-55",
         )}
@@ -4683,6 +4961,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <span className="liquid-label block truncate text-[12.5px] font-medium leading-4">
               {label}
             </span>
+            {isPinned && (
+              <span className="model-picker-pin shrink-0 text-[9px] leading-none text-muted-foreground/80" aria-hidden>
+                •
+              </span>
+            )}
             {isComingSoon && (
               <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Pronto
@@ -4690,6 +4973,61 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             )}
           </span>
         </span>
+        <button
+          type="button"
+          aria-label="Más opciones"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          className="model-picker-row-more -mr-0.5 shrink-0 rounded px-1 py-0.5 text-[11px] font-medium leading-none tracking-widest text-muted-foreground/70 hover:text-foreground"
+          onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowMenu((current) => current === model.name ? null : model.name);
+          }}
+        >
+          ...
+        </button>
+        {menuOpen && (
+          <div
+            role="menu"
+            className="model-picker-row-menu absolute right-1 top-full z-30 mt-0.5 min-w-[8.5rem] rounded-md border bg-popover p-1 text-[12px] shadow-md"
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {!isSelected && (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => onPick(model)}
+              >
+                Usar en este chat
+              </button>
+            )}
+            {isPinned ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => unpinModel(model.name)}
+              >
+                Quitar fijo
+              </button>
+            ) : (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => pinModel(model)}
+              >
+                Fijar modelo
+              </button>
+            )}
+          </div>
+        )}
       </DropdownMenuItem>
     );
   };
@@ -4698,7 +5036,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   return (
     <DropdownMenu onOpenChange={(open) => {
       if (open) { void refreshModels?.(); }
-      else setSearchQuery("");
+      else {
+        setSearchQuery("");
+        setRowMenu(null);
+      }
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator
@@ -4718,7 +5059,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         )}
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">
+          {selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel ? brandModelLabel(selectedModel) : "Sin modelos activos"}
+        </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -4896,6 +5239,7 @@ function ChatInterfaceContent() {
   const {
     currentChat,
     setCurrentChat,
+    chats,
     addMessage,
     addVideoMessage,
     addThesisMessage,
@@ -4922,15 +5266,15 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const currentChatId = currentChat?.id ?? null
-  const currentChatIdRef = React.useRef<string | null>(null)
-  React.useEffect(() => { currentChatIdRef.current = currentChatId }, [currentChatId])
+  const currentChatIdRef = React.useRef<string | null>(currentChatId)
+  currentChatIdRef.current = currentChatId
   // Live refs so stable (identity-fixed) callbacks like `branchMessage` can
   // read the latest chat/model without re-creating — required because the
   // memoized MessageComponent ignores callback prop changes.
-  const currentChatRef = React.useRef<any>(null)
-  React.useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
-  const selectedModelRef = React.useRef<string | undefined>(undefined)
-  React.useEffect(() => { selectedModelRef.current = selectedModel }, [selectedModel])
+  const currentChatRef = React.useRef<any>(currentChat)
+  currentChatRef.current = currentChat
+  const selectedModelRef = React.useRef<string | undefined>(selectedModel)
+  selectedModelRef.current = selectedModel
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
@@ -4938,7 +5282,7 @@ function ChatInterfaceContent() {
   // back to the same conversation after a reload or accidental
   // navigation. See hooks/use-chat-draft.ts for the contract.
   const chatDraft = useChatDraft(currentChat?.id, user?.id)
-  const lastRestoredChatIdRef = React.useRef<string | null>(null)
+  const lastRestoredDraftScopeRef = React.useRef<string | null>(null)
   const [isRecording, setIsRecording] = React.useState(false)
   const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
@@ -4948,7 +5292,7 @@ function ChatInterfaceContent() {
   const dictationAudioChunksRef = React.useRef<Blob[]>([])
   const dictationMediaRecorderRef = React.useRef<MediaRecorder | null>(null)
   const dictationModeRef = React.useRef<"idle" | "native" | "recorder">("idle")
-  const dictationPermissionReadyRef = React.useRef(false)
+  const dictationWantListeningRef = React.useRef(false)
   const dictationNativeFallbackStartedRef = React.useRef(false)
   const dictationShouldTranscribeRecordingRef = React.useRef(false)
   const [searchActivities, setSearchActivities] = React.useState<Record<string, SearchActivityState>>({})
@@ -5012,10 +5356,9 @@ function ChatInterfaceContent() {
   // typing is captured by handleTextareaChange below.
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const id = currentChat?.id
-    if (!id) return
-    if (lastRestoredChatIdRef.current === id) return
-    lastRestoredChatIdRef.current = id
+    const scope = currentChat?.id ?? "__new__"
+    if (lastRestoredDraftScopeRef.current === scope) return
+    lastRestoredDraftScopeRef.current = scope
     const saved = chatDraft.loadInitial()
     if (saved && saved.trim()) {
       setInput(prev => (prev.trim() ? prev : saved))
@@ -5030,16 +5373,50 @@ function ChatInterfaceContent() {
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
-  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("Gemini 2.5 Flash TTS")
-  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
-  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
-  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
-  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
+  // Voice settings persist per browser (like the effort picker): choosing
+  // Spanish / Latino / Studio Clean once must survive reloads. The provider
+  // model itself is re-validated against the live catalog on every open.
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>(() => readStoredVoiceSetting("model", "") as VoiceModel)
+  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>(() => readStoredVoiceSetting("language", "Spanish") as VoiceLanguage)
+  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>(() => readStoredVoiceSetting("accent", "Latino") as VoiceAccent)
+  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState<number>(() => Number(readStoredVoiceSetting("stability", 100)))
+  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>(() => readStoredVoiceSetting("effect", "Studio Clean") as VoiceEffect)
+  React.useEffect(() => {
+    writeStoredVoiceSettings({
+      model: selectedVoiceModel,
+      language: selectedVoiceLanguage,
+      accent: selectedVoiceAccent,
+      stability: selectedVoiceStability,
+      effect: selectedVoiceEffect,
+    })
+  }, [selectedVoiceModel, selectedVoiceLanguage, selectedVoiceAccent, selectedVoiceStability, selectedVoiceEffect])
   // Specific ElevenLabs voice chosen from the Voice Catalog. It is only sent
   // when ElevenLabs is selected; Gemini uses its own production voice.
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
+  // Sira Voz (VoiceStudio): the user's cloned voice for the local engine and
+  // the studio dialog (clone / dub / transcribe / audiobook / jobs).
+  const [selectedSiraVoiceId, setSelectedSiraVoiceId] = React.useState<string>("")
+  const [selectedSiraVoiceName, setSelectedSiraVoiceName] = React.useState<string>("")
+  const [voiceStudioOpen, setVoiceStudioOpen] = React.useState(false)
+  const [voiceStudioTab, setVoiceStudioTab] = React.useState<"voices" | "dub" | "transcribe" | "audiobook" | "jobs">("voices")
+  React.useEffect(() => {
+    const stored = readStoredVoiceStudioVoice()
+    if (stored.id) {
+      setSelectedSiraVoiceId(stored.id)
+      setSelectedSiraVoiceName(stored.name)
+    }
+  }, [])
+  const handleSelectSiraVoice = React.useCallback((voice: { id: string; name: string } | null) => {
+    setSelectedSiraVoiceId(voice?.id || "")
+    setSelectedSiraVoiceName(voice?.name || "")
+    writeStoredVoiceStudioVoice(voice && voice.id ? voice : null)
+  }, [])
+  const openVoiceStudio = React.useCallback((tab: "voices" | "dub" | "transcribe" | "audiobook" | "jobs" = "voices") => {
+    setVoiceStudioTab(tab)
+    setVoiceStudioOpen(true)
+  }, [])
   React.useEffect(() => {
     try {
       const id = localStorage.getItem("siragpt:selectedVoiceId") || ""
@@ -5058,14 +5435,14 @@ function ChatInterfaceContent() {
   }, [])
   const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
   const [isGeneratingMusic, setIsGeneratingMusic] = React.useState(false)
-  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
+  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("" as MusicModel)
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
   const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
   const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(30)
   const [selectedMusicInfluence, setSelectedMusicInfluence] = React.useState(0.3)
   const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
-  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
+  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("9:16")
   const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(DEFAULT_VIDEO_DURATION)
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
@@ -5079,11 +5456,18 @@ function ChatInterfaceContent() {
   const isGeneratingImageRef = React.useRef(false)
   const isGeneratingVoiceRef = React.useRef(false)
   const isGeneratingMusicRef = React.useRef(false)
+  const isGeneratingVideoRef = React.useRef(false)
+  const isVideoGenerationActiveRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
   const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
+  const [voiceCatalogModels, setVoiceCatalogModels] = React.useState<any[]>([])
+  // Mirror of the catalog for the best-effort refresh below: a failed fetch
+  // must return the previous list (the useCallback closes over state).
+  const voiceCatalogModelsRef = React.useRef<any[]>([])
+  const [musicCatalogModels, setMusicCatalogModels] = React.useState<any[]>([])
   const refreshImageModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('IMAGE');
     const models = Array.isArray(modelsResponse?.models)
@@ -5094,20 +5478,54 @@ function ChatInterfaceContent() {
   }, []);
   const refreshVideoModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('VIDEO');
-    const models = Array.isArray(modelsResponse?.models)
-      ? modelsResponse.models.filter(isVideoModelEntry)
-      : [];
+    const models = filterAdminVisibleVideoModels(
+      Array.isArray(modelsResponse?.models) ? modelsResponse.models : [],
+    );
     setVideoCatalogModels(models);
     return models;
   }, []);
+  const refreshVoiceModels = React.useCallback(async () => {
+    try {
+      const modelsResponse = await apiClient.getAIModels('VOICE');
+      // The backend answers VOICE with the Admin-active AUDIO (TTS) rows.
+      const models = Array.isArray(modelsResponse?.models)
+        ? modelsResponse.models.filter((model: any) => (model?.type === 'VOICE' || model?.type === 'AUDIO') && model?.isActive === true)
+        : [];
+      setVoiceCatalogModels(models);
+      voiceCatalogModelsRef.current = models;
+      return models;
+    } catch {
+      // Best-effort like refreshModels: a transient failure (expired JWT,
+      // offline blip) keeps the previous list instead of silently emptying
+      // the Voz picker. The send gate still toasts when nothing is active.
+      return voiceCatalogModelsRef.current;
+    }
+  }, []);
+  const refreshMusicModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('MUSIC');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter((model: any) => model?.type === 'MUSIC' && model?.isActive === true)
+      : [];
+    setMusicCatalogModels(models);
+    return models;
+  }, []);
+  React.useEffect(() => {
+    if (!isVoiceGenerationActive) return;
+    void refreshVoiceModels();
+  }, [isVoiceGenerationActive, refreshVoiceModels]);
+  React.useEffect(() => {
+    if (!isMusicGenerationActive) return;
+    void refreshMusicModels();
+  }, [isMusicGenerationActive, refreshMusicModels]);
   const imageModelsForComposer = React.useMemo(() => {
     const source = imageCatalogModels.length ? imageCatalogModels : availableModels;
     return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
   }, [availableModels, imageCatalogModels]);
   const videoModelsForComposer = React.useMemo(() => {
-    const source = videoCatalogModels.length ? videoCatalogModels : availableModels;
-    return (Array.isArray(source) ? source : []).filter(isVideoModelEntry);
-  }, [availableModels, videoCatalogModels]);
+    // Dedicated VIDEO catalog first; never fall back to a heuristic list.
+    const source = videoCatalogModels.length ? videoCatalogModels : [];
+    return filterAdminVisibleVideoModels(source);
+  }, [videoCatalogModels]);
   const composerAvailableModels = React.useMemo(() => {
     const byName = new Map<string, any>();
     for (const model of Array.isArray(availableModels) ? availableModels : []) {
@@ -5122,11 +5540,19 @@ function ChatInterfaceContent() {
       const name = String(model?.name || '').trim();
       if (name) byName.set(name, model);
     }
-    if (!imageCatalogModels.length && !videoCatalogModels.length) {
+    for (const model of voiceCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    for (const model of musicCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    if (!imageCatalogModels.length && !videoCatalogModels.length && !voiceCatalogModels.length && !musicCatalogModels.length) {
       return availableModels;
     }
     return Array.from(byName.values());
-  }, [availableModels, imageCatalogModels, videoCatalogModels]);
+  }, [availableModels, imageCatalogModels, musicCatalogModels, videoCatalogModels, voiceCatalogModels]);
   const resolveFreshActiveImageModel = React.useCallback(async (candidate?: string) => {
     const models = await refreshImageModels();
     const requestedName = String(candidate || '').trim();
@@ -5138,6 +5564,8 @@ function ChatInterfaceContent() {
     return selected?.provider || providerForMediaModel(modelName, selectProvider);
   }, [imageModelsForComposer, selectProvider]);
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const chatLogEndRef = React.useRef<HTMLDivElement>(null)
+  const wasStreamingRef = React.useRef(false)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
   const composerHighlightOverlayRef = React.useRef<HTMLDivElement>(null);
@@ -5220,6 +5648,33 @@ function ChatInterfaceContent() {
       void hydrateUploadedFileFromBackend(fileId);
     }
   }, [hydrateUploadedFileFromBackend, updateUploadedFileById]);
+
+  // Safety net for every chip variant: while an attachment with a server id
+  // is still "processing", re-read it from the backend every 2 s until it is
+  // ready/failed. The per-chip pollers cover the common cases; this keeps a
+  // chip that mounts no poller from blocking the send forever.
+  const processingWatchKey = collectProcessingFileIds(uploadedFiles).join(',');
+  React.useEffect(() => {
+    const ids = processingWatchKey ? processingWatchKey.split(',') : [];
+    if (!ids.length) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      for (const id of ids) {
+        if (cancelled) return;
+        await hydrateUploadedFileFromBackend(id);
+      }
+      if (!cancelled && attempts < 90) timer = setTimeout(tick, 2000);
+    };
+    timer = setTimeout(tick, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [processingWatchKey, hydrateUploadedFileFromBackend]);
 
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
@@ -5407,6 +5862,15 @@ function ChatInterfaceContent() {
     scrollToBottom();
   }, [streamingContentLen, isCurrentChatStreaming, isAtBottom, scrollToBottom]);
 
+  React.useEffect(() => {
+    if (wasStreamingRef.current && !isCurrentChatStreaming) {
+      try {
+        chatLogEndRef.current?.focus({ preventScroll: true })
+      } catch { /* ignore */ }
+    }
+    wasStreamingRef.current = isCurrentChatStreaming
+  }, [isCurrentChatStreaming]);
+
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
@@ -5430,8 +5894,12 @@ function ChatInterfaceContent() {
   const currentAgentTaskIdRef = React.useRef<string | null>(null);
   const localJobControllersRef = React.useRef<Map<string, AbortController>>(new Map());
   const agentTaskIdsByChatRef = React.useRef<Map<string, string>>(new Map());
+  const agentTaskRecoveryControllersRef = React.useRef<Map<string, AbortController>>(new Map());
+  const agentTaskRecoveryWakeKeysRef = React.useRef<Map<string, string>>(new Map());
+  const terminalAgentTaskIdsByChatRef = React.useRef<Map<string, Set<string>>>(new Map());
   const activeLocalJobChatIdsRef = React.useRef<Set<string>>(new Set());
   const [activeLocalJobChatIds, setActiveLocalJobChatIds] = React.useState<string[]>([]);
+  const [agentTaskRecoveryHydrationNonce, setAgentTaskRecoveryHydrationNonce] = React.useState(0);
 
   const syncActiveLocalJobs = React.useCallback(() => {
     setActiveLocalJobChatIds(Array.from(activeLocalJobChatIdsRef.current));
@@ -5446,6 +5914,24 @@ function ChatInterfaceContent() {
     syncActiveLocalJobs();
   }, [syncActiveLocalJobs]);
 
+  React.useEffect(() => {
+    const onCancel = (event: Event) => {
+      const taskId = String((event as CustomEvent<{ taskId?: string }>).detail?.taskId || "")
+      if (!taskId) return
+      const matchesCurrent = currentAgentTaskIdRef.current === taskId
+      let matchesChat = false
+      agentTaskIdsByChatRef.current.forEach((id) => {
+        if (id === taskId) matchesChat = true
+      })
+      if (!matchesCurrent && !matchesChat) return
+      const scoped = currentChatId ? localJobControllersRef.current.get(currentChatId) : null
+      const controller = searchAbortControllerRef.current || scoped
+      controller?.abort()
+    }
+    window.addEventListener("agent-task-cancel", onCancel)
+    return () => window.removeEventListener("agent-task-cancel", onCancel)
+  }, [currentChatId])
+
   const markLocalJobIdle = React.useCallback((chatId?: string | null, controller?: AbortController) => {
     if (!chatId) return;
     const tracked = localJobControllersRef.current.get(chatId);
@@ -5457,10 +5943,362 @@ function ChatInterfaceContent() {
     }
   }, [syncActiveLocalJobs]);
 
+  const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentSandboxChat({
+    currentChat, userId: user?.id || null, selectedModel, setCurrentChat, selectChat,
+    markBusy: markLocalJobBusy, markIdle: markLocalJobIdle, notify: (message) => toast.error(message),
+  });
+
+  // ─── Durable agent-task recovery ───────────────────────────────────
+  // Agent/document tasks execute on the backend and can outlive this page.
+  // Reconnect the visible message bubble after reload or chat navigation by
+  // discovering the task through the chat-scoped durable pointer and polling
+  // its event log. Cleanup aborts only this browser poll; it deliberately does
+  // not call cancelTask, so switching chats never stops server-side work.
+  React.useEffect(() => {
+    const chatId = currentChatId;
+    if (!chatId) return;
+    if (localJobControllersRef.current.has(chatId)) return;
+    if (agentTaskRecoveryControllersRef.current.has(chatId)) return;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    const recoveryControllers = agentTaskRecoveryControllersRef.current;
+    recoveryControllers.set(chatId, controller);
+    // A previous recovery pass can hand off the next durable task while
+    // deliberately keeping this chat busy. Claim that pointer immediately so
+    // an aborted replacement poll can release only the busy state it owns.
+    let recoveredTaskId: string | null = agentTaskIdsByChatRef.current.get(chatId) || null;
+    let bubbleMessageId: string | null = null;
+    let reachedTerminal = false;
+    let recoveryDetached = false;
+    let terminalRecoveryLookupFailure = false;
+
+    const releaseRecoveryBusyIfOwned = () => {
+      const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+      const trackedTaskId = agentTaskIdsByChatRef.current.get(chatId) || null;
+      const stillOwnsRecoveredTask = Boolean(recoveredTaskId && trackedTaskId === recoveredTaskId);
+      if (ownsRecoveryController && stillOwnsRecoveredTask && !localJobControllersRef.current.has(chatId)) {
+        markLocalJobIdle(chatId);
+      }
+    };
+
+    const upsertRecoveredBubble = (taskId: string, state: AgentTaskState, status?: string) => {
+      if (signal.aborted) return;
+      const content = serializeRecoveredAgentTaskState(state);
+      setCurrentChat(prevChat => {
+        if (!prevChat || prevChat.id !== chatId) return prevChat;
+        const messages = [...(prevChat.messages || [])];
+        const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
+        const messageIndex = findRecoveredAgentAssistantIndex(messages, {
+          chatId,
+          taskId,
+          bubbleMessageId,
+          legacyMessageId: recoverable?.message.id,
+        });
+
+        if (messageIndex >= 0) {
+          const previous = messages[messageIndex];
+          bubbleMessageId = previous.id;
+          messages[messageIndex] = {
+            ...previous,
+            content,
+            metadata: JSON.stringify({
+              ...parseAgentTaskMessageMetadata(previous.metadata),
+              source: "agent-task",
+              taskId,
+              status: status || (state.done ? (state.error ? "error" : "completed") : "running"),
+              updatedAt: new Date().toISOString(),
+            }),
+          };
+        } else {
+          bubbleMessageId = `msg-ai-recovery-${taskId}`;
+          messages.push({
+            id: bubbleMessageId,
+            chatId,
+            role: "ASSISTANT" as const,
+            content,
+            timestamp: new Date().toISOString(),
+            metadata: JSON.stringify({
+              source: "agent-task",
+              taskId,
+              status: status || "running",
+              recovered: true,
+            }),
+          });
+        }
+        return { ...prevChat, messages };
+      });
+    };
+
+    void (async () => {
+      try {
+        let pendingEnvelope: Awaited<ReturnType<typeof apiClient.getChatPendingStream>> | null = null;
+        // A handed-off task already owns the same-chat queue lock. Keep its
+        // discovery retry alive (also while the user reads another chat) until
+        // the durable endpoint answers; releasing on an unknown result could
+        // overlap queued work with a still-running server task.
+        const maxDiscoveryAttempts = recoveredTaskId ? Number.POSITIVE_INFINITY : 3;
+        for (let attempt = 0; attempt < maxDiscoveryAttempts && !signal.aborted; attempt += 1) {
+          try {
+            pendingEnvelope = await apiClient.getChatPendingStream(chatId);
+            if (pendingEnvelope?.ok) break;
+            pendingEnvelope = null;
+          } catch (error: any) {
+            if (signal.aborted || error?.name === "AbortError") return;
+          }
+          await waitForAgentTaskRecoveryPoll(Math.min(5000, 400 * (attempt + 1)), signal);
+        }
+        if (signal.aborted) return;
+        if (!pendingEnvelope?.ok) return;
+
+        const messages = currentChatRef.current?.id === chatId
+          ? (currentChatRef.current.messages || [])
+          : [];
+        const localCandidate = findRecoverableAgentTaskMessage(messages);
+        const taskPointer = resolveChatAgentTaskForRecovery(
+          pendingEnvelope,
+          localCandidate?.taskId || null,
+          Boolean(localCandidate),
+          terminalAgentTaskIdsByChatRef.current.get(chatId),
+        );
+        const taskId = taskPointer?.taskId || null;
+
+        // latestTask intentionally is not enough by itself: every historic
+        // agent chat has one. A terminal task is recovered only when the
+        // currently persisted bubble still says it is unfinished.
+        if (!taskId) {
+          // The durable endpoint is authoritative: if the handed-off task is
+          // no longer active, release only the busy marker owned by this poll.
+          releaseRecoveryBusyIfOwned();
+          return;
+        }
+        if (localJobControllersRef.current.has(chatId)) return;
+
+        const matchingCandidate = findRecoverableAgentTaskMessage(messages, taskId);
+        recoveredTaskId = taskId;
+        bubbleMessageId = matchingCandidate?.message?.id || null;
+        agentTaskIdsByChatRef.current.set(chatId, taskId);
+        markLocalJobBusy(chatId);
+
+        let state = normalizeRecoveredAgentTaskState(matchingCandidate?.state, taskId);
+        if (state.steps.length === 0 && !state.done) {
+          state = {
+            ...state,
+            steps: [{
+              id: "client-agent-recovery",
+              label: "Recuperando tarea en segundo plano",
+              icon: "thought",
+              reasoning: "Reconectando con la ejecución durable sin reiniciar el trabajo.",
+              status: "running",
+              toolCalls: [],
+            }],
+          };
+        }
+        upsertRecoveredBubble(taskId, state, taskPointer?.status);
+
+        let cursor = 0;
+        let failedPolls = 0;
+        while (!signal.aborted) {
+          let payload: Awaited<ReturnType<typeof agentTaskService.getTaskEvents>> | null = null;
+          try {
+            payload = await agentTaskService.getTaskEvents(taskId, cursor, { signal });
+          } catch (error: any) {
+            if (signal.aborted || error?.name === "AbortError") return;
+          }
+
+          if (!payload?.ok) {
+            failedPolls += 1;
+            const statusCode = Number(payload?.statusCode || 0);
+            if (isTerminalAgentTaskRecoveryHttpStatus(statusCode)) {
+              const accessDenied = statusCode === 401 || statusCode === 403;
+              state = {
+                ...state,
+                done: true,
+                error: accessDenied
+                  ? "No se pudo reconectar la tarea porque la sesión o los permisos cambiaron."
+                  : "La tarea ya no está disponible para reconexión.",
+                stoppedReason: accessDenied ? "recovery_access_denied" : "recovery_not_found",
+              };
+              reachedTerminal = true;
+              terminalRecoveryLookupFailure = true;
+              upsertRecoveredBubble(taskId, state, "error");
+              break;
+            }
+            if (shouldDetachAgentTaskRecovery(failedPolls)) {
+              state = {
+                ...state,
+                done: false,
+                error: "Se perdió temporalmente la conexión con esta tarea. El trabajo del servidor no fue cancelado; vuelve a abrir el chat para reconectar.",
+                stoppedReason: "recovery_poll_exhausted",
+              };
+              recoveryDetached = true;
+              upsertRecoveredBubble(taskId, state, "reconnecting");
+              break;
+            }
+            await waitForAgentTaskRecoveryPoll(Math.min(5000, 600 * (2 ** Math.min(failedPolls, 3))), signal);
+            continue;
+          }
+
+          failedPolls = 0;
+          const events = Array.isArray(payload.events) ? payload.events : [];
+          const cursorBeforeBatch = cursor;
+          for (const event of events) {
+            const seq = Number((event as any)?.seq);
+            if (Number.isFinite(seq)) cursor = Math.max(cursor, seq);
+          }
+
+          if (payload.streamState) {
+            // The server snapshot already includes all events up to this poll,
+            // so use it as the authority and avoid duplicating steps/artifacts.
+            state = normalizeRecoveredAgentTaskState(payload.streamState, taskId);
+          } else if (events.length > 0) {
+            if (cursorBeforeBatch === 0) state = normalizeRecoveredAgentTaskState(null, taskId);
+            for (const event of events) state = reduceEvent(state, event);
+          }
+
+          const normalizedStatus = String(payload.status || "").toLowerCase();
+          if (!state.done && normalizedStatus === "completed") {
+            state = { ...state, done: true, stoppedReason: state.stoppedReason || "recovered_completed" };
+          } else if (!state.done && ["cancelled", "canceled"].includes(normalizedStatus)) {
+            state = { ...state, done: true, error: state.error || "Tarea detenida.", stoppedReason: "cancelled" };
+          } else if (!state.done && ["error", "failed"].includes(normalizedStatus)) {
+            state = { ...state, done: true, error: state.error || payload.error || "La tarea agéntica falló.", stoppedReason: "error" };
+          }
+
+          upsertRecoveredBubble(taskId, state, payload.status);
+          if (state.done || isTerminalAgentTaskStatus(payload.status)) {
+            reachedTerminal = true;
+            break;
+          }
+          await waitForAgentTaskRecoveryPoll(900, signal);
+        }
+      } finally {
+        const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+        if ((reachedTerminal || recoveryDetached) && !signal.aborted) {
+          let terminalIds = terminalAgentTaskIdsByChatRef.current.get(chatId) || new Set<string>();
+          if (reachedTerminal && recoveredTaskId) {
+            terminalIds.add(recoveredTaskId);
+            // Keep this browser-session dedupe bounded while the durable API
+            // converges and removes recently terminal tasks from activeTasks.
+            while (terminalIds.size > 20) {
+              const oldestTaskId = terminalIds.values().next().value;
+              if (!oldestTaskId) break;
+              terminalIds.delete(oldestTaskId);
+            }
+            terminalAgentTaskIdsByChatRef.current.set(chatId, terminalIds);
+          }
+
+          let nextTaskPointer: ReturnType<typeof resolveChatAgentTaskForRecovery> = null;
+          let nextTaskDiscoveryFailed = false;
+          if (reachedTerminal && !terminalRecoveryLookupFailure) {
+            try {
+              const nextEnvelope = await apiClient.getChatPendingStream(chatId);
+              nextTaskPointer = resolveChatAgentTaskForRecovery(
+                nextEnvelope,
+                null,
+                false,
+                terminalIds,
+              );
+            } catch {
+              // Keep the busy ownership during a transient handoff failure. A
+              // fresh recovery pass retries discovery without overlapping the
+              // just-completed task with queued work from the same chat.
+              nextTaskDiscoveryFailed = true;
+            }
+          }
+
+          if (signal.aborted) return;
+
+          const trackedTaskId = agentTaskIdsByChatRef.current.get(chatId) || null;
+          const stillOwnsRecoveredTask = Boolean(recoveredTaskId && trackedTaskId === recoveredTaskId);
+          const hasReplacementController = localJobControllersRef.current.has(chatId);
+          if (stillOwnsRecoveredTask && !hasReplacementController) {
+            if (nextTaskPointer?.taskId) {
+              // Atomic A → B handoff: retain the busy marker and transfer task
+              // ownership before waking the next recovery effect.
+              agentTaskIdsByChatRef.current.set(chatId, nextTaskPointer.taskId);
+            } else if (!nextTaskDiscoveryFailed) {
+              // The durable endpoint confirmed there is no next task.
+              markLocalJobIdle(chatId);
+            }
+          }
+
+          if (ownsRecoveryController) {
+            recoveryControllers.delete(chatId);
+          }
+
+          if (reachedTerminal && currentChatIdRef.current === chatId) {
+            if (nextTaskPointer?.taskId || nextTaskDiscoveryFailed) {
+              setAgentTaskRecoveryHydrationNonce(value => value + 1);
+            }
+            try {
+              const refreshed = await apiClient.getChat(chatId);
+              setCurrentChat(prevChat => (
+                prevChat?.id === chatId
+                  ? mergeChatPreservingUserMessages(refreshed.chat, prevChat)
+                  : prevChat
+              ));
+            } catch {
+              // The reconstructed bubble is already complete; the durable DB
+              // refresh is best-effort and can retry on the next navigation.
+            }
+          }
+        } else if (ownsRecoveryController) {
+          recoveryControllers.delete(chatId);
+        }
+      }
+    })();
+
+    return () => {
+      // A chat switch must not detach recovery: the durable task keeps
+      // running, and releasing its local busy marker here would allow the
+      // same-chat queue to start overlapping work. The poll can safely remain
+      // in the background because every visible-state write is chat-scoped.
+      if (currentChatIdRef.current !== chatId) return;
+      const ownsRecoveryController = recoveryControllers.get(chatId) === controller;
+      controller.abort();
+      if (ownsRecoveryController) {
+        recoveryControllers.delete(chatId);
+      }
+    };
+  }, [agentTaskRecoveryHydrationNonce, currentChatId, markLocalJobBusy, markLocalJobIdle, setCurrentChat]);
+
+  // Recovery polls are browser-only. Teardown may stop the poll, but it
+  // must NEVER cancel the server job (Word/doc outlives the SSE socket).
+  React.useEffect(() => {
+    const recoveryControllers = agentTaskRecoveryControllersRef.current;
+    return () => {
+      for (const controller of recoveryControllers.values()) {
+        controller.abort();
+      }
+      recoveryControllers.clear();
+    };
+  }, []);
+
+  // selectChat can expose a cached shell first and hydrate its messages from
+  // the server a moment later without changing the chat id. Wake recovery once
+  // for that newly-arrived unfinished bubble; the active-controller guards
+  // above keep normal poll updates from creating a second connection.
+  React.useEffect(() => {
+    if (!currentChatId) return;
+    if (localJobControllersRef.current.has(currentChatId)) return;
+    if (agentTaskRecoveryControllersRef.current.has(currentChatId)) return;
+    const candidate = findRecoverableAgentTaskMessage(currentChat?.messages || []);
+    if (!candidate) return;
+    const wakeKey = `${candidate.message?.id || "message"}:${candidate.taskId || "pending"}`;
+    if (agentTaskRecoveryWakeKeysRef.current.get(currentChatId) === wakeKey) return;
+    agentTaskRecoveryWakeKeysRef.current.set(currentChatId, wakeKey);
+    setAgentTaskRecoveryHydrationNonce(value => value + 1);
+  }, [currentChat?.messages, currentChatId]);
+
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
+  const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
+  const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
+  const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
+  const [loginHandoffKind, setLoginHandoffKind] = React.useState("");
 
   // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -5537,6 +6375,11 @@ function ChatInterfaceContent() {
     finalUrl: computerUseFinalUrl,
     startComputerUse,
     stopComputerUse,
+    sendControllerCommand,
+    sendUserAction,
+    currentUrl: computerUseCurrentUrl,
+    actions: computerUseActions,
+    takeoverState: computerUseTakeoverState,
     addReasoningStep,
     clearReasoning
   } = useComputerUse();
@@ -5555,12 +6398,15 @@ function ChatInterfaceContent() {
    * Closes all tools and connectors - used when activating a new tool/connector
    * This ensures only one tool/connector is active at a time
    */
-  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean } = {}) => {
+  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean; preserveVideo?: boolean } = {}) => {
     if (!options.preserveWebSearch) setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVoiceGenerationActive(false);
     setIsMusicGenerationActive(false);
-    setIsVideoGenerationActive(false);
+    if (!options.preserveVideo) {
+      isVideoGenerationActiveRef.current = false;
+      setIsVideoGenerationActive(false);
+    }
     setIsGmailActive(false);
     setIsGoogleCalendarActive(false);
     setIsGoogleDriveActive(false);
@@ -5576,6 +6422,13 @@ function ChatInterfaceContent() {
    */
   const resetAllToolsAndConnectors = React.useCallback(() => {
     // Close all tools and connectors
+    isGeneratingVideoRef.current = false;
+    isVideoGenerationActiveRef.current = false;
+    try {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem("siragpt.composer.videoMode");
+      }
+    } catch {}
     closeAllToolsAndConnectors();
 
     // Reset chat type
@@ -5584,6 +6437,7 @@ function ChatInterfaceContent() {
     // Reset other UI states
     setShowAudioPanel(false);
     setCoworkPanelOpen(false);
+    setComputerPanelOpen(false);
     setDocumentPreviewUrl(null);
     setSourcesPanelData(null);
     setActiveSearchActivityId(null);
@@ -5592,6 +6446,7 @@ function ChatInterfaceContent() {
     setSelectedWordText(null);
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    attachmentHashesRef.current.clear();
     setUploadProgress({});
     setInput('');
     setSelectedImageModel(DEFAULT_IMAGE_MODEL);
@@ -5620,16 +6475,26 @@ function ChatInterfaceContent() {
   }, [setCurrentChat]);
 
   const stopActiveGeneration = React.useCallback(() => {
-    if (intentAbortControllerRef.current) {
+    const targetChatId = currentChatId;
+    // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
+    if (stopDocumentSandbox(targetChatId)) return;
+    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
+    const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
+
+    if (intentAbortControllerRef.current && ownsSendingState) {
       intentAbortControllerRef.current.abort();
       intentAbortControllerRef.current = null;
     }
-    const targetChatId = currentChatId;
     const scopedTaskId = targetChatId ? agentTaskIdsByChatRef.current.get(targetChatId) : null;
     const fallbackTaskId = currentAgentTaskIdRef.current;
-    const taskId = scopedTaskId || fallbackTaskId;
+    // A visible chat may be recovering task A while a foreground task B runs
+    // elsewhere. Never fall back to B when Stop was clicked from A.
+    const taskId = targetChatId ? scopedTaskId : fallbackTaskId;
     if (taskId) {
-      if (scopedTaskId && targetChatId) {
+      // A recovered task has no foreground controller. Keep its ownership map
+      // until the durable poll observes cancellation; otherwise the same-chat
+      // queue could start before the server has actually stopped it.
+      if (scopedTaskId && targetChatId && scopedController) {
         agentTaskIdsByChatRef.current.delete(targetChatId);
       }
       if (fallbackTaskId === taskId) {
@@ -5639,7 +6504,6 @@ function ChatInterfaceContent() {
         console.warn('Failed to cancel agent task:', err);
       });
     }
-    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     if (scopedController) {
       scopedController.abort();
       markLocalJobIdle(targetChatId, scopedController);
@@ -5647,48 +6511,51 @@ function ChatInterfaceContent() {
         searchAbortControllerRef.current = null;
         setIsWebSearching(false);
       }
-    } else if (searchAbortControllerRef.current) {
+    } else if (!targetChatId && searchAbortControllerRef.current) {
       const controller = searchAbortControllerRef.current;
       controller.abort();
       searchAbortControllerRef.current = null;
-      if (targetChatId) {
-        markLocalJobIdle(targetChatId, controller);
-      }
       setIsWebSearching(false);
     }
-    if (imageAbortControllerRef.current) {
-      imageAbortControllerRef.current.abort();
+    const imageController = imageAbortControllerRef.current;
+    const ownsImageGeneration = Boolean(imageController && (!targetChatId || imageController === scopedController));
+    if (imageController && ownsImageGeneration) {
+      imageController.abort();
       imageAbortControllerRef.current = null;
       isGeneratingImageRef.current = false;
       setIsGeneratingImage(false);
       if (targetChatId) {
-        markLocalJobIdle(targetChatId);
+        markLocalJobIdle(targetChatId, imageController);
       }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
     }
-    if (voiceAbortControllerRef.current) {
+    const voiceController = voiceAbortControllerRef.current;
+    const ownsVoiceGeneration = Boolean(voiceController && (!targetChatId || voiceController === scopedController));
+    if (voiceController && ownsVoiceGeneration) {
       const controller = voiceAbortControllerRef.current;
       voiceAbortControllerRef.current = null;
-      if (!controller.signal.aborted) {
+      if (controller && !controller.signal.aborted) {
         controller.abort();
       }
       toast.info('Generación de voz detenida');
     }
-    if (musicAbortControllerRef.current) {
+    const musicController = musicAbortControllerRef.current;
+    const ownsMusicGeneration = Boolean(musicController && (!targetChatId || musicController === scopedController));
+    if (musicController && ownsMusicGeneration) {
       const controller = musicAbortControllerRef.current;
       musicAbortControllerRef.current = null;
-      if (!controller.signal.aborted) {
+      if (controller && !controller.signal.aborted) {
         controller.abort();
       }
       toast.info('Generación de música detenida');
     }
-    if (isGeneratingVoiceRef.current) {
+    if (ownsVoiceGeneration && isGeneratingVoiceRef.current) {
       isGeneratingVoiceRef.current = false;
       setIsGeneratingVoice(false);
       setIsVoiceGenerationActive(true);
     }
-    if (isGeneratingMusicRef.current) {
+    if (ownsMusicGeneration && isGeneratingMusicRef.current) {
       isGeneratingMusicRef.current = false;
       setIsGeneratingMusic(false);
       setIsMusicGenerationActive(true);
@@ -5698,26 +6565,35 @@ function ChatInterfaceContent() {
     // indicators (video / slides) so the composer returns to idle. (The remote
     // render is a POST→poll job, so server-side completion may still finish;
     // this frees the UI and matches the image path.)
-    if (videoAbortControllerRef.current) {
-      videoAbortControllerRef.current.abort();
+    const videoController = videoAbortControllerRef.current;
+    const ownsVideoGeneration = Boolean(videoController && (!targetChatId || videoController === scopedController));
+    if (videoController && ownsVideoGeneration) {
+      videoController.abort();
       videoAbortControllerRef.current = null;
     }
     const videoOperationId = currentVideoOperationIdRef.current;
-    if (videoOperationId) {
+    if (videoOperationId && ownsVideoGeneration) {
       currentVideoOperationIdRef.current = null;
       void apiClient.cancelVideoGeneration(videoOperationId).catch((err) => {
         console.warn('Failed to cancel video generation:', err);
       });
     }
-    setIsGeneratingVideo(false);
-    setIsGeneratingPPT(false);
-    if (targetChatId) {
-      markLocalJobIdle(targetChatId);
+    if (ownsVideoGeneration) {
+      isGeneratingVideoRef.current = false;
+      setIsGeneratingVideo(false);
+      setIsGeneratingPPT(false);
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
     }
-    stopStreaming();
-    setIsSending(false);
-    setSendingChatId(null);
-  }, [currentChatId, markImageGenerationStopped, markLocalJobIdle, stopStreaming]);
+    if (!targetChatId || activeStreamingChatIds.includes(targetChatId)) {
+      stopStreaming();
+    }
+    if (ownsSendingState) {
+      setIsSending(false);
+      setSendingChatId(null);
+    }
+  }, [activeStreamingChatIds, currentChatId, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -6005,6 +6881,38 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  const prevVideoGenerationActiveRef = React.useRef(false);
+  React.useEffect(() => {
+    // Restore after mount only (avoid SSR/session hydration mismatch).
+    try {
+      if (typeof window === "undefined") return;
+      const parsed = JSON.parse(window.sessionStorage.getItem("siragpt.composer.videoMode") || "null");
+      if (!parsed?.active) return;
+      isVideoGenerationActiveRef.current = true;
+      prevVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType("video");
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useEffect(() => {
+    isVideoGenerationActiveRef.current = isVideoGenerationActive;
+    try {
+      if (typeof window === "undefined") return;
+      if (isVideoGenerationActive) {
+        window.sessionStorage.setItem(
+          "siragpt.composer.videoMode",
+          JSON.stringify({ active: true, chatId: currentChatId }),
+        );
+        prevVideoGenerationActiveRef.current = true;
+        return;
+      }
+      if (prevVideoGenerationActiveRef.current) {
+        window.sessionStorage.removeItem("siragpt.composer.videoMode");
+        prevVideoGenerationActiveRef.current = false;
+      }
+    } catch {}
+  }, [isVideoGenerationActive, currentChatId]);
   React.useEffect(() => {
     if (!isVideoGenerationActive && chatType !== 'video') return;
     let cancelled = false;
@@ -6015,17 +6923,18 @@ But first, you need to connect your Spotify account securely using the button be
           setSelectedVideoModel('');
           return;
         }
-        setSelectedVideoModel((current) => (
-          current && models.some((model: any) => model?.name === current)
-            ? current
-            : models[0].name
-        ));
+        const current = videoCatalogModels.length ? selectedVideoModel : '';
+        if (current && models.some((model: any) => model?.name === current)) {
+          setSelectedVideoModel(current);
+        } else {
+          setSelectedVideoModel(String(models[0]?.name ?? ''));
+        }
       })
       .catch((error) => {
         console.warn('No se pudo refrescar el catalogo de modelos de video:', error?.message || error);
       });
     return () => { cancelled = true; };
-  }, [chatType, isVideoGenerationActive, refreshVideoModels]);
+  }, [chatType, isVideoGenerationActive, refreshVideoModels, selectedVideoModel, videoCatalogModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -6060,14 +6969,18 @@ But first, you need to connect your Spotify account securely using the button be
     if (wantsVideo && !hasOtherActiveTool) {
       if (!isVideoGenerationActive && !autoVideoActivationRef.current) {
         closeAllToolsAndConnectors();
+        isVideoGenerationActiveRef.current = true;
         setIsVideoGenerationActive(true);
         setChatType('video');
         autoVideoActivationRef.current = true;
       }
 
       const requestedDuration = extractRequestedVideoDurationSeconds(input);
-      if (requestedDuration && selectedVideoDuration !== requestedDuration) {
-        setSelectedVideoDuration(requestedDuration as VideoDuration);
+      if (requestedDuration) {
+        const next = clampVideoDuration(requestedDuration, resolveVideoDurationSpec(selectedVideoModel))
+        if (next != null && selectedVideoDuration !== next) {
+          setSelectedVideoDuration(next as VideoDuration);
+        }
       }
       const requestedAspectRatio = extractRequestedVideoAspectRatio(input);
       if (requestedAspectRatio && selectedVideoAspectRatio !== requestedAspectRatio) {
@@ -6102,8 +7015,100 @@ But first, you need to connect your Spotify account securely using the button be
     selectedVideoAspectRatio,
     selectedVideoAudio,
     selectedVideoDuration,
+    selectedVideoModel,
     selectedVideoResolution,
     setChatType,
+  ]);
+
+  // Auto mode for the other tools (Imágenes / Música / Voz / Búsqueda web):
+  // the text itself says which tool the user wants ("crea una imagen de…",
+  // "compón una canción…", "narra este texto…", "busca en internet…"), so the
+  // matching chip switches on with the settings the prompt implies — the
+  // user never has to open the "+" menu first. Same contract as the video
+  // auto-activation above: never overrides a tool the user already chose,
+  // and Nuevo chat / the chip's X are the manual way out. One flip per draft.
+  const autoModeActivationRef = React.useRef<{ mode: ComposerAutoMode; input: string } | null>(null);
+  React.useEffect(() => {
+    const draft = (input || "").trim();
+    if (draft.length < 6) return;
+    if (shouldAutoActivateVideoGeneration(draft)) return; // owned by the video effect
+    const decision = detectComposerAutoMode(draft, { attachments: uploadedFiles as any });
+    if (!decision) return;
+    const anyToolActive =
+      isWebSearchActive ||
+      isImageGenerationActive ||
+      isVoiceGenerationActive ||
+      isMusicGenerationActive ||
+      isVideoGenerationActive ||
+      isComputerUseActive ||
+      isGmailActive ||
+      isGoogleCalendarActive ||
+      isGoogleDriveActive ||
+      isSpotifyActive ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      chatType !== 'text';
+    const alreadyFlipped = autoModeActivationRef.current?.input === draft;
+
+    if (decision.mode === 'image') {
+      if (!isImageGenerationActive) {
+        if (anyToolActive || alreadyFlipped) return;
+        closeAllToolsAndConnectors();
+        setIsImageGenerationActive(true);
+        setChatType('image');
+        autoModeActivationRef.current = { mode: 'image', input: draft };
+      }
+      const { imageAspectRatio, imageCount, imageQuality } = decision.settings;
+      if (imageAspectRatio && IMAGE_ASPECT_RATIO_OPTIONS.some((option) => option.value === imageAspectRatio) && selectedImageAspectRatio !== imageAspectRatio) {
+        setSelectedImageAspectRatio(imageAspectRatio as ImageAspectRatio);
+      }
+      if (imageCount && (IMAGE_COUNT_OPTIONS as readonly number[]).includes(imageCount) && selectedImageCount !== imageCount) {
+        setSelectedImageCount(imageCount as ImageGenerationCount);
+      }
+      if (imageQuality && (IMAGE_QUALITY_OPTIONS as readonly string[]).includes(imageQuality) && selectedImageQuality !== imageQuality) {
+        setSelectedImageQuality(imageQuality as ImageQuality);
+      }
+      return;
+    }
+    if (anyToolActive || alreadyFlipped) return;
+    if (decision.mode === 'music') {
+      closeAllToolsAndConnectors();
+      setIsMusicGenerationActive(true);
+      if (decision.settings.musicDurationSeconds) setSelectedMusicDuration(decision.settings.musicDurationSeconds);
+      autoModeActivationRef.current = { mode: 'music', input: draft };
+      return;
+    }
+    if (decision.mode === 'voice') {
+      closeAllToolsAndConnectors();
+      setIsVoiceGenerationActive(true);
+      autoModeActivationRef.current = { mode: 'voice', input: draft };
+      return;
+    }
+    if (decision.mode === 'web_search') {
+      setIsWebSearchActive(true);
+      autoModeActivationRef.current = { mode: 'web_search', input: draft };
+    }
+  }, [
+    chatType,
+    closeAllToolsAndConnectors,
+    input,
+    isComputerUseActive,
+    isExcelConnectorActive,
+    isGmailActive,
+    isGoogleCalendarActive,
+    isGoogleDriveActive,
+    isImageGenerationActive,
+    isMusicGenerationActive,
+    isSpotifyActive,
+    isVideoGenerationActive,
+    isVoiceGenerationActive,
+    isWebSearchActive,
+    isWordConnectorActive,
+    selectedImageAspectRatio,
+    selectedImageCount,
+    selectedImageQuality,
+    setChatType,
+    uploadedFiles,
   ]);
 
   React.useEffect(() => {
@@ -6280,6 +7285,29 @@ But first, you need to connect your Spotify account securely using the button be
   const chatHeaderRef = React.useRef<HTMLDivElement>(null);
   const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const [composerExpanded, setComposerExpanded] = React.useState(false)
+  const expandComposer = React.useCallback(() => {
+    setComposerExpanded((open) => {
+      const next = !open
+      try {
+        window.sessionStorage.setItem("siragpt.composer.expanded", next ? "1" : "0")
+      } catch {
+        /* quota / private mode */
+      }
+      return next
+    })
+  }, [])
+  React.useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem("siragpt.composer.expanded") === "1") {
+        setComposerExpanded(true)
+      }
+    } catch {
+      /* private mode */
+    }
+  }, [])
+  const [composerTextOverflows, setComposerTextOverflows] = React.useState(false)
+  const composerShowExpand = composerExpanded || composerTextOverflows
   const chatLayoutVarsRef = React.useRef<Record<string, number>>({});
   const composerResizeFrameRef = React.useRef<number | null>(null);
   const textareaLayoutRef = React.useRef<{ height: number; overflowY: string }>({ height: 0, overflowY: "" });
@@ -6290,6 +7318,39 @@ But first, you need to connect your Spotify account securely using the button be
   // typing the command name.
   const [slashMenuOpen, setSlashMenuOpen] = React.useState(false);
   const [slashMenuFilter, setSlashMenuFilter] = React.useState("");
+  const [mentionMenuOpen, setMentionMenuOpen] = React.useState(false);
+  const [mentionTrigger, setMentionTrigger] = React.useState<MentionTrigger | null>(null);
+  const [mentionSearchQuery, setMentionSearchQuery] = React.useState("");
+  const mentionSearchQueryRef = React.useRef("");
+  mentionSearchQueryRef.current = mentionSearchQuery;
+  const [mentionHealthById, setMentionHealthById] = React.useState<Record<string, string>>({});
+  const [mentionRegistryIds, setMentionRegistryIds] = React.useState<readonly string[]>(REGISTRY_APP_IDS);
+  const [selectedMentionIds, setSelectedMentionIds] = React.useState<string[]>([]);
+
+  // Persistent app pins — the composer rail to the right of "+" renders
+  // these logo-only chips. Per-conversation: server pins for real chats,
+  // localStorage draft pins before the first message.
+  const appPins = useAppPins(currentChat?.id)
+  const pinnedAppChips = React.useMemo<PinnedChipView[]>(() => {
+    const health = mentionHealthById
+    const pickerApps = buildPickerApps(health, undefined, mentionRegistryIds)
+    const byId = new Map(pickerApps.map((entry) => [entry.id, entry]))
+    const chips: PinnedChipView[] = []
+    for (const appId of appPins.pinnedAppIds) {
+      const app = byId.get(appId)
+      if (!app) continue
+      chips.push({
+        appId,
+        name: app.name,
+        logoUrl: app.logo || undefined,
+        logoSources: app.logoSources || undefined,
+        brandColor: undefined,
+        availability: app.status === "unavailable" ? "unavailable" : "available",
+        connectionStatus: health[appId] || null,
+      })
+    }
+    return chips
+  }, [appPins.pinnedAppIds, mentionHealthById, mentionRegistryIds])
 
   React.useEffect(() => {
     inputRef.current = input;
@@ -6307,7 +7368,161 @@ But first, you need to connect your Spotify account securely using the button be
       setSlashMenuOpen(true);
       setSlashMenuFilter(filter);
     }
+    const caret = textareaRef.current?.selectionStart;
+    const mention = detectAtMention(input, caret);
+    if (mention && filter === null) {
+      setMentionMenuOpen(true);
+      setMentionTrigger(mention);
+      if (mentionSearchQueryRef.current) setMentionSearchQuery("");
+    } else if (!mention) {
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+    }
   }, [input]);
+
+  React.useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+    const headers = {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const api = getNormalizedApiBaseUrl()
+    Promise.all([
+      authenticatedFetch(`${api}/apps`, {
+        credentials: "include",
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }).then(async (res) => (res.ok ? res.json().catch(() => ({})) : {})),
+      authenticatedFetch(`${api}/apps/connections`, {
+        credentials: "include",
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }).then(async (res) => (res.ok ? res.json().catch(() => ({})) : {})),
+    ])
+      .then(([appsBody, connectionsBody]) => {
+        if (cancelled) return
+        const manifests = Array.isArray((appsBody as { apps?: unknown }).apps)
+          ? (appsBody as { apps: Array<{ id?: string }> }).apps
+          : []
+        const registry = manifests
+          .map((app) => String(app?.id || "").trim())
+          .filter(Boolean)
+        if (registry.length) setMentionRegistryIds(registry)
+        const allowed = new Set(registry.length ? registry : REGISTRY_APP_IDS)
+        const next: Record<string, string> = {}
+        const list = Array.isArray((connectionsBody as { connections?: unknown }).connections)
+          ? (connectionsBody as { connections: Array<{ app?: string; status?: string }> }).connections
+          : []
+        for (const row of list) {
+          const appId = String(row?.app || "").trim()
+          const status = String(row?.status || "").trim()
+          if (appId && status && allowed.has(appId)) next[appId] = status
+        }
+        setMentionHealthById(next)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [user]);
+
+  const mentionPickerApps = React.useMemo(() => {
+    const query = mentionSearchQuery.trim() || mentionTrigger?.query || ""
+    const grouped = groupPickerApps(filterPickerApps(
+      buildPickerApps(mentionHealthById, undefined, mentionRegistryIds),
+      query,
+    ))
+    return grouped.flat.slice(0, 40)
+  }, [mentionHealthById, mentionRegistryIds, mentionTrigger, mentionSearchQuery]);
+
+  const startAppConnect = React.useCallback(async (app: MentionPickerApp) => {
+    const plan = resolveConnectPlan({ id: app.id, name: app.name, domain: app.domain })
+    if (plan.kind !== "oauth") {
+      toast.message(MENTION_COPY.unavailableDetail(app.name))
+      return { status: "unavailable" as const, markConnected: false, message: MENTION_COPY.unavailableDetail(app.name) }
+    }
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+    const result = await connectGptStoreApp(
+      { id: app.id, name: app.name, domain: app.domain },
+      {
+        isAuthenticated: Boolean(user || token),
+        loginNext: typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search || ""}` || "/agentes"
+          : "/agentes",
+        requireLogin: (next) => {
+          if (typeof window !== "undefined") {
+            window.location.href = `/auth/login?next=${encodeURIComponent(next || "/agentes")}`
+          }
+        },
+        fetchJson: async (requestPath) => {
+          const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}${requestPath}`, {
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            signal: AbortSignal.timeout(20_000),
+          })
+          const body = await res.json().catch(() => ({})) as Record<string, unknown>
+          return { ok: res.ok, status: res.status, body }
+        },
+        ensureComputer: async () => ({ conversationBound: false }),
+        navigateComputer: async () => undefined,
+        createConversation: async () => ({ id: "" }),
+        openComputerOverlay: () => undefined,
+      },
+    )
+    if (result.redirectUrl) {
+      toast.message(result.message)
+      window.location.href = result.redirectUrl
+      return result
+    }
+    if (result.status === "computer_opened") {
+      toast.message(MENTION_COPY.unavailableDetail(app.name))
+      return result
+    }
+    if (result.status !== "oauth_started") {
+      toast.error(result.message)
+    }
+    return result
+  }, [user])
+
+  const handleAppsMentionPick = React.useCallback(async (app: MentionPickerApp) => {
+    setMentionMenuOpen(false)
+    if (app.status === "connected") {
+      // Pin it (spec §4.3): connected + unpinned → pin + close panel +
+      // clear the @query token. The pin persists across turns and every
+      // subsequent message carries pinnedAppIds, so no inline @mention
+      // text is needed.
+      let nextInput = input
+      if (mentionTrigger) {
+        nextInput = `${input.slice(0, mentionTrigger.start)}${input.slice(mentionTrigger.start + 1 + mentionTrigger.query.length)}`
+          .replace(/\s+$/, "")
+      }
+      if (nextInput !== input) {
+        setInput(nextInput)
+        chatDraft.save(nextInput)
+      }
+      setMentionTrigger(null)
+      const ok = await appPins.pinApp(app.id)
+      if (!ok) toast.error("Puedes fijar hasta 4 apps. Quita una para agregar otra.")
+      window.setTimeout(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        const caret = nextInput.length
+        try { el.setSelectionRange(caret, caret) } catch { /* old Safari */ }
+      }, 0)
+      return
+    }
+    if (app.status === "connect") {
+      await startAppConnect(app)
+      return
+    }
+    toast.message(MENTION_COPY.unavailableDetail(app.name))
+  }, [appPins, chatDraft, input, mentionTrigger, startAppConnect]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
   const hasDetectedLinks = detectedLinks.length > 0;
@@ -6349,32 +7564,99 @@ But first, you need to connect your Spotify account securely using the button be
     root.dataset.chatInputFocused = focused ? "true" : "false";
   }, []);
 
+  const applyComposerTextareaMetrics = React.useCallback((
+    textarea: HTMLTextAreaElement,
+    scrollHeight: number,
+    maxHeight: number,
+    currentlyStacked = false,
+  ) => {
+    const measured = measureComposerTextarea({
+      scrollHeight,
+      minHeight: composerExpanded ? COMPOSER_TEXTAREA_EXPANDED_MIN_PX : COMPOSER_TEXTAREA_MIN_PX,
+      maxHeight,
+      hasExplicitNewline: textarea.value.includes("\n"),
+      charCount: textarea.value.length,
+      currentlyStacked: currentlyStacked || composerExpanded,
+    });
+    const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
+    const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
+
+    textarea.style.height = `${measured.height}px`;
+    textarea.style.setProperty("overflow-y", measured.overflowY, "important");
+    if (shell) {
+      shell.style.height = `${measured.height}px`;
+    }
+    if (surface) {
+      const stackedValue = (composerExpanded || measured.stacked) ? "true" : "false";
+      if (surface.dataset.composerStacked !== stackedValue) {
+        surface.dataset.composerStacked = stackedValue;
+      }
+    }
+    return composerExpanded ? { ...measured, stacked: true } : measured;
+  }, [composerExpanded]);
+
   const resizeComposerTextarea = React.useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // The approved composer is a stable-size control. Long prompts scroll
-    // inside the textarea instead of resizing the surrounding surface.
-    textarea.style.removeProperty("height");
-    const scrollHeight = textarea.scrollHeight;
-    const nextHeight = textarea.clientHeight;
-    const nextOverflowY = scrollHeight > textarea.clientHeight + 1 ? "auto" : "hidden";
-    const previousLayout = textareaLayoutRef.current;
-    const heightChanged = previousLayout.height !== nextHeight;
-    const overflowChanged = previousLayout.overflowY !== nextOverflowY;
+    // Grow with content (Claude/ChatGPT control-bar rhythm) up to the CSS
+    // max-height, then scroll internally so the surface stays professional.
+    // When the prompt wraps, pin the model picker to the footer so the
+    // capsule captures the full draft instead of clipping it beside the chip.
+    const computedMax = Number.parseFloat(
+      window.getComputedStyle(textarea).maxHeight || "0",
+    );
+    const maxHeight = Number.isFinite(computedMax) && computedMax > 0
+      ? computedMax
+      : 200;
 
-    if (overflowChanged) {
-      textarea.style.overflowY = nextOverflowY;
+    const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
+    const currentlyStacked = surface?.dataset.composerStacked === "true";
+    textarea.style.height = "0px";
+    let contentScrollHeight = textarea.scrollHeight;
+    let measured = applyComposerTextareaMetrics(
+      textarea,
+      contentScrollHeight,
+      maxHeight,
+      currentlyStacked,
+    );
+
+    // Switching to the stacked grid changes the textarea width, so remasure
+    // height after the footer layout is applied. Keep the stacked decision
+    // from the first pass so a wider line cannot collapse the toolbar.
+    if (measured.stacked) {
+      textarea.style.height = "0px";
+      contentScrollHeight = textarea.scrollHeight;
+      const restacked = applyComposerTextareaMetrics(
+        textarea,
+        contentScrollHeight,
+        maxHeight,
+        true,
+      );
+      measured = { ...restacked, stacked: true };
+      if (surface) surface.dataset.composerStacked = "true";
     }
+
+    const previousLayout = textareaLayoutRef.current;
+    const heightChanged = previousLayout.height !== measured.height;
+    const overflowChanged = previousLayout.overflowY !== measured.overflowY;
     if (heightChanged || overflowChanged) {
-      textareaLayoutRef.current = { height: nextHeight, overflowY: nextOverflowY };
+      textareaLayoutRef.current = { height: measured.height, overflowY: measured.overflowY };
     }
-    if (nextOverflowY === "auto" && document.activeElement === textarea) {
+    if (measured.overflowY === "auto" && document.activeElement === textarea) {
       textarea.scrollTop = textarea.scrollHeight;
     }
 
+    const nextOverflow = shouldShowComposerExpandControl({
+      scrollHeight: contentScrollHeight,
+      clientHeight: textarea.clientHeight,
+      minHeight: COMPOSER_TEXTAREA_MIN_PX,
+      value: textarea.value,
+    });
+    setComposerTextOverflows((prev) => (prev === nextOverflow ? prev : nextOverflow));
+
     syncChatLayoutVars();
-  }, [syncChatLayoutVars]);
+  }, [applyComposerTextareaMetrics, syncChatLayoutVars]);
 
   const scheduleComposerTextareaResize = React.useCallback(() => {
     if (composerResizeFrameRef.current !== null) return;
@@ -6392,6 +7674,10 @@ But first, you need to connect your Spotify account securely using the button be
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    scheduleComposerTextareaResize();
+  }, [composerExpanded, scheduleComposerTextareaResize]);
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -6642,7 +7928,7 @@ But first, you need to connect your Spotify account securely using the button be
           role: String(m.role || "USER").toUpperCase(),
           content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
           files,
-          metadata: typeof m.metadata === "string" ? m.metadata : undefined,
+          metadata: serializeBranchedMessageMetadata(m.metadata),
         });
       }
 
@@ -6720,22 +8006,6 @@ But first, you need to connect your Spotify account securely using the button be
         ? "El micrófono está bloqueado. Actívalo en los permisos del navegador y vuelve a intentarlo."
         : "No se pudo acceder al micrófono. Revisa que esté conectado y permitido.",
     );
-  }, []);
-
-  const ensureMicrophonePermission = React.useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("getUserMedia unsupported");
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    stream.getTracks().forEach(track => track.stop());
-    dictationPermissionReadyRef.current = true;
   }, []);
 
   const transcribeRecordedDictation = React.useCallback(async (audioBlob: Blob) => {
@@ -6837,18 +8107,18 @@ But first, you need to connect your Spotify account securely using the button be
   }, [showMicrophonePermissionError, transcribeRecordedDictation]);
 
   React.useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition = getSpeechRecognitionCtor(window as any);
 
     if (SpeechRecognition) {
       setIsSpeechSupported(true);
-      const recognition = new SpeechRecognition();
+      const recognition = new (SpeechRecognition as any)();
       recognition.continuous = true;
       recognition.interimResults = true;
-      const preferredLanguage = navigator.languages?.find(lang => lang.toLowerCase().startsWith("es"))
-        || navigator.language
-        || document.documentElement.lang
-        || "es-ES";
-      recognition.lang = preferredLanguage.toLowerCase().startsWith("en") ? "es-ES" : preferredLanguage;
+      recognition.lang = resolveDictationLanguage({
+        languages: navigator.languages,
+        language: navigator.language,
+        documentLang: document.documentElement.lang,
+      });
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalTranscript = '';
@@ -6871,23 +8141,27 @@ But first, you need to connect your Spotify account securely using the button be
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
-        const permissionErrors = new Set(["not-allowed", "service-not-allowed"]);
+        if (isIgnorableSpeechError(event.error)) {
+          return;
+        }
+
         if (
-          permissionErrors.has(event.error)
-          && dictationPermissionReadyRef.current
+          (isSpeechPermissionError(event.error) || event.error === "network")
           && !dictationNativeFallbackStartedRef.current
         ) {
           dictationNativeFallbackStartedRef.current = true;
+          dictationWantListeningRef.current = false;
           toast.info("El dictado nativo no se activó. Usaré grabación y transcripción al detener.");
           void startRecorderDictation();
           return;
         }
 
-        if (permissionErrors.has(event.error)) {
+        if (isSpeechPermissionError(event.error)) {
           toast.error("El micrófono está bloqueado. Actívalo en los permisos del navegador y vuelve a intentarlo.");
-        } else if (event.error !== "no-speech" && event.error !== "aborted") {
+        } else {
           toast.error("No se pudo iniciar el dictado. Inténtalo de nuevo.");
         }
+        dictationWantListeningRef.current = false;
         dictationModeRef.current = "idle";
         setIsRecording(false);
       };
@@ -6895,12 +8169,22 @@ But first, you need to connect your Spotify account securely using the button be
       recognition.onend = () => {
         if (dictationModeRef.current === "recorder") return;
 
+        if (shouldRestartNativeDictation(dictationModeRef.current, dictationWantListeningRef.current)) {
+          try {
+            recognition.start();
+            return;
+          } catch (error: any) {
+            if (error?.name === "InvalidStateError") return;
+          }
+        }
+
         const committedDraft = buildDictationDraft(dictationInterimRef.current);
         if (committedDraft) {
           setInput(committedDraft);
           inputRef.current = committedDraft;
         }
         resetDictationTranscript();
+        dictationWantListeningRef.current = false;
         dictationModeRef.current = "idle";
         setIsRecording(false);
       };
@@ -6909,6 +8193,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     return () => {
+      dictationWantListeningRef.current = false;
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
@@ -6919,12 +8204,13 @@ But first, you need to connect your Spotify account securely using the button be
     };
   }, [buildDictationDraft, normalizeDictationText, resetDictationTranscript, startRecorderDictation]);
 
-  const handleMicClick = async () => {
+  const handleMicClick = () => {
     const recognition = recognitionRef.current;
 
     if (isDictationTranscribing) return;
 
     if (isRecording) {
+      dictationWantListeningRef.current = false;
       if (dictationModeRef.current === "recorder") {
         dictationShouldTranscribeRecordingRef.current = true;
         dictationMediaRecorderRef.current?.stop();
@@ -6937,15 +8223,7 @@ But first, you need to connect your Spotify account securely using the button be
     dictationBaseRef.current = inputRef.current;
     dictationFinalRef.current = "";
     dictationInterimRef.current = "";
-    dictationPermissionReadyRef.current = false;
     dictationNativeFallbackStartedRef.current = false;
-
-    try {
-      await ensureMicrophonePermission();
-    } catch (error) {
-      showMicrophonePermissionError(error);
-      return;
-    }
 
     if (!recognition) {
       void startRecorderDictation();
@@ -6954,15 +8232,18 @@ But first, you need to connect your Spotify account securely using the button be
 
     try {
       dictationModeRef.current = "native";
+      dictationWantListeningRef.current = true;
       recognition.start();
       setIsRecording(true);
     } catch (error: any) {
       if (error?.name === "InvalidStateError") {
+        dictationWantListeningRef.current = true;
         setIsRecording(true);
         return;
       }
 
       console.error("Speech recognition start error:", error);
+      dictationWantListeningRef.current = false;
       toast.info("El dictado nativo no inició. Usaré grabación y transcripción al detener.");
       void startRecorderDictation();
     }
@@ -6982,24 +8263,29 @@ But first, you need to connect your Spotify account securely using the button be
           chatTypes={chatType}
           currentChat={currentChat}
           setCurrentChat={setCurrentChat}
+          selectedEffort={selectedEffort}
+          setSelectedEffort={setSelectedEffort}
         />
       </div>
     )
   }
 
+  // No `title` on the button: the Radix tooltip below is the hover affordance
+  // and carries richer copy (it warns when the browser has no speech support).
+  // A native title would race it and win with weaker, contradictory text.
   const renderDictationButton = () => (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
+          type="button"
           variant="ghost"
           size="icon"
           onClick={handleMicClick}
           disabled={isDictationTranscribing}
           aria-label={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           aria-pressed={isRecording}
-          title={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           className={cn(
-            "relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
+            "composer-dictation-button relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
             isRecording
               ? "bg-red-500/10 text-red-500 hover:bg-red-500/15 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
@@ -7017,7 +8303,7 @@ But first, you need to connect your Spotify account securely using the button be
             <>
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-full bg-red-500/30 animate-ping"
+                className="composer-mic-pulse pointer-events-none absolute inset-0 rounded-full bg-red-500/30 animate-ping"
               />
               <span
                 aria-hidden
@@ -7046,6 +8332,225 @@ But first, you need to connect your Spotify account securely using the button be
         </p>
       </TooltipContent>
     </Tooltip>
+  );
+
+  const renderChatComposer = () => (
+    <ChatComposerSurface
+      layout="stacked"
+      expanded={composerExpanded}
+      overlayVisible={pasteCapture.overlayVisible}
+      overlay={pasteCapture.Overlay}
+      slashMenu={
+        <SlashCommandMenu
+          open={slashMenuOpen}
+          filter={slashMenuFilter}
+          onCommandPick={(cmd) => {
+            setInput(cmd.insert);
+            setSlashMenuOpen(false);
+            window.setTimeout(() => {
+              const el = textareaRef.current;
+              if (el) {
+                const len = cmd.insert.length;
+                el.focus();
+                try { el.setSelectionRange(len, len); } catch { /* old Safari */ }
+              }
+            }, 0);
+          }}
+          onClose={() => setSlashMenuOpen(false)}
+        />
+      }
+      mentionMenu={
+        <AppsMentionPicker
+          open={mentionMenuOpen && !slashMenuOpen}
+          filter={mentionSearchQuery || mentionTrigger?.query || ""}
+          apps={mentionPickerApps}
+          enableSearchField
+          pinnedAppIds={appPins.pinnedAppIds}
+          onSearchChange={(query) => setMentionSearchQuery(query)}
+          onPick={(app) => { void handleAppsMentionPick(app); }}
+          onClose={() => {
+            setMentionMenuOpen(false);
+            setMentionTrigger(null);
+            setMentionSearchQuery("");
+          }}
+        />
+      }
+      contextTray={
+        <>
+          <ActiveOptionsDisplay
+            uploadedFiles={uploadedFiles}
+            removeFile={removeFile}
+            uploadProgress={uploadProgress}
+            retryUpload={retryUpload}
+            restoreLongPasteToInput={restoreLongPasteToInput}
+            moveFile={moveFile}
+            onPreviewAttachment={handleComposerAttachmentPreview}
+            onFileProcessingStatusChange={handleFileProcessingStatusChange}
+          />
+          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+        </>
+      }
+      leading={
+        <>
+          <ActionsDropdown {...actionsDropdownProps} />
+          <ComposerPermissionMenu />
+          {appPins.enabled && (
+            <PinnedAppRail
+              chips={pinnedAppChips}
+              onUnpin={(appId) => {
+                void appPins.unpinApp(appId)
+                toast.success("App quitada de este chat")
+              }}
+              onReconnect={(chip) => {
+                const app = buildPickerApps(mentionHealthById, undefined, mentionRegistryIds)
+                  .find((entry) => entry.id === chip.appId)
+                if (app) void startAppConnect(app)
+              }}
+            />
+          )}
+          {shouldInlineActiveTools && (
+            <div className="composer-inline-active-tools">
+              <ActiveToolsDisplay {...activeToolsProps} />
+            </div>
+          )}
+        </>
+      }
+      textarea={
+        <div className={cn("composer-textarea-shell min-w-0 flex-1", composerShowExpand && "has-expand-control")}>
+          {composerShowExpand ? (
+            <button
+              type="button"
+              onClick={expandComposer}
+              aria-pressed={composerExpanded}
+              aria-label={composerExpanded ? "Contraer" : "Ampliar"}
+              title={composerExpanded ? "Contraer" : "Ampliar"}
+              data-testid="chat-composer-expand"
+              className="composer-expand-button"
+            >
+              {composerExpanded ? (
+                <Minimize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
+          {hasDetectedLinks && input ? (
+            <div
+              ref={composerHighlightOverlayRef}
+              className="composer-textarea-highlights textarea-scrollbar"
+              aria-hidden="true"
+            >
+              <ComposerInlineLinkHighlights value={input} />
+            </div>
+          ) : null}
+          <Textarea
+            ref={textareaRef}
+            value={input}
+            onChange={handleTextareaChange}
+            onKeyDown={handleKeyDown}
+            onFocus={handleTextareaFocus}
+            onBlur={handleTextareaBlur}
+            onPaste={handleTextareaPaste}
+            onScroll={handleComposerTextareaScroll}
+            onCompositionStart={() => { isComposingRef.current = true }}
+            onCompositionEnd={() => { isComposingRef.current = false }}
+            aria-label="Mensaje para SiraGPT"
+            enterKeyHint="send"
+            data-link-highlights={hasDetectedLinks ? "true" : undefined}
+            placeholder={
+              isImageGenerationActive
+                ? tComposer("placeholderImage")
+                : isVideoGenerationActive
+                  ? tComposer("placeholderVideo")
+                  : isVoiceGenerationActive
+                    ? VOICE_COMPOSER_PLACEHOLDER
+                    : isMusicGenerationActive
+                      ? "Describe la música que quieres crear"
+                      : isWebSearchActive
+                        ? tComposer("placeholderWebSearch")
+                        : isComputerUseActive
+                          ? tComposer("placeholderComputer")
+                          : isGmailActive
+                            ? tComposer("placeholderGmail")
+                            : (isGoogleCalendarActive || isGoogleDriveActive)
+                              ? tComposer("placeholderGoogle")
+                              : isSpotifyActive
+                                ? tComposer("placeholderSpotify")
+                                : isWordConnectorActive
+                                  ? tComposer("placeholderWord")
+                                  : isWorkModeActive
+                                    ? "Describe el resultado que quieres obtener"
+                                    : tComposer("placeholderDefault")
+            }
+            className={cn(
+              "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
+              "p-0",
+              "text-[15px] leading-[1.5] tracking-normal text-foreground",
+              "placeholder:text-muted-foreground/65 placeholder:font-normal",
+              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+              "outline-none ring-0 focus:outline-none focus:ring-0",
+              "rounded-none transition-colors duration-200",
+            )}
+            style={{
+              minHeight: composerExpanded ? "8.5rem" : "26px",
+              maxHeight: composerExpanded ? "min(18rem, 52vh)" : "min(12.5rem, 42vh)",
+              overflowY: "hidden",
+              overflowX: "hidden",
+              wordWrap: "break-word",
+              border: "none",
+              outline: "none",
+              boxShadow: "none",
+            }}
+            rows={1}
+          />
+        </div>
+      }
+      toolbar={
+        <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
+          <ComposerCharCounter input={input} />
+          {/* Text-reasoning controls stay out of generation modes (Imágenes /
+              Video / Voz / Música): those turns don't consume the text context
+              window and take no reasoningEffort, so token/cost meters and the
+              effort slider would show misleading numbers. The model picker
+              already hides itself via isMediaToolActive; state is preserved
+              and the chips return when the modality is closed. */}
+          {!isMediaToolActive && (
+            <ComposerContextMenu
+              messages={currentChat?.messages || []}
+              selectedModel={currentChat?.model || selectedModel}
+              availableModels={availableModels}
+            />
+          )}
+          {renderComposerModelControls()}
+          {!isMediaToolActive && (
+            <ComposerEffortMenu
+              selectedEffort={selectedEffort}
+              setSelectedEffort={setSelectedEffort}
+            />
+          )}
+          {renderDictationButton()}
+          <ChatComposerPrimaryAction
+            input={input}
+            hasAttachment={uploadedFiles.length > 0}
+            requiresPromptBeforePrimarySend={requiresPromptBeforePrimarySend}
+            busy={isCurrentChatLocalJobBusy || isUploading}
+            isStopButtonVisible={isStopButtonVisible}
+            shouldPrioritizeStopButton={shouldPrioritizeStopButton}
+            pendingStop={pendingStop}
+            isCurrentChatStreaming={isCurrentChatStreaming}
+            onSend={handleSend}
+            onStop={stopActiveGeneration}
+          />
+        </div>
+      }
+      footer={
+        hasActiveTools && !shouldInlineActiveTools ? (
+          <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+            <ActiveToolsDisplay {...activeToolsProps} />
+          </div>
+        ) : null
+      }
+    />
   );
 
   // React.useEffect(() => {
@@ -7088,6 +8593,11 @@ But first, you need to connect your Spotify account securely using the button be
       } else if (isGeneratingMusicRef.current) {
         setIsMusicGenerationActive(true);
         setChatType('text');
+      } else if (isGeneratingVideoRef.current || isVideoGenerationActiveRef.current) {
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current, preserveVideo: true });
       } else {
         closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
         setChatType('text'); // Always default to text when switching chats
@@ -7117,6 +8627,11 @@ But first, you need to connect your Spotify account securely using the button be
     } else if (isGeneratingMusicRef.current) {
       setIsMusicGenerationActive(true);
       setChatType('text');
+    } else if (isGeneratingVideoRef.current || isVideoGenerationActiveRef.current) {
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
+      closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current, preserveVideo: true });
     } else {
       closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
     }
@@ -7215,7 +8730,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const urlChatId = typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('id')
+      ? conversationIdFromLocation(window.location.pathname, window.location.search)
       : null;
     if (urlChatId && currentChat?.id !== urlChatId) {
       selectChat(urlChatId);
@@ -7343,7 +8858,7 @@ But first, you need to connect your Spotify account securely using the button be
     // Build temp objects with stable IDs we can map to per-file progress.
     const tempFiles = filesToUpload.map((file) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      const preview = /^(image|audio|video)\//.test(file.type) ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
       const contentHash = batchHashes?.get(file) || null;
       if (contentHash) {
@@ -7422,7 +8937,12 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }, 90);
 
-      const uploadChunks = buildChatUploadChunks(filesToUpload, tempFiles);
+      // Large media (≥ 80 MB) never fits one proxied request: it is isolated
+      // in its own batch and sent through the chunked transport below.
+      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles, {
+        ...COMPOSER_UPLOAD_BATCH_LIMITS,
+        isolate: shouldUseChunkedUpload,
+      });
       let failedChunkCount = 0;
 
       for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
@@ -7434,18 +8954,24 @@ But first, you need to connect your Spotify account securely using the button be
           // Real upload progress via XHR (see lib/api.ts uploadFiles).
           // Large selections are split into bounded multipart requests so
           // 400 documents do not exceed the edge/body-size guard.
-          const response: any = await apiClient.uploadFiles(filesToFileList(chunk.files), {
-            sourceChannel,
-            idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
-            asyncProcessing: true,
-            onProgress: (pct) => {
-              setUploadProgress(prev => {
-                const next = { ...prev };
-                chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
-                return next;
-              });
-            },
-          });
+          const reportChunkProgress = (pct: number) => {
+            setUploadProgress(prev => {
+              const next = { ...prev };
+              chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
+              return next;
+            });
+          };
+          const response: any = chunk.isolated && chunk.files.length === 1 && shouldUseChunkedUpload(chunk.files[0])
+            ? await apiClient.uploadFileChunked(chunk.files[0], {
+              sourceChannel,
+              onProgress: reportChunkProgress,
+            })
+            : await apiClient.uploadFiles(filesToFileList(chunk.files), {
+              sourceChannel,
+              idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
+              asyncProcessing: true,
+              onProgress: reportChunkProgress,
+            });
 
           if (!response.files) {
             failedChunkCount += 1;
@@ -7508,6 +9034,32 @@ But first, you need to connect your Spotify account securely using the button be
             ];
             uploadedFilesRef.current = next;
             return next;
+          });
+          chunkTemps.forEach((tf, idx) => {
+            const mergedFile = merged[idx];
+            if (!mergedFile || !(tf.file instanceof File) || !String(tf.type || "").startsWith("image/")) return;
+            void recognizeImageWithRetry(tf.file).then((ocr) => {
+              if (!ocr.text) return;
+              setUploadedFiles((cur: any[]) => {
+                const next = cur.map((f: any) =>
+                  f.tempId === tf.tempId
+                    ? {
+                        ...f,
+                        extractedText: ocr.text,
+                        ocr: {
+                          ...(f.ocr || {}),
+                          confidence: ocr.confidence,
+                          provider: "tesseract.js",
+                          clientPreprocess: true,
+                          retries: ocr.retries,
+                        },
+                      }
+                    : f
+                );
+                uploadedFilesRef.current = next;
+                return next;
+              });
+            }).catch(() => {});
           });
 
           setTimeout(() => {
@@ -7949,21 +9501,110 @@ But first, you need to connect your Spotify account securely using the button be
   // composer is busy streaming a prior turn, we park it in this ref and
   // flush it automatically when the pipeline goes idle. This keeps the
   // "user types 3 things quickly" flow working without losing text.
-  const pendingMsgQueueRef = React.useRef<Array<{ chatId: string | null; msg: string; files: any[] }>>([]);
+  const pendingMsgQueueRef = React.useRef<PersistedComposerQueueItem[]>([]);
   const queueBurstTimestampsRef = React.useRef<number[]>([]);
-  const handleSendRef = React.useRef<() => void>(() => {});
+  const handleSendRef = React.useRef<() => Promise<void>>(async () => {});
+  const queuedComposerSendRef = React.useRef<PersistedComposerQueueItem | null>(null);
+  const queuedSendSucceededRef = React.useRef<Map<string, boolean>>(new Map());
+  const queueDrainClaimsRef = React.useRef<Set<string>>(new Set());
+  const hydratedQueueOwnerRef = React.useRef("");
+  const queueOwnerId = user?.id ? String(user.id) : "";
   // Reactive mirror of the per-chat queued-message count so the composer can
   // SHOW the user that their extra tasks (sent while the agent is thinking)
   // are queued and will run in order. The ref above is the source of truth;
   // this state just drives the visible "N en cola" chip.
   const [queuedCount, setQueuedCount] = React.useState(0);
+  const [queueHydrationVersion, setQueueHydrationVersion] = React.useState(0);
   const syncQueuedCount = React.useCallback((chatId?: string | null) => {
     const cid = chatId ?? currentChatIdRef.current ?? null;
     setQueuedCount(pendingMsgQueueRef.current.filter((q) => q.chatId === cid).length);
   }, []);
+
+  const persistComposerQueue = React.useCallback(() => {
+    if (!queueOwnerId) return;
+    writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
+  }, [queueOwnerId]);
+
+  const prevComposerChatIdRef = React.useRef<string | null>(currentChat?.id ?? null);
+  React.useEffect(() => {
+    const previousChatId = prevComposerChatIdRef.current;
+    const nextChatId = currentChat?.id ?? null;
+    prevComposerChatIdRef.current = nextChatId;
+    if (!nextChatId || String(nextChatId).startsWith("temp-chat-")) return;
+    const fromNewChat = previousChatId == null || String(previousChatId).startsWith("temp-chat-");
+    if (!fromNewChat) return;
+    const adopted = adoptUnboundComposerQueueItems(
+      pendingMsgQueueRef.current,
+      nextChatId,
+      previousChatId,
+    );
+    if (!adopted.changed) return;
+    pendingMsgQueueRef.current = adopted.items;
+    persistComposerQueue();
+    syncQueuedCount(nextChatId);
+  }, [currentChat?.id, persistComposerQueue, syncQueuedCount]);
+
+  // Hydrate tasks that the user explicitly queued while another turn was
+  // running. Unlike a plain ref, this survives refreshes and browser restarts.
+  React.useEffect(() => {
+    if (!queueOwnerId) {
+      pendingMsgQueueRef.current = [];
+      queueDrainClaimsRef.current.clear();
+      hydratedQueueOwnerRef.current = "";
+      syncQueuedCount(currentChatIdRef.current);
+      setQueueHydrationVersion((version) => version + 1);
+      return;
+    }
+    const stored = readPersistedComposerQueue(queueOwnerId);
+    if (hydratedQueueOwnerRef.current !== queueOwnerId) {
+      queueDrainClaimsRef.current.clear();
+    }
+    const live = hydratedQueueOwnerRef.current === queueOwnerId
+      ? pendingMsgQueueRef.current
+      : [];
+    const byId = new Map<string, PersistedComposerQueueItem>();
+    for (const item of [...stored, ...live]) byId.set(item.id, item);
+    pendingMsgQueueRef.current = Array.from(byId.values());
+    hydratedQueueOwnerRef.current = queueOwnerId;
+    persistComposerQueue();
+    syncQueuedCount(currentChatIdRef.current);
+    // Refs do not trigger effects. This version makes the drain effect observe
+    // a queue restored from localStorage even if every busy flag stayed idle.
+    setQueueHydrationVersion((version) => version + 1);
+  }, [persistComposerQueue, queueOwnerId, syncQueuedCount]);
+
   React.useEffect(() => {
     syncQueuedCount(currentChat?.id ?? null);
   }, [currentChat?.id, syncQueuedCount]);
+
+  const restoreLastQueuedMessage = React.useCallback(() => {
+    const chatId = currentChatIdRef.current ?? null;
+    const index = pendingMsgQueueRef.current
+      .map((item) => item.chatId === chatId && !queueDrainClaimsRef.current.has(item.id))
+      .lastIndexOf(true);
+    if (index < 0) return;
+    const [item] = pendingMsgQueueRef.current.splice(index, 1);
+    if (!item) return;
+    persistComposerQueue();
+    syncQueuedCount(chatId);
+    setInput(item.msg);
+    chatDraft.save(item.msg);
+    uploadedFilesRef.current = item.files;
+    setUploadedFiles(item.files);
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [chatDraft, persistComposerQueue, setUploadedFiles, syncQueuedCount]);
+
+  const removeLastQueuedMessage = React.useCallback(() => {
+    const chatId = currentChatIdRef.current ?? null;
+    const index = pendingMsgQueueRef.current
+      .map((item) => item.chatId === chatId && !queueDrainClaimsRef.current.has(item.id))
+      .lastIndexOf(true);
+    if (index < 0) return;
+    pendingMsgQueueRef.current.splice(index, 1);
+    persistComposerQueue();
+    syncQueuedCount(chatId);
+    toast.success("Tarea quitada de la cola");
+  }, [persistComposerQueue, syncQueuedCount]);
 
   // ────────────────────────────────────────────────────────────
   // Sidebar auto-collapse — when the user turns on any composer tool
@@ -7971,7 +9612,7 @@ But first, you need to connect your Spotify account securely using the button be
   // we collapse the left rail for a cleaner workspace. Never auto-
   // reopen; the user restores it via the floating PanelLeftOpen chip.
   // ────────────────────────────────────────────────────────────
-  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
+  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile, openMobile: sidebarOpenMobile, setOpenMobile: setSidebarOpenMobile } = useSidebar();
 
   // ────────────────────────────────────────────────────────────
   // Tool activation → auto-collapse the OUTER (visible) sidebar.
@@ -8089,8 +9730,8 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
 
   const composerPreviewSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles],
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress],
   );
   const composerPreviewAttachment = React.useMemo<AttachmentLike | null>(() => {
     if (composerPreviewIndex === null) return null;
@@ -8098,7 +9739,12 @@ But first, you need to connect your Spotify account securely using the button be
   }, [composerPreviewIndex, composerPreviewSiblings]);
 
   const openComposerDocumentPreview = React.useCallback((index: number) => {
-    if (!uploadedFiles[index]) return;
+    const file = uploadedFiles[index];
+    if (!file) return;
+    if (file.status === "uploading" || !canOpenComposerPreview({
+      id: resolveUploadFileId(file),
+      status: file.status,
+    })) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setSidePreviewAttachment(null);
@@ -8198,7 +9844,7 @@ But first, you need to connect your Spotify account securely using the button be
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
-          const researchModel = currentChatRef.current?.model || selectedModelRef.current
+          const researchModel = clampDeepSeekModel(currentChatRef.current?.model || selectedModelRef.current)
           if (!researchModel) throw new Error("Selecciona un modelo antes de iniciar la investigación")
           const researchChat = await ensureResearchCommandChat({
             currentChat: currentChatRef.current,
@@ -8316,10 +9962,20 @@ But first, you need to connect your Spotify account securely using the button be
   }, [selectChat]);
 
   const handleSend = async () => {
-    let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
+    const queuedSend = queuedComposerSendRef.current;
+    queuedComposerSendRef.current = null;
+    if (queuedSend) queuedSendSucceededRef.current.set(queuedSend.id, false);
+    const markQueuedSendSucceeded = () => {
+      if (queuedSend) queuedSendSucceededRef.current.set(queuedSend.id, true);
+    };
+    let composerFiles = queuedSend
+      ? [...queuedSend.files]
+      : uploadedFilesRef.current.length > 0
+        ? [...uploadedFilesRef.current]
+        : [...uploadedFiles];
     // Normalize before trim so zero-width chars don't sneak past the
     // "is it empty?" check, and so we can warn on catastrophic pastes.
-    const normalized = normalizeChatInput(input);
+    const normalized = normalizeChatInput(queuedSend?.msg ?? input);
     if (shouldWarnUser(normalized)) {
       toast.error(
         `El mensaje supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó al máximo permitido.`,
@@ -8334,7 +9990,6 @@ But first, you need to connect your Spotify account securely using the button be
     // blocks sending here. The per-message idempotency key below handles retry
     // safety once the send payload has been built.
     const sendLatchKey = currentChat?.id ?? '__new__';
-    if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
 
     // ── Slash-command intercept ────────────────────────────────────────
     // Slash commands use their dedicated backend routes. `/research` owns its
@@ -8344,10 +9999,19 @@ But first, you need to connect your Spotify account securely using the button be
       setInput("");
       try {
         await runSlashCommand(slash);
+        markQueuedSendSucceeded();
       } catch (err: any) {
         toast.error(`Slash command failed: ${err?.message || err}`);
       }
       return;
+    }
+
+    const mentionPayload = resolveMentionedApps(rawMsg, selectedMentionIds, mentionHealthById, undefined, mentionRegistryIds)
+    if (mentionPayload.needsConnect[0]) {
+      toast.message(MENTION_COPY.connectPrompt(mentionPayload.needsConnect[0].name))
+    }
+    if (mentionPayload.unavailable[0] && mentionPayload.connectedAppIds.length === 0 && mentionPayload.needsConnect.length === 0) {
+      toast.message(MENTION_COPY.unavailableDetail(mentionPayload.unavailable[0].name))
     }
 
     if (composerFiles.some(isComposerFileUploadPending)) {
@@ -8392,7 +10056,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (inFlightSendKeysRef.current.has(sendKey)) {
       return;
     }
-    const idempotencyKey = `chat-send-${safeUUID()}`;
+    const idempotencyKey = queuedSend?.idempotencyKey || `chat-send-${safeUUID()}`;
     inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
 
     const activeFreePreviewTool = isFreePlan
@@ -8443,7 +10107,7 @@ But first, you need to connect your Spotify account securely using the button be
       imageModelForSendOverride = String(activeImageModel.name).trim();
       if (imageModelForSendOverride !== selectedImageModelForSend) {
         setSelectedImageModel(imageModelForSendOverride);
-        toast.info(`El modelo seleccionado ya no esta activo. Usare ${activeImageModel.displayName || activeImageModel.name}.`);
+        toast.info(`El modelo seleccionado ya no esta activo. Usare ${brandModelLabel(activeImageModel)}.`);
       }
     }
 
@@ -8458,16 +10122,37 @@ But first, you need to connect your Spotify account securely using the button be
       model: selectedModel || null,
     });
 
-    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
+    const isBusy = isCurrentChatStreaming
+      || isCurrentChatLocalJobBusy
+      || isUploading
+      || sendInFlightChatsRef.current.has(sendLatchKey);
 
     if (isBusy) {
+      // An auto-drained item is still claimed in the durable queue. If the
+      // chat became busy between scheduling and execution, leave that item in
+      // place instead of enqueueing a duplicate with the same idempotency key.
+      if (queuedSend) {
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
       // Park the message — we'll drain the queue once the busy flags
       // flip back to idle (see the useEffect watching busy state).
-      pendingMsgQueueRef.current.push({ chatId: currentChat?.id ?? null, msg, files: composerFiles });
+      const queuedItem = createPersistedComposerQueueItem({
+        id: `queued-${safeUUID()}`,
+        ownerId: queueOwnerId || "__session__",
+        chatId: currentChat?.id ?? null,
+        msg,
+        files: composerFiles,
+        idempotencyKey,
+      });
+      pendingMsgQueueRef.current.push(queuedItem);
+      persistComposerQueue();
       syncQueuedCount(currentChat?.id ?? null);
       setInput("");
+      chatDraft.clear();
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
       const now = Date.now();
       queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
       queueBurstTimestampsRef.current.push(now);
@@ -8479,6 +10164,62 @@ But first, you need to connect your Spotify account securely using the button be
       }
       inFlightSendKeysRef.current.delete(sendKey);
       return;
+    }
+
+    const sandboxDecision = resolveDocumentSandboxAdmission(msg, {
+      attachments: composerFiles,
+      historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+      previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      wordHtml: isWordConnectorActive
+        ? (wordConnectorRef.current?.getHTML() || (currentChat as { wordContent?: string } | null)?.wordContent || "")
+        : "",
+      connectorOpen: Boolean(isWordConnectorActive || isExcelConnectorActive),
+    });
+    if (sandboxDecision.route === "need_original") {
+      toast.error(DOCUMENT_SANDBOX_NEED_ORIGINAL);
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+    if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
+      setInput("");
+      setSelectedMentionIds([]);
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+      setMentionSearchQuery("");
+      chatDraft.clear();
+      uploadedFilesRef.current = [];
+      setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        if (sandboxDecision.route === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, sandboxDecision.attachments, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = composerFiles;
+          setUploadedFiles(composerFiles);
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
     }
 
     // Handle rewrite request
@@ -8550,6 +10291,7 @@ REWRITTEN TEXT:`;
             setIsRewriting(false);
           }
         );
+        markQueuedSendSucceeded();
       } catch (error: any) {
         console.error('Rewrite error:', error);
         toast.error(error?.message || 'Failed to rewrite text.');
@@ -8559,7 +10301,24 @@ REWRITTEN TEXT:`;
       }
       return; // Stop further execution
     }
-    const filesToSend = [...composerFiles];
+    let filesToSend = [...composerFiles];
+    const imageAttachments = filesToSend.filter((file: any) =>
+      String(file?.type || file?.mimeType || "").startsWith("image/"),
+    );
+    if (imageAttachments.length > 0) {
+      const wantsTranscription = looksLikeTranscriptionRequest(msg);
+      const weakOcr = imageAttachments.some((file: any) =>
+        isWeakOcrText(file?.extractedText, file?.ocr?.confidence),
+      );
+      if (wantsTranscription || weakOcr) {
+        try {
+          filesToSend = await enrichImageFilesWithClientOcr(filesToSend, {
+            prompt: msg,
+            force: wantsTranscription,
+          });
+        } catch { /* client OCR is best-effort before the model answers */ }
+      }
+    }
     const buildImageEditPrompt = (rawPrompt: string) => {
       const editFile = filesToSend.find((file: any) => file?.editRegion);
       if (!editFile?.editRegion) return rawPrompt;
@@ -8567,12 +10326,17 @@ REWRITTEN TEXT:`;
       return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
     };
     setInput("");
+    setSelectedMentionIds([]);
+    setMentionMenuOpen(false);
+    setMentionTrigger(null);
+    setMentionSearchQuery("");
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
     chatDraft.clear();
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    attachmentHashesRef.current.clear();
 
     let isNewChat = !currentChat;
     let chatToUpdate = currentChat;
@@ -8604,7 +10368,7 @@ REWRITTEN TEXT:`;
           role: 'USER' as const,
           content: msg,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
 
         // Update chat with user message
@@ -8672,6 +10436,7 @@ REWRITTEN TEXT:`;
             toast.error(error.message || 'Error al generar documento');
           }
         );
+        markQueuedSendSucceeded();
       } catch (error: any) {
         setIsGeneratingWord(false);
         console.error('Word Connector error:', error);
@@ -8708,7 +10473,7 @@ REWRITTEN TEXT:`;
           role: 'USER' as const,
           content: msg,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
 
         setCurrentChat(prevChat => {
@@ -8730,6 +10495,7 @@ REWRITTEN TEXT:`;
           chatId: activeChat?.id,
           files: collectUploadFileIds(filesToSend),
         });
+        markQueuedSendSucceeded();
 
         setIsGeneratingExcel(false);
 
@@ -8805,6 +10571,7 @@ REWRITTEN TEXT:`;
           // createNewChat will handle chat creation and message setup properly
           const newChat = await createNewChat('thesis', msg, undefined, { idempotencyKey });
           if (newChat?.id) {
+            markQueuedSendSucceeded();
             // Select the newly created chat to show messages properly
             setTimeout(async () => {
               await selectChat(newChat.id);
@@ -8823,12 +10590,20 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVideoGenerationActive || chatType === 'video') {
+      isGeneratingVideoRef.current = true;
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
+    }
+
     if (isVoiceGenerationActive) {
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
       setIsVoiceGenerationActive(true);
       try {
         await handleVoiceGeneration(msg, filesToSend);
+        markQueuedSendSucceeded();
       } finally {
         isGeneratingVoiceRef.current = false;
         setIsGeneratingVoice(false);
@@ -8844,6 +10619,7 @@ REWRITTEN TEXT:`;
       setIsMusicGenerationActive(true);
       try {
         await handleMusicGeneration(msg, filesToSend);
+        markQueuedSendSucceeded();
       } finally {
         isGeneratingMusicRef.current = false;
         setIsGeneratingMusic(false);
@@ -8872,6 +10648,46 @@ REWRITTEN TEXT:`;
       || isVoiceGenerationActive
       || isMusicGenerationActive
       || isVideoGenerationActive;
+    // Word/Excel connector generation already returned above. Explicit edits
+    // were admitted before those returns so they cannot be skipped here.
+    const documentSandboxRoute = resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route;
+    if (!hasMediaGenerator && (documentSandboxRoute === "edit" || documentSandboxRoute === "clarify")) {
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        // The old classifier is broader than an editing authorization (it
+        // even matches discussion). Clarify instead of invoking its editor.
+        if (documentSandboxRoute === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        // Preserve the user's draft when preflight rejects a model, permission or input.
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = filesToSend;
+          setUploadedFiles(filesToSend);
+          // Transfer a rejected queued turn back to the visible draft. Leaving
+          // it in the automatic drain would retry an unsupported edit forever.
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
+    }
     const shouldUseWorkModeAgent = isWorkModeActive
       && !hasDedicatedConnector
       && !hasMediaGenerator
@@ -8881,9 +10697,8 @@ REWRITTEN TEXT:`;
       customGptId: currentChat?.customGptId,
       customGpt: currentChat?.customGpt,
     });
-    // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
-    // enter the durable agent-task path. That backend path owns the current
-    // source-preserving Office/PDF editor, artifact persistence and validation.
+    // Explicit edits and ambiguous legacy edit classifications returned above;
+    // remaining document questions retain their existing retrieval path.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
@@ -8901,7 +10716,9 @@ REWRITTEN TEXT:`;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
+        if (isLiveComputerUsePrompt(msg)) openComputerPanel();
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
+        markQueuedSendSucceeded();
       } finally {
         inFlightSendKeysRef.current.delete(sendKey);
       }
@@ -8918,7 +10735,8 @@ REWRITTEN TEXT:`;
       role: 'USER' as const,
       content: msg,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
+      metadata: JSON.stringify({ idempotencyKey }),
     };
     const assistantPlaceholder = {
       id: `msg-assistant-processing-${Date.now()}`,
@@ -8926,6 +10744,7 @@ REWRITTEN TEXT:`;
       role: 'ASSISTANT' as const,
       content: '',
       timestamp: new Date().toISOString(),
+      metadata: JSON.stringify({ idempotencyKey }),
     };
 
     if (isNewChat) {
@@ -8941,7 +10760,7 @@ REWRITTEN TEXT:`;
     } else {
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
         return { ...prevChat, messages: updatedMessages };
       });
     }
@@ -8954,18 +10773,22 @@ REWRITTEN TEXT:`;
 
       if (isWebSearchActive || shouldUseAcademicSearch) {
         await handleWebSearch(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isGmailActive) {
         await handleGmailCommand(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isGoogleCalendarActive || isGoogleDriveActive) {
         await handleGoogleServicesCommand(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isSpotifyActive) {
         await handleSpotifyCommand(msg);
+        markQueuedSendSucceeded();
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
@@ -8975,11 +10798,23 @@ REWRITTEN TEXT:`;
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
+          markQueuedSendSucceeded();
           return;
         }
       }
       if (isVideoGenerationActive || chatType === 'video') {
-        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+        isGeneratingVideoRef.current = true;
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        try {
+          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
+        }
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -8988,6 +10823,7 @@ REWRITTEN TEXT:`;
         const topics = msg.split(',').map(t => t.trim()).filter(t => t.length > 0);
         if (topics.length >= 1) {
           await addThesisMessage(topics);
+          markQueuedSendSucceeded();
         } else {
           // Remove the optimistic messages since validation failed
           setCurrentChat(prevChat => {
@@ -9063,6 +10899,7 @@ REWRITTEN TEXT:`;
         window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
 
         await startComputerUse(msg, chatId, user?.id, computerUseAppMode || 'browser');
+        markQueuedSendSucceeded();
 
         // Clean up listener
         setTimeout(() => {
@@ -9127,16 +10964,25 @@ REWRITTEN TEXT:`;
       }
 
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
+        const pins = appPins.pinnedAppIds
         if (isNewChat) {
-          await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent, idempotencyKey });
+          await createNewChat('text', msg, filesToSend, {
+            initialIntent: pipelineIntent,
+            idempotencyKey,
+            pinnedAppIds: pins,
+          });
         } else {
-          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, { idempotencyKey });
+          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+            idempotencyKey,
+            mentionedApps: mentionPayload.mentionedApps,
+            pinnedAppIds: pins,
+          });
         }
       };
 
       const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
-        userMessageAlreadyAdded: !isNewChat,
-        assistantMessageId: !isNewChat ? assistantPlaceholder.id : undefined,
+        userMessageAlreadyAdded: true,
+        assistantMessageId: assistantPlaceholder.id,
       });
 
       switch (intent) {
@@ -9154,10 +11000,26 @@ REWRITTEN TEXT:`;
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
+          isGeneratingVideoRef.current = true;
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
           break;
         case 'ppt':
-          await runClassifiedAgentTask();
+          // Creation from scratch runs the in-process document pipeline
+          // (docx-js / PptxGenJS / ExcelJS via /api/doc/generate): it needs no
+          // sandbox, which production does not have, and it renders the
+          // downloadable card in the chat. Attachment-based work keeps the
+          // durable agent task (source-preserving edits + validation).
+          if (filesToSend.length === 0) {
+            await runContextPipeline(intent);
+          } else {
+            await runClassifiedAgentTask();
+          }
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -9185,7 +11047,11 @@ REWRITTEN TEXT:`;
           }
           break;
         case 'doc':
-          await runContextPipeline(intent);
+          if (filesToSend.length === 0) {
+            await runContextPipeline(intent);
+          } else {
+            await runClassifiedAgentTask();
+          }
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
@@ -9206,6 +11072,7 @@ REWRITTEN TEXT:`;
           }
           break;
       }
+      markQueuedSendSucceeded();
     } catch (err: any) {
       console.error('Send error', err);
       devLog('Error details:', {
@@ -9647,6 +11514,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         payload.fileId = files[0];
       }
       setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
       const imageRequestStartedAt = Date.now();
       try {
         await apiClient.generateImage(payload, { signal: controller.signal });
@@ -9707,7 +11575,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           console.warn('No se pudo refrescar el catalogo de modelos de imagen:', refreshError?.message || refreshError);
         }
         const inactiveMessage = fallbackModel?.name
-          ? `El modelo seleccionado ya no esta activo. Cambie a ${fallbackModel.displayName || fallbackModel.name}; vuelve a enviar la imagen.`
+          ? `El modelo seleccionado ya no esta activo. Cambie a ${brandModelLabel(fallbackModel)}; vuelve a enviar la imagen.`
           : 'El modelo seleccionado ya no esta activo. Activa un modelo de imagen en Admin Models antes de generar.';
         if (fallbackModel?.name) {
           setSelectedImageModel(fallbackModel.name);
@@ -9815,11 +11683,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
       markLocalJobIdle(activeChatId, videoController);
       if (shouldClearVisibleState) {
+        isGeneratingVideoRef.current = false;
         setIsGeneratingVideo(false);
       }
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
     };
 
+    isGeneratingVideoRef.current = true;
+    isVideoGenerationActiveRef.current = true;
     setIsGeneratingVideo(true)
+    setIsVideoGenerationActive(true);
+    setChatType('video');
     videoAbortControllerRef.current = videoController;
     if (activeChatId) markLocalJobBusy(activeChatId, videoController);
     const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
@@ -9831,7 +11707,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const videoOptions = {
       resolution: promptResolution || selectedVideoResolution,
       aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
-      duration: selectedVideoDuration,
+      duration: clampVideoDuration(selectedVideoDuration, resolveVideoDurationSpec(activeVideoModel || selectedVideoModel, (availableModels || []).find((model: any) => model?.name === (activeVideoModel || selectedVideoModel))?.apiData?.fal)) ?? selectedVideoDuration,
       audio: promptAudio ?? selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
@@ -9890,7 +11766,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
     const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
-    setUploadedFiles([]); // Clear UI immediately
+    setUploadedFiles([]);
+    attachmentHashesRef.current.clear(); // Clear UI immediately
 
     try {
       let newChat = currentChat;
@@ -10127,29 +12004,132 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // would otherwise freeze the version from initial render.
   React.useEffect(() => { handleSendRef.current = handleSend; });
 
-  // Drain queued messages when the pipeline goes idle. Each drain
-  // re-populates the composer from the queue and fires handleSend on the
-  // next tick so React has a chance to commit the setInput/setFiles
-  // updates before the send guard reads them.
+  // Drain queued messages when a chat's pipeline goes idle.
+  // Foreground: current chat idle → restore composer + handleSend.
+  // Background: other idle chats → addMessage directly so work continues
+  // while the user is reading a different conversation.
   React.useEffect(() => {
-    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
-    if (isBusy) return;
     if (pendingMsgQueueRef.current.length === 0) return;
+    const queueDrainClaims = queueDrainClaimsRef.current;
+
     const queueChatId = currentChat?.id ?? null;
-    const nextIndex = pendingMsgQueueRef.current.findIndex((item) => item.chatId === queueChatId);
-    if (nextIndex < 0) return;
-    const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
-    syncQueuedCount(queueChatId);
-    if (!next) return;
-    setInput(next.msg);
-    uploadedFilesRef.current = next.files || [];
-    setUploadedFiles(next.files || []);
-    const t = setTimeout(() => { handleSendRef.current(); }, 0);
-    return () => clearTimeout(t);
-  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles, syncQueuedCount]);
+    const currentBusy =
+      isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
+
+    // 1) Prefer draining the chat the user is looking at (composer path).
+    if (!currentBusy) {
+      const nextIndex = pendingMsgQueueRef.current.findIndex(
+        (item) => item.chatId === queueChatId && !queueDrainClaims.has(item.id),
+      );
+      if (nextIndex >= 0) {
+        const next = pendingMsgQueueRef.current[nextIndex];
+        if (!next) return;
+        queueDrainClaims.add(next.id);
+        let started = false;
+        const t = setTimeout(async () => {
+          started = true;
+          const claimed = pendingMsgQueueRef.current.find((item) => item.id === next.id);
+          if (!claimed) {
+            queueDrainClaims.delete(next.id);
+            return;
+          }
+          queuedComposerSendRef.current = claimed;
+          try {
+            await handleSendRef.current();
+            if (queuedSendSucceededRef.current.get(claimed.id) === true) {
+              const completedIndex = pendingMsgQueueRef.current.findIndex((item) => item.id === claimed.id);
+              if (completedIndex >= 0) {
+                pendingMsgQueueRef.current.splice(completedIndex, 1);
+                persistComposerQueue();
+                syncQueuedCount(queueChatId);
+              }
+            }
+          } catch (error) {
+            console.error("No se pudo procesar la tarea en cola; se conservará para reintentar.", error);
+          } finally {
+            queuedSendSucceededRef.current.delete(claimed.id);
+            queueDrainClaims.delete(claimed.id);
+          }
+        }, 0);
+        return () => {
+          clearTimeout(t);
+          if (!started) queueDrainClaims.delete(next.id);
+        };
+      }
+    }
+
+    // 2) Background drain for any other idle chat with queued work.
+    const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
+      if (!item.chatId) return false;
+      if (item.chatId === queueChatId) return false;
+      if (queueDrainClaims.has(item.id)) return false;
+      if (activeStreamingChatIds.includes(item.chatId)) return false;
+      if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
+      // Original-file editing needs the canonical admission path. Keep these
+      // queued turns until their chat is opened; never bypass it via addMessage.
+      if (resolveDocumentSandboxAdmission(item.msg, { attachments: item.files || [] }).route) return false;
+      return true;
+    });
+    if (bgIndex < 0) return;
+    const bgNext = pendingMsgQueueRef.current[bgIndex];
+    if (!bgNext?.chatId || !bgNext.msg?.trim()) return;
+    const targetChat =
+      currentChat?.id === bgNext.chatId
+        ? currentChat
+        : (chats || []).find((c: any) => c?.id === bgNext.chatId) || null;
+    if (!targetChat) {
+      return;
+    }
+    const files = Array.isArray(bgNext.files) ? bgNext.files : [];
+    queueDrainClaims.add(bgNext.id);
+    let started = false;
+    const t = setTimeout(async () => {
+      started = true;
+      try {
+        await addMessage(bgNext.msg, files, targetChat, false, undefined, {
+          idempotencyKey: bgNext.idempotencyKey,
+        });
+        // Background work stays durable until the chat context confirms the
+        // message was accepted. A rejection leaves it in FIFO for retry.
+        const completedIndex = pendingMsgQueueRef.current.findIndex((item) => item.id === bgNext.id);
+        if (completedIndex >= 0) {
+          pendingMsgQueueRef.current.splice(completedIndex, 1);
+          persistComposerQueue();
+          syncQueuedCount(queueChatId);
+        }
+      } catch (error) {
+        console.error("No se pudo procesar la tarea en cola; se conservará para reintentar.", error);
+      } finally {
+        queueDrainClaims.delete(bgNext.id);
+      }
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      if (!started) queueDrainClaims.delete(bgNext.id);
+    };
+  }, [
+    currentChat,
+    currentChat?.id,
+    chats,
+    isCurrentChatStreaming,
+    isCurrentChatLocalJobBusy,
+    isUploading,
+    activeStreamingChatIds,
+    activeLocalJobChatIds,
+    addMessage,
+    persistComposerQueue,
+    setUploadedFiles,
+    syncQueuedCount,
+    queueHydrationVersion,
+  ]);
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // IME candidates may emit an Enter keydown while the character is still
+    // composing. Never submit or prevent that event until composition ends.
+    if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+      return
+    }
     // El textarea queda libre durante el streaming (paridad Claude); Enter
     // no dispara un segundo turno mientras el actual sigue en curso.
     if (e.key === "Enter" && !e.shiftKey) {
@@ -10267,7 +12247,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isMusicGenerationActive ||
     chatType === 'image' ||
     chatType === 'video';
-  const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
+  const isSendingForCurrentChat = Boolean(
+    isSending && sendingChatId && currentChatId && sendingChatId === currentChatId
+  );
+  const isNewChatAdmissionPending = Boolean(
+    !currentChatId && isSending && sendingChatId === null
+    && sendInFlightChatsRef.current.has('__new__') && intentAbortControllerRef.current
+  );
   // Media flags (image/voice/video/PPT/music) are GLOBAL booleans, but the
   // Stop button must only take over the composer in the chat that OWNS the
   // job (media handlers call markLocalJobBusy(chatId)). Otherwise, while chat
@@ -10276,7 +12262,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isCurrentChatMediaBusy =
     isCurrentChatLocalJobBusy &&
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isCurrentChatMediaBusy;
+  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT && !isSendingForCurrentChat && !isNewChatAdmissionPending;
+  const isStopButtonVisible = !isIdlePlaceholderComposer && (
+    isCurrentChatLoading ||
+    isCurrentChatStreaming ||
+    (pendingStop && isCurrentChatStreaming) ||
+    isSendingForCurrentChat ||
+    isNewChatAdmissionPending ||
+    isCurrentChatLocalJobBusy ||
+    isCurrentChatMediaBusy
+  );
   const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -10300,6 +12295,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVoiceEffect, setSelectedVoiceEffect,
     onOpenVoiceCatalog: () => setVoiceCatalogOpen(true),
     selectedVoiceName,
+    onOpenVoiceStudio: openVoiceStudio,
+    selectedSiraVoiceName,
     isMusicGenerationActive, setIsMusicGenerationActive,
     selectedMusicModel, setSelectedMusicModel,
     selectedMusicStyle, setSelectedMusicStyle,
@@ -10333,19 +12330,25 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     handleExcelConnectorToggle,
   };
 
+
+  const previewUsesOverlay = useDocumentPreviewOverlay();
+  const documentPreviewOpen = Boolean(
+    documentPreviewUrl ||
+    composerPreviewAttachment ||
+    sidePreviewAttachment
+  );
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
+    computerPanelOpen ||
     showAudioPanel ||
     searchActivityPanelOpen ||
-    documentPreviewUrl ||
+    (documentPreviewOpen && !previewUsesOverlay) ||
     sourcesPanelData ||
-    composerPreviewAttachment ||
-    sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
   );
-  const coworkMobileFullscreen = Boolean(coworkPanelOpen && isSidebarMobile);
+  const coworkMobileFullscreen = Boolean((coworkPanelOpen || computerPanelOpen) && isSidebarMobile);
   const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
@@ -10357,6 +12360,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (
       showAudioPanel ||
       coworkPanelOpen ||
+      computerPanelOpen ||
       searchActivityPanelOpen ||
       documentPreviewUrl ||
       composerPreviewAttachment ||
@@ -10371,6 +12375,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     sourcesPanelData,
     showAudioPanel,
     coworkPanelOpen,
+    computerPanelOpen,
     searchActivityPanelOpen,
     documentPreviewUrl,
     composerPreviewAttachment,
@@ -10393,11 +12398,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
     closeArtifactPanel();
+    setComputerPanelOpen(false);
     setCoworkPanelOpen(true);
   }, [closeArtifactPanel]);
 
   React.useEffect(() => {
-    if (!coworkPanelOpen) return;
+    if (!coworkPanelOpen && !computerPanelOpen) return;
     if (
       showAudioPanel ||
       searchActivityPanelOpen ||
@@ -10409,9 +12415,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       activeArtifact
     ) {
       setCoworkPanelOpen(false);
+      setComputerPanelOpen(false);
     }
   }, [
     coworkPanelOpen,
+    computerPanelOpen,
     showAudioPanel,
     searchActivityPanelOpen,
     documentPreviewUrl,
@@ -10422,8 +12430,125 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeArtifact,
   ]);
 
+  const injectHandoffChat = React.useCallback((detail: LoginHandoffDetail) => {
+    const chatId = String(detail.conversationId || currentChatIdRef.current || "").trim();
+    if (!detail.active || !chatId) return;
+    const chatMessage = chatMessageFromDetail(detail);
+    if (!chatMessage) return;
+    setCurrentChat((prev) => {
+      if (!prev || String(prev.id) !== chatId) return prev;
+      if (!shouldPostHandoffChatMessage(prev.messages || [], chatMessage)) return prev;
+      return {
+        ...prev,
+        messages: [...(prev.messages || []), buildHandoffAssistantMessage(chatId, chatMessage, detail)],
+      };
+    });
+    void apiClient.addMessage(chatId, {
+      role: "ASSISTANT",
+      content: chatMessage,
+      metadata: { type: "computer_login_handoff", kind: detail.kind, site: detail.site },
+      idempotencyKey: `login-handoff:${chatId}:${detail.kind || "gate"}`,
+    }).catch(() => undefined);
+  }, [setCurrentChat]);
+
+  const openComputerPanel = React.useCallback(() => {
+    setShowAudioPanel(false);
+    setActiveSearchActivityId(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
+    setSourcesPanelData(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    closeArtifactPanel();
+    setCoworkPanelOpen(false);
+    setComputerPanelOpen(true);
+    if (!currentChatIdRef.current) {
+      void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
+    }
+  }, [closeArtifactPanel, createNewChat]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const computer = params.get("computer");
+    if (computer === "1" || computer === "true") openComputerPanel();
+    const login = params.get("login");
+    if (login === "1" || login === "true") {
+      setLoginHandoffActive(true);
+      openComputerPanel();
+    }
+  }, [openComputerPanel]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onHandoff = (event: Event) => {
+      const detail = (event as CustomEvent<LoginHandoffDetail>).detail;
+      if (!detail) return;
+      const id = String(detail.conversationId || "").trim();
+      const openId = String(currentChat?.id || "").trim();
+      if (id && openId && id !== openId) return;
+      if (detail.active) {
+        setLoginHandoffActive(true);
+        if (detail.site) setLoginHandoffSite(String(detail.site));
+        if (detail.kind) setLoginHandoffKind(String(detail.kind));
+        openComputerPanel();
+        injectHandoffChat(detail);
+      } else {
+        setLoginHandoffActive(false);
+      }
+    };
+    window.addEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
+    return () => window.removeEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
+  }, [openComputerPanel, currentChat?.id, injectHandoffChat]);
+
+  React.useEffect(() => {
+    const chatId = String(currentChat?.id || "").trim();
+    if (!chatId || typeof window === "undefined") return;
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const api = getSameOriginApiBaseUrl().replace(/\/+$/, "");
+        const res = await authenticatedFetch(
+          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen ? "&probe=1" : ""}`,
+          { credentials: "include", signal: AbortSignal.timeout(12_000) },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (body && body.active) {
+          setLoginHandoffActive(true);
+          if (body.site) setLoginHandoffSite(String(body.site));
+          if (body.kind) setLoginHandoffKind(String(body.kind));
+          openComputerPanel();
+          const detail = {
+            active: true,
+            conversationId: chatId,
+            site: body.site ? String(body.site) : undefined,
+            kind: body.kind ? String(body.kind) : undefined,
+            reason: body.reason ? String(body.reason) : undefined,
+            title: body.title ? String(body.title) : undefined,
+            instruction: body.instruction ? String(body.instruction) : undefined,
+            chatMessage: body.chatMessage ? String(body.chatMessage) : undefined,
+          };
+          emitLoginHandoff(detail);
+          injectHandoffChat(detail);
+        }
+      } catch {
+        /* handoff poll is best-effort */
+      }
+    };
+    void pull();
+    const timer = window.setInterval(() => void pull(), 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [currentChat?.id, openComputerPanel, computerPanelOpen, injectHandoffChat]);
+
   const openGrokVoicePanel = React.useCallback(() => {
     setCoworkPanelOpen(false);
+    setComputerPanelOpen(false);
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setComposerPreviewIndex(null);
@@ -10435,6 +12560,45 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setShowAudioPanel(true);
     setAudioTab('stt');
   }, []);
+
+  // Shared props bundle for <ActionsDropdown /> (the "+" tools button).
+  // It renders in two spots: inline with the textarea while NO tool is
+  // active, and as a compact chip in the bottom tools row once any tool
+  // is active (so the "+" sits level with the Voz/Imágenes/Música chips).
+  const actionsDropdownProps = {
+    chatType, setChatType,
+    currentPlan,
+    isWorkModeActive, setIsWorkModeActive,
+    isWebSearchActive, setIsWebSearchActive,
+    isImageGenerationActive, setIsImageGenerationActive,
+    isVoiceGenerationActive, setIsVoiceGenerationActive,
+    isMusicGenerationActive, setIsMusicGenerationActive,
+    isVideoGenerationActive, setIsVideoGenerationActive,
+    isComputerUseActive, setIsComputerUseActive,
+    computerUseAppMode, setComputerUseAppMode,
+    computerUseStatus,
+    isGmailActive, setIsGmailActive,
+    isGoogleCalendarActive, setIsGoogleCalendarActive,
+    isGoogleDriveActive, setIsGoogleDriveActive,
+    isSpotifyActive, setIsSpotifyActive,
+    isWordConnectorActive, setIsWordConnectorActive,
+    isExcelConnectorActive, setIsExcelConnectorActive,
+    setShowAudioPanel,
+    openVoicePanel: openGrokVoicePanel,
+    handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
+    handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
+    handleExcelConnectorToggle,
+    closeAllToolsAndConnectors,
+    setAudioTab,
+    handleAndUploadFiles,
+    isUploading,
+    isWebSearching: isCurrentChatLocalJobBusy && isWebSearching,
+    isLoading: isCurrentChatLoading,
+    isGeneratingImage: isCurrentChatLocalJobBusy && isGeneratingImage,
+    isGeneratingVideo: isCurrentChatLocalJobBusy && isGeneratingVideo,
+    isGeneratingPPT,
+    isProcessingGmail: isCurrentChatLocalJobBusy && isProcessingGmail,
+  };
 
   React.useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -10927,10 +13091,46 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // "service unavailable" answer. Like image/video/music, Voice now uses a
   // dedicated, deterministic backend path that ALWAYS produces the MP3 and
   // persists it as a "Generation N" chat artifact via the same renderer.
+  // Files already attached in this chat (chunked uploads included) so the
+  // studio can dub/transcribe media above the direct-upload limit.
+  const voiceStudioChatFiles = React.useMemo(() => {
+    const out: Array<{ id: string; name: string; mimeType: string | null; size?: number | null }> = []
+    const seen = new Set<string>()
+    for (const message of currentChat?.messages || []) {
+      for (const file of parseMessageFilesForRender((message as any)?.files) as any[]) {
+        const id = typeof file?.id === "string" ? file.id : ""
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        out.push({
+          id,
+          name: String(file?.originalName || file?.name || file?.filename || "archivo"),
+          mimeType: typeof file?.mimeType === "string" ? file.mimeType : typeof file?.type === "string" ? file.type : null,
+          size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
+        })
+      }
+    }
+    return out
+  }, [currentChat?.messages])
+  const ensureVoiceStudioChatId = React.useCallback(async (): Promise<string | null> => {
+    if (currentChat?.id) return currentChat.id
+    try {
+      const response = await apiClient.createChat({ title: "Estudio de voz", model: selectedModel })
+      const id = response?.chat?.id || null
+      if (id) await selectChat(id)
+      return id
+    } catch {
+      return null
+    }
+  }, [currentChat?.id, selectedModel, selectChat])
+
   const handleVoiceGeneration = async (msg: string, filesToSend: any[] = []) => {
     const narration = (msg || '').trim();
     if (!narration) {
       toast.error('Escribe el texto que quieres convertir en voz');
+      return;
+    }
+    if (!selectedVoiceModel || !voiceCatalogModels.some((model: any) => model?.name === selectedVoiceModel && model?.isActive === true)) {
+      toast.error('No hay modelos de voz activos. Activa uno desde Administración e inténtalo de nuevo.');
       return;
     }
 
@@ -10964,7 +13164,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       role: 'USER' as const,
       content: narration,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
     };
     setCurrentChat(prev => {
       if (!prev || prev.id !== activeChat!.id) return prev;
@@ -11016,7 +13216,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -11129,7 +13329,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -11192,6 +13392,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Describe la música que quieres crear');
       return;
     }
+    if (!selectedMusicModel || !musicCatalogModels.some((model: any) => model?.name === selectedMusicModel && model?.isActive === true)) {
+      toast.error('No hay modelos de música activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     let activeChat = currentChat;
     if (!activeChat) {
@@ -11223,7 +13427,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       role: 'USER' as const,
       content: description,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
     };
     setCurrentChat(prev => {
       if (!prev || prev.id !== activeChat!.id) return prev;
@@ -11328,15 +13532,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Please enter a task');
       return;
     }
+    if (isLiveComputerUsePrompt(goalText)) openComputerPanel();
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
-    let activeChat = currentChat;
-    const isNewChat = !activeChat;
 
-    if (!activeChat) {
+    // «Abre tu computadora y …» — show the live screen without asking for a
+    // second click: the right-hand computer panel opens with the run.
+    if (isComputerRequestPrompt(goalText)) {
+      openComputerPanel();
+    }
+    let activeChat = currentChatRef.current;
+    const liveChatId = activeChat?.id != null ? String(activeChat.id) : '';
+    const needsRealChat = !activeChat || liveChatId.startsWith('temp-chat-');
+
+    if (needsRealChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${displayGoal.substring(0, 30)}`,
+          title: displayGoal.substring(0, 30),
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -11354,32 +13566,56 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWebSearching(true); // reuse the busy flag — Stop button is wired the same way
     markLocalJobBusy(activeChat.id);
 
+    const isUserRole = (m: any) => String(m?.role || '').toUpperCase() === 'USER';
+    const isTempChatId = (id: unknown) => typeof id === 'string' && id.startsWith('temp-chat-');
+    const shouldAdoptTempOntoReal = (prev: any) => Boolean(
+      prev &&
+      isTempChatId(prev.id) &&
+      activeChat?.id &&
+      !isTempChatId(activeChat.id) &&
+      prev.id !== activeChat.id,
+    );
+    const liveHasUserTurn = (currentChatRef.current?.messages || []).some(isUserRole);
+
     try {
-      if (!userMessageAlreadyAdded) {
+      // Graft a USER turn with files after createChat/selectChat even when the
+      // optimistic path set userMessageAlreadyAdded: true — that flag is stale
+      // if the temp-chat row was dropped while the real id was selected.
+      if (!userMessageAlreadyAdded || !liveHasUserTurn) {
         const userMessage = {
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
           content: displayGoal,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
         setCurrentChat(prev => {
+          const adoptingTemp = shouldAdoptTempOntoReal(prev);
           if (!prev) return { ...activeChat, messages: [userMessage] } as any;
-          if (prev.id !== activeChat.id) return prev;
-          return { ...prev, messages: [...(prev.messages || []), userMessage] };
+          if (prev.id !== activeChat.id && !adoptingTemp) return prev;
+          const baseMessages = prev.messages || [];
+          const nextChat = adoptingTemp ? { ...activeChat, messages: baseMessages } : prev;
+          if (baseMessages.some(isUserRole)) return nextChat;
+          return { ...nextChat, messages: [...baseMessages, userMessage] };
         });
       }
 
       const clientBootstrapStepId = 'client-agent-bootstrap';
+      const resolvedAssistantMessageId = assistantMessageId || `msg-ai-${Date.now() + 1}`;
       const makeInitialTaskState = (): AgentTaskState => ({
         ...initialAgentState,
+        meta: {
+          ...(initialAgentState.meta || {}),
+          assistantMessageId: resolvedAssistantMessageId,
+        },
         steps: [{
           id: clientBootstrapStepId,
           label: 'Analizando solicitud',
           icon: 'thought',
           reasoning: 'Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.',
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
         }],
         artifacts: [],
@@ -11400,19 +13636,33 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const initialTaskState = makeInitialTaskState();
       const aiMessage = {
-        id: assistantMessageId || `msg-ai-${Date.now() + 1}`,
+        id: resolvedAssistantMessageId,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
         content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => {
-        if (!prev) return { ...activeChat, messages: [aiMessage] } as any;
-        if (prev.id !== activeChat.id) return prev;
+        const adoptingTemp = shouldAdoptTempOntoReal(prev);
+        if (!prev) {
+          const seeded = (currentChatRef.current?.messages || []).filter(Boolean);
+          const withUser = seeded.some(isUserRole)
+            ? seeded
+            : [...seeded, {
+                id: `msg-user-${Date.now()}`,
+                chatId: activeChat.id,
+                role: 'USER' as const,
+                content: displayGoal,
+                timestamp: new Date().toISOString(),
+                files: snapshotComposerFilesForMessage(filesToSend),
+              }];
+          return { ...activeChat, messages: [...withUser, aiMessage] } as any;
+        }
+        if (prev.id !== activeChat.id && !adoptingTemp) return prev;
         const messages = prev.messages || [];
         const replaced = messages.some(m => m.id === aiMessage.id);
         return {
-          ...prev,
+          ...(adoptingTemp ? { ...activeChat } : prev),
           messages: replaced
             ? messages.map(m => m.id === aiMessage.id ? { ...m, ...aiMessage, error: undefined, progressStage: undefined, progressPct: undefined } : m)
             : [...messages, aiMessage],
@@ -11448,6 +13698,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: fileIds,
           fileMetadata,
           chatId: activeChat.id,
+          lastArtifactId: pickLastArtifactId(currentChatRef.current?.messages || activeChat?.messages),
           model: selectedModel,
           maxSteps: 80,
           maxRuntimeMs: 2 * 60 * 60 * 1000,
@@ -11503,7 +13754,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } else {
         toast.success('Tarea completada');
       }
-      if (activeChat?.id) selectChat(activeChat.id);
+      // The task belongs to `activeChat`, but the user may have navigated to a
+      // different conversation while it was running. Refresh only when that
+      // chat is still visible; selecting the completed task's chat here would
+      // steal focus and break the background-work contract.
+      if (activeChat?.id && currentChatIdRef.current === activeChat.id) {
+        void selectChat(activeChat.id);
+      }
     } catch (err: any) {
       console.error('Agent task failed:', err);
       toast.error(err?.message || 'Agent task failed');
@@ -11546,7 +13803,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB c/u. Se conserva el orden en que los sueltes.
+              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB por documento; audio y video hasta 2 GB. Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>
@@ -11556,6 +13813,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           is collapsed (we auto-collapse on Word/Excel/image/video to
           reclaim horizontal real estate). Pinned to the viewport edge
           so the user can always pop the sidebar back with one click. */}
+      {/* Desktop only: mobile reopens the sheet from the header button,
+          so the mid-screen tab never floats over message text on phones. */}
       {!sidebarOpen && !isSidebarMobile && (
         <button
           type="button"
@@ -11590,35 +13849,35 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                <div className="shrink-0 md:hidden">
-                  <SidebarTrigger
-                    className={cn(
-                      "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
-                      "hover:bg-transparent focus-visible:bg-transparent"
-                    )}
+                {/* Desktop toggles the sidebar from its own header; on mobile
+                    the sheet needs an opener here — a quiet 40px ghost icon,
+                    not the old prominent hamburger disc. */}
+                {isSidebarMobile && !sidebarOpenMobile ? (
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpenMobile(true)}
                     aria-label="Abrir el menú lateral"
-                    title="Abrir el menú lateral"
+                    title="Abrir el menú"
+                    data-testid="chat-mobile-sidebar-open"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
                   >
-                    <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
-                  </SidebarTrigger>
-                </div>
-                {/* Model selector moved to the composer (next to the mic),
-                    Claude-style. See renderComposerModelControls(). */}
+                    <SidebarOvalIcon className="h-[18px] w-[18px]" />
+                  </button>
+                ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
-                {currentChat?.id && (
-                  <Button
-                    variant={coworkPanelOpen ? "secondary" : "ghost"}
-                    size="icon"
-                    onClick={() => coworkPanelOpen ? setCoworkPanelOpen(false) : openCoworkPanel()}
-                    title={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
-                    aria-label={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
-                    aria-pressed={coworkPanelOpen}
-                    className="chat-header-icon-btn h-11 w-11 rounded-full"
-                  >
-                    <BriefcaseBusiness className="h-5 w-5" />
-                  </Button>
-                )}
+                <Button
+                  variant={computerPanelOpen ? "secondary" : "ghost"}
+                  size="icon"
+                  onClick={() => computerPanelOpen ? setComputerPanelOpen(false) : openComputerPanel()}
+                  title="Computadora"
+                  aria-label="Computadora"
+                  aria-pressed={computerPanelOpen}
+                  data-testid="chat-computer-button"
+                  className="chat-header-icon-btn chat-computer-action h-11 w-11 rounded-full"
+                >
+                  <Monitor className="h-5 w-5" />
+                </Button>
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
                     active so the header fits the narrower pane. */}
@@ -11699,6 +13958,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   stability={selectedVoiceStability}
                   onStabilityChange={setSelectedVoiceStability}
                 />
+                <VoiceStudioModal
+                  open={voiceStudioOpen}
+                  onOpenChange={setVoiceStudioOpen}
+                  initialTab={voiceStudioTab}
+                  selectedVoiceId={selectedSiraVoiceId || null}
+                  onSelectVoice={handleSelectSiraVoice}
+                  language={selectedVoiceLanguage}
+                  languageOptions={VOICE_LANGUAGE_OPTIONS}
+                  chatFiles={voiceStudioChatFiles}
+                  ensureChatId={ensureVoiceStudioChatId}
+                  onJobFinished={(job) => { if (job?.chatId) void selectChat(job.chatId) }}
+                  onInsertText={(text) => setInput((prev) => (prev ? `${prev}\n\n${text}` : text))}
+                />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}
                   onOpenChange={setShortcutsOpen}
@@ -11772,314 +14044,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="chat-composer-frame">
                   <div className="space-y-3">
-                  {/*
-                    Composer — premium production UI.
-                    Light and dark modes inherit `composer-surface` from
-                    globals.css, which owns the half-pixel border, background,
-                    and layered shadow. Focus recolors that same hairline
-                    violet without adding another ring, so its thickness stays
-                    fixed. Idle never glows.
-                  */}
-                  {/* The input surface keeps one approved size. Attachments and
-                      connector context use the independent tray above it. */}
-                  <div className="relative">
-                    {pasteCapture.Overlay}
-                    {/* Slash-command menu — appears when the input starts with "/" */}
-                    <SlashCommandMenu
-                      open={slashMenuOpen}
-                      filter={slashMenuFilter}
-                      onCommandPick={(cmd) => {
-                        setInput(cmd.insert);
-                        setSlashMenuOpen(false);
-                        window.setTimeout(() => {
-                          const el = textareaRef.current;
-                          if (el) {
-                            const len = cmd.insert.length;
-                            el.focus();
-                            try { el.setSelectionRange(len, len); } catch { /* old Safari */ }
-                          }
-                        }, 0);
-                      }}
-                      onClose={() => setSlashMenuOpen(false)}
-                    />
-                    <CredentialWarning text={input} />
-                    <div className="composer-context-tray">
-                      <ActiveOptionsDisplay
-                        uploadedFiles={uploadedFiles}
-                        removeFile={removeFile}
-                        uploadProgress={uploadProgress}
-                        retryUpload={retryUpload}
-                        restoreLongPasteToInput={restoreLongPasteToInput}
-                        moveFile={moveFile}
-                        onPreviewAttachment={handleComposerAttachmentPreview}
-                        onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                      />
-                      <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                      {hasActiveTools && !shouldInlineActiveTools && (
-                        <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
-                          <ActiveToolsDisplay {...activeToolsProps} />
-                        </div>
-                      )}
-                    </div>
-                    <div
-                      data-testid="chat-composer-surface"
-                      className={cn(
-                        "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
-                        pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                        "bg-background",
-                        "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                        "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
-                        "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
-                    )}
-                  >
-                    {/* Media controls stay inline with the attach button. */}
-                    <TooltipProvider>
-                      <div
-                        className="composer-input-row flex items-center gap-2 pl-2 pr-2 py-1.5"
-                      >
-                        {/* LEFT — Plus / attach + tool selector */}
-                        <ActionsDropdown
-                          chatType={chatType}
-                          setChatType={setChatType}
-                          currentPlan={currentPlan}
-                          isWorkModeActive={isWorkModeActive}
-                          setIsWorkModeActive={setIsWorkModeActive}
-                          isWebSearchActive={isWebSearchActive}
-                          setIsWebSearchActive={setIsWebSearchActive}
-                          isImageGenerationActive={isImageGenerationActive}
-                          setIsImageGenerationActive={setIsImageGenerationActive}
-                          isVoiceGenerationActive={isVoiceGenerationActive}
-                          setIsVoiceGenerationActive={setIsVoiceGenerationActive}
-                          isMusicGenerationActive={isMusicGenerationActive}
-                          setIsMusicGenerationActive={setIsMusicGenerationActive}
-                          isVideoGenerationActive={isVideoGenerationActive}
-                          setIsVideoGenerationActive={setIsVideoGenerationActive}
-                          isComputerUseActive={isComputerUseActive}
-                          setIsComputerUseActive={setIsComputerUseActive}
-                          computerUseAppMode={computerUseAppMode}
-                          setComputerUseAppMode={setComputerUseAppMode}
-                          computerUseStatus={computerUseStatus}
-                          isGmailActive={isGmailActive}
-                          setIsGmailActive={setIsGmailActive}
-                          isGoogleCalendarActive={isGoogleCalendarActive}
-                          setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                          isGoogleDriveActive={isGoogleDriveActive}
-                          setIsGoogleDriveActive={setIsGoogleDriveActive}
-                          isSpotifyActive={isSpotifyActive}
-                          setIsSpotifyActive={setIsSpotifyActive}
-                          isWordConnectorActive={isWordConnectorActive}
-                          setIsWordConnectorActive={setIsWordConnectorActive}
-                          isExcelConnectorActive={isExcelConnectorActive}
-                          setIsExcelConnectorActive={setIsExcelConnectorActive}
-                          setShowAudioPanel={setShowAudioPanel}
-                          handleComputerUseToggle={handleComputerUseToggle}
-                          handleGmailToggle={handleGmailToggle}
-                          handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                          handleGoogleDriveToggle={handleGoogleDriveToggle}
-                          handleSpotifyToggle={handleSpotifyToggle}
-                          handleWordConnectorToggle={handleWordConnectorToggle}
-                          handleExcelConnectorToggle={handleExcelConnectorToggle}
-                          closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                          setAudioTab={setAudioTab}
-                          handleAndUploadFiles={handleAndUploadFiles}
-                          isUploading={isUploading}
-                          isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
-                          isLoading={isCurrentChatLoading}
-                          isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
-                          isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
-                          isGeneratingPPT={isGeneratingPPT}
-                          isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
-                        />
-
-                        {shouldInlineActiveTools && (
-                          <div className="composer-inline-active-tools">
-                            <ActiveToolsDisplay {...activeToolsProps} />
-                          </div>
-                        )}
-
-                        {/* CENTER — stable-height textarea with internal scrolling. */}
-                        <div className="composer-textarea-shell min-w-0 flex-1">
-                          {hasDetectedLinks && input ? (
-                            <div
-                              ref={composerHighlightOverlayRef}
-                              className="composer-textarea-highlights textarea-scrollbar"
-                              aria-hidden="true"
-                            >
-                              <ComposerInlineLinkHighlights value={input} />
-                            </div>
-                          ) : null}
-                          <Textarea
-                            ref={textareaRef}
-                            value={input}
-                            onChange={handleTextareaChange}
-                            onKeyDown={handleKeyDown}
-                            onFocus={handleTextareaFocus}
-                            onBlur={handleTextareaBlur}
-                            onPaste={handleTextareaPaste}
-                            onScroll={handleComposerTextareaScroll}
-                            onCompositionStart={() => { isComposingRef.current = true }}
-                            onCompositionEnd={() => { isComposingRef.current = false }}
-                            data-link-highlights={hasDetectedLinks ? "true" : undefined}
-                            placeholder={
-                              isImageGenerationActive
-                                ? tComposer("placeholderImage")
-                                : isVideoGenerationActive
-                                  ? tComposer("placeholderVideo")
-                                  : isVoiceGenerationActive
-                                    ? VOICE_COMPOSER_PLACEHOLDER
-                                    : isMusicGenerationActive
-                                      ? "Describe la música que quieres crear"
-                                        : isWebSearchActive
-                                          ? tComposer("placeholderWebSearch")
-                                          : isComputerUseActive
-                                            ? tComposer("placeholderComputer")
-                                          : isGmailActive
-                                            ? tComposer("placeholderGmail")
-                                          : (isGoogleCalendarActive || isGoogleDriveActive)
-                                            ? tComposer("placeholderGoogle")
-                                            : isSpotifyActive
-                                              ? tComposer("placeholderSpotify")
-                                              : isWordConnectorActive
-                                                ? tComposer("placeholderWord")
-                                                : isWorkModeActive
-                                                  ? "Describe el resultado que quieres obtener"
-                                                  : tComposer("placeholderDefault")
-                            }
-                            className={cn(
-                              "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
-                              "py-1.5 px-1",
-                              "text-[15px] leading-[1.45] tracking-normal text-foreground",
-                              "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                              "outline-none ring-0 focus:outline-none focus:ring-0",
-                              "rounded-none transition-colors duration-200",
-                            )}
-                            style={{
-                              minHeight: "24px",
-                              maxHeight: "var(--chat-textarea-max-height, 200px)",
-                              overflowY: "auto",
-                              overflowX: "hidden",
-                              wordWrap: "break-word",
-                              border: "none",
-                              outline: "none",
-                              boxShadow: "none",
-                            }}
-                            rows={1}
-                          />
-                        </div>
-
-                        {/* RIGHT — VoiceControls (mic, ghost) + primary action.
-                            Primary swaps glyph based on state — never a
-                            decorative button. */}
-                        <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
-                          {/* Pulido · contador suave de caracteres. Aparece
-                              sólo cuando ya escribiste bastante. */}
-                          <ComposerCharCounter input={input} />
-                          {renderComposerModelControls()}
-                          {!isStopButtonVisible && (
-                            renderDictationButton()
-                          )}
-
-                          {!isStopButtonVisible && (() => {
-                            const hasText = input.trim().length > 0
-                            const hasAttachment = uploadedFiles.length > 0
-                            const needsPrompt = requiresPromptBeforePrimarySend && !hasText
-                            const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
-                            const busy = isCurrentChatLocalJobBusy || isUploading
-                            // In prompt-driven media modes (Video/Image/Voice/Music), an empty
-                            // composer should not open Voice Studio. Keep the primary CTA
-                            // as the send/create affordance and disable it until the user
-                            // writes the generation prompt.
-                            const action = canSend
-                              ? handleSend
-                              : openGrokVoicePanel
-                            const label = canSend
-                              ? 'Enviar (⏎)'
-                              : needsPrompt
-                                ? 'Describe lo que quieres crear'
-                                : 'Modo de voz'
-                            const Icon = canSend || needsPrompt ? ArrowUp : AudioLines
-                            return (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    onClick={action}
-                                    disabled={(canSend && busy) || needsPrompt}
-                                    size="icon"
-                                    aria-label={label}
-                                    title={label}
-                                    className={cn(
-                                      "h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
-                                      "bg-foreground text-background",
-                                      "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_4px_10px_-2px_rgba(0,0,0,0.12)]",
-                                      "hover:bg-foreground/92 hover:shadow-[0_2px_4px_rgba(0,0,0,0.12),0_8px_16px_-4px_rgba(0,0,0,0.22)] hover:-translate-y-[0.5px]",
-                                      "active:scale-[0.94] active:translate-y-0",
-                                      "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100 disabled:translate-y-0 disabled:hover:translate-y-0",
-                                    )}
-                                  >
-                                    {busy ? (
-                                      <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
-                                    ) : (
-                                      <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
-                                    )}
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent side="top">
-                                  <p>{label}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            )
-                          })()}
-
-                          {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={handleSend}
-                                  size="icon"
-                                  aria-label="Enviar a la cola"
-                                  title="Enviar a la cola · se procesa en orden"
-                                  className={cn(
-                                      "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                      "bg-[hsl(var(--accent-violet))] text-white",
-                                      "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
-                                      "hover:opacity-90 active:scale-[0.96]",
-                                  )}
-                                >
-                                  <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
-                            </Tooltip>
-                          )}
-                          {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
-                            <Button
-                              onClick={stopActiveGeneration}
-                              size="icon"
-                              aria-label="Detener generación"
-                              title="Detener"
-                              disabled={pendingStop && isCurrentChatStreaming}
-                              className={cn(
-                                "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                "bg-foreground text-background",
-                                "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                "hover:bg-foreground/90 active:scale-[0.96]",
-                                "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
-                              )}
-                            >
-                              {pendingStop ? (
-                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
-                              ) : (
-                                <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </TooltipProvider>
-
-                  </div>
-                  </div>
+                  <CredentialWarning text={input} />
+                  {renderChatComposer()}
 
                   {/* <p className="text-center text-xs text-muted-foreground">
                 {isWebSearchActive
@@ -12192,7 +14158,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       (mobile) viewport — the "la barra de chat desaparece"
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full">
+                    <div
+                      role="log"
+                      aria-live="polite"
+                      aria-relevant="additions"
+                      className="chat-log chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full"
+                    >
                       <ChatMessageList
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
                         isStreaming={isCurrentChatStreaming}
@@ -12206,50 +14177,74 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onAttachmentPreview={handleAttachmentPreview}
                         onOpenSources={handleOpenSources}
                       />
+                      <div
+                        ref={chatLogEndRef}
+                        className="chat-log-end sr-only"
+                        tabIndex={-1}
+                        aria-hidden="true"
+                      />
                     </div>
                   </ScrollArea>
 
                   {/* Input & Actions */}
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
-                    <div className="chat-composer-frame relative space-y-2 bg-background">
+                    <div className="chat-composer-frame relative flex flex-col gap-2">
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
                           otherwise a silent ref). */}
                       {queuedCount > 0 && (
                         <div className="flex items-center justify-center" aria-live="polite">
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/55 bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                          <div className="inline-flex items-center gap-1 rounded-full border border-border/55 bg-muted/50 p-1 pl-2.5 text-[11px] font-medium text-muted-foreground">
                             <span className="relative flex h-1.5 w-1.5">
-                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[hsl(var(--accent-violet))] opacity-75" />
+                              <span className="absolute inline-flex h-full w-full motion-safe:animate-ping rounded-full bg-[hsl(var(--accent-violet))] opacity-75" />
                               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet))]" />
                             </span>
-                            {queuedCount} {queuedCount === 1 ? "tarea en cola" : "tareas en cola"} · se procesarán en orden
-                          </span>
+                            <span>{queuedCount} {queuedCount === 1 ? "tarea en cola" : "tareas en cola"}</span>
+                            <button
+                              type="button"
+                              onClick={restoreLastQueuedMessage}
+                              className="inline-flex h-11 items-center rounded-full px-2.5 text-foreground/80 transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7"
+                            >
+                              Editar última
+                            </button>
+                            <button
+                              type="button"
+                              onClick={removeLastQueuedMessage}
+                              aria-label="Quitar última tarea de la cola"
+                              title="Quitar última tarea"
+                              className="inline-grid h-11 w-11 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7"
+                            >
+                              <X className="h-3.5 w-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
                         </div>
                       )}
-                      {/* Scroll-to-bottom pill — only shown when the
-                          user has scrolled up. Floats just above the
-                          composer surface so the click target sits in
-                          the same zone the user's hand is already
-                          near. Aria-live so assistive tech announces
-                          "new messages below" as the pill appears. */}
+                      {/* Scroll-to-bottom pill — only shown when the user has
+                          scrolled up. It floats like ChatGPT's affordance so it
+                          does not reserve a full-width blank row above the
+                          composer or fade the final lines of the transcript. */}
                       <div
                         aria-live="polite"
+                        data-testid="chat-scroll-to-bottom"
                         className={cn(
-                          "pointer-events-none absolute left-1/2 -top-12 z-20 -translate-x-1/2",
-                          "transition-all duration-base ease-smooth",
+                          "absolute left-1/2 -top-11 z-20 flex -translate-x-1/2 justify-center",
+                          "transition-[opacity,transform] duration-base ease-smooth",
                           isAtBottom
-                            ? "opacity-0 translate-y-1"
-                            : "opacity-100 translate-y-0",
+                            ? "pointer-events-none translate-y-2 opacity-0"
+                            : "translate-y-0 opacity-100",
+                          queuedCount > 0 && "!-top-[5.25rem]",
                         )}
                       >
                         <button
                           type="button"
                           onClick={scrollToBottom}
+                          tabIndex={isAtBottom ? -1 : 0}
+                          aria-hidden={isAtBottom ? true : undefined}
                           aria-label={isCurrentChatStreaming ? "Nuevos mensajes, ir al final" : "Ir al final de la conversación"}
                           className={cn(
-                            "pointer-events-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
+                            "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
                             "border bg-background/95 backdrop-blur-md",
                             "text-[12.5px] font-medium",
                             "shadow-[0_4px_14px_-4px_rgba(15,23,42,0.18),0_1px_2px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",
@@ -12280,279 +14275,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       {/* Input Area */}
 
-                      {/* Same fixed-size composer as the initial state. */}
                       <CredentialWarning text={input} />
-                      <div className="relative">
-                        {pasteCapture.Overlay}
-                        <div className="composer-context-tray">
-                          <ActiveOptionsDisplay
-                            uploadedFiles={uploadedFiles}
-                            removeFile={removeFile}
-                            uploadProgress={uploadProgress}
-                            retryUpload={retryUpload}
-                            restoreLongPasteToInput={restoreLongPasteToInput}
-                            moveFile={moveFile}
-                            onPreviewAttachment={handleComposerAttachmentPreview}
-                            onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                          />
-                          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                          {hasActiveTools && !shouldInlineActiveTools && (
-                            <div className="composer-media-controls-row flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible">
-                              <ActiveToolsDisplay {...activeToolsProps} />
-                            </div>
-                          )}
-                        </div>
-                        <div
-                          data-testid="chat-composer-surface"
-                          className={cn(
-                            "composer-surface composer-liquid-surface composer-focus-glow group/composer relative rounded-3xl",
-                            pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                            "bg-background",
-                            "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                            "transition-[border-color,background-color,box-shadow] duration-base ease-smooth",
-                            "focus-within:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_26px_-20px_rgba(109,40,217,0.42)]",
-                        )}
-                      >
-                        <TooltipProvider>
-                          <div
-                            className="composer-input-row flex items-center gap-2 pl-2 pr-2 py-1.5"
-                          >
-                            <ActionsDropdown
-                              chatType={chatType}
-                              setChatType={setChatType}
-                              currentPlan={currentPlan}
-                              isWorkModeActive={isWorkModeActive}
-                              setIsWorkModeActive={setIsWorkModeActive}
-                              isWebSearchActive={isWebSearchActive}
-                              setIsWebSearchActive={setIsWebSearchActive}
-                              isImageGenerationActive={isImageGenerationActive}
-                              setIsImageGenerationActive={setIsImageGenerationActive}
-                              isVoiceGenerationActive={isVoiceGenerationActive}
-                              setIsVoiceGenerationActive={setIsVoiceGenerationActive}
-                              isMusicGenerationActive={isMusicGenerationActive}
-                              setIsMusicGenerationActive={setIsMusicGenerationActive}
-                              isVideoGenerationActive={isVideoGenerationActive}
-                              setIsVideoGenerationActive={setIsVideoGenerationActive}
-                              isComputerUseActive={isComputerUseActive}
-                              setIsComputerUseActive={setIsComputerUseActive}
-                              computerUseAppMode={computerUseAppMode}
-                              setComputerUseAppMode={setComputerUseAppMode}
-                              computerUseStatus={computerUseStatus}
-                              isGmailActive={isGmailActive}
-                              setIsGmailActive={setIsGmailActive}
-                              isGoogleCalendarActive={isGoogleCalendarActive}
-                              setIsGoogleCalendarActive={setIsGoogleCalendarActive}
-                              isGoogleDriveActive={isGoogleDriveActive}
-                              setIsGoogleDriveActive={setIsGoogleDriveActive}
-                              isSpotifyActive={isSpotifyActive}
-                              setIsSpotifyActive={setIsSpotifyActive}
-                              isWordConnectorActive={isWordConnectorActive}
-                              setIsWordConnectorActive={setIsWordConnectorActive}
-                              isExcelConnectorActive={isExcelConnectorActive}
-                              setIsExcelConnectorActive={setIsExcelConnectorActive}
-                              setShowAudioPanel={setShowAudioPanel}
-                              handleComputerUseToggle={handleComputerUseToggle}
-                              handleGmailToggle={handleGmailToggle}
-                              handleGoogleCalendarToggle={handleGoogleCalendarToggle}
-                              handleGoogleDriveToggle={handleGoogleDriveToggle}
-                              handleSpotifyToggle={handleSpotifyToggle}
-                              handleWordConnectorToggle={handleWordConnectorToggle}
-                              handleExcelConnectorToggle={handleExcelConnectorToggle}
-                              closeAllToolsAndConnectors={closeAllToolsAndConnectors}
-                              setAudioTab={setAudioTab}
-                              handleAndUploadFiles={handleAndUploadFiles}
-                              isUploading={isUploading}
-                              isWebSearching={isCurrentChatLocalJobBusy && isWebSearching}
-                              isLoading={isCurrentChatLoading}
-                              isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
-                              isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
-                              isGeneratingPPT={isGeneratingPPT}
-                              isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
-                            />
-                            {shouldInlineActiveTools && (
-                              <div className="composer-inline-active-tools">
-                                <ActiveToolsDisplay {...activeToolsProps} />
-                              </div>
-                            )}
-                            <div className="composer-textarea-shell min-w-0 flex-1">
-                              {hasDetectedLinks && input ? (
-                                <div
-                                  ref={composerHighlightOverlayRef}
-                                  className="composer-textarea-highlights textarea-scrollbar"
-                                  aria-hidden="true"
-                                >
-                                  <ComposerInlineLinkHighlights value={input} />
-                                </div>
-                              ) : null}
-                              <Textarea
-                                ref={textareaRef}
-                                value={input}
-                                onChange={handleTextareaChange}
-                                onKeyDown={handleKeyDown}
-                                onFocus={handleTextareaFocus}
-                                onBlur={handleTextareaBlur}
-                                onPaste={handleTextareaPaste}
-                                onScroll={handleComposerTextareaScroll}
-                                onCompositionStart={() => { isComposingRef.current = true }}
-                                onCompositionEnd={() => { isComposingRef.current = false }}
-                                data-link-highlights={hasDetectedLinks ? "true" : undefined}
-                                placeholder={
-                                  isImageGenerationActive
-                                    ? tComposer("placeholderImage")
-                                    : isVideoGenerationActive
-                                      ? tComposer("placeholderVideo")
-                                      : isVoiceGenerationActive
-                                        ? VOICE_COMPOSER_PLACEHOLDER
-                                        : isMusicGenerationActive
-                                          ? "Describe la música que quieres crear"
-                                            : isWebSearchActive
-                                              ? tComposer("placeholderWebSearch")
-                                              : isComputerUseActive
-                                                ? tComposer("placeholderComputer")
-                                            : isGmailActive
-                                              ? tComposer("placeholderGmail")
-                                              : (isGoogleCalendarActive || isGoogleDriveActive)
-                                                ? tComposer("placeholderGoogle")
-                                                : isSpotifyActive
-                                                  ? tComposer("placeholderSpotify")
-                                                  : isWordConnectorActive
-                                                    ? tComposer("placeholderWord")
-                                                    : isWorkModeActive
-                                                      ? "Describe el resultado que quieres obtener"
-                                                      : tComposer("placeholderDefault")
-                                }
-                                className={cn(
-                                  "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
-                                  "py-1.5 px-1",
-                                  "text-[15px] leading-[1.45] tracking-normal text-foreground",
-                                  "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                                  "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                                  "outline-none ring-0 focus:outline-none focus:ring-0",
-                                  "rounded-none transition-colors duration-200",
-                                )}
-                                style={{
-                                  minHeight: "24px",
-                                  maxHeight: "var(--chat-textarea-max-height, 200px)",
-                                  overflowY: "auto",
-                                  overflowX: "hidden",
-                                  wordWrap: "break-word",
-                                  border: "none",
-                                  outline: "none",
-                                  boxShadow: "none",
-                                }}
-                                rows={1}
-                              />
-                            </div>
-                            <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
-                              {/* Pulido · contador suave de caracteres. */}
-                              <ComposerCharCounter input={input} />
-                              {renderComposerModelControls()}
-                              {!isStopButtonVisible && (
-                                renderDictationButton()
-                              )}
-
-                              {!isStopButtonVisible && (() => {
-                                const hasText = input.trim().length > 0
-                                const hasAttachment = uploadedFiles.length > 0
-                                const needsPrompt = requiresPromptBeforePrimarySend && !hasText
-                                const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
-                                const busy = isCurrentChatLocalJobBusy || isUploading
-                                const action = canSend
-                                  ? handleSend
-                                  : openGrokVoicePanel
-                                const label = canSend
-                                  ? 'Enviar (⏎)'
-                                  : needsPrompt
-                                    ? 'Describe lo que quieres crear'
-                                    : 'Modo de voz'
-                                const Icon = canSend || needsPrompt ? ArrowUp : AudioLines
-                                return (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        onClick={action}
-                                        disabled={(canSend && busy) || needsPrompt}
-                                        size="icon"
-                                        aria-label={label}
-                                        title={label}
-                                        className={cn(
-                                          "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                          "bg-foreground text-background",
-                                          "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                          "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.18)]",
-                                          "active:scale-[0.96]",
-                                          "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100",
-                                        )}
-                                      >
-                                        {busy ? (
-                                          <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
-                                        ) : (
-                                          <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
-                                        )}
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top">
-                                      <p>{label}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )
-                              })()}
-
-                              {/* While the agent is thinking, a non-empty
-                                  composer SENDS the new task to the queue
-                                  (runs in order after the current one). This
-                                  is what makes "send more while it thinks"
-                                  work on mobile, where Enter isn't available.
-                                  Empty composer → STOP button. */}
-                              {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      onClick={handleSend}
-                                      size="icon"
-                                      aria-label="Enviar a la cola"
-                                      title="Enviar a la cola · se procesa en orden"
-                                      className={cn(
-                                        "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                        "bg-[hsl(var(--accent-violet))] text-white",
-                                        "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
-                                        "hover:opacity-90 active:scale-[0.96]",
-                                      )}
-                                    >
-                                      <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
-                                </Tooltip>
-                              )}
-                              {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
-                                <Button
-                                  onClick={stopActiveGeneration}
-                                  size="icon"
-                                  aria-label="Detener generación"
-                                  title="Detener"
-                                  disabled={pendingStop && isCurrentChatStreaming}
-                                  className={cn(
-                                    "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                    "bg-foreground text-background",
-                                    "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                    "hover:bg-foreground/90 active:scale-[0.96]",
-                                    "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
-                                  )}
-                                >
-                                  {pendingStop ? (
-                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
-                                  ) : (
-                                    <Square className="h-[12px] w-[12px] fill-current" strokeWidth={0} />
-                                  )}
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        </TooltipProvider>
-
-                      </div>
-                      </div>
+                      {renderChatComposer()}
                     </div>
                   </div>
                 </>
@@ -12574,7 +14298,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <ComputerUseInterface
               screenshot={computerUseScreenshot}
               status={computerUseStatus}
+              currentUrl={computerUseCurrentUrl || computerUseFinalUrl}
+              actions={computerUseActions}
+              takeoverState={computerUseTakeoverState}
+              onStop={() => { void stopComputerUse(); }}
+              onPause={() => sendControllerCommand("pause-session")}
+              onTakeover={() => sendControllerCommand("takeover-start")}
+              onRelease={() => sendControllerCommand("takeover-end")}
+              onUserClick={(point) => sendUserAction({ type: "click", x: point.x, y: point.y })}
+              onUserType={(text) => sendUserAction({ type: "type", text })}
               onClose={() => {
+                void stopComputerUse();
                 setIsComputerUseActive(false);
                 setComputerUseAppMode(null);
                 setChatType('text');
@@ -12619,6 +14353,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
                   : coworkPanelOpen
                     ? 'clamp(320px, 42vw, 720px)'
+                  : computerPanelOpen
+                    ? 'clamp(320px, 48vw, 880px)'
                   : searchActivityPanelOpen
                     ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
                   : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,
@@ -12630,6 +14366,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <CoworkPanel
                   chatId={currentChat.id}
                   onClose={() => setCoworkPanelOpen(false)}
+                />
+              )}
+              {computerPanelOpen && (
+                <ChatAgentComputerPanel
+                  key={currentChat?.id || "none"}
+                  conversationId={currentChat?.id || ""}
+                  loginHandoff={loginHandoffActive}
+                  loginHandoffSite={loginHandoffSite}
+                  loginHandoffKind={loginHandoffKind}
+                  onClose={() => {
+                    setComputerPanelOpen(false)
+                    setLoginHandoffActive(false)
+                  }}
                 />
               )}
               {showAudioPanel && audioTab === 'stt' && (
@@ -12710,20 +14459,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 </div>
               )}
-              {!coworkPanelOpen && !showAudioPanel && activeSearchActivity && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && activeSearchActivity && (
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
                   onSave={saveSearchActivityToLibrary}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -12737,7 +14486,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -12754,7 +14503,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -12767,7 +14516,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -12776,10 +14525,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
                 <SourcesPanel
                   sources={sourcesPanelData.sources}
                   activity={sourcesPanelData.activity}
@@ -12790,6 +14539,43 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               )}
             </div>
           </>
+        )}
+        {previewUsesOverlay && documentPreviewUrl && (
+          <DocumentPreview
+            url={documentPreviewUrl}
+            onClose={() => setDocumentPreviewUrl(null)}
+          />
+        )}
+        {previewUsesOverlay && !documentPreviewUrl && composerPreviewAttachment && (
+          <UnifiedDocumentViewer
+            variant="panel"
+            className="h-full"
+            open={true}
+            onClose={() => setComposerPreviewIndex(null)}
+            attachment={composerPreviewAttachment}
+            siblings={composerPreviewSiblings}
+            onNavigate={(next) => {
+              const idx = composerPreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+              if (idx >= 0) setComposerPreviewIndex(idx);
+            }}
+          />
+        )}
+        {previewUsesOverlay && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+          <UnifiedDocumentViewer
+            variant="panel"
+            className="h-full"
+            open={true}
+            onClose={() => {
+              setSidePreviewAttachment(null);
+              setSidePreviewSiblings([]);
+            }}
+            attachment={sidePreviewAttachment}
+            siblings={sidePreviewSiblings}
+            onNavigate={(next) => {
+              const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+              if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
+            }}
+          />
         )}
       </div>
     </div >

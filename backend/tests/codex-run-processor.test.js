@@ -3,12 +3,24 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { processCodexRunJob } = require('../src/services/codex/run-processor');
+const {
+  processCodexRunJob,
+  abortRun,
+  executionContextForAdapter,
+} = require('../src/services/codex/run-processor');
+const { nativeCodexAdapter } = require('../src/services/codex/agent-adapters/native-codex-adapter');
 
 // Fake prisma: one run + one project, mutable status.
-function makeDeps({ run, project } = {}) {
+function makeDeps({
+  run,
+  project,
+  metric = null,
+  userPlan = 'PRO',
+} = {}) {
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued', ...run };
-  const projRow = { id: 'p1', name: 'Demo', ...project };
+  const projRow = { id: 'p1', userId: 'u1', name: 'Demo', ...project };
+  const metricState = { row: metric ? structuredClone(metric) : null };
+  const usageState = { rows: [] };
   const events = [];
   const prisma = {
     codexRun: {
@@ -25,12 +37,59 @@ function makeDeps({ run, project } = {}) {
     codexProject: {
       async findUnique({ where }) { return where.id === projRow.id ? { ...projRow } : null; },
     },
+    codexRunMetric: {
+      async findUnique({ where }) {
+        return metricState.row?.runId === where.runId ? structuredClone(metricState.row) : null;
+      },
+      async upsert({ create, update }) {
+        if (!metricState.row) {
+          metricState.row = { id: 'metric-1', ...structuredClone(create) };
+          return structuredClone(metricState.row);
+        }
+        for (const [key, value] of Object.entries(update)) {
+          if (value && typeof value === 'object' && 'increment' in value) {
+            metricState.row[key] = Number(metricState.row[key] || 0) + Number(value.increment || 0);
+          } else {
+            metricState.row[key] = value;
+          }
+        }
+        return structuredClone(metricState.row);
+      },
+    },
+    codexUsageEntry: {
+      async create({ data }) {
+        const row = {
+          id: `usage-${usageState.rows.length + 1}`,
+          createdAt: new Date('2026-06-13T12:00:00.000Z'),
+          ...structuredClone(data),
+        };
+        usageState.rows.push(row);
+        return structuredClone(row);
+      },
+      async findUnique({ where }) {
+        const row = usageState.rows.find(
+          (candidate) => candidate.idempotencyKey === where.idempotencyKey,
+        );
+        return row ? structuredClone(row) : null;
+      },
+    },
+    user: {
+      async findUnique() { return { plan: userPlan }; },
+    },
   };
   const eventStore = {
     async appendEvent(runId, type, data) { events.push({ runId, type, data }); return { runId, type, data, seq: events.length }; },
   };
   const clock = () => new Date('2026-06-13T12:00:00.000Z');
-  return { prisma, eventStore, clock, events, runRow };
+  return {
+    prisma,
+    eventStore,
+    clock,
+    events,
+    runRow,
+    metricState,
+    usageState,
+  };
 }
 
 test('build run: queued → running → done with run_status events in order', async () => {
@@ -47,6 +106,352 @@ test('build run: queued → running → done with run_status events in order', a
   assert.equal(nativeInput.deps.eventStore, d.eventStore);
   const statuses = d.events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running', 'done']);
+});
+
+test('fleet QA starts only after the merged run is durably terminal', async () => {
+  const d = makeDeps();
+  const reviews = [];
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      async reviewMergedCheckpoint(input) {
+        assert.equal(d.runRow.status, 'done');
+        reviews.push(input);
+        return {
+          action: 'reviewed',
+          mergeCount: 1,
+          findings: 0,
+          tasksCreated: 0,
+        };
+      },
+    },
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(reviews.length, 1);
+  assert.equal(reviews[0].mergeSha, 'a'.repeat(40));
+  assert.ok(
+    d.events.findIndex((event) => event.type === 'run_status' && event.data.status === 'done')
+      < d.events.findIndex((event) => event.type === 'narrative_delta'),
+  );
+});
+
+test('fleet QA usage is awaited and attributed to the Trust pool ledger', async () => {
+  const d = makeDeps({
+    metric: {
+      id: 'metric-1',
+      runId: 'run-1',
+      tokensIn: 100,
+      tokensOut: 20,
+      model: 'old-model',
+      costUsd: 1,
+      costSource: 'provider_exact',
+      costOriginalUsd: 1,
+      costAppliedUsd: 1,
+      costInputUsd: 0.6,
+      costOutputUsd: 0.4,
+    },
+  });
+  let usageVisibleInsideReviewer = false;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      async reviewMergedCheckpoint({ deps }) {
+        const accounted = await deps.onUsage({
+          tokensIn: 10,
+          tokensOut: 5,
+          model: 'qa-model',
+        }, {
+          departmentPoolId: 'pool-trust',
+          reviewId: 'review-1',
+        });
+        usageVisibleInsideReviewer = d.usageState.rows[0]?.costOriginalUsd === 0.25;
+        assert.equal(accounted.costOriginalUsd, 0.25);
+        return {
+          action: 'reviewed',
+          mergeCount: 1,
+          findings: 0,
+          tasksCreated: 0,
+        };
+      },
+    },
+    fleetQaCostResolver: async () => ({
+      costUsd: 0.25,
+      costInputUsd: 0.15,
+      costOutputUsd: 0.1,
+      costSource: 'provider_exact',
+    }),
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(usageVisibleInsideReviewer, true);
+  assert.equal(d.metricState.row.costOriginalUsd, 1, 'originating run metric remains unchanged');
+  assert.equal(d.usageState.rows.length, 1);
+  assert.equal(d.usageState.rows[0].projectId, 'p1');
+  assert.equal(d.usageState.rows[0].departmentPoolId, 'pool-trust');
+  assert.equal(d.usageState.rows[0].source, 'fleet_qa');
+  assert.equal(d.usageState.rows[0].sourceId, 'review-1');
+  assert.equal(d.usageState.rows[0].tokensIn, 10);
+  assert.equal(d.usageState.rows[0].tokensOut, 5);
+});
+
+test('post-terminal fleet QA has an independent hard timeout', async () => {
+  const d = makeDeps();
+  let qaSignal;
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      reviewMergedCheckpoint({ deps }) {
+        qaSignal = deps.signal;
+        return new Promise(() => {});
+      },
+    },
+    fleetQaTimeoutMs: 20,
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  assert.equal(res.status, 'done');
+  assert.equal(qaSignal.aborted, true);
+  assert.equal(res.fleetQaResult.action, 'review_failed');
+  assert.match(res.fleetQaResult.error, /fleet QA exceeded 20ms/);
+});
+
+test('post-terminal fleet QA accepts an independent cancellation signal', async () => {
+  const d = makeDeps();
+  const cancellation = new AbortController();
+  let qaSignal;
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner: { exec: async () => ({ exitCode: 0 }) },
+    runAgentLoop: async () => ({
+      status: 'done',
+      close: {
+        branchFinalization: {
+          merge: { status: 'merged', commitSha: 'a'.repeat(40) },
+        },
+      },
+    }),
+    fleetQualityReviewer: {
+      reviewMergedCheckpoint({ deps }) {
+        qaSignal = deps.signal;
+        return new Promise(() => {});
+      },
+    },
+    fleetQaSignal: cancellation.signal,
+    fleetQaTimeoutMs: 5_000,
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_FLEET_QA_ENABLED: '1' },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  cancellation.abort(new Error('operator cancelled QA'));
+  const res = await processing;
+  assert.equal(qaSignal.aborted, true);
+  assert.equal(res.fleetQaResult.action, 'review_failed');
+  assert.match(res.fleetQaResult.error, /operator cancelled QA/);
+});
+
+test('build processor provisions a run worktree before handing the scoped runner to every tool', async () => {
+  const d = makeDeps();
+  const calls = [];
+  const scopedRunner = { runScope: { project: 'p1', run: 'run-1' } };
+  const runner = {
+    async createWorktree(project, run, baseBranch) {
+      calls.push(['create', project, run, baseBranch]);
+      return { ok: true, runBranch: `run/${run}` };
+    },
+    forRun(run, project) {
+      calls.push(['scope', run, project]);
+      return scopedRunner;
+    },
+  };
+  let loopRunner;
+  const checkpointService = {
+    projectBaseBranch: () => 'main',
+    async prepareRunBranch({ run, project, deps }) {
+      calls.push(['branch', deps.runner]);
+      await deps.runner.createWorktree(project.id, run.id, 'main');
+      return { ok: true, worktree: true };
+    },
+  };
+  const result = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner,
+    checkpointService,
+    runAgentLoop: async ({ deps }) => {
+      loopRunner = deps.runner;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: {
+      NODE_ENV: 'test',
+      CODEX_RUN_BRANCHES: '1',
+      CODEX_RUN_WORKTREES: '1',
+    },
+  });
+
+  assert.equal(result.status, 'done');
+  assert.equal(calls[0][0], 'branch');
+  assert.notEqual(calls[0][1], runner, 'branch setup receives an abort-guarded runner');
+  assert.deepEqual(calls[1], ['create', 'p1', 'run-1', 'main']);
+  assert.deepEqual(calls[2], ['scope', 'run-1', 'p1']);
+  assert.deepEqual(loopRunner.runScope, scopedRunner.runScope);
+});
+
+test('cancellation during branch setup prevents recovery, second preparation, adapter, and effects', async () => {
+  const d = makeDeps();
+  let releasePrepare;
+  let enteredPrepare;
+  const prepareEntered = new Promise((resolve) => { enteredPrepare = resolve; });
+  let prepareCalls = 0;
+  let recoverCalls = 0;
+  let adapterCalls = 0;
+  let runnerEffects = 0;
+  const runner = {
+    async recoverRunBase() {
+      recoverCalls += 1;
+      runnerEffects += 1;
+      return { ok: true, recoveryRef: 'recovery-ref' };
+    },
+    async exec() {
+      runnerEffects += 1;
+      return { exitCode: 0 };
+    },
+  };
+  const checkpointService = {
+    projectBaseBranch: () => 'main',
+    async prepareRunBranch() {
+      prepareCalls += 1;
+      if (prepareCalls === 1) {
+        enteredPrepare();
+        return new Promise((resolve) => { releasePrepare = resolve; });
+      }
+      return { ok: true, worktree: true };
+    },
+    async createCheckpoint() {
+      runnerEffects += 1;
+      return null;
+    },
+  };
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner,
+    checkpointService,
+    runAgentLoop: async () => {
+      adapterCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_RUN_BRANCHES: '1', CODEX_RUN_DRAIN_TIMEOUT_MS: '50' },
+  });
+
+  await prepareEntered;
+  d.runRow.status = 'cancelled';
+  assert.equal(abortRun('run-1'), true);
+  releasePrepare({ ok: false, code: 'working_tree_dirty' });
+
+  const result = await processing;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(d.runRow.status, 'cancelled');
+  assert.equal(prepareCalls, 1);
+  assert.equal(recoverCalls, 0);
+  assert.equal(adapterCalls, 0);
+  assert.equal(runnerEffects, 0);
+  assert.equal(abortRun('run-1'), false);
+});
+
+test('setup hard timeout drains safely, preserves timeout error, and cleans transcript/controller', async () => {
+  const d = makeDeps();
+  let prepareStarted;
+  const prepareWait = new Promise((resolve) => { prepareStarted = resolve; });
+  let releasePrepare;
+  let prepareCalls = 0;
+  let registerCalls = 0;
+  let unregisterCalls = 0;
+  let adapterCalls = 0;
+  const eventStore = {
+    appendEvent: d.eventStore.appendEvent,
+    registerTranscriptSink() {
+      registerCalls += 1;
+      return () => { unregisterCalls += 1; };
+    },
+  };
+  const checkpointService = {
+    async prepareRunBranch() {
+      prepareCalls += 1;
+      prepareStarted();
+      return new Promise((resolve) => { releasePrepare = resolve; });
+    },
+  };
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore,
+    checkpointService,
+    runAgentLoop: async () => {
+      adapterCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: {
+      NODE_ENV: 'test',
+      CODEX_RUN_BRANCHES: '1',
+      CODEX_RUN_TIMEOUT_MS: '10',
+      CODEX_RUN_DRAIN_TIMEOUT_MS: '15',
+    },
+  });
+
+  await prepareWait;
+  const result = await processing;
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /timeout/i);
+  assert.equal(d.runRow.status, 'error');
+  assert.equal(prepareCalls, 1);
+  assert.equal(registerCalls, 0, 'transcript setup must not begin after a setup timeout');
+  assert.equal(unregisterCalls, 0, 'no transcript cleanup is needed when setup never registered it');
+  assert.equal(adapterCalls, 0);
+  assert.equal(abortRun('run-1'), false);
+  releasePrepare({ ok: false, code: 'working_tree_dirty' });
 });
 
 test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
@@ -174,6 +579,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued' };
   const events = [];
   let cancelFlips = 0;
+  let loopCalled = false;
   const prisma = {
     codexRun: {
       async findUnique({ where }) {
@@ -182,9 +588,9 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
         // pre-cancel `running` value (returns false), then cancelRun lands: the
         // row is `cancelled` by the time the guarded terminal write runs.
         const snapshot = { ...runRow };
-        if (runRow.status === 'running') {
+        if (runRow.status === 'running' && loopCalled) {
           cancelFlips += 1;
-          runRow.status = 'cancelled'; // flips just AFTER this read returns `running`
+          runRow.status = 'cancelled'; // flips just AFTER the cancellation check
         }
         return snapshot;
       },
@@ -199,7 +605,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
     codexProject: { async findUnique() { return { id: 'p1', name: 'Demo' }; } },
   };
   const eventStore = { async appendEvent(runId, type, data) { events.push({ runId, type, data }); } };
-  const loop = async () => ({ status: 'done' });
+  const loop = async () => { loopCalled = true; return { status: 'done' }; };
   let terminalPublishes = 0;
   const res = await processCodexRunJob({
     runId: 'run-1',
@@ -212,6 +618,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   // The row was cancelled out-of-band; the guarded write must not revert it to done.
   assert.equal(runRow.status, 'cancelled');
   assert.equal(res.raced, true);
+  assert.equal(cancelFlips, 1);
   // Only `running` was emitted by the processor; no terminal done/error event.
   const statuses = events.filter((e) => e.type === 'run_status').map((e) => e.data.status);
   assert.deepEqual(statuses, ['running']);
@@ -230,6 +637,105 @@ test('hard timeout aborts a hung loop into error', async () => {
   });
   assert.equal(res.status, 'error');
   assert.match(res.error, /timeout/i);
+});
+
+test('abortRun reaches the live adapter by runId and finalizes cancellation', async () => {
+  const d = makeDeps();
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: ({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ status: 'cancelled' }), { once: true });
+    }),
+    clock: d.clock,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(abortRun('run-1'), true);
+  const res = await processing;
+  assert.equal(res.status, 'cancelled');
+  assert.equal(d.runRow.status, 'cancelled');
+});
+
+test('timeout waits for cooperative adapter drain and ignores its late outcome', async () => {
+  const d = makeDeps();
+  let drained = false;
+  const startedAt = Date.now();
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: ({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => {
+        setTimeout(() => {
+          drained = true;
+          resolve({ status: 'done' });
+        }, 25);
+      }, { once: true });
+    }),
+    clock: d.clock,
+    env: { CODEX_RUN_TIMEOUT_MS: '10', CODEX_RUN_DRAIN_TIMEOUT_MS: '100' },
+  });
+  assert.equal(res.status, 'error');
+  assert.equal(drained, true);
+  assert.ok(Date.now() - startedAt >= 20);
+  assert.equal(d.runRow.status, 'error');
+});
+
+test('native execution blocks late runner and checkpoint effects after an ignored abort', async () => {
+  const controller = new AbortController();
+  let writes = 0;
+  let execs = 0;
+  let checkpoints = 0;
+  const context = executionContextForAdapter({
+    adapter: nativeCodexAdapter,
+    signal: controller.signal,
+    isCancelled: async () => false,
+    run: { id: 'run-1', mode: 'build' },
+    project: { id: 'p1', name: 'Demo' },
+    deps: {
+      eventStore: { async appendEvent() { writes += 1; } },
+      runner: {
+        async writeFiles() { writes += 1; },
+        async exec() { execs += 1; },
+      },
+      checkpointService: {
+        async createCheckpoint() { checkpoints += 1; },
+      },
+      env: {},
+    },
+  });
+  controller.abort(new Error('timeout'));
+  await new Promise((resolve) => setImmediate(resolve));
+  await context.deps.eventStore.appendEvent('run-1', 'late', {});
+  assert.throws(() => context.deps.runner.writeFiles('p1', []), /blocked after codex run abort/);
+  assert.throws(() => context.deps.runner.exec('p1', ['git', 'status']), /blocked after codex run abort/);
+  assert.throws(() => context.deps.checkpointService.createCheckpoint({}), /blocked after codex run abort/);
+  assert.equal(writes, 0, 'late event/write side effects must not reach downstream clients');
+  assert.equal(execs, 0, 'late exec must not reach the runner');
+  assert.equal(checkpoints, 0, 'late checkpoint must not reach the checkpoint service');
+});
+
+test('outer cleanup releases the controller when terminal side effects throw', async () => {
+  const d = makeDeps();
+  const eventStore = {
+    ...d.eventStore,
+    async appendEvent(runId, type, data, options) {
+      if (type === 'run_status' && data.status === 'done') throw new Error('terminal event failed');
+      return d.eventStore.appendEvent(runId, type, data, options);
+    },
+  };
+  await assert.rejects(
+    () => processCodexRunJob({
+      runId: 'run-1',
+      prisma: d.prisma,
+      eventStore,
+      runAgentLoop: async () => ({ status: 'done' }),
+      clock: d.clock,
+    }),
+    /terminal event failed/,
+  );
+  assert.equal(abortRun('run-1'), false);
 });
 
 test('non-queued run is skipped (idempotency)', async () => {

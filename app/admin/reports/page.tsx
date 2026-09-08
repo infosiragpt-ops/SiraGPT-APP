@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { toast } from "sonner"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
@@ -106,15 +106,11 @@ export default function ReportsPage() {
   const columns = result?.rows?.length ? Object.keys(result.rows[0]) : []
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <SidebarTrigger className="md:hidden" />
-          <div>
-            <h1 className="text-3xl font-bold">Reportes</h1>
-            <p className="text-muted-foreground">Generados en vivo desde la base de datos</p>
-          </div>
-        </div>
+    <>
+      <AdminPageHeader
+        title="Reportes"
+        description="Generados en vivo desde la base de datos"
+        actions={
         <Select value={days} onValueChange={setDays}>
           <SelectTrigger className="w-44">
             <SelectValue />
@@ -125,7 +121,9 @@ export default function ReportsPage() {
             ))}
           </SelectContent>
         </Select>
-      </div>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div>
@@ -201,6 +199,7 @@ export default function ReportsPage() {
           </CardContent>
         </Card>
       )}
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

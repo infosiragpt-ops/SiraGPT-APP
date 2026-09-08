@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState, useRef, useEffect } from "react"
+import { useState, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -49,7 +49,15 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
 
   const [isCopied, setIsCopied] = useState(false)
   const [previewKey, setPreviewKey] = useState(0)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  // Security (#253 regime): agent HTML is rendered via srcDoc into a
+  // sandboxed iframe WITHOUT allow-same-origin. The iframe gets an
+  // opaque origin, so even a prompt-injected document cannot reach
+  // window.parent, cookies, or localStorage['auth-token']. Never load
+  // this content via a blob: URL — blob: inherits the app origin when
+  // allow-same-origin is set.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const previewHtml = useMemo(() => generateCompleteHTML(), [htmlCode, cssCode, jsCode, combinedCode, title])
 
   // Generate combined HTML document with enhanced quality
   const generateCompleteHTML = () => {
@@ -211,24 +219,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
 </html>`
   }
 
-  // Update iframe content
-  useEffect(() => {
-    if (iframeRef.current && (htmlCode || cssCode || jsCode || combinedCode)) {
-      const completeHTML = generateCompleteHTML()
-      const blob = new Blob([completeHTML], { type: 'text/html' })
-      const url = URL.createObjectURL(blob)
-      iframeRef.current.src = url
-
-      return () => {
-        URL.revokeObjectURL(url)
-      }
-    }
-    // generateCompleteHTML reads only htmlCode/cssCode/jsCode/combinedCode
-    // (already in deps); recreated each render so listing it would
-    // lint-loop without changing behaviour.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [htmlCode, cssCode, jsCode, combinedCode, previewKey])
-
   // Copy complete code to clipboard
   const handleCopy = async () => {
     try {
@@ -240,6 +230,11 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
     } catch (error) {
       toast.error("No se pudo copiar el código")
     }
+  }
+
+  // Refresh preview
+  const handleRefresh = () => {
+    setPreviewKey(prev => prev + 1)
   }
 
   // Download as HTML file
@@ -341,11 +336,6 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
     toast.success("Proyecto optimizado descargado con funcionalidades modernas")
   }
 
-  // Refresh preview
-  const handleRefresh = () => {
-    setPreviewKey(prev => prev + 1)
-  }
-
   // Toggle fullscreen
   const toggleFullscreen = () => {
     setIsFullscreen(!isFullscreen)
@@ -434,10 +424,10 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
           <CardContent className="p-0 flex-grow">
             <div className="h-full border-t border-border">
               <iframe
-                ref={iframeRef}
                 key={previewKey}
                 className="w-full h-full border-0 bg-white dark:bg-gray-900 rounded-b-lg"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+                srcDoc={previewHtml}
+                sandbox="allow-scripts allow-forms allow-modals allow-popups allow-pointer-lock"
                 title={title}
                 loading="lazy"
               />

@@ -72,6 +72,26 @@ before(() => {
 });
 after(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
 
+test('merge lock serializes integrations for the same project', async () => {
+  const order = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const first = cp.withProjectMergeLock(null, 'p1', async () => {
+    order.push('first:start');
+    await firstGate;
+    order.push('first:end');
+  });
+  const second = cp.withProjectMergeLock(null, 'p1', async () => {
+    order.push('second:start');
+    order.push('second:end');
+  });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.deepEqual(order, ['first:start']);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ['first:start', 'first:end', 'second:start', 'second:end']);
+});
+
 test('git-real: commit → modify → rollback restores files byte-for-byte', { skip: !gitAvailable }, async () => {
   const runner = localRunner(root);
   const db = memCheckpointDb();

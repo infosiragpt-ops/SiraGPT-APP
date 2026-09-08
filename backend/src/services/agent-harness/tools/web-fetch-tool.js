@@ -9,7 +9,8 @@
  * web_search. The security posture here is deny-by-class instead of
  * allow-by-list, reusing the hub's hardened primitives:
  *
- *   - http/https only; credentials in the URL rejected.
+ *   - http/https default ports only; credentials and IP-literal targets
+ *     rejected.
  *   - private / loopback / link-local / CGNAT / cloud-metadata addresses
  *     blocked BOTH as URL literals and after a fresh DNS resolution of the
  *     hostname (anti DNS-rebinding), via connectors/web-fetch.js
@@ -69,16 +70,30 @@ function assertSafeUrl(rawUrl) {
   if (parsed.username || parsed.password) {
     throw new WebFetchError('web_fetch_credentials_rejected', 400, 'URLs with embedded credentials are not allowed');
   }
+  // URL normalizes an explicitly specified protocol-default port to "".
+  // Any remaining port is non-standard (including https:80 / http:443) and
+  // would turn this public-page reader into a service/port scanner.
+  if (parsed.port) {
+    throw new WebFetchError(
+      'web_fetch_nonstandard_port_rejected',
+      400,
+      'only the default HTTP/HTTPS ports are reachable from this tool',
+    );
+  }
   const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   if (!host) throw new WebFetchError('web_fetch_no_host', 400, 'url has no host component');
   if (BLOCKED_HOSTNAMES.has(host) || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) {
     throw new WebFetchError('web_fetch_blocked_host', 400, `host "${host}" is not reachable from this tool`);
   }
   if (net.isIP(host)) {
-    // Public IP literals are allowed; private/reserved/metadata ranges never.
-    if (isPrivateOrReservedAddress(host)) {
-      throw new WebFetchError('web_fetch_blocked_host', 400, 'private / reserved IP addresses are not reachable from this tool');
-    }
+    // Hostnames are required even for globally routed addresses. Besides
+    // reducing abuse, this prevents hairpin/NAT routes to a host's own public
+    // IP from bypassing an external firewall.
+    throw new WebFetchError(
+      isPrivateOrReservedAddress(host) ? 'web_fetch_blocked_host' : 'web_fetch_ip_literal_rejected',
+      400,
+      'IP literal targets are not reachable from this tool',
+    );
   }
   return parsed;
 }

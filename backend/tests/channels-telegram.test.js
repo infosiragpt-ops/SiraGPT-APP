@@ -63,9 +63,10 @@ describe('TelegramAdapter · constructor', () => {
 });
 
 describe('TelegramAdapter · verify (webhook secret)', () => {
-  it('returns true when no webhook secret configured (open mode)', async () => {
+  it('fails closed when no webhook secret is configured', async () => {
     const a = makeAdapter();
-    assert.equal(await a.verify({ headers: {} }), true);
+    assert.equal(await a.verify({ headers: {} }), false);
+    assert.equal(a.metrics.get('telegram', KINDS.VERIFY_FAIL), 1);
   });
 
   it('returns true when secret matches header (lowercase)', async () => {

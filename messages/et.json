@@ -1,6 +1,6 @@
 {
   "sidebar": {
-    "newChat": "New chat",
+    "newChat": "New agent",
     "searchChats": "Search chats",
     "library": "Library",
     "gpts": "GPTs",
@@ -14,7 +14,24 @@
     "last7Days": "Last 7 days",
     "older": "Older",
     "projects": "Projects",
-    "design": "Design"
+    "design": "Design",
+    "justNow": "Just nüüd",
+    "yesterday": "Eile",
+    "loadingMoreChats": "Laaditakse rohkem vestlusi…",
+    "loadMoreChats": "Laadi rohkem vestlusi",
+    "allChatsLoaded": "Kõik vestlused laetud",
+    "privacyPolicy": "Privaatsuspoliitika",
+    "adminPanel": "Adminipaneel",
+    "superAdminPanel": "Super-admini paneel",
+    "returnToSuperAdmin": "Tagasi super-admini",
+    "upgrade": "Täienda plaani",
+    "upgradeNow": "Täienda kohe",
+    "administrator": "Administraator",
+    "superAdministrator": "Super-administraator",
+    "freePlan": "Tasuta plaan",
+    "searchBrain": "Otsi",
+    "post": "Postitus",
+    "code": "Kood"
   },
   "projects": {
     "title": "Projects",
@@ -290,7 +307,57 @@
     "continueWithGoogle": "Continue with Google",
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?",
-    "tagline": "Sign in to your SiraGPT account"
+    "tagline": "Sign in to your SiraGPT account",
+    "serverWarming": "Server käivitub. Automaatne uuesti proovimine…",
+    "serverWarmingButton": "Serveri käivitamine…",
+    "signingIn": "Sisselogimine…",
+    "invalidCreds": "Valed mandaadid",
+    "createYourAccount": "Loo oma konto",
+    "registerTagline": "Alusta tasuta SiraGPT-ga",
+    "name": "Nimi",
+    "namePlaceholder": "Sinu täisnimi",
+    "confirmPassword": "Kinnita parool",
+    "passwordMinHint": "Vähemalt 8 tähemärki",
+    "agreeTerms": "Nõustun tingimuste ja privaatsuspoliitikaga",
+    "emailInvalid": "Sisesta kehtiv e-posti aadress",
+    "passwordRequired": "Sisesta oma parool",
+    "brandTagline": "Kogu AI jõud ühes kohas",
+    "brandFeature1": "Parimad mudelid: GPT, Claude, Gemini, Grok ja teised",
+    "brandFeature2": "Pildid, dokumendid, kood ja diagrammid koheselt",
+    "brandFeature3": "Uuri ja automatiseeri spetsialiseeritud agentidega",
+    "brandFooter": "© SiraGPT — Multimodaalne AI platvorm",
+    "orWithEmail": "või oma e-posti aadressiga",
+    "signUpWithGoogle": "Registreeru Google'iga",
+    "nameRequired": "Sisesta oma nimi",
+    "passwordTooShort": "Parool peab olema vähemalt 8 tähemärki",
+    "passwordsNoMatch": "Paroolid ei ühti",
+    "agreeTermsRequired": "Jätkamiseks pead tingimustega nõustuma",
+    "back": "Tagasi",
+    "backToLogin": "Tagasi sisselogimisele",
+    "sending": "Saatmine…",
+    "sendResetLink": "Saada taastelink",
+    "resetLinkSent": "Taastelink saadetud",
+    "resetLinkSentDescription": "Kui selle e-postiga konto on olemas, saad lingi parooli lähtestamiseks. Kontrolli sisendkausta ja rämpsposti.",
+    "tryAgain": "Proovi uuesti",
+    "resetRequestFailed": "Linki ei õnnestunud saata. Proovi uuesti.",
+    "forgotPasswordTitle": "Taasta juurdepääs",
+    "forgotPasswordSubtitle": "Saadame sulle lingi parooli lähtestamiseks.",
+    "resetPasswordTitle": "Uus parool",
+    "resetPassword": "Lähtesta parool",
+    "resetPasswordSubtitle": "Sisesta oma uus parool.",
+    "resetting": "Lähtestamine…",
+    "passwordResetSuccess": "Parool uuendatud",
+    "passwordResetSuccessDescription": "Sinu parool uuendati edukalt. Nüüd saad sisse logida.",
+    "resetTokenMissing": "Taastemärk puudub. Küsi uus link.",
+    "resetTokenNotFound": "Taastemärk ei kehti.",
+    "resetTokenExpired": "Taastemärk on aegunud.",
+    "resetTokenUsed": "Seda märki on juba kasutatud.",
+    "resetFailed": "Parooli ei õnnestunud lähtestada.",
+    "requestNewResetLink": "Küsi uus link",
+    "agreeTermsPrefix": "Nõustun",
+    "agreeTermsLink": "tingimustega",
+    "agreeTermsAnd": "ja",
+    "agreePrivacyLink": "privaatsuspoliitikaga"
   },
   "documents": {
     "download": "Download",
@@ -343,7 +410,9 @@
       "titleDefault": "SiraGPT — Multimodal AI Platform",
       "titleTemplate": "%s · SiraGPT",
       "description": "SiraGPT integrates OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs and OpenClaw into one professional AI experience."
-    }
+    },
+    "sidebarMenu": "Külgmenüü",
+    "sidebarMenuDescription": "Peamine navigeerimine"
   },
   "thinking": {
     "thinking": "Mõtlen…",
@@ -443,6 +512,7 @@
     },
     "composer": {
       "placeholder": "Describe the idea — AI plans and builds…",
+      "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
       "plan": "Plan",
       "planTooltip": "The agent plans internally and builds automatically.",
       "send": "Send",
@@ -503,12 +573,135 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Agent computer",
+        "status": {
+          "live": "Live",
+          "starting": "Thinking…",
+          "error": "Error",
+          "idle": "Waiting"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
+        },
+        "routines": {
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+        }
+      }
     }
   },
   "meta": {
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "profile": {
+    "title": "Profiili seaded",
+    "subtitle": "Halda oma konto seadeid ja eelistusi.",
+    "synced": "Sünkroonitud",
+    "admin": "Administraator",
+    "personalInfo": {
+      "title": "Isikuandmed",
+      "desc": "Sinu profiiliandmed siraGPT-s"
+    },
+    "fullName": "Täisnimi",
+    "fullNamePlaceholder": "Sinu nimi",
+    "emailImmutable": "E-posti ei saa turvalisuse tõttu muuta.",
+    "discard": "Loobu",
+    "save": "Salvesta muudatused",
+    "saving": "Salvestamine…",
+    "security": {
+      "title": "Turvalisus",
+      "desc": "Uuenda parooli perioodiliselt"
+    },
+    "currentPassword": "Praegune parool",
+    "newPassword": "Uus parool",
+    "confirmPassword": "Kinnita parool",
+    "minChars": "Vähemalt 8 tähemärki",
+    "updatePassword": "Uuenda parooli",
+    "updatingPassword": "Uuendamine…",
+    "subscription": {
+      "title": "Tellimus",
+      "desc": "Plaan ja arveldus"
+    },
+    "nextBilling": "Järgmine arveldus",
+    "manageSubscription": "Halda tellimust",
+    "usage": {
+      "title": "Igakuine kasutus",
+      "subtitleCalls": "Kasutatud kõned",
+      "subtitleTokens": "Kasutatud tokenid"
+    },
+    "used": "kasutatud",
+    "remaining": "jäänud",
+    "usageWarning": "Oled ületanud 70% oma igakuisest kvoodist.",
+    "usageDanger": "Sel kuul on sul väga vähe kvooti jäänud. Kaalu plaani täiendamist, et oma töövoogu mitte katkestada.",
+    "adminAccess": {
+      "title": "Admini juurdepääs",
+      "desc": "Aktiivsed õigused"
+    },
+    "openAdmin": "Ava adminipaneel"
+  },
+  "messageActions": {
+    "copy": "Kopeeri",
+    "copied": "Kopeeritud",
+    "userMessage": "Kasutaja sõnum",
+    "assistantResponse": "Abi vastus",
+    "speak": "Loe ette",
+    "stopSpeak": "Lõpeta lugemine",
+    "regenerate": "Genereeri uuesti",
+    "share": "Jaga",
+    "feedbackGood": "Kasulik vastus",
+    "feedbackBad": "Vähem kasulik vastus"
+  },
+  "composer": {
+    "placeholderDefault": "Küsi SiraGPT-lt",
+    "placeholderImage": "Kirjelda pilti, mida soovid luua",
+    "placeholderVideo": "Kirjelda videot, mida soovid luua",
+    "placeholderWebSearch": "Otsi veebist",
+    "placeholderGmail": "Gmaili käsk",
+    "placeholderGoogle": "Google'i käsk",
+    "placeholderSpotify": "Spotify'i käsk",
+    "placeholderWord": "Kirjelda dokumenti, mida soovid luua",
+    "placeholderComputer": "Ütle, mida soovid, et see juhib",
+    "sendHint": "Saada",
+    "stopHint": "Peata",
+    "dropFiles": "Lohista failid üleslaadimiseks"
+  },
+  "chatSearch": {
+    "placeholder": "Search your chats…",
+    "noResults": "No results",
+    "noResultsFor": "We couldn't find chats matching “{query}”",
+    "serverFallback": "Couldn't reach server search; showing local title matches.",
+    "emptyHistory": "You have no chats yet",
+    "emptyHistoryHint": "Start a conversation and it will show up here",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chats"
   }
 }

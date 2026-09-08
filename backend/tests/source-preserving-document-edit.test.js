@@ -1,6 +1,5 @@
 const assert = require('node:assert/strict');
 const { describe, it } = require('node:test');
-const { execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -40,15 +39,6 @@ async function makeDocxBuffer() {
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
-function hasPdfToText() {
-  try {
-    execFileSync('pdftotext', ['-v'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function makePdfBuffer() {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([612, 792]);
@@ -56,19 +46,6 @@ async function makePdfBuffer() {
   page.drawText('SiraGPT banco real PDF', { x: 72, y: 720, size: 16, font, color: rgb(0, 0, 0) });
   page.drawText('Estado: BORRADOR', { x: 72, y: 690, size: 14, font, color: rgb(0, 0, 0) });
   return Buffer.from(await pdf.save());
-}
-
-function extractPdfTextForTest(buffer) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-text-'));
-  const pdfPath = path.join(tmp, 'input.pdf');
-  const txtPath = path.join(tmp, 'output.txt');
-  try {
-    fs.writeFileSync(pdfPath, buffer);
-    execFileSync('pdftotext', [pdfPath, txtPath]);
-    return fs.readFileSync(txtPath, 'utf8');
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
 }
 
 async function makeDocxWithAnexo3Buffer() {
@@ -325,9 +302,27 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('corrige la redacción', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('pasa este word al formato UPN', ['src.docx', 'formato-upn.docx']), true);
+    assert.equal(isSourcePreservingEditRequest('usando todos los documentos adjuntos', ['a.docx', 'b.docx']), false);
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);
+    // NEW PowerPoint from thesis PDF + images must NOT preserve the PDF as annexes.
+    const thesisPptPrompt = 'realiza una ppt profesional en 30 ppts de forma profesional de la tesis 20 julio Tesis de maestria.pdf en base a las imagenes de forma profesional';
+    assert.equal(isSourcePreservingEditRequest(thesisPptPrompt, ['file-pdf', 'img-1', 'img-2']), false);
+    assert.equal(isSourcePreservingEditRequest('crea una presentacion de 15 diapositivas de este PDF', ['file-pdf']), false);
+    assert.equal(isSourcePreservingEditRequest('genera un powerpoint de defensa de tesis con 20 slides', ['file-pdf']), false);
+    // Surgical edit of an existing PPTX still preserves source.
+    assert.equal(isSourcePreservingEditRequest('cambia el titulo de la diapositiva 3', ['file-pptx']), true);
+    assert.equal(isSourcePreservingEditRequest(
+      'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
+      ['file-pptx'],
+    ), true);
+    assert.equal(isSourcePreservingEditRequest(
+      'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
+      [],
+    ), true, 'same-deck follow-up must recover the prior PPT even without current-turn fileIds');
+    assert.equal(isSourcePreservingEditRequest('edita mi presentacion y corrige la ortografia', ['file-pptx']), true);
     assert.equal(isSourcePreservingEditRequest('reemplaza BORRADOR por APROBADO en los documentos adjuntos y devuelve un DOCX completo', ['file-docx', 'file-xlsx']), true);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
@@ -496,6 +491,55 @@ describe('source-preserving document edit', () => {
     assert.equal(files.length, 1);
     assert.equal(files[0].id, 'file-new');
     assert.equal(files[0].path, newPath);
+  });
+
+  it('recovers the ##-named PPTX from recent chat attachments when fileIds are empty', async () => {
+    const prompt = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
+    assert.deepEqual(
+      sourcePreservingInternals.extractReferencedSourceFilenames(prompt),
+      ['gestion_amdinistrativa.pptx'],
+    );
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-named-pptx-'));
+    const pptxPath = path.join(tmp, 'Gestion_amdinistrativa.pptx');
+    const otherPath = path.join(tmp, 'informe.docx');
+    fs.writeFileSync(pptxPath, 'pptx');
+    fs.writeFileSync(otherPath, 'docx');
+    const prisma = {
+      message: {
+        async findMany() {
+          return [{
+            id: 'm1',
+            files: [
+              { id: 'file-docx', originalName: 'informe.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+              { id: 'file-pptx', originalName: 'Gestion_amdinistrativa.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+            ],
+          }];
+        },
+      },
+      file: {
+        async findMany(query) {
+          assert.deepEqual(query.where.id.in, ['file-pptx']);
+          return [{
+            id: 'file-pptx',
+            filename: 'Gestion_amdinistrativa.pptx',
+            originalName: 'Gestion_amdinistrativa.pptx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            size: 12,
+            path: pptxPath,
+            extractedText: 'Gestión administrativa',
+          }];
+        },
+      },
+    };
+    const files = await loadEditableSourceFiles(prisma, {
+      userId: 'user-1',
+      chatId: 'chat-1',
+      fileIds: [],
+      prompt,
+    });
+    assert.equal(files.length, 1);
+    assert.equal(files[0].id, 'file-pptx');
+    assert.equal(files[0].source, 'recent_attachment');
   });
 
   it('uses the latest generated DOCX as the main document and current uploads as reference material', async () => {
@@ -1868,6 +1912,7 @@ describe('source-preserving DOCX title edits', () => {
     planSourcePreservingOperations,
     setDocxDocumentTitleBuffer,
     validateDocxOperationCriteria,
+    validateEditedBuffer,
   } = sourcePreservingInternals;
 
   it('extracts the new title without swallowing the next requested edit', () => {
@@ -1879,6 +1924,245 @@ describe('source-preserving DOCX title edits', () => {
       extractNamedSectionAppend('Agrega una sección Recomendaciones con dos puntos.'),
       { sectionTitle: 'Recomendaciones' },
     );
+  });
+
+  it('understands the exact live phrasing and never degrades it to an appendix', () => {
+    const prompt = 'quiero que en este mismo word Modelo Informe.docx el titulo le coloques 2027 solo modifica ello';
+    assert.deepEqual(extractDocxTitleChange(prompt), { newTitle: '2027' });
+
+    const operations = planSourcePreservingOperations({
+      requestText: prompt,
+      documentXml: '<w:document><w:body><w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>Modelo Informe 2026</w:t></w:r></w:p></w:body></w:document>',
+    });
+
+    assert.deepEqual(operations.map((operation) => operation.kind), ['set_document_title']);
+    assert.equal(operations[0].newTitle, '2027');
+    assert.equal(operations.some((operation) => operation.kind === 'append_generic'), false);
+  });
+
+  it('changes “de 2026 al 2027” only in a complex multi-run cover title', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-de-al-'));
+    const originalPath = path.join(tmp, 'TSP-profesional.docx');
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new TextRun({ text: 'PROPUESTA PROFESIONAL, LIMA, ', bold: true }),
+            new TextRun({ text: '20', bold: true }),
+            new TextRun({ text: '26', bold: true }),
+          ],
+        }),
+        new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun('2026')] }),
+        new Paragraph('El cuerpo académico conserva la referencia 2026 sin cambios.'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente que no debe validar una operación equivocada.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+
+    const prompt = 'cambia en el título de 2026 al 2027 en mi mismo Word. Solo modifica ello.';
+    const documentXml = new PizZip(original).file('word/document.xml').asText();
+    const operations = planSourcePreservingOperations({ requestText: prompt, documentXml });
+    assert.deepEqual(operations, [{
+      kind: 'replace_text',
+      needle: '2026',
+      replacement: '2027',
+      scope: 'title',
+    }]);
+    assert.deepEqual(
+      sourcePreservingInternals.extractReplacementPair(
+        'cambia en el título de 2026 al 2027, solo modifica ello',
+      ),
+      { needle: '2026', replacement: '2027' },
+      'separator punctuation must not leak into the Word title',
+    );
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'professional-cover-de-al',
+        path: originalPath,
+        originalName: 'TSP-profesional.docx',
+        filename: 'TSP-profesional.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'PROPUESTA PROFESIONAL, LIMA, 2026. Referencia 2026. ANEXOS.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-title-de-al',
+      chatId: 'chat-title-de-al',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.request_contract, true);
+    assert.equal(result.validation.details.requestContract.type, 'replace_text');
+    assert.equal(result.validation.details.requestContract.details.targetParagraphIndex, 0);
+    assert.equal(result.orchestration.operations[0].changedCount, 1);
+    assert.match(result.file.filename, /_editado\.docx$/);
+    assert.doesNotMatch(result.file.filename, /con_anexos/);
+    assert.match(result.content, /reemplacé el texto solicitado únicamente en el título/);
+    assert.doesNotMatch(result.content, /agregué el contenido solicitado en anexos/);
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded Word must remain immutable');
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const beforeZip = new PizZip(original);
+    const afterZip = new PizZip(edited);
+    const editedXml = afterZip.file('word/document.xml').asText();
+    const paragraphTexts = [...editedXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map((paragraph) => (
+      [...paragraph[0].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)]
+        .map((textNode) => textNode[1])
+        .join('')
+    ));
+    assert.equal(paragraphTexts[0], 'PROPUESTA PROFESIONAL, LIMA, 2027');
+    assert.doesNotMatch(paragraphTexts[0], /en mi mismo word|solo modifica ello/i);
+    assert.equal(paragraphTexts[1], '2026');
+    assert.match(paragraphTexts[2], /referencia 2026/i);
+    assert.equal(paragraphTexts.filter((text) => text === 'ANEXOS').length, 1);
+    assert.equal((editedXml.match(/<w:p(?:\s|>)/g) || []).length, (documentXml.match(/<w:p(?:\s|>)/g) || []).length);
+    assert.equal((editedXml.match(/<w:sectPr(?:\s|>)/g) || []).length, (documentXml.match(/<w:sectPr(?:\s|>)/g) || []).length);
+
+    for (const name of Object.keys(beforeZip.files)) {
+      if (name === 'word/document.xml' || beforeZip.files[name].dir) continue;
+      assert.equal(
+        beforeZip.file(name).asNodeBuffer().equals(afterZip.file(name).asNodeBuffer()),
+        true,
+        `${name} must remain byte-identical`,
+      );
+    }
+  });
+
+  it('fails closed instead of fabricating ANEXOS for an unresolved title mutation', () => {
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'modifica el título, pero no indico cuál es el texto actual ni el nuevo',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Título actual</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+    );
+
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'modifica el título del anexo 3 desde 2026 hasta 2027',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Anexo 3</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+      'an unresolved title edit must not escape through a section-fill operation',
+    );
+
+    assert.throws(
+      () => planSourcePreservingOperations({
+        requestText: 'cambia "Estado A" por "Estado B" y modifica el título del anexo 3 desde 2026 hasta 2027',
+        documentXml: '<w:document><w:body><w:p><w:r><w:t>Estado A</w:t></w:r></w:p><w:p><w:r><w:t>Anexo 3, 2026</w:t></w:r></w:p></w:body></w:document>',
+      }),
+      (error) => error?.code === 'SOURCE_EDIT_INTENT_UNRESOLVED',
+      'a valid sibling replacement must not hide an unresolved mutation clause',
+    );
+  });
+
+  it('parses “del 2026 al 2027” without leaking the final letter of del', () => {
+    const operations = planSourcePreservingOperations({
+      requestText: 'cambia en el título del 2026 al 2027 en mi mismo Word',
+      documentXml: '<w:document><w:body><w:p><w:r><w:t>LIMA, 2026</w:t></w:r></w:p></w:body></w:document>',
+    });
+    assert.deepEqual(operations, [{
+      kind: 'replace_text',
+      needle: '2026',
+      replacement: '2027',
+      scope: 'title',
+    }]);
+  });
+
+  it('validates a title replacement whose new value contains the old value', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-overlap-'));
+    const originalPath = path.join(tmp, 'informe-2026.docx');
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'INFORME ANUAL 2026', bold: true })],
+        }),
+        new Paragraph('Cuerpo que debe conservarse.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+    const prompt = 'cambia en el título de 2026 a 2026-2027 en mi mismo Word';
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'title-overlap',
+        path: originalPath,
+        originalName: 'informe-2026.docx',
+        filename: 'informe-2026.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'INFORME ANUAL 2026. Cuerpo que debe conservarse.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-title-overlap',
+      chatId: 'chat-title-overlap',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.request_contract, true);
+    assert.equal(result.validation.details.requestContract.details.targetTransformationMatches, true);
+    assert.equal(result.validation.details.requestContract.details.needleAbsentFromTarget, true);
+    const editedXml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(editedXml, /INFORME ANUAL 2026-2027/);
+    assert.doesNotMatch(editedXml, /INFORME ANUAL 2026<\/w:t>/);
+    assert.match(editedXml, /Cuerpo que debe conservarse/);
+  });
+
+  it('does not validate unrelated growth as a generic appendix', async () => {
+    const before = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+      ] }],
+    })));
+    const unrelatedGrowth = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+        new Paragraph('Crecimiento ajeno a la operación solicitada.'),
+      ] }],
+    })));
+    const validation = validateDocxOperationCriteria(
+      unrelatedGrowth,
+      [{ kind: 'append_generic', wantsInstrument: false }],
+      { beforeBuffer: before },
+    );
+    assert.equal(validation.passed, false);
+    assert.equal(validation.checks[0].details.beforeMarkerCount, 1);
+    assert.equal(validation.checks[0].details.afterMarkerCount, 1);
+
+    const misleadingGrowth = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph('Informe original'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Contenido preexistente.'),
+        new Paragraph('ANEXOS'),
+        new Paragraph('Texto distinto de los bloques que esta ejecución debía agregar.'),
+      ] }],
+    })));
+    const fingerprintValidation = await validateEditedBuffer(
+      misleadingGrowth,
+      'docx',
+      [
+        { kind: 'pageBreak', text: '' },
+        { kind: 'heading1', text: 'ANEXOS' },
+        { kind: 'heading2', text: 'Contenido agregado según solicitud' },
+      ],
+      {
+        beforeBuffer: before,
+        operations: [{ kind: 'append_generic', wantsInstrument: false }],
+        requestText: 'agrega el contenido solicitado como anexo',
+      },
+    );
+    assert.equal(fingerprintValidation.checks.operation_criteria, true, 'the structural gate alone sees a new anchor');
+    assert.equal(fingerprintValidation.checks.content_appended, false, 'the expected block fingerprint is absent');
+    assert.equal(fingerprintValidation.passed, false);
   });
 
   it('plans a native title update instead of replacing the literal word título', async () => {
@@ -1968,6 +2252,274 @@ describe('source-preserving DOCX title edits', () => {
       newTitle: edited.newTitle,
     }]);
     assert.equal(validation.passed, true);
+  });
+
+  it('delivers a validated edited DOCX for a natural title replacement request', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-title-delivery-'));
+    const originalPath = path.join(tmp, 'aspectos-administrativos.docx');
+    const source = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          style: 'Title',
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'Distrito Judicial de Ayacucho', bold: true })],
+        }),
+        new Paragraph('Antecedente institucional desarrollado en Ayacucho.'),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, source);
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'title-delivery-docx',
+        path: originalPath,
+        originalName: 'aspectos-administrativos.docx',
+        filename: 'aspectos-administrativos.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Distrito Judicial de Ayacucho. Antecedente institucional desarrollado en Ayacucho.',
+      },
+      prompt: 'el titulo cambialo de ayacucho a cajamarca en mi mismo word',
+      displayPrompt: 'el titulo cambialo de ayacucho a cajamarca en mi mismo word',
+      userId: 'user-title-delivery',
+      chatId: 'chat-title-delivery',
+    });
+
+    assert.equal(result.clarification, undefined);
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.operation_criteria, true);
+    assert.equal(result.orchestration.operations[0].scope, 'title');
+    assert.equal(result.orchestration.operations[0].changedCount, 1);
+    const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    assert.match(xml, /Distrito Judicial de Cajamarca/);
+    assert.match(xml, /desarrollado en Ayacucho/);
+  });
+
+  it('edits the real DOCX in place, proves its structure, and leaves the uploaded bytes immutable', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-live-title-'));
+    const originalPath = path.join(tmp, 'Modelo Informe.docx');
+    const cell = (text) => new TableCell({ children: [new Paragraph(text)] });
+    const original = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{ children: [
+        new Paragraph({
+          style: 'Title',
+          alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: 'Modelo Informe 2026', bold: true, color: '1F4E79' })],
+        }),
+        new Paragraph('CENTINELA-CUERPO-ORIGINAL-7429'),
+        new Table({ rows: [new TableRow({ children: [cell('Dato fijo A'), cell('Dato fijo B')] })] }),
+      ] }],
+    })));
+    fs.writeFileSync(originalPath, original);
+
+    const prompt = 'quiero que en este mismo word Modelo Informe.docx el titulo le coloques 2027 solo modifica ello';
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'modelo-informe-live',
+        path: originalPath,
+        originalName: 'Modelo Informe.docx',
+        filename: 'Modelo Informe.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Modelo Informe 2026. CENTINELA-CUERPO-ORIGINAL-7429.',
+      },
+      prompt,
+      displayPrompt: prompt,
+      userId: 'user-live-title',
+      chatId: 'chat-live-title',
+    });
+
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.validation.checks.source_preserved, true);
+    assert.equal(result.validation.details.sourcePreservation.strictTitleOnly, true);
+    assert.deepEqual(result.validation.details.sourcePreservation.unexpectedlyChangedParts, []);
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded file must never be mutated');
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+    assert.match(xml, /<w:t[^>]*>2027<\/w:t>/);
+    assert.doesNotMatch(xml, /Modelo Informe 2026/);
+    assert.match(xml, /CENTINELA-CUERPO-ORIGINAL-7429/);
+    assert.match(xml, /Dato fijo A/);
+    assert.match(xml, /Dato fijo B/);
+    assert.match(xml, /<w:b\/>/);
+    assert.match(xml, /w:color w:val="1F4E79"/);
+    assert.doesNotMatch(xml, />ANEXOS</);
+  });
+
+  it('edits only the explicitly requested DOCX family when PDF files are also attached', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-live-title-batch-'));
+    const makeSource = async (filename, title, sentinel) => {
+      const sourcePath = path.join(tmp, filename);
+      const buffer = Buffer.from(await Packer.toBuffer(new Document({
+        sections: [{ children: [
+          new Paragraph({ style: 'Title', children: [new TextRun({ text: title, bold: true })] }),
+          new Paragraph(sentinel),
+          new Table({ rows: [new TableRow({ children: [new TableCell({ children: [new Paragraph(`Tabla ${sentinel}`)] })] })] }),
+        ] }],
+      })));
+      fs.writeFileSync(sourcePath, buffer);
+      return { sourcePath, buffer };
+    };
+    const first = await makeSource('Informe Norte.docx', 'Informe Norte 2026', 'CENTINELA-NORTE-101');
+    const second = await makeSource('Informe Sur.docx', 'Informe Sur 2026', 'CENTINELA-SUR-202');
+    const referencePdfPath = path.join(tmp, 'Referencia.pdf');
+    const referencePdf = await makePdfBuffer();
+    fs.writeFileSync(referencePdfPath, referencePdf);
+    const rows = [
+      {
+        id: 'batch-north', userId: 'user-batch', filename: 'Informe Norte.docx', originalName: 'Informe Norte.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: first.buffer.length,
+        path: first.sourcePath, extractedText: 'Informe Norte 2026. CENTINELA-NORTE-101.',
+      },
+      {
+        id: 'batch-south', userId: 'user-batch', filename: 'Informe Sur.docx', originalName: 'Informe Sur.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: second.buffer.length,
+        path: second.sourcePath, extractedText: 'Informe Sur 2026. CENTINELA-SUR-202.',
+      },
+      {
+        id: 'batch-reference-pdf', userId: 'user-batch', filename: 'Referencia.pdf', originalName: 'Referencia.pdf',
+        mimeType: 'application/pdf', size: referencePdf.length,
+        path: referencePdfPath, extractedText: 'SiraGPT banco real PDF. Estado: BORRADOR.',
+      },
+    ];
+    const prisma = {
+      file: { async findMany() { return [...rows].reverse(); } },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+    const prompt = 'quiero que en ambos Word el título le coloques 2027; solo modifica eso y devuélveme ambos archivos';
+
+    assert.equal(sourcePreservingInternals.requestWantsBatchDocumentEdit(prompt, [
+      { ...rows[0], source: 'current_upload' },
+      { ...rows[2], source: 'current_upload' },
+    ]), false, 'one matching Word plus another family must not activate batch mode');
+    assert.deepEqual(
+      sourcePreservingInternals.selectBatchDocumentSources(prompt, rows.map((row) => ({ ...row, source: 'current_upload' })))
+        .map((file) => file.id),
+      ['batch-north', 'batch-south'],
+    );
+    assert.deepEqual(
+      sourcePreservingInternals.selectBatchDocumentSources(
+        'reemplaza BORRADOR en todos los documentos y devuelve un DOCX completo',
+        rows.map((row) => ({ ...row, source: 'current_upload' })),
+      ).map((file) => file.id),
+      ['batch-north', 'batch-south', 'batch-reference-pdf'],
+      'an output-format mention must not narrow an otherwise generic batch',
+    );
+
+    const familyBatchCases = [
+      ['en cada Word cambia el título', 'word', 'docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+      ['en cada PDF cambia el título', 'pdf', 'pdf', 'application/pdf'],
+      ['en cada Excel cambia el título', 'excel', 'xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+      ['en ambos PowerPoint cambia el título', 'powerpoint', 'pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+    ];
+    for (const [familyPrompt, family, extension, mimeType] of familyBatchCases) {
+      const familyRows = [1, 2].map((index) => ({
+        id: `${family}-${index}`,
+        originalName: `${family}-${index}.${extension}`,
+        filename: `${family}-${index}.${extension}`,
+        mimeType,
+        source: 'current_upload',
+      }));
+      assert.equal(
+        sourcePreservingInternals.requestWantsBatchDocumentEdit(familyPrompt, familyRows),
+        true,
+        `${familyPrompt} must activate one edited copy per matching upload`,
+      );
+    }
+
+    for (const genericPrompt of [
+      'edita los documentos adjuntos y cambia el título a 2027',
+      'en los documentos adjuntos cambia el título a 2027',
+      'edita mis archivos cargados y cambia el título a 2027',
+      'en los archivos subidos cambia el título a 2027',
+    ]) {
+      assert.equal(
+        sourcePreservingInternals.requestWantsBatchDocumentEdit(
+          genericPrompt,
+          rows.slice(0, 2).map((row) => ({ ...row, source: 'current_upload' })),
+        ),
+        true,
+        `${genericPrompt} must edit every attached document independently`,
+      );
+    }
+    const bareBatchPlan = sourcePreservingInternals.planSourcePreservingOperations({
+      requestText: 'edita los documentos adjuntos y cambia el título a 2027; solo modifica eso y devuélveme ambos archivos',
+      documentXml: new PizZip(first.buffer).file('word/document.xml').asText(),
+    });
+    assert.deepEqual(
+      bareBatchPlan.map((operation) => operation.kind),
+      ['set_document_title'],
+      'attachment scope and delivery wording must not manufacture an ANEXOS operation',
+    );
+    const strictBatch = sourcePreservingInternals.buildBatchEditResult({
+      attempts: [
+        {
+          ok: true,
+          sourceFile: { id: 'invalid-truthy', originalName: 'truthy.docx' },
+          result: {
+            validation: { passed: 'true' },
+            artifact: { id: 'truthy-artifact', filename: 'truthy.docx' },
+            file: { filename: 'truthy.docx' },
+          },
+        },
+        {
+          ok: true,
+          sourceFile: { id: 'valid-boolean', originalName: 'valid.docx' },
+          result: {
+            validation: { passed: true },
+            artifact: { id: 'valid-artifact', filename: 'valid.docx' },
+            file: { filename: 'valid.docx' },
+          },
+        },
+      ],
+    });
+    assert.deepEqual(strictBatch.results.map((item) => item.artifact.id), ['valid-artifact']);
+    assert.equal(strictBatch.failures[0].sourceFileId, 'invalid-truthy');
+    assert.equal(
+      sourcePreservingInternals.requestWantsBatchDocumentEdit(
+        'fusiona los documentos adjuntos en un solo archivo',
+        rows.slice(0, 2).map((row) => ({ ...row, source: 'current_upload' })),
+      ),
+      false,
+      'a merge request must remain a single combined deliverable',
+    );
+
+    const result = await tryGenerateSourcePreservingDocumentEdit({
+      prisma,
+      userId: 'user-batch',
+      chatId: 'chat-batch',
+      fileIds: ['batch-north', 'batch-south', 'batch-reference-pdf'],
+      prompt,
+      displayPrompt: prompt,
+    });
+
+    assert.equal(result.batch, true);
+    assert.equal(result.partial, false);
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation, null, 2));
+    assert.equal(result.results.length, 2);
+    assert.deepEqual(result.results.map((item) => item.sourceFileId), ['batch-north', 'batch-south'],
+      'batch source identity must survive even when file-version persistence is unavailable');
+    assert.equal(new Set(result.artifacts.map((artifact) => artifact.id)).size, 2);
+    assert.equal(fs.readFileSync(first.sourcePath).equals(first.buffer), true);
+    assert.equal(fs.readFileSync(second.sourcePath).equals(second.buffer), true);
+    assert.equal(fs.readFileSync(referencePdfPath).equals(referencePdf), true);
+    assert.equal(result.orchestration.requestedDocuments, 2);
+    assert.equal(result.orchestration.perDocument.some((document) => document.sourceFileId === 'batch-reference-pdf'), false);
+
+    const proofs = [
+      { result: result.results[0], own: 'CENTINELA-NORTE-101', other: 'CENTINELA-SUR-202' },
+      { result: result.results[1], own: 'CENTINELA-SUR-202', other: 'CENTINELA-NORTE-101' },
+    ];
+    for (const proof of proofs) {
+      assert.equal(proof.result.validation.passed, true);
+      assert.equal(proof.result.validation.checks.source_preserved, true);
+      const xml = new PizZip(fs.readFileSync(proof.result.artifact.path)).file('word/document.xml').asText();
+      assert.match(xml, /<w:t[^>]*>2027<\/w:t>/);
+      assert.match(xml, new RegExp(proof.own));
+      assert.doesNotMatch(xml, new RegExp(proof.other));
+      assert.doesNotMatch(xml, />ANEXOS</);
+    }
   });
 });
 
@@ -2195,6 +2747,138 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(cellOps[0].value, 'Validado por comité');
   });
 
+  it('plans EVERY quoted replace pair with the user original casing', () => {
+    const {
+      extractAllQuotedReplacementPairs,
+      planSourcePreservingOperations,
+    } = sourcePreservingInternals;
+    const prompt = 'reemplaza "Introducción original" por "Introducción mejorada" y cambia "BORRADOR" por "APROBADO"';
+    const pairs = extractAllQuotedReplacementPairs(prompt);
+    assert.equal(pairs.length, 2);
+    assert.equal(pairs[1].needle, 'BORRADOR');
+    assert.equal(pairs[1].replacement, 'APROBADO');
+
+    const ops = planSourcePreservingOperations({ requestText: prompt, format: 'docx' });
+    const replaces = ops.filter((op) => op.kind === 'replace_text');
+    assert.equal(replaces.length, 2);
+    assert.equal(replaces[1].replacement, 'APROBADO', 'must not collapse to lowercase via normalizeText');
+
+    const generic = planGenericOfficeOperations({ requestText: prompt, format: 'docx' });
+    assert.equal(generic.filter((op) => op.kind === 'replace_text')[1].replacement, 'APROBADO');
+
+    const literalPrompt = 'reemplaza "el documento" por "La política conserva tus datos y devuélveme seguridad"';
+    assert.deepEqual(extractAllQuotedReplacementPairs(literalPrompt), [{
+      needle: 'el documento',
+      replacement: 'La política conserva tus datos y devuélveme seguridad',
+    }], 'quoted needles and replacements must stay literal');
+  });
+
+  it('parses natural "cambia de X por Y" without gluing the Spanish "de" onto the needle', () => {
+    const {
+      extractReplacementPair,
+      planSourcePreservingOperations,
+      replaceTextInDocxBuffer,
+    } = sourcePreservingInternals;
+    // Live prod bug (2026-08-01): user said this exact phrasing and the planner
+    // produced needle "de judicial de ayacucho", which never matched the Word.
+    const livePrompt = 'En el titulo del word cambia de Judicial de Ayacucho por Judicial de de Cajamarca';
+    const pair = extractReplacementPair(livePrompt);
+    assert.ok(pair, 'pair extracted');
+    assert.equal(pair.needle, 'Judicial de Ayacucho');
+    assert.equal(pair.replacement, 'Judicial de Cajamarca', 'collapses typo "de de"');
+
+    const ops = planSourcePreservingOperations({ requestText: livePrompt, format: 'docx' });
+    const replaces = ops.filter((op) => op.kind === 'replace_text');
+    assert.equal(replaces.length, 1);
+    assert.equal(replaces[0].needle, 'Judicial de Ayacucho');
+    assert.equal(replaces[0].replacement, 'Judicial de Cajamarca');
+    assert.equal(replaces[0].scope, 'title');
+    // Must NOT full-rewrite the title — this is a partial span replace.
+    assert.equal(ops.some((op) => op.kind === 'set_document_title'), false);
+
+    // End-to-end: the cleaned needle must hit a real title-like paragraph.
+    const PizZip = require('pizzip');
+    const { Document, Packer, Paragraph, TextRun, AlignmentType } = require('docx');
+    return (async () => {
+      const source = Buffer.from(await Packer.toBuffer(new Document({
+        sections: [{
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: 'Poder Judicial de Ayacucho — Aspectos administrativos', bold: true })],
+            }),
+            new Paragraph('Cuerpo del informe que no debe mutar.'),
+          ],
+        }],
+      })));
+      const edited = replaceTextInDocxBuffer(source, pair.needle, pair.replacement);
+      assert.ok(edited.changedCount >= 1);
+      const xml = new PizZip(edited.buffer).file('word/document.xml').asText();
+      assert.match(xml, /Judicial de Cajamarca/);
+      assert.doesNotMatch(xml, /Judicial de Ayacucho/);
+      assert.match(xml, /Cuerpo del informe que no debe mutar/);
+      assert.match(xml, /Poder /); // prefix of title preserved
+    })();
+  });
+
+  it('returns the same DOCX with only the requested title span changed', async () => {
+    const {
+      extractReplacementPair,
+      planSourcePreservingOperations,
+      replaceTextInDocxBuffer,
+      validateDocxOperationCriteria,
+    } = sourcePreservingInternals;
+    const prompt = 'el titulo cambialo de ayacucho a cajamarca en mi mismo word';
+    assert.deepEqual(extractReplacementPair(prompt), {
+      needle: 'ayacucho',
+      replacement: 'cajamarca',
+    });
+
+    const operations = planSourcePreservingOperations({ requestText: prompt, format: 'docx' });
+    const replaceOperation = operations.find((op) => op.kind === 'replace_text');
+    assert.ok(replaceOperation);
+    assert.deepEqual(replaceOperation, {
+      kind: 'replace_text',
+      needle: 'ayacucho',
+      replacement: 'cajamarca',
+      scope: 'title',
+    });
+
+    const source = Buffer.from(await Packer.toBuffer(new Document({
+      sections: [{
+        children: [
+          new Paragraph({
+            style: 'Title',
+            alignment: AlignmentType.CENTER,
+            children: [
+              new TextRun({ text: 'Distrito Judicial de ', bold: true, color: '1F2937' }),
+              new TextRun({ text: 'Ayacucho', bold: true, color: '1F2937' }),
+            ],
+          }),
+          new Paragraph('El expediente fue remitido desde Ayacucho y esta referencia debe conservarse.'),
+        ],
+      }],
+    })));
+    const edited = replaceTextInDocxBuffer(
+      source,
+      replaceOperation.needle,
+      replaceOperation.replacement,
+      { scope: replaceOperation.scope },
+    );
+    replaceOperation.changedCount = edited.changedCount;
+    replaceOperation.remainingMatchCount = edited.remainingMatchCount;
+
+    assert.equal(edited.changedCount, 1);
+    assert.equal(edited.remainingMatchCount, 1, 'the unrelated body reference remains');
+    const xml = new PizZip(edited.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Distrito Judicial de /);
+    assert.match(xml, /Cajamarca/);
+    assert.match(xml, /desde Ayacucho y esta referencia debe conservarse/);
+    assert.match(xml, /<w:b\/>/);
+    assert.match(xml, /w:color w:val="1F2937"/);
+    assert.equal(validateDocxOperationCriteria(edited.buffer, operations).passed, true);
+  });
+
   it('plans natural Excel cell changes as cell writes, not text replacements', () => {
     const ops = planGenericOfficeOperations({
       requestText: 'Edita este Excel: cambia la celda B2 a 999 y devuelveme el Excel completo.',
@@ -2290,6 +2974,78 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.ok(text);
   });
 
+  it('surgical DOCX replace keeps mixed run formatting and paragraph properties', () => {
+    const {
+      mutateParagraphTextSurgical,
+      findNeedleSpanInText,
+      deleteTextFromDocxBuffer,
+    } = sourcePreservingInternals;
+
+    // Needle split across three runs (bold + normal + italic).
+    const mixed = [
+      '<w:p>',
+      '<w:pPr><w:jc w:val="both"/></w:pPr>',
+      '<w:r><w:rPr><w:b/></w:rPr><w:t>Intro</w:t></w:r>',
+      '<w:r><w:t>ducción ori</w:t></w:r>',
+      '<w:r><w:rPr><w:i/></w:rPr><w:t>ginal del capítulo</w:t></w:r>',
+      '</w:p>',
+    ].join('');
+    const mutated = mutateParagraphTextSurgical(mixed, 'Introducción original', 'Introducción revisada');
+    assert.ok(mutated && mutated.changed);
+    assert.match(mutated.xml, /Introducción revisada/);
+    assert.match(mutated.xml, /<w:jc w:val="both"\/>/);
+    assert.match(mutated.xml, /<w:b\/>/);
+    assert.match(mutated.xml, /del capítulo/);
+    // First run keeps bold formatting; intermediate run is emptied, not rebuilt.
+    assert.match(mutated.xml, /<w:rPr><w:b\/><\/w:rPr><w:t>Introducción revisada<\/w:t>/);
+
+    // Partial delete must not wipe the rest of the paragraph.
+    const partial = mutateParagraphTextSurgical(
+      '<w:p><w:r><w:t>Alpha beta gamma delta</w:t></w:r></w:p>',
+      'beta gamma',
+      '',
+    );
+    assert.ok(partial);
+    assert.match(partial.xml, /Alpha/);
+    assert.match(partial.xml, /delta/);
+    assert.doesNotMatch(partial.xml, /beta gamma/);
+
+    // Accent-insensitive span maps back to the original characters.
+    const span = findNeedleSpanInText('Evaluación final del proyecto', 'evaluacion final');
+    assert.deepEqual(span, { start: 0, end: 'Evaluación final'.length });
+
+    // Full-buffer path preserves heading style + mixed runs outside the needle.
+    const documentXml = [
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">',
+      '<w:body>',
+      '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Portada UPN</w:t></w:r></w:p>',
+      '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Texto </w:t></w:r><w:r><w:t>clave a corregir</w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t> y más</w:t></w:r></w:p>',
+      '<w:sectPr/></w:body></w:document>',
+    ].join('');
+    const zip = new PizZip();
+    zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+    zip.file('word/document.xml', documentXml);
+    zip.file('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+    const sourceBuffer = zip.generate({ type: 'nodebuffer' });
+
+    const replaced = replaceTextInDocxBuffer(sourceBuffer, 'clave a corregir', 'clave corregida');
+    const replacedXml = new PizZip(replaced.buffer).file('word/document.xml').asText();
+    assert.match(replacedXml, /clave corregida/);
+    assert.match(replacedXml, /Portada UPN/);
+    assert.match(replacedXml, /Heading1/);
+    assert.match(replacedXml, /<w:b\/>/);
+    assert.match(replacedXml, /<w:i\/>/);
+    assert.match(replacedXml, / y más/);
+
+    const deleted = deleteTextFromDocxBuffer(replaced.buffer, 'clave corregida');
+    const deletedXml = new PizZip(deleted.buffer).file('word/document.xml').asText();
+    assert.doesNotMatch(deletedXml, /clave corregida/);
+    assert.match(deletedXml, /Texto /);
+    assert.match(deletedXml, / y más/);
+    assert.match(deletedXml, /Portada UPN/);
+  });
+
   it('appends a real PPTX slide and preserves existing slides', async () => {
     const source = await makePptxBuffer();
     const edited = appendToPptxBuffer(source, [
@@ -2329,9 +3085,10 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(result.validation.passed, true);
     assert.equal(result.validation.checks.operation_criteria, true);
     assert.match(result.content, /reemplacé el texto específico/);
-    assert.match(result.content, /agregué una diapositiva nueva/);
+    assert.match(result.content, /agregué la diapositiva/);
     assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
-    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'add_slide'), true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), false);
 
     const edited = fs.readFileSync(result.artifact.path);
     const text = extractTextFromPptxBuffer(edited);
@@ -2342,34 +3099,82 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.match(text, /matriz de riesgos/i);
   });
 
-  it('rewrites PDF text for explicit replacement requests instead of only appending', { skip: hasPdfToText() ? false : 'pdftotext unavailable' }, async () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-generic-'));
-    const originalPath = path.join(tmp, 'estado.pdf');
-    fs.writeFileSync(originalPath, await makePdfBuffer());
+  it('adds 5 professional slides to the same PPT; last is bibliography, never an ANEXOS dump', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pptx-examples-'));
+    const originalPath = path.join(tmp, 'retencion-cohortes.pptx');
+    fs.writeFileSync(originalPath, await makePptxBuffer());
 
     const result = await generateSourcePreservingDocumentEdit({
       sourceFile: {
-        id: 'file-pdf',
+        id: 'file-pptx-any-topic',
         path: originalPath,
-        originalName: 'estado.pdf',
-        filename: 'estado.pdf',
-        mimeType: 'application/pdf',
-        extractedText: 'SiraGPT banco real PDF\nEstado: BORRADOR',
+        originalName: 'retencion-cohortes.pptx',
+        filename: 'retencion-cohortes.pptx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        extractedText: 'Retención de cohortes\nEl churn del canal orgánico bajó en marzo',
       },
-      prompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
-      displayPrompt: 'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      prompt: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
+      displayPrompt: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
       userId: 'user-office',
-      chatId: 'chat-office',
+      chatId: 'chat-office-examples',
     });
 
-    assert.equal(result.format, 'pdf');
+    assert.equal(result.format, 'pptx');
     assert.equal(result.validation.passed, true);
-    assert.equal(result.validation.checks.operation_criteria, true);
-    assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
+    assert.equal(result.orchestration.operations.filter((op) => op.kind === 'add_slide').length, 5);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), false);
+    assert.match(result.content, /Referencias bibliogr/i);
 
-    const text = extractPdfTextForTest(fs.readFileSync(result.artifact.path));
-    assert.match(text, /APROBADO/);
-    assert.doesNotMatch(text, /BORRADOR/);
+    const edited = fs.readFileSync(result.artifact.path);
+    const text = extractTextFromPptxBuffer(edited);
+    const slides = Object.keys(new PizZip(edited).files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    assert.equal(slides.length, 6);
+    assert.match(text, /Título viejo/);
+    assert.match(text, /Referencias bibliogr/i);
+    assert.match(text, /Ejemplo|churn|cohortes/i);
+    assert.doesNotMatch(text, /Contenido agregado seg[uú]n solicitud/i);
+    assert.doesNotMatch(text, /Documento base:/i);
+    assert.doesNotMatch(text, /ANEXOS/);
+  });
+
+  it('fails closed for PDF text replacement or deletion instead of rebuilding and losing formatting', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pdf-generic-'));
+    const originalPath = path.join(tmp, 'estado.pdf');
+    const original = await makePdfBuffer();
+    fs.writeFileSync(originalPath, original);
+    const sourceFile = {
+      id: 'file-pdf',
+      path: originalPath,
+      originalName: 'estado.pdf',
+      filename: 'estado.pdf',
+      mimeType: 'application/pdf',
+      extractedText: 'SiraGPT banco real PDF\nEstado: BORRADOR',
+    };
+
+    for (const prompt of [
+      'reemplaza BORRADOR por APROBADO en este PDF y devuelve el PDF editado',
+      'elimina BORRADOR de este PDF y devuelve el mismo PDF',
+    ]) {
+      await assert.rejects(
+        () => generateSourcePreservingDocumentEdit({
+          sourceFile,
+          prompt,
+          displayPrompt: prompt,
+          userId: 'user-office',
+          chatId: 'chat-office',
+        }),
+        (error) => {
+          assert.equal(error.code, 'PDF_TEXT_EDIT_PRESERVATION_UNSUPPORTED');
+          assert.equal(error.validationOnlyFailure, true);
+          assert.match(error.message, /PDF/);
+          assert.match(error.message, /DOCX\/Word/);
+          assert.match(error.message, /diseño, imágenes y estructura/);
+          return true;
+        },
+      );
+    }
+
+    assert.equal(fs.readFileSync(originalPath).equals(original), true, 'the uploaded PDF must remain byte-identical');
   });
 
   it('replaces and deletes PPTX slide text without rebuilding the deck', async () => {

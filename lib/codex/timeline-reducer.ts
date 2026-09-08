@@ -47,6 +47,7 @@ export type TimelineItem =
   | { kind: 'plan'; id: string; architecture: string; pages: any[]; components: any[]; tasks: any[]; approved: boolean }
   | { kind: 'checkpoint'; id: string; checkpointId: string; commitSha: string; title: string; createdAt?: string }
   | { kind: 'summary'; id: string; metrics: any }
+  | { kind: 'run_audio'; id: string; audioUrl: string; mime: string; characters: number }
   | { kind: 'file_patch'; id: string; path: string; patch: string; truncated: boolean }
   | { kind: 'executive_summary'; id: string; summary: ExecutiveSummary }
   | { kind: 'action_required'; id: string; patternId: string; title: string; rawError: string; blockedCapabilities: string[]; remediationUrl?: string }
@@ -210,13 +211,25 @@ export function timelineReducer(state: TimelineState, event: CodexEventEnvelope)
       items = [...items, { kind: 'summary', id: synthId('sum', seq), metrics: data.metrics || {} }]
       break
 
+    case 'run_audio':
+      items = items.filter((item) => item.kind !== 'run_audio')
+      items = [...items, {
+        kind: 'run_audio',
+        id: synthId('audio', seq),
+        audioUrl: data.audioUrl || '',
+        mime: data.mime || 'audio/mpeg',
+        characters: Number(data.characters) || 0,
+      }]
+      break
+
     case 'file_patch':
+    case 'file_delta':
       items = items.filter((item) => item.kind !== 'file_patch' || item.path !== (data.path || ''))
       items = [...items, {
         kind: 'file_patch',
         id: synthId('patch', seq),
         path: data.path || '',
-        patch: data.patch || '',
+        patch: data.patch || data.hunk || '',
         truncated: data.truncated === true,
       }]
       {

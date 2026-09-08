@@ -90,22 +90,26 @@ export class SiragptAgent {
           const { done, value } = await reader.read()
           if (done) break
           buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split("\n")
-          buffer = lines.pop() || ""
+          // SSE frames are separated by blank lines (Claude Code / EventSource style).
+          const frames = buffer.split("\n\n")
+          buffer = frames.pop() || ""
 
-          for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed || !trimmed.startsWith("data: ")) continue
-
+          for (const frame of frames) {
+            if (!frame.trim()) continue
+            let eventType = "message"
+            let dataStr = ""
+            for (const line of frame.split("\n")) {
+              if (line.startsWith("event:")) eventType = line.slice(6).trim()
+              else if (line.startsWith("data:")) dataStr += (dataStr ? "\n" : "") + line.slice(5).trimStart()
+            }
+            if (!dataStr) continue
             try {
-              const eventType = trimmed.startsWith("event: ")
-                ? trimmed.split("\n")[0].slice(7)
-                : "message"
-              const dataStr = trimmed.includes("\ndata: ") ? trimmed.split("\ndata: ")[1] : trimmed.slice(6)
               const data = JSON.parse(dataStr)
               handlers[eventType]?.forEach((h) => h(data))
               handlers["*"]?.forEach((h) => h({ event: eventType, data }))
-            } catch { /* skip malformed */ }
+            } catch {
+              /* skip malformed frames */
+            }
           }
         }
       } catch (e) {

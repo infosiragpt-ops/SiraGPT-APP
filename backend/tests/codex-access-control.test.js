@@ -15,6 +15,17 @@ const {
 test('codex access allows admins and superadmins', () => {
   assert.equal(canUseCodexAgent({ id: 'u-1', isAdmin: true }, {}), true);
   assert.equal(canUseCodexAgent({ id: 'u-2', isSuperAdmin: true }, {}), true);
+  assert.equal(
+    canUseCodexAgent({ id: 'u-1', isAdmin: true, deletedAt: new Date() }, {}),
+    false,
+  );
+  assert.equal(
+    canUseCodexAgent(
+      { id: 'u-2', deletedAt: new Date() },
+      { CODEX_AGENT_ALLOWED_USER_IDS: 'u-2' },
+    ),
+    false,
+  );
 });
 
 test('codex access allows explicit user ids from env allowlist', () => {

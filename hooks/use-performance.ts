@@ -117,3 +117,14 @@ export function useChunkedContent(content: string, chunkSize: number = 1000) {
 }
 
 import { useState } from 'react'
+
+
+/** OLA200_WAVE_G FE-093 — never send long-task names that include a URL with a token. */
+export function sanitizeLongTaskName(name: unknown): string {
+  const raw = String(name || "")
+  if (!raw) return ""
+  if (/https?:\/\/\S+(?:token|access_token|id_token|refresh|auth)=\S+/i.test(raw) || /[?&](?:token|access_token|id_token)=/i.test(raw)) {
+    return raw.replace(/https?:\/\/\S+/g, "[redacted-url]").replace(/([?&](?:token|access_token|id_token|refresh)=)[^&\s]+/gi, "$1[redacted]")
+  }
+  return raw.length > 180 ? `${raw.slice(0, 177)}...` : raw
+}
