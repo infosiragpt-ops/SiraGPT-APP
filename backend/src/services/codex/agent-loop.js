@@ -1503,11 +1503,45 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     return error;
   };
 
+  const activeProvider = (() => {
+    try {
+      const anthropic = require('./anthropic-turn').getAnthropicTurnConfig({ env, tier: run?.tier || null });
+      if (anthropic.enabled && anthropic.tierEligible) {
+        return { provider: 'anthropic', model: anthropic.model };
+      }
+      return require('./llm-provider').describeActiveProvider({ env });
+    } catch {
+      return { provider: null, model: run?.model || null };
+    }
+  })();
   const llmTurn = async (args) => {
     if (budgetTerminalError) throw budgetTerminalError;
-    const turn = await baseLlmTurn(args);
-    const usage = turn?.usage;
-    recordLlmUsageOnce(metrics, usage);
+    // Per-model canary telemetry: one record per LLM turn, success or failure.
+    // Best-effort — telemetry must never alter run behavior.
+    const modelTurnStarted = Date.now();
+    let modelTtfbAt = null;
+    const baseArgs = args;
+    try {
+      const turn = await baseLlmTurn({
+        ...args,
+        onTextDelta: args.onTextDelta
+          ? (text) => { if (modelTtfbAt === null) modelTtfbAt = Date.now(); return args.onTextDelta(text); }
+          : undefined,
+      });
+      const usage = turn?.usage;
+      recordLlmUsageOnce(metrics, usage);
+      try {
+        require('./model-telemetry').recordLlmTurn({
+          model: usage?.model || args.model || activeProvider?.model || null,
+          provider: usage?.provider || activeProvider?.provider || null,
+          agent: run?.mode === 'plan' ? 'codex_plan' : 'codex_build',
+          outcome: 'ok',
+          durationMs: Date.now() - modelTurnStarted,
+          ttftMs: modelTtfbAt === null ? null : modelTtfbAt - modelTurnStarted,
+          tokensIn: usage?.tokensIn,
+          tokensOut: usage?.tokensOut,
+        });
+      } catch { /* optional */ }
 
     if (
       (
@@ -1629,6 +1663,20 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
     }
     return turn;
+    } catch (err) {
+      try {
+        require('./model-telemetry').recordLlmTurn({
+          model: args.model || activeProvider?.model || null,
+          provider: activeProvider?.provider || null,
+          agent: run?.mode === 'plan' ? 'codex_plan' : 'codex_build',
+          outcome: signal?.aborted ? 'cancelled' : 'error',
+          error: err,
+          durationMs: Date.now() - modelTurnStarted,
+          ttftMs: modelTtfbAt === null ? null : modelTtfbAt - modelTurnStarted,
+        });
+      } catch { /* optional */ }
+      throw err;
+    }
   };
 
   if (runBranchesEnabled) {
@@ -1684,17 +1732,6 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       // MCP is an optional extension; the built-in registry remains available.
     }
   }
-  const activeProvider = (() => {
-    try {
-      const anthropic = require('./anthropic-turn').getAnthropicTurnConfig({ env, tier: run?.tier || null });
-      if (anthropic.enabled && anthropic.tierEligible) {
-        return { provider: 'anthropic', model: anthropic.model };
-      }
-      return require('./llm-provider').describeActiveProvider({ env });
-    } catch {
-      return { provider: null, model: run?.model || null };
-    }
-  })();
   const modelCapabilities = (() => {
     try {
       return require('../agent-harness/model-capabilities').resolveModelCapabilities(

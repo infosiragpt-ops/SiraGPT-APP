@@ -6,6 +6,7 @@ import {
   Send,
   Paperclip,
   Mic,
+  Clapperboard,
   Square,
   FileText,
   Video,
@@ -49,10 +50,21 @@ import {
   Disc3,
   Menu as MenuIcon,
   BriefcaseBusiness,
+  Maximize2,
+  Minimize2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import {
+  LOGIN_HANDOFF_WINDOW_EVENT,
+  emitLoginHandoff,
+  isLiveComputerUsePrompt,
+  chatMessageFromDetail,
+  shouldPostHandoffChatMessage,
+  buildHandoffAssistantMessage,
+  type LoginHandoffDetail,
+} from "@/lib/computer-login-handoff"
 import {
   getSpeechRecognitionCtor,
   isIgnorableSpeechError,
@@ -97,8 +109,30 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .then(mod => mod.prewarmUnifiedDocumentPreview(a))
     .catch(() => null)
 }
-import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
+import { canOpenComposerPreview } from "@/lib/document-preview-gate"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
+import { AppsMentionPicker } from "@/components/AppsMentionPicker"
+import { PinnedAppRail, type PinnedChipView } from "@/components/PinnedAppRail"
+import { useAppPins } from "@/lib/use-app-pins"
+import { MAX_PINS } from "@/lib/apps-pins"
+import {
+  MENTION_COPY,
+  REGISTRY_APP_IDS,
+  buildPickerApps,
+  detectAtMention,
+  filterPickerApps,
+  groupPickerApps,
+  insertMention,
+  resolveMentionedApps,
+  type MentionPickerApp,
+  type MentionTrigger,
+} from "@/lib/apps-mentions"
+import {
+  connectGptStoreApp,
+  resolveConnectPlan,
+} from "@/lib/gpts-apps-connect"
+import { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
@@ -107,13 +141,21 @@ import {
   ChatComposerPrimaryAction,
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
+import { ComposerContextMenu } from "@/components/chat/composer-context-menu"
+import { ComposerEffortMenu } from "@/components/chat/composer-effort-menu"
+import { ComposerPermissionMenu } from "@/components/chat/composer-permission-menu"
 import {
+  COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
   COMPOSER_TEXTAREA_MIN_PX,
   measureComposerTextarea,
+  shouldShowComposerExpandControl,
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
+import { FileProcessingStatusSync } from "@/components/file-processing-status-sync"
+import { DocumentPageThumb } from "@/components/document-page-thumb"
+import { isPagePreviewDocument } from "@/lib/document-first-page"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
-import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
+import { describeComposerDocumentThumb, isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -130,9 +172,10 @@ import {
 } from "@/lib/api"
 import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { clampDeepSeekModel } from "@/lib/sse-client"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -186,6 +229,11 @@ const VoiceCatalogModal = dynamic(
   () => import("./voice/voice-catalog-modal"),
   { ssr: false, loading: () => null },
 )
+// Sira Voz — Estudio de voz (VoiceStudio, open source, local, gratis).
+const VoiceStudioModal = dynamic(
+  () => import("./voice/voice-studio-modal"),
+  { ssr: false, loading: () => null },
+)
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
@@ -201,8 +249,14 @@ import {
 } from "@/lib/research-artifacts"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
+import { pickLastArtifactId } from "@/lib/document-chat-request"
+import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
+import { DOCUMENT_SANDBOX_NEED_ORIGINAL, historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
+import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { agentsHomeHref, conversationIdFromLocation } from "@/lib/agents-home-path"
 import { safeUUID } from "@/lib/safe-uuid"
 import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 const VideoGenerationComponent = dynamic(
@@ -213,10 +267,7 @@ import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
 import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
-import {
-  SidebarTrigger,
-  useSidebar,
-} from "@/components/ui/sidebar"
+import { useSidebar } from "@/components/ui/sidebar"
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
@@ -235,6 +286,10 @@ const ComputerUseInterface = dynamic(
 const CoworkPanel = dynamic(
   () => import("@/components/chat/cowork-panel"),
   { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" /> },
+)
+const ChatAgentComputerPanel = dynamic(
+  () => import("@/components/chat/chat-agent-computer-panel"),
+  { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" data-testid="chat-agent-computer-loading" /> },
 )
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
@@ -277,7 +332,8 @@ import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
-import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
+import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
+import { shouldUseChunkedUpload } from "@/lib/composer/chunked-upload"
 import {
   isAssistantMessage,
   parseMessageFilesForRender,
@@ -287,13 +343,20 @@ import {
   attachmentHasPreviewSource,
   buildAgentFileMetadata,
   collectUploadFileIds,
+  getAudioMediaMeta,
   getFileProcessingStage,
+  isAudioComposerFile,
   isComposerFileProcessingPending,
+  collectProcessingFileIds,
   isComposerFileUploadFailed,
   isComposerFileUploadPending,
+  isVideoComposerFile,
   previewAttachmentKey,
+  resolveComposerMediaSrc,
   resolveUploadFileId,
+  snapshotComposerFilesForMessage,
 } from "@/lib/chat/composer-files"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import {
   adoptUnboundComposerQueueItems,
   createPersistedComposerQueueItem,
@@ -310,21 +373,25 @@ import {
   IMAGE_COUNT_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
   MUSIC_EFFECT_OPTIONS,
-  MUSIC_MODEL_OPTIONS,
   MUSIC_MOOD_OPTIONS,
   MUSIC_STYLE_OPTIONS,
   MUSIC_STYLE_PROFILES,
   VIDEO_ASPECT_RATIO_OPTIONS,
-  VIDEO_DURATION_OPTIONS,
   VIDEO_RESOLUTION_OPTIONS,
   VOICE_ACCENT_OPTIONS,
   VOICE_COMPOSER_PLACEHOLDER,
   VOICE_EFFECT_OPTIONS,
   VOICE_LANGUAGE_OPTIONS,
-  VOICE_MODEL_OPTIONS,
+  filterAdminVisibleVideoModels,
+  isAdminVisibleVideoModel,
   isImageModelEntry,
   isVideoModelEntry,
   providerForMediaModel,
+  readStoredVoiceSetting,
+  writeStoredVoiceSettings,
+  isSiraVozModel,
+  readStoredVoiceStudioVoice,
+  writeStoredVoiceStudioVoice,
   type ImageAspectRatio,
   type ImageGenerationCount,
   type ImageQuality,
@@ -340,11 +407,35 @@ import {
   type VoiceLanguage,
   type VoiceModel,
 } from "@/lib/chat/media-composer-config"
+import { detectComposerAutoMode, type ComposerAutoMode } from "@/lib/chat/composer-auto-mode"
+import {
+  MEDIA_MENU_DOT_CLASS,
+  MEDIA_MENU_ICON_GLYPH_CLASS,
+  MEDIA_MENU_ICON_WRAP_CLASS,
+  MEDIA_MODE_CHIP_CLOSE_CLASS,
+  VOICE_STABILITY_SLIDER_CLASS,
+  mediaModeChipChrome,
+} from "@/lib/chat/media-mode-chips"
+import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from "@/lib/chat/video-duration"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
 // contexts (preview iframes, denied permission, insecure origin) and, when not
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
+import {
+  clearPinnedModel,
+  getPinnedModel,
+  isPinnedModel,
+  setLastModel,
+  setPinnedModel,
+} from "@/lib/chat/model-preference"
+import {
+  enrichImageFilesWithClientOcr,
+  isWeakOcrText,
+  looksLikeTranscriptionRequest,
+  recognizeImageWithRetry,
+} from "@/lib/chat/ocr-preprocess"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
@@ -459,6 +550,7 @@ const findRecoverableAgentTaskMessage = (messages: any[] = [], taskId?: string |
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    if (parseDocumentJobPointer(message.metadata)) continue // this durable job has its own authenticated recovery contract
     const state = parseAgentTaskMessageState(message?.content)
     if (!state || state.done) continue
     totalCandidates += 1
@@ -1508,17 +1600,20 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Subir archivos</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isUploading ? 'Subiendo…' : 'Imágenes, PDFs, documentos'}
+                  {isUploading ? 'Subiendo…' : 'Cualquier formato: documentos, código, datos, imágenes, audio, video'}
                 </div>
               </div>
             </div>
           </DropdownMenuItem>
+          {/* No `accept` filter on purpose: the picker offers every file the OS
+              can hand us. Size caps, Office lock-file detection and the
+              backend byte-level policy still run on every selection. */}
           <input
             ref={fileInputRef}
             type="file"
             multiple
             className="hidden"
-            accept="image/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
+            data-accepts-any-format="true"
             onChange={handleFilesSelected}
           />
           {/* Web Search */}
@@ -1636,8 +1731,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
-                <Palette className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Palette className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1648,7 +1743,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 shrink-0 bg-violet-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn(MEDIA_MENU_DOT_CLASS, isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1663,8 +1758,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
-                <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <AudioLines className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">{isVoiceGenerationActive ? 'Voz activa' : 'Voz'}</div>
@@ -1673,7 +1768,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isVoiceGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-cyan-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1688,8 +1783,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
-                <Video className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Video className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1700,7 +1795,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isVideoGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1715,8 +1810,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-fuchsia-100 dark:bg-fuchsia-900/20 flex items-center justify-center">
-                <Music className="h-4 w-4 text-fuchsia-600 dark:text-fuchsia-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Music className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1727,7 +1822,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-fuchsia-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1825,7 +1920,7 @@ const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
     {peaks.slice(0, 36).map((p, i) => (
       <span
         key={i}
-        className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+        className="w-[2px] rounded-full bg-zinc-900/70 dark:bg-zinc-100/70"
         style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
       />
     ))}
@@ -1881,11 +1976,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
     if (viewingIndex === null) return null;
     const f = uploadedFiles[viewingIndex];
     if (!f) return null;
-    return toDocumentViewerAttachment(f);
-  }, [viewingIndex, uploadedFiles]);
+    return toDocumentViewerAttachmentWithProgress(f, uploadProgress);
+  }, [viewingIndex, uploadedFiles, uploadProgress]);
   const viewerSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles]
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress]
   );
 
   React.useEffect(() => {
@@ -1938,7 +2033,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const longPasteMeta = getLongPasteMetadata(file);
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-[4.5rem] w-[4.5rem]' : 'h-20 w-20';
           const attachment = viewerSiblings[index];
-          const canPreview = !isFailed && attachmentHasPreviewSource(attachment);
+          const canPreview = !isFailed
+            && !isUploading
+            && canOpenComposerPreview({ id: resolveUploadFileId(file), status: file.status })
+            && attachmentHasPreviewSource(attachment);
           const openPreview = () => {
             if (!canPreview || !attachment) return;
             if (onPreviewAttachment) {
@@ -1949,9 +2047,19 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           };
 
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
-          const isAudio = (file.type || '').startsWith('audio/');
-          const isVideo = (file.type || '').startsWith('video/');
+          const isAudio = isAudioComposerFile(file);
+          const isVideo = isVideoComposerFile(file);
+          const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
+            && isPagePreviewDocument(file.name, file.type || file.mimeType);
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
+          const thumbProgress = describeComposerDocumentThumb({
+            uploading: isUploading,
+            uploadProgress: progress,
+            status: file.status,
+            stage: getFileProcessingStage(file),
+            error: file.processingError || file.uploadError,
+          });
+          const docBusy = thumbProgress.busy;
           const handleReorder = (delta: -1 | 1) => {
             if (!moveFile) return;
             const target = index + delta;
@@ -1974,12 +2082,24 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70",
                 isImage
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
-                  : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+                  : isDocPage
+                    ? "h-[7.75rem] w-[5.7rem] overflow-hidden rounded-[0.9rem] p-0 shadow-sm"
+                    : isVideo
+                      ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
+                      : isAudio
+                        ? "min-w-[14.5rem] max-w-[22rem] overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
+                    : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
-              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
+              title={isFailed
+                ? `Subida fallida: ${file.uploadError || 'error'}`
+                : isUploading
+                  ? 'Subiendo…'
+                  : canPreview
+                    ? (thumbProgress.busy && thumbProgress.label ? `Ver documento · ${thumbProgress.label}` : 'Ver documento')
+                    : (thumbProgress.label || 'Preparando documento')}
               onClick={openPreview}
               role="listitem"
               aria-label={chipLabel}
@@ -2050,20 +2170,99 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
                   </Button>
                 </>
+              ) : isDocPage ? (
+                <>
+                  <FileProcessingStatusSync
+                    fileId={isUploading ? null : file.id}
+                    onReady={() => toast.success(`Documento listo: ${file.name}`)}
+                    onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
+                  />
+                  <DocumentPageThumb
+                    source={{
+                      id: file.id,
+                      name: file.name,
+                      mimeType: file.type || file.mimeType,
+                      size: file.size,
+                      file: getAttachmentLocalFile(file),
+                      url: file.url,
+                    }}
+                    busy={docBusy}
+                    progress={isUploading ? progress : null}
+                    label={thumbProgress.label}
+                  />
+                  {isFailed && retryUpload && (
+                    <div className="absolute inset-0 bg-red-900/55 flex flex-col items-center justify-center gap-1 rounded-[0.9rem]">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-full bg-white/95 hover:bg-white text-red-600"
+                        onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                        title="Reintentar subida"
+                        aria-label="Reintentar subida"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                      <span className="max-w-[90%] truncate px-1 text-center text-[9.5px] text-white font-medium">
+                        {thumbProgress.label || "Reintentar"}
+                      </span>
+                    </div>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isVideo ? (
+                <>
+                  <ChatVideoPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    poster={file.mediaMeta?.thumbnailDataUrl || file.thumbnailUrl || null}
+                    title={file.name || "video"}
+                    durationSeconds={file.mediaMeta?.durationSeconds}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isAudio ? (
+                <>
+                  <ChatAudioPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    title={file.name || "audio"}
+                    durationSeconds={getAudioMediaMeta(file)?.durationSeconds}
+                    peaks={getAudioMediaMeta(file)?.peaks}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
               ) : (
                 <>
-                  {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
-                    <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
-                      <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
-                      {formatChipDuration(file.mediaMeta?.durationSeconds) && (
-                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
-                          {formatChipDuration(file.mediaMeta?.durationSeconds)}
-                        </span>
-                      )}
-                    </span>
-                  ) : (
-                    getFileIcon(file)
-                  )}
+                  {getFileIcon(file)}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
                       {longPasteMeta && (
@@ -2146,6 +2345,16 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                           <span className="text-muted-foreground">{"\n"}… ({Intl.NumberFormat('es').format(longPasteMeta.originalCharCount)} caracteres en total)</span>
                         )}
                       </pre>
+                    )}
+                    {/* The "PEGADO" card renders no progress bar, but it still
+                        needs the headless poller: without it the chip stays
+                        "processing" after the backend is ready and the send
+                        button keeps asking to wait for the file. */}
+                    {!isFailed && longPasteMeta && !isUploading && file.id && (
+                      <FileProcessingStatusSync
+                        fileId={file.id}
+                        onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
+                      />
                     )}
                     {!isFailed && !longPasteMeta && (isUploading || file.id) && (
                       <div className="mt-1">
@@ -2240,6 +2449,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect,
   onOpenVoiceCatalog,
   selectedVoiceName,
+  onOpenVoiceStudio,
+  selectedSiraVoiceName,
   isMusicGenerationActive,
   setIsMusicGenerationActive,
   selectedMusicModel,
@@ -2331,6 +2542,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
   onOpenVoiceCatalog: () => void;
   selectedVoiceName?: string | null;
+  onOpenVoiceStudio: (tab?: "voices" | "dub" | "transcribe" | "audiobook" | "jobs") => void;
+  selectedSiraVoiceName?: string | null;
   isMusicGenerationActive: boolean;
   setIsMusicGenerationActive: (value: boolean) => void;
   selectedMusicModel: MusicModel;
@@ -2394,7 +2607,6 @@ const ActiveToolsDisplay = ({
 }) => {
   const [showAllImageRatios, setShowAllImageRatios] = React.useState(false);
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
-  const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeComputerUseMode = computerUseAppMode || "computer";
   const computerUseAppMeta: Record<ComputerUseAppMode, { label: string; icon: JSX.Element }> = {
     browser: { label: "Navegador", icon: <AppWindow className="h-4 w-4" /> },
@@ -2524,8 +2736,17 @@ const ActiveToolsDisplay = ({
 
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
-    const pickByKind = (kind: "image" | "video") => {
-      const predicate = kind === "image" ? isImageModelEntry : isVideoModelEntry;
+    const pickByKind = (kind: "image" | "video" | "voice" | "music") => {
+      // Video: admin catalog only (type=VIDEO + isActive). Hidden/unknown = omit.
+      // Voice: the backend answers the Voz chip with AUDIO (TTS) rows — the
+      // VOICE alias never survives Prisma — so both shapes count as voice.
+      const predicate = kind === "image"
+        ? isImageModelEntry
+        : kind === "video"
+          ? isAdminVisibleVideoModel
+          : kind === "voice"
+            ? (model: any) => (model?.type === "VOICE" || model?.type === "AUDIO") && model?.isActive === true
+            : (model: any) => model?.type === kind.toUpperCase() && model?.isActive === true;
       return models.filter(predicate);
     };
     const normalize = (model: any) => ({
@@ -2539,22 +2760,14 @@ const ActiveToolsDisplay = ({
 
     const imageModels = pickByKind("image").map(normalize);
     const videoModels = pickByKind("video").map(normalize);
+    const voiceModels = pickByKind("voice").map(normalize);
+    const musicModels = pickByKind("music").map(normalize);
 
     return {
       image: imageModels,
       video: videoModels,
-      voice: VOICE_MODEL_OPTIONS.map((name) => ({
-        name,
-        displayName: name,
-        provider: name === "ElevenLabs" ? "ElevenLabs" : "Google",
-        iconName: name.startsWith("Gemini") ? "GeminiLogo" : "Bot",
-      })),
-      music: MUSIC_MODEL_OPTIONS.map((name) => ({
-        name,
-        displayName: name,
-        provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
-        iconName: name === "Lyria 3 Pro" ? "GeminiLogo" : "Bot",
-      })),
+      voice: voiceModels,
+      music: musicModels,
     };
   }, [availableModels]);
 
@@ -2582,6 +2795,37 @@ const ActiveToolsDisplay = ({
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
 
+  React.useEffect(() => {
+    if (!isVoiceGenerationActive) return;
+    const voiceOptions = mediaModelOptions.voice;
+    if (!voiceOptions.length) {
+      if (selectedVoiceModel) setSelectedVoiceModel("" as VoiceModel);
+      return;
+    }
+    if (!voiceOptions.some((option: any) => option.name === selectedVoiceModel)) {
+      setSelectedVoiceModel(voiceOptions[0].name as VoiceModel);
+    }
+  }, [isVoiceGenerationActive, mediaModelOptions.voice, selectedVoiceModel, setSelectedVoiceModel]);
+
+  React.useEffect(() => {
+    if (!isMusicGenerationActive) return;
+    const musicOptions = mediaModelOptions.music;
+    if (!musicOptions.length) {
+      if (selectedMusicModel) setSelectedMusicModel("" as MusicModel);
+      return;
+    }
+    if (!musicOptions.some((option: any) => option.name === selectedMusicModel)) {
+      setSelectedMusicModel(musicOptions[0].name as MusicModel);
+    }
+  }, [isMusicGenerationActive, mediaModelOptions.music, selectedMusicModel, setSelectedMusicModel]);
+
+  React.useEffect(() => {
+    const fal = (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal
+    const durationSpec = resolveVideoDurationSpec(selectedVideoModel, fal)
+    const next = clampVideoDuration(selectedVideoDuration, durationSpec, undefined, selectedVideoResolution)
+    if (next != null && next !== selectedVideoDuration) setSelectedVideoDuration(next)
+  }, [availableModels, selectedVideoModel, selectedVideoDuration, selectedVideoResolution, setSelectedVideoDuration]);
+
   // Activate a model chosen from the floating fal.ai model gallery (mounted at
   // the page level, decoupled from this composer). Image/video map onto the
   // string-based pickers; audio/3d selections only surface the launcher toast.
@@ -2590,11 +2834,17 @@ const ActiveToolsDisplay = ({
       const model = (e as CustomEvent).detail as { id?: string; group?: string } | undefined;
       if (!model || !model.id) return;
       if (model.group === "image") setSelectedImageModel(model.id);
-      else if (model.group === "video") setSelectedVideoModel(model.id);
+      else if (model.group === "video") {
+        // Hidden/disabled admin VIDEO rows must not become selectable via the gallery.
+        const allowed = (Array.isArray(availableModels) ? availableModels : []).some(
+          (entry: any) => isAdminVisibleVideoModel(entry) && String(entry?.name || "") === model.id,
+        );
+        if (allowed) setSelectedVideoModel(model.id);
+      }
     };
     window.addEventListener("siragpt:fal-model-selected", handler as EventListener);
     return () => window.removeEventListener("siragpt:fal-model-selected", handler as EventListener);
-  }, [setSelectedImageModel, setSelectedVideoModel]);
+  }, [availableModels, setSelectedImageModel, setSelectedVideoModel]);
 
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
@@ -2603,7 +2853,9 @@ const ActiveToolsDisplay = ({
   ) => {
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
-    const label = selected?.displayName || (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
+    const label = selected
+      ? brandModelLabel(selected)
+      : "Sin modelos activos";
     const disabled = options.length === 0;
 
     return (
@@ -2650,7 +2902,7 @@ const ActiveToolsDisplay = ({
                       <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={option.displayName}>{option.displayName}</span>
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={brandModelLabel(option)}>{brandModelLabel(option)}</span>
                       <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62" title={[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}>
                         {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
                       </span>
@@ -2811,8 +3063,8 @@ const ActiveToolsDisplay = ({
       {isImageGenerationActive && (
         <>
           <div
-            className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
-            style={{ "--image-liquid-red": "#7C3AED" } as React.CSSProperties}
+            data-testid="imagenes-mode-chip"
+            className={mediaModeChipChrome("image").className}
           >
             <span className="image-liquid-chip__wave" />
             <span className="image-liquid-chip__gloss" />
@@ -2825,10 +3077,10 @@ const ActiveToolsDisplay = ({
               variant="ghost"
               size="sm"
               className={cn(
-                "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
+                MEDIA_MODE_CHIP_CLOSE_CLASS,
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-[rgba(124,58,237,0.10)] dark:hover:bg-[rgba(124,58,237,0.18)]"
+                  : ""
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -2969,16 +3221,16 @@ const ActiveToolsDisplay = ({
 
       {isVoiceGenerationActive && (
         <>
-          <div className="group/voice-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(34,211,238,0.0)_70deg,rgba(34,211,238,0.50)_135deg,rgba(6,182,212,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
-            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
+          <div data-testid="voz-mode-chip" className={mediaModeChipChrome("voice").className}>
+            <span className="media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/20" />
+            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
-            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-cyan-500 motion-safe:animate-pulse" />}
+            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-white motion-safe:animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleVoiceGenerationClose}
               disabled={isGeneratingVoice}
               title={isGeneratingVoice ? "La herramienta sigue activa durante la generación" : "Cerrar voz"}
@@ -2989,7 +3241,7 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Google", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : isSiraVozModel(name) ? "VoiceStudio" : "Google", surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
@@ -3000,11 +3252,41 @@ const ActiveToolsDisplay = ({
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
             aria-label="Abrir catálogo de voces"
-            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-violet-200/80 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-violet-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(124,58,237,0.5)] backdrop-blur-xl transition-all duration-200 hover:border-violet-300 hover:bg-white dark:border-violet-400/30 dark:bg-zinc-900/82 dark:text-violet-200 dark:hover:bg-zinc-800/92"
+            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
           >
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
           </button>}
+
+          {/* Sira Voz (VoiceStudio, local, gratis): the user's cloned voice +
+              the studio (clonar / doblar / transcribir / audiolibro). */}
+          {isSiraVozModel(selectedVoiceModel) && (
+            <>
+              <button
+                type="button"
+                data-testid="sira-voz-voice-pill"
+                onClick={() => onOpenVoiceStudio("voices")}
+                title="Elegir o clonar una voz"
+                aria-label={`Voz de Sira Voz: ${selectedSiraVoiceName || "predeterminada"}. Elegir o clonar una voz`}
+                className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+              >
+                <Mic className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 max-w-[110px] truncate">{selectedSiraVoiceName || "Voz de Sira"}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="sira-voz-studio-button"
+                onClick={() => onOpenVoiceStudio("dub")}
+                title="Estudio de voz: clonar, doblar vídeos, transcribir y crear audiolibros (gratis, 100 % local)"
+                aria-label="Abrir el estudio de voz"
+                className="group/voice-studio relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-950 bg-zinc-950 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-white shadow-[0_10px_24px_-20px_rgba(15,23,42,0.6)] transition-all duration-200 hover:bg-zinc-800 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <Clapperboard className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 hidden sm:inline">Estudio de voz</span>
+                <span className="relative z-10 sm:hidden">Estudio</span>
+              </button>
+            </>
+          )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -3027,7 +3309,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 py-1">
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
@@ -3036,12 +3318,15 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {VOICE_MODEL_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedVoiceModel === option && <Check className="h-3.5 w-3.5" />}
+                      {mediaModelOptions.voice.map((option: any) => (
+                        <DropdownMenuItem key={option.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option.name as VoiceModel)}>
+                          <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                          {selectedVoiceModel === option.name && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
                       ))}
+                      {mediaModelOptions.voice.length === 0 && (
+                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">Sin modelos activos</div>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -3094,7 +3379,7 @@ const ActiveToolsDisplay = ({
                     min={0}
                     max={100}
                     step={1}
-                    className="mt-2"
+                    className={VOICE_STABILITY_SLIDER_CLASS}
                   />
                 </div>
 
@@ -3126,15 +3411,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-fuchsia-300/70 bg-fuchsia-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-fuchsia-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(192,38,211,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-fuchsia-400/80 dark:border-fuchsia-500/40 dark:bg-fuchsia-900/25 dark:text-fuchsia-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(232,121,249,0.0)_70deg,rgba(232,121,249,0.48)_135deg,rgba(217,70,239,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(192,38,211,0.35)]" />
+          <div data-testid="musica-mode-chip" className={mediaModeChipChrome("music").className}>
+            <span className="media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/20" />
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-fuchsia-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -3168,7 +3453,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 p-1.5">
                 <div className="px-2 pb-2 pt-1.5">
                   <div className="flex items-center justify-between gap-3">
@@ -3176,7 +3461,7 @@ const ActiveToolsDisplay = ({
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
                       <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
                     </div>
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-fuchsia-200/80 bg-fuchsia-50 text-fuchsia-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-fuchsia-400/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200">
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-zinc-200/80 bg-zinc-50 text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-white/20 dark:bg-white/10 dark:text-white">
                       <Music className="h-4 w-4" />
                     </span>
                   </div>
@@ -3189,12 +3474,15 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {MUSIC_MODEL_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedMusicModel === option && <Check className="h-3.5 w-3.5" />}
+                      {mediaModelOptions.music.map((option: any) => (
+                        <DropdownMenuItem key={option.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option.name as MusicModel)}>
+                          <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                          {selectedMusicModel === option.name && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
                       ))}
+                      {mediaModelOptions.music.length === 0 && (
+                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">Sin modelos activos</div>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -3231,7 +3519,7 @@ const ActiveToolsDisplay = ({
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center justify-between gap-2">
                                 <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
-                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-fuchsia-600 dark:text-fuchsia-300" />}
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-zinc-900 dark:text-white" />}
                               </span>
                               <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
                             </span>
@@ -3320,15 +3608,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="video-mode-chip group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]">
-            <span className="video-mode-chip-flow pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
+          <div data-testid="video-mode-chip" className={mediaModeChipChrome("video").className}>
+            <span className="video-mode-chip-flow media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/20" />
             <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-emerald-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -3431,35 +3719,68 @@ const ActiveToolsDisplay = ({
                 </section>
 
                 <section className="video-settings-section">
-                  <h3 className="video-settings-label">Duración</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Duración de video">
-                    {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= DEFAULT_VIDEO_DURATION).map(option => {
-                      const selected = option === selectedVideoDuration;
+                  {(() => {
+                    const durationSpec = resolveVideoDurationSpec(selectedVideoModel, (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal)
+                    const maxLabel = durationSpec.max != null ? `${durationSpec.max}s` : ""
+                    if (durationSpec.audioDriven) {
                       return (
-                        <button
-                          key={option}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setSelectedVideoDuration(option)}
-                          className={cn(
-                            "video-setting-pill min-w-8",
-                            selected && "is-selected"
-                          )}
-                        >
-                          {option}s
-                        </button>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] text-zinc-500 dark:text-white/70">Según audio</span>
+                        </div>
                       )
-                    })}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAllVideoDurations(value => !value)}
-                    className="video-settings-more"
-                    aria-expanded={showAllVideoDurations}
-                  >
-                    {showAllVideoDurations ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
-                  </button>
+                    }
+                    if (!durationSpec.supportsDuration) {
+                      return (
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] text-zinc-500 dark:text-white/70">Auto</span>
+                        </div>
+                      )
+                    }
+                    const step = durationSpec.step || 1
+                    return (
+                      <>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] tabular-nums text-zinc-500 dark:text-white/70">{selectedVideoDuration}s · {maxLabel} máx.</span>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            aria-label="Reducir duración"
+                            className="video-setting-pill min-w-7 px-0"
+                            onClick={() => {
+                              const next = stepVideoDuration(selectedVideoDuration, -1, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          >−</button>
+                          <input
+                            type="range"
+                            min={durationSpec.min ?? 4}
+                            max={durationSpec.max ?? 8}
+                            step={step}
+                            value={selectedVideoDuration}
+                            aria-label="Duración de video"
+                            className="h-1 w-full cursor-pointer accent-zinc-900 dark:accent-white"
+                            onChange={(event) => {
+                              const next = clampVideoDuration(event.target.value, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          />
+                          <button
+                            type="button"
+                            aria-label="Aumentar duración"
+                            className="video-setting-pill min-w-7 px-0"
+                            onClick={() => {
+                              const next = stepVideoDuration(selectedVideoDuration, 1, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          >+</button>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </section>
 
                 <section className="video-settings-section">
@@ -3473,7 +3794,7 @@ const ActiveToolsDisplay = ({
                 </section>
 
                 <div className="video-settings-summary">
-                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration}s / Audio {selectedVideoAudio ? "On" : "Off"}
+                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {resolveVideoDurationSpec(selectedVideoModel).audioDriven ? "Según audio" : `${selectedVideoDuration}s`} / Audio {selectedVideoAudio ? "On" : "Off"}
                 </div>
               </div>
             </DropdownMenuContent>
@@ -3533,13 +3854,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\
 const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
 
 const getModelDisplayLabel = (model: any) => {
-  const provider = resolveModelProviderName(model)
-  const label = String(model?.displayName || model?.name || "Modelo").trim()
-  if (!label || provider === "Otros") return label || "Modelo"
-  return label
-    .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
-    .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
-    .trim() || label
+  return brandModelLabel(model)
 }
 
 const getNavbarModelSelectorChatSignature = (chat: any) => [
@@ -3562,116 +3877,6 @@ const getNavbarModelSelectorChatSignature = (chat: any) => [
   chat?.project?._count?.memories,
   chat?.project?._count?.documents,
 ].map((part) => String(part ?? "")).join("\u0001")
-
-// Reasoning-effort picker rendered at the bottom of the model dropdown.
-// The four stops mirror the backend contract exactly: reasoning-orchestrator's
-// EFFORT_ALIASES maps Bajo→low (direct pass), Medio→medium (extended),
-// Extra→high (extended+reflection) and Max→max (self-consistency ×3), so the
-// slider never offers a level the compute planner would ignore.
-const EFFORT_LEVELS = [
-  { value: "Bajo", caption: "Rápido y directo. Menos profundidad." },
-  { value: "Medio", caption: "Equilibrado. Ideal para el día a día." },
-  { value: "Extra", caption: "Más profundidad y reflexión. Más lento." },
-  { value: "Max", caption: "Máxima profundidad. Mayor costo y latencia." },
-] as const
-
-function EffortSection({ selectedEffort, setSelectedEffort }: {
-  selectedEffort: string
-  setSelectedEffort: (effort: string) => void
-}) {
-  const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((l) => l.value === selectedEffort))
-  const active = EFFORT_LEVELS[activeIndex]
-  const trackRef = React.useRef<HTMLDivElement | null>(null)
-  const draggingRef = React.useRef(false)
-  const moveTo = (index: number) => {
-    const clamped = Math.min(EFFORT_LEVELS.length - 1, Math.max(0, index))
-    if (clamped !== activeIndex) setSelectedEffort(EFFORT_LEVELS[clamped].value)
-  }
-  // Real dragging, not just stop-clicks: any x on the track maps to the
-  // nearest stop, and pointer capture keeps the drag alive even when the
-  // finger/cursor leaves the dropdown. Pointer events cover mouse + touch.
-  const indexFromPointer = (clientX: number) => {
-    const track = trackRef.current
-    if (!track) return activeIndex
-    const rect = track.getBoundingClientRect()
-    if (rect.width <= 0) return activeIndex
-    const fraction = (clientX - rect.left) / rect.width
-    return Math.round(Math.min(1, Math.max(0, fraction)) * (EFFORT_LEVELS.length - 1))
-  }
-  return (
-    <div className="effort-section" onClick={(e) => e.stopPropagation()}>
-      <div className="effort-header">
-        <span className="effort-title">Effort</span>
-        <span className="effort-value">{active.value}</span>
-      </div>
-      <div
-        ref={trackRef}
-        className="effort-track"
-        role="slider"
-        tabIndex={0}
-        aria-label="Nivel de esfuerzo de razonamiento"
-        aria-valuemin={0}
-        aria-valuemax={EFFORT_LEVELS.length - 1}
-        aria-valuenow={activeIndex}
-        aria-valuetext={active.value}
-        onPointerDown={(e) => {
-          // Primary button / touch only; capture so the drag survives leaving
-          // the track and the dropdown never sees these events as item picks.
-          if (e.button !== 0 && e.pointerType === "mouse") return
-          draggingRef.current = true
-          try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* older browsers */ }
-          moveTo(indexFromPointer(e.clientX))
-        }}
-        onPointerMove={(e) => {
-          if (!draggingRef.current) return
-          moveTo(indexFromPointer(e.clientX))
-        }}
-        onPointerUp={(e) => {
-          draggingRef.current = false
-          try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* noop */ }
-        }}
-        onPointerCancel={() => { draggingRef.current = false }}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); moveTo(activeIndex + 1) }
-          else if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); moveTo(activeIndex - 1) }
-          else if (e.key === "Home") { e.preventDefault(); moveTo(0) }
-          else if (e.key === "End") { e.preventDefault(); moveTo(EFFORT_LEVELS.length - 1) }
-        }}
-      >
-        <div className="effort-track-line" aria-hidden />
-        <div
-          className="effort-track-fill"
-          aria-hidden
-          /* Width is the fraction of the span between first and last stop
-             centers (100% - stop size). That keeps the fill end exact on the
-             active dot instead of overshooting a full-track percentage. */
-          style={{
-            width:
-              activeIndex <= 0
-                ? "0px"
-                : `calc((100% - var(--effort-stop-size, 1.75rem)) * ${activeIndex / (EFFORT_LEVELS.length - 1)})`,
-          }}
-        />
-        {EFFORT_LEVELS.map((level, index) => (
-          <button
-            key={level.value}
-            type="button"
-            tabIndex={-1}
-            aria-hidden
-            title={level.value}
-            className={cn(
-              "effort-stop",
-              index <= activeIndex && "effort-stop-reached",
-              index === activeIndex && "effort-stop-active",
-            )}
-            onClick={() => moveTo(index)}
-          />
-        ))}
-      </div>
-      <p className="effort-caption">{active.caption}</p>
-    </div>
-  )
-}
 
 function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
   return (
@@ -3713,14 +3918,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     lastGoodSelectedModelRef.current = liveSelectedModelData;
   } else if (
     lastGoodSelectedModelRef.current &&
-    lastGoodSelectedModelRef.current.name !== selectedModel
+    (availableModels.length === 0 || lastGoodSelectedModelRef.current.name !== selectedModel)
   ) {
-    // User picked a genuinely different model not yet in the list: drop the
-    // stale entry so we never show a logo for the wrong model.
+    // A confirmed empty catalog or a genuinely different selection invalidates
+    // the old row. Never preserve an admin-disabled model as visual fallback.
     lastGoodSelectedModelRef.current = undefined;
   }
   const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [pinnedModel, setPinnedModelState] = React.useState("")
+  const [rowMenu, setRowMenu] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    setPinnedModelState(getPinnedModel())
+  }, [])
   // Re-fetch the model list when the picker opens so a model an admin just
   // activated shows up without a page reload (live admin → frontend sync).
   // Use the fine-grained models/files context (NOT useChat) — useChat also
@@ -3772,7 +3982,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: nextModel.name });
-      toast.success(`Modelo actualizado: ${nextModel.displayName || nextModel.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(nextModel)}`);
     } catch (error) {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -3794,7 +4004,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat");
       localStorage.setItem("currentChatId", data.chat.id);
-      window.location.href = `/chat?id=${data.chat.id}`;
+      window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el chat");
     }
@@ -3804,7 +4014,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const gpt = currentChat?.customGpt;
     const href = gpt?.shareId
       ? `${window.location.origin}/gpts/share/${gpt.shareId}`
-      : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
+      : `${window.location.origin}${agentsHomeHref(currentChat?.id ? `id=${currentChat.id}` : "")}`;
     const r = await copyTextSafe(href);
     if (r.ok) toast.success("Enlace copiado");
     else toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
@@ -3846,7 +4056,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -3981,7 +4191,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo de la empresa actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo de la empresa actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo de la empresa");
     }
@@ -4007,7 +4217,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat de la empresa");
       localStorage.setItem("currentChatId", data.chat.id);
-      window.location.href = `/chat?id=${data.chat.id}`;
+      window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el chat de la empresa");
     }
@@ -4035,7 +4245,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     return (
       <div className="model-provider-heading">
         <ModelLogo model={sample} compact />
-        <span className="min-w-0 flex-1 truncate">{provider}</span>
+        <span className="min-w-0 flex-1 truncate">{brandProviderLabel(provider)}</span>
         <span className="model-provider-count">{models.length}</span>
       </div>
     );
@@ -4044,11 +4254,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    const videoModels = (Array.isArray(availableModels) ? availableModels : [])
-      .filter((model: any) => {
-        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
-        return String(model?.type || "").toUpperCase() === "VIDEO" || /video|veo|kling|runway|pika|hailuo|luma/i.test(label);
-      });
+    const videoModels = filterAdminVisibleVideoModels(
+      Array.isArray(availableModels) ? availableModels : [],
+    );
     selectedVideoModelData = videoModels.find((m: any) => m.name === selectedModel) || videoModels[0];
 
     // Filter video models based on search
@@ -4063,7 +4271,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       }}>
         <DropdownMenuTrigger className="chat-model-trigger flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
-          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData ? brandModelLabel(selectedVideoModelData) : 'Select Video Model'}</span>
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
             <ChevronDown className="h-4 w-4 opacity-70" />
@@ -4104,7 +4312,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                   >
                     <Video className="h-5 w-5 flex-shrink-0" />
                     <div className="flex flex-col flex-1">
-                      <span className="text-sm">{model.displayName}</span>
+                      <span className="text-sm">{brandModelLabel(model)}</span>
                     </div>
                   </DropdownMenuItem>
                 ))
@@ -4123,7 +4331,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
 
   if ((currentChat?.projectId || currentChat?.project) && !(currentChat?.customGptId || currentChat?.customGpt)) {
-    const activeModelLabel = selectedProjectModel?.displayName || activeProjectModelName || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedProjectModel || activeProjectModelName || "Modelo");
 
     return (
       <>
@@ -4181,7 +4389,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeProjectModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4303,7 +4511,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
     });
     const customGptTextIcon = String(customGptIcon || "").trim();
-    const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedGptModel || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo");
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
     const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
     const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
@@ -4377,7 +4585,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4687,7 +4895,13 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     setSelectedModel(model.name);
     setSelectedProvider(model.provider);
     recordRecent(model.name);
+    setLastModel(model.name);
     setSearchQuery("");
+    setRowMenu(null);
+    if (currentChat?.id) {
+      setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
+      void apiClient.updateChat(currentChat.id, { model: model.name }).catch(() => {});
+    }
     // Main model-picker funnel event. Programmatic model swaps
     // (auto-fallback, pickModelForTier, etc.) intentionally do NOT
     // emit — only direct user picks do. Dashboards can compare
@@ -4700,22 +4914,43 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     });
   };
 
+  const pinModel = (model: any) => {
+    setPinnedModel(model.name);
+    setPinnedModelState(model.name);
+    onPick(model);
+  };
+
+  const unpinModel = (modelName: string) => {
+    if (!isPinnedModel(modelName, pinnedModel)) return;
+    clearPinnedModel();
+    setPinnedModelState("");
+    setRowMenu(null);
+  };
+
   // ModelRow — single picker entry. Active state = subtle bg + Check on
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
     const isComingSoon = Boolean(model.comingSoon);
+    const isPinned = isPinnedModel(model.name, pinnedModel);
+    const menuOpen = rowMenu === model.name;
     const label = getModelDisplayLabel(model);
-    const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
-        aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
-        title={attribution ? `${label} - ${attribution}` : label}
-        onSelect={isComingSoon ? (e) => e.preventDefault() : () => onPick(model)}
+        aria-label={label}
+        title={label}
+        onSelect={(event) => {
+          const target = event.target as HTMLElement | null
+          if (isComingSoon || target?.closest?.(".model-picker-row-more, .model-picker-row-menu")) {
+            event.preventDefault()
+            return
+          }
+          onPick(model)
+        }}
         data-selected={isSelected ? "true" : undefined}
         disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+          "model-picker-row group/row relative flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
           isComingSoon && "cursor-default opacity-55",
         )}
@@ -4726,6 +4961,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <span className="liquid-label block truncate text-[12.5px] font-medium leading-4">
               {label}
             </span>
+            {isPinned && (
+              <span className="model-picker-pin shrink-0 text-[9px] leading-none text-muted-foreground/80" aria-hidden>
+                •
+              </span>
+            )}
             {isComingSoon && (
               <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Pronto
@@ -4733,6 +4973,61 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             )}
           </span>
         </span>
+        <button
+          type="button"
+          aria-label="Más opciones"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          className="model-picker-row-more -mr-0.5 shrink-0 rounded px-1 py-0.5 text-[11px] font-medium leading-none tracking-widest text-muted-foreground/70 hover:text-foreground"
+          onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowMenu((current) => current === model.name ? null : model.name);
+          }}
+        >
+          ...
+        </button>
+        {menuOpen && (
+          <div
+            role="menu"
+            className="model-picker-row-menu absolute right-1 top-full z-30 mt-0.5 min-w-[8.5rem] rounded-md border bg-popover p-1 text-[12px] shadow-md"
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {!isSelected && (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => onPick(model)}
+              >
+                Usar en este chat
+              </button>
+            )}
+            {isPinned ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => unpinModel(model.name)}
+              >
+                Quitar fijo
+              </button>
+            ) : (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => pinModel(model)}
+              >
+                Fijar modelo
+              </button>
+            )}
+          </div>
+        )}
       </DropdownMenuItem>
     );
   };
@@ -4741,7 +5036,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   return (
     <DropdownMenu onOpenChange={(open) => {
       if (open) { void refreshModels?.(); }
-      else setSearchQuery("");
+      else {
+        setSearchQuery("");
+        setRowMenu(null);
+      }
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator
@@ -4761,7 +5059,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         )}
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">
+          {selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel ? brandModelLabel(selectedModel) : "Sin modelos activos"}
+        </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -4793,12 +5093,6 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             </div>
           )}
         </ScrollArea>
-        {typeof setSelectedEffort === "function" && (
-          <EffortSection
-            selectedEffort={selectedEffort}
-            setSelectedEffort={setSelectedEffort}
-          />
-        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -5079,16 +5373,50 @@ function ChatInterfaceContent() {
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
-  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("Gemini 2.5 Flash TTS")
-  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
-  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
-  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
-  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
+  // Voice settings persist per browser (like the effort picker): choosing
+  // Spanish / Latino / Studio Clean once must survive reloads. The provider
+  // model itself is re-validated against the live catalog on every open.
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>(() => readStoredVoiceSetting("model", "") as VoiceModel)
+  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>(() => readStoredVoiceSetting("language", "Spanish") as VoiceLanguage)
+  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>(() => readStoredVoiceSetting("accent", "Latino") as VoiceAccent)
+  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState<number>(() => Number(readStoredVoiceSetting("stability", 100)))
+  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>(() => readStoredVoiceSetting("effect", "Studio Clean") as VoiceEffect)
+  React.useEffect(() => {
+    writeStoredVoiceSettings({
+      model: selectedVoiceModel,
+      language: selectedVoiceLanguage,
+      accent: selectedVoiceAccent,
+      stability: selectedVoiceStability,
+      effect: selectedVoiceEffect,
+    })
+  }, [selectedVoiceModel, selectedVoiceLanguage, selectedVoiceAccent, selectedVoiceStability, selectedVoiceEffect])
   // Specific ElevenLabs voice chosen from the Voice Catalog. It is only sent
   // when ElevenLabs is selected; Gemini uses its own production voice.
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
+  // Sira Voz (VoiceStudio): the user's cloned voice for the local engine and
+  // the studio dialog (clone / dub / transcribe / audiobook / jobs).
+  const [selectedSiraVoiceId, setSelectedSiraVoiceId] = React.useState<string>("")
+  const [selectedSiraVoiceName, setSelectedSiraVoiceName] = React.useState<string>("")
+  const [voiceStudioOpen, setVoiceStudioOpen] = React.useState(false)
+  const [voiceStudioTab, setVoiceStudioTab] = React.useState<"voices" | "dub" | "transcribe" | "audiobook" | "jobs">("voices")
+  React.useEffect(() => {
+    const stored = readStoredVoiceStudioVoice()
+    if (stored.id) {
+      setSelectedSiraVoiceId(stored.id)
+      setSelectedSiraVoiceName(stored.name)
+    }
+  }, [])
+  const handleSelectSiraVoice = React.useCallback((voice: { id: string; name: string } | null) => {
+    setSelectedSiraVoiceId(voice?.id || "")
+    setSelectedSiraVoiceName(voice?.name || "")
+    writeStoredVoiceStudioVoice(voice && voice.id ? voice : null)
+  }, [])
+  const openVoiceStudio = React.useCallback((tab: "voices" | "dub" | "transcribe" | "audiobook" | "jobs" = "voices") => {
+    setVoiceStudioTab(tab)
+    setVoiceStudioOpen(true)
+  }, [])
   React.useEffect(() => {
     try {
       const id = localStorage.getItem("siragpt:selectedVoiceId") || ""
@@ -5107,14 +5435,14 @@ function ChatInterfaceContent() {
   }, [])
   const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
   const [isGeneratingMusic, setIsGeneratingMusic] = React.useState(false)
-  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
+  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("" as MusicModel)
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
   const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
   const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(30)
   const [selectedMusicInfluence, setSelectedMusicInfluence] = React.useState(0.3)
   const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
-  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
+  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("9:16")
   const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(DEFAULT_VIDEO_DURATION)
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
@@ -5128,11 +5456,18 @@ function ChatInterfaceContent() {
   const isGeneratingImageRef = React.useRef(false)
   const isGeneratingVoiceRef = React.useRef(false)
   const isGeneratingMusicRef = React.useRef(false)
+  const isGeneratingVideoRef = React.useRef(false)
+  const isVideoGenerationActiveRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
   const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
+  const [voiceCatalogModels, setVoiceCatalogModels] = React.useState<any[]>([])
+  // Mirror of the catalog for the best-effort refresh below: a failed fetch
+  // must return the previous list (the useCallback closes over state).
+  const voiceCatalogModelsRef = React.useRef<any[]>([])
+  const [musicCatalogModels, setMusicCatalogModels] = React.useState<any[]>([])
   const refreshImageModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('IMAGE');
     const models = Array.isArray(modelsResponse?.models)
@@ -5143,20 +5478,54 @@ function ChatInterfaceContent() {
   }, []);
   const refreshVideoModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('VIDEO');
-    const models = Array.isArray(modelsResponse?.models)
-      ? modelsResponse.models.filter(isVideoModelEntry)
-      : [];
+    const models = filterAdminVisibleVideoModels(
+      Array.isArray(modelsResponse?.models) ? modelsResponse.models : [],
+    );
     setVideoCatalogModels(models);
     return models;
   }, []);
+  const refreshVoiceModels = React.useCallback(async () => {
+    try {
+      const modelsResponse = await apiClient.getAIModels('VOICE');
+      // The backend answers VOICE with the Admin-active AUDIO (TTS) rows.
+      const models = Array.isArray(modelsResponse?.models)
+        ? modelsResponse.models.filter((model: any) => (model?.type === 'VOICE' || model?.type === 'AUDIO') && model?.isActive === true)
+        : [];
+      setVoiceCatalogModels(models);
+      voiceCatalogModelsRef.current = models;
+      return models;
+    } catch {
+      // Best-effort like refreshModels: a transient failure (expired JWT,
+      // offline blip) keeps the previous list instead of silently emptying
+      // the Voz picker. The send gate still toasts when nothing is active.
+      return voiceCatalogModelsRef.current;
+    }
+  }, []);
+  const refreshMusicModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('MUSIC');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter((model: any) => model?.type === 'MUSIC' && model?.isActive === true)
+      : [];
+    setMusicCatalogModels(models);
+    return models;
+  }, []);
+  React.useEffect(() => {
+    if (!isVoiceGenerationActive) return;
+    void refreshVoiceModels();
+  }, [isVoiceGenerationActive, refreshVoiceModels]);
+  React.useEffect(() => {
+    if (!isMusicGenerationActive) return;
+    void refreshMusicModels();
+  }, [isMusicGenerationActive, refreshMusicModels]);
   const imageModelsForComposer = React.useMemo(() => {
     const source = imageCatalogModels.length ? imageCatalogModels : availableModels;
     return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
   }, [availableModels, imageCatalogModels]);
   const videoModelsForComposer = React.useMemo(() => {
-    const source = videoCatalogModels.length ? videoCatalogModels : availableModels;
-    return (Array.isArray(source) ? source : []).filter(isVideoModelEntry);
-  }, [availableModels, videoCatalogModels]);
+    // Dedicated VIDEO catalog first; never fall back to a heuristic list.
+    const source = videoCatalogModels.length ? videoCatalogModels : [];
+    return filterAdminVisibleVideoModels(source);
+  }, [videoCatalogModels]);
   const composerAvailableModels = React.useMemo(() => {
     const byName = new Map<string, any>();
     for (const model of Array.isArray(availableModels) ? availableModels : []) {
@@ -5171,11 +5540,19 @@ function ChatInterfaceContent() {
       const name = String(model?.name || '').trim();
       if (name) byName.set(name, model);
     }
-    if (!imageCatalogModels.length && !videoCatalogModels.length) {
+    for (const model of voiceCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    for (const model of musicCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    if (!imageCatalogModels.length && !videoCatalogModels.length && !voiceCatalogModels.length && !musicCatalogModels.length) {
       return availableModels;
     }
     return Array.from(byName.values());
-  }, [availableModels, imageCatalogModels, videoCatalogModels]);
+  }, [availableModels, imageCatalogModels, musicCatalogModels, videoCatalogModels, voiceCatalogModels]);
   const resolveFreshActiveImageModel = React.useCallback(async (candidate?: string) => {
     const models = await refreshImageModels();
     const requestedName = String(candidate || '').trim();
@@ -5187,6 +5564,8 @@ function ChatInterfaceContent() {
     return selected?.provider || providerForMediaModel(modelName, selectProvider);
   }, [imageModelsForComposer, selectProvider]);
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const chatLogEndRef = React.useRef<HTMLDivElement>(null)
+  const wasStreamingRef = React.useRef(false)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
   const composerHighlightOverlayRef = React.useRef<HTMLDivElement>(null);
@@ -5269,6 +5648,33 @@ function ChatInterfaceContent() {
       void hydrateUploadedFileFromBackend(fileId);
     }
   }, [hydrateUploadedFileFromBackend, updateUploadedFileById]);
+
+  // Safety net for every chip variant: while an attachment with a server id
+  // is still "processing", re-read it from the backend every 2 s until it is
+  // ready/failed. The per-chip pollers cover the common cases; this keeps a
+  // chip that mounts no poller from blocking the send forever.
+  const processingWatchKey = collectProcessingFileIds(uploadedFiles).join(',');
+  React.useEffect(() => {
+    const ids = processingWatchKey ? processingWatchKey.split(',') : [];
+    if (!ids.length) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      for (const id of ids) {
+        if (cancelled) return;
+        await hydrateUploadedFileFromBackend(id);
+      }
+      if (!cancelled && attempts < 90) timer = setTimeout(tick, 2000);
+    };
+    timer = setTimeout(tick, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [processingWatchKey, hydrateUploadedFileFromBackend]);
 
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
@@ -5456,6 +5862,15 @@ function ChatInterfaceContent() {
     scrollToBottom();
   }, [streamingContentLen, isCurrentChatStreaming, isAtBottom, scrollToBottom]);
 
+  React.useEffect(() => {
+    if (wasStreamingRef.current && !isCurrentChatStreaming) {
+      try {
+        chatLogEndRef.current?.focus({ preventScroll: true })
+      } catch { /* ignore */ }
+    }
+    wasStreamingRef.current = isCurrentChatStreaming
+  }, [isCurrentChatStreaming]);
+
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
@@ -5499,6 +5914,24 @@ function ChatInterfaceContent() {
     syncActiveLocalJobs();
   }, [syncActiveLocalJobs]);
 
+  React.useEffect(() => {
+    const onCancel = (event: Event) => {
+      const taskId = String((event as CustomEvent<{ taskId?: string }>).detail?.taskId || "")
+      if (!taskId) return
+      const matchesCurrent = currentAgentTaskIdRef.current === taskId
+      let matchesChat = false
+      agentTaskIdsByChatRef.current.forEach((id) => {
+        if (id === taskId) matchesChat = true
+      })
+      if (!matchesCurrent && !matchesChat) return
+      const scoped = currentChatId ? localJobControllersRef.current.get(currentChatId) : null
+      const controller = searchAbortControllerRef.current || scoped
+      controller?.abort()
+    }
+    window.addEventListener("agent-task-cancel", onCancel)
+    return () => window.removeEventListener("agent-task-cancel", onCancel)
+  }, [currentChatId])
+
   const markLocalJobIdle = React.useCallback((chatId?: string | null, controller?: AbortController) => {
     if (!chatId) return;
     const tracked = localJobControllersRef.current.get(chatId);
@@ -5509,6 +5942,11 @@ function ChatInterfaceContent() {
       syncActiveLocalJobs();
     }
   }, [syncActiveLocalJobs]);
+
+  const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentSandboxChat({
+    currentChat, userId: user?.id || null, selectedModel, setCurrentChat, selectChat,
+    markBusy: markLocalJobBusy, markIdle: markLocalJobIdle, notify: (message) => toast.error(message),
+  });
 
   // ─── Durable agent-task recovery ───────────────────────────────────
   // Agent/document tasks execute on the backend and can outlive this page.
@@ -5550,17 +5988,13 @@ function ChatInterfaceContent() {
       setCurrentChat(prevChat => {
         if (!prevChat || prevChat.id !== chatId) return prevChat;
         const messages = [...(prevChat.messages || [])];
-        let messageIndex = messages.findIndex((message: any) => {
-          const parsedState = parseAgentTaskMessageState(message?.content);
-          return getAgentTaskIdFromMessage(message, parsedState) === taskId;
+        const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
+        const messageIndex = findRecoveredAgentAssistantIndex(messages, {
+          chatId,
+          taskId,
+          bubbleMessageId,
+          legacyMessageId: recoverable?.message.id,
         });
-        if (messageIndex < 0 && bubbleMessageId) {
-          messageIndex = messages.findIndex((message: any) => message?.id === bubbleMessageId);
-        }
-        if (messageIndex < 0) {
-          const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
-          if (recoverable) messageIndex = messages.findIndex((message: any) => message?.id === recoverable.message.id);
-        }
 
         if (messageIndex >= 0) {
           const previous = messages[messageIndex];
@@ -5829,8 +6263,8 @@ function ChatInterfaceContent() {
     };
   }, [agentTaskRecoveryHydrationNonce, currentChatId, markLocalJobBusy, markLocalJobIdle, setCurrentChat]);
 
-  // Recovery polls intentionally survive chat navigation, so component
-  // teardown owns the final abort for every background controller.
+  // Recovery polls are browser-only. Teardown may stop the poll, but it
+  // must NEVER cancel the server job (Word/doc outlives the SSE socket).
   React.useEffect(() => {
     const recoveryControllers = agentTaskRecoveryControllersRef.current;
     return () => {
@@ -5861,6 +6295,10 @@ function ChatInterfaceContent() {
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
+  const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
+  const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
+  const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
+  const [loginHandoffKind, setLoginHandoffKind] = React.useState("");
 
   // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -5960,12 +6398,15 @@ function ChatInterfaceContent() {
    * Closes all tools and connectors - used when activating a new tool/connector
    * This ensures only one tool/connector is active at a time
    */
-  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean } = {}) => {
+  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean; preserveVideo?: boolean } = {}) => {
     if (!options.preserveWebSearch) setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVoiceGenerationActive(false);
     setIsMusicGenerationActive(false);
-    setIsVideoGenerationActive(false);
+    if (!options.preserveVideo) {
+      isVideoGenerationActiveRef.current = false;
+      setIsVideoGenerationActive(false);
+    }
     setIsGmailActive(false);
     setIsGoogleCalendarActive(false);
     setIsGoogleDriveActive(false);
@@ -5981,6 +6422,13 @@ function ChatInterfaceContent() {
    */
   const resetAllToolsAndConnectors = React.useCallback(() => {
     // Close all tools and connectors
+    isGeneratingVideoRef.current = false;
+    isVideoGenerationActiveRef.current = false;
+    try {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem("siragpt.composer.videoMode");
+      }
+    } catch {}
     closeAllToolsAndConnectors();
 
     // Reset chat type
@@ -5989,6 +6437,7 @@ function ChatInterfaceContent() {
     // Reset other UI states
     setShowAudioPanel(false);
     setCoworkPanelOpen(false);
+    setComputerPanelOpen(false);
     setDocumentPreviewUrl(null);
     setSourcesPanelData(null);
     setActiveSearchActivityId(null);
@@ -5997,6 +6446,7 @@ function ChatInterfaceContent() {
     setSelectedWordText(null);
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    attachmentHashesRef.current.clear();
     setUploadProgress({});
     setInput('');
     setSelectedImageModel(DEFAULT_IMAGE_MODEL);
@@ -6026,6 +6476,8 @@ function ChatInterfaceContent() {
 
   const stopActiveGeneration = React.useCallback(() => {
     const targetChatId = currentChatId;
+    // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
+    if (stopDocumentSandbox(targetChatId)) return;
     const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
 
@@ -6127,8 +6579,12 @@ function ChatInterfaceContent() {
       });
     }
     if (ownsVideoGeneration) {
+      isGeneratingVideoRef.current = false;
       setIsGeneratingVideo(false);
       setIsGeneratingPPT(false);
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
     }
     if (!targetChatId || activeStreamingChatIds.includes(targetChatId)) {
       stopStreaming();
@@ -6137,7 +6593,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -6425,6 +6881,38 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  const prevVideoGenerationActiveRef = React.useRef(false);
+  React.useEffect(() => {
+    // Restore after mount only (avoid SSR/session hydration mismatch).
+    try {
+      if (typeof window === "undefined") return;
+      const parsed = JSON.parse(window.sessionStorage.getItem("siragpt.composer.videoMode") || "null");
+      if (!parsed?.active) return;
+      isVideoGenerationActiveRef.current = true;
+      prevVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType("video");
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useEffect(() => {
+    isVideoGenerationActiveRef.current = isVideoGenerationActive;
+    try {
+      if (typeof window === "undefined") return;
+      if (isVideoGenerationActive) {
+        window.sessionStorage.setItem(
+          "siragpt.composer.videoMode",
+          JSON.stringify({ active: true, chatId: currentChatId }),
+        );
+        prevVideoGenerationActiveRef.current = true;
+        return;
+      }
+      if (prevVideoGenerationActiveRef.current) {
+        window.sessionStorage.removeItem("siragpt.composer.videoMode");
+        prevVideoGenerationActiveRef.current = false;
+      }
+    } catch {}
+  }, [isVideoGenerationActive, currentChatId]);
   React.useEffect(() => {
     if (!isVideoGenerationActive && chatType !== 'video') return;
     let cancelled = false;
@@ -6435,17 +6923,18 @@ But first, you need to connect your Spotify account securely using the button be
           setSelectedVideoModel('');
           return;
         }
-        setSelectedVideoModel((current) => (
-          current && models.some((model: any) => model?.name === current)
-            ? current
-            : models[0].name
-        ));
+        const current = videoCatalogModels.length ? selectedVideoModel : '';
+        if (current && models.some((model: any) => model?.name === current)) {
+          setSelectedVideoModel(current);
+        } else {
+          setSelectedVideoModel(String(models[0]?.name ?? ''));
+        }
       })
       .catch((error) => {
         console.warn('No se pudo refrescar el catalogo de modelos de video:', error?.message || error);
       });
     return () => { cancelled = true; };
-  }, [chatType, isVideoGenerationActive, refreshVideoModels]);
+  }, [chatType, isVideoGenerationActive, refreshVideoModels, selectedVideoModel, videoCatalogModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -6480,14 +6969,18 @@ But first, you need to connect your Spotify account securely using the button be
     if (wantsVideo && !hasOtherActiveTool) {
       if (!isVideoGenerationActive && !autoVideoActivationRef.current) {
         closeAllToolsAndConnectors();
+        isVideoGenerationActiveRef.current = true;
         setIsVideoGenerationActive(true);
         setChatType('video');
         autoVideoActivationRef.current = true;
       }
 
       const requestedDuration = extractRequestedVideoDurationSeconds(input);
-      if (requestedDuration && selectedVideoDuration !== requestedDuration) {
-        setSelectedVideoDuration(requestedDuration as VideoDuration);
+      if (requestedDuration) {
+        const next = clampVideoDuration(requestedDuration, resolveVideoDurationSpec(selectedVideoModel))
+        if (next != null && selectedVideoDuration !== next) {
+          setSelectedVideoDuration(next as VideoDuration);
+        }
       }
       const requestedAspectRatio = extractRequestedVideoAspectRatio(input);
       if (requestedAspectRatio && selectedVideoAspectRatio !== requestedAspectRatio) {
@@ -6522,8 +7015,100 @@ But first, you need to connect your Spotify account securely using the button be
     selectedVideoAspectRatio,
     selectedVideoAudio,
     selectedVideoDuration,
+    selectedVideoModel,
     selectedVideoResolution,
     setChatType,
+  ]);
+
+  // Auto mode for the other tools (Imágenes / Música / Voz / Búsqueda web):
+  // the text itself says which tool the user wants ("crea una imagen de…",
+  // "compón una canción…", "narra este texto…", "busca en internet…"), so the
+  // matching chip switches on with the settings the prompt implies — the
+  // user never has to open the "+" menu first. Same contract as the video
+  // auto-activation above: never overrides a tool the user already chose,
+  // and Nuevo chat / the chip's X are the manual way out. One flip per draft.
+  const autoModeActivationRef = React.useRef<{ mode: ComposerAutoMode; input: string } | null>(null);
+  React.useEffect(() => {
+    const draft = (input || "").trim();
+    if (draft.length < 6) return;
+    if (shouldAutoActivateVideoGeneration(draft)) return; // owned by the video effect
+    const decision = detectComposerAutoMode(draft, { attachments: uploadedFiles as any });
+    if (!decision) return;
+    const anyToolActive =
+      isWebSearchActive ||
+      isImageGenerationActive ||
+      isVoiceGenerationActive ||
+      isMusicGenerationActive ||
+      isVideoGenerationActive ||
+      isComputerUseActive ||
+      isGmailActive ||
+      isGoogleCalendarActive ||
+      isGoogleDriveActive ||
+      isSpotifyActive ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      chatType !== 'text';
+    const alreadyFlipped = autoModeActivationRef.current?.input === draft;
+
+    if (decision.mode === 'image') {
+      if (!isImageGenerationActive) {
+        if (anyToolActive || alreadyFlipped) return;
+        closeAllToolsAndConnectors();
+        setIsImageGenerationActive(true);
+        setChatType('image');
+        autoModeActivationRef.current = { mode: 'image', input: draft };
+      }
+      const { imageAspectRatio, imageCount, imageQuality } = decision.settings;
+      if (imageAspectRatio && IMAGE_ASPECT_RATIO_OPTIONS.some((option) => option.value === imageAspectRatio) && selectedImageAspectRatio !== imageAspectRatio) {
+        setSelectedImageAspectRatio(imageAspectRatio as ImageAspectRatio);
+      }
+      if (imageCount && (IMAGE_COUNT_OPTIONS as readonly number[]).includes(imageCount) && selectedImageCount !== imageCount) {
+        setSelectedImageCount(imageCount as ImageGenerationCount);
+      }
+      if (imageQuality && (IMAGE_QUALITY_OPTIONS as readonly string[]).includes(imageQuality) && selectedImageQuality !== imageQuality) {
+        setSelectedImageQuality(imageQuality as ImageQuality);
+      }
+      return;
+    }
+    if (anyToolActive || alreadyFlipped) return;
+    if (decision.mode === 'music') {
+      closeAllToolsAndConnectors();
+      setIsMusicGenerationActive(true);
+      if (decision.settings.musicDurationSeconds) setSelectedMusicDuration(decision.settings.musicDurationSeconds);
+      autoModeActivationRef.current = { mode: 'music', input: draft };
+      return;
+    }
+    if (decision.mode === 'voice') {
+      closeAllToolsAndConnectors();
+      setIsVoiceGenerationActive(true);
+      autoModeActivationRef.current = { mode: 'voice', input: draft };
+      return;
+    }
+    if (decision.mode === 'web_search') {
+      setIsWebSearchActive(true);
+      autoModeActivationRef.current = { mode: 'web_search', input: draft };
+    }
+  }, [
+    chatType,
+    closeAllToolsAndConnectors,
+    input,
+    isComputerUseActive,
+    isExcelConnectorActive,
+    isGmailActive,
+    isGoogleCalendarActive,
+    isGoogleDriveActive,
+    isImageGenerationActive,
+    isMusicGenerationActive,
+    isSpotifyActive,
+    isVideoGenerationActive,
+    isVoiceGenerationActive,
+    isWebSearchActive,
+    isWordConnectorActive,
+    selectedImageAspectRatio,
+    selectedImageCount,
+    selectedImageQuality,
+    setChatType,
+    uploadedFiles,
   ]);
 
   React.useEffect(() => {
@@ -6700,6 +7285,29 @@ But first, you need to connect your Spotify account securely using the button be
   const chatHeaderRef = React.useRef<HTMLDivElement>(null);
   const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const [composerExpanded, setComposerExpanded] = React.useState(false)
+  const expandComposer = React.useCallback(() => {
+    setComposerExpanded((open) => {
+      const next = !open
+      try {
+        window.sessionStorage.setItem("siragpt.composer.expanded", next ? "1" : "0")
+      } catch {
+        /* quota / private mode */
+      }
+      return next
+    })
+  }, [])
+  React.useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem("siragpt.composer.expanded") === "1") {
+        setComposerExpanded(true)
+      }
+    } catch {
+      /* private mode */
+    }
+  }, [])
+  const [composerTextOverflows, setComposerTextOverflows] = React.useState(false)
+  const composerShowExpand = composerExpanded || composerTextOverflows
   const chatLayoutVarsRef = React.useRef<Record<string, number>>({});
   const composerResizeFrameRef = React.useRef<number | null>(null);
   const textareaLayoutRef = React.useRef<{ height: number; overflowY: string }>({ height: 0, overflowY: "" });
@@ -6710,6 +7318,39 @@ But first, you need to connect your Spotify account securely using the button be
   // typing the command name.
   const [slashMenuOpen, setSlashMenuOpen] = React.useState(false);
   const [slashMenuFilter, setSlashMenuFilter] = React.useState("");
+  const [mentionMenuOpen, setMentionMenuOpen] = React.useState(false);
+  const [mentionTrigger, setMentionTrigger] = React.useState<MentionTrigger | null>(null);
+  const [mentionSearchQuery, setMentionSearchQuery] = React.useState("");
+  const mentionSearchQueryRef = React.useRef("");
+  mentionSearchQueryRef.current = mentionSearchQuery;
+  const [mentionHealthById, setMentionHealthById] = React.useState<Record<string, string>>({});
+  const [mentionRegistryIds, setMentionRegistryIds] = React.useState<readonly string[]>(REGISTRY_APP_IDS);
+  const [selectedMentionIds, setSelectedMentionIds] = React.useState<string[]>([]);
+
+  // Persistent app pins — the composer rail to the right of "+" renders
+  // these logo-only chips. Per-conversation: server pins for real chats,
+  // localStorage draft pins before the first message.
+  const appPins = useAppPins(currentChat?.id)
+  const pinnedAppChips = React.useMemo<PinnedChipView[]>(() => {
+    const health = mentionHealthById
+    const pickerApps = buildPickerApps(health, undefined, mentionRegistryIds)
+    const byId = new Map(pickerApps.map((entry) => [entry.id, entry]))
+    const chips: PinnedChipView[] = []
+    for (const appId of appPins.pinnedAppIds) {
+      const app = byId.get(appId)
+      if (!app) continue
+      chips.push({
+        appId,
+        name: app.name,
+        logoUrl: app.logo || undefined,
+        logoSources: app.logoSources || undefined,
+        brandColor: undefined,
+        availability: app.status === "unavailable" ? "unavailable" : "available",
+        connectionStatus: health[appId] || null,
+      })
+    }
+    return chips
+  }, [appPins.pinnedAppIds, mentionHealthById, mentionRegistryIds])
 
   React.useEffect(() => {
     inputRef.current = input;
@@ -6727,7 +7368,161 @@ But first, you need to connect your Spotify account securely using the button be
       setSlashMenuOpen(true);
       setSlashMenuFilter(filter);
     }
+    const caret = textareaRef.current?.selectionStart;
+    const mention = detectAtMention(input, caret);
+    if (mention && filter === null) {
+      setMentionMenuOpen(true);
+      setMentionTrigger(mention);
+      if (mentionSearchQueryRef.current) setMentionSearchQuery("");
+    } else if (!mention) {
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+    }
   }, [input]);
+
+  React.useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+    const headers = {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const api = getNormalizedApiBaseUrl()
+    Promise.all([
+      authenticatedFetch(`${api}/apps`, {
+        credentials: "include",
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }).then(async (res) => (res.ok ? res.json().catch(() => ({})) : {})),
+      authenticatedFetch(`${api}/apps/connections`, {
+        credentials: "include",
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }).then(async (res) => (res.ok ? res.json().catch(() => ({})) : {})),
+    ])
+      .then(([appsBody, connectionsBody]) => {
+        if (cancelled) return
+        const manifests = Array.isArray((appsBody as { apps?: unknown }).apps)
+          ? (appsBody as { apps: Array<{ id?: string }> }).apps
+          : []
+        const registry = manifests
+          .map((app) => String(app?.id || "").trim())
+          .filter(Boolean)
+        if (registry.length) setMentionRegistryIds(registry)
+        const allowed = new Set(registry.length ? registry : REGISTRY_APP_IDS)
+        const next: Record<string, string> = {}
+        const list = Array.isArray((connectionsBody as { connections?: unknown }).connections)
+          ? (connectionsBody as { connections: Array<{ app?: string; status?: string }> }).connections
+          : []
+        for (const row of list) {
+          const appId = String(row?.app || "").trim()
+          const status = String(row?.status || "").trim()
+          if (appId && status && allowed.has(appId)) next[appId] = status
+        }
+        setMentionHealthById(next)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [user]);
+
+  const mentionPickerApps = React.useMemo(() => {
+    const query = mentionSearchQuery.trim() || mentionTrigger?.query || ""
+    const grouped = groupPickerApps(filterPickerApps(
+      buildPickerApps(mentionHealthById, undefined, mentionRegistryIds),
+      query,
+    ))
+    return grouped.flat.slice(0, 40)
+  }, [mentionHealthById, mentionRegistryIds, mentionTrigger, mentionSearchQuery]);
+
+  const startAppConnect = React.useCallback(async (app: MentionPickerApp) => {
+    const plan = resolveConnectPlan({ id: app.id, name: app.name, domain: app.domain })
+    if (plan.kind !== "oauth") {
+      toast.message(MENTION_COPY.unavailableDetail(app.name))
+      return { status: "unavailable" as const, markConnected: false, message: MENTION_COPY.unavailableDetail(app.name) }
+    }
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+    const result = await connectGptStoreApp(
+      { id: app.id, name: app.name, domain: app.domain },
+      {
+        isAuthenticated: Boolean(user || token),
+        loginNext: typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search || ""}` || "/agentes"
+          : "/agentes",
+        requireLogin: (next) => {
+          if (typeof window !== "undefined") {
+            window.location.href = `/auth/login?next=${encodeURIComponent(next || "/agentes")}`
+          }
+        },
+        fetchJson: async (requestPath) => {
+          const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}${requestPath}`, {
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            signal: AbortSignal.timeout(20_000),
+          })
+          const body = await res.json().catch(() => ({})) as Record<string, unknown>
+          return { ok: res.ok, status: res.status, body }
+        },
+        ensureComputer: async () => ({ conversationBound: false }),
+        navigateComputer: async () => undefined,
+        createConversation: async () => ({ id: "" }),
+        openComputerOverlay: () => undefined,
+      },
+    )
+    if (result.redirectUrl) {
+      toast.message(result.message)
+      window.location.href = result.redirectUrl
+      return result
+    }
+    if (result.status === "computer_opened") {
+      toast.message(MENTION_COPY.unavailableDetail(app.name))
+      return result
+    }
+    if (result.status !== "oauth_started") {
+      toast.error(result.message)
+    }
+    return result
+  }, [user])
+
+  const handleAppsMentionPick = React.useCallback(async (app: MentionPickerApp) => {
+    setMentionMenuOpen(false)
+    if (app.status === "connected") {
+      // Pin it (spec §4.3): connected + unpinned → pin + close panel +
+      // clear the @query token. The pin persists across turns and every
+      // subsequent message carries pinnedAppIds, so no inline @mention
+      // text is needed.
+      let nextInput = input
+      if (mentionTrigger) {
+        nextInput = `${input.slice(0, mentionTrigger.start)}${input.slice(mentionTrigger.start + 1 + mentionTrigger.query.length)}`
+          .replace(/\s+$/, "")
+      }
+      if (nextInput !== input) {
+        setInput(nextInput)
+        chatDraft.save(nextInput)
+      }
+      setMentionTrigger(null)
+      const ok = await appPins.pinApp(app.id)
+      if (!ok) toast.error("Puedes fijar hasta 4 apps. Quita una para agregar otra.")
+      window.setTimeout(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        const caret = nextInput.length
+        try { el.setSelectionRange(caret, caret) } catch { /* old Safari */ }
+      }, 0)
+      return
+    }
+    if (app.status === "connect") {
+      await startAppConnect(app)
+      return
+    }
+    toast.message(MENTION_COPY.unavailableDetail(app.name))
+  }, [appPins, chatDraft, input, mentionTrigger, startAppConnect]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
   const hasDetectedLinks = detectedLinks.length > 0;
@@ -6777,28 +7572,28 @@ But first, you need to connect your Spotify account securely using the button be
   ) => {
     const measured = measureComposerTextarea({
       scrollHeight,
-      minHeight: COMPOSER_TEXTAREA_MIN_PX,
+      minHeight: composerExpanded ? COMPOSER_TEXTAREA_EXPANDED_MIN_PX : COMPOSER_TEXTAREA_MIN_PX,
       maxHeight,
       hasExplicitNewline: textarea.value.includes("\n"),
       charCount: textarea.value.length,
-      currentlyStacked,
+      currentlyStacked: currentlyStacked || composerExpanded,
     });
     const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
 
     textarea.style.height = `${measured.height}px`;
-    textarea.style.overflowY = measured.overflowY;
+    textarea.style.setProperty("overflow-y", measured.overflowY, "important");
     if (shell) {
       shell.style.height = `${measured.height}px`;
     }
     if (surface) {
-      const stackedValue = measured.stacked ? "true" : "false";
+      const stackedValue = (composerExpanded || measured.stacked) ? "true" : "false";
       if (surface.dataset.composerStacked !== stackedValue) {
         surface.dataset.composerStacked = stackedValue;
       }
     }
-    return measured;
-  }, []);
+    return composerExpanded ? { ...measured, stacked: true } : measured;
+  }, [composerExpanded]);
 
   const resizeComposerTextarea = React.useCallback(() => {
     const textarea = textareaRef.current;
@@ -6818,9 +7613,10 @@ But first, you need to connect your Spotify account securely using the button be
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
     const currentlyStacked = surface?.dataset.composerStacked === "true";
     textarea.style.height = "0px";
+    let contentScrollHeight = textarea.scrollHeight;
     let measured = applyComposerTextareaMetrics(
       textarea,
-      textarea.scrollHeight,
+      contentScrollHeight,
       maxHeight,
       currentlyStacked,
     );
@@ -6830,9 +7626,10 @@ But first, you need to connect your Spotify account securely using the button be
     // from the first pass so a wider line cannot collapse the toolbar.
     if (measured.stacked) {
       textarea.style.height = "0px";
+      contentScrollHeight = textarea.scrollHeight;
       const restacked = applyComposerTextareaMetrics(
         textarea,
-        textarea.scrollHeight,
+        contentScrollHeight,
         maxHeight,
         true,
       );
@@ -6849,6 +7646,14 @@ But first, you need to connect your Spotify account securely using the button be
     if (measured.overflowY === "auto" && document.activeElement === textarea) {
       textarea.scrollTop = textarea.scrollHeight;
     }
+
+    const nextOverflow = shouldShowComposerExpandControl({
+      scrollHeight: contentScrollHeight,
+      clientHeight: textarea.clientHeight,
+      minHeight: COMPOSER_TEXTAREA_MIN_PX,
+      value: textarea.value,
+    });
+    setComposerTextOverflows((prev) => (prev === nextOverflow ? prev : nextOverflow));
 
     syncChatLayoutVars();
   }, [applyComposerTextareaMetrics, syncChatLayoutVars]);
@@ -6869,6 +7674,10 @@ But first, you need to connect your Spotify account securely using the button be
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    scheduleComposerTextareaResize();
+  }, [composerExpanded, scheduleComposerTextareaResize]);
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -7476,7 +8285,7 @@ But first, you need to connect your Spotify account securely using the button be
           aria-label={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           aria-pressed={isRecording}
           className={cn(
-            "relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
+            "composer-dictation-button relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
             isRecording
               ? "bg-red-500/10 text-red-500 hover:bg-red-500/15 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
@@ -7527,6 +8336,8 @@ But first, you need to connect your Spotify account securely using the button be
 
   const renderChatComposer = () => (
     <ChatComposerSurface
+      layout="stacked"
+      expanded={composerExpanded}
       overlayVisible={pasteCapture.overlayVisible}
       overlay={pasteCapture.Overlay}
       slashMenu={
@@ -7548,6 +8359,22 @@ But first, you need to connect your Spotify account securely using the button be
           onClose={() => setSlashMenuOpen(false)}
         />
       }
+      mentionMenu={
+        <AppsMentionPicker
+          open={mentionMenuOpen && !slashMenuOpen}
+          filter={mentionSearchQuery || mentionTrigger?.query || ""}
+          apps={mentionPickerApps}
+          enableSearchField
+          pinnedAppIds={appPins.pinnedAppIds}
+          onSearchChange={(query) => setMentionSearchQuery(query)}
+          onPick={(app) => { void handleAppsMentionPick(app); }}
+          onClose={() => {
+            setMentionMenuOpen(false);
+            setMentionTrigger(null);
+            setMentionSearchQuery("");
+          }}
+        />
+      }
       contextTray={
         <>
           <ActiveOptionsDisplay
@@ -7566,6 +8393,21 @@ But first, you need to connect your Spotify account securely using the button be
       leading={
         <>
           <ActionsDropdown {...actionsDropdownProps} />
+          <ComposerPermissionMenu />
+          {appPins.enabled && (
+            <PinnedAppRail
+              chips={pinnedAppChips}
+              onUnpin={(appId) => {
+                void appPins.unpinApp(appId)
+                toast.success("App quitada de este chat")
+              }}
+              onReconnect={(chip) => {
+                const app = buildPickerApps(mentionHealthById, undefined, mentionRegistryIds)
+                  .find((entry) => entry.id === chip.appId)
+                if (app) void startAppConnect(app)
+              }}
+            />
+          )}
           {shouldInlineActiveTools && (
             <div className="composer-inline-active-tools">
               <ActiveToolsDisplay {...activeToolsProps} />
@@ -7574,7 +8416,24 @@ But first, you need to connect your Spotify account securely using the button be
         </>
       }
       textarea={
-        <div className="composer-textarea-shell min-w-0 flex-1">
+        <div className={cn("composer-textarea-shell min-w-0 flex-1", composerShowExpand && "has-expand-control")}>
+          {composerShowExpand ? (
+            <button
+              type="button"
+              onClick={expandComposer}
+              aria-pressed={composerExpanded}
+              aria-label={composerExpanded ? "Contraer" : "Ampliar"}
+              title={composerExpanded ? "Contraer" : "Ampliar"}
+              data-testid="chat-composer-expand"
+              className="composer-expand-button"
+            >
+              {composerExpanded ? (
+                <Minimize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
           {hasDetectedLinks && input ? (
             <div
               ref={composerHighlightOverlayRef}
@@ -7633,8 +8492,8 @@ But first, you need to connect your Spotify account securely using the button be
               "rounded-none transition-colors duration-200",
             )}
             style={{
-              minHeight: "26px",
-              maxHeight: "min(12.5rem, 42vh)",
+              minHeight: composerExpanded ? "8.5rem" : "26px",
+              maxHeight: composerExpanded ? "min(18rem, 52vh)" : "min(12.5rem, 42vh)",
               overflowY: "hidden",
               overflowX: "hidden",
               wordWrap: "break-word",
@@ -7649,10 +8508,27 @@ But first, you need to connect your Spotify account securely using the button be
       toolbar={
         <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
           <ComposerCharCounter input={input} />
-          {renderComposerModelControls()}
-          {!isStopButtonVisible && (
-            renderDictationButton()
+          {/* Text-reasoning controls stay out of generation modes (Imágenes /
+              Video / Voz / Música): those turns don't consume the text context
+              window and take no reasoningEffort, so token/cost meters and the
+              effort slider would show misleading numbers. The model picker
+              already hides itself via isMediaToolActive; state is preserved
+              and the chips return when the modality is closed. */}
+          {!isMediaToolActive && (
+            <ComposerContextMenu
+              messages={currentChat?.messages || []}
+              selectedModel={currentChat?.model || selectedModel}
+              availableModels={availableModels}
+            />
           )}
+          {renderComposerModelControls()}
+          {!isMediaToolActive && (
+            <ComposerEffortMenu
+              selectedEffort={selectedEffort}
+              setSelectedEffort={setSelectedEffort}
+            />
+          )}
+          {renderDictationButton()}
           <ChatComposerPrimaryAction
             input={input}
             hasAttachment={uploadedFiles.length > 0}
@@ -7717,6 +8593,11 @@ But first, you need to connect your Spotify account securely using the button be
       } else if (isGeneratingMusicRef.current) {
         setIsMusicGenerationActive(true);
         setChatType('text');
+      } else if (isGeneratingVideoRef.current || isVideoGenerationActiveRef.current) {
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current, preserveVideo: true });
       } else {
         closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
         setChatType('text'); // Always default to text when switching chats
@@ -7746,6 +8627,11 @@ But first, you need to connect your Spotify account securely using the button be
     } else if (isGeneratingMusicRef.current) {
       setIsMusicGenerationActive(true);
       setChatType('text');
+    } else if (isGeneratingVideoRef.current || isVideoGenerationActiveRef.current) {
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
+      closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current, preserveVideo: true });
     } else {
       closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
     }
@@ -7844,7 +8730,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const urlChatId = typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('id')
+      ? conversationIdFromLocation(window.location.pathname, window.location.search)
       : null;
     if (urlChatId && currentChat?.id !== urlChatId) {
       selectChat(urlChatId);
@@ -7972,7 +8858,7 @@ But first, you need to connect your Spotify account securely using the button be
     // Build temp objects with stable IDs we can map to per-file progress.
     const tempFiles = filesToUpload.map((file) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      const preview = /^(image|audio|video)\//.test(file.type) ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
       const contentHash = batchHashes?.get(file) || null;
       if (contentHash) {
@@ -8051,7 +8937,12 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }, 90);
 
-      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles);
+      // Large media (≥ 80 MB) never fits one proxied request: it is isolated
+      // in its own batch and sent through the chunked transport below.
+      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles, {
+        ...COMPOSER_UPLOAD_BATCH_LIMITS,
+        isolate: shouldUseChunkedUpload,
+      });
       let failedChunkCount = 0;
 
       for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
@@ -8063,18 +8954,24 @@ But first, you need to connect your Spotify account securely using the button be
           // Real upload progress via XHR (see lib/api.ts uploadFiles).
           // Large selections are split into bounded multipart requests so
           // 400 documents do not exceed the edge/body-size guard.
-          const response: any = await apiClient.uploadFiles(filesToFileList(chunk.files), {
-            sourceChannel,
-            idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
-            asyncProcessing: true,
-            onProgress: (pct) => {
-              setUploadProgress(prev => {
-                const next = { ...prev };
-                chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
-                return next;
-              });
-            },
-          });
+          const reportChunkProgress = (pct: number) => {
+            setUploadProgress(prev => {
+              const next = { ...prev };
+              chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
+              return next;
+            });
+          };
+          const response: any = chunk.isolated && chunk.files.length === 1 && shouldUseChunkedUpload(chunk.files[0])
+            ? await apiClient.uploadFileChunked(chunk.files[0], {
+              sourceChannel,
+              onProgress: reportChunkProgress,
+            })
+            : await apiClient.uploadFiles(filesToFileList(chunk.files), {
+              sourceChannel,
+              idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
+              asyncProcessing: true,
+              onProgress: reportChunkProgress,
+            });
 
           if (!response.files) {
             failedChunkCount += 1;
@@ -8137,6 +9034,32 @@ But first, you need to connect your Spotify account securely using the button be
             ];
             uploadedFilesRef.current = next;
             return next;
+          });
+          chunkTemps.forEach((tf, idx) => {
+            const mergedFile = merged[idx];
+            if (!mergedFile || !(tf.file instanceof File) || !String(tf.type || "").startsWith("image/")) return;
+            void recognizeImageWithRetry(tf.file).then((ocr) => {
+              if (!ocr.text) return;
+              setUploadedFiles((cur: any[]) => {
+                const next = cur.map((f: any) =>
+                  f.tempId === tf.tempId
+                    ? {
+                        ...f,
+                        extractedText: ocr.text,
+                        ocr: {
+                          ...(f.ocr || {}),
+                          confidence: ocr.confidence,
+                          provider: "tesseract.js",
+                          clientPreprocess: true,
+                          retries: ocr.retries,
+                        },
+                      }
+                    : f
+                );
+                uploadedFilesRef.current = next;
+                return next;
+              });
+            }).catch(() => {});
           });
 
           setTimeout(() => {
@@ -8689,7 +9612,7 @@ But first, you need to connect your Spotify account securely using the button be
   // we collapse the left rail for a cleaner workspace. Never auto-
   // reopen; the user restores it via the floating PanelLeftOpen chip.
   // ────────────────────────────────────────────────────────────
-  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
+  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile, openMobile: sidebarOpenMobile, setOpenMobile: setSidebarOpenMobile } = useSidebar();
 
   // ────────────────────────────────────────────────────────────
   // Tool activation → auto-collapse the OUTER (visible) sidebar.
@@ -8807,8 +9730,8 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
 
   const composerPreviewSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles],
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress],
   );
   const composerPreviewAttachment = React.useMemo<AttachmentLike | null>(() => {
     if (composerPreviewIndex === null) return null;
@@ -8816,7 +9739,12 @@ But first, you need to connect your Spotify account securely using the button be
   }, [composerPreviewIndex, composerPreviewSiblings]);
 
   const openComposerDocumentPreview = React.useCallback((index: number) => {
-    if (!uploadedFiles[index]) return;
+    const file = uploadedFiles[index];
+    if (!file) return;
+    if (file.status === "uploading" || !canOpenComposerPreview({
+      id: resolveUploadFileId(file),
+      status: file.status,
+    })) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setSidePreviewAttachment(null);
@@ -8916,7 +9844,7 @@ But first, you need to connect your Spotify account securely using the button be
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
-          const researchModel = currentChatRef.current?.model || selectedModelRef.current
+          const researchModel = clampDeepSeekModel(currentChatRef.current?.model || selectedModelRef.current)
           if (!researchModel) throw new Error("Selecciona un modelo antes de iniciar la investigación")
           const researchChat = await ensureResearchCommandChat({
             currentChat: currentChatRef.current,
@@ -9078,6 +10006,14 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    const mentionPayload = resolveMentionedApps(rawMsg, selectedMentionIds, mentionHealthById, undefined, mentionRegistryIds)
+    if (mentionPayload.needsConnect[0]) {
+      toast.message(MENTION_COPY.connectPrompt(mentionPayload.needsConnect[0].name))
+    }
+    if (mentionPayload.unavailable[0] && mentionPayload.connectedAppIds.length === 0 && mentionPayload.needsConnect.length === 0) {
+      toast.message(MENTION_COPY.unavailableDetail(mentionPayload.unavailable[0].name))
+    }
+
     if (composerFiles.some(isComposerFileUploadPending)) {
       toast.info("Espera a que el documento llegue al 100% antes de enviarlo.", { duration: 2200 });
       return;
@@ -9171,7 +10107,7 @@ But first, you need to connect your Spotify account securely using the button be
       imageModelForSendOverride = String(activeImageModel.name).trim();
       if (imageModelForSendOverride !== selectedImageModelForSend) {
         setSelectedImageModel(imageModelForSendOverride);
-        toast.info(`El modelo seleccionado ya no esta activo. Usare ${activeImageModel.displayName || activeImageModel.name}.`);
+        toast.info(`El modelo seleccionado ya no esta activo. Usare ${brandModelLabel(activeImageModel)}.`);
       }
     }
 
@@ -9216,6 +10152,7 @@ But first, you need to connect your Spotify account securely using the button be
       chatDraft.clear();
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
       const now = Date.now();
       queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
       queueBurstTimestampsRef.current.push(now);
@@ -9227,6 +10164,62 @@ But first, you need to connect your Spotify account securely using the button be
       }
       inFlightSendKeysRef.current.delete(sendKey);
       return;
+    }
+
+    const sandboxDecision = resolveDocumentSandboxAdmission(msg, {
+      attachments: composerFiles,
+      historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+      previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      wordHtml: isWordConnectorActive
+        ? (wordConnectorRef.current?.getHTML() || (currentChat as { wordContent?: string } | null)?.wordContent || "")
+        : "",
+      connectorOpen: Boolean(isWordConnectorActive || isExcelConnectorActive),
+    });
+    if (sandboxDecision.route === "need_original") {
+      toast.error(DOCUMENT_SANDBOX_NEED_ORIGINAL);
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+    if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
+      setInput("");
+      setSelectedMentionIds([]);
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+      setMentionSearchQuery("");
+      chatDraft.clear();
+      uploadedFilesRef.current = [];
+      setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        if (sandboxDecision.route === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, sandboxDecision.attachments, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = composerFiles;
+          setUploadedFiles(composerFiles);
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
     }
 
     // Handle rewrite request
@@ -9308,7 +10301,24 @@ REWRITTEN TEXT:`;
       }
       return; // Stop further execution
     }
-    const filesToSend = [...composerFiles];
+    let filesToSend = [...composerFiles];
+    const imageAttachments = filesToSend.filter((file: any) =>
+      String(file?.type || file?.mimeType || "").startsWith("image/"),
+    );
+    if (imageAttachments.length > 0) {
+      const wantsTranscription = looksLikeTranscriptionRequest(msg);
+      const weakOcr = imageAttachments.some((file: any) =>
+        isWeakOcrText(file?.extractedText, file?.ocr?.confidence),
+      );
+      if (wantsTranscription || weakOcr) {
+        try {
+          filesToSend = await enrichImageFilesWithClientOcr(filesToSend, {
+            prompt: msg,
+            force: wantsTranscription,
+          });
+        } catch { /* client OCR is best-effort before the model answers */ }
+      }
+    }
     const buildImageEditPrompt = (rawPrompt: string) => {
       const editFile = filesToSend.find((file: any) => file?.editRegion);
       if (!editFile?.editRegion) return rawPrompt;
@@ -9316,12 +10326,17 @@ REWRITTEN TEXT:`;
       return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
     };
     setInput("");
+    setSelectedMentionIds([]);
+    setMentionMenuOpen(false);
+    setMentionTrigger(null);
+    setMentionSearchQuery("");
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
     chatDraft.clear();
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    attachmentHashesRef.current.clear();
 
     let isNewChat = !currentChat;
     let chatToUpdate = currentChat;
@@ -9353,7 +10368,7 @@ REWRITTEN TEXT:`;
           role: 'USER' as const,
           content: msg,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
 
         // Update chat with user message
@@ -9458,7 +10473,7 @@ REWRITTEN TEXT:`;
           role: 'USER' as const,
           content: msg,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
 
         setCurrentChat(prevChat => {
@@ -9575,6 +10590,13 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVideoGenerationActive || chatType === 'video') {
+      isGeneratingVideoRef.current = true;
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
+    }
+
     if (isVoiceGenerationActive) {
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
@@ -9626,6 +10648,46 @@ REWRITTEN TEXT:`;
       || isVoiceGenerationActive
       || isMusicGenerationActive
       || isVideoGenerationActive;
+    // Word/Excel connector generation already returned above. Explicit edits
+    // were admitted before those returns so they cannot be skipped here.
+    const documentSandboxRoute = resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route;
+    if (!hasMediaGenerator && (documentSandboxRoute === "edit" || documentSandboxRoute === "clarify")) {
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        // The old classifier is broader than an editing authorization (it
+        // even matches discussion). Clarify instead of invoking its editor.
+        if (documentSandboxRoute === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        // Preserve the user's draft when preflight rejects a model, permission or input.
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = filesToSend;
+          setUploadedFiles(filesToSend);
+          // Transfer a rejected queued turn back to the visible draft. Leaving
+          // it in the automatic drain would retry an unsupported edit forever.
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
+    }
     const shouldUseWorkModeAgent = isWorkModeActive
       && !hasDedicatedConnector
       && !hasMediaGenerator
@@ -9635,9 +10697,8 @@ REWRITTEN TEXT:`;
       customGptId: currentChat?.customGptId,
       customGpt: currentChat?.customGpt,
     });
-    // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
-    // enter the durable agent-task path. That backend path owns the current
-    // source-preserving Office/PDF editor, artifact persistence and validation.
+    // Explicit edits and ambiguous legacy edit classifications returned above;
+    // remaining document questions retain their existing retrieval path.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
@@ -9655,6 +10716,7 @@ REWRITTEN TEXT:`;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
+        if (isLiveComputerUsePrompt(msg)) openComputerPanel();
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
         markQueuedSendSucceeded();
       } finally {
@@ -9673,7 +10735,7 @@ REWRITTEN TEXT:`;
       role: 'USER' as const,
       content: msg,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
       metadata: JSON.stringify({ idempotencyKey }),
     };
     const assistantPlaceholder = {
@@ -9698,7 +10760,7 @@ REWRITTEN TEXT:`;
     } else {
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
         return { ...prevChat, messages: updatedMessages };
       });
     }
@@ -9741,8 +10803,18 @@ REWRITTEN TEXT:`;
         }
       }
       if (isVideoGenerationActive || chatType === 'video') {
-        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
-        markQueuedSendSucceeded();
+        isGeneratingVideoRef.current = true;
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        try {
+          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
+        }
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -9892,16 +10964,25 @@ REWRITTEN TEXT:`;
       }
 
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
+        const pins = appPins.pinnedAppIds
         if (isNewChat) {
-          await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent, idempotencyKey });
+          await createNewChat('text', msg, filesToSend, {
+            initialIntent: pipelineIntent,
+            idempotencyKey,
+            pinnedAppIds: pins,
+          });
         } else {
-          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, { idempotencyKey });
+          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+            idempotencyKey,
+            mentionedApps: mentionPayload.mentionedApps,
+            pinnedAppIds: pins,
+          });
         }
       };
 
       const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
-        userMessageAlreadyAdded: !isNewChat,
-        assistantMessageId: !isNewChat ? assistantPlaceholder.id : undefined,
+        userMessageAlreadyAdded: true,
+        assistantMessageId: assistantPlaceholder.id,
       });
 
       switch (intent) {
@@ -9919,10 +11000,26 @@ REWRITTEN TEXT:`;
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
+          isGeneratingVideoRef.current = true;
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
           break;
         case 'ppt':
-          await runClassifiedAgentTask();
+          // Creation from scratch runs the in-process document pipeline
+          // (docx-js / PptxGenJS / ExcelJS via /api/doc/generate): it needs no
+          // sandbox, which production does not have, and it renders the
+          // downloadable card in the chat. Attachment-based work keeps the
+          // durable agent task (source-preserving edits + validation).
+          if (filesToSend.length === 0) {
+            await runContextPipeline(intent);
+          } else {
+            await runClassifiedAgentTask();
+          }
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -9950,7 +11047,11 @@ REWRITTEN TEXT:`;
           }
           break;
         case 'doc':
-          await runContextPipeline(intent);
+          if (filesToSend.length === 0) {
+            await runContextPipeline(intent);
+          } else {
+            await runClassifiedAgentTask();
+          }
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
@@ -10413,6 +11514,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         payload.fileId = files[0];
       }
       setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
       const imageRequestStartedAt = Date.now();
       try {
         await apiClient.generateImage(payload, { signal: controller.signal });
@@ -10473,7 +11575,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           console.warn('No se pudo refrescar el catalogo de modelos de imagen:', refreshError?.message || refreshError);
         }
         const inactiveMessage = fallbackModel?.name
-          ? `El modelo seleccionado ya no esta activo. Cambie a ${fallbackModel.displayName || fallbackModel.name}; vuelve a enviar la imagen.`
+          ? `El modelo seleccionado ya no esta activo. Cambie a ${brandModelLabel(fallbackModel)}; vuelve a enviar la imagen.`
           : 'El modelo seleccionado ya no esta activo. Activa un modelo de imagen en Admin Models antes de generar.';
         if (fallbackModel?.name) {
           setSelectedImageModel(fallbackModel.name);
@@ -10581,11 +11683,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
       markLocalJobIdle(activeChatId, videoController);
       if (shouldClearVisibleState) {
+        isGeneratingVideoRef.current = false;
         setIsGeneratingVideo(false);
       }
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
     };
 
+    isGeneratingVideoRef.current = true;
+    isVideoGenerationActiveRef.current = true;
     setIsGeneratingVideo(true)
+    setIsVideoGenerationActive(true);
+    setChatType('video');
     videoAbortControllerRef.current = videoController;
     if (activeChatId) markLocalJobBusy(activeChatId, videoController);
     const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
@@ -10597,7 +11707,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const videoOptions = {
       resolution: promptResolution || selectedVideoResolution,
       aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
-      duration: selectedVideoDuration,
+      duration: clampVideoDuration(selectedVideoDuration, resolveVideoDurationSpec(activeVideoModel || selectedVideoModel, (availableModels || []).find((model: any) => model?.name === (activeVideoModel || selectedVideoModel))?.apiData?.fal)) ?? selectedVideoDuration,
       audio: promptAudio ?? selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
@@ -10656,7 +11766,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
     const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
-    setUploadedFiles([]); // Clear UI immediately
+    setUploadedFiles([]);
+    attachmentHashesRef.current.clear(); // Clear UI immediately
 
     try {
       let newChat = currentChat;
@@ -10954,6 +12065,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (queueDrainClaims.has(item.id)) return false;
       if (activeStreamingChatIds.includes(item.chatId)) return false;
       if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
+      // Original-file editing needs the canonical admission path. Keep these
+      // queued turns until their chat is opened; never bypass it via addMessage.
+      if (resolveDocumentSandboxAdmission(item.msg, { attachments: item.files || [] }).route) return false;
       return true;
     });
     if (bgIndex < 0) return;
@@ -11133,7 +12247,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isMusicGenerationActive ||
     chatType === 'image' ||
     chatType === 'video';
-  const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
+  const isSendingForCurrentChat = Boolean(
+    isSending && sendingChatId && currentChatId && sendingChatId === currentChatId
+  );
+  const isNewChatAdmissionPending = Boolean(
+    !currentChatId && isSending && sendingChatId === null
+    && sendInFlightChatsRef.current.has('__new__') && intentAbortControllerRef.current
+  );
   // Media flags (image/voice/video/PPT/music) are GLOBAL booleans, but the
   // Stop button must only take over the composer in the chat that OWNS the
   // job (media handlers call markLocalJobBusy(chatId)). Otherwise, while chat
@@ -11142,7 +12262,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isCurrentChatMediaBusy =
     isCurrentChatLocalJobBusy &&
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isCurrentChatMediaBusy;
+  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT && !isSendingForCurrentChat && !isNewChatAdmissionPending;
+  const isStopButtonVisible = !isIdlePlaceholderComposer && (
+    isCurrentChatLoading ||
+    isCurrentChatStreaming ||
+    (pendingStop && isCurrentChatStreaming) ||
+    isSendingForCurrentChat ||
+    isNewChatAdmissionPending ||
+    isCurrentChatLocalJobBusy ||
+    isCurrentChatMediaBusy
+  );
   const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -11166,6 +12295,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVoiceEffect, setSelectedVoiceEffect,
     onOpenVoiceCatalog: () => setVoiceCatalogOpen(true),
     selectedVoiceName,
+    onOpenVoiceStudio: openVoiceStudio,
+    selectedSiraVoiceName,
     isMusicGenerationActive, setIsMusicGenerationActive,
     selectedMusicModel, setSelectedMusicModel,
     selectedMusicStyle, setSelectedMusicStyle,
@@ -11208,6 +12339,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   );
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
+    computerPanelOpen ||
     showAudioPanel ||
     searchActivityPanelOpen ||
     (documentPreviewOpen && !previewUsesOverlay) ||
@@ -11216,7 +12348,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
-  const coworkMobileFullscreen = Boolean(coworkPanelOpen && isSidebarMobile);
+  const coworkMobileFullscreen = Boolean((coworkPanelOpen || computerPanelOpen) && isSidebarMobile);
   const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
@@ -11228,6 +12360,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (
       showAudioPanel ||
       coworkPanelOpen ||
+      computerPanelOpen ||
       searchActivityPanelOpen ||
       documentPreviewUrl ||
       composerPreviewAttachment ||
@@ -11242,6 +12375,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     sourcesPanelData,
     showAudioPanel,
     coworkPanelOpen,
+    computerPanelOpen,
     searchActivityPanelOpen,
     documentPreviewUrl,
     composerPreviewAttachment,
@@ -11264,11 +12398,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
     closeArtifactPanel();
+    setComputerPanelOpen(false);
     setCoworkPanelOpen(true);
   }, [closeArtifactPanel]);
 
   React.useEffect(() => {
-    if (!coworkPanelOpen) return;
+    if (!coworkPanelOpen && !computerPanelOpen) return;
     if (
       showAudioPanel ||
       searchActivityPanelOpen ||
@@ -11280,9 +12415,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       activeArtifact
     ) {
       setCoworkPanelOpen(false);
+      setComputerPanelOpen(false);
     }
   }, [
     coworkPanelOpen,
+    computerPanelOpen,
     showAudioPanel,
     searchActivityPanelOpen,
     documentPreviewUrl,
@@ -11293,8 +12430,125 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeArtifact,
   ]);
 
+  const injectHandoffChat = React.useCallback((detail: LoginHandoffDetail) => {
+    const chatId = String(detail.conversationId || currentChatIdRef.current || "").trim();
+    if (!detail.active || !chatId) return;
+    const chatMessage = chatMessageFromDetail(detail);
+    if (!chatMessage) return;
+    setCurrentChat((prev) => {
+      if (!prev || String(prev.id) !== chatId) return prev;
+      if (!shouldPostHandoffChatMessage(prev.messages || [], chatMessage)) return prev;
+      return {
+        ...prev,
+        messages: [...(prev.messages || []), buildHandoffAssistantMessage(chatId, chatMessage, detail)],
+      };
+    });
+    void apiClient.addMessage(chatId, {
+      role: "ASSISTANT",
+      content: chatMessage,
+      metadata: { type: "computer_login_handoff", kind: detail.kind, site: detail.site },
+      idempotencyKey: `login-handoff:${chatId}:${detail.kind || "gate"}`,
+    }).catch(() => undefined);
+  }, [setCurrentChat]);
+
+  const openComputerPanel = React.useCallback(() => {
+    setShowAudioPanel(false);
+    setActiveSearchActivityId(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
+    setSourcesPanelData(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    closeArtifactPanel();
+    setCoworkPanelOpen(false);
+    setComputerPanelOpen(true);
+    if (!currentChatIdRef.current) {
+      void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
+    }
+  }, [closeArtifactPanel, createNewChat]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const computer = params.get("computer");
+    if (computer === "1" || computer === "true") openComputerPanel();
+    const login = params.get("login");
+    if (login === "1" || login === "true") {
+      setLoginHandoffActive(true);
+      openComputerPanel();
+    }
+  }, [openComputerPanel]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onHandoff = (event: Event) => {
+      const detail = (event as CustomEvent<LoginHandoffDetail>).detail;
+      if (!detail) return;
+      const id = String(detail.conversationId || "").trim();
+      const openId = String(currentChat?.id || "").trim();
+      if (id && openId && id !== openId) return;
+      if (detail.active) {
+        setLoginHandoffActive(true);
+        if (detail.site) setLoginHandoffSite(String(detail.site));
+        if (detail.kind) setLoginHandoffKind(String(detail.kind));
+        openComputerPanel();
+        injectHandoffChat(detail);
+      } else {
+        setLoginHandoffActive(false);
+      }
+    };
+    window.addEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
+    return () => window.removeEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
+  }, [openComputerPanel, currentChat?.id, injectHandoffChat]);
+
+  React.useEffect(() => {
+    const chatId = String(currentChat?.id || "").trim();
+    if (!chatId || typeof window === "undefined") return;
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const api = getSameOriginApiBaseUrl().replace(/\/+$/, "");
+        const res = await authenticatedFetch(
+          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen ? "&probe=1" : ""}`,
+          { credentials: "include", signal: AbortSignal.timeout(12_000) },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (body && body.active) {
+          setLoginHandoffActive(true);
+          if (body.site) setLoginHandoffSite(String(body.site));
+          if (body.kind) setLoginHandoffKind(String(body.kind));
+          openComputerPanel();
+          const detail = {
+            active: true,
+            conversationId: chatId,
+            site: body.site ? String(body.site) : undefined,
+            kind: body.kind ? String(body.kind) : undefined,
+            reason: body.reason ? String(body.reason) : undefined,
+            title: body.title ? String(body.title) : undefined,
+            instruction: body.instruction ? String(body.instruction) : undefined,
+            chatMessage: body.chatMessage ? String(body.chatMessage) : undefined,
+          };
+          emitLoginHandoff(detail);
+          injectHandoffChat(detail);
+        }
+      } catch {
+        /* handoff poll is best-effort */
+      }
+    };
+    void pull();
+    const timer = window.setInterval(() => void pull(), 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [currentChat?.id, openComputerPanel, computerPanelOpen, injectHandoffChat]);
+
   const openGrokVoicePanel = React.useCallback(() => {
     setCoworkPanelOpen(false);
+    setComputerPanelOpen(false);
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setComposerPreviewIndex(null);
@@ -11837,10 +13091,46 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // "service unavailable" answer. Like image/video/music, Voice now uses a
   // dedicated, deterministic backend path that ALWAYS produces the MP3 and
   // persists it as a "Generation N" chat artifact via the same renderer.
+  // Files already attached in this chat (chunked uploads included) so the
+  // studio can dub/transcribe media above the direct-upload limit.
+  const voiceStudioChatFiles = React.useMemo(() => {
+    const out: Array<{ id: string; name: string; mimeType: string | null; size?: number | null }> = []
+    const seen = new Set<string>()
+    for (const message of currentChat?.messages || []) {
+      for (const file of parseMessageFilesForRender((message as any)?.files) as any[]) {
+        const id = typeof file?.id === "string" ? file.id : ""
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        out.push({
+          id,
+          name: String(file?.originalName || file?.name || file?.filename || "archivo"),
+          mimeType: typeof file?.mimeType === "string" ? file.mimeType : typeof file?.type === "string" ? file.type : null,
+          size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
+        })
+      }
+    }
+    return out
+  }, [currentChat?.messages])
+  const ensureVoiceStudioChatId = React.useCallback(async (): Promise<string | null> => {
+    if (currentChat?.id) return currentChat.id
+    try {
+      const response = await apiClient.createChat({ title: "Estudio de voz", model: selectedModel })
+      const id = response?.chat?.id || null
+      if (id) await selectChat(id)
+      return id
+    } catch {
+      return null
+    }
+  }, [currentChat?.id, selectedModel, selectChat])
+
   const handleVoiceGeneration = async (msg: string, filesToSend: any[] = []) => {
     const narration = (msg || '').trim();
     if (!narration) {
       toast.error('Escribe el texto que quieres convertir en voz');
+      return;
+    }
+    if (!selectedVoiceModel || !voiceCatalogModels.some((model: any) => model?.name === selectedVoiceModel && model?.isActive === true)) {
+      toast.error('No hay modelos de voz activos. Activa uno desde Administración e inténtalo de nuevo.');
       return;
     }
 
@@ -11874,7 +13164,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       role: 'USER' as const,
       content: narration,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
     };
     setCurrentChat(prev => {
       if (!prev || prev.id !== activeChat!.id) return prev;
@@ -11926,7 +13216,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -12039,7 +13329,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -12102,6 +13392,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Describe la música que quieres crear');
       return;
     }
+    if (!selectedMusicModel || !musicCatalogModels.some((model: any) => model?.name === selectedMusicModel && model?.isActive === true)) {
+      toast.error('No hay modelos de música activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     let activeChat = currentChat;
     if (!activeChat) {
@@ -12133,7 +13427,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       role: 'USER' as const,
       content: description,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
     };
     setCurrentChat(prev => {
       if (!prev || prev.id !== activeChat!.id) return prev;
@@ -12238,15 +13532,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Please enter a task');
       return;
     }
+    if (isLiveComputerUsePrompt(goalText)) openComputerPanel();
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
-    let activeChat = currentChat;
-    const isNewChat = !activeChat;
 
-    if (!activeChat) {
+    // «Abre tu computadora y …» — show the live screen without asking for a
+    // second click: the right-hand computer panel opens with the run.
+    if (isComputerRequestPrompt(goalText)) {
+      openComputerPanel();
+    }
+    let activeChat = currentChatRef.current;
+    const liveChatId = activeChat?.id != null ? String(activeChat.id) : '';
+    const needsRealChat = !activeChat || liveChatId.startsWith('temp-chat-');
+
+    if (needsRealChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${displayGoal.substring(0, 30)}`,
+          title: displayGoal.substring(0, 30),
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -12264,32 +13566,56 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWebSearching(true); // reuse the busy flag — Stop button is wired the same way
     markLocalJobBusy(activeChat.id);
 
+    const isUserRole = (m: any) => String(m?.role || '').toUpperCase() === 'USER';
+    const isTempChatId = (id: unknown) => typeof id === 'string' && id.startsWith('temp-chat-');
+    const shouldAdoptTempOntoReal = (prev: any) => Boolean(
+      prev &&
+      isTempChatId(prev.id) &&
+      activeChat?.id &&
+      !isTempChatId(activeChat.id) &&
+      prev.id !== activeChat.id,
+    );
+    const liveHasUserTurn = (currentChatRef.current?.messages || []).some(isUserRole);
+
     try {
-      if (!userMessageAlreadyAdded) {
+      // Graft a USER turn with files after createChat/selectChat even when the
+      // optimistic path set userMessageAlreadyAdded: true — that flag is stale
+      // if the temp-chat row was dropped while the real id was selected.
+      if (!userMessageAlreadyAdded || !liveHasUserTurn) {
         const userMessage = {
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
           role: 'USER' as const,
           content: displayGoal,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
         setCurrentChat(prev => {
+          const adoptingTemp = shouldAdoptTempOntoReal(prev);
           if (!prev) return { ...activeChat, messages: [userMessage] } as any;
-          if (prev.id !== activeChat.id) return prev;
-          return { ...prev, messages: [...(prev.messages || []), userMessage] };
+          if (prev.id !== activeChat.id && !adoptingTemp) return prev;
+          const baseMessages = prev.messages || [];
+          const nextChat = adoptingTemp ? { ...activeChat, messages: baseMessages } : prev;
+          if (baseMessages.some(isUserRole)) return nextChat;
+          return { ...nextChat, messages: [...baseMessages, userMessage] };
         });
       }
 
       const clientBootstrapStepId = 'client-agent-bootstrap';
+      const resolvedAssistantMessageId = assistantMessageId || `msg-ai-${Date.now() + 1}`;
       const makeInitialTaskState = (): AgentTaskState => ({
         ...initialAgentState,
+        meta: {
+          ...(initialAgentState.meta || {}),
+          assistantMessageId: resolvedAssistantMessageId,
+        },
         steps: [{
           id: clientBootstrapStepId,
           label: 'Analizando solicitud',
           icon: 'thought',
           reasoning: 'Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.',
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
         }],
         artifacts: [],
@@ -12310,19 +13636,33 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const initialTaskState = makeInitialTaskState();
       const aiMessage = {
-        id: assistantMessageId || `msg-ai-${Date.now() + 1}`,
+        id: resolvedAssistantMessageId,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
         content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => {
-        if (!prev) return { ...activeChat, messages: [aiMessage] } as any;
-        if (prev.id !== activeChat.id) return prev;
+        const adoptingTemp = shouldAdoptTempOntoReal(prev);
+        if (!prev) {
+          const seeded = (currentChatRef.current?.messages || []).filter(Boolean);
+          const withUser = seeded.some(isUserRole)
+            ? seeded
+            : [...seeded, {
+                id: `msg-user-${Date.now()}`,
+                chatId: activeChat.id,
+                role: 'USER' as const,
+                content: displayGoal,
+                timestamp: new Date().toISOString(),
+                files: snapshotComposerFilesForMessage(filesToSend),
+              }];
+          return { ...activeChat, messages: [...withUser, aiMessage] } as any;
+        }
+        if (prev.id !== activeChat.id && !adoptingTemp) return prev;
         const messages = prev.messages || [];
         const replaced = messages.some(m => m.id === aiMessage.id);
         return {
-          ...prev,
+          ...(adoptingTemp ? { ...activeChat } : prev),
           messages: replaced
             ? messages.map(m => m.id === aiMessage.id ? { ...m, ...aiMessage, error: undefined, progressStage: undefined, progressPct: undefined } : m)
             : [...messages, aiMessage],
@@ -12358,6 +13698,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: fileIds,
           fileMetadata,
           chatId: activeChat.id,
+          lastArtifactId: pickLastArtifactId(currentChatRef.current?.messages || activeChat?.messages),
           model: selectedModel,
           maxSteps: 80,
           maxRuntimeMs: 2 * 60 * 60 * 1000,
@@ -12462,7 +13803,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB c/u. Se conserva el orden en que los sueltes.
+              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB por documento; audio y video hasta 2 GB. Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>
@@ -12472,6 +13813,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           is collapsed (we auto-collapse on Word/Excel/image/video to
           reclaim horizontal real estate). Pinned to the viewport edge
           so the user can always pop the sidebar back with one click. */}
+      {/* Desktop only: mobile reopens the sheet from the header button,
+          so the mid-screen tab never floats over message text on phones. */}
       {!sidebarOpen && !isSidebarMobile && (
         <button
           type="button"
@@ -12506,35 +13849,35 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                <div className="shrink-0 md:hidden">
-                  <SidebarTrigger
-                    className={cn(
-                      "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
-                      "hover:bg-transparent focus-visible:bg-transparent"
-                    )}
+                {/* Desktop toggles the sidebar from its own header; on mobile
+                    the sheet needs an opener here — a quiet 40px ghost icon,
+                    not the old prominent hamburger disc. */}
+                {isSidebarMobile && !sidebarOpenMobile ? (
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpenMobile(true)}
                     aria-label="Abrir el menú lateral"
-                    title="Abrir el menú lateral"
+                    title="Abrir el menú"
+                    data-testid="chat-mobile-sidebar-open"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
                   >
-                    <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
-                  </SidebarTrigger>
-                </div>
-                {/* Model selector moved to the composer (next to the mic),
-                    Claude-style. See renderComposerModelControls(). */}
+                    <SidebarOvalIcon className="h-[18px] w-[18px]" />
+                  </button>
+                ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
-                {currentChat?.id && (
-                  <Button
-                    variant={coworkPanelOpen ? "secondary" : "ghost"}
-                    size="icon"
-                    onClick={() => coworkPanelOpen ? setCoworkPanelOpen(false) : openCoworkPanel()}
-                    title={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
-                    aria-label={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
-                    aria-pressed={coworkPanelOpen}
-                    className="chat-header-icon-btn h-11 w-11 rounded-full"
-                  >
-                    <BriefcaseBusiness className="h-5 w-5" />
-                  </Button>
-                )}
+                <Button
+                  variant={computerPanelOpen ? "secondary" : "ghost"}
+                  size="icon"
+                  onClick={() => computerPanelOpen ? setComputerPanelOpen(false) : openComputerPanel()}
+                  title="Computadora"
+                  aria-label="Computadora"
+                  aria-pressed={computerPanelOpen}
+                  data-testid="chat-computer-button"
+                  className="chat-header-icon-btn chat-computer-action h-11 w-11 rounded-full"
+                >
+                  <Monitor className="h-5 w-5" />
+                </Button>
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
                     active so the header fits the narrower pane. */}
@@ -12614,6 +13957,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   effectOptions={VOICE_EFFECT_OPTIONS}
                   stability={selectedVoiceStability}
                   onStabilityChange={setSelectedVoiceStability}
+                />
+                <VoiceStudioModal
+                  open={voiceStudioOpen}
+                  onOpenChange={setVoiceStudioOpen}
+                  initialTab={voiceStudioTab}
+                  selectedVoiceId={selectedSiraVoiceId || null}
+                  onSelectVoice={handleSelectSiraVoice}
+                  language={selectedVoiceLanguage}
+                  languageOptions={VOICE_LANGUAGE_OPTIONS}
+                  chatFiles={voiceStudioChatFiles}
+                  ensureChatId={ensureVoiceStudioChatId}
+                  onJobFinished={(job) => { if (job?.chatId) void selectChat(job.chatId) }}
+                  onInsertText={(text) => setInput((prev) => (prev ? `${prev}\n\n${text}` : text))}
                 />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}
@@ -12802,7 +14158,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       (mobile) viewport — the "la barra de chat desaparece"
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full">
+                    <div
+                      role="log"
+                      aria-live="polite"
+                      aria-relevant="additions"
+                      className="chat-log chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full"
+                    >
                       <ChatMessageList
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
                         isStreaming={isCurrentChatStreaming}
@@ -12815,6 +14176,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onDocumentPreview={handleDocumentPreview}
                         onAttachmentPreview={handleAttachmentPreview}
                         onOpenSources={handleOpenSources}
+                      />
+                      <div
+                        ref={chatLogEndRef}
+                        className="chat-log-end sr-only"
+                        tabIndex={-1}
+                        aria-hidden="true"
                       />
                     </div>
                   </ScrollArea>
@@ -12867,6 +14234,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isAtBottom
                             ? "pointer-events-none translate-y-2 opacity-0"
                             : "translate-y-0 opacity-100",
+                          queuedCount > 0 && "!-top-[5.25rem]",
                         )}
                       >
                         <button
@@ -12985,6 +14353,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
                   : coworkPanelOpen
                     ? 'clamp(320px, 42vw, 720px)'
+                  : computerPanelOpen
+                    ? 'clamp(320px, 48vw, 880px)'
                   : searchActivityPanelOpen
                     ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
                   : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,
@@ -12996,6 +14366,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <CoworkPanel
                   chatId={currentChat.id}
                   onClose={() => setCoworkPanelOpen(false)}
+                />
+              )}
+              {computerPanelOpen && (
+                <ChatAgentComputerPanel
+                  key={currentChat?.id || "none"}
+                  conversationId={currentChat?.id || ""}
+                  loginHandoff={loginHandoffActive}
+                  loginHandoffSite={loginHandoffSite}
+                  loginHandoffKind={loginHandoffKind}
+                  onClose={() => {
+                    setComputerPanelOpen(false)
+                    setLoginHandoffActive(false)
+                  }}
                 />
               )}
               {showAudioPanel && audioTab === 'stt' && (
@@ -13076,20 +14459,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 </div>
               )}
-              {!coworkPanelOpen && !showAudioPanel && activeSearchActivity && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && activeSearchActivity && (
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
                   onSave={saveSearchActivityToLibrary}
                 />
               )}
-              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -13103,7 +14486,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -13120,7 +14503,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -13133,7 +14516,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -13142,10 +14525,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
+              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
                 <SourcesPanel
                   sources={sourcesPanelData.sources}
                   activity={sourcesPanelData.activity}
@@ -13157,44 +14540,44 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
           </>
         )}
+        {previewUsesOverlay && documentPreviewUrl && (
+          <DocumentPreview
+            url={documentPreviewUrl}
+            onClose={() => setDocumentPreviewUrl(null)}
+          />
+        )}
+        {previewUsesOverlay && !documentPreviewUrl && composerPreviewAttachment && (
+          <UnifiedDocumentViewer
+            variant="panel"
+            className="h-full"
+            open={true}
+            onClose={() => setComposerPreviewIndex(null)}
+            attachment={composerPreviewAttachment}
+            siblings={composerPreviewSiblings}
+            onNavigate={(next) => {
+              const idx = composerPreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+              if (idx >= 0) setComposerPreviewIndex(idx);
+            }}
+          />
+        )}
+        {previewUsesOverlay && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+          <UnifiedDocumentViewer
+            variant="panel"
+            className="h-full"
+            open={true}
+            onClose={() => {
+              setSidePreviewAttachment(null);
+              setSidePreviewSiblings([]);
+            }}
+            attachment={sidePreviewAttachment}
+            siblings={sidePreviewSiblings}
+            onNavigate={(next) => {
+              const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+              if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
+            }}
+          />
+        )}
       </div>
-      {previewUsesOverlay && documentPreviewUrl && (
-        <DocumentPreview
-          url={documentPreviewUrl}
-          onClose={() => setDocumentPreviewUrl(null)}
-        />
-      )}
-      {previewUsesOverlay && !documentPreviewUrl && composerPreviewAttachment && (
-        <UnifiedDocumentViewer
-          variant="panel"
-          className="h-full"
-          open={true}
-          onClose={() => setComposerPreviewIndex(null)}
-          attachment={composerPreviewAttachment}
-          siblings={composerPreviewSiblings}
-          onNavigate={(next) => {
-            const idx = composerPreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
-            if (idx >= 0) setComposerPreviewIndex(idx);
-          }}
-        />
-      )}
-      {previewUsesOverlay && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
-        <UnifiedDocumentViewer
-          variant="panel"
-          className="h-full"
-          open={true}
-          onClose={() => {
-            setSidePreviewAttachment(null);
-            setSidePreviewSiblings([]);
-          }}
-          attachment={sidePreviewAttachment}
-          siblings={sidePreviewSiblings}
-          onNavigate={(next) => {
-            const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
-            if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
-          }}
-        />
-      )}
     </div >
   )
 }

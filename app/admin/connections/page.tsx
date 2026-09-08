@@ -44,6 +44,7 @@ const KNOWN_URLS = [
   "https://api.fireworks.ai/inference/v1",
   "https://api.deepseek.com/v1",
   "https://api.x.ai/v1",
+  "https://api.meta.ai/v1",
 ]
 
 type AuthType = "Bearer" | "Key" | "None" | "Custom"
@@ -64,6 +65,7 @@ const PROVIDER_DEFAULTS: Record<string, { url: string; authType: AuthType; apiTy
   fireworks: { url: "https://api.fireworks.ai/inference/v1", authType: "Bearer", apiType: "chat_completions" },
   deepseek: { url: "https://api.deepseek.com/v1", authType: "Bearer", apiType: "chat_completions" },
   xai: { url: "https://api.x.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+  meta: { url: "https://api.meta.ai/v1", authType: "Bearer", apiType: "chat_completions" },
 }
 
 const PROVIDERS: Array<{ key: string; label: string }> = [
@@ -81,6 +83,7 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "fireworks", label: "Fireworks AI API" },
   { key: "deepseek", label: "DeepSeek API" },
   { key: "xai", label: "xAI API" },
+  { key: "meta", label: "Meta Model API" },
   { key: "custom", label: "Custom API" },
 ]
 
@@ -98,6 +101,7 @@ const QUICK_PICK: Array<{ key: string; label: string }> = [
   { key: "kimi", label: "Kimi" },
   { key: "fal", label: "fal.ai" },
   { key: "mistral", label: "Mistral" },
+  { key: "meta", label: "Meta" },
 ]
 
 type Connection = {
@@ -142,6 +146,12 @@ function inferProviderFromUrl(u: string): string {
   if (lower.includes("fireworks.ai")) return "fireworks"
   if (lower.includes("deepseek.com")) return "deepseek"
   if (lower.includes("x.ai")) return "xai"
+  if (
+    lower.includes("api.meta.ai")
+    || lower.includes("llama.com")
+    || lower.includes("llama-api.meta.com")
+    || lower.includes("developer.meta.com")
+  ) return "meta"
   return "custom"
 }
 

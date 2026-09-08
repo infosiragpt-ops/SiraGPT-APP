@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } 
 import clsx from "clsx"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { Loader2, Plus, Eye, FileCode2, ListChecks, Plug, Play } from "lucide-react"
 import { codexApi, type CodexAccess, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
 import { DEFAULT_TIER } from "@/lib/codex/model-tiers"
@@ -42,18 +43,6 @@ const RIGHT_TABS: { id: CodexTabId; labelKey: string; icon: typeof Eye }[] = [
   { id: "connections", labelKey: "tabs.connections", icon: Plug },
 ]
 
-/** Tracks the md breakpoint so the tab bar only exists on mobile. */
-function useIsMobile(): boolean {
-  const [mobile, setMobile] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)")
-    const update = () => setMobile(mq.matches)
-    update()
-    mq.addEventListener("change", update)
-    return () => mq.removeEventListener("change", update)
-  }, [])
-  return mobile
-}
 
 export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps" } = {}) {
   const t = useTranslations("codex")

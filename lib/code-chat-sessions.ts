@@ -435,3 +435,18 @@ export function deleteCodeChatSession(sessionId: string, store = loadStore()): S
   saveStore(next)
   return next
 }
+
+
+/** OLA200_WAVE_G FE-082 — persist the active session id; refresh must not spawn a duplicate chat. */
+export function persistActiveSessionId(workspaceId: string, sessionId: string, store = loadStore()) {
+  return setActiveCodeChatSession(workspaceId, sessionId, store)
+}
+export function reusePersistedSessionOnRefresh(workspaceId: string, store = loadStore()) {
+  const ensured = ensureDefaultSession(workspaceId, store)
+  const id = getActiveSessionId(workspaceId, ensured)
+  if (!id) return null
+  return ensured.sessions.find((s) => s.id === id) || null
+}
+export function shouldCreateSessionOnRefresh(workspaceId: string, store = loadStore()): boolean {
+  return listSessionsForWorkspace(workspaceId, store).length === 0
+}

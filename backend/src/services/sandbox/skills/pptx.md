@@ -1,5 +1,14 @@
 # Skill: PPTX editing & professional design
 
+## Golden rule: SURGICAL edits — never regenerate the deck
+Open the ORIGINAL file, touch ONLY the shapes/slides asked about, and return
+the SAME file. Text lives in a:t of slideN.xml and notesSlideN.xml — for
+TEXT-ONLY changes prefer unpack + direct XML patch (lxml) preserving a:rPr.
+FORBIDDEN unless "modo reformateo": layouts, masters, theme,
+presentation.xml (slide order lives in p:sldIdLst — edit it together with
+rels + [Content_Types] overrides if reordering). Beware autofit when
+lengthening text.
+
 ## Contract: SURGICAL edits on uploaded decks
 When the user uploads a .pptx and asks for a change, the edited deck MUST keep
 the original theme, masters, layouts, fonts and colors. Follow this contract:

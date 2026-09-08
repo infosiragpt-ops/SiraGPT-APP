@@ -39,6 +39,39 @@ const {
 
 const router = express.Router();
 
+// ── Model tiering (DeepSeek) ──────────────────────────────────────
+const FLASH = process.env.AGENT_BATCH_FLASH_MODEL || 'deepseek-v4-flash';
+const PRO = process.env.AGENT_BATCH_PRO_MODEL || 'deepseek-v4-pro';
+// Escape hatch: comma-separated allowlist of fallback models (e.g.
+// "gpt-4o,claude-sonnet-4") so a DeepSeek outage does not strand the
+// batch queue behind `model_forbidden`.
+const FALLBACK_MODELS = String(process.env.AGENT_BATCH_FALLBACK_MODELS || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+function resolveBatchModel(model) {
+  const raw = String(model || '').toLowerCase();
+  if (!raw) return FLASH;
+  // Any DeepSeek id (bare or aggregator slug like openrouter/deepseek/…)
+  // normalizes to the flash/pro tier pair.
+  if (/deepseek/.test(raw)) {
+    return /v4-pro|reasoner/.test(raw) ? PRO : FLASH;
+  }
+  // Escape hatch first: allowlisted fallback models pass through untouched
+  // so a DeepSeek outage cannot strand the batch queue.
+  if (FALLBACK_MODELS.length > 0 && FALLBACK_MODELS.includes(raw)) {
+    return raw;
+  }
+  // Explicit non-DeepSeek provider ids are rejected (drift posture); truly
+  // unknown bare ids collapse to the cheap FLASH tier instead of erroring.
+  if (/openrouter|openai|gemini|gpt-|claude|anthropic/.test(raw)) {
+    const err = new Error('model_forbidden');
+    err.code = 'model_forbidden';
+    err.status = 400;
+    throw err;
+  }
+  return FLASH;
+}
+
 // ── Limits / defaults ─────────────────────────────────────────────
 const MAX_TASKS_PER_BATCH = parseInt(process.env.AGENT_BATCH_MAX_TASKS, 10) || 50;
 const DEFAULT_CONCURRENCY = parseInt(process.env.AGENT_BATCH_DEFAULT_CONCURRENCY, 10) || 5;
@@ -75,7 +108,7 @@ async function defaultRunner(task, ctx) {
     systemContract: task.systemContract || '',
     files: Array.isArray(task.files) ? task.files : [],
     chatId: task.chatId || null,
-    model: task.model || 'gpt-4o',
+    model: resolveBatchModel(task.model),
     maxSteps: task.maxSteps || 60,
     maxRuntimeMs: task.maxRuntimeMs || ctx.timeoutMs,
     // Direct batch execution stays in-process, so the caller signal can be
@@ -435,6 +468,10 @@ router.INTERNAL = {
   classifyRunnerOutcome,
   pickStreamMode,
   computeTaskHash,
+  resolveBatchModel,
+  FLASH,
+  PRO,
+  FALLBACK_MODELS,
   limits: {
     MAX_TASKS_PER_BATCH,
     DEFAULT_CONCURRENCY,
@@ -445,3 +482,4 @@ router.INTERNAL = {
 };
 
 module.exports = router;
+module.exports.INTERNAL = router.INTERNAL;

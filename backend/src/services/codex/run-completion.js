@@ -15,6 +15,24 @@ metrics.registerCounter(TERMINAL_COUNTER, {
   maxSeries: 8,
 });
 
+const MODEL_TERMINAL_COUNTER = 'siragpt_codex_runs_terminal_by_model_total';
+
+// Per-model canary gate (CEO Office decision): terminal outcomes segmented by
+// model bucket, so flash-vs-sonnet success rates are comparable pre/post flip.
+metrics.registerCounter(MODEL_TERMINAL_COUNTER, {
+  help: 'Terminal Codex runs by final status and model bucket',
+  labels: ['model', 'status'],
+  maxSeries: 32,
+});
+
+function modelBucket(value) {
+  try {
+    return require('./model-telemetry').modelToken(value);
+  } catch {
+    return 'unknown';
+  }
+}
+
 function redactError(value) {
   return String(value || '')
     .replace(/\b(?:sk|pk|key)-[a-zA-Z0-9_-]{16,}\b/g, '[secret]')
@@ -47,6 +65,9 @@ async function publishRunCompletion({
   const event = EVENT_BY_STATUS[status];
   if (!event || !run?.id) return { published: false, reason: 'not_terminal' };
   try { metrics.counter(TERMINAL_COUNTER, { status }, 1); } catch { /* no-op */ }
+  try {
+    metrics.counter(MODEL_TERMINAL_COUNTER, { model: modelBucket(run?.model), status }, 1);
+  } catch { /* no-op */ }
   if (String(env?.CODEX_COMPLETION_WEBHOOKS ?? '1').trim() === '0') {
     return { published: false, reason: 'disabled' };
   }
@@ -77,6 +98,7 @@ async function publishRunCompletion({
 
 module.exports = {
   TERMINAL_COUNTER,
+  MODEL_TERMINAL_COUNTER,
   EVENT_BY_STATUS,
   redactError,
   completionPayload,

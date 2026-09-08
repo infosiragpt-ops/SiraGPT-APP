@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
@@ -40,6 +41,18 @@ type BackupInfo = {
   sizeMB?: number | null
   retained?: number | null
   retentionDays?: number | null
+}
+
+async function fetchJson(path: string, init?: RequestInit): Promise<unknown> {
+  const res = await authenticatedFetch(path, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
 }
 
 const TABLE_LABELS: Array<{ key: string; label: string }> = [
@@ -111,17 +124,18 @@ export default function DatabasePage() {
   const queueProbe = services.bullmq
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Base de datos</h1>
-          <p className="text-muted-foreground">Estado real de la base, almacenamiento y backups</p>
-        </div>
-        <Button variant="outline" onClick={() => void load()} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refrescar
-        </Button>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Base de datos"
+        description="Estado real de la base, almacenamiento y backups"
+        actions={
+          <Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Refrescar
+          </Button>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
@@ -263,13 +277,7 @@ export default function DatabasePage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+      </AdminPageBody>
+    </>
   )
-}
-
-// Minimal authenticated JSON fetch against the same-origin API proxy.
-async function fetchJson(path: string): Promise<unknown> {
-  const res = await authenticatedFetch(path)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.json()
 }

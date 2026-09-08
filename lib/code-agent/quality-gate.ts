@@ -30,6 +30,9 @@ export interface QualityGateResult {
   issues: QualityIssue[]
   /** Combined fix instruction for auto-retry, if there are fixable issues. */
   retryInstruction?: string
+  /** FE-049: never "Validado" when the stream aborted. */
+  status?: "Validado" | "failed" | "aborted"
+  validated?: boolean
 }
 
 type WorkspaceFile = { path: string; content: string }
@@ -205,7 +208,13 @@ function checkTrailingWhitespace(file: WorkspaceFile): QualityIssue[] {
  * Run the quality gate on a set of generated/patched files.
  * Returns all issues found, with a combined retry instruction for auto-fix.
  */
-export function runQualityGate(files: WorkspaceFile[]): QualityGateResult {
+export function runQualityGate(
+  files: WorkspaceFile[],
+  opts: { aborted?: boolean } = {},
+): QualityGateResult {
+  if (opts.aborted) {
+    return { passed: false, issues: [], status: "aborted", validated: false }
+  }
   const allIssues: QualityIssue[] = []
   for (const file of files) {
     allIssues.push(
@@ -226,5 +235,11 @@ export function runQualityGate(files: WorkspaceFile[]): QualityGateResult {
         .join("\n")}`
     : undefined
 
-  return { passed, issues: allIssues, retryInstruction }
+  return {
+    passed,
+    issues: allIssues,
+    retryInstruction,
+    status: passed ? "Validado" : "failed",
+    validated: passed,
+  }
 }

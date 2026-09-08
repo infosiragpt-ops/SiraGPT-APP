@@ -81,3 +81,27 @@ export async function startPreviewWithCleanupFence<T>({
   }
   return { stale: true, value, cleaned: true }
 }
+
+const previewStartLocks = new Map<string, Promise<void>>()
+
+/**
+ * Exclusive start slot per resource key. Two overlapping /start calls for the
+ * same preview never race: the successor waits, then the predecessor may only
+ * clean up if shouldCleanupStalePreviewStart says so.
+ */
+export async function acquirePreviewStartFence(key: string): Promise<() => void> {
+  const slot = String(key || "default")
+  const previous = previewStartLocks.get(slot)
+  let release = () => {}
+  const mine = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  previewStartLocks.set(slot, mine)
+  if (previous) {
+    try { await previous } catch { /* predecessor must not block successor */ }
+  }
+  return () => {
+    if (previewStartLocks.get(slot) === mine) previewStartLocks.delete(slot)
+    release()
+  }
+}

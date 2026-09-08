@@ -8,6 +8,8 @@
 
 // Record a new version. Returns the created row, or null on any failure
 // (missing prisma / model / write error) — the caller ignores null.
+// `content` (optional, MVP): the edited Markdown for human manual edits. Kept
+// optional so existing background-editor callers stay untouched.
 async function recordFileVersion(prisma, {
   fileId,
   userId,
@@ -17,6 +19,7 @@ async function recordFileVersion(prisma, {
   editPlan = null,
   validationPassed = true,
   createdByChatId = null,
+  content = null,
 } = {}) {
   // Invalid candidates are never versions. This defensive guard protects
   // callers beyond the source-preserving editor as well as legacy code paths.
@@ -43,6 +46,9 @@ async function recordFileVersion(prisma, {
             editPlan: editPlan || undefined,
             validationPassed: Boolean(validationPassed),
             createdByChatId: createdByChatId || null,
+            content: content !== null && content !== undefined
+              ? String(content).slice(0, 2_000_000)
+              : undefined,
           },
         });
       } catch (err) {
@@ -66,7 +72,7 @@ async function listFileVersions(prisma, { fileId, userId } = {}) {
       orderBy: { version: 'desc' },
       select: {
         id: true, version: true, artifactId: true, filename: true,
-        summary: true, validationPassed: true, createdByChatId: true, createdAt: true,
+        summary: true, validationPassed: true, createdByChatId: true, createdAt: true, content: true,
       },
     });
   } catch {

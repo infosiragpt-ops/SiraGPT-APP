@@ -52,6 +52,14 @@ import {
   StopCircle,
   X,
 } from "lucide-react"
+import {
+  CODE_NEW_DEPT_CONVERSATION_EVENT,
+  CODE_OPEN_DEPT_DRAWER_EVENT,
+  DeptChatDrawer,
+  DeptChatFab,
+  setDeptChatChrome,
+  type DeptChatBardNav,
+} from "@/components/code/dept-chat-bard"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
 import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
@@ -111,6 +119,7 @@ import {
   claimPendingCodeAgentInstruction,
   requestCodeAgentInstruction,
 } from "@/lib/code-autonomous-starters"
+import { departmentEmptySuggestions } from "@/lib/code-department-empty-suggestions"
 import {
   buildProactiveCompanySystemBlock,
   claimPendingSeedPrompt,
@@ -118,8 +127,10 @@ import {
   setProactiveCompanyObjective,
 } from "@/lib/code-agent-company-proactive"
 import {
+  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
   CODE_COMPANY_ASSOCIATION_CHANGED_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  getActiveDepartmentSelection,
   notifyCompanyAssociationChanged,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   setActiveCodexProject,
@@ -177,6 +188,7 @@ import {
   nextWorkTaskAction,
   stepIterationBudget,
 } from "@/lib/code-agent/autonomy"
+import { markTaskFailure } from "@/lib/code-agent/task-retry"
 import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
 import { runQualityGate } from "@/lib/code-agent/quality-gate"
 import {
@@ -193,6 +205,13 @@ import {
   COMPOSER_PLACEHOLDER,
 } from "@/lib/code-agent/composer-mode-config"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import {
+  ModelCircuitBreakerRegistry,
+  computeBackoffMs,
+  isRetryableFailure,
+  retryWithBackoff,
+  shouldRetryOpenRouter,
+} from "@/lib/code-agent/resilience"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
@@ -258,11 +277,17 @@ import {
 
 import { DiffView } from "./diff-view"
 
-import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { PensandoBars } from "@/components/pensando-bars"
 import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+// Per-model circuit breakers for the application-layer stream retry. Module-
+// level so breaker state survives component remounts (a sick model stays
+// "open" between turns instead of tripping fresh every render).
+const modelBreakers = new ModelCircuitBreakerRegistry()
 
 type CodeDispatchOptions = {
   forceDeterministic?: boolean
@@ -810,15 +835,12 @@ export type AICodeChatPanelProps = {
   title?: string
   onBack?: () => void
   proactive?: boolean
+  bardNav?: DeptChatBardNav
 }
 
-export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
+export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
-  const {
-    selectedModel,
-    selectProvider,
-    availableModels,
-  } = useChat()
+  const { availableModels } = useChat()
   const {
     files,
     activePath,
@@ -833,6 +855,26 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     patchCodeChatSessionTurns,
     patchAgentState,
   } = useCodeWorkspace()
+
+  const hasBardNav = Boolean(bardNav)
+  const [deptDrawerOpen, setDeptDrawerOpen] = React.useState(false)
+  React.useEffect(() => {
+    setDeptChatChrome(hasBardNav)
+    return () => setDeptChatChrome(false)
+  }, [hasBardNav])
+  React.useEffect(() => {
+    const onOpenDrawer = () => setDeptDrawerOpen(true)
+    const onNewConversation = () => {
+      if (bardNav) bardNav.onNewConversation()
+      else createCodeChatSession()
+    }
+    window.addEventListener(CODE_OPEN_DEPT_DRAWER_EVENT, onOpenDrawer)
+    window.addEventListener(CODE_NEW_DEPT_CONVERSATION_EVENT, onNewConversation)
+    return () => {
+      window.removeEventListener(CODE_OPEN_DEPT_DRAWER_EVENT, onOpenDrawer)
+      window.removeEventListener(CODE_NEW_DEPT_CONVERSATION_EVENT, onNewConversation)
+    }
+  }, [bardNav, createCodeChatSession])
 
   const sessionId = activeCodeChatSessionId
   const turns = React.useMemo(
@@ -901,39 +943,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     }
   }, [])
 
-  // FREE-plan / sparse catalogs return models:[] but the backend still ships a
-  // policy.fallbackModel it will route to. Surface it so the composer never gets
-  // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
-  // LLM-free and works even with no model at all.)
-  const [fallbackModel, setFallbackModel] = React.useState<{
-    name: string
-    provider?: string
-    displayName?: string
-  } | null>(null)
-
-  React.useEffect(() => {
-    if ((availableModels && availableModels.length > 0) || fallbackModel) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const res = await apiClient.getAIModels("TEXT")
-        const fb = (
-          res as {
-            policy?: { fallbackModel?: { name?: string; provider?: string; displayName?: string } }
-          }
-        )?.policy?.fallbackModel
-        if (!cancelled && fb?.name) {
-          setFallbackModel({ name: fb.name, provider: fb.provider, displayName: fb.displayName })
-        }
-      } catch {
-        /* best-effort: deterministic Agent build still works without a model */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [availableModels, fallbackModel])
-
   React.useEffect(() => {
     if (codeModel || !availableModels || availableModels.length === 0) return
     let restored: { name: string; provider?: string } | null = null
@@ -959,44 +968,44 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     }
   }, [])
 
-  // If a real catalog loads later (e.g. an admin activates models) and our
-  // persisted choice is the policy fallback — which isn't in the catalog — drop
-  // it so the picker reflects the real list instead of pinning "Gema4".
+  // Remove persisted selections as soon as the admin catalog no longer lists
+  // them. An empty active catalog must leave /code without a selected model;
+  // policy fallbacks are not selectable admin models.
   React.useEffect(() => {
-    if (!availableModels || availableModels.length === 0 || !codeModel) return
-    if (availableModels.some((m) => m.name === codeModel.name)) return
+    if (!codeModel) return
+    if (availableModels?.some((m) => m.name === codeModel.name)) return
+    if (!availableModels || availableModels.length === 0) {
+      setCodeModel(null)
+      try {
+        window.localStorage.removeItem("code-workspace:model")
+      } catch {
+        /* quota / private mode */
+      }
+      return
+    }
     const next = recommendFastModel(availableModels) || availableModels[0]
     if (next) chooseCodeModel({ name: next.name, provider: next.provider })
   }, [availableModels, codeModel, chooseCodeModel])
 
-  // Resolved model the code chat actually uses. Priority:
-  //  1. an explicit code-chat choice (codeModel),
-  //  2. a fast model derived inline from the catalog (so the FIRST request is
-  //     already fast even before the auto-pick effect has run),
-  //  3. the main-chat selection as a last resort (may be a slow model).
+  // Resolve only from the live active catalog. This deliberately excludes the
+  // main-chat selection and backend policy fallback because either may have
+  // been deactivated since it was persisted.
+  const activeCodeModel = React.useMemo(
+    () => codeModel && availableModels?.some((model) => model.name === codeModel.name)
+      ? codeModel
+      : null,
+    [availableModels, codeModel],
+  )
   const autoFastModel = React.useMemo(
     () => recommendFastModel(availableModels || []),
     [availableModels],
   )
-  const activeModelName =
-    codeModel?.name || autoFastModel?.name || selectedModel || fallbackModel?.name || ""
-  const activeProvider =
-    codeModel?.provider || autoFastModel?.provider || selectProvider || fallbackModel?.provider
-  // What the model picker shows: the real catalog when present, else the single
-  // policy fallback so the user sees "Gema4" rather than an endless spinner.
-  const pickerModels = React.useMemo<ModelOption[]>(() => {
-    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
-    if (fallbackModel) {
-      return [
-        {
-          name: fallbackModel.name,
-          displayName: fallbackModel.displayName,
-          provider: fallbackModel.provider,
-        } as ModelOption,
-      ]
-    }
-    return []
-  }, [availableModels, fallbackModel])
+  const activeModelName = activeCodeModel?.name || autoFastModel?.name || ""
+  const activeProvider = activeCodeModel?.provider || autoFastModel?.provider
+  const pickerModels = React.useMemo<ModelOption[]>(
+    () => Array.isArray(availableModels) ? availableModels as ModelOption[] : [],
+    [availableModels],
+  )
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -1797,7 +1806,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         return { applied: [] as Array<{ path: string; content: string }> }
       }
       if (!activeModelName) {
-        toast.error("Cargando modelos… intenta de nuevo en un momento.")
+        toast.error("No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.")
         return { applied: [] as Array<{ path: string; content: string }> }
       }
 
@@ -1922,318 +1931,306 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }),
           })
         }
-        await apiClient.generateAIStream(
-          {
-            provider: activeProvider,
-            model: activeModelName,
-            prompt: finalPrompt,
-            streamId: id,
-            files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
-            // /code stays on the reliable plain stream. For an explicit public
-            // web turn the backend performs a deterministic, read-only fetch /
-            // search first and injects the result as untrusted evidence. We do
-            // NOT enable the general agent toolset here: a malicious page must
-            // never gain access to code, shell, files or private connectors.
-            disableAgentic: true,
-            enableWebGrounding: webGroundedConversation,
-            webGroundingQuery: webGroundingQuery || undefined,
-            reasoningEffort: selectedEffort,
-          },
-          (chunk) => {
-            if (firstChunkAt == null) firstChunkAt = Date.now()
-            streamChunks += 1
-            assistantText += chunk
-            setTurns((prev) =>
-              prev.map((t) => {
-                if (t.id !== assistantId) return t
-                const nextContent = t.content + chunk
-                // The first completed line = the planning line is done → stamp the
-                // REAL planning duration once (turn start → first line emitted).
-                const planPatch =
-                  t.planMs == null && nextContent.includes("\n")
-                    ? { planMs: Date.now() - startedAt }
-                    : {}
-                return { ...t, content: nextContent, ...planPatch }
-              }),
-            )
-          },
-          () => {
-            if (controller.signal.aborted || abortRef.current !== controller) {
-              cancelled = true
-              return
-            }
-            // Agentic write modes (app/build, plus debug/patch via explicit
-            // override) = Replit-style "presented output": the agent applies the
-            // generated files itself and opens the live preview, with NO manual
-            // "Aplicar" button (the user asked the agentic system to do the
-            // writing). Read-only modes (ask/plan/image) pass autoApply:false and
-            // never apply. `applied` feeds the Worked-Summary/action-log metrics
-            // on the turn (real numbers).
-            if (!conversational) {
-              patchAssistant({
-                agentLabel: "Aplicando cambios al workspace",
-                agentPhases: buildCodeAgentPhases("apply", {
-                  context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                  generate: { status: "done", detail: "Stream completado" },
-                }),
-              })
-            }
-            // Blocklist, not allowlist: any mode that is not explicitly
-            // read-only (ask/plan/image) applies the files the model wrote.
-            // The old app|build allowlist left deps/debug — and any build
-            // misrouted through another mode — streaming file cards into
-            // chat while the workspace and preview stayed empty.
-            if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
-              try {
-                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
-                if (blocks.length > 0) {
-                  // Mejora 3 (stream validator): when the streamed content fails
-                  // the deterministic structural checks, do NOT ship a broken
-                  // file to the preview. The work_task loop retries with the
-                  // returned instruction. Debug spoken turns still apply so a
-                  // targeted SRE patch is not blocked by a leftover fence.
-                  const streamCheck = validateStreamedFiles(
-                    blocks.map((b) => ({ path: b.path as string, content: b.content })),
+        await retryWithBackoff(
+          async () => {
+            let streamError: Error | null = null
+            let streamSettled = false
+            await new Promise<void>((resolve) => {
+              apiClient.generateAIStream(
+                {
+                  provider: activeProvider,
+                  model: activeModelName,
+                  prompt: finalPrompt,
+                  streamId: id,
+                  files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
+                  // /code stays on the reliable plain stream. For an explicit public
+                  // web turn the backend performs a deterministic, read-only fetch /
+                  // search first and injects the result as untrusted evidence. We do
+                  // NOT enable the general agent toolset here: a malicious page must
+                  // never gain access to code, shell, files or private connectors.
+                  disableAgentic: true,
+                  enableWebGrounding: webGroundedConversation,
+                  webGroundingQuery: webGroundingQuery || undefined,
+                  reasoningEffort: selectedEffort,
+                },
+                (chunk) => {
+                  if (firstChunkAt == null) firstChunkAt = Date.now()
+                  streamChunks += 1
+                  assistantText += chunk
+                  setTurns((prev) =>
+                    prev.map((t) => {
+                      if (t.id !== assistantId) return t
+                      const nextContent = t.content + chunk
+                      // The first completed line = the planning line is done → stamp the
+                      // REAL planning duration once (turn start → first line emitted).
+                      const planPatch =
+                        t.planMs == null && nextContent.includes("\n")
+                          ? { planMs: Date.now() - startedAt }
+                          : {}
+                      return { ...t, content: nextContent, ...planPatch }
+                    }),
                   )
-                  if (!streamCheck.valid && override?.spokenKind !== "debug") {
-                    rejectedStream = streamCheck
-                    toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                },
+                () => {
+                  if (streamSettled) return
+                  if (controller.signal.aborted || abortRef.current !== controller) {
+                    cancelled = true
+                    return
+                  }
+                  streamSettled = true
+                  // Agentic write modes (app/build, plus debug/patch via explicit
+                  // override) = Replit-style "presented output": the agent applies the
+                  // generated files itself and opens the live preview, with NO manual
+                  // "Aplicar" button (the user asked the agentic system to do the
+                  // writing). Read-only modes (ask/plan/image) pass autoApply:false and
+                  // never apply. `applied` feeds the Worked-Summary/action-log metrics
+                  // on the turn (real numbers).
+                  let applied: Array<{ path: string; content: string }> = []
+                  if (!conversational) {
                     patchAssistant({
-                      agentLabel: "Validación bloqueó la aplicación",
+                      agentLabel: "Aplicando cambios al workspace",
                       agentPhases: buildCodeAgentPhases("apply", {
                         context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
                         generate: { status: "done", detail: "Stream completado" },
-                        apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
                       }),
                     })
-                  } else {
-                    for (const b of blocks) {
-                      if (b.path) applyBlock(b.path, b.content)
-                    }
-                    applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
-                    lastAppliedFilesRef.current = applied
-                    const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
-                    const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
-                    toast.success(
-                      hasPkg
-                        ? "Proyecto generado — levantando el dev server…"
-                        : hasHtml
-                          ? "App generada — revisa el preview en vivo →"
-                          : `Generados ${blocks.length} archivo(s) — abriendo preview`,
-                    )
-                    openPreviewAndMaybeRun(applied)
                   }
-                }
-              } catch {
-                // Auto-apply failed (parse/write error). There is no manual
-                // "Aplicar" button anymore, so surface the failure explicitly and
-                // tell the user they can still copy the code as a fallback.
-                toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
-                void recordRun({
-                  id: runId,
-                  conversational,
-                  startedAt,
-                  finishedAt: Date.now(),
-                  totalMs: Date.now() - startedAt,
-                  streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-                  outcome: "error",
-                  phases: [
-                    { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                    { name: "generate", ms: Date.now() - startedAt },
-                    { name: "apply", ms: 0, detail: "Fallo al aplicar — copia manual disponible" },
-                  ],
-                })
-                patchAssistant({
-                  agentLabel: "No se pudieron aplicar los cambios",
-                  agentPhases: buildCodeAgentPhases("apply", {
-                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                    generate: { status: "done", detail: "Stream completado" },
-                    apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
-                  }),
-                })
-              }
-            }
-            const verifyDetail = applied.length > 0
-              ? `${applied.length} archivo(s) aplicado(s)`
-              : "Respuesta sin escritura de archivos"
-            if (applied.length > 0) markVoiced(assistantId)
-            setTurns((prev) =>
-              prev.map((t) => {
-                if (t.id !== assistantId) return t
-                // Conversational close: the turn ends quietly (no rail, no
-                // "Turno completado" banner) — like any chat answer. The token
-                // usage still attaches below so costs stay visible.
-                const base = conversational
-                  ? { ...t, streaming: false, agentLabel: undefined }
-                  : {
-                      ...t,
-                      streaming: false,
-                      agentLabel: "Turno completado",
-                      agentPhases: buildCodeAgentPhases("verify", {
-                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                        generate: { status: "done", detail: "Respuesta generada" },
-                        apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
-                        verify: { status: "done", detail: verifyDetail },
-                      }),
-                    }
-                // Attach the Worked Summary when the turn did file work OR the
-                // stream reported real token usage (the Agent Usage figure).
-                if (applied.length > 0 || usage) {
-                  const { actions, metrics } = buildWriteMetrics(applied, {
-                    startedAt,
-                    now: Date.now(),
-                    getPrevContent: (p) => files[p]?.content ?? "",
-                  })
-                  // Even a no-file text answer shows an action row (the model
-                  // reasoned + produced the reply).
-                  const effectiveActions =
-                    actions.length > 0
-                      ? actions
-                      : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
-                  const withUsage = usage
-                    ? {
-                        ...metrics,
-                        tokensIn: usage.tokensIn,
-                        tokensOut: usage.tokensOut,
-                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
-                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
-                      }
-                    : metrics
-                  return {
-                    ...base,
-                    actions: effectiveActions,
-                    metrics: withUsage,
-                    // Claude Code-style spoken completion digest — only when the
-                    // turn did real multi-step file work (never for plain answers).
-                    ...(applied.length > 0
-                      ? {
-                          voice: buildSpokenSummary({
-                            kind: override?.spokenKind ?? "patch",
-                            filesChanged: withUsage.filesChanged,
-                            durationMs: withUsage.timeWorkedMs,
-                          }),
+                  // Blocklist, not allowlist: any mode that is not explicitly
+                  // read-only (ask/plan/image) applies the files the model wrote.
+                  // The old app|build allowlist left deps/debug — and any build
+                  // misrouted through another mode — streaming file cards into
+                  // chat while the workspace and preview stayed empty.
+                  if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
+                    try {
+                      const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                      if (blocks.length > 0) {
+                        // Mejora 3 (stream validator): when the streamed content fails
+                        // the deterministic structural checks, do NOT ship a broken
+                        // file to the preview. The work_task loop retries with the
+                        // returned instruction. Debug spoken turns still apply so a
+                        // targeted SRE patch is not blocked by a leftover fence.
+                        const streamCheck = validateStreamedFiles(
+                          blocks.map((b) => ({ path: b.path as string, content: b.content })),
+                        )
+                        if (!streamCheck.valid && override?.spokenKind !== "debug") {
+                          rejectedStream = streamCheck
+                          toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                          patchAssistant({
+                            agentLabel: "Validación bloqueó la aplicación",
+                            agentPhases: buildCodeAgentPhases("apply", {
+                              context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                              generate: { status: "done", detail: "Stream completado" },
+                              apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
+                            }),
+                          })
+                        } else {
+                          for (const b of blocks) {
+                            if (b.path) applyBlock(b.path, b.content)
+                          }
+                          applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
+                          lastAppliedFilesRef.current = applied
+                          const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
+                          const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                          toast.success(
+                            hasPkg
+                              ? "Proyecto generado — levantando el dev server…"
+                              : hasHtml
+                                ? "App generada — revisa el preview en vivo →"
+                                : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                          )
+                          openPreviewAndMaybeRun(applied)
                         }
-                      : {}),
+                      }
+                    } catch {
+                      // Auto-apply failed (parse/write error). There is no manual
+                      // "Aplicar" button anymore, so surface the failure explicitly and
+                      // tell the user they can still copy the code as a fallback.
+                      toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                      void recordRun({
+                        id: runId,
+                        conversational,
+                        startedAt,
+                        finishedAt: Date.now(),
+                        totalMs: Date.now() - startedAt,
+                        streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+                        outcome: "error",
+                        phases: [
+                          { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                          { name: "generate", ms: Date.now() - startedAt },
+                          { name: "apply", ms: 0, detail: "Fallo al aplicar — copia manual disponible" },
+                        ],
+                      })
+                      patchAssistant({
+                        agentLabel: "No se pudieron aplicar los cambios",
+                        agentPhases: buildCodeAgentPhases("apply", {
+                          context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                          generate: { status: "done", detail: "Stream completado" },
+                          apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
+                        }),
+                      })
+                    }
                   }
-                }
-                return base
-              }),
-            )
-            // Observability: the turn is closed and the run is fully known
-            // (outcome, applied files, token usage). The `success` branch above
-            // already recorded apply failures; this covers the common path.
-            void recordRun({
-              id: runId,
-              conversational,
-              startedAt,
-              finishedAt: Date.now(),
-              totalMs: Date.now() - startedAt,
-              streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-              outcome: "success",
-              phases: [
-                { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                { name: "generate", ms: Date.now() - startedAt },
-                ...(applied.length > 0
-                  ? [{ name: "apply" as const, ms: 0, detail: `${applied.length} archivo(s)` }]
-                  : []),
-                { name: "verify", ms: 0, detail: applied.length > 0 ? "Cambios escritos" : "Respuesta sin escritura" },
-              ],
-              files: applied.length > 0 ? applied.map((f) => f.path) : undefined,
-              usage: usage ?? undefined,
-            })
-            // Only release the latch if this turn is still the active one — a
-            // newer turn may have replaced abortRef, and clearing it here would
-            // cancel that turn's busy state (mirrors runEngine/runCodexEngine).
-            if (abortRef.current === controller) {
-              abortRef.current = null
-              setBusy(false)
-            }
-          },
-          (err) => {
-            // A cancelled/aborted stream (user started a new turn, navigated
-            // away, or the SSE socket was cut) is NOT a failure — surface it as
-            // a soft "stopped" state that keeps whatever partial content arrived,
-            // instead of a scary red "Fetch is aborted" error turn.
-            const aborted =
-              err?.name === "AbortError" ||
-              /\babort|cancel|operation was aborted/i.test(err?.message || "")
-            const msg = err?.message || "Error en el chat de código"
-            void recordRun({
-              id: runId,
-              conversational: false,
-              startedAt,
-              finishedAt: Date.now(),
-              totalMs: Date.now() - startedAt,
-              streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-              outcome: aborted ? "aborted" : "error",
-              phases: [
-                { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                { name: "generate", ms: Date.now() - startedAt, detail: msg },
-              ],
-            })
-            setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId
-                  ? aborted
-                    ? {
-                        ...t,
-                        streaming: false,
-                        agentLabel: "Generación detenida",
-                        ...(conversational
-                          ? {}
-                          : {
-                              agentPhases: buildCodeAgentPhases("generate", {
-                                generate: { status: "done", detail: "Detenida" },
-                              }),
+                  const verifyDetail = applied.length > 0
+                    ? `${applied.length} archivo(s) aplicado(s)`
+                    : "Respuesta sin escritura de archivos"
+                  if (applied.length > 0) markVoiced(assistantId)
+                  setTurns((prev) =>
+                    prev.map((t) => {
+                      if (t.id !== assistantId) return t
+                      // Conversational close: the turn ends quietly (no rail, no
+                      // "Turno completado" banner) — like any chat answer. The token
+                      // usage still attaches below so costs stay visible.
+                      const base = conversational
+                        ? { ...t, streaming: false, agentLabel: undefined }
+                        : {
+                            ...t,
+                            streaming: false,
+                            agentLabel: "Turno completado",
+                            agentPhases: buildCodeAgentPhases("verify", {
+                              context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                              generate: { status: "done", detail: "Respuesta generada" },
+                              apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                              verify: { status: "done", detail: verifyDetail },
                             }),
-                        content: t.content
-                          ? `${t.content}\n\n_Generación detenida._`
-                          : "_Generación detenida — vuelve a enviar para reintentar._",
+                          }
+                      // Attach the Worked Summary when the turn did file work OR the
+                      // stream reported real token usage (the Agent Usage figure).
+                      if (applied.length > 0 || usage) {
+                        const { actions, metrics } = buildWriteMetrics(applied, {
+                          startedAt,
+                          now: Date.now(),
+                          getPrevContent: (p) => files[p]?.content ?? "",
+                        })
+                        // Even a no-file text answer shows an action row (the model
+                        // reasoned + produced the reply).
+                        const effectiveActions =
+                          actions.length > 0
+                            ? actions
+                            : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
+                        const withUsage = usage
+                          ? {
+                              ...metrics,
+                              tokensIn: usage.tokensIn,
+                              tokensOut: usage.tokensOut,
+                              ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                              ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                            }
+                          : metrics
+                        return {
+                          ...base,
+                          actions: effectiveActions,
+                          metrics: withUsage,
+                          // Claude Code-style spoken completion digest — only when the
+                          // turn did real multi-step file work (never for plain answers).
+                          ...(applied.length > 0
+                            ? {
+                                voice: buildSpokenSummary({
+                                  kind: override?.spokenKind ?? "patch",
+                                  filesChanged: withUsage.filesChanged,
+                                  durationMs: withUsage.timeWorkedMs,
+                                }),
+                              }
+                            : {}),
+                        }
                       }
-                    : {
-                        ...t,
-                        streaming: false,
-                        agentLabel: "Error en el turno",
-                        ...(conversational
-                          ? {}
-                          : {
-                              agentPhases: buildCodeAgentPhases("generate", {
-                                generate: { status: "error", detail: msg },
-                              }),
-                            }),
-                        content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
-                      }
-                  : t,
-              ),
-            )
-            if (abortRef.current === controller) {
-              abortRef.current = null
-              setBusy(false)
-            }
-          },
-          controller.signal,
-          {
-            // The backend may replace already-streamed text after its final
-            // safety scrub. Keep both the UI turn and the local accumulator in
-            // sync; appending the replacement would duplicate the answer and
-            // could reintroduce text the scrub intentionally removed.
-            onReplace: (content) => {
-              assistantText = content
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === assistantId
-                    ? {
-                        ...t,
-                        content,
-                        ...(t.planMs == null && content.includes("\n")
-                          ? { planMs: Date.now() - startedAt }
-                          : {}),
-                      }
-                    : t,
-                ),
+                      return base
+                    }),
+                  )
+                  // Observability: the turn is closed and the run is fully known
+                  // (outcome, applied files, token usage). The `success` branch above
+                  // already recorded apply failures; this covers the common path.
+                  void recordRun({
+                    id: runId,
+                    conversational,
+                    startedAt,
+                    finishedAt: Date.now(),
+                    totalMs: Date.now() - startedAt,
+                    streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+                    outcome: "success",
+                    phases: [
+                      { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                      { name: "generate", ms: Date.now() - startedAt },
+                      ...(applied.length > 0
+                        ? [{ name: "apply" as const, ms: 0, detail: `${applied.length} archivo(s)` }]
+                        : []),
+                      { name: "verify", ms: 0, detail: applied.length > 0 ? "Cambios escritos" : "Respuesta sin escritura" },
+                    ],
+                    files: applied.length > 0 ? applied.map((f) => f.path) : undefined,
+                    usage: usage ?? undefined,
+                  })
+                  resolve()
+                },
+                (err) => {
+                  // The transport (lib/api.ts) has already retried 5 times with
+                  // cursor resume. This is the application-layer verdict: hold the
+                  // error until the outer retryWithBackoff decides, so a retriable
+                  // failure never flashes a red "Error en el turno" mid-recovery.
+                  if (streamSettled) return
+                  streamSettled = true
+                  streamError = err || new Error("Error en el chat de código")
+                  resolve()
+                },
+                controller.signal,
+                {
+                  // The backend may replace already-streamed text after its final
+                  // safety scrub. Keep both the UI turn and the local accumulator in
+                  // sync; appending the replacement would duplicate the answer and
+                  // could reintroduce text the scrub intentionally removed.
+                  onReplace: (content) => {
+                    assistantText = content
+                    setTurns((prev) =>
+                      prev.map((t) =>
+                        t.id === assistantId
+                          ? {
+                              ...t,
+                              content,
+                              ...(t.planMs == null && content.includes("\n")
+                                ? { planMs: Date.now() - startedAt }
+                                : {}),
+                            }
+                          : t,
+                      ),
+                    )
+                  },
+                  onUsage: (u) => { usage = u },
+                },
               )
+            })
+            if (streamError) throw streamError
+          },
+          {
+            // Application-layer retry ON TOP of the transport's 5 attempts.
+            // Only retried before any content reached the UI (re-sending after
+            // content would duplicate the turn / break the e2e contract), and
+            // only while the autonomous-iteration budget still allows it.
+            shouldRetry: (err: unknown, attempt: number): boolean => {
+              if (assistantText.trim()) return false
+              const budget = activeCodeChatSession?.agent?.budget
+              const budgetExhausted = budget ? budget.count >= budget.max : false
+              const breaker = modelBreakers.get(activeProvider, activeModelName)
+              if (!breaker.allowRequest()) {
+                toast.error("El modelo está temporalmente degradado. Intenta de nuevo en un momento.")
+                return false
+              }
+              const verdict = shouldRetryOpenRouter(err as any, attempt, { budgetExhausted })
+              if (verdict) breaker.recordFailure()
+              else breaker.recordSuccess()
+              return verdict
             },
-            onUsage: (u) => { usage = u },
+            delayMs: (attempt) => computeBackoffMs(attempt),
+            onRetry: (attempt, delayMs) => {
+              toast.info(
+                `El stream se interrumpió — reintentando (${attempt}/2, en ${Math.round(delayMs / 1000)}s)…`,
+                { duration: 4000 },
+              )
+              patchAssistant({
+                agentLabel: "Reconectando con el modelo",
+                agentPhases: buildCodeAgentPhases("generate", {
+                  context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+                  generate: { status: "running", detail: `Reintento ${attempt}/2 tras interrupción` },
+                }),
+              })
+            },
           },
         )
       } catch (err: any) {
@@ -2338,6 +2335,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setTurns,
       turns,
       user,
+      activeCodeChatSession?.agent?.budget,
     ],
   )
 
@@ -4455,9 +4453,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${lastVerdict.retryInstruction?.slice(0, 90)}…`)
           }
           const doneAgent = activeCodeChatSession?.agent
-          const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, {
-            status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
-          })
+          // Structured per-task retry: a validation failure (not a user
+          // cancellation) requeues the SAME task with backoff via
+          // markTaskFailure (which also blocks once MAX_TASK_RETRIES is spent)
+          // — nextWorkTaskAction picks it up again once notBefore elapses,
+          // instead of stranding the plan as blocked forever.
+          const failedTask = (doneAgent?.tasks || []).find((t) => t.id === action.taskId)
+          const patchedTasks = (() => {
+            if (!failedTask) {
+              return updateAgentTask(doneAgent?.tasks || [], action.taskId, {
+                status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
+              })
+            }
+            if (lastVerdict.ok) return updateAgentTask(doneAgent?.tasks || [], action.taskId, { status: "completed" })
+            const stamped = markTaskFailure(failedTask, cancelledWork
+              ? { transient: false, reason: "Cancelado por el usuario" }
+              : { transient: true, reason: lastVerdict.retryInstruction || "La verificación del paso falló" })
+            return (doneAgent?.tasks || []).map((t) => (t.id === stamped.id ? stamped : t))
+          })()
           patchAgentState(sid, (s) => ({
             ...s,
             phase: cancelledWork ? "idle" : lastVerdict.ok ? "preview" : "debugging",
@@ -4825,7 +4838,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const activeSessionTitle =
     codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
     "Nuevo chat"
-  const visibleSessionTitle = title?.trim() || activeSessionTitle
 
   // Replit-style "Plan" pill: flips the composer into plan mode and back to
   // whatever mode was active before (defaults to "app").
@@ -4842,90 +4854,27 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   return (
     <div
-      className="relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
+      className={cn(
+        "relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950",
+        bardNav && "dept-chat-bard",
+      )}
       data-embedded={embedded ? "true" : undefined}
+      data-testid={bardNav ? "dept-chat-bard" : undefined}
     >
       {codeDraggingFiles ? (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
           Suelta archivos para adjuntarlos al agente de APPS
         </div>
       ) : null}
-      {/* Replit-style panel header: current thread title + history / new-chat
-          actions (the session tabs collapsed into the history dropdown). */}
-      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
-        {onBack ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="-ml-1 h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-            aria-label="Volver a la empresa"
-            title="Volver a la empresa"
-            onClick={onBack}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <span
-          className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
-          title={visibleSessionTitle}
-        >
-          {visibleSessionTitle}
-        </span>
-        {activeFileLabel ? (
-          <span
-            className="min-w-0 shrink truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-            title={activePath ?? undefined}
-          >
-            {activeFileLabel}
-          </span>
-        ) : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-              aria-label="Historial de chats"
-              title="Historial de chats"
-            >
-              <History className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60 rounded-lg border-border/70 p-1.5">
-            <DropdownMenuLabel className="px-2 py-1 text-[11px] font-normal text-muted-foreground">
-              Chats del proyecto
-            </DropdownMenuLabel>
-            {codeChatSessions.map((session) => (
-              <DropdownMenuItem
-                key={session.id}
-                className={cn(
-                  "gap-2 rounded-md text-[13px]",
-                  session.id === activeCodeChatSessionId && "bg-muted/70 font-medium",
-                )}
-                onClick={() => setActiveCodeChatSession(session.id)}
-              >
-                <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                {session.id === activeCodeChatSessionId ? (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                ) : null}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-          aria-label="Nuevo agente"
-          title="Nuevo chat en paralelo"
-          onClick={() => createCodeChatSession()}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+
+      {bardNav ? (
+        <DeptChatDrawer
+          open={deptDrawerOpen}
+          nav={bardNav}
+          onClose={() => setDeptDrawerOpen(false)}
+        />
+      ) : null}
+      {/* Duplicate CEO Office | history | + bar removed (data-drop-dup-header). */}
 
       {identityIssue ? (
         <div
@@ -4954,7 +4903,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
+          <EmptyChat
+            active={agentsActive}
+            proactive={proactiveEnabled}
+            durable={codexAvailable}
+            departmentId={bardNav?.departmentId}
+            departmentName={bardNav?.departmentName || _title}
+          />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -4968,6 +4923,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           </div>
         )}
       </div>
+
+      {bardNav ? (
+        <div className="dept-chat-fab-wrap pointer-events-none absolute inset-x-0 z-20 flex justify-end px-3">
+          <DeptChatFab onNewConversation={bardNav.onNewConversation} />
+        </div>
+      ) : null}
 
       <form onSubmit={onSubmit} className="code-composer shrink-0" data-testid="code-composer">
         <div
@@ -5295,13 +5256,34 @@ function EmptyChat({
   active,
   proactive = false,
   durable = false,
+  departmentId,
+  departmentName,
 }: {
   active: boolean
   proactive?: boolean
   durable?: boolean
+  departmentId?: string
+  departmentName?: string
 }) {
+  const [selection, setSelection] = React.useState(() => getActiveDepartmentSelection())
+  React.useEffect(() => {
+    const onSelect = (event: Event) => {
+      const next = (event as CustomEvent<{ selection: ReturnType<typeof getActiveDepartmentSelection> }>).detail?.selection
+      if (next) setSelection(next)
+    }
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelect)
+    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelect)
+  }, [])
+  const resolved = departmentEmptySuggestions(
+    departmentId || selection?.id,
+    departmentName || selection?.name,
+  )
+
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
+    <div
+      className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center"
+      data-testid="code-chat-empty-state"
+    >
       <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
         <span
           className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
@@ -5312,32 +5294,59 @@ function EmptyChat({
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
         <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
       </span>
-      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
+      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground" data-testid="code-chat-empty-department">
+        {resolved.name}
       </h2>
       <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
         {proactive
-          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
-          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
+          ? "Modo PROACTIVO activo. Elige una acción o escribe el objetivo de este departamento."
+          : "Elige una acción o escribe qué debe hacer este departamento."}
       </p>
-      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
+      <div className="mt-5 grid w-full max-w-[28rem] gap-2 text-left">
+        {resolved.suggestions.map((suggestion) => (
+          <button
+            key={suggestion.id}
+            type="button"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => requestCodeAgentInstruction(suggestion.prompt, { mode: "app" })}
+            data-testid={`code-dept-suggestion-${suggestion.id}`}
+            aria-label={suggestion.label}
+            title={suggestion.label}
+          >
+            <span className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
+                <Rocket className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-foreground">{suggestion.label}</span>
+                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
+                </span>
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <h3 className="mt-7 text-[13px] font-semibold tracking-tight text-foreground" data-testid="code-chat-empty-launch">
+        ¿Qué quieres lanzar?
+      </h3>
+      <p className="mt-1 max-w-[22rem] text-[12px] leading-relaxed text-muted-foreground">
+        Elige un producto completo para que el agente planifique, construya y verifique.
+      </p>
+      <div className="mt-3 grid w-full max-w-[28rem] gap-2 text-left">
         {CODE_AUTONOMOUS_STARTERS.map((starter) => (
           <button
             key={starter.id}
             type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
             onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
             data-testid={`code-agent-starter-${starter.id}`}
+            aria-label={starter.title}
+            title={starter.title}
           >
             <span className="flex items-start gap-3">
               <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
-                {starter.id === "ai-platform" ? (
-                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
-                ) : starter.id === "business-os" ? (
-                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Rocket className="h-4 w-4" aria-hidden="true" />
-                )}
+                <BrainCircuit className="h-4 w-4" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center justify-between gap-2">
@@ -5347,20 +5356,12 @@ function EmptyChat({
                 <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
                   {starter.description}
                 </span>
-                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
+                <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
                   {starter.meta}
                 </span>
               </span>
             </span>
           </button>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
-        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
-          <React.Fragment key={step}>
-            {index > 0 ? <span aria-hidden="true">→</span> : null}
-            <span>{step}</span>
-          </React.Fragment>
         ))}
       </div>
     </div>
@@ -5412,7 +5413,7 @@ function ChatBubble({
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
             {turn.streaming ? (
-              <DotmCircular15 size={16} dotSize={2} color={THINKING_GLYPH_COLOR} ariaLabel="Pensando" className="inline shrink-0" />
+              <PensandoBars size={16} className="inline shrink-0" />
             ) : null}
           </span>
         ) : null}
@@ -5940,7 +5941,7 @@ function ModelPickerInline({
   }, [grouped, query])
 
   const active = models.find((m) => m.name === selectedModel)
-  const label = active?.displayName || active?.name || selectedModel || "Modelo"
+  const label = active?.displayName || active?.name || "Sin modelos activos"
 
   React.useEffect(() => {
     if (!open) setQuery("")
@@ -5994,7 +5995,7 @@ function ModelPickerInline({
         <div className="max-h-[min(280px,calc(100vh-240px))] overflow-y-auto p-1">
           {models.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-              Cargando modelos…
+              Sin modelos activos
             </div>
           ) : filtered.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">

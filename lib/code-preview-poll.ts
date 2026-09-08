@@ -1,3 +1,20 @@
+export function previewPollStatusOf(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null
+  const e = error as { status?: number; statusCode?: number; response?: { status?: number } }
+  const n = e.status ?? e.statusCode ?? e.response?.status
+  return typeof n === "number" ? n : null
+}
+
+/** 401 (lost auth) and 410 (preview gone) must stop the poll — never spin. */
+export function isFatalPreviewPollStatus(status: number | null | undefined): boolean {
+  return status === 401 || status === 410
+}
+
+export function nextPreviewPollDelayMs(attempt: number, baseMs: number, maxMs = 15_000): number {
+  const n = Math.max(0, Number(attempt) || 0)
+  return Math.min(maxMs, Math.max(50, baseMs) * (2 ** n))
+}
+
 export type SerializedPreviewPollController = {
   stop: () => void
 }
@@ -31,6 +48,7 @@ export function startSerializedPreviewPoll<T, Timer>({
   clear: (timer: Timer) => void
 }): SerializedPreviewPollController {
   let stopped = false
+  let errorAttempt = 0
   let timer: Timer | null = null
   let deadlineTimer: Timer | null = null
   let activeReadController: AbortController | null = null
@@ -83,10 +101,11 @@ export function startSerializedPreviewPoll<T, Timer>({
       void expire()
       return
     }
+    const delay = errorAttempt > 0 ? nextPreviewPollDelayMs(errorAttempt - 1, intervalMs) : intervalMs
     timer = schedule(() => {
       timer = null
       void tick()
-    }, intervalMs)
+    }, delay)
   }
 
   const tick = async () => {
@@ -119,10 +138,18 @@ export function startSerializedPreviewPoll<T, Timer>({
         await expire()
         return
       }
+      if (isFatalPreviewPollStatus(previewPollStatusOf(error))) {
+        if (onError) {
+          try { await onError(error) } catch { /* stop anyway */ }
+        }
+        stop()
+        return
+      }
       if (onError && await onError(error) === false) {
         stop()
         return
       }
+      errorAttempt += 1
       if (deadlineReached()) {
         await expire()
         return
@@ -140,6 +167,7 @@ export function startSerializedPreviewPoll<T, Timer>({
       await expire()
       return
     }
+    errorAttempt = 0
     if (await onValue(value) === false) {
       stop()
       return

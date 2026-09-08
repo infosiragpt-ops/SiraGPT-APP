@@ -18,20 +18,25 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  MessageSquarePlus,
   Search,
+  SlidersHorizontal,
   Library,
   Images,
   LayoutGrid,
   Pin,
   Folder,
+  Send,
   Download,
   Archive,
   EyeOff,
   CalendarDays,
   FolderKanban,
   PenSquare,
+  Plug,
   Shield,
-  Code2,
   Edit2,
   Check,
   X,
@@ -56,8 +61,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuPortal,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -93,6 +100,7 @@ import {
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChatList, useModelsAndFiles } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
+import { isAgentsHomePath, agentsHomeHref } from "@/lib/agents-home-path"
 import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
@@ -110,7 +118,39 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { CreditsBadge } from "@/components/CreditsBadge"
 import NotificationCenter from "./notification-center"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  RECENT_CHAT_ACTIVITY_LABELS,
+  RECENT_CHAT_GROUP_LABELS,
+  RECENT_CHAT_STATUS_LABELS,
+  RECENT_CHAT_TYPE_LABELS,
+  filterRecentChats,
+  groupRecentChatsByDate,
+  sortChatsNewestFirst,
+  type RecentChatActivityFilter,
+  type RecentChatGroupBy,
+  type RecentChatStatusFilter,
+  type RecentChatTypeFilter,
+} from "@/lib/sidebar-recent-chats-filters"
+import {
+  CHAT_FOLDER_NAMES_STORAGE_KEY,
+  CHAT_FOLDERS_STORAGE_KEY,
+  SUGGESTED_CHAT_FOLDERS,
+  chatsAvailableToSendToFolder,
+  countChatsInFolder,
+  decodeChatFolderDragId,
+  deleteChatFolder,
+  encodeChatFolderDragId,
+  filterChatsByFolder,
+  isSameChatFolder,
+  listChatFolderNames,
+  normalizeChatFolderName,
+  parseChatFolderAssignments,
+  parseChatFolderNameList,
+  renameChatFolder,
+} from "@/lib/sidebar-chat-folders"
 
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
 // as module constants avoids allocating a new string on every render
@@ -206,6 +246,45 @@ const NAV_ROW =
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
+const HEADER_ICON_BTN =
+  "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const SIDEBAR_TIP =
+  "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
+const RECENT_TOOLBAR_ICON =
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const CHAT_ROW_SLOT =
+  "flex h-8 w-8 shrink-0 items-center justify-center p-0"
+const FOLDER_ADD_ICON = cn(
+  CHAT_ROW_SLOT,
+  "rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
+)
+const FILTER_POPOVER =
+  "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(15,23,42,0.14)]"
+const FILTER_ROW =
+  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-zinc-800 transition-colors hover:bg-zinc-100"
+const FILTER_OPTION =
+  "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-zinc-100"
+
+function SidebarChromeTooltip({
+  label,
+  children,
+  side = "bottom",
+  hidden,
+}: {
+  label: string
+  children: React.ReactNode
+  side?: "top" | "bottom" | "left" | "right"
+  hidden?: boolean
+}) {
+  return (
+    <Tooltip delayDuration={250}>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side} className={cn(SIDEBAR_TIP, hidden && "hidden")}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 type SidebarNavItemProps = {
   href: string
@@ -389,7 +468,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/code', '/library',
+      '/', '/gpts', '/parafraseo', '/projects', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -459,36 +538,40 @@ export function AppSidebar() {
   }, [isMobile, setOpenMobile])
   const markNewChatIntent = React.useCallback(() => {
     setNewChatPending(true)
-    markSharedNavigationIntent("/chat", t("newChat"))
+    markSharedNavigationIntent("/agentes", t("newChat"))
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+  const [chatTypeFilter, setChatTypeFilter] = React.useState<RecentChatTypeFilter>("all")
+  const [chatStatusFilter, setChatStatusFilter] = React.useState<RecentChatStatusFilter>("active")
+  const [chatActivityFilter, setChatActivityFilter] = React.useState<RecentChatActivityFilter>("all")
+  const [chatGroupBy, setChatGroupBy] = React.useState<RecentChatGroupBy>("date")
+  const [filterMenuOpen, setFilterMenuOpen] = React.useState(false)
+  const [filterOpenRow, setFilterOpenRow] = React.useState<"type" | "status" | "activity" | "group" | null>(null)
   // Settings now open as a floating Claude-style modal (the /settings
   // route still exists for deep-links / command palette).
   const [settingsOpen, setSettingsOpen] = React.useState(false)
 
-  // ── Global keyboard shortcut: ⌘K / Ctrl+K opens chat search ──────
-  // Mirrors the affordance every Claude / Linear / Notion user
-  // already has in muscle memory. Skipped while focus is in an
-  // input/textarea/contenteditable so we don't hijack regular typing.
+  // ── Global keyboard shortcut: ⌘K / Ctrl+K toggles ChatSearchDialog ──
+  // Capture-phase so this wins over the global command-palette listener
+  // and never expands an inline toolbar field.
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
-      const tag = target?.tagName?.toLowerCase()
-      const isTyping =
-        tag === "input" || tag === "textarea" || target?.isContentEditable === true
       const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k"
+      const isCmdComma = (event.metaKey || event.ctrlKey) && event.key === ","
+      if (isCmdComma) {
+        event.preventDefault()
+        setSettingsOpen(true)
+        return
+      }
       if (!isCmdK) return
-      // ⌘K from anywhere — even mid-input — should still open search.
-      // This is the convention every productivity app follows, so the
-      // `isTyping` gate above only protects accidental letter shortcuts
-      // (none added here yet, just the gate skeleton for future ones).
-      if (isTyping && !isCmdK) return
       event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
       setSearchOpen((current) => !current)
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [])
 
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
@@ -504,43 +587,24 @@ export function AppSidebar() {
   const [archivedChatIds, setArchivedChatIds] = React.useState<string[]>([])
   const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
   const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
+  const [namedChatFolders, setNamedChatFolders] = React.useState<string[]>([])
+  const [folderDialogOpen, setFolderDialogOpen] = React.useState(false)
+  const [folderDialogName, setFolderDialogName] = React.useState("")
+  const [folderDialogChat, setFolderDialogChat] = React.useState<any | null>(null)
+  const [folderDialogRenameFrom, setFolderDialogRenameFrom] = React.useState<string | null>(null)
+  const [selectedFolder, setSelectedFolder] = React.useState<string | null>(null)
+  const [folderDropTarget, setFolderDropTarget] = React.useState<string | null>(null)
+  const [sendChatFolder, setSendChatFolder] = React.useState<string | null>(null)
+  const [sendChatQuery, setSendChatQuery] = React.useState("")
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
-  // Claude-style sidebar mode toggle (header segmented control): "chat"
-  // shows the normal agentic-chat sidebar; "code" shows the APPS tree
-  // (moved out of the chat view). Persisted across reloads.
-  const [sidebarMode, setSidebarMode] = React.useState<"chat" | "code">("chat")
+  // Keep the standard sidebar after retiring the Empresas mode switch.
+  // Discard the old preference so returning users cannot get stuck in code mode.
+  const [sidebarMode] = React.useState<"chat" | "code">("chat")
   React.useEffect(() => {
     try {
-      if (window.localStorage.getItem("sira:sidebar:mode") === "code") setSidebarMode("code")
+      window.localStorage.removeItem("sira:sidebar:mode")
     } catch { /* ignore */ }
   }, [])
-  const switchSidebarMode = React.useCallback((mode: "chat" | "code") => {
-    setSidebarMode(mode)
-    // Entering Code mode always reveals the APPS tree — a collapsed
-    // section here would read as an empty sidebar.
-    if (mode === "code") setCodexCollapsed(false)
-    try { window.localStorage.setItem("sira:sidebar:mode", mode) } catch { /* ignore */ }
-    // The main view follows the toggle: Chats → the chat interface,
-    // Code → the Apps IDE. navigate() dedupes if already on the route.
-    navigate(mode === "code" ? "/code" : "/chat")
-  }, [navigate])
-  // …and the toggle follows the route: landing on /code (deep link, agent
-  // click, reload) flips the sidebar into Code mode and vice versa, so the
-  // header always reflects what the main view shows.
-  React.useEffect(() => {
-    if (!pathname) return
-    const routeMode: "chat" | "code" | null = pathname.startsWith("/code")
-      ? "code"
-      : pathname.startsWith("/chat") ? "chat" : null
-    if (routeMode) {
-      setSidebarMode((prev) => {
-        if (prev === routeMode) return prev
-        if (routeMode === "code") setCodexCollapsed(false)
-        try { window.localStorage.setItem("sira:sidebar:mode", routeMode) } catch { /* ignore */ }
-        return routeMode
-      })
-    }
-  }, [pathname])
   // Lote F · #45 — Codex section collapsible with persistent state.
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
@@ -572,6 +636,21 @@ export function AppSidebar() {
     setRecentChatsCollapsed((prev) => {
       const next = !prev
       try { window.localStorage.setItem("sira:sidebar:recent-collapsed", next ? "1" : "0") } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+  // Carpetas folds the same way as Recent chats: one quiet header toggle.
+  const [foldersCollapsed, setFoldersCollapsed] = React.useState<boolean>(false)
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("sira:sidebar:folders-collapsed")
+      if (raw === "1") setFoldersCollapsed(true)
+    } catch { /* ignore */ }
+  }, [])
+  const toggleFoldersCollapsed = React.useCallback(() => {
+    setFoldersCollapsed((prev) => {
+      const next = !prev
+      try { window.localStorage.setItem("sira:sidebar:folders-collapsed", next ? "1" : "0") } catch { /* ignore */ }
       return next
     })
   }, [])
@@ -620,13 +699,15 @@ export function AppSidebar() {
       setPinnedChatIds(readArray("sira:pinned-chat-ids"))
       setArchivedChatIds(readArray("sira:archived-chat-ids"))
       setHiddenChatIds(readArray("sira:hidden-chat-ids"))
-      setChatFolders(readRecord("sira:chat-folders"))
+      setChatFolders(parseChatFolderAssignments(readRecord(CHAT_FOLDERS_STORAGE_KEY)))
+      setNamedChatFolders(parseChatFolderNameList(JSON.parse(localStorage.getItem(CHAT_FOLDER_NAMES_STORAGE_KEY) || "[]")))
       setScheduledChats(readRecord("sira:scheduled-chats"))
     } catch {
       setPinnedChatIds([])
       setArchivedChatIds([])
       setHiddenChatIds([])
       setChatFolders({})
+      setNamedChatFolders([])
       setScheduledChats({})
     }
   }, [])
@@ -691,22 +772,145 @@ export function AppSidebar() {
     toast.success("Chat ocultado")
   }, [persistArrayState])
 
-  const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
-    setChatFolders((current) => {
-      const next = { ...(current || {}) }
-      if (folder) next[chat.id] = folder
-      else delete next[chat.id]
-      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
-      return next
-    })
-    toast.success(folder ? `Movido a ${folder}` : "Chat quitado de carpeta")
+  const persistChatFolders = React.useCallback((
+    assignments: Record<string, string>,
+    named: string[],
+  ) => {
+    const nextAssignments = parseChatFolderAssignments(assignments)
+    const nextNamed = listChatFolderNames(nextAssignments, named)
+    setChatFolders(nextAssignments)
+    setNamedChatFolders(nextNamed)
+    try {
+      localStorage.setItem(CHAT_FOLDERS_STORAGE_KEY, JSON.stringify(nextAssignments))
+      localStorage.setItem(CHAT_FOLDER_NAMES_STORAGE_KEY, JSON.stringify(nextNamed))
+    } catch (err) {
+      console.debug('storage unavailable', err)
+    }
+    return { assignments: nextAssignments, named: nextNamed }
   }, [])
 
-  const createFolderAndMove = React.useCallback((chat: any) => {
-    const folder = window.prompt("Nombre de la carpeta")
-    if (!folder?.trim()) return
-    moveChatToFolder(chat, folder.trim())
-  }, [moveChatToFolder])
+  const visibleChatFolders = React.useMemo(
+    () => listChatFolderNames(chatFolders, namedChatFolders),
+    [chatFolders, namedChatFolders],
+  )
+
+  const moveMenuFolders = React.useMemo(
+    () => listChatFolderNames(chatFolders, [...SUGGESTED_CHAT_FOLDERS, ...namedChatFolders]),
+    [chatFolders, namedChatFolders],
+  )
+
+  const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
+    if (!chat?.id) return
+    const next = { ...(chatFolders || {}) }
+    if (folder) next[chat.id] = folder
+    else delete next[chat.id]
+    persistChatFolders(next, folder ? [...namedChatFolders, folder] : namedChatFolders)
+    toast.success(folder ? `Conversación enviada a ${folder}` : "Chat quitado de carpeta")
+  }, [chatFolders, namedChatFolders, persistChatFolders])
+
+  const toggleSelectedFolder = React.useCallback((folder: string) => {
+    setSelectedFolder((current) => (current && isSameChatFolder(current, folder) ? null : folder))
+  }, [])
+
+  const openSendChatToFolderDialog = React.useCallback((folder: string) => {
+    setSendChatFolder(folder)
+    setSendChatQuery("")
+    setSelectedFolder(folder)
+  }, [])
+
+  const closeSendChatToFolderDialog = React.useCallback(() => {
+    setSendChatFolder(null)
+    setSendChatQuery("")
+  }, [])
+
+  const sendableChatsForFolder = React.useMemo(() => {
+    if (!sendChatFolder) return []
+    const needle = sendChatQuery.trim().toLowerCase()
+    return chatsAvailableToSendToFolder(chats || [], chatFolders, sendChatFolder).filter((chat) => {
+      if (!needle) return true
+      return String(chat.title || "").toLowerCase().includes(needle)
+    })
+  }, [chatFolders, chats, sendChatFolder, sendChatQuery])
+
+  const handleFolderDrop = React.useCallback((event: React.DragEvent, folder: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setFolderDropTarget(null)
+    const chatId = decodeChatFolderDragId(event.dataTransfer.getData("text/plain"))
+    if (!chatId) return
+    const chat = (chats || []).find((item: any) => item?.id === chatId)
+    if (chat) moveChatToFolder(chat, folder)
+  }, [chats, moveChatToFolder])
+
+  const openCreateFolderDialog = React.useCallback((chat?: any) => {
+    setFolderDialogChat(chat ?? null)
+    setFolderDialogRenameFrom(null)
+    setFolderDialogName("")
+    setFolderDialogOpen(true)
+  }, [])
+
+  const openRenameFolderDialog = React.useCallback((folder: string) => {
+    setFolderDialogChat(null)
+    setFolderDialogRenameFrom(folder)
+    setFolderDialogName(folder)
+    setFolderDialogOpen(true)
+  }, [])
+
+  const closeFolderDialog = React.useCallback(() => {
+    setFolderDialogOpen(false)
+    setFolderDialogName("")
+    setFolderDialogChat(null)
+    setFolderDialogRenameFrom(null)
+  }, [])
+
+  const submitFolderDialog = React.useCallback(() => {
+    const name = normalizeChatFolderName(folderDialogName)
+    if (!name) {
+      toast.error("Escribe un nombre de carpeta")
+      return
+    }
+    if (folderDialogRenameFrom) {
+      const next = renameChatFolder(chatFolders, namedChatFolders, folderDialogRenameFrom, name)
+      persistChatFolders(next.assignments, next.named)
+      if (selectedFolder && isSameChatFolder(selectedFolder, folderDialogRenameFrom)) {
+        setSelectedFolder(name)
+      }
+      if (sendChatFolder && isSameChatFolder(sendChatFolder, folderDialogRenameFrom)) {
+        setSendChatFolder(name)
+      }
+      toast.success(`Carpeta renombrada a ${name}`)
+      closeFolderDialog()
+      return
+    }
+    if (folderDialogChat?.id) {
+      moveChatToFolder(folderDialogChat, name)
+      setSelectedFolder(name)
+    } else {
+      persistChatFolders(chatFolders, [...namedChatFolders, name])
+      setSelectedFolder(name)
+      toast.success(`Carpeta "${name}" creada`)
+    }
+    closeFolderDialog()
+  }, [
+    chatFolders,
+    closeFolderDialog,
+    folderDialogChat,
+    folderDialogName,
+    folderDialogRenameFrom,
+    moveChatToFolder,
+    namedChatFolders,
+    persistChatFolders,
+    selectedFolder,
+    sendChatFolder,
+  ])
+
+  const removeNamedFolder = React.useCallback((folder: string) => {
+    const next = deleteChatFolder(chatFolders, namedChatFolders, folder)
+    persistChatFolders(next.assignments, next.named)
+    if (selectedFolder && isSameChatFolder(selectedFolder, folder)) setSelectedFolder(null)
+    if (sendChatFolder && isSameChatFolder(sendChatFolder, folder)) closeSendChatToFolderDialog()
+    toast.success(`Carpeta "${folder}" eliminada`)
+  }, [chatFolders, closeSendChatToFolderDialog, namedChatFolders, persistChatFolders, selectedFolder, sendChatFolder])
 
   const downloadChatExport = React.useCallback(async (chat: any) => {
     try {
@@ -775,19 +979,17 @@ export function AppSidebar() {
     persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => current.filter((id) => id !== chatId))
     persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => current.filter((id) => id !== chatId))
     persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => current.filter((id) => id !== chatId))
-    setChatFolders((current) => {
-      const next = { ...(current || {}) }
-      delete next[chatId]
-      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
-      return next
-    })
+    persistChatFolders(
+      Object.fromEntries(Object.entries(chatFolders).filter(([id]) => id !== chatId)),
+      namedChatFolders,
+    )
     setScheduledChats((current) => {
       const next = { ...(current || {}) }
       delete next[chatId]
       try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
       return next
     })
-  }, [persistArrayState])
+  }, [chatFolders, namedChatFolders, persistArrayState, persistChatFolders])
 
   const confirmDeleteChat = React.useCallback(async () => {
     const id = chatPendingDelete?.id
@@ -831,8 +1033,8 @@ export function AppSidebar() {
     }, 0);
 
     const hasQuery = typeof window !== "undefined" && window.location.search.length > 0
-    if (!pathname.startsWith('/chat') || hasQuery) {
-      startNavTransition(() => { router.replace('/chat', { scroll: false }) })
+    if (!isAgentsHomePath(pathname) || hasQuery) {
+      startNavTransition(() => { router.replace('/agentes', { scroll: false }) })
     } else {
       window.setTimeout(clearNavigationIntent, 0)
     }
@@ -894,24 +1096,7 @@ export function AppSidebar() {
    * subtraction are converted consistently.
    */
   const groupChatsByTime = (items: Array<{ id: string; updatedAt: string } & Record<string, any>>) => {
-    const now = Date.now()
-    const DAY = 24 * 60 * 60 * 1000
-    const today = new Date()
-    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
-    const startOfYesterday = startOfToday - DAY
-    const weekAgo = now - 7 * DAY
-
-    const buckets: Record<"today" | "yesterday" | "last7Days" | "older", typeof items> = {
-      today: [], yesterday: [], last7Days: [], older: [],
-    }
-    for (const chat of items) {
-      const ts = new Date(chat.updatedAt).getTime()
-      if (ts >= startOfToday) buckets.today.push(chat)
-      else if (ts >= startOfYesterday) buckets.yesterday.push(chat)
-      else if (ts >= weekAgo) buckets.last7Days.push(chat)
-      else buckets.older.push(chat)
-    }
-    return buckets
+    return groupRecentChatsByDate(items)
   }
 
   const isAnon = !user
@@ -943,8 +1128,8 @@ export function AppSidebar() {
       const data = await response.json().catch(() => ({}))
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo abrir el GPT")
       localStorage.setItem("currentChatId", data.chat.id)
-      markSharedNavigationIntent("/chat", data.chat?.title || "Chat")
-      router.push(`/chat?id=${data.chat.id}`, { scroll: false })
+      markSharedNavigationIntent("/agentes", data.chat?.title || "Chat")
+      router.push(agentsHomeHref(`id=${data.chat.id}`), { scroll: false })
       if (isMobile) setOpenMobile(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el GPT")
@@ -952,11 +1137,11 @@ export function AppSidebar() {
   }
 
   const handleChatClick = (chatId: string) => {
-    markSharedNavigationIntent("/chat", "Chat")
+    markSharedNavigationIntent("/agentes", "Chat")
     selectChat(chatId)
-    // Navigate to chat page if not already there
-    if (!pathname.startsWith('/chat')) {
-      startNavTransition(() => { router.push(`/chat?id=${chatId}`, { scroll: false }) })
+    // Navigate to agents home if not already there
+    if (!isAgentsHomePath(pathname)) {
+      startNavTransition(() => { router.push(agentsHomeHref(`id=${chatId}`), { scroll: false }) })
     } else {
       window.setTimeout(clearNavigationIntent, 0)
     }
@@ -1098,8 +1283,9 @@ export function AppSidebar() {
   }, [hasMoreChats, isLoadingMore, loadMoreChats])
 
   // Check if we're on GPTs page
-  const isOnChatPage = activePathname.startsWith('/chat')
+  const isOnChatPage = isAgentsHomePath(activePathname)
   const isOnLibraryPage = activePathname.startsWith('/library')
+  const isOnConnectAppsPage = activePathname === '/conexiones' || activePathname.startsWith('/conexiones/')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   return (
@@ -1116,72 +1302,61 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Mode toggle: Chats ↔ Empresas. Replaces the
-              logo+name lockup in the open header (the collapsed rail
-              keeps the logo button below). */}
-          <div className="flex min-w-0 flex-1 items-center justify-center">
-            <div
-              role="tablist"
-              aria-label="Modo de la barra lateral"
-              className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
-            >
+          {/* Claude-style chrome strip: collapse + browser history on the
+              left, notifications + the primary new-chat disc on the right. */}
+          <div className="flex shrink-0 items-center gap-0.5">
+            <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
+              <SidebarTrigger
+                aria-label="Contraer barra lateral ⌘B"
+                className={HEADER_ICON_BTN}
+              >
+                <SidebarOvalIcon className="h-4 w-4" />
+              </SidebarTrigger>
+            </SidebarChromeTooltip>
+            <SidebarChromeTooltip label="Atrás">
               <button
                 type="button"
-                role="tab"
-                aria-selected={sidebarMode === "chat"}
-                aria-label="Chats"
-                title="Chats"
-                onClick={() => switchSidebarMode("chat")}
-                className={cn(
-                  "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
-                  sidebarMode === "chat"
-                    ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
-                    : "w-9 text-muted-foreground hover:text-foreground",
-                )}
+                aria-label="Atrás"
+                onClick={() => window.history.back()}
+                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
               >
-                <MessageSquare className="h-4 w-4 shrink-0" />
-                {sidebarMode === "chat" && (
-                  <span className="text-xs font-medium">Chats</span>
-                )}
+                <ChevronLeft className="h-4 w-4" strokeWidth={1.9} />
               </button>
+            </SidebarChromeTooltip>
+            <SidebarChromeTooltip label="Adelante">
               <button
                 type="button"
-                role="tab"
-                aria-selected={sidebarMode === "code"}
-                aria-label="Empresas"
-                title="Empresas"
-                onClick={() => switchSidebarMode("code")}
-                className={cn(
-                  "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
-                  sidebarMode === "code"
-                    ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
-                    : "px-2 text-muted-foreground hover:text-foreground",
-                )}
+                aria-label="Adelante"
+                onClick={() => window.history.forward()}
+                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
               >
-                <span className="text-xs font-medium">Empresas</span>
-                <Code2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <ChevronRight className="h-4 w-4" strokeWidth={1.9} />
               </button>
-            </div>
+            </SidebarChromeTooltip>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <NotificationCenter />
-            <SidebarTrigger
-              aria-label="Ocultar barra lateral"
-              title="Ocultar barra lateral"
-              className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-            >
-              <SidebarOvalIcon className="h-4 w-4" />
-            </SidebarTrigger>
+            <SidebarChromeTooltip label="Nuevo agente ⌘N">
+              <button
+                type="button"
+                onPointerDown={markNewChatIntent}
+                onClick={handleNewChat}
+                aria-label="Nuevo agente ⌘N"
+                className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <MessageSquarePlus className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </SidebarChromeTooltip>
           </div>
         </div>
         {/* Collapsed state keeps a single, predictable affordance. */}
         <div className={cn("relative", state === "open" && "hidden")}>
+          <SidebarChromeTooltip label="Expandir barra lateral ⌘B" side="right">
           <button
             type="button"
-            className="group flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            className="group flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
             onClick={toggleSidebar}
-            aria-label="Mostrar barra lateral"
-            title="Mostrar barra lateral"
+            aria-label="Expandir barra lateral ⌘B"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -1191,6 +1366,7 @@ export function AppSidebar() {
             />
             <SidebarOvalIcon className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
+          </SidebarChromeTooltip>
         </div>
       </SidebarHeader>
 
@@ -1261,34 +1437,19 @@ export function AppSidebar() {
             </div>
           )}
 
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
+          {state === "closed" && (
+            <SidebarChromeTooltip label="Buscar ⌘K" side="right">
+              <button
+                type="button"
+                data-sidebar-collapsed-search="1"
                 onClick={handleSearchClick}
-                onPointerDown={handleSearchClick}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    if (event.key === " ") event.preventDefault()
-                    handleSearchClick()
-                  }
-                }}
                 className={cn(NAV_ROW, "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2")}
-                variant="default"
+                aria-label="Buscar ⌘K"
               >
                 <Search className={cn(NAV_ICON, "text-muted-foreground")} />
-                <span className="group-data-[state=closed]:hidden truncate">{t("searchChats")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              {/* Pulido · muestra el atajo ⌘K en el tooltip. */}
-              <p className="flex items-center gap-2">
-                <span>{t("searchChats")}</span>
-                <kbd className="rounded border border-border/60 bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                  ⌘K
-                </kbd>
-              </p>
-            </TooltipContent>
-          </Tooltip>
+              </button>
+            </SidebarChromeTooltip>
+          )}
 
           <SidebarNavItem
             href="/library"
@@ -1318,6 +1479,19 @@ export function AppSidebar() {
             onNavigate={closeMobileSidebar}
           />
 
+          <SidebarNavItem
+            href="/conexiones"
+            label="Apps"
+            tooltip="Apps"
+            icon={Plug}
+            active={isOnConnectAppsPage}
+            pending={isPendingRoute("/conexiones")}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
+          />
 
           {/* Projects — file-bucket workspaces. Placed right after GPTs
               because both are "context-rich chat entry points": GPTs
@@ -1397,38 +1571,291 @@ export function AppSidebar() {
         {/* Recent Chats - Only show for Text Chat, in chat mode */}
         {sidebarMode === "chat" && selectedType === "Text Chat" && (
           <SidebarGroup>
-            <button
-              type="button"
-              onClick={toggleRecentChatsCollapsed}
-              aria-expanded={!recentChatsCollapsed}
-              aria-controls="sidebar-recent-chats-content"
+            <div
+              id="sidebar-chat-folders-toolbar"
+              data-sidebar-folders-toolbar="1"
               className={cn(
-                "group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 transition-colors hover:text-foreground/80 select-none",
-                state === "closed" && "hidden"
+                "group flex w-full items-center gap-0.5 pt-1",
+                state === "closed" && "hidden",
               )}
             >
-              <ChevronDown
-                className={cn(
-                  "h-3 w-3 transition-transform duration-150",
-                  recentChatsCollapsed && "-rotate-90"
-                )}
-                aria-hidden="true"
-              />
-              <span className="truncate">{t("recentChats")}</span>
-              {isLoadingChats || isLoadingMore ? (
-                <ThinkingIndicator
-                  size="xs"
-                  label="Cargando historial de chats"
-                  className="ml-auto text-muted-foreground/70"
+              <button
+                type="button"
+                onClick={toggleFoldersCollapsed}
+                aria-expanded={!foldersCollapsed}
+                aria-controls="sidebar-chat-folders-list"
+                className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-lg px-2 text-left text-[13px] font-medium leading-none text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 transition-transform duration-150",
+                    foldersCollapsed && "-rotate-90",
+                  )}
+                  aria-hidden="true"
                 />
+                <span className="truncate">Carpetas</span>
+              </button>
+              <button
+                type="button"
+                data-sidebar-folders-add="1"
+                onClick={() => openCreateFolderDialog()}
+                className={FOLDER_ADD_ICON}
+                aria-label="Nueva carpeta"
+                title="Nueva carpeta"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div
+              id="sidebar-chat-folders-list"
+              data-sidebar-folders-list="1"
+              className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
+            >
+              {visibleChatFolders.length === 0 ? (
+                <p className="px-2 pb-1 text-[11px] leading-snug text-muted-foreground">
+                  Crea una carpeta con + y envíale conversaciones.
+                </p>
               ) : (
-                <span
-                  className="ml-auto h-1.5 w-1.5 rounded-full bg-sky-500/85 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]"
-                  aria-label="Historial cargado"
-                  title="Historial cargado"
-                />
+                visibleChatFolders.map((folder) => {
+                  const isActive = Boolean(selectedFolder && isSameChatFolder(selectedFolder, folder))
+                  const isDropTarget = Boolean(folderDropTarget && isSameChatFolder(folderDropTarget, folder))
+                  const folderCount = countChatsInFolder(chatFolders, folder)
+                  return (
+                  <div key={folder} className="group flex w-full items-center gap-0.5">
+                    <button
+                      type="button"
+                      data-sidebar-folder-row="1"
+                      aria-pressed={isActive}
+                      onClick={() => toggleSelectedFolder(folder)}
+                      onDragOver={(event) => {
+                        event.preventDefault()
+                        event.dataTransfer.dropEffect = "move"
+                        setFolderDropTarget(folder)
+                      }}
+                      onDragLeave={() => {
+                        setFolderDropTarget((current) => (current && isSameChatFolder(current, folder) ? null : current))
+                      }}
+                      onDrop={(event) => handleFolderDrop(event, folder)}
+                      className={cn(
+                        "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-sm text-foreground/85 transition-colors",
+                        "hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                        isActive && "bg-muted text-foreground",
+                        isDropTarget && "ring-2 ring-ring/50 bg-muted",
+                      )}
+                    >
+                      <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{folder}</span>
+                      <span className="ml-auto tabular-nums text-[11px] text-muted-foreground/70">{folderCount}</span>
+                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className={cn(CHAT_ROW_SLOT, "text-muted-foreground hover:bg-muted/70 hover:text-foreground")}
+                          aria-label={`Acciones de la carpeta ${folder}`}
+                        >
+                          <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className={CHAT_ACTION_MENU}>
+                        <DropdownMenuItem
+                          onSelect={() => deferChatMenuAction(() => openSendChatToFolderDialog(folder))}
+                          className={CHAT_ACTION_ITEM}
+                        >
+                          <Send className={CHAT_ACTION_ICON} />
+                          Enviar conversación
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => deferChatMenuAction(() => openRenameFolderDialog(folder))}
+                          className={CHAT_ACTION_ITEM}
+                        >
+                          <Edit2 className={CHAT_ACTION_ICON} />
+                          Renombrar
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => deferChatMenuAction(() => removeNamedFolder(folder))}
+                          className={cn(
+                            CHAT_ACTION_ITEM,
+                            "text-red-600 focus:bg-red-500/10 focus:text-red-700 data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-700",
+                          )}
+                        >
+                          <Trash2 className={CHAT_ACTION_ICON} />
+                          Eliminar
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  )
+                })
               )}
-            </button>
+            </div>
+            <div
+              id="sidebar-recent-chats-toolbar"
+              data-sidebar-recent-toolbar="1"
+              className={cn(
+                "flex items-center gap-1 px-0.5 pt-2 pb-1",
+                state === "closed" && "hidden",
+              )}
+            >
+              <button
+                type="button"
+                onClick={toggleRecentChatsCollapsed}
+                aria-expanded={!recentChatsCollapsed}
+                aria-controls="sidebar-recent-chats-content"
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-1 rounded-full border border-transparent bg-muted/50 px-2.5 py-1 text-left text-[13px] font-medium text-foreground transition-colors",
+                  "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                )}
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
+                    recentChatsCollapsed && "-rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{selectedFolder || t("recentChats")}</span>
+                {isLoadingChats || isLoadingMore ? (
+                  <ThinkingIndicator
+                    size="xs"
+                    label="Cargando historial de chats"
+                    className="ml-auto text-muted-foreground/70"
+                  />
+                ) : null}
+              </button>
+              <SidebarChromeTooltip label="Buscar ⌘K">
+                <button
+                  type="button"
+                  data-sidebar-recent-search="1"
+                  onClick={handleSearchClick}
+                  className={RECENT_TOOLBAR_ICON}
+                  aria-label="Buscar ⌘K"
+                >
+                  <Search className="h-3.5 w-3.5" />
+                </button>
+              </SidebarChromeTooltip>
+              <Popover
+                open={filterMenuOpen}
+                onOpenChange={(open) => {
+                  setFilterMenuOpen(open)
+                  if (!open) setFilterOpenRow(null)
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-sidebar-recent-filter="1"
+                    className={cn(
+                      RECENT_TOOLBAR_ICON,
+                      filterMenuOpen && "bg-muted/80 text-foreground",
+                    )}
+                    aria-label="Filtrar chats"
+                    title="Filtrar chats"
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" sideOffset={6} className={FILTER_POPOVER}>
+                  {([
+                    {
+                      key: "type" as const,
+                      label: "Tipo",
+                      value: RECENT_CHAT_TYPE_LABELS[chatTypeFilter],
+                      options: [
+                        ["all", "Todo"],
+                        ["chats", "Chats"],
+                        ["scheduled", "Programados"],
+                      ] as const,
+                      set: setChatTypeFilter,
+                    },
+                    {
+                      key: "status" as const,
+                      label: "Estado",
+                      value: RECENT_CHAT_STATUS_LABELS[chatStatusFilter],
+                      options: [
+                        ["active", "Activo"],
+                        ["archived", "Archivados"],
+                        ["pinned", "Fijados"],
+                      ] as const,
+                      set: setChatStatusFilter,
+                    },
+                    {
+                      key: "activity" as const,
+                      label: "Última actividad",
+                      value: RECENT_CHAT_ACTIVITY_LABELS[chatActivityFilter],
+                      options: [
+                        ["all", "Todo"],
+                        ["today", "Hoy"],
+                        ["yesterday", "Ayer"],
+                        ["last7Days", "Últimos 7 días"],
+                      ] as const,
+                      set: setChatActivityFilter,
+                    },
+                  ]).map((row) => (
+                    <div key={row.key}>
+                      <button
+                        type="button"
+                        className={FILTER_ROW}
+                        aria-expanded={filterOpenRow === row.key}
+                        onClick={() => setFilterOpenRow((current) => current === row.key ? null : row.key)}
+                      >
+                        <span>{row.label}</span>
+                        <span className="ml-auto text-[12px] font-normal text-muted-foreground">{row.value}</span>
+                        <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground/70 transition-transform", filterOpenRow === row.key && "rotate-90")} />
+                      </button>
+                      {filterOpenRow === row.key && (
+                        <div className="pb-1 pl-2">
+                          {row.options.map(([id, label]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className={cn(FILTER_OPTION, row.value === label && "bg-zinc-100 font-medium")}
+                              onClick={() => {
+                                row.set(id as never)
+                                setFilterOpenRow(null)
+                              }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div className="mx-2 my-1 h-px bg-zinc-200" />
+                  <button
+                    type="button"
+                    className={FILTER_ROW}
+                    aria-expanded={filterOpenRow === "group"}
+                    onClick={() => setFilterOpenRow((current) => current === "group" ? null : "group")}
+                  >
+                    <span>Agrupar por</span>
+                    <span className="ml-auto text-[12px] font-normal text-muted-foreground">
+                      {RECENT_CHAT_GROUP_LABELS[chatGroupBy]}
+                    </span>
+                    <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground/70 transition-transform", filterOpenRow === "group" && "rotate-90")} />
+                  </button>
+                  {filterOpenRow === "group" && (
+                    <div className="pb-1 pl-2">
+                      {([["date", "Fecha"], ["none", "Ninguno"]] as const).map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={cn(FILTER_OPTION, chatGroupBy === id && "bg-zinc-100 font-medium")}
+                          onClick={() => {
+                            setChatGroupBy(id)
+                            setFilterOpenRow(null)
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
+            </div>
             <SidebarGroupContent
               id="sidebar-recent-chats-content"
               className={cn(state === "closed" && "hidden", recentChatsCollapsed && "hidden")}
@@ -1482,13 +1909,19 @@ export function AppSidebar() {
                       // inline timestamp stays compact so the group
                       // header provides the coarse context and the row
                       // just shows the fine offset ("3h", "2d").
-                      const seenChatIds = new Set<string>()
-                      const visibleChats = chats.filter((c) => {
-                        if (!c?.id || seenChatIds.has(c.id)) return false
-                        seenChatIds.add(c.id)
-                        const persistedState = c as any
-                        if (persistedState.deletedAt || persistedState.isArchived || hiddenChatIds.includes(c.id) || archivedChatIds.includes(c.id)) return false
-                        return true
+                      const titledChats = chats.map((chat) => ({
+                        ...chat,
+                        title: getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title,
+                      }))
+                      const scopedChats = filterChatsByFolder(titledChats, chatFolders, selectedFolder)
+                      const visibleChats = filterRecentChats(scopedChats, {
+                        type: chatTypeFilter,
+                        status: chatStatusFilter,
+                        activity: chatActivityFilter,
+                        archivedIds: archivedChatIds,
+                        hiddenIds: hiddenChatIds,
+                        scheduledIds: scheduledChats,
+                        isPinned: isChatPinned,
                       })
                       const visibleById = new Map(visibleChats.map((chat) => [chat.id, chat]))
                       const serverPinnedIds = visibleChats
@@ -1496,10 +1929,16 @@ export function AppSidebar() {
                         .sort((a, b) => new Date((b as any).pinnedAt || b.updatedAt || 0).getTime() - new Date((a as any).pinnedAt || a.updatedAt || 0).getTime())
                         .map((chat) => chat.id)
                       const renderPinnedIds = Array.from(new Set([...serverPinnedIds, ...pinnedChatIds]))
-                      const pinnedChats = renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                      const showPinnedSection = chatStatusFilter === "active" && chatGroupBy === "date"
+                      const pinnedChats = showPinnedSection
+                        ? renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                        : []
                       const pinnedSet = new Set(pinnedChats.map((chat) => chat.id))
-                      const validChats = visibleChats.filter((chat) => !pinnedSet.has(chat.id))
+                      const validChats = sortChatsNewestFirst(
+                        visibleChats.filter((chat) => !pinnedSet.has(chat.id)),
+                      )
                       const buckets = groupChatsByTime(validChats)
+                      const hasVisibleChats = visibleChats.length > 0
                       const groupDefs: Array<[keyof typeof buckets, string]> = [
                         ["today", t("today")],
                         ["yesterday", t("yesterday")],
@@ -1520,8 +1959,15 @@ export function AppSidebar() {
                         const isFailed = streamStatus === "error"
 
                         return (
-                          <SidebarMenuItem key={chat.id}>
-                            <div className="flex w-full items-center gap-0.5 group">
+                          <SidebarMenuItem key={chat.id} className="chat-history-item">
+                            <div
+                              className="flex w-full items-center gap-0.5 group"
+                              draggable={!isEditing}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData("text/plain", encodeChatFolderDragId(chat.id))
+                                event.dataTransfer.effectAllowed = "move"
+                              }}
+                            >
                               {isEditing ? (
                                 <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
                                   <Input
@@ -1560,8 +2006,8 @@ export function AppSidebar() {
                               ) : (
                                 <>
                                   <SidebarMenuButton
-                                        isActive={currentChatId === chat.id && pathname.startsWith('/chat')}
-                                        aria-current={currentChatId === chat.id && pathname.startsWith('/chat') ? 'page' : undefined}
+                                        isActive={currentChatId === chat.id && isAgentsHomePath(pathname)}
+                                        aria-current={currentChatId === chat.id && isAgentsHomePath(pathname) ? 'page' : undefined}
                                         title={isTruncated ? displayTitle : undefined}
                                         onClick={() => !isEditing && handleChatClick(chat.id)}
                                         className={cn(
@@ -1657,7 +2103,10 @@ export function AppSidebar() {
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-100 md:opacity-0 transition-opacity md:group-hover:opacity-100"
+                                        className={cn(
+                                          CHAT_ROW_SLOT,
+                                          "opacity-100 text-muted-foreground md:opacity-0 transition-opacity md:group-hover:opacity-100",
+                                        )}
                                         aria-label="Acciones del chat"
                                         onClick={(e) => e.stopPropagation()}
                                       >
@@ -1691,7 +2140,7 @@ export function AppSidebar() {
                                         </DropdownMenuSubTrigger>
                                         <DropdownMenuPortal>
                                           <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
-                                            {["Trabajo", "Empresa", "Personal"].map((folder) => (
+                                            {moveMenuFolders.map((folder) => (
                                               <DropdownMenuItem
                                                 key={folder}
                                                 onSelect={() => moveChatToFolder(chat, folder)}
@@ -1704,7 +2153,7 @@ export function AppSidebar() {
                                             ))}
                                             <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                             <DropdownMenuItem
-                                              onSelect={() => deferChatMenuAction(() => createFolderAndMove(chat))}
+                                              onSelect={() => deferChatMenuAction(() => openCreateFolderDialog(chat))}
                                               className={CHAT_ACTION_ITEM}
                                             >
                                               <Plus className={CHAT_ACTION_ICON} />
@@ -1784,6 +2233,32 @@ export function AppSidebar() {
                         </div>
                       )
 
+                      if (!hasVisibleChats) {
+                        return (
+                          <div className="px-3 py-5 text-center">
+                            <p className="text-sm font-medium text-foreground/80">
+                              {selectedFolder ? "Esta carpeta está vacía" : "Ningún chat coincide"}
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {selectedFolder
+                                ? "Envía una conversación o arrástrala aquí."
+                                : "Prueba otro filtro o busca en todo el historial."}
+                            </p>
+                            {selectedFolder ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => openSendChatToFolderDialog(selectedFolder)}
+                              >
+                                Enviar conversación
+                              </Button>
+                            ) : null}
+                          </div>
+                        )
+                      }
+
                       return (
                         <>
                           {pinnedChats.length > 0 && (
@@ -1794,18 +2269,24 @@ export function AppSidebar() {
                               </div>
                             </React.Fragment>
                           )}
-                          {groupDefs.map(([key, label]) => {
-                            const items = buckets[key]
-                            if (items.length === 0) return null
-                            return (
-                              <React.Fragment key={key}>
-                                {renderChatGroupHeader(label, items.length)}
-                                <div>
-                                  {items.map(renderChatItem)}
-                                </div>
-                              </React.Fragment>
+                          {chatGroupBy === "none"
+                            ? (
+                              <div>
+                                {validChats.map(renderChatItem)}
+                              </div>
                             )
-                          })}
+                            : groupDefs.map(([key, label]) => {
+                              const items = buckets[key]
+                              if (items.length === 0) return null
+                              return (
+                                <React.Fragment key={key}>
+                                  {renderChatGroupHeader(label, items.length)}
+                                  <div>
+                                    {items.map(renderChatItem)}
+                                  </div>
+                                </React.Fragment>
+                              )
+                            })}
                         </>
                       )
                     })()}
@@ -1904,8 +2385,11 @@ export function AppSidebar() {
                       <span className="text-sm font-medium truncate">
                         {user?.name || "Admin User"}
                       </span>
-                      <span className="text-xs text-muted-foreground">
-                        {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : user?.plan || t("freePlan")}
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className="truncate">
+                          {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : user?.plan || t("freePlan")}
+                        </span>
+                        <CreditsBadge />
                       </span>
                     </div>
                   </SidebarMenuButton>
@@ -1922,6 +2406,13 @@ export function AppSidebar() {
                     "dark:shadow-[0_12px_48px_-12px_rgba(0,0,0,0.55),inset_0_1px_0_0_rgba(255,255,255,0.08)]",
                   )}
                 >
+                  {user?.email && (
+                    <DropdownMenuLabel className="px-2.5 py-2">
+                      <div className="text-[13px] font-medium text-foreground truncate">{user?.name || "Cuenta"}</div>
+                      <div className="text-[12px] font-normal text-muted-foreground truncate">{user.email}</div>
+                    </DropdownMenuLabel>
+                  )}
+                  <DropdownMenuSeparator className={LG_SEP} />
                   <DropdownMenuItem
                     onClick={() => navigate("/profile")}
                     onMouseEnter={() => prefetchOnHover("/profile")}
@@ -1952,6 +2443,7 @@ export function AppSidebar() {
                   >
                     <Settings className="mr-2 h-4 w-4" />
                     {t("settings")}
+                    <DropdownMenuShortcut>⌘,</DropdownMenuShortcut>
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => navigate("/privacy-policy")}
@@ -2143,6 +2635,110 @@ export function AppSidebar() {
             </Button>
             <Button type="button" onClick={saveScheduledChat}>
               Programar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={folderDialogOpen}
+        onOpenChange={(open) => {
+          if (open) setFolderDialogOpen(true)
+          else closeFolderDialog()
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>{folderDialogRenameFrom ? "Renombrar carpeta" : "Nueva carpeta"}</DialogTitle>
+            <DialogDescription>
+              {folderDialogRenameFrom
+                ? "El nombre se actualiza en todos los chats de esta carpeta."
+                : folderDialogChat
+                  ? `Mueve “${folderDialogChat.title || "este chat"}” a una carpeta nueva.`
+                  : "Organiza chats recientes en carpetas."}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              submitFolderDialog()
+            }}
+            className="space-y-3"
+          >
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="sidebar-new-folder-name">
+                Nombre de la carpeta
+              </label>
+              <Input
+                id="sidebar-new-folder-name"
+                value={folderDialogName}
+                onChange={(event) => setFolderDialogName(event.target.value)}
+                placeholder="Ej. Clientes"
+                autoFocus
+                maxLength={60}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeFolderDialog}>
+                Cancelar
+              </Button>
+              <Button type="submit">
+                {folderDialogRenameFrom ? "Guardar" : "Crear"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(sendChatFolder)}
+        onOpenChange={(open) => {
+          if (!open) closeSendChatToFolderDialog()
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Enviar conversación</DialogTitle>
+            <DialogDescription>
+              {sendChatFolder
+                ? `Elige un chat para enviarlo a “${sendChatFolder}”.`
+                : "Elige un chat para enviarlo a una carpeta."}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={sendChatQuery}
+            onChange={(event) => setSendChatQuery(event.target.value)}
+            placeholder="Buscar conversación"
+            aria-label="Buscar conversación"
+          />
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-border/60">
+            {sendableChatsForFolder.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+                No hay más conversaciones para enviar.
+              </p>
+            ) : (
+              sendableChatsForFolder.slice(0, 40).map((chat: any) => {
+                const title = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title
+                return (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/70"
+                    onClick={() => {
+                      moveChatToFolder(chat, sendChatFolder)
+                      closeSendChatToFolderDialog()
+                    }}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{title || "Chat"}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeSendChatToFolderDialog}>
+              Cerrar
             </Button>
           </DialogFooter>
         </DialogContent>

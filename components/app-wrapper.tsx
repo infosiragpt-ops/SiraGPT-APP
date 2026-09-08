@@ -1,12 +1,12 @@
 "use client"
 
 import { usePathname } from "next/navigation"
-import { ChatProvider } from "@/lib/chat-context-integrated"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { AppShell } from "@/components/app-shell"
 import { ArtifactPanelProvider } from "@/lib/artifact-panel-context"
-import { BackgroundStreamsProvider } from "@/lib/background-streams-context"
 import { needsChatContext, needsSidebar } from "@/lib/app-wrapper-routes"
+import { isAgentsHomePath } from "@/lib/agents-home-path"
+import { useAuth } from "@/lib/auth-context-integrated"
 import { ErrorBoundary } from "@/components/error-boundary"
 
 interface AppWrapperProps {
@@ -46,51 +46,37 @@ function ProviderGuard({ label, children }: { label: string; children: React.Rea
 
 export function AppWrapper({ children }: AppWrapperProps) {
   const pathname = usePathname()
-  const pageNeedsChatContext = needsChatContext(pathname)
-  const pageNeedsSidebar = needsSidebar(pathname)
+  const { user, isLoading } = useAuth()
+  const agentsHome = isAgentsHomePath(pathname) && Boolean(user) && !isLoading
+  const pageNeedsChatContext = needsChatContext(pathname) || agentsHome
+  const pageNeedsSidebar = needsSidebar(pathname) || agentsHome
 
-  // For pages that don't need any special layout
+  // ChatProvider + BackgroundStreams live in RootProviders so a Word/doc
+  // job survives leaving /chat. This wrapper only toggles chrome.
   if (!pageNeedsChatContext && !pageNeedsSidebar) {
     return <>{children}</>
   }
 
-  // For pages that need chat context and sidebar
   if (pageNeedsChatContext) {
     if (!pageNeedsSidebar) {
       return (
-        <ProviderGuard label="BackgroundStreams">
-          <BackgroundStreamsProvider>
-            <ProviderGuard label="ChatProvider">
-              <ChatProvider>
-                <ProviderGuard label="ArtifactPanel">
-                  <ArtifactPanelProvider>
-                    {children}
-                  </ArtifactPanelProvider>
-                </ProviderGuard>
-              </ChatProvider>
-            </ProviderGuard>
-          </BackgroundStreamsProvider>
+        <ProviderGuard label="ArtifactPanel">
+          <ArtifactPanelProvider>
+            {children}
+          </ArtifactPanelProvider>
         </ProviderGuard>
       )
     }
 
     return (
-      <ProviderGuard label="BackgroundStreams">
-        <BackgroundStreamsProvider>
-          <ProviderGuard label="ChatProvider">
-            <ChatProvider>
-              <ProviderGuard label="ArtifactPanel">
-                <ArtifactPanelProvider>
-                  <SidebarProvider>
-                    <AppShell>
-                      {children}
-                    </AppShell>
-                  </SidebarProvider>
-                </ArtifactPanelProvider>
-              </ProviderGuard>
-            </ChatProvider>
-          </ProviderGuard>
-        </BackgroundStreamsProvider>
+      <ProviderGuard label="ArtifactPanel">
+        <ArtifactPanelProvider>
+          <SidebarProvider>
+            <AppShell>
+              {children}
+            </AppShell>
+          </SidebarProvider>
+        </ArtifactPanelProvider>
       </ProviderGuard>
     )
   }

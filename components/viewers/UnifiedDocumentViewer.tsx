@@ -12,12 +12,15 @@
  *   • single point for format detection + telemetry
  *
  * Source strategies, in priority order:
- *   1. `file` (in-memory File blob)      — used while an attachment is
- *      still in the composer BEFORE upload completes.
- *   2. `url` (server-backed URL)         — used after upload; hits
- *      /uploads/<user>/<filename> which the backend serves directly.
- *   3. `documentId` (RagDocument)        — reserved for future RAG
- *      preview endpoint; currently unused in main.
+ *   1. Gate: do not paint final pages until the HTTP upload is complete
+ *      AND the server has persisted the full object (stable id /uploads
+ *      URL). While uploading/converting, show the professional loading
+ *      skeleton + composer-synced %.
+ *   2. Server LibreOffice/Gotenberg PDF (`/api/files/:id/render`) for
+ *      DOCX/DOC/PPTX/XLSX — page size and margins preserved via
+ *      writer/impress/calc PDF export filters. Native PDFs pass through.
+ *   3. `url` (server-backed /uploads/…) then `file` as fallback only
+ *      after the object is ready and conversion is unavailable.
  *
  * Renderers (all client-side except where noted):
  *   image   → <img> with wheel-zoom and click-drag pan
@@ -45,6 +48,8 @@ import {
   Presentation,
   File as FileIcon,
   Image as ImageIcon,
+  Video,
+  Volume2,
   X,
   ChevronLeft,
   ChevronRight,
@@ -55,16 +60,9 @@ import {
   Maximize2,
   RefreshCw,
   Reply,
-  MoreHorizontal,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import {
   createAuthenticatedFetch,
@@ -125,6 +123,14 @@ import JSZip from "jszip"
 import DOMPurify from "dompurify"
 import { Document as PdfDocument, Page as PdfPage, pdfjs } from "react-pdf"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import {
+  CONVERSION_LOADING_LABEL,
+  INDEXING_STATUS_LABEL,
+  PREVIEW_LOADING_LABEL,
+  isRetryablePreviewError,
+  isRetryablePreviewHttpStatus,
+  resolvePreviewGate,
+} from "@/lib/document-preview-gate"
 import "react-pdf/dist/Page/TextLayer.css"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 
@@ -142,6 +148,7 @@ if (typeof window !== "undefined") {
 type Kind =
   | "image" | "pdf" | "docx" | "doc" | "xlsx" | "csv" | "pptx"
   | "md" | "html" | "xml" | "json" | "text" | "code"
+  | "audio" | "video"
   | "unknown"
 
 const CODE_EXTENSIONS: Record<string, string> = {
@@ -157,6 +164,8 @@ function detectKind(file: AttachmentLike): Kind {
   const ext = extOf(file.name).toLowerCase()
   const mt = (file.mimeType || "").toLowerCase()
   if (mt.startsWith("image/") || /^(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|svg)$/.test(ext)) return "image"
+  if (mt.startsWith("video/") || /^(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv|3gp)$/.test(ext)) return "video"
+  if (mt.startsWith("audio/") || /^(mp3|wav|m4a|aac|ogg|oga|flac|opus|wma|aiff?)$/.test(ext)) return "audio"
   if (mt === "application/pdf" || ext === "pdf") return "pdf"
   // Legacy binary .doc → "doc" (needs server-side conversion); modern
   // .docx (OOXML) → "docx" (handled client-side by docx-preview).
@@ -183,6 +192,8 @@ function extOf(name: string | undefined | null): string {
 function iconForKind(kind: Kind) {
   switch (kind) {
     case "image": return ImageIcon
+    case "video": return Video
+    case "audio": return Volume2
     case "pdf":
     case "docx":
     case "doc":
@@ -216,6 +227,12 @@ export interface AttachmentLike {
   url?: string | null
   /** Pre-extracted plain text — used as a fallback for exotic formats. */
   extractedText?: string | null
+  /** Composer upload status (`uploading` / `ready` / `processing` / `failed`). */
+  status?: string | null
+  /** 0..100 HTTP upload progress — keep the pane in sync with the chip. */
+  uploadProgress?: number | null
+  /** RAG pipeline stage after HTTP upload (does not block original-byte preview). */
+  processingStage?: string | null
 }
 
 interface UnifiedDocumentViewerProps {
@@ -345,8 +362,6 @@ export default function UnifiedDocumentViewer({
   // between a value and null) flips the hook count and throws
   // "rendered more/fewer hooks than during the previous render".
   const isDark = useIsDark()
-  const isOverlay = useDocumentPreviewOverlay()
-  const useFullscreenChrome = variant === "modal" || isOverlay
   // Retry counter used as React key on the renderer subtree — bumping
   // it forces a clean remount, which resets all internal state and
   // re-runs effects. The Retry button surfaced inside ErrorState calls
@@ -396,6 +411,7 @@ export default function UnifiedDocumentViewer({
 
   const kind = detectKind(attachment)
   const Icon = iconForKind(kind)
+  const previewGate = resolvePreviewGate(attachment)
 
   const downloadUrl = attachment.url ? absUrl(attachment.url) : null
   const canDownload = !!downloadUrl || !!attachment.file
@@ -417,100 +433,33 @@ export default function UnifiedDocumentViewer({
     }
   }
 
-  const reuseInPrompt = () => {
-    if (typeof window === "undefined" || !attachment.id) return
-    window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
-      detail: {
-        id: attachment.id,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        size: attachment.size,
-        url: attachment.url,
-        extractedText: attachment.extractedText,
-      },
-    }))
-  }
-
   const shell = (
     <div
       className={cn(
-        useFullscreenChrome
-          ? "fixed inset-0 z-[10000]"
-          : "flex h-full w-full min-w-0 flex-col overflow-hidden",
+        variant === "panel" ? "flex h-full w-full min-w-0 flex-col overflow-hidden" : "fixed inset-0 z-[10000]",
         className,
       )}
     >
-      {useFullscreenChrome && (
+      {variant === "modal" && (
         <div
-          className={cn("absolute inset-0", isOverlay ? "bg-zinc-900/45 backdrop-blur-sm" : "bg-black/80")}
+          className="absolute inset-0 bg-black/80"
           aria-hidden="true"
           onClick={onClose}
         />
       )}
       <section
         role="dialog"
-        aria-modal={useFullscreenChrome ? true : undefined}
+        aria-modal={variant === "modal"}
         aria-labelledby="unified-document-viewer-title"
         data-testid="unified-document-viewer-dialog"
-        data-presentation={isOverlay ? "mobile-overlay" : (variant === "panel" ? "desktop-split" : "desktop-modal")}
         className={cn(
           "unified-doc-viewer flex flex-col overflow-hidden border border-border bg-background p-0",
-          isOverlay
-            ? "fixed inset-0 z-[10001] h-[100dvh] w-full rounded-none border-0 pb-[env(safe-area-inset-bottom)] shadow-none"
-            : variant === "panel"
-              ? "h-full w-full rounded-none border-y-0 border-r-0 shadow-none"
-              : "fixed left-1/2 top-1/2 z-[10001] h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg shadow-lg",
+          variant === "panel"
+            ? "h-full w-full rounded-none border-y-0 border-r-0 shadow-none"
+            : "fixed left-1/2 top-1/2 z-[10001] h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg shadow-lg",
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        {isOverlay ? (
-          <div className="flex min-h-12 items-center gap-1 border-b border-black/5 bg-background/92 px-1 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:border-white/10">
-            <button
-              type="button"
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-foreground"
-              onClick={onClose}
-              title="Cerrar"
-              aria-label="Cerrar"
-            >
-              <X className="h-5 w-5" />
-            </button>
-            <h2 id="unified-document-viewer-title" className="min-w-0 flex-1 truncate px-1 text-center text-[15px] font-semibold leading-5">
-              {attachment.name}
-            </h2>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-foreground"
-                  title="Más opciones"
-                  aria-label="Más opciones del documento"
-                >
-                  <MoreHorizontal className="h-5 w-5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-44">
-                {canDownload && (
-                  <DropdownMenuItem onSelect={handleDownload}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Descargar
-                  </DropdownMenuItem>
-                )}
-                {downloadUrl && (
-                  <DropdownMenuItem onSelect={() => window.open(downloadUrl, "_blank", "noopener,noreferrer")}>
-                    <ExternalLink className="mr-2 h-4 w-4" />
-                    Abrir en una pestaña
-                  </DropdownMenuItem>
-                )}
-                {attachment.id && (
-                  <DropdownMenuItem onSelect={reuseInPrompt}>
-                    <Reply className="mr-2 h-4 w-4" />
-                    Reutilizar en prompt
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        ) : (
         <div className={cn(
           "relative isolate flex min-h-16 flex-row items-center gap-3 overflow-hidden px-4 py-2.5",
           liquidViewerHeaderClass,
@@ -526,6 +475,9 @@ export default function UnifiedDocumentViewer({
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
               {kind !== "unknown" && <span className={liquidMetaPillClass}>{kind}</span>}
               {attachment.size ? <span className={liquidMetaPillClass}>{formatSize(attachment.size)}</span> : null}
+              {previewGate.phase === "indexing" ? (
+                <span className={liquidMetaPillClass}>{INDEXING_STATUS_LABEL}</span>
+              ) : null}
               {siblings && siblings.length > 1 && idx >= 0 ? (
                 <span className={liquidMetaPillClass}>{idx + 1} / {siblings.length}</span>
               ) : null}
@@ -557,11 +509,27 @@ export default function UnifiedDocumentViewer({
             </div>
           )}
 
+          {/* Reuse-in-prompt: re-attaches this file to the next composer
+              message via a window CustomEvent the chat shell listens to.
+              Only meaningful for attachments that already have a backend
+              id (i.e., already uploaded). */}
           {attachment.id && (
             <button
               type="button"
               className={liquidIconButtonClass}
-              onClick={reuseInPrompt}
+              onClick={() => {
+                if (typeof window === "undefined") return
+                window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
+                  detail: {
+                    id: attachment.id,
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    size: attachment.size,
+                    url: attachment.url,
+                    extractedText: attachment.extractedText,
+                  },
+                }))
+              }}
               title="Reutilizar en prompt"
               aria-label="Reutilizar en prompt"
             >
@@ -600,7 +568,6 @@ export default function UnifiedDocumentViewer({
             <X className="h-4 w-4" />
           </button>
         </div>
-        )}
 
         {/* Renderer subtree, wrapped in a context that gives
             LoadingState/ErrorState access to attachment+kind+onRetry,
@@ -617,7 +584,7 @@ export default function UnifiedDocumentViewer({
     </div>
   )
 
-  if (variant === "panel" && !isOverlay) return shell
+  if (variant === "panel") return shell
   return createPortal(shell, document.body)
 }
 
@@ -626,11 +593,22 @@ export default function UnifiedDocumentViewer({
 function RendererDispatch({
   kind, attachment, isDark,
 }: { kind: Kind; attachment: AttachmentLike; isDark: boolean }) {
+  const gate = resolvePreviewGate(attachment)
+  if (!gate.ready) {
+    return <LoadingState label={gate.label || PREVIEW_LOADING_LABEL} progress={gate.progress} />
+  }
   switch (kind) {
     case "image":    return <ImageRenderer a={attachment} />
+    case "video":    return <VideoRenderer a={attachment} />
+    case "audio":    return <AudioRenderer a={attachment} />
     case "pdf":      return <PdfRenderer a={attachment} />
     case "csv":      return <CsvRenderer a={attachment} />
-    case "xlsx":     return <XlsxRenderer a={attachment} />
+    case "xlsx":     return (
+      <ServerConvertedPdfRenderer
+        a={attachment}
+        fallback={<XlsxRenderer a={attachment} />}
+      />
+    )
     // PPTX (and legacy .ppt): try server-rendered PDF first for layout
     // fidelity; if unavailable, fall back to the JSZip text+image
     // extraction we already have for OOXML .pptx.
@@ -722,7 +700,9 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
     const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
     const res = await fetchAssetBytes(url)
     if (!res.ok) {
-      throw new Error(`http-${res.status}`)
+      const err = new Error(`http-${res.status}`) as Error & { retryable?: boolean }
+      if (isRetryablePreviewHttpStatus(res.status)) err.retryable = true
+      throw err
     }
 
     const buf = await res.arrayBuffer()
@@ -764,23 +744,43 @@ function ServerConvertedPdfRenderer({
 
     let cancelled = false
     ;(async () => {
-      try {
-        const pdfAtt = await fetchServerConvertedPdfAttachment(a)
-        if (cancelled) return
-        setPdfAttachment(pdfAtt)
-        setState("ok")
-      } catch (e: any) {
-        if (!cancelled) {
-          setUnavailableReason(e?.message || "fetch-failed")
-          setState("unavailable")
+      const maxAttempts = 8
+      for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
+        try {
+          const pdfAtt = await fetchServerConvertedPdfAttachment(a)
+          if (cancelled) return
+          setPdfAttachment(pdfAtt)
+          setState("ok")
+          return
+        } catch (e: any) {
+          const retryable = isRetryablePreviewError(e)
+          if (retryable && attempt < maxAttempts - 1) {
+            const waitMs = Math.min(400 * (attempt + 1), 2000)
+            await new Promise((resolve) => setTimeout(resolve, waitMs))
+            continue
+          }
+          if (!cancelled) {
+            setUnavailableReason(e?.message || "fetch-failed")
+            setState("unavailable")
+          }
+          return
         }
       }
     })()
     return () => { cancelled = true }
   }, [a])
 
-  if (state === "probing" && hasClientPreviewSource(a)) return <>{fallback}</>
-  if (state === "probing") return <LoadingState label="Generando vista de alta fidelidad…" />
+  // Never paint client-side office pages while the server object is
+  // still uploading or LibreOffice is converting. A local File exists
+  // the moment the user picks the document — that is what used to show
+  // a finished 1/N thesis page at 80% upload.
+  if (state === "probing") {
+    const canWaitForServer = canUseServerPdfConversion(a) || !hasClientPreviewSource(a)
+    if (canWaitForServer) {
+      return <LoadingState label={CONVERSION_LOADING_LABEL} />
+    }
+    return <>{fallback}</>
+  }
   if (state === "unavailable" || !pdfAttachment) {
     if (process.env.NODE_ENV !== "production" && unavailableReason) {
       // eslint-disable-next-line no-console
@@ -1145,19 +1145,40 @@ function SkeletonImage() {
   )
 }
 
-function LoadingState({ label }: { label?: string }) {
+function LoadingState({ label, progress }: { label?: string; progress?: number }) {
   const ctx = React.useContext(RendererCtx)
   const kind = ctx?.kind
+  const caption = label || PREVIEW_LOADING_LABEL
+  const showPct = typeof progress === "number" && Number.isFinite(progress) && progress > 0
+  const pct = showPct ? Math.max(1, Math.min(100, Math.round(progress))) : null
+  let skeleton: React.ReactNode
   switch (kind) {
     case "pdf":
-    case "doc":  return <SkeletonPdf />
+    case "doc":  skeleton = <SkeletonPdf />; break
     case "xlsx":
-    case "csv":  return <SkeletonXlsx />
-    case "pptx": return <SkeletonPptx />
-    case "docx": return <SkeletonDocx />
-    case "image": return <SkeletonImage />
-    default:     return <SkeletonGeneric label={label} />
+    case "csv":  skeleton = <SkeletonXlsx />; break
+    case "pptx": skeleton = <SkeletonPptx />; break
+    case "docx": skeleton = <SkeletonDocx />; break
+    case "image": skeleton = <SkeletonImage />; break
+    default:     skeleton = <SkeletonGeneric label={caption} />
   }
+  if (kind === undefined || (kind !== "pdf" && kind !== "doc" && kind !== "xlsx" && kind !== "csv" && kind !== "pptx" && kind !== "docx" && kind !== "image")) {
+    return <>{skeleton}</>
+  }
+  return (
+    <div className="relative h-full w-full" role="status" aria-live="polite" aria-label={caption}>
+      {skeleton}
+      <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
+        <div className="flex max-w-full items-center gap-2 rounded-full border border-white/60 bg-white/80 px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-[0_10px_24px_rgba(15,23,42,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100">
+          <ThinkingIndicator size="sm" />
+          <span className="truncate">{caption}</span>
+          {pct != null && (
+            <span className="tabular-nums text-zinc-500 dark:text-zinc-300">{pct}%</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // Typed error state. Pulls attachment/kind/onRetry from RendererCtx so
@@ -1355,11 +1376,12 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
  *   • predictable styling under light/dark mode
  *   • runs entirely in the browser — no server round-trip
  */
-export function PdfRenderer({ a }: { a: AttachmentLike }) {
+export function PdfRenderer({ a, toolbarContainer }: { a: AttachmentLike; toolbarContainer?: HTMLElement | null }) {
   // pdf.js accepts a URL string OR a `{ data: Uint8Array }` payload.
   // Using `data` for in-memory File blobs avoids creating a blob URL
   // that pdf.js would have to refetch over HTTP.
   const [source, setSource] = React.useState<{ url: string } | { data: Uint8Array } | null>(null)
+  const activeSourceRef = React.useRef<typeof source>(null)
   const [err, setErr] = React.useState<string | null>(null)
   const [numPages, setNumPages] = React.useState<number>(0)
   const [scale, setScale] = React.useState<number>(1)
@@ -1370,25 +1392,46 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   const [pageAspect, setPageAspect] = React.useState<number>(0)
   // Once the user zooms by hand we stop auto-fitting so we never fight them.
   const manualZoomRef = React.useRef(false)
-  const markManualZoom = React.useCallback(() => { manualZoomRef.current = true }, [])
+  const activePageRef = React.useRef(1)
+  const zoomAnchorRef = React.useRef<number | null>(null)
+  const markManualZoom = React.useCallback(() => {
+    manualZoomRef.current = true
+    zoomAnchorRef.current = activePageRef.current
+  }, [])
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const pageRefs = React.useRef<Record<number, HTMLDivElement | null>>({})
   const [activePage, setActivePage] = React.useState<number>(1)
+  React.useEffect(() => { activePageRef.current = activePage }, [activePage])
 
   // Resolve through the same authenticated byte loader used by the
   // other document renderers. A plain pdf.js URL load cannot attach the
   // Bearer token required by protected /uploads assets.
   React.useEffect(() => {
     let cancelled = false
+    activeSourceRef.current = null
+    setSource(null)
+    setErr(null)
+    setNumPages(0)
+    setActivePage(1)
+    activePageRef.current = 1
+    zoomAnchorRef.current = null
+    setPageAspect(0)
+    setScale(1)
+    manualZoomRef.current = false
+    pageRefs.current = {}
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        if (!cancelled) setSource({ data: new Uint8Array(cloneArrayBuffer(buf)) })
+        if (!cancelled) {
+          const loadedSource = { data: new Uint8Array(cloneArrayBuffer(buf)) }
+          activeSourceRef.current = loadedSource
+          setSource(loadedSource)
+        }
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "Error")
       }
     })()
-    return () => { cancelled = true }
+    return () => { cancelled = true; activeSourceRef.current = null }
   }, [a])
 
   // Track container width for "fit-to-width" rendering.
@@ -1398,14 +1441,14 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
     const ro = new ResizeObserver(entries => {
       for (const entry of entries) {
         // Subtract scrollbar gutter so pages don't overflow.
-        const w = Math.max(320, Math.floor(entry.contentRect.width) - 24)
+        const w = Math.max(200, Math.floor(entry.contentRect.width) - 24)
         setContainerWidth(w)
         setContainerHeight(Math.max(240, Math.floor(entry.contentRect.height)))
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [source, err])
 
   // Smart auto-fit: scale so the whole first page fits the viewport
   // (fit-to-page) the moment the PDF + its dimensions are known, and keep it
@@ -1414,7 +1457,7 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   // pageAspect) just fits the available viewport height.
   const fitPageScale = React.useMemo(() => {
     if (!pageAspect || !containerWidth || !containerHeight) return 1
-    const avail = Math.max(200, containerHeight - 88) // leave room for the controls bar
+    const avail = Math.max(200, containerHeight - 32) // page padding; controls live above the document
     const raw = avail / (containerWidth * pageAspect)
     return Math.min(1, Math.max(0.5, +raw.toFixed(2)))
   }, [pageAspect, containerWidth, containerHeight])
@@ -1445,7 +1488,7 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
       el.removeEventListener("wheel", onWheel)
       el.removeEventListener("dblclick", onDoubleClick)
     }
-  }, [markManualZoom])
+  }, [markManualZoom, source, err])
 
   // IntersectionObserver — track which page is currently most visible so
   // the "page X of Y" indicator stays accurate while the user scrolls.
@@ -1453,17 +1496,26 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
     if (!numPages) return
     const root = containerRef.current
     if (!root) return
-    const visibility = new Map<number, number>()
     const io = new IntersectionObserver(
-      entries => {
-        for (const e of entries) {
-          const n = Number((e.target as HTMLElement).dataset.pageNum)
-          if (Number.isFinite(n)) visibility.set(n, e.intersectionRatio)
+      () => {
+        // IO entries are only the pages crossing a threshold, not a complete
+        // snapshot. Cached ratios from before a page jump can override a newer
+        // explicit selection. Read one current geometry snapshot instead.
+        const viewport = root.getBoundingClientRect()
+        const visibility = new Map<number, number>()
+        for (const [number, element] of Object.entries(pageRefs.current)) {
+          if (!element) continue
+          const rect = element.getBoundingClientRect()
+          const width = Math.max(0, Math.min(rect.right, viewport.right) - Math.max(rect.left, viewport.left))
+          const height = Math.max(0, Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top))
+          visibility.set(Number(number), rect.width && rect.height ? width * height / (rect.width * rect.height) : 0)
         }
-        let bestPage = 1
-        let bestRatio = 0
+        // Several landscape slides can fit at once. Keep the explicitly
+        // selected page on visibility ties instead of always choosing page 1.
+        let bestPage = activePageRef.current
+        let bestRatio = visibility.get(bestPage) || 0
         visibility.forEach((ratio, page) => {
-          if (ratio > bestRatio) { bestRatio = ratio; bestPage = page }
+          if (ratio > bestRatio + 0.001) { bestRatio = ratio; bestPage = page }
         })
         if (bestRatio > 0) setActivePage(bestPage)
       },
@@ -1474,9 +1526,16 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   }, [numPages])
 
   const goToPage = (p: number) => {
+    zoomAnchorRef.current = null
     const target = Math.min(Math.max(1, p), numPages || 1)
+    activePageRef.current = target
     const el = pageRefs.current[target]
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+    const root = containerRef.current
+    if (el && root) {
+      // Discrete page navigation must not let intermediate animation frames
+      // overwrite the selected page (several landscape pages may be visible).
+      root.scrollTo({ top: root.scrollTop + el.getBoundingClientRect().top - root.getBoundingClientRect().top, behavior: "instant" })
+    }
     setActivePage(target)
   }
 
@@ -1509,53 +1568,13 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   if (err) return <ErrorState error={err} hint="Si el archivo está cifrado o protegido, descárgalo y ábrelo en un visor PDF nativo." />
   if (!source) return <LoadingState label="Cargando PDF…" />
 
-  const renderWidth = Math.floor(containerWidth * scale)
-
-  return (
-    <div className="relative flex h-full flex-col">
-      {/* Pages */}
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 pb-20 pt-4">
-        <PdfDocument
-          file={source}
-          onLoadSuccess={(pdf: any) => {
-            setNumPages(pdf?.numPages || 0)
-            // Read the first page's intrinsic size so auto-fit knows the
-            // page aspect ratio and can fit the whole page on load.
-            try {
-              pdf?.getPage?.(1)?.then((page: any) => {
-                const vp = page?.getViewport?.({ scale: 1 })
-                if (vp?.width) setPageAspect(vp.height / vp.width)
-              }).catch(() => {})
-            } catch { /* non-fatal: falls back to fit-width */ }
-          }}
-          onLoadError={(e) => setErr(e?.message || "No se pudo abrir el PDF")}
-          loading={<LoadingState label="Renderizando PDF…" />}
-          error={<ErrorState error="No se pudo abrir el PDF" />}
-          className="flex flex-col items-center gap-3"
-        >
-          {Array.from({ length: numPages }, (_, i) => i + 1).map(p => (
-            <div
-              key={p}
-              data-page-num={p}
-              ref={el => { pageRefs.current[p] = el }}
-              className="rounded-sm bg-white dark:bg-zinc-800 shadow-md ring-1 ring-border/30"
-            >
-              <PdfPage
-                pageNumber={p}
-                width={renderWidth}
-                renderTextLayer
-                renderAnnotationLayer
-              />
-            </div>
-          ))}
-        </PdfDocument>
-      </div>
-
-      {/* Bottom liquid-glass controls */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-3">
-        <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5", liquidControlShellClass)}>
+  // Reuse the same page state in the generated-document header. Uploaded PDFs
+  // get an inline top toolbar; neither path covers the document with controls.
+  const controls = (
+      <nav aria-label="Navegación y zoom del documento" data-testid="pdf-preview-controls" className="flex max-w-full justify-center">
+        <div className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", liquidControlShellClass)}>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            disabled={activePage <= 1}
+            disabled={!numPages || activePage <= 1}
             onClick={() => goToPage(activePage - 1)}
             aria-label="Página anterior" title="Página anterior">
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -1588,7 +1607,7 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
 
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => { markManualZoom(); setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2))) }}
-            aria-label="Reducir zoom" title="Reducir (⌘−)">
+            disabled={scale <= 0.5} aria-label="Reducir zoom" title="Reducir (⌘−)">
             <Minus className="h-3.5 w-3.5" />
           </Button>
           <button
@@ -1601,16 +1620,80 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
           </button>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => { markManualZoom(); setScale(s => Math.min(3, +(s + 0.25).toFixed(2))) }}
-            aria-label="Aumentar zoom" title="Aumentar (⌘+)">
+            disabled={scale >= 3} aria-label="Aumentar zoom" title="Aumentar (⌘+)">
             <Plus className="h-3.5 w-3.5" />
           </Button>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            onClick={() => { manualZoomRef.current = false; setScale(fitPageScale) }}
+            onClick={() => { zoomAnchorRef.current = activePage; manualZoomRef.current = false; setScale(fitPageScale) }}
             aria-label="Ajustar a la página" title="Ajustar a la página (vista completa)">
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
         </div>
+      </nav>
+  )
+
+  const renderWidth = Math.floor(containerWidth * scale)
+
+  return (
+    <div className="relative flex h-full flex-col">
+      {toolbarContainer
+        ? createPortal(controls, toolbarContainer)
+        : toolbarContainer === undefined && <div className="shrink-0 border-b border-border/40 bg-background px-2 py-2">{controls}</div>}
+      {/* Pages */}
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 py-4">
+        <PdfDocument
+          file={source}
+          onLoadSuccess={(pdf: any) => {
+            if (activeSourceRef.current !== source) return
+            setNumPages(pdf?.numPages || 0)
+            // Read the first page's intrinsic size so auto-fit knows the
+            // page aspect ratio and can fit the whole page on load.
+            try {
+              pdf?.getPage?.(1)?.then((page: any) => {
+                if (activeSourceRef.current !== source) return
+                const vp = page?.getViewport?.({ scale: 1 })
+                if (vp?.width) setPageAspect(vp.height / vp.width)
+              }).catch(() => {})
+            } catch { /* non-fatal: falls back to fit-width */ }
+          }}
+          onLoadError={(e) => {
+            if (activeSourceRef.current === source) setErr(e?.message || "No se pudo abrir el PDF")
+          }}
+          loading={<LoadingState label="Renderizando PDF…" />}
+          error={<ErrorState error="No se pudo abrir el PDF" />}
+          className="flex w-max min-w-full flex-col items-center gap-3"
+        >
+          {Array.from({ length: numPages }, (_, i) => i + 1).map(p => (
+            <div
+              key={p}
+              data-page-num={p}
+              ref={el => { pageRefs.current[p] = el }}
+              className="rounded-sm bg-white dark:bg-zinc-800 shadow-md ring-1 ring-border/30"
+            >
+              <PdfPage
+                pageNumber={p}
+                width={renderWidth}
+                renderTextLayer
+                renderAnnotationLayer
+                onRenderSuccess={() => {
+                  if (activeSourceRef.current !== source || zoomAnchorRef.current !== p) return
+                  const root = containerRef.current
+                  const page = pageRefs.current[p]
+                  if (!root || !page) return
+                  // Keep the current page in view after the new canvas size is
+                  // painted, instead of jumping back to an earlier page on zoom.
+                  root.scrollTo({ top: root.scrollTop + page.getBoundingClientRect().top - root.getBoundingClientRect().top, behavior: "auto" })
+                  activePageRef.current = p
+                  setActivePage(p)
+                  zoomAnchorRef.current = null
+                }}
+              />
+            </div>
+          ))}
+        </PdfDocument>
       </div>
+
+
     </div>
   )
 }
@@ -2675,6 +2758,41 @@ function escapeHtml(value: unknown): string {
 }
 
 // ─── Fallback ────────────────────────────────────────────────────────
+
+function mediaSrcFromAttachment(a: AttachmentLike): string {
+  if (a.url) return absUrl(a.url)
+  return ""
+}
+
+function VideoRenderer({ a }: { a: AttachmentLike }) {
+  const src = mediaSrcFromAttachment(a)
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-zinc-950/95 p-4">
+      <ChatVideoPlayer
+        src={src || undefined}
+        file={a.file}
+        title={a.name || "video"}
+        variant="viewer"
+        className="max-h-full w-full max-w-4xl"
+      />
+    </div>
+  )
+}
+
+function AudioRenderer({ a }: { a: AttachmentLike }) {
+  const src = mediaSrcFromAttachment(a)
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-zinc-50 p-6 dark:bg-zinc-950">
+      <ChatAudioPlayer
+        src={src || undefined}
+        file={a.file}
+        title={a.name || "audio"}
+        variant="viewer"
+        className="w-full max-w-xl"
+      />
+    </div>
+  )
+}
 
 function FallbackRenderer({ a }: { a: AttachmentLike }) {
   const url = a.url ? absUrl(a.url) : null

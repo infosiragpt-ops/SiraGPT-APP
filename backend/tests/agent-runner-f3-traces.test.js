@@ -128,8 +128,10 @@ test('F3(a): mocked loop emits stage events in order — Pensando → Ejecutando
   assert.equal(result.stoppedReason, 'final');
 
   const stages = events.map(toStageEvent).filter(Boolean);
-  // EVERY loop event renders as a stage (uniform trace, no silent steps).
-  assert.equal(stages.length, events.length);
+  // EVERY tool/stage loop event renders as a stage. Advisory 3H65
+  // budget_hint leftovers stay off the stage rail (not a tool trace).
+  const toolTraceEvents = events.filter((e) => e && e.type !== 'budget_hint');
+  assert.equal(stages.length, toolTraceEvents.length);
   for (const s of stages) {
     assert.equal(s.type, 'stage');
     assert.ok(s.label, 'stage always has a Spanish label');

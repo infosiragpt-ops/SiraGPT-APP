@@ -30,7 +30,7 @@ test("company files and resources expose real workspace and social operations", 
   assert.match(companySource, /testId="company-files-surface"/)
   assert.match(companySource, /buildCompanyAgentFileArtifacts/)
   assert.match(companySource, /workers=\{officeModel\.workers\}/)
-  assert.match(companySource, /data-testid="company-agent-files-group"/)
+  assert.match(companySource, /data-testid="company-files-dept-folders"/)
   assert.match(companySource, /data-testid="company-mission-evidence-ledger"/)
   assert.match(companySource, /codexApi\.getMissionEvidence/)
   assert.match(companySource, /codexApi\.reviewMissionEvidence/)

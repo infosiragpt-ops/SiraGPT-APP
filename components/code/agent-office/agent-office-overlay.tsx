@@ -7,13 +7,17 @@ import {
   ArrowUpRight,
   BadgeCheck,
   Building2,
+  Camera,
   CircleDollarSign,
   CloudSun,
   FileWarning,
+  Home,
   Layers3,
   Loader2,
   Moon,
   Pause,
+  PersonStanding,
+  Plane,
   Play,
   RotateCcw,
   ShieldAlert,
@@ -40,6 +44,7 @@ import {
 import { cn } from "@/lib/utils"
 
 import { AgentOfficeScene } from "./agent-office-scene"
+import { OFFICE_PRO_MARKER, type AgentOfficeNavMode } from "./agent-office-navigation"
 import { useOfficeSoundscape } from "./use-office-soundscape"
 
 type AgentOfficeOverlayProps = {
@@ -71,6 +76,15 @@ const ACTIVITY_LABELS = {
   localization: "Localización",
   security: "Seguridad",
 } as const
+
+const COMMAND_STATUS_LABELS: Record<AgentOfficeDepartment["commandStatus"], string> = {
+  active: "Activo",
+  queued: "En cola",
+  paused: "Pausado",
+  blocked: "Bloqueado",
+  completed: "Completado",
+  idle: "En espera",
+}
 
 const EVIDENCE_LABELS: Record<NonNullable<AgentOfficeWorker["evidenceReview"]>, string> = {
   pending: "Pendiente de CEO",
@@ -125,9 +139,10 @@ export function AgentOfficeOverlay({
   const [selectedWorkerId, setSelectedWorkerId] = React.useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = React.useState(false)
   const [cameraCommand, setCameraCommand] = React.useState<{
-    type: "reset" | "zoom-in" | "zoom-out"
+    type: "reset" | "zoom-in" | "zoom-out" | "fly" | "walk" | "orbit"
     nonce: number
   }>({ type: "reset", nonce: 0 })
+  const [navMode, setNavMode] = React.useState<AgentOfficeNavMode>("orbit")
   const [timeMode, setTimeMode] = React.useState<OfficeTimeMode>("auto")
   const [localClock, setLocalClock] = React.useState(() => new Date())
   const dialogRef = React.useRef<HTMLDivElement>(null)
@@ -256,9 +271,16 @@ export function AgentOfficeOverlay({
     { id: "resources", label: "Recursos", icon: CircleDollarSign, action: onOpenResources },
   ]
 
-  const sendCameraCommand = React.useCallback((type: "reset" | "zoom-in" | "zoom-out") => {
+  const sendCameraCommand = React.useCallback((
+    type: "reset" | "zoom-in" | "zoom-out" | "fly" | "walk" | "orbit",
+  ) => {
     setCameraCommand((current) => ({ type, nonce: current.nonce + 1 }))
   }, [])
+
+  const setOfficeNav = React.useCallback((mode: AgentOfficeNavMode) => {
+    setNavMode(mode)
+    sendCameraCommand(mode === "orbit" ? "orbit" : mode)
+  }, [sendCameraCommand])
 
   if (!mounted || !open) return null
 
@@ -284,6 +306,8 @@ export function AgentOfficeOverlay({
       data-department-count={model.departments.length}
       data-logical-agent-count={logicalAgentCount}
       data-interactive-worker-count={model.workers.length}
+      data-office-pro={OFFICE_PRO_MARKER}
+      data-office-nav={navMode}
     >
       <AgentOfficeScene
         model={visibleModel}
@@ -292,6 +316,8 @@ export function AgentOfficeOverlay({
         timePhase={timePhase}
         selectedWorkerId={selectedWorkerId}
         cameraCommand={cameraCommand}
+        navMode={navMode}
+        onNavModeChange={setNavMode}
         onSelectWorker={(workerId) => {
           const worker = model.workers.find((row) => row.id === workerId)
           setSelectedWorkerId(workerId)
@@ -305,7 +331,7 @@ export function AgentOfficeOverlay({
         }}
       />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-16 items-center border-b border-white/10 bg-slate-950/95 px-3 shadow-2xl backdrop-blur-2xl sm:px-5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-[calc(4rem+env(safe-area-inset-top))] items-center border-b border-white/10 bg-slate-950/95 px-3 pt-[env(safe-area-inset-top)] shadow-2xl backdrop-blur-2xl sm:px-5">
         <div className="pointer-events-auto flex min-w-0 items-center gap-3">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-slate-800 to-slate-900 text-sky-300 shadow-lg">
             <Building2 className="h-5 w-5" />
@@ -457,11 +483,60 @@ export function AgentOfficeOverlay({
         </label>
       </div>
 
-      <div className="pointer-events-auto absolute bottom-20 right-3 z-20 flex flex-col gap-2 sm:right-5" aria-label="Controles de cámara">
-        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-lg font-medium text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("zoom-in")} aria-label="Acercar cámara"><span aria-hidden>+</span></Button>
-        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-lg font-medium text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("zoom-out")} aria-label="Alejar cámara"><span aria-hidden>−</span></Button>
-        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("reset")} aria-label="Restablecer cámara"><RotateCcw className="h-4 w-4" /></Button>
-        <Button type="button" variant="ghost" size="icon" className={cn("h-11 w-11 rounded-xl border border-white/10 bg-slate-900/90 text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white", drawerOpen && !selectedWorker && !selectedDepartment && "border-sky-400/30 bg-sky-400/15 text-sky-200")} onClick={() => { setSelectedWorkerId(null); setSelectedDepartmentId(null); setDrawerOpen(true) }} aria-label="Ver agentes"><Users className="h-4 w-4" /></Button>
+      {navMode !== "orbit" ? (
+        <div
+          className="pointer-events-none absolute bottom-[calc(9.5rem+env(safe-area-inset-bottom))] left-1/2 z-20 -translate-x-1/2 rounded-full border border-white/15 bg-slate-950/80 px-3 py-1.5 text-[11px] font-medium tracking-wide text-slate-100 shadow-2xl backdrop-blur-xl lg:bottom-24"
+          data-office-fly-hint={navMode}
+          role="status"
+        >
+          {navMode === "fly"
+            ? "Modo vuelo · WASD mover · Q/E altura · F salir"
+            : "Modo caminar · WASD en la terraza · clic para mirar · F salir"}
+        </div>
+      ) : null}
+
+      <div className="pointer-events-auto absolute bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-3 z-20 flex flex-col items-end gap-2 lg:bottom-20 sm:right-5" aria-label="Controles de navegación">
+        <div className="flex overflow-hidden rounded-2xl border border-white/12 bg-slate-950/88 shadow-2xl backdrop-blur-xl" data-office-nav-toolbar="matrix">
+          {([
+            { id: "fly" as const, label: "Volar", icon: Plane },
+            { id: "walk" as const, label: "Caminar", icon: PersonStanding },
+            { id: "orbit" as const, label: "Órbita", icon: Home },
+            { id: "camera" as const, label: "Cámara", icon: Camera },
+          ]).map((tool) => {
+            const Icon = tool.icon
+            const active = tool.id !== "camera" && navMode === tool.id
+            return (
+              <button
+                key={tool.id}
+                type="button"
+                className={cn(
+                  "flex h-12 min-w-[4.4rem] flex-col items-center justify-center gap-0.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
+                  active ? "bg-sky-500/20 text-sky-100" : "text-slate-400 hover:bg-white/[0.06] hover:text-white",
+                )}
+                aria-pressed={active}
+                aria-label={tool.label}
+                data-office-nav-tool={tool.id}
+                onClick={() => {
+                  if (tool.id === "camera") {
+                    setOfficeNav("orbit")
+                    sendCameraCommand("reset")
+                    return
+                  }
+                  setOfficeNav(tool.id)
+                }}
+              >
+                <Icon className="h-4 w-4" />
+                {tool.label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="flex gap-2">
+          <Button type="button" variant="ghost" size="icon" className="h-10 w-10 rounded-xl border border-white/10 bg-slate-900/90 text-lg font-medium text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("zoom-in")} aria-label="Acercar cámara"><span aria-hidden>+</span></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-10 w-10 rounded-xl border border-white/10 bg-slate-900/90 text-lg font-medium text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => sendCameraCommand("zoom-out")} aria-label="Alejar cámara"><span aria-hidden>−</span></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-10 w-10 rounded-xl border border-white/10 bg-slate-900/90 text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white" onClick={() => { setOfficeNav("orbit"); sendCameraCommand("reset") }} aria-label="Restablecer cámara"><RotateCcw className="h-4 w-4" /></Button>
+          <Button type="button" variant="ghost" size="icon" className={cn("h-10 w-10 rounded-xl border border-white/10 bg-slate-900/90 text-slate-200 shadow-lg hover:bg-slate-800 hover:text-white", drawerOpen && !selectedWorker && !selectedDepartment && "border-sky-400/30 bg-sky-400/15 text-sky-200")} onClick={() => { setSelectedWorkerId(null); setSelectedDepartmentId(null); setDrawerOpen(true) }} aria-label="Ver agentes"><Users className="h-4 w-4" /></Button>
+        </div>
       </div>
 
       <div className="pointer-events-none absolute bottom-3 left-3 right-16 z-20 hidden grid-cols-5 gap-px overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-2xl md:grid lg:left-72" data-testid="agent-office-truth-strip">
@@ -515,7 +590,7 @@ export function AgentOfficeOverlay({
             </div>
           ) : selectedDepartment ? (
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              <div className="flex items-center gap-3"><span className={cn("h-3 w-3 rounded-full", departmentTone(selectedDepartment))} /><div><p className="text-base font-semibold">{selectedDepartment.name}</p><p className="mt-1 text-xs text-slate-500">{selectedDepartment.commandStatus}</p></div></div>
+              <div className="flex items-center gap-3"><span className={cn("h-3 w-3 rounded-full", departmentTone(selectedDepartment))} /><div><p className="text-base font-semibold">{selectedDepartment.name}</p><p className="mt-1 text-xs text-slate-500">{COMMAND_STATUS_LABELS[selectedDepartment.commandStatus] || selectedDepartment.commandStatus}</p></div></div>
               <p className="mt-5 text-sm leading-6 text-slate-300">{selectedDepartment.description}</p>
               <p className="mt-5 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-xs leading-5 text-slate-300">{selectedDepartment.pool.occupied}/{selectedDepartment.pool.size} puestos · {selectedDepartment.tasksQueued} en cola · {selectedDepartment.progress}% · {money(selectedDepartment.costTodayUsd)} hoy</p>
               {selectedDepartment.currentWork ? <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Trabajo actual</p><p className="mt-2 text-sm leading-5 text-slate-200">{selectedDepartment.currentWork}</p></div> : null}
@@ -536,7 +611,7 @@ export function AgentOfficeOverlay({
         </aside>
       ) : null}
 
-      <nav className="absolute inset-x-0 bottom-0 z-30 grid h-16 grid-cols-5 border-t border-white/10 bg-slate-950 px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="Navegación móvil de la oficina">
+      <nav className="absolute inset-x-0 bottom-0 z-30 grid h-[calc(4rem+env(safe-area-inset-bottom))] grid-cols-5 border-t border-white/10 bg-slate-950 px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" aria-label="Navegación móvil de la oficina">
         {destinations.map((destination) => {
           const Icon = destination.icon
           return <button key={destination.id} type="button" className={cn("flex min-h-11 flex-col items-center justify-center gap-1 text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-400", destination.id === "office" ? "text-sky-300" : "text-slate-500")} aria-current={destination.id === "office" ? "page" : undefined} onClick={() => destination.action && leaveOffice(destination.action)}><Icon className="h-4 w-4" />{destination.label === "Vista 3D" ? "Oficina" : destination.label}</button>

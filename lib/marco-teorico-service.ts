@@ -1,7 +1,7 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
-import { streamSseJson } from "./sse-client"
+import { streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
 
 /**
  * marco-teorico-service — client for the SSE generation pipeline.
@@ -75,8 +75,9 @@ export async function* generate({ projectId, signal, ...body }: GenerateArgs): A
   const resp = await authenticatedFetch(`${API_ROOT}/projects/${projectId}/marco-teorico/generate`, {
     method: "POST",
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...authHeader() },
-    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json", ...freshGenerateHeaders(), ...authHeader() },
+    body: JSON.stringify({ ...body, model: clampDeepSeekModel(body.model) }),
+    cache: "no-store",
     signal,
   })
   if (!resp.ok) {

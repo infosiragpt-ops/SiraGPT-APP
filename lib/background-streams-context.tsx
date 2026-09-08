@@ -33,14 +33,40 @@ export type BackgroundStream = {
   status: BackgroundStreamStatus
   partialContent: string
   startedAt: number
+  lastEventId?: string
   error?: string
 }
+
+const LAST_EVENT_PREFIX = "siragpt:lastEventId:"
+
+export function readPersistedLastEventId(chatId: string): string | null {
+  try {
+    if (typeof sessionStorage === "undefined" || !chatId) return null
+    return sessionStorage.getItem(`${LAST_EVENT_PREFIX}${chatId}`)
+  } catch {
+    return null
+  }
+}
+
+export function persistLastEventId(chatId: string, lastEventId?: string | null): void {
+  const id = String(lastEventId || "").trim()
+  if (!chatId || !id) return
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(`${LAST_EVENT_PREFIX}${chatId}`, id)
+    }
+  } catch {
+    /* private mode / quota */
+  }
+}
+
 
 type Ctx = {
   streams: Map<string, BackgroundStream>
   activeCount: number
   register: (chatId: string, title: string, controller: AbortController) => void
   appendChunk: (chatId: string, chunk: string) => void
+  rememberEventId: (chatId: string, lastEventId: string) => void
   complete: (chatId: string) => void
   fail: (chatId: string, error: string) => void
   cancel: (chatId: string) => void
@@ -61,6 +87,7 @@ export function useBackgroundStreams(): Ctx {
     activeCount: 0,
     register: noop,
     appendChunk: noop,
+    rememberEventId: noop,
     complete: noop,
     fail: noop,
     cancel: noop,
@@ -105,6 +132,7 @@ export function BackgroundStreamsProvider({ children }: { children: React.ReactN
       status: "streaming",
       partialContent: "",
       startedAt: Date.now(),
+      lastEventId: readPersistedLastEventId(chatId) || undefined,
     })
     publish(next)
   }, [clearGcTimer, publish])
@@ -126,6 +154,15 @@ export function BackgroundStreamsProvider({ children }: { children: React.ReactN
       lastChunkTick.current.set(chatId, now)
       setStreams(next)
     }
+  }, [])
+
+  const rememberEventId = React.useCallback((chatId: string, lastEventId: string) => {
+    persistLastEventId(chatId, lastEventId)
+    const s = streamsRef.current.get(chatId)
+    if (!s) return
+    const next = new Map(streamsRef.current)
+    next.set(chatId, { ...s, lastEventId })
+    streamsRef.current = next
   }, [])
 
   const complete = React.useCallback((chatId: string) => {
@@ -187,8 +224,8 @@ export function BackgroundStreamsProvider({ children }: { children: React.ReactN
   }, [])
 
   const value = React.useMemo<Ctx>(() => ({
-    streams, activeCount, register, appendChunk, complete, fail, cancel, dismiss, get,
-  }), [streams, activeCount, register, appendChunk, complete, fail, cancel, dismiss, get])
+    streams, activeCount, register, appendChunk, rememberEventId, complete, fail, cancel, dismiss, get,
+  }), [streams, activeCount, register, appendChunk, rememberEventId, complete, fail, cancel, dismiss, get])
 
   return (
     <BackgroundStreamsContext.Provider value={value}>

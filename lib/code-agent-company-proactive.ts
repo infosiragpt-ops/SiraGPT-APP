@@ -241,3 +241,22 @@ export function buildProactiveCompanySystemBlock(opts: {
 export function departmentBootstrapTitle(department: AgentDepartmentDefinition): string {
   return department.id === "ceo-office" ? "CEO Office" : department.name
 }
+
+
+/** OLA200_WAVE_F FE-080 — cancel the company poll when the panel unmounts. */
+export function createProactivePollController(): {
+  signal: AbortSignal
+  cancelled: () => boolean
+  cancel: () => void
+} {
+  const ac = new AbortController()
+  let cancelled = false
+  return {
+    signal: ac.signal,
+    cancelled: () => cancelled || ac.signal.aborted,
+    cancel: () => {
+      cancelled = true
+      try { ac.abort() } catch { /* ignore */ }
+    },
+  }
+}

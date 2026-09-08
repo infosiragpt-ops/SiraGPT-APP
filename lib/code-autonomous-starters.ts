@@ -176,3 +176,21 @@ export function requestCodeAgentInstruction(
     return false
   }
 }
+
+
+/** OLA200_WAVE_F FE-078 — abort the starter if the user already typed a prompt. */
+export function shouldAbortAutonomousStarter(opts: {
+  userTyped?: boolean
+  composerText?: string | null
+} = {}): boolean {
+  if (opts.userTyped === true) return true
+  return String(opts.composerText || "").trim().length > 0
+}
+
+export function requestCodeAgentInstructionUnlessUserTyped(
+  text: string,
+  options: { mode?: "app"; userTyped?: boolean; composerText?: string | null } = {},
+): boolean {
+  if (shouldAbortAutonomousStarter(options)) return false
+  return requestCodeAgentInstruction(text, { mode: options.mode })
+}

@@ -14,7 +14,7 @@ import { expect, test } from "@playwright/test"
  *   - /privacy-policy    public page
  *   - /icon.svg          static asset
  */
-const PUBLIC_ROUTES = ["/", "/chat", "/privacy-policy", "/icon.svg", "/api/health", "/api/health/live"]
+const PUBLIC_ROUTES = ["/", "/agentes", "/chat", "/privacy-policy", "/icon.svg", "/api/health", "/api/health/live"]
 
 for (const route of PUBLIC_ROUTES) {
   test(`route ${route} does not 5xx`, async ({ page }) => {

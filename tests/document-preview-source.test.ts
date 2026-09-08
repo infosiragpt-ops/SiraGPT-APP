@@ -40,7 +40,11 @@ test("generated Office previews use the shared pdf.js renderer instead of a nati
     /import \{[^}]*PdfRenderer[^}]*\} from "@\/components\/viewers\/UnifiedDocumentViewer"/,
     "the generated preview must not pull the full document viewer into the eager chat bundle",
   )
-  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} \/>/)
+  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} toolbarContainer=\{toolbarContainer\} \/>/)
+  assert.match(source, /state\.kind === "pdf" \? \{ name: filename, url: previewUrl \}/,
+    "direct PDFs must share the real page/zoom renderer with converted Office files")
+  assert.doesNotMatch(source, /state\.kind === "pdf" && \(\s*<iframe/,
+    "a native PDF iframe bypasses our page count and authenticated byte loading")
   assert.doesNotMatch(
     source,
     /state\.kind === "pdfBlob"[\s\S]{0,180}<iframe/,
@@ -48,48 +52,51 @@ test("generated Office previews use the shared pdf.js renderer instead of a nati
   )
 })
 
-test("generated document preview opens as a full-screen overlay on compact viewports", () => {
-  const preview = readFileSync(generatedPreviewSourcePath, "utf8")
-  const chat = readFileSync(path.join(process.cwd(), "components/chat-interface-enhanced.tsx"), "utf8")
-  const hook = readFileSync(path.join(process.cwd(), "hooks/use-mobile.tsx"), "utf8")
+test("office previews wait on the server object instead of painting local File pages mid-upload", () => {
+  const source = viewerSource()
 
-  assert.match(hook, /DOCUMENT_PREVIEW_OVERLAY_MAX_PX\s*=\s*879/, "split mins 420+460 cannot fit below 880px")
-  assert.match(hook, /export function useDocumentPreviewOverlay/)
-  assert.match(preview, /useDocumentPreviewOverlay/)
-  assert.match(preview, /createPortal\(shell, document\.body\)/)
-  assert.match(preview, /data-presentation=\{isOverlay \? "mobile-overlay" : "desktop-split"\}/)
-  assert.match(preview, /Más opciones del documento/)
-  assert.match(
-    readFileSync(path.join(process.cwd(), "components/viewers/UnifiedDocumentViewer.tsx"), "utf8"),
-    /data-presentation=\{isOverlay \? "mobile-overlay"/,
+  assert.doesNotMatch(
+    source,
+    /if \(state === "probing" && hasClientPreviewSource\(a\)\) return <>\{fallback\}<\/>/,
+    "a local File exists before upload finishes — using it as the probing fallback shows a finished thesis page at 80%",
   )
   assert.match(
-    readFileSync(path.join(process.cwd(), "components/message-component.tsx"), "utf8"),
-    /data-testid="generated-document-card"/,
+    source,
+    /resolvePreviewGate\(attachment\)/,
+    "the unified viewer must consult the upload/object-ready gate before rendering pages",
   )
   assert.match(
-    readFileSync(path.join(process.cwd(), "components/agentic-steps.tsx"), "utf8"),
-    /data-preview-openable="true"/,
+    source,
+    /if \(state === "probing"\)/,
+    "server PDF conversion must keep the professional loading state while LibreOffice runs",
   )
-  assert.match(chat, /previewUsesOverlay/)
   assert.match(
-    chat,
-    /documentPreviewOpen && !previewUsesOverlay/,
-    "the desktop split must stay off on phones so the overlay is not clipped off-screen",
+    source,
+    /CONVERSION_LOADING_LABEL/,
+    "LibreOffice conversion must show Generando vista previa… not a finished page",
+  )
+  assert.match(
+    source,
+    /isRetryablePreviewHttpStatus/,
+    "409/425 from /render (object not yet in R2) must retry instead of falling back to a client renderer",
   )
 })
 
-test("DOCX server-conversion probing never blocks the client-side fallback preview", () => {
+test("spreadsheets use the same LibreOffice PDF path as Word and decks", () => {
   const source = viewerSource()
-
   assert.match(
     source,
-    /if \(state === "probing" && hasClientPreviewSource\(a\)\) return <>\{fallback\}<\/>/,
-    "DOCX attachments with a file/url/extractedText source must render the fallback immediately while server PDF conversion probes in the background",
+    /case "xlsx":\s+return \(\s+<ServerConvertedPdfRenderer/,
+    "xlsx must go through soffice/calc_pdf_Export so sheet layout is not a squashed HTML table",
   )
-  assert.doesNotMatch(
-    source,
-    /state === "probing" && hasClientPreviewSource\(a\) && !preferServer/,
-    "preferServer must not gate the fallback, otherwise DOCX preview can sit on a blank/loading panel while conversion hangs",
+})
+
+test("generated document preview stays on the loading gate until the object is ready", () => {
+  const source = readFileSync(generatedPreviewSourcePath, "utf8")
+  assert.match(source, /previewGate\.ready/)
+  assert.match(source, /CONVERSION_LOADING_LABEL/)
+  assert.match(
+    readFileSync(path.join(process.cwd(), "lib/document-preview-gate.ts"), "utf8"),
+    /Generando vista previa/,
   )
 })

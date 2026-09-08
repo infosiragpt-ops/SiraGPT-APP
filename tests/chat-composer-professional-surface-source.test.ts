@@ -11,12 +11,22 @@ const composerSurfacePath = path.join(process.cwd(), "components", "chat", "Chat
 const composerSurface = fs.readFileSync(composerSurfacePath, "utf8")
 const composerLayoutPath = path.join(process.cwd(), "lib", "composer-layout.ts")
 const composerLayout = fs.readFileSync(composerLayoutPath, "utf8")
+const effortMenuPath = path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx")
+const effortMenu = fs.readFileSync(effortMenuPath, "utf8")
+const contextMenuPath = path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx")
+const contextMenu = fs.readFileSync(contextMenuPath, "utf8")
+const permissionMenuPath = path.join(process.cwd(), "components", "chat", "composer-permission-menu.tsx")
+const permissionMenu = fs.readFileSync(permissionMenuPath, "utf8")
+const popoverPath = path.join(process.cwd(), "components", "ui", "popover.tsx")
+const popover = fs.readFileSync(popoverPath, "utf8")
+const esMessages = JSON.parse(fs.readFileSync(path.join(process.cwd(), "messages", "es.json"), "utf8"))
+const enMessages = JSON.parse(fs.readFileSync(path.join(process.cwd(), "messages", "en.json"), "utf8"))
 
 describe("professional chat composer surface source contract", () => {
   it("uses one neutral solid surface without stacked rings or glass", () => {
     assert.match(
       globals,
-      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(220 10% 86% \/ 0\.96\)/,
+      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(220 10% 89% \/ 0\.96\)/,
       "the light composer should use a crisp neutral one-pixel outline"
     )
     assert.match(
@@ -42,7 +52,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(220 9% 72% \/ 0\.22\)/,
+      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(220 10% 80% \/ 0\.12\)/,
       "focused text should strengthen the complete neutral contour"
     )
     assert.match(
@@ -122,8 +132,22 @@ describe("professional chat composer surface source contract", () => {
   it("keeps all primary composer controls at accessible stable dimensions", () => {
     assert.match(
       globals,
-      /\.composer-input-row \.composer-toolbar-actions > button\s*\{[\s\S]{0,240}width: 2\.75rem !important;[\s\S]{0,160}height: 2\.75rem !important;/,
+      /\.composer-input-row \.composer-toolbar-actions > button\.composer-dictation-button,\s*\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button,\s*\.composer-input-row \.composer-toolbar-actions > button\.composer-stop-button\s*\{[\s\S]{0,240}width: 2\.75rem !important;[\s\S]{0,160}height: 2\.75rem !important;/,
       "send, stop and dictation controls should keep a 44px target"
+    )
+    const blanketToolbarButtonRule = globals.match(
+      /\.composer-input-row \.composer-toolbar-actions > button\s*\{([^}]*)\}/,
+    )?.[1]
+    assert.ok(blanketToolbarButtonRule, "the shared toolbar button rule should still exist for color")
+    assert.doesNotMatch(
+      blanketToolbarButtonRule,
+      /width:|height:/,
+      "the blanket toolbar rule must not force chips to 44px — it crushed the effort label to a bare glyph"
+    )
+    assert.match(
+      globals,
+      /\.composer-permission-chip,\s*\.composer-effort-chip\s*\{[\s\S]{0,160}height: 2rem;/,
+      "the compact chips keep their own 32px pill geometry"
     )
     assert.match(
       globals,
@@ -132,8 +156,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: #0a0a0a !important;[\s\S]{0,80}color: #ffffff !important;/,
-      "the send disc must stay solid black with a white arrow"
+      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: #0d0d0d !important;[\s\S]{0,80}color: #ffffff !important;/,
+      "the send disc uses the professional black surface when the composer has text"
     )
   })
 
@@ -183,7 +207,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.75rem;[\s\S]{0,220}min-height: 3\.25rem;/,
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.25rem;[\s\S]{0,220}min-height: 3\.25rem;/,
       "phones should keep the same compact single-row hierarchy"
     )
     assert.match(
@@ -203,11 +227,174 @@ describe("professional chat composer surface source contract", () => {
     )
   })
 
+  it("matches the approved two-row reference without replacing live controls", () => {
+    assert.equal(esMessages.composer.placeholderDefault, "Escribe un mensaje…")
+    assert.equal(enMessages.composer.placeholderDefault, "Type a message…")
+    assert.match(
+      globals,
+      /\.composer-surface\s*\{[\s\S]{0,180}border-radius: 1\.25rem;/,
+      "the reference uses a restrained 20px surface radius",
+    )
+    assert.match(
+      globals,
+      /\.composer-surface\[data-composer-layout="stacked"\] \.composer-input-row\s*\{[\s\S]{0,260}row-gap: 1\.05rem;[\s\S]{0,100}padding: 1rem 0\.15rem 0\.1rem 0\.1rem !important;/,
+      "the placeholder and footer must occupy the same vertical positions as the reference",
+    )
+    for (const [selector, order] of [
+      ["composer-context-trigger", 10],
+      ["composer-model-inline", 20],
+      ["composer-effort-chip", 30],
+      ["composer-dictation-button", 40],
+      ["composer-stop-button", 50],
+    ] as const) {
+      assert.match(
+        globals,
+        new RegExp(`\\.${selector}\\s*\\{[^}]*order: ${order};`),
+        `${selector} must preserve the reference toolbar order`,
+      )
+    }
+    assert.match(
+      effortMenu,
+      /value: "Max", label: "Extra high"/,
+      "the far-right Max compute value should expose the reference's Extra high label",
+    )
+    assert.equal(
+      (effortMenu.match(/<PopoverTrigger asChild>/g) || []).length,
+      1,
+      "effort owns only its lightning-chip trigger",
+    )
+    assert.equal(
+      (contextMenu.match(/<PopoverTrigger asChild>/g) || []).length,
+      1,
+      "context owns an independent progress-ring trigger",
+    )
+    assert.match(contextMenu, /data-testid="composer-context-trigger"/)
+    assert.match(contextMenu, /data-testid="composer-context-menu"/)
+    assert.match(contextMenu, /role="progressbar"/)
+    assert.doesNotMatch(
+      effortMenu,
+      /composer-context-trigger|composer-effort-ring/,
+      "the effort popover must not reclaim the context trigger",
+    )
+    assert.match(chatInterface, /composer-dictation-button/)
+    assert.match(
+      chatInterface,
+      /<ComposerContextMenu[\s\S]{0,260}\{renderComposerModelControls\(\)\}[\s\S]{0,120}<ComposerEffortMenu[\s\S]{0,180}\{renderDictationButton\(\)\}\s*<ChatComposerPrimaryAction/,
+      "context, model, effort, microphone and primary action must keep the approved order",
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /!isStopButtonVisible\s*&&\s*\(\s*renderDictationButton\(\)/,
+      "the reference keeps microphone and Stop visible together",
+    )
+    assert.match(
+      chatInterface,
+      /<ComposerPermissionMenu\s*\/>/,
+      "the composer should expose the permission menu without injecting agent-mode controls",
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /<ComposerPermissionMenu[^>]*agentToggle/,
+      "the permission menu must not receive Construir or Planificar controls",
+    )
+
+    const levelBlock = permissionMenu.match(/const LEVELS[\s\S]*?= \[([\s\S]*?)\n\]/)?.[1]
+    assert.ok(levelBlock, "the permission menu should declare its five permission levels")
+    const permissionLevels = [...levelBlock.matchAll(/\{\s*id: "([^"]+)",\s*label: "([^"]+)"/g)].map(
+      ([, id, label]) => ({ id, label }),
+    )
+    assert.deepEqual(
+      permissionLevels,
+      [
+        { id: "default", label: "Default" },
+        { id: "read", label: "Solo lectura" },
+        { id: "protected", label: "Protegido" },
+        { id: "workspace", label: "Workspace" },
+        { id: "full", label: "Acceso completo" },
+      ],
+      "the popover must contain exactly the five approved permission levels in order",
+    )
+    for (const copy of [
+      "Seguir la política configurada del agente.",
+      "Lectura dentro de la raíz de la sesión; se bloquean las escrituras y los comandos.",
+      "Sin tools de escritura hasta que exista un revisor de aprobación.",
+      "La computadora sigue acotada a /workspace de esta conversación.",
+      "Sin revisor; los archivos y comandos no tienen restricciones extra.",
+    ]) {
+      assert.ok(permissionMenu.includes(copy), `missing permission description: ${copy}`)
+    }
+    assert.doesNotMatch(
+      permissionMenu,
+      /agentToggle|Modo del agente|Construir|Planificar|composer-permission-agent-mode/,
+      "agent-mode controls must not appear anywhere in the permission menu",
+    )
+    assert.match(
+      permissionMenu,
+      /<PopoverContent\s+forceMount\s+hidden=\{!open\}/,
+      "the five permission levels must stay mounted while the popover is closed",
+    )
+    assert.match(
+      permissionMenu,
+      /aria-label=\{`Permisos: \$\{active\.label\}`\}/,
+      "the icon trigger must name the level for assistive tech",
+    )
+    assert.match(
+      permissionMenu,
+      /title=\{active\.label\}/,
+      "hover can name the level without putting the title in the bar",
+    )
+    assert.doesNotMatch(
+      permissionMenu,
+      /<span className="truncate">\{active\.label\}<\/span>/,
+      "the toolbar trigger must stay icon-only — no Acceso completo / Permisos label",
+    )
+    assert.match(
+      popover,
+      /<PopoverPrimitive\.Portal forceMount=\{forceMount\}>[\s\S]{0,180}forceMount=\{forceMount\}/,
+      "the shared popover wrapper must preserve forced content through its portal",
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /^\s{6}agentToggle=\{<SiraCodeAgentToggle \/>\}/m,
+      "the closed composer surface must stay two rows tall",
+    )
+    assert.match(
+      globals,
+      /\.composer-input-row \.composer-model-inline \.chat-model-trigger\s*\{[\s\S]{0,220}border: 1px solid transparent;/,
+      "the live model selector must remain dynamic without drawing a nested capsule",
+    )
+    assert.match(
+      globals,
+      /\.composer-stop-button::before\s*\{[\s\S]{0,260}background: #fee2e2;/,
+      "the accessible stop target should contain the reference's pale-red visual disc",
+    )
+    assert.match(
+      globals,
+      /\.composer-stop-button \.composer-stop-icon\s*\{[\s\S]{0,120}background-color: #dc2626 !important;/,
+      "the stop glyph should remain solid red",
+    )
+    assert.match(
+      globals,
+      /\.composer-context-trigger\s*\{[^}]*border: 0;/,
+      "only the compact context meter should be visible, not a second outer ring",
+    )
+    assert.match(
+      globals,
+      /\.composer-effort-chip\.is-high svg\s*\{\s*color: #e89a96;/,
+      "the high-effort lightning should use the reference's restrained warm accent",
+    )
+    assert.match(
+      globals,
+      /\.composer-dictation-button:not\(\[aria-pressed="true"\]\)\s*\{\s*color: hsl\(220 8% 64%\) !important;/,
+      "the idle microphone should stay visually quiet",
+    )
+  })
+
   it("preserves the approved width and height across chat states", () => {
     assert.match(
       globals,
-      /\.chat-viewport\s*\{[^}]{0,1600}--chat-content-max-width: 51\.75rem;/,
-      "the chat viewport should own one 828px width token for messages and composer"
+      /\.chat-viewport\s*\{[^}]{0,1600}--content-max: 48rem;[\s\S]{0,80}--chat-content-max-width: var\(--content-max\);/,
+      "the chat viewport should own one 48rem width token for messages and composer"
     )
     assert.match(
       globals,
@@ -269,10 +456,50 @@ describe("professional chat composer surface source contract", () => {
       /export function shouldStackComposer/,
       "stacking the footer toolbar must live in a pure layout helper"
     )
+    assert.match(
+      chatInterface,
+      /data-testid="chat-composer-expand"/,
+      "the /chat composer exposes the same Ampliar/Contraer control as /code"
+    )
+    assert.match(
+      chatInterface,
+      /aria-label=\{composerExpanded \? "Contraer" : "Ampliar"\}/,
+      "expand control uses Ampliar / Contraer labels"
+    )
     assert.doesNotMatch(
       chatInterface,
-      /data-expanded=|getComposerTextareaMaxHeight|composerIsExpanded/,
-      "growth stays CSS/JS layout only — no expanded UI mode flag"
+      /chat-composer-expand[\s\S]{0,500}hidden md:/,
+      "expand must stay visible on phone — not hidden md: only"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /ActionsDropdown[\s\S]{0,220}data-testid="chat-composer-expand"/,
+      "expand must not stay a permanent sibling of +"
+    )
+    assert.match(
+      chatInterface,
+      /composer-textarea-shell[\s\S]{0,500}has-expand-control[\s\S]{0,500}chat-composer-expand/,
+      "expand overlays the textarea shell instead of the bottom toolbar"
+    )
+    assert.match(
+      chatInterface,
+      /composerShowExpand \? \(/,
+      "expand is gated; it is not rendered next to + on every short draft"
+    )
+    assert.match(
+      composerLayout,
+      /export function shouldShowComposerExpandControl/,
+      "overflow gating lives in the shared layout helper"
+    )
+    assert.match(
+      globals,
+      /\.composer-expand-button\s*\{[\s\S]{0,180}position: absolute;[\s\S]{0,80}top: 0\.05rem;[\s\S]{0,80}right: 0\.05rem;/,
+      "expand sits on the textarea top-right corner"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /getComposerTextareaMaxHeight|composerIsExpanded/,
+      "legacy expand flag names stay unused"
     )
     assert.equal(
       (composerSurface.match(/data-testid="chat-composer-surface"/g) || []).length,

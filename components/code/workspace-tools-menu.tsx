@@ -168,6 +168,7 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
           side="bottom"
           sideOffset={6}
           className="w-[320px] rounded-xl border-border/70 p-0 shadow-xl"
+          aria-label="Herramientas del workspace"
         >
           <div className="border-b border-border/50 p-2.5">
             <Input
@@ -176,6 +177,7 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
               placeholder="Buscar herramientas y archivos…"
               className="h-8 border-0 bg-muted/30 text-[13px] shadow-none focus-visible:ring-1"
               autoFocus
+              aria-label="Buscar herramientas y archivos"
             />
           </div>
           <div className="max-h-[min(420px,60vh)] overflow-y-auto py-1">
@@ -227,6 +229,7 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
                 variant={workflowHours === 10 ? "default" : "outline"}
                 size="sm"
                 onClick={() => setWorkflowHours(10)}
+                aria-label="Duración del workflow: 10 horas"
               >
                 10 horas
               </Button>
@@ -235,6 +238,7 @@ export function WorkspaceToolsMenu({ children, handlers }: Props) {
                 variant={workflowHours === 20 ? "default" : "outline"}
                 size="sm"
                 onClick={() => setWorkflowHours(20)}
+                aria-label="Duración del workflow: 20 horas"
               >
                 20 horas
               </Button>
@@ -262,6 +266,7 @@ function ToolRow({ tool, onSelect }: { tool: WorkspaceToolDef; onSelect: () => v
         type="button"
         className="flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
         onClick={onSelect}
+        aria-label={tool.title}
       >
         <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
           <Icon className="h-4 w-4" />

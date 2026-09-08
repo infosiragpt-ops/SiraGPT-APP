@@ -18,6 +18,32 @@
 
 import type { CodeFiles } from "./code-workspace-utils"
 
+// OLA200_WAVE_F FE-051 — cancel the previous preview build before starting another.
+let __previewBuildGeneration = 0
+let __previewBuildAbort: AbortController | null = null
+
+export function currentPreviewBuildGeneration(): number {
+  return __previewBuildGeneration
+}
+
+export function cancelPreviewBuild(reason = "superseded"): void {
+  try { __previewBuildAbort?.abort() } catch { /* ignore */ }
+  __previewBuildAbort = null
+  void reason
+}
+
+export function beginPreviewBuild(): { generation: number; signal: AbortSignal } {
+  cancelPreviewBuild("superseded")
+  __previewBuildGeneration += 1
+  __previewBuildAbort = new AbortController()
+  return { generation: __previewBuildGeneration, signal: __previewBuildAbort.signal }
+}
+
+export function isCurrentPreviewBuild(generation: number): boolean {
+  return generation === __previewBuildGeneration
+}
+
+
 export type PreviewKind = "html" | "react" | "markdown" | "svg" | "unsupported" | "empty"
 
 export type PreviewResult = {
@@ -687,6 +713,7 @@ export function projectNeedsDevServer(files: CodeFiles): boolean {
 
 /** Pick the best entry + kind given the active file and the whole project. */
 export function buildPreviewDocument(files: CodeFiles, activePath: string | null, nonce = ""): PreviewResult {
+  beginPreviewBuild()
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 

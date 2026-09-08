@@ -30,13 +30,14 @@ describe("chat media composer configuration", () => {
   })
 
   it("keeps working voice defaults and avoids forcing a video engine", () => {
-    assert.deepEqual(VOICE_MODEL_OPTIONS, ["Gemini 2.5 Flash TTS", "ElevenLabs"])
+    assert.deepEqual(VOICE_MODEL_OPTIONS, ["Gemini 2.5 Flash TTS", "ElevenLabs", "Sira Voz"])
     assert.equal(VOICE_COMPOSER_PLACEHOLDER, "Escribe el texto que quieres convertir en voz")
     assert.equal(DEFAULT_VIDEO_MODEL, "")
   })
 
   it("classifies provider and model capabilities deterministically", () => {
-    assert.equal(providerForMediaModel("google/imagen-4"), "OpenRouter")
+    // google/* models route direct to Google in the reconciled drift config.
+    assert.equal(providerForMediaModel("google/imagen-4"), "Google")
     assert.equal(providerForMediaModel("Veo 3"), "Google")
     assert.equal(providerForMediaModel("Kling 2.1"), "Kling")
     assert.equal(isImageModelEntry({ displayName: "GPT Image 1" }), true)

@@ -329,8 +329,15 @@ test('runAgentLoop caps at 25 iterations', async () => {
     executors: { async list_files() { return '(no files)'; } },
     maxIterations: 25,
   });
-  assert.equal(result.stoppedReason, 'max_iterations');
-  assert.equal(result.iterations, 25);
+  // 3H59 fingerprint cut is a real safety stop when the model repeats the
+  // same tool+args. Either that or the hard 25-iteration cap is valid;
+  // neither path may run past the cap.
+  assert.ok(
+    result.stoppedReason === 'max_iterations' || result.stoppedReason === 'loop_fingerprint_cut',
+    result.stoppedReason,
+  );
+  assert.ok(result.iterations <= 25, result.iterations);
+  assert.ok(result.iterations >= 1, result.iterations);
 });
 
 test('makeToolExecutors execute_python execute_bash render_preview set_slide_background', async () => {

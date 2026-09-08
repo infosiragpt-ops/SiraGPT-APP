@@ -111,7 +111,10 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
   }, [deploymentId])
 
   React.useEffect(() => {
-    const url = deploymentsApi.logsStreamUrl(deploymentId)
+    const resumeId = (() => {
+      try { return sessionStorage.getItem(`siragpt:lastEventId:deploy:${deploymentId}`) } catch { return null }
+    })()
+    const url = deploymentsApi.logsStreamUrl(deploymentId, resumeId)
     let source: EventSource | null = null
 
     try {
@@ -123,6 +126,9 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
 
     const onOpen = () => setConnection("live")
     const onLog = (event: MessageEvent) => {
+      if (event.lastEventId) {
+        try { sessionStorage.setItem(`siragpt:lastEventId:deploy:${deploymentId}`, event.lastEventId) } catch { /* quota */ }
+      }
       try {
         const payload = JSON.parse(event.data) as Partial<LogEntry>
         const entry = normalizeLogEntry(payload)

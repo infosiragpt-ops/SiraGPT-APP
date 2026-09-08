@@ -26,11 +26,9 @@ import {
   Monitor,
   MonitorSmartphone,
   MousePointer2,
-  Play,
   RefreshCw,
   RotateCw,
   Smartphone,
-  Square,
   Tablet,
   TerminalSquare,
   Zap,
@@ -1058,17 +1056,12 @@ export function PreviewPane() {
   }, [files, activePath])
 
   const openInNewTab = React.useCallback(() => {
+    // El HTML estático del preview también es salida NO confiable del agente.
+    // Abrirlo como documento top-level hereda el origen de SiraGPT (acceso a
+    // localStorage/cookies/APIs) — mismo vector que el runner en vivo, que ya
+    // está bloqueado. Mantenemos la preview aislada dentro del iframe sandboxed.
     if (typeof window === "undefined") return
-    // NUNCA abrir el runner en vivo en una pestaña top-level: ahí no hay sandbox
-    // y el código generado NO confiable correría con el origen real de SiraGPT
-    // (acceso a localStorage/cookies/APIs). La app en vivo solo se ve dentro del
-    // iframe aislado. Para la preview estática (HTML) sí abrimos un blob.
-    if (liveRun.phase === "ready") return
-    const blob = new Blob([result.html], { type: "text/html" })
-    const url = URL.createObjectURL(blob)
-    window.open(url, "_blank", "noopener,noreferrer")
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [liveRun.phase, result.html])
+  }, [])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -1404,33 +1397,8 @@ export function PreviewPane() {
             onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
           />
           <span className="mx-0.5 h-4 w-px bg-border/50" />
-          {/* Phase B — auto-run stays primary; manual run is available when idle/error. */}
-          {canRunProject ? (
-            <>
-              {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
-                <button
-                  type="button"
-                  onClick={stopApp}
-                  title="Detener el dev server"
-                  className="flex h-6 items-center gap-1 rounded-md bg-red-600/90 px-2 text-[11px] font-medium text-white transition-colors hover:bg-red-600"
-                >
-                  {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
-                  <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void runApp()}
-                  title="Instalar dependencias y correr el app (npm)"
-                  className="flex h-6 items-center gap-1 rounded-md bg-emerald-600 px-2 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500"
-                >
-                  <Play className="h-3 w-3" />
-                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
-                </button>
-              )}
-              <span className="mx-0.5 h-4 w-px bg-border/50" />
-            </>
-          ) : null}
+          {/* Manual run/stop lives in the workspace ⋯ overflow — no green
+              Ejecutar / Arrancando play button in this chrome. Auto-run stays. */}
 
           {/* Type-check verdict for the live run: verifying → clean → or the
               error count while the agent auto-repairs. Host runner only. */}

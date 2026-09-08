@@ -25,6 +25,12 @@ export type AgentTask = {
   createdAt: number
   /** Timestamp (ms) when the task was last updated. */
   updatedAt: number
+  /** Structured-retry bookkeeping: execution attempts so far. */
+  attempts?: number
+  /** Earliest ms timestamp when a requeued task may run again (retry backoff). */
+  notBefore?: number
+  /** Cause of the last failure, for actionable reporting. */
+  lastError?: string
 }
 
 /** Context accumulated during the intake gate (slot-filling, goal-adaptive). */

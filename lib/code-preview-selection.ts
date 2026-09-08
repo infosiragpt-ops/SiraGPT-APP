@@ -124,3 +124,29 @@ export function buildSelectedElementPrompt(
     "Aplica el cambio en los archivos correctos del workspace, conserva el resto del diseño y verifica que el preview siga funcionando.",
   ].join("\n")
 }
+
+
+/** OLA200_WAVE_F FE-052 — ignore a selection that belongs to a destroyed preview. */
+export type PreviewSelectionLifetime = {
+  previewId?: string | null
+  generation?: number | null
+  destroyed?: boolean
+}
+
+export function shouldApplyPreviewSelection(
+  detail: CodePreviewSelectionDetail & PreviewSelectionLifetime,
+  live: PreviewSelectionLifetime,
+): boolean {
+  if (detail?.destroyed || live?.destroyed) return false
+  if (live?.previewId && detail?.previewId && String(live.previewId) !== String(detail.previewId)) {
+    return false
+  }
+  if (
+    Number.isFinite(Number(live?.generation))
+    && Number.isFinite(Number(detail?.generation))
+    && Number(live.generation) !== Number(detail.generation)
+  ) {
+    return false
+  }
+  return true
+}

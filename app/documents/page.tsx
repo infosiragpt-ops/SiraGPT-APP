@@ -139,7 +139,7 @@ export default function DocumentsPage() {
       toast.info("Este documento no tiene un chat asociado.")
       return
     }
-    window.location.href = `/chat?chatId=${encodeURIComponent(row.chatId)}`
+    window.location.href = `/agentes/${encodeURIComponent(row.chatId)}`
   }, [])
 
   return (

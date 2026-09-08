@@ -146,15 +146,23 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(normalized)",
   },
   {
+    file: "lib/document-first-page.ts",
+    reason: "Data/blob first-page thumb branch after trusted Sira assets use authenticatedFetch.",
+    accepts: (text) => text === "fetch(normalized)",
+  },
+  {
     file: "components/download-buttons.tsx",
     reason: "Public or external generated-image download.",
     accepts: (text) => text === "fetch(content)",
   },
   {
     file: "components/fal/fal-model-gallery.tsx",
-    reason: "Public cached FAL model manifest GET.",
+    reason: "Public cached FAL model manifest GET plus the optional-auth VIDEO admin catalog GET used to filter hidden video models.",
     accepts: (text) =>
-      text === 'fetch("/api/ai/fal-models")'
+      (
+        text === 'fetch("/api/ai/fal-models", { headers: { "Cache-Control": "no-cache" } })'
+        || text === 'fetch("/api/ai/models?type=VIDEO", { headers: { "Cache-Control": "no-cache" } })'
+      )
       && isCredentialFreePublicFetch(text),
     required: true,
   },
@@ -211,6 +219,11 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     file: "lib/attachments/link-preview.ts",
     reason: "Public same-origin link-preview GET with an injectable fetch seam.",
     accepts: (text) => text === "fetch(...args)",
+  },
+  {
+    file: "lib/attachment-url.ts",
+    reason: "Presigned external/blob asset download with a 403 re-presign retry; the presign refresh itself uses authenticatedFetch.",
+    accepts: (text) => text === "fetch(url, init)" || text === "fetch(next, init)",
   },
   {
     file: "lib/code-agent/observability.ts",

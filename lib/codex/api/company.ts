@@ -76,9 +76,19 @@ export const companyCodexApi = {
       },
     ).then((result) => result.portfolio),
   upsertDepartment: (id: string, department: Partial<CodexCompanyDepartment> & { name: string; poolSize?: number; dailyBudgetUsd?: number | null }) =>
-    req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(
+    req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity; computer?: { computerRunId: string; resumed?: boolean } | null }>(
       `/projects/${id}/departments`,
       { method: "PUT", body: JSON.stringify({ department }) },
+    ),
+  ensureDepartmentComputer: (id: string, departmentId: string) =>
+    req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity; computer?: { computerRunId: string; resumed?: boolean } | null }>(
+      `/projects/${id}/departments`,
+      { method: "PUT", body: JSON.stringify({ ensureComputer: true, departmentId, department: { id: departmentId } }) },
+    ),
+  startDepartmentComputerSession: (id: string, departmentId: string) =>
+    req<{ url: string; container?: string; persist?: string; resumed?: boolean; image?: string; runtime?: string }>(
+      `/projects/${id}/departments/${encodeURIComponent(departmentId)}/computer/session`,
+      { method: "POST", timeoutMs: 90_000 },
     ),
   deleteDepartment: (id: string, departmentId: string) =>
     req<{ departments: CodexCompanyDepartment[]; departmentPools: CodexDepartmentPool[]; capacity: CodexCompanyCapacity }>(

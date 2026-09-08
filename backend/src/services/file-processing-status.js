@@ -81,11 +81,13 @@ async function setStage(prisma, fileId, stage, opts = {}) {
   }
   // Structured log mirrors the DB write so it's queryable in pino
   // even if the row could not be updated.
+  const durationMs = Number.isFinite(Number(opts.durationMs)) ? Number(opts.durationMs) : null;
   console.log('[file-status]', JSON.stringify({
     event: 'file_processing_stage',
     file_id: fileId,
     user_id: opts.userId || null,
     stage,
+    duration_ms: durationMs,
     error: stage === 'failed' ? data.processingError : null,
     written,
     ts: now.toISOString(),

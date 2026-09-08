@@ -153,7 +153,7 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
   const isShortTurn = wordCount <= 6;
   // Saludos/agradecimientos puros: la frase ENTERA es chitchat (anclado a ^ y $)
   // para que "hola necesito X" NO se trate como saludo.
-  const looksLikeChitChat = /^(?:[¿¡]\s*)?(?:hola|hi|hello|hey|holi|holaa+|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|qu[eé]\s+tal|c[oó]mo\s+est[aá]s|c[oó]mo\s+vas?|c[oó]mo\s+andas|qu[eé]\s+hay|qu[eé]\s+pasa|qu[eé]\s+onda|saludos|gracias|muchas\s+gracias|mil\s+gracias|ok(?:ay)?|vale|listo|perfecto|genial|s[ií]|no|claro|entendido|de\s+acuerdo|adi[oó]s|chao|hasta\s+luego|bye)[\s!.?¿¡,]*$/i.test(promptText);
+  const looksLikeChitChat = isShortChitchatPrompt(promptText);
   // Follow-ups deícticos/continuativos cortos: solo cuando el turno actual
   // explícitamente referencia el contexto anterior. Evita pasar prompts
   // ambiguos como "el reporte" al LLM solo porque haya historial.
@@ -275,8 +275,18 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
   }
 }
 
+const SHORT_CHITCHAT_RE = /^(?:[¿¡]\s*)?(?:hola|hi|hello|hey|holi|holaa+|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|qu[eé]\s+tal|c[oó]mo\s+est[aá]s|c[oó]mo\s+vas?|c[oó]mo\s+andas|qu[eé]\s+hay|qu[eé]\s+pasa|qu[eé]\s+onda|saludos|gracias|muchas\s+gracias|mil\s+gracias|ok(?:ay)?|vale|listo|perfecto|genial|s[ií]|no|claro|entendido|de\s+acuerdo|adi[oó]s|chao|hasta\s+luego|bye)[\s!.?¿¡,]*$/i;
+
+function isShortChitchatPrompt(text) {
+  const promptText = String(text || '').trim();
+  if (!promptText) return false;
+  const wordCount = promptText.split(/\s+/).filter(Boolean).length;
+  return wordCount <= 6 && SHORT_CHITCHAT_RE.test(promptText);
+}
+
 module.exports = {
   triageIntent,
+  isShortChitchatPrompt,
   DEFAULTS,
   // exposed for tests
   _internal: { normalizeQuestion, pickHeuristicQuestion, readScore, withTimeout, looksLikeVagueRequest },

@@ -108,7 +108,11 @@ describe("codexApi.getOfficeState", () => {
       error: "codex_office_state_failed",
       message: "Office state unavailable",
     }
-    fetchMock.mockResolvedValueOnce(jsonResponse(failure, 503))
+    // The shared transport retries a 503 once (250ms backoff) before the
+    // structured error surfaces; both attempts see the same failure body.
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(failure, 503))
+      .mockResolvedValueOnce(jsonResponse(failure, 503))
 
     await expect(codexApi.getOfficeState("project-1")).rejects.toMatchObject({
       message: "Office state unavailable",
@@ -116,6 +120,7 @@ describe("codexApi.getOfficeState", () => {
       body: failure,
     })
 
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     const [input] = fetchMock.mock.calls[0]
     const url = new URL(String(input))
     expect(url.pathname).toBe("/api/codex/projects/project-1/office-state")

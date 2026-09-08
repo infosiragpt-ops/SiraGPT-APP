@@ -287,6 +287,7 @@ async function runAgent(opts) {
     depth,
     clearance,
     provider,
+    model,
     signal,
     ...(Array.isArray(skillIds) ? { allowedSkillIds: skillIds } : {}),
     taskId: opts.taskId || null,
@@ -409,6 +410,7 @@ async function runAgent(opts) {
         tools,
         thinking,
         executorModel: model,
+        ...(opts.plannerModel ? { plannerModel: opts.plannerModel } : {}),
         ctx,
       });
       return {

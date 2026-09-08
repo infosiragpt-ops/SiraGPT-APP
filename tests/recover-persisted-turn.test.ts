@@ -1,0 +1,131 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+import {
+  isExplicitUserStop,
+  pollPersistedAssistantTurn,
+  shouldRecoverPersistedGenerate,
+} from "../lib/recover-persisted-turn"
+
+describe("recover persisted generate turn", () => {
+  it("does not treat Safari AbortError as user Stop", () => {
+    assert.equal(isExplicitUserStop(undefined, false), false)
+    assert.equal(shouldRecoverPersistedGenerate({ name: "AbortError" }), true)
+    const stopped = new AbortController()
+    stopped.abort()
+    assert.equal(isExplicitUserStop(stopped.signal, false), true)
+    assert.equal(
+      shouldRecoverPersistedGenerate({ name: "AbortError" }, { signal: stopped.signal }),
+      false,
+    )
+  })
+
+  it("recovers Cloudflare 520 and failed-to-fetch cuts", () => {
+    assert.equal(shouldRecoverPersistedGenerate({ status: 520, message: "error code: 520" }), true)
+    assert.equal(shouldRecoverPersistedGenerate({ name: "TypeError", message: "Failed to fetch" }), true)
+    assert.equal(shouldRecoverPersistedGenerate({ code: "stream_stall", message: "Stream stalled" }), true)
+    assert.equal(shouldRecoverPersistedGenerate({ status: 429, message: "quota" }), false)
+    assert.equal(
+      shouldRecoverPersistedGenerate({ status: 503, code: "connection_unavailable", message: "Conexión no disponible" }),
+      false,
+    )
+    assert.equal(shouldRecoverPersistedGenerate({ status: 503 }), false)
+    assert.equal(shouldRecoverPersistedGenerate({ status: 401, message: "unauthorized" }), false)
+  })
+
+  it("can poll immediately when the stream already finished", async () => {
+    const pending = { idempotencyKey: "turn-done", turnKey: "turn-done", streamId: "s" }
+    let calls = 0
+    const recovered = await pollPersistedAssistantTurn({
+      chatId: "chat-1",
+      pending,
+      attempts: 2,
+      delayMs: 0,
+      getChat: async () => {
+        calls += 1
+        return {
+          chat: {
+            id: "chat-1",
+            messages: [
+              { role: "USER", content: "hola", metadata: { idempotencyKey: "turn-done" } },
+              { role: "ASSISTANT", content: "Hola, Luis.", metadata: { idempotencyKey: "turn-done" } },
+            ],
+          },
+        }
+      },
+    })
+    assert.equal(calls, 1)
+    assert.equal(recovered?.chat.messages.at(-1).content, "Hola, Luis.")
+  })
+
+  it("polls getChat until the assistant row for this turn exists", async () => {
+    const pending = { idempotencyKey: "turn-1", turnKey: "turn-1", streamId: "stream-1" }
+    let calls = 0
+    const recovered = await pollPersistedAssistantTurn({
+      chatId: "chat-1",
+      pending,
+      attempts: 3,
+      delayMs: 0,
+      getChat: async () => {
+        calls += 1
+        if (calls < 2) {
+          return {
+            chat: {
+              id: "chat-1",
+              messages: [
+                { role: "USER", content: "1+1", metadata: { idempotencyKey: "turn-1" } },
+              ],
+            },
+          }
+        }
+        return {
+          chat: {
+            id: "chat-1",
+            messages: [
+              { role: "USER", content: "1+1", metadata: { idempotencyKey: "turn-1" } },
+              { role: "ASSISTANT", content: "¡2!", metadata: { idempotencyKey: "turn-1" } },
+            ],
+          },
+        }
+      },
+    })
+    assert.equal(calls, 2)
+    assert.equal(recovered?.chat.messages.at(-1).content, "¡2!")
+  })
+
+  it("stops polling when the user hits Stop", async () => {
+    let calls = 0
+    const recovered = await pollPersistedAssistantTurn({
+      chatId: "chat-1",
+      pending: { idempotencyKey: "turn-1", turnKey: "turn-1", streamId: "s" },
+      attempts: 5,
+      delayMs: 0,
+      isCancelled: () => true,
+      getChat: async () => {
+        calls += 1
+        return { chat: { messages: [] } }
+      },
+    })
+    assert.equal(recovered, null)
+    assert.equal(calls, 0)
+  })
+})
+
+describe("recover persisted generate turn — exhausted client reconnect budget", () => {
+  it("polls after the friendly reconnect-exhausted errors so a persisted reply still paints", () => {
+    assert.equal(
+      shouldRecoverPersistedGenerate({
+        message: "No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.",
+      }),
+      true,
+    )
+    assert.equal(
+      shouldRecoverPersistedGenerate({ message: "No se pudo completar la respuesta después de 5 intentos. Stream stalled" }),
+      true,
+    )
+    assert.equal(
+      shouldRecoverPersistedGenerate({ message: "El stream terminó antes de completar la respuesta." }),
+      true,
+    )
+    assert.equal(shouldRecoverPersistedGenerate({ status: 400, message: "No se pudo completar la respuesta" }), false)
+  })
+})

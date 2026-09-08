@@ -47,7 +47,7 @@ import {
   upsertCodexProject,
 } from "./codex-projects"
 import { projectsService } from "./projects-service"
-import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed } from "./code-git-mirror"
+import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed, abortPendingMirrors } from "./code-git-mirror"
 import {
   canOpenLocalDirectory,
   getLinkedLocalFolderName,
@@ -150,6 +150,40 @@ export function setActiveCodexProject(projectId: string | null) {
 }
 export function getActiveCodexProject(): string | null {
   return _activeCodexProjectId
+}
+
+// Department computer: a stable synthetic run id `dept-<departmentId>` that
+// scopes Files / Shell / Preview to that department's worktree on the shared
+// company machine. Same late-consumer singleton as the Codex project id.
+let _activeDepartmentComputerRunId: string | null = null
+export const CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT = "siragpt:active-department-computer"
+export const CODE_OPEN_DEPARTMENT_COMPUTER_EVENT = "siragpt:open-department-computer"
+export function setActiveDepartmentComputer(runId: string | null) {
+  _activeDepartmentComputerRunId = runId
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, { detail: { runId } }),
+    )
+  }
+}
+export function getActiveDepartmentComputer(): string | null {
+  return _activeDepartmentComputerRunId
+}
+
+export type ActiveDepartmentSelection = { id: string; name: string; projectId?: string | null } | null
+let _activeDepartmentSelection: ActiveDepartmentSelection = null
+export const CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT = "siragpt:active-department-selection"
+export const CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT = "siragpt:open-current-department-computer"
+export function setActiveDepartmentSelection(selection: ActiveDepartmentSelection) {
+  _activeDepartmentSelection = selection
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, { detail: { selection } }),
+    )
+  }
+}
+export function getActiveDepartmentSelection(): ActiveDepartmentSelection {
+  return _activeDepartmentSelection
 }
 
 export type CodeNewChatDetail = {
@@ -346,6 +380,27 @@ function readStoredActiveFolder(): ActiveFolder | null {
   }
 }
 
+
+// OLA200_WAVE_F FE-039 — abort in-flight workspace writes when the folder changes.
+const workspaceWriteControllers = new Set<AbortController>()
+
+export function abortWorkspaceInflightWrites(reason = "workspace_changed"): void {
+  for (const ac of Array.from(workspaceWriteControllers)) {
+    try { ac.abort() } catch { /* ignore */ }
+    workspaceWriteControllers.delete(ac)
+  }
+  try { abortPendingMirrors() } catch { /* ignore */ }
+  void reason
+}
+
+export function beginWorkspaceWrite(): AbortController {
+  const ac = new AbortController()
+  workspaceWriteControllers.add(ac)
+  const cleanup = () => workspaceWriteControllers.delete(ac)
+  ac.signal.addEventListener("abort", cleanup, { once: true })
+  return ac
+}
+
 export function CodeWorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Boot the active folder synchronously from localStorage so we can
   // pick the right per-folder bucket on the very first render. Doing
@@ -417,6 +472,9 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     // Mirror commands issued in the same tick as a workspace switch must use
     // the new owner; waiting for a React effect would leave a stale project id.
     activeFolderIdRef.current = nextFolderId
+    if (previousFolderId !== nextFolderId) {
+      abortWorkspaceInflightWrites("workspace_changed")
+    }
     if (previousFolderId === nextFolderId) {
       // Same folder — only the metadata (description/instructions) may
       // have been re-hydrated from the API. Keep the file state intact.

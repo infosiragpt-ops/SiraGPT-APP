@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
+import { fetchWithPresignRetry, isExpiredPresignUrl } from "@/lib/attachment-url"
 import dynamic from "next/dynamic"
 const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
@@ -162,6 +163,21 @@ function ArtifactPanelMounted({
   const onReset = () => setGeneration((g) => g + 1)
 
   const onDownload = async () => {
+    if (/^https?:\/\//i.test(code) && (isExpiredPresignUrl(code) || code.includes("X-Amz-"))) {
+      const res = await fetchWithPresignRetry(code)
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = fileName
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 1500)
+        return
+      }
+    }
     let blob: Blob
     if (isMermaid) {
       const svg = await renderMermaidSvg(code)
@@ -179,18 +195,22 @@ function ArtifactPanelMounted({
     setTimeout(() => URL.revokeObjectURL(url), 1500)
   }
 
+  // The artifact document is agent-controlled; opening it top-level
+  // would run it with the app's own origin. The tab instead gets a
+  // static wrapper embedding the artifact in a sandboxed,
+  // opaque-origin iframe — same contract as the inline preview.
   const onOpenNewTab = async () => {
-    let blob: Blob
+    let innerDoc: string
     if (isMermaid) {
       const svg = (await renderMermaidSvg(code)) || code
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title || "Artefacto")}</title>
+      innerDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title || "Artefacto")}</title>
 <style>html,body{margin:0;padding:24px;background:#fff;display:grid;place-items:center}</style>
 </head><body>${svg}</body></html>`
-      blob = new Blob([html], { type: "text/html" })
     } else {
-      blob = new Blob([srcDoc], { type: "text/html" })
+      innerDoc = srcDoc
     }
-    const url = URL.createObjectURL(blob)
+    const wrapper = buildTabWrapperDocument(innerDoc, escapeHtml(title || "Artefacto"))
+    const url = URL.createObjectURL(new Blob([wrapper], { type: "text/html" }))
     window.open(url, "_blank", "noopener,noreferrer")
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
   }
@@ -329,6 +349,26 @@ async function renderMermaidSvg(code: string): Promise<string | null> {
     const { svg } = await mermaid.render(id, code)
     return svg
   } catch { return null }
+}
+
+// Static host document for "open in new tab". The agent-controlled
+// artifact is embedded via srcDoc into a sandboxed iframe with an
+// opaque origin, so scripts inside it can never touch the opener,
+// the app origin, or localStorage['auth-token'].
+function buildTabWrapperDocument(innerDoc: string, titleHtmlEscaped: string): string {
+  // \u003c keeps any "</script>" inside the artifact from closing the
+  // host document's own script block.
+  const payload = JSON.stringify(innerDoc).replace(/</g, "\\u003c")
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${titleHtmlEscaped}</title>
+<style>html,body{margin:0;height:100%;background:#fff}iframe{display:block;width:100%;height:100%;border:0}</style>
+</head><body><iframe id="frame" sandbox="allow-scripts allow-forms allow-popups allow-modals" title="${titleHtmlEscaped}"></iframe>
+<script>
+(function(){
+  var doc = ${payload};
+  var f = document.getElementById('frame');
+  f.srcdoc = doc;
+})();
+</script></body></html>`
 }
 
 function sanitizeFilename(s: string): string {
