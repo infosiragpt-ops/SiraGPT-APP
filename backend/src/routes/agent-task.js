@@ -19,6 +19,9 @@
  *     { type: "done",         stoppedReason, stats }
  *     { type: "error",        message, code?, reason? }
  *
+ *   Existing events also carry honest job progress (never fake 100%):
+ *     percent, etaMs, etaLabel, phase, phaseLabel, progress
+ *
  * GET /api/agent/artifact/:id
  *   Serves a previously-created artifact as an attachment download.
  *
@@ -109,6 +112,12 @@ const {
   claimTaskCancel,
   buildCancelAck,
 } = require('../services/agents/agent-task-cancel');
+const {
+  createHonestProgressTracker,
+  enrichAgentTaskEvent,
+  mergeHonestProgress,
+  buildHeartbeatProgressEvent,
+} = require('../services/agents/agent-task-honest-progress');
 const { toAgentTaskErrorEvent } = require('../utils/task-error-classifier');
 const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
@@ -858,8 +867,21 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
       error: 'Tarea cancelada por el usuario.',
       errorCode: 'E_CANCELLED',
     };
-    streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
-    const cancelEvent = { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' };
+    const cancelTracker = createHonestProgressTracker({
+      startedAt: Date.now(),
+      maxSteps: snapshot.maxSteps,
+      maxRuntimeMs: snapshot.maxRuntimeMs,
+    });
+    if (snapshot.streamState?.progress) cancelTracker.seed(snapshot.streamState.progress);
+    const cancelQueueEvent = enrichAgentTaskEvent({
+      type: 'queue_status',
+      taskId: snapshot.taskId,
+      status: 'cancelled',
+      queue: snapshot.queueName || getQueueName(),
+      jobId: snapshot.jobId || snapshot.taskId,
+    }, cancelTracker);
+    streamState = reduceAgentState(streamState, cancelQueueEvent);
+    const cancelEvent = enrichAgentTaskEvent({ type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' }, cancelTracker);
     const writtenCancel = taskStore.appendTaskEvent(snapshot, cancelEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
     await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || cancelEvent);
     taskStore.markTaskStatus(snapshot, 'cancelled', {
@@ -960,7 +982,20 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       ACTIVE_AGENT_TASKS.delete(snapshot.taskId);
     }
     await agentTaskPersistence.appendAgentTaskEvent(retryWritten || snapshot, retryWritten?.events?.[retryWritten.events.length - 1] || retryEvent);
-    const queueEvent = { type: 'queue_status', taskId: snapshot.taskId, status: 'queued', queue: getQueueName(), jobId: String(job.id), position: null };
+    const retryProgress = createHonestProgressTracker({
+      startedAt: Date.now(),
+      maxSteps: snapshot.maxSteps,
+      maxRuntimeMs: snapshot.maxRuntimeMs,
+    });
+    if (snapshot.streamState?.progress) retryProgress.seed(snapshot.streamState.progress);
+    const queueEvent = enrichAgentTaskEvent({
+      type: 'queue_status',
+      taskId: snapshot.taskId,
+      status: 'queued',
+      queue: getQueueName(),
+      jobId: String(job.id),
+      position: null,
+    }, retryProgress);
     streamState = reduceAgentState(streamState, queueEvent);
     const queued = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
     taskStore.markTaskStatus({ ...queued, userId: req.user?.id }, 'queued', {
@@ -1519,7 +1554,7 @@ router.post(
       if (!clientConnected || res.writableEnded) { clearTimers(); return; }
       try {
         res.write(': keep-alive\n\n');
-        res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+        res.write(`data: ${safeJsonStringify(buildHeartbeatProgressEvent(streamState, Date.now()))}\n\n`);
       } catch { safeCloseConnection(); }
     }, inlineHeartbeatMs);
     if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
@@ -1636,11 +1671,20 @@ router.post(
       await Promise.allSettled(Array.from(pendingProgressWrites));
     };
 
+    // applyEvent is declared first so consumer VM extracts that stop at this
+    // marker never evaluate createHonestProgressTracker in a sandbox that
+    // only has persistence closures.
     const applyEvent = (obj) => {
-      streamState = reduceAgentState(streamState, obj);
-      appendTaskEvent(task, obj, streamState);
-      return obj;
+      const enriched = enrichAgentTaskEvent(obj, progressTracker);
+      streamState = reduceAgentState(streamState, enriched);
+      appendTaskEvent(task, enriched, streamState);
+      return enriched;
     };
+    const progressTracker = createHonestProgressTracker({
+      startedAt: Date.now(),
+      maxSteps,
+      maxRuntimeMs,
+    });
     const emit = (obj) => {
       const applied = applyEvent(obj);
       send(applied);
@@ -2286,7 +2330,12 @@ async function handleQueuedTaskRequest(req, res) {
   };
   taskStore.writeTaskSnapshot(snapshot);
 
-  const queueEvent = {
+  const queueProgress = createHonestProgressTracker({
+    startedAt: Date.now(),
+    maxSteps,
+    maxRuntimeMs,
+  });
+  const queueEvent = enrichAgentTaskEvent({
     type: 'queue_status',
     taskId,
     status: 'queued',
@@ -2294,7 +2343,7 @@ async function handleQueuedTaskRequest(req, res) {
     jobId: String(job.id),
     position: null,
     estimatedWaitMs: null,
-  };
+  }, queueProgress);
   streamState = reduceAgentState(streamState, queueEvent);
   let written = taskStore.appendTaskEvent(snapshot, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || snapshot;
   await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || queueEvent);
@@ -2453,7 +2502,12 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   };
   taskStore.writeTaskSnapshot(snapshot);
 
-  const queueEvent = {
+  const localProgress = createHonestProgressTracker({
+    startedAt: Date.now(),
+    maxSteps,
+    maxRuntimeMs,
+  });
+  const queueEvent = enrichAgentTaskEvent({
     type: 'queue_status',
     taskId,
     status: 'running',
@@ -2461,7 +2515,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     jobId: snapshot.jobId,
     position: 0,
     estimatedWaitMs: 0,
-  };
+  }, localProgress);
   streamState = reduceAgentState(streamState, queueEvent);
   appendTaskEvent(snapshot, queueEvent, streamState);
   const policyEvent = { type: 'document_policy', policy: documentPolicy };
@@ -2701,8 +2755,9 @@ function streamTaskEvents(req, res, taskId, userId) {
   const writeHeartbeat = () => {
     if (!clientConnected || res.writableEnded || res.destroyed) return;
     try {
+      const live = getTaskForUser(taskId, userId) || taskStore.getTaskSnapshotForUser(taskId, userId);
       res.write(': keep-alive\n\n');
-      res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+      res.write(`data: ${safeJsonStringify(buildHeartbeatProgressEvent(live?.streamState || live, Date.now()))}\n\n`);
     } catch { safeCloseQueuedConnection(); }
   };
   heartbeatTimer = setInterval(writeHeartbeat, heartbeatMs);
@@ -3186,10 +3241,16 @@ function initialAgentState() {
     documentAnalysisIds: [],
     evidenceRefs: [],
     cycle: null,
+    progress: null,
   };
 }
 
 function reduceAgentState(state, evt) {
+  const reduced = reduceAgentStateBody(state, evt);
+  return mergeHonestProgress(reduced, evt);
+}
+
+function reduceAgentStateBody(state, evt) {
   switch (evt.type) {
     case 'queue_status':
       return { ...state, queue: { status: evt.status, queue: evt.queue, jobId: evt.jobId, position: evt.position ?? null, estimatedWaitMs: evt.estimatedWaitMs ?? null, updatedAt: evt.ts || new Date().toISOString() } };
@@ -3510,6 +3571,7 @@ function toSerializableAgentState(state = {}) {
       ts: approval.ts,
     })),
     queue: state.queue || undefined,
+    progress: state.progress || undefined,
     documentPolicy: state.documentPolicy || undefined,
     documentAnalysisIds: state.documentAnalysisIds || undefined,
     evidenceRefs: state.evidenceRefs || undefined,
