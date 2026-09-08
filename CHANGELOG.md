@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 1 of Coding Agents (`AGENTES_CODING_V2`): OSS catalog (Tier S
+  from a 176-repo pass: OpenSandbox, E2B, gVisor, Firecracker, Aider,
+  OpenHands, Cline HITL-only, SWE-agent/SWE-bench, mem0, xterm.js,
+  Playwright MCP, Goose) plus `/agentes` architecture, license gate,
+  and an off-by-default flag helper (`GET /api/agentes-coding/health`).
+  Default `/agentes` UX is unchanged. No monorepo dump.
+
 - SiraCode native `multiedit` applies a jailed batch of unique
   `old_str` → `new_str` replacements atomically (nothing is written
   if one edit misses). Commits use the #629 conditional mutation
