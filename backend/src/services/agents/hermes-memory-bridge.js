@@ -72,6 +72,28 @@ function remember(userId, fact, opts = {}) {
   });
 }
 
+function rememberCurated(userId, fact, opts = {}) {
+  return curatedMemory.rememberFact(userId, fact, opts);
+}
+
+function forgetCurated(userId, query) {
+  const curated = curatedMemory.forgetFact(userId, query);
+  let activeRemoved = 0;
+  try {
+    activeRemoved = Number(activeMemory.forget(userId, query)?.removed) || 0;
+  } catch {
+    activeRemoved = 0;
+  }
+  return {
+    ...curated,
+    activeRemoved,
+  };
+}
+
+function promoteMemoryToUser(userId, opts = {}) {
+  return curatedMemory.promoteMemoryToUser(userId, opts);
+}
+
 function recall(userId, query, opts = {}) {
   return activeMemory.recall(userId, query, {
     limit: opts.limit || 8,
@@ -191,6 +213,9 @@ function status(userId = null) {
 
 module.exports = {
   remember,
+  rememberCurated,
+  forgetCurated,
+  promoteMemoryToUser,
   recall,
   promote,
   buildMemoryPrompt,
