@@ -528,6 +528,19 @@ function forgetMatching(userId, query) {
   return { removed };
 }
 
+function invalidateSnapshots(userId) {
+  const id = normalizeUserId(userId);
+  if (!id) return 0;
+  let removed = 0;
+  for (const key of snapshots.keys()) {
+    if (key.startsWith(`${id}::`)) {
+      snapshots.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 function clearUser(userId) {
   const id = normalizeUserId(userId);
   if (!id) return { cleared: 0 };
@@ -535,9 +548,7 @@ function clearUser(userId) {
   const cleared = stores.memory.length + stores.user.length + (stores.notes ? stores.notes.length : 0);
   liveByUser.set(id, emptyStores());
   persistUser(id);
-  for (const key of snapshots.keys()) {
-    if (key.startsWith(`${id}::`)) snapshots.delete(key);
-  }
+  invalidateSnapshots(id);
   return { cleared };
 }
 
@@ -581,6 +592,7 @@ module.exports = {
   learnFromEntry,
   learnFromFacts,
   forgetMatching,
+  invalidateSnapshots,
   clearUser,
   status,
   scanMemoryContent,

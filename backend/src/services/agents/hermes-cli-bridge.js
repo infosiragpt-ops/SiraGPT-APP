@@ -70,6 +70,20 @@ const COMMAND_HANDLERS = Object.freeze({
   },
 
   memory(ctx = {}) {
+    const action = String(ctx.action || '').toLowerCase();
+    if (action === 'export') {
+      return { command: 'memory', action, ...memoryBridge.exportSnapshot(ctx.userId) };
+    }
+    if (action === 'import') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.importSnapshot(ctx.userId, ctx.snapshot, {
+          mode: ctx.mode,
+          requireSameOwner: ctx.requireSameOwner,
+        }),
+      };
+    }
     return {
       command: 'memory',
       status: memoryBridge.status(ctx.userId),

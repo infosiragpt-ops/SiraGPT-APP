@@ -10,6 +10,7 @@ const sessionManager = require('../session-manager');
 const curatedMemory = require('./hermes-curated-memory');
 const { assertMemoryWrite } = require('./memory-write-guard');
 const sessionCompaction = require('./hermes-memory-compaction');
+const memoryPortability = require('./hermes-memory-portability');
 
 function normalizeText(text) {
   return String(text || '')
@@ -173,7 +174,8 @@ function listEntries(userId) {
 
 function status(userId = null) {
   const base = {
-    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction'],
+    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction', 'hermes-memory-portability'],
+    portability: memoryPortability.status(),
     promotionThreshold: Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10),
     curated: curatedMemory.status(userId),
     compaction: sessionCompaction.status(userId),
@@ -201,6 +203,8 @@ module.exports = {
   retrieveRanked,
   compactSession,
   recordSession: sessionCompaction.record,
+  exportSnapshot: memoryPortability.exportSnapshot,
+  importSnapshot: memoryPortability.importSnapshot,
   nudgePromotion,
   listEntries,
   status,

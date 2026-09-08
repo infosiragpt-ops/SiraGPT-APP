@@ -109,7 +109,7 @@ const hermesMemoryTool = {
     properties: {
       action: {
         type: 'string',
-        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge', 'compact', 'retrieve'],
+        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge', 'compact', 'retrieve', 'export', 'import'],
       },
       target: { type: 'string', enum: ['memory', 'user'], description: 'Curated store for add/replace/remove/read.' },
       content: { type: 'string', description: 'New entry text for add/replace.' },
@@ -117,6 +117,8 @@ const hermesMemoryTool = {
       fact: { type: 'string' },
       query: { type: 'string' },
       entryId: { type: 'string' },
+      snapshot: { type: 'object', description: 'Portable profile+notes snapshot for action=import.' },
+      mode: { type: 'string', enum: ['replace', 'merge'], description: 'Import mode. Default replace.' },
     },
   },
   async execute(args, ctx = {}) {
@@ -155,6 +157,10 @@ const hermesMemoryTool = {
         return memoryBridge.retrieveRanked(userId, args.query || args.content || '', {
           limit: args.limit,
         });
+      case 'export':
+        return memoryBridge.exportSnapshot(userId);
+      case 'import':
+        return memoryBridge.importSnapshot(userId, args.snapshot, { mode: args.mode });
       default:
         return { ok: false, error: 'invalid action' };
     }

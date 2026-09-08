@@ -161,6 +161,13 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   Hermes MEMORY.md / USER.md bounded-store idea (fold older log text,
   never drop profile facts). Native CommonJS; no `tools/memory_tool.py`
   dump, no OpenRouter, no paid summarizer on the default path.
+  Profile + compacted-notes export/import in
+  `backend/src/services/agents/hermes-memory-portability.js` adapts the
+  Hermes memories/ portability idea (copy USER.md + folded notes, verify
+  bytes). Snapshots carry a sha256 checksum of a canonical payload;
+  import fails closed on mismatch, size caps, or unsafe content.
+  Spanish errors and §16 codes. Per-user isolation: a snapshot never
+  selects another user's store. No upstream dump.
 
   The owner checks in `backend/src/routes/hermes.js`,
   `backend/src/services/agents/cron/hermes-cron-bridge.js` and
