@@ -493,6 +493,7 @@ const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
 const codexV2Routes = require('./src/routes/codex');
 const deploymentsRoutes = require('./src/routes/deployments');
+const agentesCodingRoutes = require('./src/routes/agentes-coding');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
@@ -1352,6 +1353,10 @@ app.use('/api/codex', codexV2Routes);
 // Deployments / Publishing (flag DEPLOYMENTS_V2). Bearer-auth, CSRF-exempt like
 // codex; flag off ⇒ every route except /health is 404.
 app.use('/api/deployments', deploymentsRoutes);
+// Coding Agents V2 scaffold (flag AGENTES_CODING_V2). Public /health always
+// 200 with { ok, enabled }; default OFF in prod. Flag off ⇒ no /agentes UX
+// change (UI-lock). Phase 1 has no other routes.
+app.use('/api/agentes-coding', agentesCodingRoutes);
 // Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
 app.use('/api/telegram', telegramRoutes);
