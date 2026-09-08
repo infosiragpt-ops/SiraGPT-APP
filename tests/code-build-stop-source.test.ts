@@ -65,9 +65,10 @@ describe("code OpenCode Stop aborts the engine session", () => {
     assert.match(opencodeClient, /\/session\/\$\{encodeURIComponent\(sessionId\)\}\/abort/)
   })
 
-  it("the backend route and client forward abort to OpenCode", () => {
+  it("the backend route and client forward abort to SiraCode", () => {
     assert.match(opencodeRoute, /router\.post\('\/session\/:id\/abort'/)
-    assert.match(opencodeRoute, /createOpencodeClient\(\)\.abortSession\(req\.params\.id\)/)
+    assert.match(opencodeRoute, /siraCode\.abort\(req\.params\.id/)
+    assert.doesNotMatch(opencodeRoute, /createOpencodeClient\(\)/)
   })
 
   it("Detener and session teardown abort the live OpenCode session", () => {

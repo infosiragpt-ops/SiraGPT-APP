@@ -300,7 +300,7 @@ export function CodexFoldersSidebar({ onClose, variant = "rail" }: Props) {
 
   const handleOpenChat = React.useCallback((chatId: string) => {
     if (typeof window === "undefined") return
-    window.open(`/chat?id=${encodeURIComponent(chatId)}`, "_blank", "noopener,noreferrer")
+    window.open(`/agentes?id=${encodeURIComponent(chatId)}`, "_blank", "noopener,noreferrer")
   }, [])
 
   const handleNewCodeChat = React.useCallback(

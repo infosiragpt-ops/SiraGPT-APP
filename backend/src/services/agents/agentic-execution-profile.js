@@ -164,6 +164,9 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     const count = mediaIntent.kind === 'image' ? Number(mediaIntent.specs?.count || 1) : 1;
     minimumToolCalls[mediaIntent.tool] = Math.max(1, Number.isFinite(count) ? Math.round(count) : 1);
     qualityGates.push(`Use the media generation tool ${mediaIntent.tool} before claiming the ${mediaIntent.kind} was created.`);
+    if (mediaIntent.kind === 'audio') {
+      qualityGates.push('Deliver a real downloadable MP3/WAV via generate_speech. Never invent an HTML page that uses speechSynthesis or the Web Speech API.');
+    }
   }
   if (capabilities.needsDocument) {
     requiredTools.push('create_document', 'verify_artifact');

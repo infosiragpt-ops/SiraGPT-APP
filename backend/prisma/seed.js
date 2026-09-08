@@ -63,6 +63,10 @@ const modelsToSeed = [
     { name: 'llama-3.3-70b-versatile', displayName: 'Llama 3.3 70B (Groq)', provider: 'Groq', type: 'TEXT', icon: 'MetaLogo', description: 'Meta Llama 3.3 70B served by Groq with extremely low latency.', isActive: true },
     { name: 'llama-3.1-70b-versatile', displayName: 'Llama 3.1 70B (Groq)', provider: 'Groq', type: 'TEXT', icon: 'MetaLogo', description: 'Meta Llama 3.1 70B on Groq — fast general-purpose chat and reasoning.', isActive: true },
 
+    // --- Meta Model API (direct) ---
+    { name: 'muse-spark-1.2', displayName: 'Meta Muse Spark 1.2', provider: 'Meta', type: 'TEXT', icon: 'MetaLogo', description: 'Meta Muse Spark 1.2 direct API for agents, coding, tools, and long-context work.', isActive: true },
+    { name: 'muse-spark-1.1', displayName: 'Meta Muse Spark 1.1', provider: 'Meta', type: 'TEXT', icon: 'MetaLogo', description: 'Meta Muse Spark 1.1 direct API for multimodal chat and agentic work.', isActive: true },
+
     // ================================== //
     // ====== IMAGE GENERATION MODELS ====== //
     // ================================== //
@@ -80,10 +84,14 @@ async function main() {
     console.log(`Starting to seed ${modelsToSeed.length} curated models...`);
 
     for (const modelData of modelsToSeed) {
+        // Seeding refreshes catalog metadata only. Publication is an explicit
+        // administrator decision, so a seed run must neither reactivate an
+        // existing row nor publish a newly introduced model.
+        const { isActive: _legacySeedDefault, ...metadata } = modelData;
         const model = await prisma.aiModel.upsert({
             where: { name: modelData.name },
-            update: modelData,
-            create: modelData,
+            update: metadata,
+            create: { ...metadata, isActive: false },
         });
         console.log(`[${model.type}] Upserted model: ${model.displayName}`);
     }

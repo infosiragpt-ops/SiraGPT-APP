@@ -187,3 +187,12 @@ tests/ola-200-waveF-invariants.test.js
 tests/ola-200-waveG-invariants.test.js
 tests/ola-oss-rewrite-invariants.test.js
 tests/openclaw-execution-dossier.test.js
+
+# Document sandbox (#561): these three .test.js files are executed by the
+# dedicated, tool-provisioned shard-1 steps `test:doc-sandbox:unit` and
+# `test:doc-sandbox:validation` (see backend/package.json). The generic
+# round-robin shards run without LibreOffice/Poppler, so discovering them here
+# would double-run them and fail the validation suite on a tool-less shard.
+tests/doc-sandbox-engine.test.js
+tests/doc-sandbox-engine-lifecycle.test.js
+tests/doc-sandbox-validation.test.js

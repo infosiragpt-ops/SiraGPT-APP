@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { getMyCredits, isLowBalance, type Credits } from "@/lib/credits-service"
+import { formatCreditBalance, getMyCredits, isLowBalance, type Credits } from "@/lib/credits-service"
 
 /**
  * F3 PR11 — Sidebar badge showing the authenticated user's credit
@@ -55,6 +55,7 @@ export function CreditsBadge({ className = "" }: { className?: string }) {
   if (!credits) return null
 
   const low = isLowBalance(credits)
+  const label = formatCreditBalance(credits.balance)
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -62,12 +63,12 @@ export function CreditsBadge({ className = "" }: { className?: string }) {
           ? "bg-amber-500/10 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300"
           : "bg-zinc-500/10 text-zinc-600 dark:bg-zinc-500/20 dark:text-zinc-300"
       } ${className}`}
-      aria-label={`${credits.balance} créditos disponibles${low ? ", saldo bajo" : ""}`}
-      title={`Saldo: ${credits.balance} créditos`}
+      aria-label={`${label} créditos disponibles${low ? ", saldo bajo" : ""}`}
+      title={`Saldo: ${label} créditos`}
       data-testid="credits-badge"
     >
       <span aria-hidden="true">◐</span>
-      <span>{credits.balance}</span>
+      <span>{label}</span>
     </span>
   )
 }

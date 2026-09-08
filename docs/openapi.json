@@ -1674,6 +1674,34 @@
           }
         ]
       },
+      "patch": {
+        "operationId": "patch_api_admin_models_id",
+        "summary": "PATCH /api/admin/models/:id",
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
       "put": {
         "operationId": "put_api_admin_models_id",
         "summary": "PUT /api/admin/models/:id",

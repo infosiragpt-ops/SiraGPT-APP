@@ -57,8 +57,8 @@ interface AiModel {
   provider?: string
 }
 
-// Featured set for design-studio tasks. If none of these are present
-// in the DB, we fall back to whatever models the API returns.
+// Featured set for design-studio tasks. Every option still comes from the
+// active server catalog; these patterns only control ordering and labels.
 // These ids come from siraGPT's seed — we check both bare and
 // slug-prefixed names because the registry has both shapes.
 const FEATURED_PATTERNS: Array<{ id: string; display: string; match: (n: string) => boolean }> = [
@@ -114,24 +114,29 @@ export function DesignComposer({
 }: Props) {
   const [value, setValue] = React.useState("")
   const [models, setModels] = React.useState<AiModel[]>([])
-  const [modelId, setModelId] = React.useState<string>(initialModel || "deepseek-v4-flash")
+  const [modelId, setModelId] = React.useState<string>("")
   const [effort, setEffort] = React.useState<Effort>("balanced")
   const [visibility, setVisibility] = React.useState<Visibility>("private")
 
-  // Fetch models once on mount. If the call fails or returns an
-  // empty list, keep the hardcoded default — the composer should
-  // still work even without a live models endpoint.
+  // Fetch models once on mount. A confirmed empty catalog clears any initial
+  // or persisted choice; design must never manufacture a selectable fallback.
   React.useEffect(() => {
     fetchModels()
       .then(rows => {
-        if (rows.length > 0) setModels(rows)
+        setModels(rows)
+        setModelId(current => {
+          const requested = current || initialModel || ""
+          if (requested && rows.some(model => model.name === requested)) return requested
+          const featured = FEATURED_PATTERNS
+            .map(pattern => rows.find(model => pattern.match(model.name)))
+            .find(Boolean)
+          return featured?.name || rows[0]?.name || ""
+        })
       })
-      .catch(() => { /* silent — UI keeps the default */ })
-  }, [])
+      .catch(() => { /* transient failure keeps the last confirmed catalog */ })
+  }, [initialModel])
 
-  // Resolve featured models that are actually present in the
-  // returned list. If none match, we still expose the default
-  // (gpt-4o) so the user isn't stranded.
+  // Resolve featured models that are actually present in the active list.
   const featured = React.useMemo(() => {
     const names = new Set(models.map(m => m.name))
     const hits: Array<{ name: string; display: string }> = []
@@ -144,8 +149,6 @@ export function DesignComposer({
       const m = models.find(mm => mm.name === modelId)!
       hits.unshift({ name: m.name, display: m.displayName || m.name })
     }
-    // Absolute fallback
-    if (hits.length === 0) hits.push({ name: "deepseek-v4-flash", display: "DeepSeek V4 Flash" })
     return hits
   }, [models, modelId])
 
@@ -153,7 +156,7 @@ export function DesignComposer({
     const hit = featured.find(f => f.name === modelId)
     if (hit) return hit.display
     const m = models.find(mm => mm.name === modelId)
-    return m?.displayName || m?.name || modelId
+    return m?.displayName || m?.name || "Sin modelos activos"
   }, [featured, modelId, models])
 
   function submit() {
@@ -166,6 +169,10 @@ export function DesignComposer({
     }
     const text = normalized.value.trim()
     if (!text || running || disabled) return
+    if (!modelId || !models.some(model => model.name === modelId)) {
+      toast.error("No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.")
+      return
+    }
     setValue("")
     onSend({ instruction: text, model: modelId, effort })
   }
@@ -267,6 +274,11 @@ export function DesignComposer({
               <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
                 Modelo de diseño
               </DropdownMenuLabel>
+              {featured.length === 0 && (
+                <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+                  Sin modelos activos
+                </div>
+              )}
               {featured.map(f => (
                 <DropdownMenuItem
                   key={f.name}
@@ -368,7 +380,7 @@ export function DesignComposer({
           ) : (
             <Button
               onClick={submit}
-              disabled={disabled || !value.trim()}
+              disabled={disabled || !value.trim() || !modelId}
               size="icon"
               className="h-9 w-9 rounded-full bg-foreground hover:bg-foreground/90 text-background"
               title="Send"

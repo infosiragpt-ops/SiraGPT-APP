@@ -142,7 +142,7 @@ test("upload → Editar → exportar .md → Guardar (nueva versión)", async ({
   await page.setViewportSize({ width: 1440, height: 900 })
   const api = await installDocumentEditorApi(page)
 
-  await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 120_000 })
 
   if (isAuthSurface(page.url())) {
     const bodyText = await page.locator("body").innerText()

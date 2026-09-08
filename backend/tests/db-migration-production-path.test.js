@@ -51,21 +51,12 @@ test('reviewed baseline script exists and is confirm-gated outside boot', () => 
   );
 });
 
-test('deploy workflow wires deploy-production-baseline-* to the reviewed one-off', () => {
+test('production verification cannot run migration baselines or legacy deployments', () => {
   const workflow = read('.github/workflows/deploy.yml');
-  assert.match(workflow, /startsWith\(github\.ref_name, 'deploy-production-baseline-'\)/);
-  assert.match(workflow, /ALLOW_MIGRATION_BASELINE:\s+\$\{\{/);
-  assert.match(workflow, /envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR/);
-  assert.doesNotMatch(
-    workflow,
-    /envs:[^\n]*(?:GITHUB_TOKEN|GH_TOKEN|DEPLOY_GH_TOKEN)/,
-  );
-  assert.match(workflow, /baseline-migration-history\.js/);
-  assert.match(workflow, /MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA/);
-  assert.match(workflow, /MIGRATION_BASELINE_SYNC_SCHEMA=1/);
-  assert.doesNotMatch(workflow, /ALLOW_EQUIVALENT_UNBASELINED/);
-  assert.doesNotMatch(workflow, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
-  assert.doesNotMatch(workflow, /deploy-production-equivalent-/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /contents: read/);
+  assert.match(workflow, /verify-lenovo-release\.cjs/);
+  assert.doesNotMatch(workflow, /baseline-migration-history|MIGRATION_BASELINE|migrate resolve|VPS_|appleboy|\n  push:|workflow_run:/);
 });
 
 test('health readiness remains critical for failed migration rows', () => {

@@ -52,9 +52,23 @@ async function listConversationArtifacts(prisma, { userId, chatId, take = 8 } = 
   }
 }
 
-async function getLatestConversationArtifact(prisma, { userId, chatId } = {}) {
-  const rows = await listConversationArtifacts(prisma, { userId, chatId, take: 1 });
-  return rows[0] || null;
+async function getLatestConversationArtifact(prisma, { userId, chatId, instruction = '' } = {}) {
+  const rows = await listConversationArtifacts(prisma, { userId, chatId, take: 20 });
+  // Quoted replacement/title values are CONTENT, not source selectors:
+  // "Excel avanzado" must not redirect a PPTX edit to an older workbook.
+  const referenceText = require('../document-editing/presentation-title-intent').documentReferenceText(instruction);
+  const named = rows.filter((row) => {
+    if (!row.filename) return false;
+    const filename = String(row.filename).split(/[\\/]/).pop().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\p{L}\\p{N}_.-])${filename}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu').test(referenceText);
+  });
+  if (named.length === 1) return named[0];
+  const text = referenceText.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const format = /\b(?:pptx?|powerpoint|presentacion|diapositiva\w*|lamina\w*|landin\w*|slide\w*)\b/.test(text) ? 'pptx'
+    : /\b(?:docx|word)\b/.test(text) ? 'docx' : /\b(?:xlsx|excel|celda\w*|hoja\w*)\b/.test(text) ? 'xlsx'
+      : /\bpdf\b/.test(text) ? 'pdf' : null;
+  const eligible = rows.filter((row) => ['docx', 'xlsx', 'pptx', 'pdf', 'txt', 'csv'].includes(mimeToExt(row.mime, row.filename)));
+  return (format ? eligible.find((row) => mimeToExt(row.mime, row.filename) === format) : rows[0]) || null;
 }
 
 async function hasConversationArtifacts(prisma, { userId, chatId } = {}) {
@@ -62,7 +76,7 @@ async function hasConversationArtifacts(prisma, { userId, chatId } = {}) {
   return Boolean(latest);
 }
 
-async function loadArtifactBuffer(row, { objectStorage, fsImpl } = {}) {
+async function loadArtifactBuffer(row, { objectStorage, fsImpl, artifactDir } = {}) {
   if (!row) return null;
   const objectStore = objectStorage || require('../object-storage');
   const fs = fsImpl || require('fs/promises');
@@ -78,6 +92,24 @@ async function loadArtifactBuffer(row, { objectStorage, fsImpl } = {}) {
       if (Buffer.isBuffer(buf) && buf.length) return buf;
     } catch (_) { /* fall through */ }
   }
+  // Disk fallback rows intentionally omit storage paths. Recover those only
+  // from trusted metadata with matching owner AND conversation, never from a
+  // client filename/path or an unscoped artifact id.
+  if (/^[a-f0-9]{16}$/.test(String(row.id || '')) && row.userId && row.chatId) {
+    try {
+      const path = require('path');
+      const root = path.resolve(artifactDir || require('../agents/task-tools').ARTIFACT_DIR);
+      const meta = JSON.parse(await fs.readFile(path.join(root, `${row.id}.json`), 'utf8'));
+      if (String(meta.ownerUserId) !== String(row.userId) || String(meta.chatId) !== String(row.chatId)) return null;
+      if (meta.storageRef && typeof objectStore.readFile === 'function') {
+        try { const buffer = await objectStore.readFile(meta.storageRef); if (Buffer.isBuffer(buffer) && buffer.length) return buffer; } catch { /* local copy below */ }
+      }
+      const full = path.resolve(root, String(meta.storedRelPath || `${row.id}-${meta.filename}`));
+      if (!full.startsWith(root + path.sep)) return null;
+      const buffer = await fs.readFile(full);
+      if (Buffer.isBuffer(buffer) && buffer.length) return buffer;
+    } catch { /* unavailable original is never fabricated */ }
+  }
   return null;
 }
 
@@ -92,12 +124,13 @@ async function resolveTurnFiles({
   chatId,
   attachedFiles = [],
   objectStorage,
+  instruction = '',
 } = {}) {
   const attached = Array.isArray(attachedFiles) ? attachedFiles.filter((f) => f && f.buffer) : [];
-  const latest = await getLatestConversationArtifact(prisma, { userId, chatId });
+  const latest = await getLatestConversationArtifact(prisma, { userId, chatId, instruction });
   const prior = [];
   if (latest) {
-    const buffer = await loadArtifactBuffer(latest, { objectStorage });
+    const buffer = await loadArtifactBuffer({ ...latest, userId, chatId }, { objectStorage });
     if (buffer) {
       prior.push({
         name: latest.filename || `artifact.${mimeToExt(latest.mime, latest.filename)}`,
@@ -106,6 +139,9 @@ async function resolveTurnFiles({
         artifactId: latest.id,
         isPriorArtifact: true,
       });
+    }
+    else if (require('../source-preserving-document-edit').isSourcePreservingEditRequest(instruction, [latest])) {
+      throw new Error('No pude cargar la última versión del documento; adjúntala de nuevo. No usaré una versión anterior en su lugar.');
     }
   }
   // If the user re-attached the original, still put the prior artifact FIRST
@@ -135,6 +171,7 @@ async function persistOutputs({
       : 'application/octet-stream'
     );
     let saved;
+    const validation = out.validation || { ok: true, passed: true, engine: 'agent_runner', scope: 'file_structure_only' };
     try {
       saved = save({
         filename: out.name,
@@ -143,10 +180,11 @@ async function persistOutputs({
         ownerUserId: userId || null,
         chatId: chatId || null,
         category: 'agent_artifact',
-        validation: { ok: true, passed: true, engine: 'agent_runner' },
+        validation,
       });
+      if (!saved?.id || !saved?.filename || !saved?.downloadUrl) throw new Error('artifact_persistence_incomplete');
     } catch (err) {
-      artifacts.push({ filename: out.name, error: String(err && err.message || err).slice(0, 200) });
+      try { onEvent({ type: 'output_invalid', name: out.name, reason: 'artifact_persistence_failed' }); } catch { /* non-fatal UI event */ }
       continue;
     }
     const artifact = {
@@ -158,7 +196,7 @@ async function persistOutputs({
       path: saved.path || null,
       downloadUrl: saved.downloadUrl,
       previewHtml: null,
-      validation: { ok: true, passed: true, engine: 'agent_runner' },
+      validation,
     };
     if (prisma?.generatedArtifact && userId && saved.id) {
       try {
@@ -173,13 +211,13 @@ async function persistOutputs({
             format: saved.format || ext,
             path: saved.path || null,
             sizeBytes: Number(saved.sizeBytes) || 0,
-            validation: { ok: true, passed: true, engine: 'agent_runner' },
+            validation,
           },
           update: {
             filename: saved.filename,
             path: saved.path || undefined,
             sizeBytes: Number(saved.sizeBytes) || 0,
-            validation: { ok: true, passed: true, engine: 'agent_runner' },
+            validation,
           },
         });
       } catch (_) { /* follow-ups can still use disk metadata */ }
