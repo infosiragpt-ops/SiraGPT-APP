@@ -14,24 +14,10 @@ function sliceBetween(source: string, startMarker: string, endMarker: string): s
 }
 
 describe("code workspace lifecycle contracts", () => {
-  it("redirects unauthenticated users from an effect instead of render", () => {
-    const gate = sliceBetween(
-      pageSource,
-      "function CodeWorkspaceGate(",
-      "/**\n * ActiveFolderHydrator",
-    )
-
-    assert.match(gate, /React\.useEffect\(\(\) => \{[\s\S]*?router\.replace\("\/auth\/login\?next=\/code"\)/)
-    assert.match(gate, /if \(!user\) return <CodeWorkspaceSkeleton \/>/)
-    assert.doesNotMatch(gate, /if \(!user\) \{[\s\S]*?router\.replace/)
-  })
-
-  it("clears delayed tool and agent dispatches on effect cleanup", () => {
-    assert.match(pageSource, /const timer = window\.setTimeout\([\s\S]*?return \(\) => window\.clearTimeout\(timer\)/)
-    assert.match(pageSource, /const primaryTimer = window\.setTimeout\(openAgent, 220\)/)
-    assert.match(pageSource, /const retryTimer = window\.setTimeout\(openAgent, 900\)/)
-    assert.match(pageSource, /window\.clearTimeout\(primaryTimer\)/)
-    assert.match(pageSource, /window\.clearTimeout\(retryTimer\)/)
+  it("retires /code as a public page and redirects to /agentes", () => {
+    assert.match(pageSource, /redirect\(/)
+    assert.match(pageSource, /chatSearchToAgentsHome/)
+    assert.doesNotMatch(pageSource, /CodeWorkspaceGate|CodeWorkspaceProvider|ActiveFolderHydrator/)
   })
 
   it("creates or activates a workspace chat against the latest session store", () => {

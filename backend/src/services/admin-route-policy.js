@@ -130,6 +130,7 @@ const ADMIN_ROUTE_POLICIES = Object.freeze({
   'GET /api/admin/models': policy('admin.models.read'),
   'POST /api/admin/models': policy('admin.models.manage'),
   'PUT /api/admin/models/:id': policy('admin.models.manage'),
+  'PATCH /api/admin/models/:id': policy('admin.models.manage'),
   'DELETE /api/admin/models/:id': policy('admin.models.manage'),
   'GET /api/admin/models/fetch': policy('admin.models.read'),
   'GET /api/admin/models/catalog': policy('admin.models.read'),

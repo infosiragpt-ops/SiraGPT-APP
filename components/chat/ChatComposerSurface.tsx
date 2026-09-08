@@ -40,22 +40,26 @@ export function ChatComposerSurface({
   overlayVisible = false,
   overlay = null,
   slashMenu = null,
+  mentionMenu = null,
   contextTray,
   leading,
   textarea,
   toolbar,
   footer = null,
+  agentToggle = null,
   layout = "row",
   expanded = false,
 }: {
   overlayVisible?: boolean
   overlay?: React.ReactNode
   slashMenu?: React.ReactNode
+  mentionMenu?: React.ReactNode
   contextTray: React.ReactNode
   leading: React.ReactNode
   textarea: React.ReactNode
   toolbar: React.ReactNode
   footer?: React.ReactNode
+  agentToggle?: React.ReactNode
   layout?: "row" | "stacked"
   expanded?: boolean
 }) {
@@ -63,6 +67,7 @@ export function ChatComposerSurface({
     <div className="relative">
       {overlay}
       {slashMenu}
+      {mentionMenu}
       <div
         data-testid="chat-composer-surface"
         data-composer-layout={layout}
@@ -85,6 +90,11 @@ export function ChatComposerSurface({
             {toolbar}
           </div>
         </TooltipProvider>
+        {agentToggle ? (
+          <div className="composer-sira-code-toggle flex items-center px-3 pb-2 pt-0" data-testid="composer-sira-code-toggle">
+            {agentToggle}
+          </div>
+        ) : null}
         {footer}
       </div>
     </div>
@@ -118,6 +128,9 @@ export function ChatComposerPrimaryAction({
   const needsPrompt = requiresPromptBeforePrimarySend && !hasText
   const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
 
+  // The primary disc is always Send. Dictation stays on the dedicated mic
+  // button and voice mode lives in the "+" menu, so the bar never shows two
+  // adjacent speech affordances that behave the same way.
   if (!isStopButtonVisible) {
     const label = canSend
       ? "Enviar (⏎)"
@@ -135,6 +148,7 @@ export function ChatComposerPrimaryAction({
             className={cn(
               "composer-send-button h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
               "active:scale-[0.94] active:translate-y-0",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
               "disabled:cursor-not-allowed disabled:active:scale-100 disabled:translate-y-0",
             )}
           >
@@ -182,18 +196,16 @@ export function ChatComposerPrimaryAction({
       disabled={pendingStop && isCurrentChatStreaming}
       className={cn(
         "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
-        "bg-foreground text-white",
-        "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-        "hover:bg-foreground/90 active:scale-[0.96]",
+        "active:scale-[0.96]",
         "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
       )}
     >
       {pendingStop ? (
-        <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
+        <ThinkingIndicator size="sm" className="relative z-[1] h-[15px] w-[15px] text-red-600" />
       ) : (
         <span
           aria-hidden
-          className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
+          className="composer-stop-icon relative z-[1] block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-red-600"
         />
       )}
     </Button>

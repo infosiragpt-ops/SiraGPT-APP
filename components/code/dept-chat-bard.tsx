@@ -152,7 +152,7 @@ export function DeptChatDrawer({
                     onClose()
                   }}
                 >
-                  <span className="min-w-0 flex-1 truncate">{department.name}</span>
+                  <span className="min-w-0 flex-1 whitespace-normal break-words [overflow-wrap:anywhere]">{department.name}</span>
                   {current ? <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : null}
                 </button>
               )

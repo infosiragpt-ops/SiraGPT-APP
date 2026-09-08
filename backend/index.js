@@ -419,6 +419,8 @@ const apiProxyRoutes = require('./src/routes/api');
 const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
 const figmaRoutes = require('./src/routes/figma');
+const agentComputerRoutes = require('./src/routes/agent-computer');
+const desktopRoutes = require('./src/routes/desktop');
 const {
     router: computerUseRoutes,
     initializeWebSocketServer,
@@ -432,6 +434,7 @@ const {
 const thesisRoutes = require('./src/routes/thesis');
 const thesisEngineRoutes = require('./src/routes/thesis-engine');
 const voiceGrokRoutes = require('./src/routes/voice-grok');
+const voiceStudioRoutes = require('./src/routes/voice-studio');
 const researchRoutes = require('./src/routes/research');
 const scientificSearchRoutes = require('./src/routes/scientific-search');
 const answerRoutes = require('./src/routes/answer');
@@ -467,7 +470,8 @@ const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
-const { createUploadStaticAccessGuard, createUploadR2Fallback } = require('./src/middleware/upload-static-access');
+const { createUploadStaticAccessGuard, createUploadR2Fallback, uploadAttachmentDisposition } = require('./src/middleware/upload-static-access');
+const { shouldForceDownload: shouldForceUploadDownload } = require('./src/services/upload-security-policy');
 const searchAgenticRoutes = require('./src/routes/search-agentic');
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
@@ -484,10 +488,12 @@ const docRoutes = require('./src/routes/doc');
 const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
+const appsRoutes = require('./src/routes/apps');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
 const codexV2Routes = require('./src/routes/codex');
 const deploymentsRoutes = require('./src/routes/deployments');
+const agentesCodingRoutes = require('./src/routes/agentes-coding');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
@@ -509,6 +515,10 @@ const scheduler = require('./src/services/scheduler/scheduler');
 const coworkScheduler = require('./src/services/cowork/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
+const {
+  startAgentTaskRuntimeWatchdog,
+  stopAgentTaskRuntimeWatchdog,
+} = require('./src/services/agents/agent-task-runtime-watchdog');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
 const { closeChatRunQueue } = require('./src/services/chat-run-queue');
@@ -688,6 +698,7 @@ const apiLimiterSpecificPrefixes = [
     '/api/rag',
     '/api/document-ai',
     '/api/doc/',
+    '/api/docs/jobs',
     '/api/doc-agent',
 ];
 const apiLimiter = rateLimit({
@@ -740,6 +751,7 @@ app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/doc', expensiveLimiter);
+app.use('/api/docs/jobs', expensiveLimiter);
 app.use('/api/doc-agent', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
 // Autonomous research loop (planner→search→browser→vision LLM) and the
@@ -996,19 +1008,31 @@ app.get('/uploads/presentations/:filename/download', async (req, res) => {
     }
 });
 
-app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
-app.use('/uploads', express.static(uploadsDir, {
-    setHeaders: (res, filePath) => {
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
-        if (/\.pptx$/i.test(filePath)) {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-        }
+// Every format is accepted at upload time, so the serving layer is where
+// executables / scripts / HTML-like active content are neutralised: they are
+// always delivered as downloads, never rendered inline on this origin.
+// (`<img>` ignores Content-Disposition, so SVG image previews still work.)
+const setUploadStaticHeaders = (res, filePath) => {
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+    if (/\.pptx$/i.test(filePath)) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     }
-}));
-// When the binary is not on local disk (R2-backed / scaled deploys), redirect
-// to a short-lived signed R2 URL. Runs only for authorized requests (the
-// access guard above already enforced ownership).
+    if (shouldForceUploadDownload({ filename: filePath })) {
+        res.setHeader('Content-Disposition', uploadAttachmentDisposition(filePath));
+    }
+};
+app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
+app.use('/uploads', express.static(uploadsDir, { setHeaders: setUploadStaticHeaders }));
+// When the binary is not on local disk (R2-backed / scaled deploys), stream
+// the object through this origin. A 302 to a signed R2 URL breaks chat
+// preview (CORS / Failed to fetch). Auth already enforced by the guard above.
 app.use('/uploads', createUploadR2Fallback());
+// Authenticated /api alias of the same stack. Chat preview can fetch
+// `/api/uploads/<user>/<file>` (credentials + Bearer) when `/uploads` is
+// rewritten to a host the browser cannot follow. Same guard + stream.
+app.use('/api/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
+app.use('/api/uploads', express.static(uploadsDir, { setHeaders: setUploadStaticHeaders }));
+app.use('/api/uploads', createUploadR2Fallback());
 
 
 // ── Health probes ───────────────────────────────────────────────
@@ -1176,6 +1200,9 @@ app.get('/internal/metrics', metricsHandler);
 // See backend/src/routes/api-docs.js for the env-gate semantics
 // and docs/api-docs.md for the operator runbook.
 const { buildApiDocsRouter } = require('./src/routes/api-docs');
+const { createDocumentSandboxModule } = require('./src/services/doc-sandbox-module');
+const documentSandboxModule = createDocumentSandboxModule({ prisma, authenticate: authenticateToken, logger });
+app.use('/api/docs/jobs', documentSandboxModule.router);
 app.use('/api-docs', buildApiDocsRouter());
 // Alias under /api/docs — same env-gate, same Swagger UI. Kept as a
 // separate router instance so the two surfaces are independently
@@ -1254,9 +1281,13 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/agent-computer', agentComputerRoutes);
+app.use('/api/desktop', desktopRoutes.router);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
+// Sira Voz — VoiceStudio (open source, local): cloning, dubbing, transcription, audiobooks. Free tier.
+app.use('/api/voice-studio', voiceStudioRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/scientific-search', scientificSearchRoutes);
 app.use('/api/answer', answerRoutes);
@@ -1312,6 +1343,7 @@ app.use('/api/doc', docRoutes);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
+app.use('/api/apps', appsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/codex', codexRunsRoutes);
 // Codex Agent V2 (flag CODEX_AGENT_V2). Mounted AFTER codex-runs so the legacy
@@ -1321,6 +1353,10 @@ app.use('/api/codex', codexV2Routes);
 // Deployments / Publishing (flag DEPLOYMENTS_V2). Bearer-auth, CSRF-exempt like
 // codex; flag off ⇒ every route except /health is 404.
 app.use('/api/deployments', deploymentsRoutes);
+// Coding Agents V2 (flag AGENTES_CODING_V2). Public /health always 200 with
+// { ok, enabled }; default OFF. Flag off ⇒ every other path is 404. Phase 2a
+// adds the coding-sandbox session adapter; no /agentes UX change (UI-lock).
+app.use('/api/agentes-coding', agentesCodingRoutes);
 // Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
 app.use('/api/telegram', telegramRoutes);
@@ -1554,9 +1590,11 @@ async function startServer() {
     startDatabasePoolAutoscaler();
 
     recoverAgentTasksAfterBoot({ logger });
+    startAgentTaskRuntimeWatchdog({ logger });
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
     startAgentTaskWorker();
+    documentSandboxModule.start().catch(() => logger.error({ code: 'DOC_WORKER_START_FAILED' }, 'doc_sandbox'));
     try {
       const { startAgentRunnerWorker } = require('./src/services/agent-runner/queue');
       const { createRedisConnection } = require('./src/services/agents/agent-task-queue');
@@ -1656,6 +1694,15 @@ async function startServer() {
     // HTTP preview requests are handled by code-runner.js; upgrades must be
     // attached to the underlying Node server because Express never sees them.
     codeRunnerRoutes.attachPreviewWebSocketProxy(server);
+
+    // F7.2 same-origin noVNC proxy (/ws/desktop/:sessionId). Kill-switch
+    // fail-closed; token scoped to userId/chatId. Does not publish
+    // container ports and does not replace the live computer orchestrator.
+    try {
+        desktopRoutes.attachDesktopWebSocketProxy(server);
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'desktop_ws_proxy_init_failed');
+    }
 
     // Token-authenticated Vite HMR tunnel for cross-origin Codex previews.
     // Caddy forwards the upgrade to this HTTP server; the route resolves the
@@ -1790,10 +1837,12 @@ async function startServer() {
         5000,
     );
 
+    shutdownRegistry.register('doc_sandbox_close', () => documentSandboxModule.close(), 25000);
     // Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
         try { stopGoalRecovery(); } catch { }
         try { stopGoalCleanup(); } catch { }
+        try { stopAgentTaskRuntimeWatchdog(); } catch { }
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),

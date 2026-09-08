@@ -43,6 +43,11 @@
  * scrub, drop buffered tokens on cancel, SSE id monotonic, coalesced
  * in-flight call ids, settle credits if client gone, json/abort taxonomy,
  * skip duplicate web_fetch same URL per turn.
+ * 3H59 is a fail-open sibling module (`engine-3h59.js`) loaded like
+ * engine-3h55..3h58 would be: require() errors leave this adapter intact.
+ * 3H60 is the next fail-open sibling (`engine-3h60.js`): unique helpers
+ * after 3H59 (oscillation cut, faithful compact, SSE Last-Event-ID replay,
+ * credit settle on error). A throwing require leaves 3H59 intact.
  * 3H40 extends (does not smash) 3H39: hard cap 32 tools/step, abort nested
  * subagents on parent halt, unquoted-key JSON repair, drop NUL args,
  * integer coerce, empty-model circuit, budget hint every 5 steps,
@@ -586,7 +591,50 @@ function classifyAdapterError(code) {
     rate_limited: { code: 'rate_limited', retryable: true, message: 'DeepSeek 429: espera y reintenta.' },
     credit_ceiling: { code: 'credit_ceiling', retryable: false, message: 'DeepSeek 402: sin credito. No reintente.' },
   };
-  return table[c] || null;
+  if (table[c]) return table[c];
+  try {
+    const w = require('./engine-3h59');
+    if (w && typeof w.classifyEngine3h59Error === 'function') {
+      const extra = w.classifyEngine3h59Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
+    const w60 = require('./engine-3h60');
+    if (w60 && typeof w60.classifyEngine3h60Error === 'function') {
+      const extra = w60.classifyEngine3h60Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
+    const w61 = require('./engine-3h61');
+    if (w61 && typeof w61.classifyPublicLoopErrorClosed === 'function') {
+      const extra = w61.classifyPublicLoopErrorClosed({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
+    const w67 = require('./engine-3h67');
+    if (w67 && typeof w67.classifyEngine3h67Error === 'function') {
+      const extra = w67.classifyEngine3h67Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
+    const w66 = require('./engine-3h66');
+    if (w66 && typeof w66.classifyEngine3h66Error === 'function') {
+      const extra = w66.classifyEngine3h66Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
+    const w65 = require('./engine-3h65');
+    if (w65 && typeof w65.classifyEngine3h65Error === 'function') {
+      const extra = w65.classifyEngine3h65Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -953,12 +1001,17 @@ function startCommentHeartbeat({
   };
 }
 
-function honorLastEventId(headerValue, ring) {
+function honorLastEventId(headerValue, ring, opts = {}) {
   const n = Number(String(headerValue || '').trim());
   if (!Number.isFinite(n) || n < 0) return { ok: true, replay: [], last: 0 };
   const frames = Array.isArray(ring) ? ring : [];
-  const replay = frames.filter((f) => Number(f && f.seq) > n);
-  return { ok: true, replay, last: n, code: replay.length ? 'sse_resume' : null };
+  const inclusive = Boolean(opts && opts.inclusive);
+  const replay = frames.filter((f) => {
+    const seq = Number(f && f.seq);
+    if (!Number.isFinite(seq)) return false;
+    return inclusive ? seq >= n : seq > n;
+  });
+  return { ok: true, replay, last: n, code: replay.length ? 'sse_resume' : null, inclusive };
 }
 
 function dedupConsecutiveAssistantCalls(calls) {
@@ -4424,7 +4477,7 @@ function firstTokenWatchdogMs({ elapsedMs, firstTokenAt, startedAt, now = Date.n
 
 
 function adapterSnapshot() {
-  return {
+  const base = {
     retryBackoffJitter: true,
     consecutiveRepeatCut: true,
     sessionRemainingSteps: true,
@@ -4791,6 +4844,72 @@ function adapterSnapshot() {
     sandboxUsesRunsc: false,
     latencyNote: 'scripted p50/p95; never invented Flash',
   };
+  let snap = base;
+  try {
+    const w = require('./engine-3h59');
+    if (w && typeof w.waveSnapshot === 'function') {
+      snap = { ...snap, ...w.waveSnapshot(), wave: w.WAVE || '3H59' };
+    }
+  } catch (_) { /* fail-open: stay on 3H46 if 3H59 is absent */ }
+  try {
+    const w60 = require('./engine-3h60');
+    if (w60 && typeof w60.waveSnapshot === 'function') {
+      snap = { ...snap, ...w60.waveSnapshot(), wave: w60.WAVE || '3H60' };
+    }
+  } catch (_) { /* fail-open: stay on 3H59 if 3H60 is absent */ }
+  try {
+    const w61 = require('./engine-3h61');
+    if (w61 && typeof w61.waveSnapshot === 'function') {
+      snap = { ...snap, ...w61.waveSnapshot(), wave: w61.WAVE || '3H61' };
+    }
+  } catch (_) { /* fail-open: stay on 3H60 if 3H61 is absent */ }
+  try {
+    const w62 = require('./engine-3h62');
+    if (w62 && typeof w62.waveSnapshot === 'function') {
+      snap = { ...snap, ...w62.waveSnapshot(), wave: w62.WAVE || '3H62' };
+    }
+  } catch (_) { /* fail-open: stay on 3H61 if 3H62 is absent */ }
+  try {
+    const w63 = require('./engine-3h63');
+    if (w63 && typeof w63.waveSnapshot === 'function') {
+      snap = { ...snap, ...w63.waveSnapshot(), wave: w63.WAVE || '3H63' };
+    }
+  } catch (_) { /* fail-open: stay on 3H62 if 3H63 is absent */ }
+  try {
+    const w64 = require('./engine-3h64');
+    if (w64 && typeof w64.waveSnapshot === 'function') {
+      snap = { ...snap, ...w64.waveSnapshot(), wave: w64.WAVE || '3H64' };
+    }
+  } catch (_) { /* fail-open: stay on 3H63 if 3H64 is absent */ }
+  try {
+    const w65 = require('./engine-3h65');
+    if (w65 && typeof w65.waveSnapshot === 'function') {
+      snap = { ...snap, ...w65.waveSnapshot(), wave: w65.WAVE || '3H65' };
+    }
+  } catch (_) { /* fail-open: stay on 3H64 if 3H65 is absent */ }
+  try {
+    const w66 = require('./engine-3h66');
+    if (w66 && typeof w66.waveSnapshot === 'function') {
+      snap = { ...snap, ...w66.waveSnapshot(), wave: w66.WAVE || '3H66' };
+    }
+  } catch (_) { /* fail-open: stay on 3H65 if 3H66 is absent */ }
+  try {
+    const w67 = require('./engine-3h67');
+    if (w67 && typeof w67.waveSnapshot === 'function') {
+      snap = { ...snap, ...w67.waveSnapshot(), wave: w67.WAVE || '3H67' };
+    }
+  } catch (_) { /* fail-open: stay on 3H66 if 3H67 is absent */ }
+  return snap;
+}
+
+function loadOptionalEngineWave(name) {
+  const file = String(name || '').trim();
+  if (!/^engine-3h(?:5[5-9]|6[0-7])$/.test(file)) return null;
+  try {
+    return require('./' + file);
+  } catch (_) {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7597,6 +7716,7 @@ module.exports = {
   refuseSubagentIfSameToolAsParent,
   sortMemoryHitsByScoreDesc,
   rejectToolCallIfArgsIsArray,
+  loadOptionalEngineWave,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,
@@ -7605,3 +7725,38 @@ module.exports = {
   DEEPSEEK_GENERATE_MODELS,
   GLOB_IGNORE_DEFAULTS,
 };
+
+function bindOptionalEngineWaves(target) {
+  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60', 'engine-3h61', 'engine-3h62', 'engine-3h63', 'engine-3h64', 'engine-3h65', 'engine-3h66', 'engine-3h67']) {
+    const mod = loadOptionalEngineWave(name);
+    if (!mod || typeof mod !== 'object') continue;
+    for (const [k, v] of Object.entries(mod)) {
+      if (k === 'WAVE' || k === 'waveSnapshot' || k === 'HELPERS' || k === 'ERROR_TABLE' || k === 'MUTATING_TOOLS' || k === 'FLAGS' || k === 'snapshotFlags') continue;
+      if (typeof v === 'function' && typeof target[k] !== 'function') target[k] = v;
+    }
+  }
+  return target;
+}
+
+/** Live #388 / 3H59 helpers the loop and generate path import by name. */
+function bindLive388CheckpointSandboxSse(target) {
+  let w = null;
+  try { w = require('./engine-3h59'); } catch (_) { return target; }
+  if (!w) return target;
+  const names = [
+    'checkpointHookBeforeMutatingTool',
+    'rollbackHookOnTimedOutWrite',
+    'skipCheckpointIfUnchanged',
+    'sandboxTimeoutThenCleanup',
+    'sandboxReapOrphanWorkdirs',
+    'sseResumeDropsPriorListeners',
+    'sseCancelClearsHeartbeat',
+    'sseResumeRejectsSeqPastHead',
+  ];
+  for (const name of names) {
+    if (typeof w[name] === 'function') target[name] = w[name];
+  }
+  return target;
+}
+
+module.exports = bindLive388CheckpointSandboxSse(bindOptionalEngineWaves(module.exports));

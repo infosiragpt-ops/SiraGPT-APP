@@ -6,35 +6,35 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
   {
     name: 'openai/gpt-5.5',
     displayName: 'GPT 5.5',
-    provider: 'OpenRouter',
+    provider: 'OpenAI',
     type: 'TEXT',
     icon: 'ChatGPTLogo',
-    description: 'GPT 5.5 via OpenRouter para chat, razonamiento, documentos y trabajo multimodal.',
+    description: 'GPT 5.5 de OpenAI para chat, razonamiento, documentos y trabajo multimodal.',
     aliases: ['gpt-5.5', 'gpt-5'],
   },
   {
     name: 'anthropic/claude-opus-4.7',
     displayName: 'Opus 4.7',
-    provider: 'OpenRouter',
+    provider: 'Anthropic',
     type: 'TEXT',
     icon: 'ClaudeLogo',
-    description: 'Claude Opus 4.7 via OpenRouter para razonamiento profundo, escritura y codigo.',
+    description: 'Claude Opus 4.7 de Anthropic para razonamiento profundo, escritura y codigo.',
     aliases: ['claude-opus-4-7', 'claude-opus-4.7', 'anthropic/claude-opus-4-7'],
   },
   {
     name: 'google/gemini-3.5',
     displayName: 'Gemini 3.5',
-    provider: 'OpenRouter',
+    provider: 'Gemini',
     type: 'TEXT',
     icon: 'GeminiLogo',
-    description: 'Gemini 3.5 via OpenRouter para contexto largo, vision y analisis multimodal.',
+    description: 'Gemini 3.5 de Google para contexto largo, vision y analisis multimodal.',
     aliases: ['gemini-3.5', 'gemini-3.5-pro', 'google/gemini-3.5-pro', 'google/gemini-3.5-flash'],
     comingSoon: true,
   },
   {
     name: 'x-ai/grok-4.20',
     displayName: 'Grok 4.2',
-    provider: 'OpenRouter',
+    provider: 'xAI',
     type: 'TEXT',
     icon: 'GrokLogo',
     description: 'Grok 4.2 via OpenRouter para razonamiento, busqueda conversacional y tareas generales.',
@@ -46,11 +46,29 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
   {
     name: 'moonshotai/kimi-k2.6',
     displayName: 'Kimi K2.6',
-    provider: 'OpenRouter',
+    provider: 'Kimi',
     type: 'TEXT',
     icon: 'KimiLogo',
-    description: 'Kimi K2.6 via OpenRouter para contexto largo, codigo y flujos agenticos.',
+    description: 'Kimi K2.6 de Moonshot para contexto largo, codigo y flujos agenticos.',
     aliases: ['kimi-k2.6', 'moonshotai/kimi-k2.6'],
+  },
+  {
+    name: 'muse-spark-1.2',
+    displayName: 'Meta Muse Spark 1.2',
+    provider: 'Meta',
+    type: 'TEXT',
+    icon: 'MetaLogo',
+    description: 'Meta Muse Spark 1.2 directo para agentes, codigo, herramientas y contexto largo.',
+    aliases: ['muse-spark-1.2', 'meta/muse-spark-1.2'],
+  },
+  {
+    name: 'muse-spark-1.1',
+    displayName: 'Meta Muse Spark 1.1',
+    provider: 'Meta',
+    type: 'TEXT',
+    icon: 'MetaLogo',
+    description: 'Meta Muse Spark 1.1 directo para chat multimodal y trabajo agentico.',
+    aliases: ['muse-spark-1.1', 'meta/muse-spark-1.1'],
   },
   {
     name: 'z-ai/glm-5.1',
@@ -63,12 +81,12 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'deepseek/deepseek-v4-pro',
-    displayName: 'Deepseek V4 PRO',
-    provider: 'OpenRouter',
+    displayName: 'Sira Pro',
+    provider: 'DeepSeek',
     type: 'TEXT',
     icon: 'DeepseekLogo',
-    description: 'Deepseek V4 PRO via OpenRouter para razonamiento profesional, codigo y documentos complejos.',
-    aliases: ['deepseek-v4-pro', 'deepseek/deepseek-v4-pro'],
+    description: 'Sira Pro para razonamiento profesional, codigo y documentos complejos.',
+    aliases: ['deepseek-v4-pro', 'deepseek/deepseek-v4-pro', 'sira-pro', 'Sira Pro'],
   },
   {
     name: 'gpt-4o',
@@ -271,11 +289,10 @@ function buildGemaVisibleModel(env = process.env) {
 
 /**
  * Optional deploy-scoped allowlist. When `VISIBLE_MODELS_ALLOWLIST` is set
- * (comma-separated model names or aliases), the visible picker is restricted
- * to ONLY those models. Unset/empty → no filtering (every deploy behaves as
- * before). This lets a single deploy (e.g. one without certain provider keys)
- * surface just the models it can actually serve, without editing this shared
- * catalog or affecting other deploys.
+ * (comma-separated model names or aliases), the static curated showcase is
+ * restricted to those models. Unset/empty → no curated filtering. Admin-
+ * activated TEXT rows still pass through regardless of this env — activar =
+ * visible.
  */
 function parseVisibleModelsAllowlist(env = process.env) {
   const raw = String(env.VISIBLE_MODELS_ALLOWLIST || '').trim();
@@ -306,7 +323,7 @@ function curateVisibleTextModels(models = [], env = process.env) {
   for (const model of Array.isArray(models) ? models : []) {
     const name = String(model?.name || '').trim();
     if (!name) continue;
-    if (model?.isActive === false) continue;
+    if (model?.isActive !== true) continue;
     if (model?.virtual === true) continue;
     const id = String(model?.id || '').trim();
     if (id.startsWith('__virtual_')) continue;
@@ -338,17 +355,14 @@ function curateVisibleTextModels(models = [], env = process.env) {
 
   // Admin-authoritative pass-through: any TEXT model the admin explicitly
   // activated (isActive=true) that isn't already surfaced by a curated
-  // definition still appears in the picker — "activar = visible". This keeps
-  // curated models' rich metadata while letting operators expose new models
-  // by toggling them on, with no code edit to the static catalog. Still honors
-  // the deploy-scoped VISIBLE_MODELS_ALLOWLIST when that env is set.
-  const allow = parseVisibleModelsAllowlist(env);
+  // definition still appears in the picker — "activar = visible". The
+  // deploy-scoped VISIBLE_MODELS_ALLOWLIST may still filter the static
+  // curated showcase; leftover admin-activated TEXT rows always pass through.
   const passthrough = [];
   for (const [lowerName, model] of byName) {
     if (consumed.has(lowerName)) continue;
     const t = normalizeModelType(model?.type);
     if (t && t !== 'TEXT') continue; // only surface TEXT here
-    if (allow && !allow.has(lowerName)) continue;
     passthrough.push({
       ...model,
       displayName: model?.displayName || model?.name,
