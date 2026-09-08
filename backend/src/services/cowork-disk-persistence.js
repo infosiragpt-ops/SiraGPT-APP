@@ -59,11 +59,30 @@ function saveMemoryDocument(userId, doc) {
   });
 }
 
+function normalizePersistedNote(note) {
+  if (!note) return null;
+  if (typeof note === 'string') {
+    const text = note.trim();
+    return text ? { id: '', text, sourceCount: 0, createdAt: 0 } : null;
+  }
+  const text = String(note.text || '').trim();
+  if (!text) return null;
+  return {
+    id: String(note.id || ''),
+    text,
+    sourceCount: Number(note.sourceCount) || 0,
+    createdAt: Number(note.createdAt) || 0,
+  };
+}
+
 function loadCuratedMemory(userId) {
-  const row = loadJson(userPath('curated-memory', userId), { memory: [], user: [] });
+  const row = loadJson(userPath('curated-memory', userId), { memory: [], user: [], notes: [] });
   return {
     memory: Array.isArray(row.memory) ? row.memory.map(String) : [],
     user: Array.isArray(row.user) ? row.user.map(String) : [],
+    notes: Array.isArray(row.notes)
+      ? row.notes.map(normalizePersistedNote).filter(Boolean)
+      : [],
     updatedAt: Number(row.updatedAt) || 0,
   };
 }
@@ -74,6 +93,9 @@ function saveCuratedMemory(userId, stores) {
     updatedAt: Date.now(),
     memory: Array.isArray(stores?.memory) ? stores.memory.map(String) : [],
     user: Array.isArray(stores?.user) ? stores.user.map(String) : [],
+    notes: Array.isArray(stores?.notes)
+      ? stores.notes.map(normalizePersistedNote).filter(Boolean)
+      : [],
   });
 }
 

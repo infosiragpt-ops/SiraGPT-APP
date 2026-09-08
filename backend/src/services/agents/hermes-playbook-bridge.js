@@ -27,6 +27,7 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { hermes: 'docker', sira: 'backend/src/services/agents/hermes-docker-bridge.js', status: 'integrated', strategy: 'Hermes backend profiles mapped to code-sandbox + env-gated remote backends' },
   { hermes: 'tests', sira: 'backend/tests, tests, e2e', status: 'integrated', strategy: 'map Hermes test lanes to Node --test suites' },
   { hermes: 'curator', sira: 'backend/src/services/agents/hermes-skill-curator.js', status: 'integrated', strategy: 'deterministic skill-library review + Biblioteca deposit; never mutates bundled skills' },
+  { hermes: 'tools/memory_tool.py', sira: 'backend/src/services/agents/hermes-memory-compaction.js', status: 'integrated', strategy: 'bounded log compaction + ranked retrieval (profile > recent log > notes); profile facts never folded' },
 ]);
 
 const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
