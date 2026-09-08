@@ -33,6 +33,8 @@ const WRITE_TOOLS = new Set([
 const COMMAND_TOOLS = new Set([
   'bash',
   'execute_bash',
+  'shell',
+  'execute_shell',
   'host_bash',
 ]);
 
@@ -52,6 +54,8 @@ const TOOL_ALIASES = Object.freeze({
   str_replace: 'edit',
   execute_bash: 'bash',
   bash: 'bash',
+  shell: 'bash',
+  execute_shell: 'bash',
   host_bash: 'host_bash',
   host_file: 'host_file',
   computer_write_file: 'computer_write_file',

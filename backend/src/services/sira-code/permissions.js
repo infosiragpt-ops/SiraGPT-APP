@@ -27,6 +27,8 @@ const TOOL_ALIASES = Object.freeze({
   str_replace: 'edit',
   execute_bash: 'bash',
   bash: 'bash',
+  shell: 'bash',
+  execute_shell: 'bash',
   grep: 'grep',
   glob: 'glob',
   list_files: 'glob',
