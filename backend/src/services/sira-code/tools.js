@@ -2,7 +2,7 @@
 
 /**
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
- * Also ls, apply_patch, webfetch, todo and diagnostics.
+ * Also ls, apply_patch, webfetch, todo, diagnostics and question.
  *
  * File tools stay inside the session workspace. bash/shell runs through
  * the native allowlist (shell-sandbox) then execInWorkspace (scrubbed
@@ -19,6 +19,7 @@ const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox
 const { searchGrep, searchGlob } = require('./search');
 const { runRead, runWrite, runEdit } = require('./file-tools');
 const { runDiagnostics } = require('./diagnostics');
+const { runQuestion } = require('./question-tool');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -125,13 +126,17 @@ const EXECUTORS = {
   webfetch: runWebFetchTool,
   todo: runTodoTool,
   diagnostics: runDiagnosticsTool,
+  question: runQuestion,
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
+  const answers = ctx.answers !== undefined ? ctx.answers : args.answers;
   const auth = authorizeTool(session.agentId, toolName, {
     permission: session.permission || ctx.permission,
     approved: ctx.approved === true,
     grants: session.permissionGrants,
+    answers,
+    dismissed: ctx.dismissed === true,
   });
   if (auth.denied) {
     const detail = auth.reason === 'composer_read_only'
@@ -143,17 +148,20 @@ async function executeTool(session, toolName, args = {}, ctx = {}) {
     };
   }
   if (auth.needsPermission) {
+    const waiting = auth.tool === 'question'
+      ? `${auth.tool} espera una respuesta del usuario`
+      : `${auth.tool} necesita permiso en modo ${session.agentId}`;
     return {
       ok: false,
       code: 'permission_required',
-      error: `${auth.tool} necesita permiso en modo ${session.agentId}`,
-      content: `ERROR: permiso requerido para ${auth.tool}`,
+      error: waiting,
+      content: `ERROR: ${auth.tool === 'question' ? 'pregunta pendiente' : `permiso requerido para ${auth.tool}`}`,
       permission: auth,
     };
   }
   const exec = EXECUTORS[auth.tool];
   if (!exec) return toolError('unknown_tool', `herramienta desconocida: ${auth.tool}`);
-  const result = await exec(session.workspace, args || {}, { ...ctx, session });
+  const result = await exec(session.workspace, args || {}, { ...ctx, session, answers });
   return { ...result, permission: auth };
 }
 
@@ -321,6 +329,42 @@ const TOOL_DEFINITIONS = [
           severity: { type: 'string' },
           limit: { type: 'integer' },
         },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'question',
+      description: 'Pausa el turno y pregunta al usuario en español (alias: user_ask). questions[] con question, header (≤30), options[{label, description}] y multiple. Construir espera la respuesta (permission-resume). Planificar solo aclara; no desbloquea escrituras. No la uses para saludos.',
+      parameters: {
+        type: 'object',
+        properties: {
+          questions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                question: { type: 'string' },
+                header: { type: 'string' },
+                options: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      description: { type: 'string' },
+                    },
+                    required: ['label'],
+                  },
+                },
+                multiple: { type: 'boolean' },
+              },
+              required: ['question'],
+            },
+          },
+        },
+        required: ['questions'],
       },
     },
   },

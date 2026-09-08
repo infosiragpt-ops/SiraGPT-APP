@@ -12,6 +12,7 @@ const { DEFAULT_AGENT_ID, resolveAgentId, getAgent } = require('./agents');
 const { createWorkspace } = require('./workspace');
 const { publicPlan } = require('./plan-handoff');
 const { DEFAULT_TITLE, isDefaultTitle } = require('./session-title');
+const { describePending } = require('./question-tool');
 
 const sessions = new Map();
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
@@ -33,11 +34,9 @@ function publicSession(session) {
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
     plan: publicPlan(session.plan),
-    pendingPermissions: [...(session.pendingPermissions || [])].map(([permissionId, pending]) => ({
-      permissionId,
-      tool: pending.tool,
-      label: 'Esperando permiso',
-    })),
+    pendingPermissions: [...(session.pendingPermissions || [])].map(([permissionId, pending]) => (
+      describePending(permissionId, pending)
+    )),
   };
 }
 

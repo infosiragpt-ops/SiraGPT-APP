@@ -18,6 +18,12 @@ const { appendMessage } = require('./session-store');
 const { executeTool } = require('./tools');
 const { authorizeTool, canonicalTool, WRITE_TOOLS } = require('./permissions');
 const { publicModelLabel, sanitizePublicObject } = require('./display');
+const {
+  isQuestionPending,
+  describePending,
+  validateAnswers,
+  formatDismissedResult,
+} = require('./question-tool');
 
 const DECISION_ALIASES = Object.freeze({
   allow: 'allow',
@@ -47,26 +53,28 @@ function hasGrant(session, toolName) {
 
 function listPending(session) {
   if (!session || !session.pendingPermissions) return [];
-  return [...session.pendingPermissions.entries()].map(([permissionId, pending]) => ({
-    permissionId,
-    tool: pending.tool,
-    label: 'Esperando permiso',
-  }));
+  return [...session.pendingPermissions.entries()].map(([permissionId, pending]) => (
+    describePending(permissionId, pending)
+  ));
 }
 
 function publicPending(session) {
   return listPending(session);
 }
 
-async function executeApproved(session, pending, { signal } = {}) {
+async function executeApproved(session, pending, { signal, answers, dismissed } = {}) {
   const name = pending.name || pending.tool;
-  const args = pending.args || {};
+  const args = { ...(pending.args || {}) };
+  if (answers !== undefined) args.answers = answers;
+  const question = isQuestionPending(pending);
   stageEvent(session, 'executing', {
-    label: 'Ejecutando código',
+    label: question ? 'Registrando respuesta' : 'Ejecutando código',
     tool: pending.tool,
   });
   const result = await executeTool(session, name, args, {
     approved: true,
+    answers,
+    dismissed: dismissed === true,
     permission: session.permission,
     signal: signal || (session.abort && session.abort.signal) || undefined,
   });
@@ -91,7 +99,7 @@ async function executeApproved(session, pending, { signal } = {}) {
   return result;
 }
 
-async function resolveSessionPermission(session, permissionId, decision) {
+async function resolveSessionPermission(session, permissionId, decision, extras = {}) {
   const pending = session.pendingPermissions.get(String(permissionId || ''));
   if (!pending) {
     const err = new Error('permiso no encontrado');
@@ -108,8 +116,86 @@ async function resolveSessionPermission(session, permissionId, decision) {
     throw err;
   }
 
+  if (isQuestionPending(pending) && normalized !== 'deny') {
+    const rawAnswers = extras && (extras.answers !== undefined ? extras.answers : extras.reply);
+    if (rawAnswers !== undefined) {
+      const checked = validateAnswers(pending.questions || [], rawAnswers, { allowEmpty: true });
+      if (!checked.ok) {
+        const err = new Error(checked.error || 'las respuestas no coinciden con las preguntas');
+        err.code = checked.code || 'validation_failed';
+        err.status = 400;
+        throw err;
+      }
+      extras = { ...extras, answers: checked.answers };
+    }
+  }
+
   session.pendingPermissions.delete(String(permissionId));
   session.updatedAt = Date.now();
+
+  if (isQuestionPending(pending)) {
+    if (normalized === 'deny') {
+      const dismissed = formatDismissedResult(pending.questions || []);
+      appendEvent(session, 'permission_resolved', {
+        permissionId,
+        tool: pending.tool,
+        decision: 'deny',
+        label: 'Pregunta descartada',
+        kind: 'question',
+      });
+      stageEvent(session, 'cancelled', { label: 'Pregunta descartada', tool: pending.tool });
+      appendEvent(session, 'tool_result', {
+        tool: pending.tool,
+        ok: true,
+        preview: dismissed.text.slice(0, 240),
+      });
+      appendMessage(session, {
+        role: 'tool',
+        content: dismissed.text,
+        parts: [{
+          type: 'tool',
+          tool: pending.tool,
+          ok: true,
+          content: dismissed.text,
+        }],
+      });
+      return {
+        ok: true,
+        allowed: false,
+        executed: false,
+        remembered: false,
+        dismissed: true,
+        tool: pending.tool,
+        decision: 'deny',
+        answers: dismissed.answers,
+        result: { ok: true, preview: dismissed.text.slice(0, 240) },
+      };
+    }
+
+    const answers = extras && extras.answers !== undefined ? extras.answers : [];
+    appendEvent(session, 'permission_resolved', {
+      permissionId,
+      tool: pending.tool,
+      decision: 'allow',
+      label: 'Respuesta registrada',
+      kind: 'question',
+    });
+    const result = await executeApproved(session, pending, { answers });
+    return {
+      ok: true,
+      allowed: true,
+      executed: true,
+      remembered: false,
+      tool: pending.tool,
+      decision: 'allow',
+      answers: result.answers || answers,
+      result: {
+        ok: result.ok,
+        code: result.code || undefined,
+        preview: String(result.content || result.error || '').slice(0, 240),
+      },
+    };
+  }
 
   if (normalized === 'deny') {
     appendEvent(session, 'permission_resolved', {
