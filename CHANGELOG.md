@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Hermes fusion: memory writes now fail closed on a per-fact size cap
+  (2000 chars) and a per-user write rate-limit, with Spanish `E_PARAMS`
+  / `E_QUOTA` errors. Native rewrite of the Hermes MEMORY.md / USER.md
+  character-limit contract; chat-side fact extractors keep size-only
+  (no rate starve). No upstream Python.
+
 - `/agentes` task cancel is idempotent after an SSE drop: a reconnect
   mid-run (or a second Stop) returns `already` + `E_CANCELLED` and does
   not abort twice or append another cancel event. Completed/error

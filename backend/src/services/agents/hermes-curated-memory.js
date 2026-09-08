@@ -20,6 +20,11 @@
  */
 
 const diskPersistence = require('../cowork-disk-persistence');
+const {
+  checkFactSize,
+  checkWriteRate,
+  storeOverflowError,
+} = require('./memory-write-guard');
 
 const ENTRY_DELIMITER = '\n§\n';
 const MEMORY_CHAR_LIMIT = 2200;
@@ -196,7 +201,7 @@ function successResponse(userId, target, message) {
   };
 }
 
-function add(userId, { target = 'memory', content } = {}) {
+function add(userId, { target = 'memory', content, now, maxWrites, windowMs, rateLimit } = {}) {
   const id = normalizeUserId(userId);
   if (!id) return { ok: false, success: false, error: 'userId required' };
   const resolved = resolveTarget(target);
@@ -206,6 +211,9 @@ function add(userId, { target = 'memory', content } = {}) {
   if (!text) return { ok: false, success: false, error: 'Content cannot be empty.' };
   const scanError = scanMemoryContent(text);
   if (scanError) return { ok: false, success: false, error: scanError };
+
+  const size = checkFactSize(text);
+  if (!size.ok) return size;
 
   const stores = storesFor(id);
   const entries = entriesFor(stores, resolved);
@@ -219,12 +227,15 @@ function add(userId, { target = 'memory', content } = {}) {
   if (newTotal > limit) {
     const current = charCount(entries);
     return {
-      ok: false,
-      success: false,
-      error: `Memory at ${current}/${limit} chars. Adding this entry (${text.length} chars) would exceed the limit. Replace or remove existing entries first.`,
+      ...storeOverflowError({ current, limit, added: text.length }),
       current_entries: [...entries],
       usage: `${current}/${limit}`,
     };
+  }
+
+  if (rateLimit !== false) {
+    const rate = checkWriteRate(id, { now, maxWrites, windowMs });
+    if (!rate.ok) return rate;
   }
 
   if (resolved === 'user') stores.user = next;
@@ -250,7 +261,7 @@ function findUniqueMatch(entries, oldText) {
   return { index: matches[0].index, entry: matches[0].entry };
 }
 
-function replace(userId, { target = 'memory', old_text, oldText, content } = {}) {
+function replace(userId, { target = 'memory', old_text, oldText, content, now, maxWrites, windowMs, rateLimit } = {}) {
   const id = normalizeUserId(userId);
   if (!id) return { ok: false, success: false, error: 'userId required' };
   const resolved = resolveTarget(target);
@@ -263,6 +274,9 @@ function replace(userId, { target = 'memory', old_text, oldText, content } = {})
   const scanError = scanMemoryContent(nextText);
   if (scanError) return { ok: false, success: false, error: scanError };
 
+  const size = checkFactSize(nextText);
+  if (!size.ok) return size;
+
   const stores = storesFor(id);
   const entries = entriesFor(stores, resolved);
   const match = findUniqueMatch(entries, old_text || oldText);
@@ -273,11 +287,12 @@ function replace(userId, { target = 'memory', old_text, oldText, content } = {})
   const limit = charLimit(resolved);
   const newTotal = charCount(test);
   if (newTotal > limit) {
-    return {
-      ok: false,
-      success: false,
-      error: `Replacement would put memory at ${newTotal}/${limit} chars. Shorten the new content or remove other entries first.`,
-    };
+    return storeOverflowError({ current: charCount(entries), limit, added: nextText.length });
+  }
+
+  if (rateLimit !== false) {
+    const rate = checkWriteRate(id, { now, maxWrites, windowMs });
+    if (!rate.ok) return rate;
   }
 
   if (resolved === 'user') stores.user = test;
@@ -372,7 +387,11 @@ function learnFromEntry(entry) {
   if (!shouldLearnFromEntry(entry)) {
     return { ok: false, skipped: true, reason: 'not_learnable' };
   }
-  return add(entry.userId, { target: inferTarget(entry), content: String(entry.fact).trim() });
+  return add(entry.userId, {
+    target: inferTarget(entry),
+    content: String(entry.fact).trim(),
+    rateLimit: false,
+  });
 }
 
 function learnFromFacts(userId, facts) {
@@ -383,6 +402,7 @@ function learnFromFacts(userId, facts) {
     results.push(add(userId, {
       target: inferTarget({ fact: text, category: fact?.category }),
       content: String(text).trim(),
+      rateLimit: false,
     }));
   }
   return results;

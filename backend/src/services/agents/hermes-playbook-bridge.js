@@ -15,7 +15,7 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { hermes: 'toolsets.py', sira: 'backend/src/services/agents/toolset-registry.js', status: 'integrated', strategy: 'tiered tool bundles: core, research, webhook-safe, visual, enterprise' },
   { hermes: 'trajectory_compressor.py', sira: 'backend/src/services/agents/trajectory-compactor.js', status: 'integrated', strategy: 'middle-turn compression for eval/training trajectories' },
   { hermes: 'agent/context_compressor.py', sira: 'backend/src/services/sira/context-compactor.js', status: 'integrated', strategy: 'Hermes compaction preamble and tail protection via hermes-context-patterns.js' },
-  { hermes: 'hermes_state.py', sira: 'backend/src/services/agents/task-store.js, hermes-memory-bridge.js', status: 'integrated', strategy: 'durable task state + session search + active memory promotion' },
+  { hermes: 'hermes_state.py', sira: 'backend/src/services/agents/task-store.js, hermes-memory-bridge.js, memory-write-guard.js', status: 'integrated', strategy: 'durable task state + session search + active memory promotion + Spanish size/rate write guard' },
   { hermes: 'cron', sira: 'backend/src/services/agents/cron/hermes-cron-bridge.js', status: 'integrated', strategy: 'Hermes cron API over SiraGPT scheduler + agent-entry invoker' },
   { hermes: 'providers', sira: 'backend/src/services/agents/providers', status: 'integrated', strategy: 'provider adapters + hermes-cli model command' },
   { hermes: 'acp_adapter', sira: 'backend/src/services/agents/hermes-delegate-bridge.js', status: 'integrated', strategy: 'subagent orchestration and delegate_task tool' },
