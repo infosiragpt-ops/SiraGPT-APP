@@ -1,18 +1,45 @@
 "use client"
 
 /**
- * Right-hand department computer. One persistent Linux desktop per member
- * (Xvfb + x11vnc + noVNC). Every department shares that same machine.
- * Human viewer is same-origin noVNC (real mouse). PNG is agent-only.
+ * Right-hand department / chat computer. Persistent Linux desktop.
+ * Bind the session to conversationId when provided so chat A does
+ * not reuse chat B's cached desktop. Human viewer is the live
+ * same-origin desktop (real mouse). PNG is agent-only.
  */
 
 import * as React from "react"
-import { Folder, Globe, Monitor, TerminalSquare, X } from "lucide-react"
+import dynamic from "next/dynamic"
+import { Folder, Globe, Maximize2, Monitor, TerminalSquare, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
+import { PensandoBars } from "@/components/pensando-bars"
+import { emitLoginHandoff } from "@/lib/computer-login-handoff"
+
+function DesktopScreenLoading() {
+  return (
+    <div
+      className="relative h-full w-full min-h-0 overflow-hidden bg-[#1b1b1d]"
+      data-testid="desktop-screen"
+    >
+      <div
+        className="absolute inset-0 z-10 flex items-center justify-center bg-[#1b1b1d]"
+        data-testid="desktop-screen-black"
+        aria-hidden
+      >
+        <p className="text-sm text-zinc-400">Preparando escritorio…</p>
+      </div>
+    </div>
+  )
+}
+
+const DesktopScreen = dynamic(
+  () => import("@/components/desktop/DesktopScreen").then((m) => m.DesktopScreen),
+  { ssr: false, loading: () => <DesktopScreenLoading /> },
+)
 
 export type DepartmentComputerDock = "screen" | "files" | "terminal" | "browser"
 
@@ -23,9 +50,16 @@ export type DepartmentComputerPaneProps = {
   computerRunId: string
   onClose: () => void
   browser?: React.ReactNode
+  /** Open chat/conversation id — keys the live desktop session per chat. */
+  conversationId?: string | null
+  /** Hide this pane's own chrome when framed by AgentComputerShell. */
+  embedded?: boolean
+  onStatusChange?: (status: "starting" | "live" | "error" | "idle") => void
 }
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")
+function computerApiBase() {
+  return getSameOriginApiBaseUrl().replace(/\/+$/, "")
+}
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
@@ -44,49 +78,273 @@ type AgentSession = {
   novncWsUrl?: string
   agentUrl?: string
   reused?: boolean
+  conversationId?: string | null
+  conversationBound?: boolean
+  sessionKey?: string
 }
 
-let cachedAgentSession: AgentSession | null = null
+const sessionCache = new Map<string, AgentSession>()
 
-function embedFrom(session: AgentSession): string {
-  if (session.embedUrl) return session.embedUrl
-  const id = session.sessionId
-  if (!id) return ""
-  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&path=agent-computer/sessions/${id}/novnc/websockify`
+/**
+ * Always-on computer policy.
+ * The desktop must survive blips, restarts and stale tabs instead of
+ * spinning "Preparando escritorio…" forever:
+ * - session acquire retries a few times with backoff (transport/5xx only,
+ *   never isolation/auth errors),
+ * - a cached session is revalidated before use (a tab can outlive the
+ *   server-side session record),
+ * - a heartbeat revalidates the live session every minute and silently
+ *   rebuilds after consecutive misses,
+ * - when everything fails the pane says so with a Reintentar button.
+ */
+export const COMPUTER_ACQUIRE_ATTEMPTS = 3
+export const COMPUTER_ACQUIRE_RETRY_DELAYS_MS = [1000, 2500]
+export const COMPUTER_HEARTBEAT_INTERVAL_MS = 60_000
+export const COMPUTER_HEARTBEAT_MAX_MISSES = 2
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    if (typeof (timer as unknown as { unref?: unknown }).unref === "function") {
+      (timer as unknown as { unref: () => void }).unref()
+    }
+  })
 }
 
-async function ensureMemberDesktop(): Promise<AgentSession> {
-  const res = await authenticatedFetch(`${API_BASE}/agent-computer/sessions`, {
+function isRetriableComputerError(err: unknown): boolean {
+  const status = Number((err as { status?: unknown })?.status)
+  if (status === 400 || status === 401 || status === 403 || status === 409) return false
+  if ((err as { emptyChat?: unknown })?.emptyChat) return false
+  const msg = String(
+    (err as { message?: unknown })?.message
+    ?? (err as { body?: { message?: unknown } })?.body?.message
+    ?? "",
+  )
+  if (/aislar|isolation|login|permiso|forbidden|unauthorized|No se pudo aislar/i.test(msg)) return false
+  return true
+}
+
+async function acquireMemberDesktopWithRetry(
+  conversationId: string | null,
+): Promise<AgentSession> {
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < COMPUTER_ACQUIRE_ATTEMPTS; attempt += 1) {
+    try {
+      return await ensureMemberDesktop(conversationId)
+    } catch (err) {
+      lastErr = err
+      const last = attempt >= COMPUTER_ACQUIRE_ATTEMPTS - 1
+      if (last || !isRetriableComputerError(err)) throw err
+      await sleep(COMPUTER_ACQUIRE_RETRY_DELAYS_MS[Math.min(attempt, COMPUTER_ACQUIRE_RETRY_DELAYS_MS.length - 1)])
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("No se pudo abrir la computadora.")
+}
+
+async function validateAgentSession(
+  sessionId: string,
+  conversationId: string | null,
+): Promise<boolean> {
+  const id = String(sessionId || "").trim()
+  if (!id) return false
+  try {
+    const chatId = String(conversationId || "").trim()
+    const qs = chatId ? `?conversationId=${encodeURIComponent(chatId)}` : ""
+    const res = await authenticatedFetch(
+      `${computerApiBase()}/agent-computer/sessions/${encodeURIComponent(id)}${qs}`,
+      {
+        method: "GET",
+        credentials: "include",
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(8_000),
+      },
+    )
+    if (!res.ok) return false
+    const body = (await res.json().catch(() => null)) as { sessionId?: string } | null
+    return Boolean(body && body.sessionId)
+  } catch {
+    return false
+  }
+}
+
+const GENERIC_DESKTOP_UNAVAILABLE =
+  "No se pudo abrir la computadora. El escritorio no está disponible."
+const PREPARING_DESKTOP_ES = "Preparando escritorio…"
+
+function cacheKey(conversationId?: string | null) {
+  const id = String(conversationId || "").trim()
+  return id ? `chat:${id}` : "member"
+}
+
+type DesktopPoolHint = { poolWarm: number; enabled: boolean; starting: boolean }
+
+function userFacingComputerError(
+  message?: string,
+  hint: DesktopPoolHint = { poolWarm: 0, enabled: false, starting: false },
+): string {
+  if (hint.poolWarm > 0 || hint.starting) {
+    const msg = String(message || "").trim()
+    if (!msg || /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|AbortError|timed out|orchestrator|ORCH_|network|El escritorio no está disponible/i.test(msg)) {
+      return PREPARING_DESKTOP_ES
+    }
+    if (/sk-[A-Za-z0-9_-]{8,}/i.test(msg) || /deepseek|model[_-]?id/i.test(msg)) {
+      return PREPARING_DESKTOP_ES
+    }
+    return msg
+  }
+  const msg = String(message || "").trim()
+  if (!msg) return GENERIC_DESKTOP_UNAVAILABLE
+  if (/sk-[A-Za-z0-9_-]{8,}/i.test(msg)) return "No se pudo abrir la computadora."
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|AbortError|timed out|orchestrator|ORCH_|network/i.test(msg)) {
+    return GENERIC_DESKTOP_UNAVAILABLE
+  }
+  if (/deepseek|model[_-]?id/i.test(msg)) return "No se pudo abrir la computadora."
+  if (/^[a-z0-9_]+$/i.test(msg)) return GENERIC_DESKTOP_UNAVAILABLE
+  return msg
+}
+
+type DesktopLease = {
+  sessionId: string
+  wsUrl?: string
+  viewerToken?: string
+  provider?: string
+  expiresAt?: string
+  status?: string
+  inputMode?: string
+  fromPool?: boolean
+}
+
+async function getDesktopStatus(): Promise<{ enabled: boolean; poolWarm: number } | null> {
+  try {
+    const res = await authenticatedFetch(`${computerApiBase()}/desktop/status`, {
+      method: "GET",
+      credentials: "include",
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) return null
+    const body = await res.json().catch(() => ({})) as { enabled?: boolean; poolWarm?: number }
+    return {
+      enabled: Boolean(body.enabled),
+      poolWarm: Number(body.poolWarm) || 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+async function acquireDesktopLease(chatId: string): Promise<DesktopLease> {
+  const res = await authenticatedFetch(`${computerApiBase()}/desktop/sessions`, {
     method: "POST",
     credentials: "include",
     headers: authHeaders(),
+    body: JSON.stringify(chatId ? { conversationId: chatId } : {}),
+    signal: AbortSignal.timeout(25_000),
+  })
+  const body = await res.json().catch(() => ({})) as DesktopLease & { message?: string; error?: string; poolWarm?: number }
+  if (!res.ok) {
+    throw Object.assign(
+      new Error(body.message || body.error || PREPARING_DESKTOP_ES),
+      { status: res.status, body, poolWarm: Number(body.poolWarm) || 0 },
+    )
+  }
+  return body
+}
+
+function embedFrom(session: AgentSession): string {
+  const raw = String(session.embedUrl || session.novncUrl || "").trim()
+  if (raw && !/computer\.(siragpt|chatagic)\.com/i.test(raw)) return raw
+  const id = session.sessionId
+  if (!id) return ""
+  return `/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=sessions/${id}/novnc/websockify`
+}
+
+function rfbWsFromSession(session: AgentSession): string {
+  const id = String(session.sessionId || "").trim()
+  if (!id) return ""
+  const raw = String(session.novncWsUrl || "").trim()
+  if (raw && !/computer\.(siragpt|chatagic)\.com/i.test(raw) && !/api\.siragpt\.com/i.test(raw)) {
+    return raw
+  }
+  return `/sessions/${id}/novnc/websockify`
+}
+
+async function postMemberDesktop(chatId: string, useQuery: boolean) {
+  const qs = chatId && useQuery ? `?conversationId=${encodeURIComponent(chatId)}` : ""
+  const res = await authenticatedFetch(`${computerApiBase()}/agent-computer/sessions${qs}`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: chatId ? JSON.stringify({ conversationId: chatId }) : undefined,
     signal: AbortSignal.timeout(60_000),
   })
   const body = await res.json().catch(() => ({}))
+  return { res, body }
+}
+
+async function ensureMemberDesktop(conversationId?: string | null): Promise<AgentSession> {
+  const key = cacheKey(conversationId)
+  const chatId = String(conversationId || "").trim()
+  let { res, body } = await postMemberDesktop(chatId, Boolean(chatId))
+  if (res.status === 409) {
+    ({ res, body } = await postMemberDesktop(chatId, true))
+  }
   if (!res.ok) {
+    const isolation = res.status === 409 && (
+      (body as { error?: string; message?: string }).error === "isolation_required"
+      || /aislar/.test(String((body as { message?: string }).message || ""))
+    )
+    if (isolation && !chatId) {
+      throw Object.assign(new Error("Pensando…"), {
+        status: res.status,
+        body,
+        emptyChat: true,
+      })
+    }
     throw Object.assign(
-      new Error((body as any)?.message || (body as any)?.error || "No se pudo abrir la computadora persistente."),
+      new Error((body as any)?.message || (body as any)?.error || "No se pudo abrir la computadora."),
       { status: res.status, body },
     )
   }
-  cachedAgentSession = body as AgentSession
-  return body as AgentSession
+  const session = body as AgentSession
+  if (chatId && session.conversationBound === false) {
+    throw Object.assign(
+      new Error("No se pudo aislar la computadora de esta conversación."),
+      { status: 409, body, isolationRequired: true },
+    )
+  }
+  sessionCache.set(key, session)
+  return session
 }
 
-export function prewarmDepartmentDesktop(_departmentId = "ceo-office") {
+export function prewarmDepartmentDesktop(_departmentId = "ceo-office", conversationId?: string | null) {
   if (typeof window === "undefined") return
-  void ensureMemberDesktop().catch(() => undefined)
+  void ensureMemberDesktop(conversationId).catch(() => undefined)
 }
 
-async function focusDesktopApp(app: string) {
-  const res = await authenticatedFetch(`${API_BASE}/agent-computer/action`, {
+async function focusDesktopApp(app: string, conversationId?: string | null) {
+  const chatId = String(conversationId || "").trim()
+  const res = await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
     method: "POST",
     credentials: "include",
     headers: authHeaders(),
-    body: JSON.stringify({ focus: app }),
+    body: JSON.stringify({
+      focus: app,
+      ...(chatId ? { conversationId: chatId } : {}),
+    }),
     signal: AbortSignal.timeout(20_000),
   })
-  const body = await res.json().catch(() => ({}))
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>
+  if (res.status === 409 && (body?.loginHandoff === true || body?.error === "login_handoff_required")) {
+    emitLoginHandoff({
+      active: true,
+      conversationId: chatId || null,
+      site: typeof (body as any)?.takeover?.site === "string" ? (body as any).takeover.site : undefined,
+      kind: typeof (body as any)?.takeover?.kind === "string" ? (body as any).takeover.kind : undefined,
+      reason: typeof (body as any)?.takeover?.reason === "string" ? (body as any).takeover.reason : undefined,
+      title: typeof (body as any)?.takeover?.title === "string" ? (body as any).takeover.title : undefined,
+    })
+  }
   if (!res.ok) {
     throw Object.assign(
       new Error((body as any)?.message || (body as any)?.error || "No se pudo enfocar la aplicación."),
@@ -101,109 +359,415 @@ export function DepartmentComputerPane({
   departmentId,
   computerRunId,
   onClose,
+  conversationId,
+  embedded = false,
+  onStatusChange,
 }: DepartmentComputerPaneProps) {
-  const [session, setSession] = React.useState<AgentSession | null>(cachedAgentSession)
+  const chatId = String(conversationId || "").trim()
+  const initial = sessionCache.get(cacheKey(chatId || null)) ?? null
+  const [session, setSession] = React.useState<AgentSession | null>(initial)
   const [error, setError] = React.useState<string | null>(null)
-  const [loading, setLoading] = React.useState(!cachedAgentSession)
+  const [loading, setLoading] = React.useState(!initial)
   const [dock, setDock] = React.useState<DepartmentComputerDock>("screen")
-  const [statusLine, setStatusLine] = React.useState("Encendiendo…")
+  const [statusLine, setStatusLine] = React.useState(PREPARING_DESKTOP_ES)
+  const [poolWarm, setPoolWarm] = React.useState(0)
+  const [desktopLease, setDesktopLease] = React.useState<DesktopLease | null>(null)
+  const [prepareProgress, setPrepareProgress] = React.useState(12)
+  const [expanded, setExpanded] = React.useState(false)
+  const [buildId, setBuildId] = React.useState(0)
+  const [exhausted, setExhausted] = React.useState(false)
+  const buildIdRef = React.useRef(0)
+  const autoRebuiltRef = React.useRef<string | null>(null)
+  const heartbeatMissesRef = React.useRef(0)
   const dept = String(departmentId || "").trim() || "ceo-office"
   const resolvedName = departmentName || (dept === "ceo-office" ? "CEO Office" : dept)
   const embedUrl = session ? embedFrom(session) : ""
+  const bound = Boolean(session?.conversationBound && chatId)
+
+  const bumpBuild = React.useCallback(() => {
+    buildIdRef.current += 1
+    setBuildId(buildIdRef.current)
+  }, [])
+
+  const rebuildDesktop = React.useCallback(() => {
+    sessionCache.delete(cacheKey(chatId || null))
+    setSession(null)
+    setDesktopLease(null)
+    setError(null)
+    setExhausted(false)
+    setLoading(true)
+    setStatusLine(PREPARING_DESKTOP_ES)
+    setPrepareProgress(18)
+    heartbeatMissesRef.current = 0
+    bumpBuild()
+  }, [chatId, bumpBuild])
+
+  const handleViewerConnectionError = React.useCallback(() => {
+    const stamp = `${chatId || "-"}:${buildIdRef.current}`
+    if (autoRebuiltRef.current === stamp) {
+      // A freshly rebuilt session died too: stop looping, say so honestly,
+      // and let the user retry on purpose.
+      setExhausted(true)
+      setLoading(false)
+      setError((prev) => prev || "La conexión con el escritorio se interrumpió.")
+      return
+    }
+    autoRebuiltRef.current = stamp
+    rebuildDesktop()
+  }, [chatId, rebuildDesktop])
+
+  const handleManualRetry = React.useCallback(() => {
+    autoRebuiltRef.current = null
+    rebuildDesktop()
+  }, [rebuildDesktop])
 
   React.useEffect(() => {
     let cancelled = false
     setError(null)
-    if (!cachedAgentSession) setLoading(true)
-    void ensureMemberDesktop()
-      .then((row) => {
+    setExhausted(false)
+    setDesktopLease(null)
+    const cached = sessionCache.get(cacheKey(chatId || null)) ?? null
+    if (!cached) {
+      setSession(null)
+      setLoading(true)
+      setStatusLine(PREPARING_DESKTOP_ES)
+      setPrepareProgress(18)
+    } else {
+      setSession(cached)
+      setLoading(false)
+    }
+
+    void (async () => {
+      const desk = await getDesktopStatus()
+      if (cancelled) return
+      const warm = desk?.poolWarm ?? 0
+      setPoolWarm(warm)
+      setPrepareProgress(desk?.enabled ? 42 : 28)
+
+      if (desk?.enabled) {
+        try {
+          const lease = await acquireDesktopLease(chatId)
+          if (cancelled) return
+          setDesktopLease(lease)
+          setPoolWarm(Math.max(warm, lease.fromPool ? 1 : warm))
+          setStatusLine("En vivo")
+          setLoading(false)
+          setError(null)
+          return
+        } catch (deskErr: any) {
+          if (cancelled) return
+          if (warm > 0) {
+            setError(null)
+            setStatusLine(userFacingComputerError(deskErr?.message, { poolWarm: warm, enabled: true, starting: true }))
+            setLoading(true)
+            return
+          }
+          setError(userFacingComputerError(deskErr?.message, { poolWarm: 0, enabled: true, starting: true }))
+          setStatusLine(PREPARING_DESKTOP_ES)
+          setLoading(true)
+        }
+      }
+
+      // A cached session can outlive the server-side record (orchestrator
+      // restart, deploy, tab left open). Revalidate before trusting it; a
+      // stale id re-acquires instead of pointing the viewer at a ghost.
+      let row = sessionCache.get(cacheKey(chatId || null)) ?? null
+      if (row?.sessionId) {
+        const valid = await validateAgentSession(row.sessionId, chatId || null)
+        if (cancelled) return
+        if (!valid) {
+          sessionCache.delete(cacheKey(chatId || null))
+          row = null
+        }
+      }
+
+      if (row) {
         if (cancelled) return
         setSession(row)
-        setStatusLine(row.reused ? "Escritorio persistente · reanudado" : "Escritorio persistente · en vivo")
+        setStatusLine("En vivo")
         setLoading(false)
-      })
-      .catch((err) => {
+        setError(null)
+        return
+      }
+
+      try {
+        const fresh = await acquireMemberDesktopWithRetry(chatId || null)
         if (cancelled) return
-        setError(err?.message || "No se pudo encender la computadora.")
+        setSession(fresh)
+        setStatusLine("En vivo")
         setLoading(false)
-      })
+      } catch (err: any) {
+        if (cancelled) return
+        if (err?.emptyChat) {
+          setError(null)
+          setStatusLine(PREPARING_DESKTOP_ES)
+          setLoading(true)
+          return
+        }
+        const nextHint: DesktopPoolHint = {
+          poolWarm: warm,
+          enabled: Boolean(desk?.enabled),
+          starting: !desk?.enabled && warm <= 0 ? false : warm > 0 || Boolean(desk?.enabled),
+        }
+        if (nextHint.poolWarm > 0 || nextHint.starting) {
+          setError(null)
+          setStatusLine(userFacingComputerError(err?.message, nextHint))
+          setLoading(true)
+          return
+        }
+        setError(userFacingComputerError(err?.message, nextHint))
+        setStatusLine(userFacingComputerError(err?.message, nextHint))
+        setLoading(false)
+        setExhausted(true)
+      }
+    })()
     return () => {
       cancelled = true
     }
-  }, [computerRunId])
+  }, [computerRunId, chatId, buildId])
+
+  // Keepalive: while a desktop is live, revalidate the session every minute.
+  // After consecutive misses the desktop is rebuilt silently once; if the
+  // rebuild also fails the honest error card takes over (never a silent
+  // freeze, never a retry storm).
+  React.useEffect(() => {
+    const id = session?.sessionId || desktopLease?.sessionId
+    if (!id || loading || exhausted) return
+    let cancelled = false
+    const timer = setInterval(() => {
+      void (async () => {
+        const ok = await validateAgentSession(id, chatId || null)
+        if (cancelled || ok) {
+          if (ok) heartbeatMissesRef.current = 0
+          return
+        }
+        heartbeatMissesRef.current += 1
+        if (heartbeatMissesRef.current >= COMPUTER_HEARTBEAT_MAX_MISSES) {
+          heartbeatMissesRef.current = 0
+          handleViewerConnectionError()
+        }
+      })()
+    }, COMPUTER_HEARTBEAT_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [session?.sessionId, desktopLease?.sessionId, chatId, loading, exhausted, handleViewerConnectionError])
 
   const chooseDock = React.useCallback((next: DepartmentComputerDock) => {
     setDock(next)
     const app = next === "browser" ? "chrome" : next === "files" ? "thunar" : next === "terminal" ? "terminal" : "desktop"
-    void focusDesktopApp(app)
-      .then(() => setStatusLine(`Enfocado · ${app}`))
+    void focusDesktopApp(app, chatId || null)
+      .then(() => setStatusLine("En vivo"))
       .catch(() => undefined)
-  }, [])
+  }, [chatId])
+
+  const attachUrl = bound || !chatId ? embedUrl : ""
+  const orchRfbWs = session && (bound || !chatId) ? rfbWsFromSession(session) : ""
+  const hasLiveDesktop = Boolean(desktopLease || orchRfbWs || attachUrl)
+
+  React.useEffect(() => {
+    if (!expanded) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [expanded])
+
+  React.useEffect(() => {
+    if (!onStatusChange) return
+    if (loading) onStatusChange("starting")
+    else if (error && poolWarm <= 0) onStatusChange("error")
+    else if (desktopLease || orchRfbWs || (session && attachUrl)) onStatusChange("live")
+    else onStatusChange("idle")
+  }, [loading, error, session, attachUrl, orchRfbWs, desktopLease, poolWarm, onStatusChange])
 
   return (
     <section
-      className="absolute inset-0 flex min-h-0 flex-col bg-[#1b1b1d] text-zinc-50 outline-none"
+      className="relative flex h-full min-h-0 w-full flex-col bg-[#1b1b1d] text-zinc-50 outline-none"
       data-testid="department-computer-pane"
       data-dept-real-computer="1"
       data-agent-computer-novnc="1"
       data-novnc-embed="vnc.html"
       data-computer-run-id={computerRunId}
       data-department-id={dept}
+      data-conversation-id={chatId || undefined}
+      data-conversation-bound={bound ? "1" : "0"}
       aria-label={`Pantalla de ${resolvedName}`}
     >
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-white/10 bg-[#2a2a2c] px-3">
-        <DesktopMonitorGlyph className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[12px] font-semibold leading-tight">
-            {resolvedName} · Computadora
-          </h2>
-          <p className="truncate text-[10px] text-zinc-400" data-testid="department-computer-status">
-            {statusLine || (loading ? "Encendiendo…" : "Lista")}
-            {" · "}una máquina por miembro · noVNC
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-zinc-400 hover:bg-white/10 hover:text-zinc-50"
-          aria-label="Cerrar computadora"
-          title="Cerrar computadora"
-          data-testid="department-computer-close"
-          onClick={onClose}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </header>
-
-      <div className="relative min-h-0 flex-1 bg-[#0c0c0d] text-zinc-50">
-        {embedUrl ? (
-          <ComputerViewer url={embedUrl} className="absolute inset-0" />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
-            <div>
-              <p className="text-sm text-zinc-300">
-                {error || (loading ? `Abriendo la computadora de ${resolvedName}…` : `Pantalla de ${resolvedName}`)}
-              </p>
-              {loading && !session ? (
-                <p className="mt-3 text-[11px] text-zinc-500">noVNC · XFCE · Chrome · Terminal · Archivos</p>
-              ) : null}
-            </div>
+      {embedded ? null : (
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-white/10 bg-[#2a2a2c] px-3">
+          <DesktopMonitorGlyph className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-[12px] font-semibold leading-tight">
+              {resolvedName} · Computadora
+            </h2>
+            <p className="truncate text-[10px] text-zinc-400" data-testid="department-computer-status">
+              {error
+                ? userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: loading })
+                : statusLine || (loading ? PREPARING_DESKTOP_ES : "En vivo")}
+            </p>
           </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-50 active:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
+            aria-label="Cerrar computadora"
+            title="Cerrar computadora"
+            data-testid="department-computer-close"
+            onClick={onClose}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </header>
+      )}
+
+      <span className="sr-only" data-testid="chat-computer-isolation-gap" />
+
+      {expanded ? (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60"
+          data-testid="computer-abrir-overlay"
+          aria-hidden
+          onClick={() => setExpanded(false)}
+        />
+      ) : null}
+
+      <div
+        className={cn(
+          "relative min-h-0 flex-1 bg-[#1b1b1d] text-zinc-50",
+          expanded ? "overflow-visible" : "overflow-hidden",
         )}
+        data-novnc-fit="cover"
+        data-desktop-pool-warm={poolWarm}
+        data-desktop-preparing={loading && !attachUrl ? "1" : "0"}
+        data-desktop-first-frame={desktopLease && !attachUrl ? "1" : "0"}
+        data-computer-expanded={expanded ? "1" : "0"}
+      >
+        <div
+          className={cn(
+            expanded
+              ? "fixed left-[5vw] top-[5vh] z-[90] h-[90vh] w-[90vw] overflow-hidden rounded-lg bg-[#1b1b1d] shadow-2xl"
+              : "absolute inset-0 h-full w-full min-h-0",
+          )}
+        >
+          {desktopLease ? (
+            <DesktopScreen
+              key={`${desktopLease.sessionId}:${buildId}`}
+              sessionId={desktopLease.sessionId}
+              wsUrl={desktopLease.wsUrl}
+              viewerToken={desktopLease.viewerToken}
+              viewOnly={desktopLease.inputMode !== "human"}
+              className="absolute inset-0 h-full w-full min-h-0"
+              onFirstFrame={() => setStatusLine("En vivo")}
+              onConnectionError={handleViewerConnectionError}
+            />
+          ) : orchRfbWs && session?.sessionId ? (
+            <DesktopScreen
+              key={`${session.sessionId}:${buildId}`}
+              sessionId={session.sessionId}
+              wsUrl={orchRfbWs}
+              viewOnly={false}
+              className="absolute inset-0 h-full w-full min-h-0"
+              onFirstFrame={() => setStatusLine("En vivo")}
+              onConnectionError={handleViewerConnectionError}
+            />
+          ) : attachUrl ? (
+            <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
+          ) : exhausted && error ? (
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="alert">
+              <div className="flex flex-col items-center gap-3" data-testid="desktop-error-card">
+                <p className="max-w-xs text-sm text-zinc-300" data-testid="desktop-error-message">
+                  {userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: false })}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  data-testid="desktop-retry"
+                  onClick={handleManualRetry}
+                >
+                  Reintentar
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
+              <div className="flex flex-col items-center gap-3">
+                {!error ? <PensandoBars size={28} /> : null}
+                <p className="text-sm text-zinc-300" data-testid="desktop-preparing-label">
+                  {error
+                    ? userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: loading })
+                    : PREPARING_DESKTOP_ES}
+                </p>
+                {!error ? (
+                  <div
+                    className="h-1 w-40 overflow-hidden rounded-full bg-zinc-700"
+                    data-testid="desktop-prepare-progress"
+                    aria-hidden
+                  >
+                    <div
+                      className="h-full bg-sky-400/80 transition-[width]"
+                      style={{ width: `${Math.min(92, Math.max(12, prepareProgress))}%` }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          )}
+
+          {expanded && hasLiveDesktop ? (
+            <button
+              type="button"
+              className="absolute right-3 top-3 z-[95] inline-flex items-center gap-1.5 rounded-full bg-zinc-950/95 px-3 py-1.5 text-sm font-medium text-white shadow-lg transition-colors hover:bg-black"
+              aria-label="Cerrar"
+              title="Cerrar"
+              onClick={() => setExpanded(false)}
+            >
+              <X className="h-4 w-4" aria-hidden />
+              Cerrar
+            </button>
+          ) : null}
+
+          {!expanded && hasLiveDesktop ? (
+            <div className="group/abrir absolute inset-0 z-20 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/0 transition-colors group-hover/abrir:bg-black/25" />
+              <button
+                type="button"
+                data-testid="computer-abrir"
+                className="relative z-10 inline-flex items-center gap-2 rounded-full bg-zinc-950/95 px-4 py-2 text-sm font-medium text-white opacity-0 shadow-lg transition-opacity group-hover/abrir:opacity-100 hover:bg-black focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                aria-label="Abrir"
+                title="Abrir"
+                onClick={() => setExpanded(true)}
+              >
+                <Maximize2 className="h-4 w-4" aria-hidden />
+                Abrir
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <nav
-        className="flex h-12 shrink-0 items-center justify-center gap-1 border-t border-white/10 bg-[#161618] px-2"
-        aria-label="Aplicaciones de la computadora"
-        data-testid="department-computer-dock"
-        data-department-computer-dock="1"
-      >
-        <DockButton active={dock === "screen"} onClick={() => chooseDock("screen")} label="Pantalla" icon={Monitor} />
-        <DockButton active={dock === "browser"} onClick={() => chooseDock("browser")} label="Navegador" icon={Globe} />
-        <DockButton active={dock === "files"} onClick={() => chooseDock("files")} label="Archivos" icon={Folder} />
-        <DockButton active={dock === "terminal"} onClick={() => chooseDock("terminal")} label="Terminal" icon={TerminalSquare} />
-      </nav>
+      {embedded ? null : (
+        <nav
+          className="flex h-12 shrink-0 items-center justify-center gap-1 border-t border-white/10 bg-[#161618] px-2"
+          aria-label="Aplicaciones de la computadora"
+          data-testid="department-computer-dock"
+          data-department-computer-dock="1"
+        >
+          <DockButton active={dock === "screen"} onClick={() => chooseDock("screen")} label="Pantalla" icon={Monitor} />
+          <DockButton active={dock === "browser"} onClick={() => chooseDock("browser")} label="Navegador" icon={Globe} />
+          <DockButton active={dock === "files"} onClick={() => chooseDock("files")} label="Archivos" icon={Folder} />
+          <DockButton active={dock === "terminal"} onClick={() => chooseDock("terminal")} label="Terminal" icon={TerminalSquare} />
+        </nav>
+      )}
     </section>
   )
 }
@@ -224,10 +788,16 @@ function DockButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium",
-        active ? "bg-white/15 text-white" : "text-zinc-400 hover:bg-white/10 hover:text-zinc-100",
+        "flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+        "disabled:pointer-events-none disabled:opacity-40",
+        active
+          ? "bg-white/15 text-white active:bg-white/25"
+          : "text-zinc-400 hover:bg-white/10 hover:text-zinc-100 active:bg-white/20",
       )}
       aria-pressed={active}
+      aria-label={label}
+      title={label}
     >
       <Icon className="h-3.5 w-3.5" />
       <span>{label}</span>

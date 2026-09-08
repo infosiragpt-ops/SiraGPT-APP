@@ -34,7 +34,7 @@ const CRITICAL_PAGES: Array<{ name: string; path: string }> = [
   { name: "landing", path: "/" },
   { name: "login", path: "/login" },
   { name: "register", path: "/register" },
-  { name: "chat", path: "/chat" },
+  { name: "chat", path: "/agentes" },
   { name: "pricing", path: "/pricing" },
 ]
 

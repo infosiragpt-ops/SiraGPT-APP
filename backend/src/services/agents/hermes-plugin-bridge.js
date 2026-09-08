@@ -15,7 +15,7 @@ const HERMES_PLUGIN_CATALOG = Object.freeze([
     id: 'hermes-memory',
     name: 'Hermes Memory',
     version: '1.0.0',
-    description: 'Active memory + session search (Honcho/mem0-style semantics via SiraGPT active-memory).',
+    description: 'Hermes frozen MEMORY/USER snapshot + active memory + session search. Writes persist immediately; the system-prompt block is captured once per chat.',
     author: 'SiraGPT',
     hooks: ['agent:beforeRun', 'agent:afterRun'],
     capabilities: ['memory', 'hooks'],
@@ -88,7 +88,10 @@ function buildFactory(catalogEntry) {
     if (catalogEntry.id === 'hermes-memory') {
       api.on('agent:beforeRun', async (ctx) => {
         if (!ctx?.userId) return;
-        ctx.memoryPrompt = memoryBridge.buildMemoryPrompt(ctx.userId);
+        memoryBridge.beginSession(ctx.userId, { chatId: ctx.chatId || ctx.conversationId || null });
+        ctx.memoryPrompt = memoryBridge.buildMemoryPrompt(ctx.userId, {
+          chatId: ctx.chatId || ctx.conversationId || null,
+        });
         memoryBridge.nudgePromotion(ctx.userId);
       });
     }

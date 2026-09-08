@@ -2086,6 +2086,7 @@ async function applyStripeWebhookTransaction(tx, event, context) {
         where: { id: user.id },
         data: {
           apiUsage: 0,
+          docQuotaEpoch: { increment: 1 },
           monthlyCallLimit: 0,
         },
       });

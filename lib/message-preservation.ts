@@ -1,3 +1,5 @@
+import { mergeMessageFileLists, parseMessageFiles } from './chat/composer-files';
+
 export type ChatMessageLike = {
   id?: string;
   role?: string;
@@ -59,8 +61,8 @@ export const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
   const trailingText = raw.slice(match[0].length).trim();
   const finalText = typeof state?.finalText === 'string' ? state.finalText.trim() : '';
   const status = typeof state?.status === 'string' ? state.status.toLowerCase() : '';
-  const done = state?.done === true || status === 'completed';
-  const error = Boolean(state?.error) || status === 'failed' || status === 'error';
+  const done = state?.done === true || ['completed', 'failed', 'error', 'cancelled', 'canceled'].includes(status);
+  const error = Boolean(state?.error) || ['failed', 'error', 'cancelled', 'canceled'].includes(status);
   const meta = state?.meta && typeof state.meta === 'object'
     ? state.meta as Record<string, unknown>
     : null;
@@ -112,9 +114,11 @@ const shouldPreserveLocalAssistantContent = (incomingContent: unknown, localCont
 
   // Durable task completion can reach the event log just before the final
   // assistant message is committed. A refresh during that narrow window must
-  // not replace a locally completed bubble (and its download cards) with the
-  // older pending copy of the very same task.
-  if (sameAgentTask && localTask.done && !localTask.error && !incomingTask.done) return true;
+  // not replace a terminal bubble (including errors/cancellation) with the
+  // older pending copy of the very same task, regardless of payload length.
+  if (sameAgentTask && localTask.done && !incomingTask.done) return true;
+  if (sameAgentTask && incomingTask.done && !localTask.done) return false;
+  if (incomingTask.taskId && localTask.taskId && !sameAgentTask) return false;
 
   if (incomingCompleted && !localCompleted) return false;
   if (incomingCompleted && localCompleted) {
@@ -147,46 +151,6 @@ const hasFiles = (value: unknown) => {
   }
 };
 
-const parseFilesArray = (value: unknown): unknown[] => {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-};
-
-const hasRichFileMetadata = (value: unknown) =>
-  parseFilesArray(value).some((file) => {
-    if (!file || typeof file !== 'object') return false;
-    const f = file as Record<string, unknown>;
-    return Boolean(
-      f.name ||
-      f.originalName ||
-      f.filename ||
-      f.mimeType ||
-      f.contentType ||
-      f.type ||
-      f.url ||
-      f.path ||
-      f.preview ||
-      f.thumbnailUrl ||
-      f.extractedText
-    );
-  });
-
-const shouldPreserveLocalFiles = (incomingFiles: unknown, localFiles: unknown) => {
-  if (!hasFiles(localFiles)) return false;
-  if (!hasFiles(incomingFiles)) return true;
-
-  // Some backend refreshes return only file ids after upload. That is enough
-  // for model context, but not enough for the UI to render image thumbnails,
-  // document chips, previews, or extracted text. Keep the richest version that
-  // was already visible in the local optimistic message.
-  return hasRichFileMetadata(localFiles) && !hasRichFileMetadata(incomingFiles);
-};
 
 /**
  * Backend refreshes can race with optimistic UI updates or return partial
@@ -262,8 +226,8 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
         next.content = localText as TMessage['content'];
       }
 
-      if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
-        next.files = localMatch.files as TMessage['files'];
+      if (parseMessageFiles(localMatch.files).length > 0 || parseMessageFiles(next.files).length > 0) {
+        next.files = mergeMessageFileLists(next.files, localMatch.files) as TMessage['files'];
       }
 
       return next;
@@ -289,8 +253,11 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
       if (shouldPreserveLocalAssistantContent(incomingText, localText)) {
         next.content = localText as TMessage['content'];
       }
-      if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
-        next.files = localMatch.files as TMessage['files'];
+      if (!(next as { model?: unknown }).model && (localMatch as { model?: unknown }).model) {
+        (next as { model?: unknown }).model = (localMatch as { model?: unknown }).model;
+      }
+      if (parseMessageFiles(localMatch.files).length > 0 || parseMessageFiles(next.files).length > 0) {
+        next.files = mergeMessageFileLists(next.files, localMatch.files) as TMessage['files'];
       }
       return next;
     }
@@ -380,15 +347,37 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
 
 const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
 
+function parseTurnMetadata(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function turnIdentityKey(message?: { metadata?: unknown } | null): string {
+  const metadata = parseTurnMetadata(message?.metadata);
+  const key = metadata.idempotencyKey || metadata.streamId || metadata.turnKey;
+  return typeof key === 'string' ? key.trim() : '';
+}
+
 // Minimal structural shape for dedupe — deliberately WITHOUT ChatMessageLike's
 // `[key: string]: unknown` index signature, so concrete app message types
 // (e.g. the frontend `Message`) are assignable without a cast.
 type DedupeMessageLike = {
+  metadata?: unknown;
   id?: string;
   role?: string;
   content?: unknown;
   timestamp?: unknown;
   createdAt?: unknown;
+  files?: unknown;
 };
 
 const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
@@ -402,14 +391,31 @@ const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
 const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
   // Prefer the copy with more content; on a tie prefer the stable
   // (non-optimistic) id because that's the server's source-of-truth record.
+  // Files are merged onto the winner so an optimistic audio chip is not
+  // dropped when the server twin has the same text but empty/id-only files.
   const la = asText(a?.content).length;
   const lb = asText(b?.content).length;
-  if (lb > la) return b;
-  if (la > lb) return a;
-  const aOptimistic = a?.id ? OPTIMISTIC_ID_RE.test(String(a.id)) : true;
-  const bOptimistic = b?.id ? OPTIMISTIC_ID_RE.test(String(b.id)) : true;
-  if (aOptimistic && !bOptimistic) return b;
-  return a;
+  let winner: T
+  if (lb > la) winner = b;
+  else if (la > lb) winner = a;
+  else {
+    const aOptimistic = a?.id ? OPTIMISTIC_ID_RE.test(String(a.id)) : true;
+    const bOptimistic = b?.id ? OPTIMISTIC_ID_RE.test(String(b.id)) : true;
+    winner = aOptimistic && !bOptimistic ? b : a;
+  }
+  const other = winner === a ? b : a
+  const winnerModel = (winner as { model?: unknown }).model
+  const otherModel = (other as { model?: unknown }).model
+  const graftedModel = winnerModel || otherModel
+  const needsFiles = parseMessageFiles(a?.files).length > 0 || parseMessageFiles(b?.files).length > 0
+  if (!needsFiles && !(!winnerModel && otherModel)) {
+    return winner
+  }
+  return {
+    ...winner,
+    ...(graftedModel ? { model: graftedModel } : {}),
+    ...(needsFiles ? { files: mergeMessageFileLists(winner.files, other.files) } : {}),
+  } as T
 };
 
 const isStableMessage = (message?: DedupeMessageLike) => {
@@ -468,21 +474,39 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   }
 
   // Pass B — drop optimistic twins whose stable-id sibling is already present.
-  const hasStableTwin = (candidate: TMessage, selfIndex: number) =>
-    collapsed.some((other, j) => {
-      if (j === selfIndex) return false;
-      if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
-      if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
-      return sameContentNormalized(other, candidate);
-    });
+  // Graft files from the optimistic copy onto the surviving server row first
+  // so an audio attachment that only existed locally does not vanish.
+  const isStableTwinOf = (candidate: TMessage, other: TMessage) => {
+    if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
+    if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
+    const candidateKey = turnIdentityKey(candidate);
+    const otherKey = turnIdentityKey(other);
+    // Live placeholder is `msg-ai-…` (empty). DB row is `cmti…` with the
+    // same idempotencyKey. Match by turn identity even when content differs
+    // so getChat replaces Pensando without a reload.
+    if (candidateKey && otherKey && candidateKey === otherKey) return true;
+    return sameContentNormalized(other, candidate);
+  };
 
-  const deduped = collapsed.filter((message, index) => {
+  const optimisticTwinIndexes = new Map<number, number>();
+  collapsed.forEach((message, index) => {
     const id = message?.id ? String(message.id) : '';
-    if (id && OPTIMISTIC_ID_RE.test(id) && hasStableTwin(message, index)) {
-      return false;
-    }
-    return true;
+    if (!id || !OPTIMISTIC_ID_RE.test(id)) return;
+    const twinIndex = collapsed.findIndex((other, j) => j !== index && isStableTwinOf(message, other));
+    if (twinIndex >= 0) optimisticTwinIndexes.set(index, twinIndex);
   });
+  for (const [optimisticIndex, stableIndex] of optimisticTwinIndexes) {
+    const optimistic = collapsed[optimisticIndex];
+    const stable = collapsed[stableIndex];
+    if (parseMessageFiles(optimistic.files).length > 0 || parseMessageFiles(stable.files).length > 0) {
+      collapsed[stableIndex] = {
+        ...stable,
+        files: mergeMessageFileLists(stable.files, optimistic.files),
+      } as TMessage;
+    }
+  }
+
+  const deduped = collapsed.filter((_, index) => !optimisticTwinIndexes.has(index));
 
   // Pass C — collapse ADJACENT same-role twins where BOTH carry a stable
   // (non-optimistic) server id and identical visible content. This closes the
@@ -559,11 +583,28 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   return collapsedPairs.length === messages.length ? messages : collapsedPairs;
 }
 
+function shouldAdoptTempLocalChat<TChat extends ChatLike>(
+  incomingChat: TChat | null | undefined,
+  localChat: TChat | null | undefined,
+): boolean {
+  return Boolean(
+    incomingChat &&
+    localChat &&
+    incomingChat.id !== localChat.id &&
+    String(localChat.id).startsWith('temp-chat-') &&
+    !String(incomingChat.id).startsWith('temp-chat-'),
+  );
+}
+
 export function mergeChatPreservingUserMessages<TChat extends ChatLike>(
   incomingChat: TChat,
   localChat: TChat | null | undefined,
 ): TChat {
-  if (!incomingChat || !localChat || incomingChat.id !== localChat.id) {
+  if (!incomingChat || !localChat) {
+    return incomingChat;
+  }
+  const idsMatch = incomingChat.id === localChat.id;
+  if (!idsMatch && !shouldAdoptTempLocalChat(incomingChat, localChat)) {
     return incomingChat;
   }
 
@@ -643,13 +684,24 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
     if (m?.id && m?.role && !isUserMessage(m)) incomingIds.add(String(m.id));
   }
 
+  const incomingAssistantTurnKeys = new Set<string>();
+  for (const m of enriched) {
+    if (!m?.role || isUserMessage(m)) continue;
+    const key = turnIdentityKey(m as { metadata?: unknown });
+    if (key) incomingAssistantTurnKeys.add(key);
+  }
+
   const orphans = localAssistants.slice(incomingAssistantCount).filter((local) => {
     if (!local) return false;
     // Skip orphans whose id already exists incoming (paranoid dedupe).
     if (local.id && incomingIds.has(String(local.id))) return false;
-    // Empty / placeholder messages aren't worth preserving — the next
-    // refresh will surface the real content.
-    return hasText(local.content) || hasFiles(local.files);
+    if (hasText(local.content) || hasFiles(local.files)) return true;
+    // An EMPTY placeholder is the live stream's landing spot. Drop it only
+    // once the server has an assistant row for the same turn; otherwise a
+    // refresh racing the first token deletes the message the chunks are
+    // addressed to and the UI sits on Pensando.
+    const turnKey = turnIdentityKey(local as { metadata?: unknown });
+    return Boolean(turnKey) && !incomingAssistantTurnKeys.has(turnKey);
   });
 
   if (orphans.length === 0) return enriched;

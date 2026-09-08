@@ -14,6 +14,11 @@ const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 const modelSyncService = require('../services/model-sync-service');
 const modelSyncScheduler = require('../services/model-sync-scheduler');
+const {
+  parseIsActive,
+  countPublication,
+  setAiModelActive,
+} = require('../services/ai-model-publication');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const adminStats = require('../services/admin-stats-aggregator');
 const webhookDispatcher = require('../services/webhook-dispatcher');
@@ -184,6 +189,48 @@ router.post('/models', [
   }
 });
 
+// Keep this static route before /models/:id. Express resolves routes in
+// registration order, so placing it later makes "bulk" look like a model id
+// and silently sends the request through the single-model handler.
+router.put('/models/bulk', async (req, res) => {
+  try {
+    const { action, modelIds, provider } = req.body;
+
+    if (!action || !['enable', 'disable'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid action. Use enable or disable.' });
+    }
+
+    const isActive = action === 'enable';
+    let whereClause = {};
+
+    if (modelIds && Array.isArray(modelIds)) {
+      whereClause.id = { in: modelIds };
+    } else if (provider) {
+      whereClause.provider = provider;
+    } else {
+      return res.status(400).json({ error: 'Either modelIds or provider must be specified' });
+    }
+
+    const result = await prisma.aiModel.updateMany({
+      where: whereClause,
+      data: { isActive }
+    });
+    invalidateAiModelsCache();
+
+    res.json({
+      success: true,
+      message: `Successfully ${action}d ${result.count} models`,
+      count: result.count
+    });
+  } catch (error) {
+    console.error('❌ Error in bulk update:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update models'
+    });
+  }
+});
+
 router.put('/models/:id', [
   body('displayName').optional().trim().isLength({ min: 1 }),
   // AiModel.provider is a plain String column and the catalog already
@@ -210,7 +257,8 @@ router.put('/models/:id', [
     if (icon !== undefined) updateData.icon = icon;
     if (description !== undefined) updateData.description = description;
     if (apiKey !== undefined) updateData.apiKey = apiKey;
-    if (typeof isActive === 'boolean') updateData.isActive = isActive;
+    const parsedActive = parseIsActive(isActive);
+    if (typeof parsedActive === 'boolean') updateData.isActive = parsedActive;
     // The admin page already sends these two — they were silently dropped,
     // making renames/context edits a no-op that looked successful.
     if (name) updateData.name = name;
@@ -222,7 +270,11 @@ router.put('/models/:id', [
     });
 
     invalidateAiModelsCache();
-    res.json({ model });
+    const payload = { model };
+    if (typeof parsedActive === 'boolean') {
+      payload.stats = await countPublication(prisma);
+    }
+    res.json(payload);
   } catch (error) {
     console.error('Update model error:', error);
     if (error.code === 'P2002') {
@@ -232,6 +284,39 @@ router.put('/models/:id', [
       return res.status(404).json({ error: 'Modelo no encontrado' });
     }
     res.status(500).json({ error: 'Failed to update model' });
+  }
+});
+
+// Alias for the Estado switch. PUT /models/:id is the admin UI contract
+// (Express + admin-route-policy). PATCH stays mapped so a leftover client
+// does not fail closed as admin_route_policy_unmapped.
+router.patch('/models/:id', [
+  body('isActive').exists().withMessage('isActive is required'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        error: 'isActive debe ser un booleano',
+        code: 'E_PARAMS',
+        errors: errors.array(),
+      });
+    }
+    const { model, stats } = await setAiModelActive(prisma, {
+      id: req.params.id,
+      isActive: req.body.isActive,
+      invalidateCache: invalidateAiModelsCache,
+    });
+    res.json({ model, stats });
+  } catch (error) {
+    if (error.status === 400) {
+      return res.status(400).json({ error: error.message, code: error.code || 'E_PARAMS' });
+    }
+    if (error.status === 404 || error.code === 'P2025') {
+      return res.status(404).json({ error: 'Modelo no encontrado' });
+    }
+    console.error('Toggle model error:', error);
+    res.status(500).json({ error: 'No se pudo actualizar el modelo' });
   }
 });
 
@@ -368,46 +453,6 @@ router.post('/models/clear-cache', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Failed to clear cache' 
-    });
-  }
-});
-
-// Bulk enable/disable models
-router.put('/models/bulk', async (req, res) => {
-  try {
-    const { action, modelIds, provider } = req.body;
-    
-    if (!action || !['enable', 'disable'].includes(action)) {
-      return res.status(400).json({ error: 'Invalid action. Use enable or disable.' });
-    }
-
-    const isActive = action === 'enable';
-    let whereClause = {};
-
-    if (modelIds && Array.isArray(modelIds)) {
-      whereClause.id = { in: modelIds };
-    } else if (provider) {
-      whereClause.provider = provider;
-    } else {
-      return res.status(400).json({ error: 'Either modelIds or provider must be specified' });
-    }
-
-    const result = await prisma.aiModel.updateMany({
-      where: whereClause,
-      data: { isActive }
-    });
-    invalidateAiModelsCache();
-
-    res.json({ 
-      success: true, 
-      message: `Successfully ${action}d ${result.count} models`,
-      count: result.count 
-    });
-  } catch (error) {
-    console.error('❌ Error in bulk update:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to update models' 
     });
   }
 });
@@ -793,7 +838,7 @@ router.delete('/users/:id', async (req, res) => {
       preDeleteSessions = [];
     }
 
-    await hardDeleteUser({
+    const deletion = await hardDeleteUser({
       userId: req.params.id,
       actorId: req.user.id,
     });
@@ -826,6 +871,10 @@ router.delete('/users/:id', async (req, res) => {
       console.warn('[admin/users:id] session_admin_revoked audit failed:', auditErr?.message || auditErr);
     }
 
+    if (deletion.deletionPending) return res.status(202).json({
+      code: 'DOC_CLEANUP_PENDING', deletionPending: true,
+      message: 'La cuenta está desactivada; la eliminación de sus documentos está pendiente.',
+    });
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);

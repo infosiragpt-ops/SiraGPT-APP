@@ -28,6 +28,9 @@
 const prisma = require('../config/database');
 const { decrypt } = require('../utils/encryption');
 
+const CUSTOM_BASE_URL_ENV = 'CUSTOM_BASE_URL';
+const CUSTOM_API_KEY_ENV = 'CUSTOM_API_KEY';
+
 const PROVIDER_ENV_MAP = Object.freeze({
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
@@ -43,12 +46,18 @@ const PROVIDER_ENV_MAP = Object.freeze({
   together: 'TOGETHER_API_KEY',
   fireworks: 'FIREWORKS_API_KEY',
   fal: 'FAL_KEY',
+  meta: 'MODEL_API_KEY',
+  // `custom` is intentionally absent: each AdminConnection has its own
+  // base URL (Ollama / vLLM / LM Studio). Live chat reads the row at
+  // request time via services/ai/custom-provider-client.js — stuffing
+  // OPENAI_BASE_URL would clobber the real OpenAI client.
 });
 
 const PROVIDER_ENV_ALIASES = Object.freeze({
   fal: ['FAL_API_KEY'],
   cerebras: ['GEMA4_API_KEY'],
   kimi: ['KIMI_API_KEY'],
+  meta: ['META_API_KEY', 'LLAMA_API_KEY'],
 });
 
 // providerKey (lowercase, panel form) → provider value in AiModel.provider column
@@ -67,6 +76,7 @@ const PROVIDER_CATALOG_MAP = Object.freeze({
   together: 'Together',
   fireworks: 'Fireworks',
   fal: 'fal.ai',
+  meta: 'Meta',
 });
 
 // providerKey → { url, authHeader: (key) => headers }
@@ -84,6 +94,7 @@ const PROVIDER_PROBE = Object.freeze({
   xai:        { url: 'https://api.x.ai/v1/models',                                  auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   together:   { url: 'https://api.together.xyz/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fireworks:  { url: 'https://api.fireworks.ai/inference/v1/models',                auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  meta:       { url: 'https://api.meta.ai/v1/models',                               auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fal:        { url: 'https://api.fal.ai/v1/models?limit=1',                         auth: (k) => ({ Authorization: /^key\s+/i.test(k) ? k : `Key ${k}` }) },
 });
 
@@ -112,6 +123,8 @@ function captureSnapshotOnce() {
       envSnapshot[env] = process.env[env] || '';
     }
   }
+  envSnapshot[CUSTOM_BASE_URL_ENV] = process.env[CUSTOM_BASE_URL_ENV] || '';
+  envSnapshot[CUSTOM_API_KEY_ENV] = process.env[CUSTOM_API_KEY_ENV] || '';
   snapshotCaptured = true;
 }
 
@@ -194,6 +207,8 @@ async function applyAdminConnections() {
       if (didRestore) restored.push(providerKey);
     }));
 
+    await applyCustomConnectionEnv();
+
     if (applied.length || restored.length || rejected.length) {
       console.log(
         '[admin-connections-bridge] applied:',
@@ -216,6 +231,36 @@ async function applyAdminConnections() {
   } finally {
     applying = false;
   }
+}
+
+async function applyCustomConnectionEnv() {
+  captureSnapshotOnce();
+  let rows = [];
+  try {
+    rows = await prisma.adminConnection.findMany({
+      where: { enabled: true, providerKey: 'custom' },
+      orderBy: { updatedAt: 'desc' },
+      select: { url: true, apiKey: true },
+    });
+  } catch (err) {
+    console.warn('[admin-connections-bridge] custom connection lookup failed:', err.message);
+    return;
+  }
+
+  const row = Array.isArray(rows) ? rows.find((item) => String(item?.url || '').trim()) : null;
+  if (!row) {
+    if (envSnapshot[CUSTOM_BASE_URL_ENV] !== undefined) {
+      process.env[CUSTOM_BASE_URL_ENV] = envSnapshot[CUSTOM_BASE_URL_ENV];
+    }
+    if (envSnapshot[CUSTOM_API_KEY_ENV] !== undefined) {
+      process.env[CUSTOM_API_KEY_ENV] = envSnapshot[CUSTOM_API_KEY_ENV];
+    }
+    return;
+  }
+
+  process.env[CUSTOM_BASE_URL_ENV] = String(row.url).trim();
+  const key = unwrap(row.apiKey);
+  if (key) process.env[CUSTOM_API_KEY_ENV] = key;
 }
 
 async function probeKey(providerKey, apiKey) {
@@ -274,4 +319,10 @@ async function reconcileCatalog() {
   return results;
 }
 
-module.exports = { applyAdminConnections, reconcileCatalog, PROVIDER_ENV_MAP, PROVIDER_CATALOG_MAP };
+module.exports = {
+  applyAdminConnections,
+  applyCustomConnectionEnv,
+  reconcileCatalog,
+  PROVIDER_ENV_MAP,
+  PROVIDER_CATALOG_MAP,
+};
