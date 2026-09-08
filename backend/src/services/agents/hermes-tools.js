@@ -14,8 +14,6 @@ const skillsRegistry = require('../skills-registry');
 const { buildHermesIntegrationMap, recommendAdaptedPlaybooks } = require('./hermes-playbook-bridge');
 const skillCurator = require('./hermes-skill-curator');
 const biblioteca = require('./hermes-biblioteca');
-const { isMemoryWriteError } = require('./memory-write-guard');
-
 function ctxUser(ctx) {
   return ctx?.userId || ctx?.user?.id || null;
 }
@@ -109,7 +107,7 @@ const hermesMemoryTool = {
     properties: {
       action: {
         type: 'string',
-        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge', 'compact', 'retrieve', 'export', 'import', 'pin', 'unpin', 'resolve'],
+        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'forget', 'promote', 'nudge', 'compact', 'retrieve', 'export', 'import', 'pin', 'unpin', 'resolve'],
       },
       target: { type: 'string', enum: ['memory', 'user'], description: 'Curated store for add/replace/remove/read.' },
       content: { type: 'string', description: 'New entry text for add/replace.' },
@@ -121,6 +119,8 @@ const hermesMemoryTool = {
       mode: { type: 'string', enum: ['replace', 'merge'], description: 'Import mode. Default replace.' },
       pinned: { type: 'boolean', description: 'When adding to target=user, mark the profile fact as pinned.' },
       dryRun: { type: 'boolean', description: 'For action=resolve, report conflicts without writing.' },
+      resolve: { type: 'string', enum: ['replace', 'keep_user', 'keep_memory'], description: 'How to settle a MEMORY→USER conflict on promote.' },
+      category: { type: 'string', description: 'Optional category for remember (preference → USER).' },
     },
   },
   async execute(args, ctx = {}) {
@@ -145,15 +145,24 @@ const hermesMemoryTool = {
       case 'read':
         return memoryBridge.curatedRead(userId, { target: args.target });
       case 'remember':
-        try {
-          return { ok: true, entry: memoryBridge.remember(userId, args.fact) };
-        } catch (err) {
-          if (isMemoryWriteError(err)) return err.toJSON();
-          throw err;
-        }
+        return memoryBridge.rememberCurated(userId, args.fact || args.content, {
+          target: args.target,
+          category: args.category,
+          actor: 'remember',
+        });
+      case 'forget':
+        return memoryBridge.forgetCurated(userId, args.query || args.old_text || args.fact);
       case 'recall':
         return { ok: true, entries: memoryBridge.recall(userId, args.query) };
       case 'promote':
+        if (args.old_text || args.target === 'memory' || args.target === 'user') {
+          return memoryBridge.promoteMemoryToUser(userId, {
+            old_text: args.old_text || args.query,
+            content: args.content || args.fact,
+            resolve: args.resolve,
+            actor: 'promote',
+          });
+        }
         return { ok: true, entry: memoryBridge.promote(userId, args.entryId) };
       case 'nudge':
         return { ok: true, ...memoryBridge.nudgePromotion(userId) };
@@ -313,12 +322,84 @@ const hermesPlaybookMapTool = {
   },
 };
 
+function executeRememberAlias(args, ctx = {}) {
+  const userId = ctxUser(ctx);
+  if (!userId) return { ok: false, error: 'Falta el userId para recordar.' };
+  return memoryBridge.rememberCurated(userId, args.fact || args.content || args.dato, {
+    target: args.target,
+    category: args.category,
+    actor: args.actor || 'remember',
+  });
+}
+
+function executeForgetAlias(args, ctx = {}) {
+  const userId = ctxUser(ctx);
+  if (!userId) return { ok: false, error: 'Falta el userId para olvidar.' };
+  return memoryBridge.forgetCurated(userId, args.query || args.fact || args.content || args.dato);
+}
+
+const hermesRememberTool = {
+  name: 'remember',
+  description: 'Recuerda un hecho en la memoria curada (MEMORY o USER). Alias en español: recordar.',
+  parameters: {
+    type: 'object',
+    required: ['fact'],
+    properties: {
+      fact: { type: 'string', description: 'Hecho a recordar.' },
+      content: { type: 'string' },
+      target: { type: 'string', enum: ['memory', 'user'] },
+      category: { type: 'string' },
+    },
+  },
+  async execute(args, ctx = {}) {
+    return executeRememberAlias({ ...args, actor: 'remember' }, ctx);
+  },
+};
+
+const hermesForgetTool = {
+  name: 'forget',
+  description: 'Olvida hechos de la memoria curada que coincidan con la consulta. Alias en español: olvidar.',
+  parameters: {
+    type: 'object',
+    required: ['query'],
+    properties: {
+      query: { type: 'string', description: 'Texto a olvidar.' },
+      fact: { type: 'string' },
+    },
+  },
+  async execute(args, ctx = {}) {
+    return executeForgetAlias(args, ctx);
+  },
+};
+
+const hermesRecordarTool = {
+  name: 'recordar',
+  description: 'Alias en español de remember: guarda un hecho en la memoria curada (MEMORY o USER).',
+  parameters: hermesRememberTool.parameters,
+  async execute(args, ctx = {}) {
+    return executeRememberAlias({ ...args, actor: 'recordar' }, ctx);
+  },
+};
+
+const hermesOlvidarTool = {
+  name: 'olvidar',
+  description: 'Alias en español de forget: borra hechos de la memoria curada que coincidan.',
+  parameters: hermesForgetTool.parameters,
+  async execute(args, ctx = {}) {
+    return executeForgetAlias(args, ctx);
+  },
+};
+
 function buildHermesTools() {
   return [
     hermesCronjobTool,
     hermesSendMessageTool,
     hermesSessionSearchTool,
     hermesMemoryTool,
+    hermesRememberTool,
+    hermesForgetTool,
+    hermesRecordarTool,
+    hermesOlvidarTool,
     hermesDelegateTool,
     hermesSkillsListTool,
     hermesSkillCuratorTool,
@@ -333,5 +414,9 @@ module.exports = {
   hermesSendMessageTool,
   hermesSessionSearchTool,
   hermesMemoryTool,
+  hermesRememberTool,
+  hermesForgetTool,
+  hermesRecordarTool,
+  hermesOlvidarTool,
   hermesDelegateTool,
 };

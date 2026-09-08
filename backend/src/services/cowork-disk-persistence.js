@@ -63,7 +63,7 @@ function normalizePersistedNote(note) {
   if (!note) return null;
   if (typeof note === 'string') {
     const text = note.trim();
-    return text ? { id: '', text, sourceCount: 0, createdAt: 0 } : null;
+    return text ? { id: '', text, sourceCount: 0, createdAt: 0, expiresAt: 0 } : null;
   }
   const text = String(note.text || '').trim();
   if (!text) return null;
@@ -72,6 +72,23 @@ function normalizePersistedNote(note) {
     text,
     sourceCount: Number(note.sourceCount) || 0,
     createdAt: Number(note.createdAt) || 0,
+    expiresAt: Number(note.expiresAt) || 0,
+  };
+}
+
+function normalizeProvenance(row) {
+  const src = row && row.provenance && typeof row.provenance === 'object' ? row.provenance : null;
+  if (!src) return undefined;
+  const from = String(src.from || '').trim();
+  const sourceText = String(src.sourceText || '').trim();
+  if (!from && !sourceText) return undefined;
+  return {
+    id: String(src.id || ''),
+    from,
+    sourceText,
+    promotedAt: Number(src.promotedAt) || 0,
+    reason: String(src.reason || ''),
+    actor: String(src.actor || ''),
   };
 }
 
@@ -79,10 +96,31 @@ function normalizeCuratedMetaRow(row) {
   if (!row || typeof row !== 'object') {
     return { pinned: false, createdAt: 0, updatedAt: 0 };
   }
-  return {
+  const next = {
     pinned: row.pinned === true,
     createdAt: Number(row.createdAt) || 0,
     updatedAt: Number(row.updatedAt) || Number(row.createdAt) || 0,
+  };
+  const provenance = normalizeProvenance(row);
+  if (provenance) next.provenance = provenance;
+  return next;
+}
+
+function normalizePromotion(row) {
+  if (!row || typeof row !== 'object') return null;
+  const sourceText = String(row.sourceText || '').trim();
+  const promotedText = String(row.promotedText || '').trim();
+  if (!sourceText && !promotedText) return null;
+  return {
+    id: String(row.id || ''),
+    from: String(row.from || 'memory'),
+    to: String(row.to || 'user'),
+    sourceText,
+    promotedText,
+    reason: String(row.reason || ''),
+    actor: String(row.actor || ''),
+    promotedAt: Number(row.promotedAt) || 0,
+    resolve: row.resolve ? String(row.resolve) : null,
   };
 }
 
@@ -109,6 +147,9 @@ function loadCuratedMemory(userId) {
     notes: Array.isArray(row.notes)
       ? row.notes.map(normalizePersistedNote).filter(Boolean)
       : [],
+    promotions: Array.isArray(row.promotions)
+      ? row.promotions.map(normalizePromotion).filter(Boolean)
+      : [],
     meta: normalizeCuratedMeta(row.meta),
     updatedAt: Number(row.updatedAt) || 0,
   };
@@ -122,6 +163,9 @@ function saveCuratedMemory(userId, stores) {
     user: Array.isArray(stores?.user) ? stores.user.map(String) : [],
     notes: Array.isArray(stores?.notes)
       ? stores.notes.map(normalizePersistedNote).filter(Boolean)
+      : [],
+    promotions: Array.isArray(stores?.promotions)
+      ? stores.promotions.map(normalizePromotion).filter(Boolean)
       : [],
     meta: normalizeCuratedMeta(stores?.meta),
   });

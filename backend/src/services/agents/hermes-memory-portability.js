@@ -74,7 +74,7 @@ function normalizeNotes(notes) {
       if (!note) return null;
       if (typeof note === 'string') {
         const text = note.trim();
-        return text ? { id: '', text, sourceCount: 0, createdAt: 0 } : null;
+        return text ? { id: '', text, sourceCount: 0, createdAt: 0, expiresAt: 0 } : null;
       }
       const text = String(note.text || '').trim();
       if (!text) return null;
@@ -83,15 +83,25 @@ function normalizeNotes(notes) {
         text,
         sourceCount: Number.isFinite(Number(note.sourceCount)) ? Number(note.sourceCount) : 0,
         createdAt: Number(note.createdAt) || 0,
+        expiresAt: Number(note.expiresAt) || 0,
       };
     })
     .filter(Boolean);
 }
 
+function notesForChecksum(notes) {
+  return normalizeNotes(notes).map((note) => ({
+    id: note.id,
+    text: note.text,
+    sourceCount: note.sourceCount,
+    createdAt: note.createdAt,
+  }));
+}
+
 function canonicalPayload(profile, notes, fingerprint) {
   return {
     kind: KIND,
-    notes,
+    notes: notesForChecksum(notes),
     ownerFingerprint: fingerprint,
     profile,
     version: SCHEMA_VERSION,
