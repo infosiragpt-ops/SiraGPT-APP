@@ -1,0 +1,2653 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-08T16:40:10.822Z",
+  "sourceSha256": "71966ef291c60d5873505d85ed1187cb66fa8ae00c690c31251ec9b2b6dceb04",
+  "records": [
+    {
+      "slug": "anomalyco/opencode",
+      "canonical": "anomalyco/opencode",
+      "commit": "dff8fbc149fb7492e4f07b713ac31ea70d9a541c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "6439474beed8e0271df9862eff97ffd70ec2464c",
+        "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+        "bytes": 1065,
+        "url": "https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "openclaw/openclaw",
+      "canonical": "openclaw/openclaw",
+      "commit": "1a7224b69f09b8e7a9edb8d9de27c3c534397f1e",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "ebaebf7c416761a32f932ad70ebe5d1d2e214f68",
+        "sha256": "73571b25326281d369087f469842c02444fe39faaecebda4d82ed21ff3a1c29d",
+        "bytes": 1170,
+        "url": "https://github.com/openclaw/openclaw/blob/1a7224b69f09b8e7a9edb8d9de27c3c534397f1e/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "NousResearch/hermes-agent",
+      "canonical": "NousResearch/hermes-agent",
+      "commit": "c8aa5608c24e3636e77c267650c0f1f52e44adb0",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "75410e73319c72cd3e991a501c5455eb78f38375",
+        "sha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+        "bytes": 1070,
+        "url": "https://github.com/NousResearch/hermes-agent/blob/c8aa5608c24e3636e77c267650c0f1f52e44adb0/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "sst/opencode",
+      "canonical": "anomalyco/opencode",
+      "commit": "dff8fbc149fb7492e4f07b713ac31ea70d9a541c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "6439474beed8e0271df9862eff97ffd70ec2464c",
+        "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+        "bytes": 1065,
+        "url": "https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "alibaba/OpenSandbox",
+      "canonical": "opensandbox-group/OpenSandbox",
+      "commit": "5ac4e576855b2a0b617ed67c24f4f90075f416b7",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "b09cd7856d58590578ee1a4f3ad45d1310a97f87",
+        "sha256": "50e6751797c50dedd75ef1b8a0d9e42f5f8472e9fbce91f34718e9f97b0c780a",
+        "bytes": 11324,
+        "url": "https://github.com/opensandbox-group/OpenSandbox/blob/5ac4e576855b2a0b617ed67c24f4f90075f416b7/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "e2b-dev/E2B",
+      "canonical": "e2b-dev/E2B",
+      "commit": "b8b43232c885396a6c9d1ee9d1280325e5766536",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "ec47fef19f779f6b0e7d0073035cb727baf73c7a",
+        "sha256": "b4ef1bf811cb4095229fb86b574199e467c78f0ac4078cf8be62189e1fbd0818",
+        "bytes": 11347,
+        "url": "https://github.com/e2b-dev/E2B/blob/b8b43232c885396a6c9d1ee9d1280325e5766536/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "e2b-dev/infra",
+      "canonical": "e2b-dev/infra",
+      "commit": "4f7b8f9a353d499529778f0912c47aeddfeb4ee5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "ec47fef19f779f6b0e7d0073035cb727baf73c7a",
+        "sha256": "b4ef1bf811cb4095229fb86b574199e467c78f0ac4078cf8be62189e1fbd0818",
+        "bytes": 11347,
+        "url": "https://github.com/e2b-dev/infra/blob/4f7b8f9a353d499529778f0912c47aeddfeb4ee5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "e2b-dev/code-interpreter",
+      "canonical": "e2b-dev/code-interpreter",
+      "commit": "fd0e4c89bd4b3c637dde491b770df251241ba434",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/e2b-dev/code-interpreter/blob/fd0e4c89bd4b3c637dde491b770df251241ba434/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "microsandbox/microsandbox",
+      "canonical": "superradcompany/microsandbox",
+      "commit": "e25cae318d7aa15b5191351bddc913f43778c3b1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "821ac5b21e4d7576cbf28663a40d22fb0441a223",
+        "sha256": "a276ca3381fefb9cde42fccae847856085c76027557d62eee83f057eb6c53433",
+        "bytes": 11324,
+        "url": "https://github.com/superradcompany/microsandbox/blob/e25cae318d7aa15b5191351bddc913f43778c3b1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "openai/codex-universal",
+      "canonical": "openai/codex-universal",
+      "commit": "47f4f0eb5337083e2f610db0d15558932cb4901d",
+      "archived": false,
+      "licenseEvidence": null,
+      "issues": [
+        "github-http-404"
+      ],
+      "newSourceFilesImported": 0,
+      "decision": "unverified-no-copy"
+    },
+    {
+      "slug": "agent-infra/sandbox",
+      "canonical": "agent-infra/sandbox",
+      "commit": "89186e8c9fb3f78b2f67cc472a36c1cb63e25ccb",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/agent-infra/sandbox/blob/89186e8c9fb3f78b2f67cc472a36c1cb63e25ccb/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "NVIDIA/OpenShell",
+      "canonical": "NVIDIA/OpenShell",
+      "commit": "2ad86c1b2e3e81a26e0fd38ec860398acb31f2fc",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "f76e7a1eb75b21354f10e48a5f4eedb3bb5de40d",
+        "sha256": "b967d1c87b93b7d61ebcf4f8737e6ad79e5433e743e49dff395a36fb3c327047",
+        "bytes": 10788,
+        "url": "https://github.com/NVIDIA/OpenShell/blob/2ad86c1b2e3e81a26e0fd38ec860398acb31f2fc/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "kubernetes-sigs/agent-sandbox",
+      "canonical": "kubernetes-sigs/agent-sandbox",
+      "commit": "9d53cedc127d7a2e5387f25f95442f7577184a9c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "8dada3edaf50dbc082c9a125058f25def75e625a",
+        "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+        "bytes": 11357,
+        "url": "https://github.com/kubernetes-sigs/agent-sandbox/blob/9d53cedc127d7a2e5387f25f95442f7577184a9c/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "anthropics/sandbox-runtime",
+      "canonical": "anthropics/sandbox-runtime",
+      "commit": "66d35e5ffeba5f406db4343ef88bef0c2fd5bab6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "fe95f74680c8c8023153ebaeceb8ce03e523d75a",
+        "sha256": "1210bc93eb85dd786c33192d5bcb7153a93922fa99fbc1512af6a7199cb41080",
+        "bytes": 11339,
+        "url": "https://github.com/anthropics/sandbox-runtime/blob/66d35e5ffeba5f406db4343ef88bef0c2fd5bab6/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "nolabs-ai/nono",
+      "canonical": "nolabs-ai/nono",
+      "commit": "51d2ba1b89f9be5000327c58a6c460bcf2cf309c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "737eb9e19dcaf5499fb421d9577d5b63a7ad96f6",
+        "sha256": "7310e9389f298b89bb2f90ac4b6081ed5b6a1c4a7b8547df5d52966a57cb0929",
+        "bytes": 11351,
+        "url": "https://github.com/nolabs-ai/nono/blob/51d2ba1b89f9be5000327c58a6c460bcf2cf309c/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "paradigmxyz/iron-proxy",
+      "canonical": "paradigmxyz/iron-proxy",
+      "commit": "2393dd175a8c419153fb49917fdeceb94cd9ed59",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "c76354164b6f9a6819b6d4e25e62243a4f5296cb",
+        "sha256": "f1a78af3197c0b00175f19f18a65f537c957ff87c180997cf6a038f8aa6f0906",
+        "bytes": 10773,
+        "url": "https://github.com/paradigmxyz/iron-proxy/blob/2393dd175a8c419153fb49917fdeceb94cd9ed59/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "engineer-man/piston",
+      "canonical": "engineer-man/piston",
+      "commit": "de2b365ac759670a3a0d13ea208a0869a92c7e64",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "license",
+        "spdx": "MIT",
+        "blobSha": "fd203f8b664a356b620d5087aec958e4c3d530cb",
+        "sha256": "f774400768f05a3f7c952d32e063308f45ee7d3b89e613d4bc1bf58d266f0f44",
+        "bytes": 1096,
+        "url": "https://github.com/engineer-man/piston/blob/de2b365ac759670a3a0d13ea208a0869a92c7e64/license",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "vndee/llm-sandbox",
+      "canonical": "vndee/llm-sandbox",
+      "commit": "ee34fb7b4c6f2a65087d610b0fb6a4ba33a1ea21",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "bfd85d5a4e8e86aa1ab9b2ab52556a034d5f0903",
+        "sha256": "f117e87366786f5e31afb19fce5142a0ef155f3876ef61721b09304a4653042f",
+        "bytes": 1066,
+        "url": "https://github.com/vndee/llm-sandbox/blob/ee34fb7b4c6f2a65087d610b0fb6a4ba33a1ea21/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "dagger/container-use",
+      "canonical": "dagger/container-use",
+      "commit": "2e43e625e95216b719ec9338f4034fd3a0be2734",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "17b2ba29b525453b46b0311d202b63044d3aa5cb",
+        "sha256": "4442a42853bd02d190ce5f06f76ba62f1a0ff803e8cc1a524dcaa7085a0b100b",
+        "bytes": 10758,
+        "url": "https://github.com/dagger/container-use/blob/2e43e625e95216b719ec9338f4034fd3a0be2734/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "firecracker-microvm/firecracker",
+      "canonical": "firecracker-microvm/firecracker",
+      "commit": "83a71352016a6f1ec3fc99a6e27b97b68db5641e",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358,
+        "url": "https://github.com/firecracker-microvm/firecracker/blob/83a71352016a6f1ec3fc99a6e27b97b68db5641e/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "google/gvisor",
+      "canonical": "google/gvisor",
+      "commit": "b1abaf7973d077e67e250a23a6f785a063bb90f4",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "f7a006d10464cfe9724b5d687c0013bf982cc66a",
+        "sha256": "0fbab5c58efbdf6d31e8085214f2dd821659c03d73cff3ed2b08e98826ea1cd9",
+        "bytes": 14110,
+        "url": "https://github.com/google/gvisor/blob/b1abaf7973d077e67e250a23a6f785a063bb90f4/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "kata-containers/kata-containers",
+      "canonical": "kata-containers/kata-containers",
+      "commit": "26c2e1630457977d931bce0527c4df92a3b8f15d",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/kata-containers/kata-containers/blob/26c2e1630457977d931bce0527c4df92a3b8f15d/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "OpenHands/software-agent-sdk",
+      "canonical": "OpenHands/software-agent-sdk",
+      "commit": "3896f186936342b99c7c5d3f89cdae888f458e7f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "b0bd86a6335a564bd3766666bebbf014fd6a8013",
+        "sha256": "14a9b631c658eee682c6c2973525fbdf808c3457176bc47513052c559cc5ce86",
+        "bytes": 1079,
+        "url": "https://github.com/OpenHands/software-agent-sdk/blob/3896f186936342b99c7c5d3f89cdae888f458e7f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "OpenHands/typescript-client",
+      "canonical": "OpenHands/typescript-client",
+      "commit": "5072d2a916e7956c4c18553c46498d971be60a0c",
+      "archived": true,
+      "licenseEvidence": null,
+      "issues": [
+        "github-http-404"
+      ],
+      "newSourceFilesImported": 0,
+      "decision": "unverified-no-copy"
+    },
+    {
+      "slug": "OpenHands/OpenHands",
+      "canonical": "OpenHands/OpenHands",
+      "commit": "ea7a85c27628a6abad4d5738527e5044b34b91ff",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "f6f60f52368bcc96f82fbe59ec65049c2c3af9db",
+        "sha256": "e1d1fa9f3a8d7bef24449d488fcd8f00f8f272cac297bb9bed161eb6175b876a",
+        "bytes": 1096,
+        "url": "https://github.com/OpenHands/OpenHands/blob/ea7a85c27628a6abad4d5738527e5044b34b91ff/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "earendil-works/pi",
+      "canonical": "earendil-works/pi",
+      "commit": "6160683a4a8012f0d1cd30c145df18b4ca6f5176",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "b0a8e9b81083294360c69b4ec45d3d39a2b28197",
+        "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
+        "bytes": 1069,
+        "url": "https://github.com/earendil-works/pi/blob/6160683a4a8012f0d1cd30c145df18b4ca6f5176/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "badlogic/pi-mono",
+      "canonical": "earendil-works/pi",
+      "commit": "6160683a4a8012f0d1cd30c145df18b4ca6f5176",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "b0a8e9b81083294360c69b4ec45d3d39a2b28197",
+        "sha256": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
+        "bytes": 1069,
+        "url": "https://github.com/earendil-works/pi/blob/6160683a4a8012f0d1cd30c145df18b4ca6f5176/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "vercel/ai",
+      "canonical": "vercel/ai",
+      "commit": "36b3364bcdb23d34e3062a104d3206018660db35",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "6c16c29f41168411dbf6e3ba3a063ce789c27334",
+        "sha256": "b4f9adb7c568904834d0dd6cc98d16c390d21ca32fc17ae7a267715269bd5529",
+        "bytes": 552,
+        "url": "https://github.com/vercel/ai/blob/36b3364bcdb23d34e3062a104d3206018660db35/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "deepseek-ai/deepseek-harness",
+      "canonical": "deepseek-ai/deepseek-harness",
+      "commit": "5dda764ed3aa172535a7967b06ff95d9cbfe536a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "c1f7a78e89e4e4dc7b86664c3b3c76eb5eee1785",
+        "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+        "bytes": 1065,
+        "url": "https://github.com/deepseek-ai/deepseek-harness/blob/5dda764ed3aa172535a7967b06ff95d9cbfe536a/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "openai/codex",
+      "canonical": "openai/codex",
+      "commit": "6515a72db7a82e8cdebed940aad4ba1a159ce245",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "4606e72e042564097e8780d66c1d4dcb611869bd",
+        "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+        "bytes": 10926,
+        "url": "https://github.com/openai/codex/blob/6515a72db7a82e8cdebed940aad4ba1a159ce245/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "xai-org/grok-build",
+      "canonical": "xai-org/grok-build",
+      "commit": "75810042ca2762aa0b0fa17864f3f68823ccbea5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "90b1793cf8eb2d6444863591e8405ecc707dc62d",
+        "sha256": "116f7778b9802e569b7fa3a532b17bd80eb13c67837def01eed093d4ea472f28",
+        "bytes": 11388,
+        "url": "https://github.com/xai-org/grok-build/blob/75810042ca2762aa0b0fa17864f3f68823ccbea5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "cline/cline",
+      "canonical": "cline/cline",
+      "commit": "7e8063857bee520f1f15ceaa743e1e3f9f7900ef",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "05ae14a377caf4df24e26edde0c4f7b22ef3ef30",
+        "sha256": "f704446a5f1271608805598b557e4288cf8580477ea038c9c3d8b361f693f6b8",
+        "bytes": 11344,
+        "url": "https://github.com/cline/cline/blob/7e8063857bee520f1f15ceaa743e1e3f9f7900ef/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "Kilo-Org/kilocode",
+      "canonical": "Kilo-Org/kilocode",
+      "commit": "a365ba69558a6689fd58b8557aa3c393886d44b0",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "c5762eb3ad5a0e1788ef155772fe3c240ab23e42",
+        "sha256": "8a088af74e19c37e62906321b1072f593113058ed9eae507d899d41e6e5e5bb4",
+        "bytes": 1094,
+        "url": "https://github.com/Kilo-Org/kilocode/blob/a365ba69558a6689fd58b8557aa3c393886d44b0/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "aaif-goose/goose",
+      "canonical": "aaif-goose/goose",
+      "commit": "13f4d26e1e703d6ed1552c6e599abdfa8d3e44ff",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "c83043d4494071fbd93ef245a14e573c5a8280c4",
+        "sha256": "44459b86c2e96fdbfd8a6b5c33d30d4b04b5293fcb2ec96fe4dcc4e0f90b8962",
+        "bytes": 11341,
+        "url": "https://github.com/aaif-goose/goose/blob/13f4d26e1e703d6ed1552c6e599abdfa8d3e44ff/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "block/goose",
+      "canonical": "aaif-goose/goose",
+      "commit": "13f4d26e1e703d6ed1552c6e599abdfa8d3e44ff",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "c83043d4494071fbd93ef245a14e573c5a8280c4",
+        "sha256": "44459b86c2e96fdbfd8a6b5c33d30d4b04b5293fcb2ec96fe4dcc4e0f90b8962",
+        "bytes": 11341,
+        "url": "https://github.com/aaif-goose/goose/blob/13f4d26e1e703d6ed1552c6e599abdfa8d3e44ff/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "Aider-AI/aider",
+      "canonical": "Aider-AI/aider",
+      "commit": "5dc9490bb35f9729ef2c95d00a19ccd30c26339c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.txt",
+        "spdx": "Apache-2.0",
+        "blobSha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "bytes": 11358,
+        "url": "https://github.com/Aider-AI/aider/blob/5dc9490bb35f9729ef2c95d00a19ccd30c26339c/LICENSE.txt",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "Hmbown/CodeWhale",
+      "canonical": "Hmbown/Codewhale",
+      "commit": "aedb88b950b0bbc05eb46993175074e545e03efa",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "d20b90d5f572f597cad32f0c7ddd4c3ce1733239",
+        "sha256": "91873e17f073f4dcddc63799a0a6fdeb44a281440b6c5e0b9d8ea2aa7f7ffd95",
+        "bytes": 1087,
+        "url": "https://github.com/Hmbown/Codewhale/blob/aedb88b950b0bbc05eb46993175074e545e03efa/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "esengine/DeepSeek-Reasonix",
+      "canonical": "esengine/DeepSeek-Reasonix",
+      "commit": "7717f3eeab47f66560ea85cc7dbe27426c3adf47",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "bc45a281d8050c59c9b833ea2d0b1fb6e02602c0",
+        "sha256": "dc024237821ac82056c37f8d82e3be919bd51e39a4529ec12a8ab3e2a346dc4c",
+        "bytes": 1078,
+        "url": "https://github.com/esengine/DeepSeek-Reasonix/blob/7717f3eeab47f66560ea85cc7dbe27426c3adf47/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "QwenLM/qwen-code",
+      "canonical": "QwenLM/qwen-code",
+      "commit": "b9f5d15a5b0c571f7c8b4e3279af018862328b08",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "2d4f1fee82272cbad5f22394dc064e621f668aac",
+        "sha256": "55367b61ccd2a016a0159ad886bd66a3ee6cb5e873d0c75c803c897dd245b075",
+        "bytes": 11361,
+        "url": "https://github.com/QwenLM/qwen-code/blob/b9f5d15a5b0c571f7c8b4e3279af018862328b08/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "google-gemini/gemini-cli",
+      "canonical": "google-gemini/gemini-cli",
+      "commit": "24cab6830a9be146fdcb37a8b654f4c203b54863",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "7a4a3ea2424c09fbe48d455aed1eaa94d9124835",
+        "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+        "bytes": 11357,
+        "url": "https://github.com/google-gemini/gemini-cli/blob/24cab6830a9be146fdcb37a8b654f4c203b54863/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "continuedev/continue",
+      "canonical": "continuedev/continue",
+      "commit": "5522c6f44ca0ac3528b37244818fbfa39b5af470",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "c25dc1768217ba50d454fcc06290d66886512872",
+        "sha256": "b14a17598cb08c4c7c82c070731126304e0a75d001ed59fb9ea3955a0b561802",
+        "bytes": 11348,
+        "url": "https://github.com/continuedev/continue/blob/5522c6f44ca0ac3528b37244818fbfa39b5af470/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "microsoft/vscode-copilot-chat",
+      "canonical": "microsoft/vscode-copilot-chat",
+      "commit": "5863f5a7088958050792b5dccbe8b46c6e13eccc",
+      "archived": true,
+      "licenseEvidence": {
+        "path": "LICENSE.txt",
+        "spdx": "MIT",
+        "blobSha": "dc0c2ffb3dc1523bed6ab4090e9215504bd39b17",
+        "sha256": "8f3b85643422256a936daede0159c60fe5d140ace61a4fbb7de8b912e1274260",
+        "bytes": 1094,
+        "url": "https://github.com/microsoft/vscode-copilot-chat/blob/5863f5a7088958050792b5dccbe8b46c6e13eccc/LICENSE.txt",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "SWE-agent/SWE-agent",
+      "canonical": "SWE-agent/SWE-agent",
+      "commit": "3ea751c087f32b16e039a2233dd6eefecef325d5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "e702436e21844c5c519de31ab68277a6d3b427d9",
+        "sha256": "7610ed3916f6674e34b78417894abd57ff538b3cfdda3085e3643d82acbaf31f",
+        "bytes": 1147,
+        "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "bytedance/trae-agent",
+      "canonical": "bytedance/trae-agent",
+      "commit": "e839e559ac61bdd0e057c375dd1dee391fee797d",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "3b8890f7c67d2e5342e96c343b1aa3ae8bf6b78c",
+        "sha256": "89e0d148344772c3931992a8370b7315034bb9ce49a7d183e3fafa2a6632367f",
+        "bytes": 1084,
+        "url": "https://github.com/bytedance/trae-agent/blob/e839e559ac61bdd0e057c375dd1dee391fee797d/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "OpenAutoCoder/Agentless",
+      "canonical": "OpenAutoCoder/Agentless",
+      "commit": "5ce5888b9f149beaace393957a55ea8ee46c9f71",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "c99d4d2ce279ca269d1a4d918dff73c105a8fa17",
+        "sha256": "01be13f66160d7e6227a3cedc1e993b63e497b5d3623ab7fa5798c1fba769cb1",
+        "bytes": 1070,
+        "url": "https://github.com/OpenAutoCoder/Agentless/blob/5ce5888b9f149beaace393957a55ea8ee46c9f71/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "aorwall/moatless-tools",
+      "canonical": "aorwall/moatless-tools",
+      "commit": "011ead57a5c81664e9c45e07e1f50b17e695cc63",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "a93736ec515c946a380bea688e9596d4fe2705f8",
+        "sha256": "4059f3cce5d092392a86ab1bde78bfbc8a06e53c15fa7b6cffea137e04cc2736",
+        "bytes": 1070,
+        "url": "https://github.com/aorwall/moatless-tools/blob/011ead57a5c81664e9c45e07e1f50b17e695cc63/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "plandex-ai/plandex",
+      "canonical": "plandex-ai/plandex",
+      "commit": "e2d772072efadbe41d2946d97d79be55532dbab5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "4aa379f2105798e6d6a8a4f1020ba272f23995f4",
+        "sha256": "eda5a26207e5a30cbad304444ea650a588c54f7404368cbefdb7b9a3e206bcd0",
+        "bytes": 1070,
+        "url": "https://github.com/plandex-ai/plandex/blob/e2d772072efadbe41d2946d97d79be55532dbab5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "stitionai/devika",
+      "canonical": "stitionai/devika",
+      "commit": "80bb343cbe4a4e5f5a0ba08d2524920139baceb6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "649d6dd5def3b82d1b10aec31424e2514c5a2851",
+        "sha256": "6fe9b238554258f580ca182ae3f228557d1e95e1b4c8aeedfc29533b3fe70529",
+        "bytes": 1064,
+        "url": "https://github.com/stitionai/devika/blob/80bb343cbe4a4e5f5a0ba08d2524920139baceb6/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "AntonOsika/gpt-engineer",
+      "canonical": "AntonOsika/gpt-engineer",
+      "commit": "a90fcd543eedcc0ff2c34561bc0785d2ba83c47e",
+      "archived": true,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "a56867b9bdba937f0a9cb2656cc999d86aab2eaf",
+        "sha256": "966e11816b63a7ebb7cf7de61e1a47b856fb8421054a2acff34eebe5d997bc59",
+        "bytes": 1068,
+        "url": "https://github.com/AntonOsika/gpt-engineer/blob/a90fcd543eedcc0ff2c34561bc0785d2ba83c47e/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "Pythagora-io/gpt-pilot",
+      "canonical": "Pythagora-io/gpt-pilot",
+      "commit": "9b763fdaf0020c7d8abacc7b58b2b09e57494623",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "74887def946db0da0a8eb754bb3a6acd7bd4eef3",
+        "sha256": "cd8cedadb8689978509c259edcd5254c860d26ac130eac42347d11b70c48150e",
+        "bytes": 4228,
+        "url": "https://github.com/Pythagora-io/gpt-pilot/blob/9b763fdaf0020c7d8abacc7b58b2b09e57494623/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "geekan/MetaGPT",
+      "canonical": "FoundationAgents/MetaGPT",
+      "commit": "11cdf466d042aece04fc6cfd13b28e1a70341b1f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "00d36a832e74e0a131ed5e698896206cb3724323",
+        "sha256": "74945da6216c3f6498159a55cd25c0564acc684b791c169f869117a095808b00",
+        "bytes": 1072,
+        "url": "https://github.com/FoundationAgents/MetaGPT/blob/11cdf466d042aece04fc6cfd13b28e1a70341b1f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "frdel/agent-zero",
+      "canonical": "agent0ai/agent-zero",
+      "commit": "6a6cecff8527b164668c7a6ab2f76b6b1ed7cfa1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "50b7754de5cde0fbb796ffae376fb03dc19236d1",
+        "sha256": "23844ed5fb9976b15e6c0be1b617918cb1c32e13e8d70b74100dae08d40fbf23",
+        "bytes": 1150,
+        "url": "https://github.com/agent0ai/agent-zero/blob/6a6cecff8527b164668c7a6ab2f76b6b1ed7cfa1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "kortix-ai/suna",
+      "canonical": "kortix-ai/suna",
+      "commit": "0e7dc99f58a9ed53c2a43b75003d94c7549ac69d",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "809108b857ffd2c2a93cafc5b69e496f3b6ace04",
+        "sha256": "48255018b41fc0e965b1115af7e6779bc218bb8a6747d561da800d5022622aa2",
+        "bytes": 3860,
+        "url": "https://github.com/kortix-ai/suna/blob/0e7dc99f58a9ed53c2a43b75003d94c7549ac69d/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "BloopAI/vibe-kanban",
+      "canonical": "BloopAI/vibe-kanban",
+      "commit": "4deb7eca8f381f7cbc1f9d15515a9ab8f8009053",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/BloopAI/vibe-kanban/blob/4deb7eca8f381f7cbc1f9d15515a9ab8f8009053/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "TabbyML/tabby",
+      "canonical": "TabbyML/tabby",
+      "commit": "21b29048d7bcf6b94f9f482f2d0fd05efadfd19f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "fe1321487adbda16145776ad813dcc26460fb8dd",
+        "sha256": "c1ec1f6ab624f12b8f80eae16fe6c2dc4c1872438baf0efbd25e670936bc7d00",
+        "bytes": 10258,
+        "url": "https://github.com/TabbyML/tabby/blob/21b29048d7bcf6b94f9f482f2d0fd05efadfd19f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "cloudflare/vibesdk",
+      "canonical": "cloudflare/vibesdk",
+      "commit": "9da158d82c597a0e8f4bf033cdccd1053fb6fb15",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "f0d058142cc1ce289df409bd3f54588b7265d447",
+        "sha256": "bb4ead5064d47e249a0126883fcde7151c7302282b4be89001886b315bb16246",
+        "bytes": 1067,
+        "url": "https://github.com/cloudflare/vibesdk/blob/9da158d82c597a0e8f4bf033cdccd1053fb6fb15/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "cloudflare/vibesdk-templates",
+      "canonical": "cloudflare/vibesdk-templates",
+      "commit": "7ea201fafdef44f5dcc5bc05f03b36e3198cebe5",
+      "archived": false,
+      "licenseEvidence": null,
+      "issues": [
+        "github-http-404"
+      ],
+      "newSourceFilesImported": 0,
+      "decision": "unverified-no-copy"
+    },
+    {
+      "slug": "stackblitz/bolt.new",
+      "canonical": "stackblitz/bolt.new",
+      "commit": "eda10b121221b30825a4c16eec5da1fd3eb1eb99",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "79290241f979e4079f5fd7d6fdc9acac6614de2b",
+        "sha256": "444b630ecac2a829a48dc007cf299a1183d78f930f8e6702c4d078be02e8e371",
+        "bytes": 1073,
+        "url": "https://github.com/stackblitz/bolt.new/blob/eda10b121221b30825a4c16eec5da1fd3eb1eb99/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "stackblitz-labs/bolt.diy",
+      "canonical": "stackblitz-labs/bolt.diy",
+      "commit": "2e254ac19a696394030601bc602f54945b12bfc4",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "8fb312e9478c0bef8df939141a58929480aefa0c",
+        "sha256": "312c7a6557ba76d33134e7b4634f6c94c5c76c6bc2b5fe5fb1a37f0a2552efc1",
+        "bytes": 1099,
+        "url": "https://github.com/stackblitz-labs/bolt.diy/blob/2e254ac19a696394030601bc602f54945b12bfc4/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "dyad-sh/dyad",
+      "canonical": "dyad-sh/dyad",
+      "commit": "0882f9d8595ad54113382c03f089d3d5b59f0d59",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "d68041161a7a42ada7c4a3789a84e593bff2fdcf",
+        "sha256": "eb194f9b70920f23323e2f993330f92d175e361fd11efb526626f71f9be8f8b2",
+        "bytes": 11694,
+        "url": "https://github.com/dyad-sh/dyad/blob/0882f9d8595ad54113382c03f089d3d5b59f0d59/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "e2b-dev/fragments",
+      "canonical": "e2b-dev/fragments",
+      "commit": "2d0ba973f11012cd1d08110655cf542eb98ef04e",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "ec47fef19f779f6b0e7d0073035cb727baf73c7a",
+        "sha256": "b4ef1bf811cb4095229fb86b574199e467c78f0ac4078cf8be62189e1fbd0818",
+        "bytes": 11347,
+        "url": "https://github.com/e2b-dev/fragments/blob/2d0ba973f11012cd1d08110655cf542eb98ef04e/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "onlook-dev/onlook",
+      "canonical": "onlook-dev/onlook",
+      "commit": "423e2e924366419e418ee049093872d535eea41a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "Apache-2.0",
+        "blobSha": "295f5e1b5c342a1382ca2b54f7a911fdc466149d",
+        "sha256": "ebac09c6f0854bc48cb843bcab00d57310028defb124e9bc7f2f39203b705ea8",
+        "bytes": 11342,
+        "url": "https://github.com/onlook-dev/onlook/blob/423e2e924366419e418ee049093872d535eea41a/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "srcbookdev/srcbook",
+      "canonical": "srcbookdev/srcbook",
+      "commit": "1534c61a82f570ff3aa0285ef18bb9c9574d3a5f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "c61b66391a3c1545c8c274bc6d7d764bafb84993",
+        "sha256": "4458503dd48e88c4e0b945fb252a08b93c40ec757309b8ffa7c594dfa1e35104",
+        "bytes": 10947,
+        "url": "https://github.com/srcbookdev/srcbook/blob/1534c61a82f570ff3aa0285ef18bb9c9574d3a5f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "langchain-ai/open-canvas",
+      "canonical": "langchain-ai/open-canvas",
+      "commit": "0310cecd51f31b3d37a52d6d1060137da3405280",
+      "archived": true,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "5d8d7cdac780017a095f4932978783dc8fe057a3",
+        "sha256": "5a73d9410eb4f288d95245e5ec15ba55b2a5a080226d98869b52ba72379938bf",
+        "bytes": 1066,
+        "url": "https://github.com/langchain-ai/open-canvas/blob/0310cecd51f31b3d37a52d6d1060137da3405280/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "abi/screenshot-to-code",
+      "canonical": "abi/screenshot-to-code",
+      "commit": "d026163f586dfa8c5c10d28c36edd59a9d3b0e88",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "bee961c0b14b5bc4eaece2c07adae0eb45624675",
+        "sha256": "a264aef6acfaf75d9dcf0600a984f0f0ad0a36c2961013f530e2367d66201fd7",
+        "bytes": 1065,
+        "url": "https://github.com/abi/screenshot-to-code/blob/d026163f586dfa8c5c10d28c36edd59a9d3b0e88/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "microsoft/monaco-editor",
+      "canonical": "microsoft/monaco-editor",
+      "commit": "d620ca0c03d24a51c05ae4dca8a9d5923a4aeb9c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.txt",
+        "spdx": "MIT",
+        "blobSha": "76fdc58a0d7f76d050f6098fb19e53ee86231b3e",
+        "sha256": "33e4ff1a06ef62ba21788ea162564ee8165269a24a9ce6ef301837447eab0ac6",
+        "bytes": 1098,
+        "url": "https://github.com/microsoft/monaco-editor/blob/d620ca0c03d24a51c05ae4dca8a9d5923a4aeb9c/LICENSE.txt",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "codemirror/dev",
+      "canonical": "codemirror/dev",
+      "commit": "c010426d06689a7115aa9df08425126b6d3ead2f",
+      "archived": true,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "e5686ed320d93be7d87e3646c482eb72eca0100a",
+        "sha256": "7dc7fb9b4a0822d404e866ec96742fd774104ac22442ef7fd2d9879ada23c90c",
+        "bytes": 1150,
+        "url": "https://github.com/codemirror/dev/blob/c010426d06689a7115aa9df08425126b6d3ead2f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "xtermjs/xterm.js",
+      "canonical": "xtermjs/xterm.js",
+      "commit": "c58ea3637f3968e0e6e79cd92cf9aace7ef89ee2",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "4472336c9f3dee53c82f951cff3d9ddbadc65614",
+        "sha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd",
+        "bytes": 1261,
+        "url": "https://github.com/xtermjs/xterm.js/blob/c58ea3637f3968e0e6e79cd92cf9aace7ef89ee2/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "brimdata/react-arborist",
+      "canonical": "jameskerr/react-arborist",
+      "commit": "d74c4ec696ba98c1a4e981075f6d60cdff3e290b",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "03198917ea274924955e5b1a7c842f6350571454",
+        "sha256": "f1dcfe846608164333e4662013cd41adcee862327ca0b93228fbc11418b299c8",
+        "bytes": 1066,
+        "url": "https://github.com/jameskerr/react-arborist/blob/d74c4ec696ba98c1a4e981075f6d60cdff3e290b/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "shikijs/shiki",
+      "canonical": "shikijs/shiki",
+      "commit": "48cd2cc695ed2e3357c3f9c370578ea843d6d9a3",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "6a627184d44ec1995fc649fc5ca7d79ce2612e5a",
+        "sha256": "7a9d8d01038aeacf9e5bcdabbddf2a7815200dce9fc1118468cc553e00ae3eee",
+        "bytes": 1121,
+        "url": "https://github.com/shikijs/shiki/blob/48cd2cc695ed2e3357c3f9c370578ea843d6d9a3/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "rtfpessoa/diff2html",
+      "canonical": "rtfpessoa/diff2html",
+      "commit": "72331ff5d13a8d4d1f11256a7b554dd0d69d7014",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "MIT",
+        "blobSha": "922711cf0e47400a140d4ffa6b3c259539ec4698",
+        "sha256": "6de794566a8feb4233594420299cec2dbfba51ae57201763541a5e7d627cb245",
+        "bytes": 1091,
+        "url": "https://github.com/rtfpessoa/diff2html/blob/72331ff5d13a8d4d1f11256a7b554dd0d69d7014/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "yjs/yjs",
+      "canonical": "yjs/yjs",
+      "commit": "96c96e1fcb1ef6ce866d5264b3f97f7f77b11f64",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "f55e8b4846a2796967970bc4ad02d3e6abda3bac",
+        "sha256": "341baa53605ed85d6f95782322854cca56c655ebc7fd4712649b8e7afc6020ff",
+        "bytes": 1211,
+        "url": "https://github.com/yjs/yjs/blob/96c96e1fcb1ef6ce866d5264b3f97f7f77b11f64/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "assistant-ui/assistant-ui",
+      "canonical": "assistant-ui/assistant-ui",
+      "commit": "0afb5989cc3e2f1b9343f687025bbef009151ca0",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "1be0da052dc2f3add7a56609d310d47c29e2f1bf",
+        "sha256": "71fd4b7b76d27a09af2e8b2bedf14e51f4c229e32b59654d327cc24dc63e60d7",
+        "bytes": 1073,
+        "url": "https://github.com/assistant-ui/assistant-ui/blob/0afb5989cc3e2f1b9343f687025bbef009151ca0/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "vercel/ai-elements",
+      "canonical": "vercel/ai-elements",
+      "commit": "6a9d5b1822ffb10bba4bd97175f01edd7d8651cd",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "6c16c29f41168411dbf6e3ba3a063ce789c27334",
+        "sha256": "b4f9adb7c568904834d0dd6cc98d16c390d21ca32fc17ae7a267715269bd5529",
+        "bytes": 552,
+        "url": "https://github.com/vercel/ai-elements/blob/6a9d5b1822ffb10bba4bd97175f01edd7d8651cd/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "vercel/streamdown",
+      "canonical": "vercel/streamdown",
+      "commit": "e0ce123f493e2a7eb6d304be62ca0040ab8c3881",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "6c16c29f41168411dbf6e3ba3a063ce789c27334",
+        "sha256": "b4f9adb7c568904834d0dd6cc98d16c390d21ca32fc17ae7a267715269bd5529",
+        "bytes": 552,
+        "url": "https://github.com/vercel/streamdown/blob/e0ce123f493e2a7eb6d304be62ca0040ab8c3881/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "CopilotKit/CopilotKit",
+      "canonical": "CopilotKit/CopilotKit",
+      "commit": "416e854dc67a6887d04fc5d7fffa841fa680bc35",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "b3bf13ded443fa46a3fbbf69c42d2150c21f4cda",
+        "sha256": "15a0e5343aea872c0573ad72feb6044b336f162d724cc1673c608e6b37ea071b",
+        "bytes": 1067,
+        "url": "https://github.com/CopilotKit/CopilotKit/blob/416e854dc67a6887d04fc5d7fffa841fa680bc35/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "ag-ui-protocol/ag-ui",
+      "canonical": "ag-ui-protocol/ag-ui",
+      "commit": "409ad608f70269ad89cabbc2952431f9d8a518bb",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "b77bf2ab726c6e7cb5a81a9d3b7dc38266ebfd3d",
+        "sha256": "06dcddbb6908a0c6dd4a9e8ec822eea41d5a460a53089fecccc8a68049e99241",
+        "bytes": 1056,
+        "url": "https://github.com/ag-ui-protocol/ag-ui/blob/409ad608f70269ad89cabbc2952431f9d8a518bb/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "codesandbox/sandpack",
+      "canonical": "codesandbox/sandpack",
+      "commit": "7d60a4334980eef304d53b1c3df371ed6dbcf491",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "0e9ff7e78ca1d1c5b6cc49a6fe7de0382c24bdeb",
+        "sha256": "b75c33064bdc1c7f392dc4e42df8329f64332e841f87ccaa1f3954c5eeba5bc1",
+        "bytes": 10890,
+        "url": "https://github.com/codesandbox/sandpack/blob/7d60a4334980eef304d53b1c3df371ed6dbcf491/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "pyodide/pyodide",
+      "canonical": "pyodide/pyodide",
+      "commit": "069e19ad8581b9dbb2dd964cf45087ffbfafed12",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MPL-2.0",
+        "blobSha": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+        "bytes": 16725,
+        "url": "https://github.com/pyodide/pyodide/blob/069e19ad8581b9dbb2dd964cf45087ffbfafed12/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "coder/code-server",
+      "canonical": "coder/code-server",
+      "commit": "00672a55224585de8ca555227985d0b74166a5bc",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "0270469f3670695fefafcda93a873eb042d02f86",
+        "sha256": "872184c17fe5a3379da02acd21949ea2fcf4793bd4a3b920a96ba8b147741745",
+        "bytes": 1084,
+        "url": "https://github.com/coder/code-server/blob/00672a55224585de8ca555227985d0b74166a5bc/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "gitpod-io/openvscode-server",
+      "canonical": "gitpod-io/openvscode-server",
+      "commit": "2bfb814c5215c51a10e80c2cb1b58ed91068ad8b",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.txt",
+        "spdx": "MIT",
+        "blobSha": "0ac28ee234d232ac0691f39cebf95bf6b2a763a5",
+        "sha256": "9480271317925265e806a9a196aaa33410a962fa9d4d1e248a4a5187bc8c9df9",
+        "bytes": 1088,
+        "url": "https://github.com/gitpod-io/openvscode-server/blob/2bfb814c5215c51a10e80c2cb1b58ed91068ad8b/LICENSE.txt",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "tree-sitter/tree-sitter",
+      "canonical": "tree-sitter/tree-sitter",
+      "commit": "8351896bea2e3359ed2fd893ffb051e9f9ebc69b",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "971b81f9a86c0c91827e225aeac9159a13bfd3c1",
+        "sha256": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78",
+        "bytes": 1080,
+        "url": "https://github.com/tree-sitter/tree-sitter/blob/8351896bea2e3359ed2fd893ffb051e9f9ebc69b/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "BurntSushi/ripgrep",
+      "canonical": "BurntSushi/ripgrep",
+      "commit": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "UNLICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "68a49daad8ff7e35068f2b7a97d643aab440eaec",
+        "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+        "bytes": 1211,
+        "url": "https://github.com/BurntSushi/ripgrep/blob/3fce3b5bb0236da2df6d99672afb8a719642eca7/UNLICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "ast-grep/ast-grep",
+      "canonical": "ast-grep/ast-grep",
+      "commit": "fc2b1530db74de49131b725221de98036a552a9f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "f15282f90a7158c2d9f1fedef55438bf9f5c37b0",
+        "sha256": "81471889c77b2161a3e4dcdb1b2e6ca382e485766132d92d5fe1d7497e7dd2d9",
+        "bytes": 1077,
+        "url": "https://github.com/ast-grep/ast-grep/blob/fc2b1530db74de49131b725221de98036a552a9f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "sourcegraph/zoekt",
+      "canonical": "sourcegraph/zoekt",
+      "commit": "596c362fcf1388fe0082acfcfc80c4d172efb7c1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/sourcegraph/zoekt/blob/596c362fcf1388fe0082acfcfc80c4d172efb7c1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "oraios/serena",
+      "canonical": "oraios/serena",
+      "commit": "701e7c843f46c6a649203a488cece1bf19f1df90",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "d27bba648a59b23cadf39b9e74fd0684ea2e15dd",
+        "sha256": "16017e50562bb112006f6f32d17ca989e0e573b011bd6790b642018b1c195b0c",
+        "bytes": 1066,
+        "url": "https://github.com/oraios/serena/blob/701e7c843f46c6a649203a488cece1bf19f1df90/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "microsoft/multilspy",
+      "canonical": "microsoft/multilspy",
+      "commit": "b9a0ef1bc221e5575787be80493059b01f03c37a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "9e841e7a26e4eb057b24511e7b92d42b257a80e5",
+        "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+        "bytes": 1141,
+        "url": "https://github.com/microsoft/multilspy/blob/b9a0ef1bc221e5575787be80493059b01f03c37a/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "microsoft/pyright",
+      "canonical": "microsoft/pyright",
+      "commit": "c77393240247e017db6538d35876e723c518e06c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.txt",
+        "spdx": "NOASSERTION",
+        "blobSha": "0c537977906fbe6f3fb260109f579bc4d9cad402",
+        "sha256": "f7c936bc43f132b08497ac952e9376cbc102e5eedb4bf6ec902ea8442bd9c68d",
+        "bytes": 1150,
+        "url": "https://github.com/microsoft/pyright/blob/c77393240247e017db6538d35876e723c518e06c/LICENSE.txt",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "yamadashy/repomix",
+      "canonical": "yamadashy/repomix",
+      "commit": "dc40590d5fe46069bae0cb6f40ba953992e618b5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "cc6cde3b20418ea0c9f503be0ab2e301bb02d6db",
+        "sha256": "7a2200260d2e6a8d1137dfc85877d44029055863013123743ef56d625b4fb095",
+        "bytes": 1053,
+        "url": "https://github.com/yamadashy/repomix/blob/dc40590d5fe46069bae0cb6f40ba953992e618b5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "coderamp-labs/gitingest",
+      "canonical": "coderamp-labs/gitingest",
+      "commit": "4e259a02fe72115bee538271622f1234a81c8e1a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "4d8225f89995fe3690b1b2a8c874c1f5efcaa56a",
+        "sha256": "651354bf1adc1b53443ad641611e0831726bf5d3642188dc7adeac8a01eb686d",
+        "bytes": 1072,
+        "url": "https://github.com/coderamp-labs/gitingest/blob/4e259a02fe72115bee538271622f1234a81c8e1a/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "cocoindex-io/cocoindex",
+      "canonical": "cocoindex-io/cocoindex",
+      "commit": "e84aa99b3292c5270a4b313b2a7137ad9ce8ab3b",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/cocoindex-io/cocoindex/blob/e84aa99b3292c5270a4b313b2a7137ad9ce8ab3b/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "pgvector/pgvector",
+      "canonical": "pgvector/pgvector",
+      "commit": "efa08fda9ec485d80292d0487a77939c087dedcc",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "fc5f177fa5d9c0d20a949f4b4faa028999977008",
+        "sha256": "6bba9ebeb73e27477463b05e5ef1bf303bccbddb3db9bbc95905d351604d6a87",
+        "bytes": 1104,
+        "url": "https://github.com/pgvector/pgvector/blob/efa08fda9ec485d80292d0487a77939c087dedcc/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "potpie-ai/potpie",
+      "canonical": "potpie-ai/potpie",
+      "commit": "642a72c3444c684d947a5cab6d1ff4fa97c95d93",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "533c06f9d97b11cf1781df698140b074be792d02",
+        "sha256": "4fa07a269aee5e59183e6834edd76e40a50205dbfee393d9558d994e2ed38811",
+        "bytes": 10769,
+        "url": "https://github.com/potpie-ai/potpie/blob/642a72c3444c684d947a5cab6d1ff4fa97c95d93/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "Wilfred/difftastic",
+      "canonical": "Wilfred/difftastic",
+      "commit": "274d0a8f57291477cfbfb27bace0d82395d15c97",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "80b96e3da8e92b8e6d2ad8b2fbf1fd9baecd73d8",
+        "sha256": "76f1045e65caa521762a76bbddcc24b6e6ec2251a097d0b3975ca35de47f11e2",
+        "bytes": 1076,
+        "url": "https://github.com/Wilfred/difftastic/blob/274d0a8f57291477cfbfb27bace0d82395d15c97/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "isomorphic-git/isomorphic-git",
+      "canonical": "isomorphic-git/isomorphic-git",
+      "commit": "89d641a761b56a492270933608df78edd7c9ee33",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "MIT",
+        "blobSha": "aad7bd8eaea577e38428c2006cf8882aa5bfa15d",
+        "sha256": "b916888fb16893c3a1df138543f994b96bb6892d74b6777c3a080d9cd2520c48",
+        "bytes": 1073,
+        "url": "https://github.com/isomorphic-git/isomorphic-git/blob/89d641a761b56a492270933608df78edd7c9ee33/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "go-gitea/gitea",
+      "canonical": "go-gitea/gitea",
+      "commit": "d93bd06d0c29c3f57783818e191b98c14494a836",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "a8d4b49dd073a4a38a7e58385eeff7cc52568697",
+        "sha256": "ed2f10a9d78b8c6c9ef33f1420d0eb266981891caf2f15d630553f02dc60d3ae",
+        "bytes": 1097,
+        "url": "https://github.com/go-gitea/gitea/blob/d93bd06d0c29c3f57783818e191b98c14494a836/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "github/github-mcp-server",
+      "canonical": "github/github-mcp-server",
+      "commit": "6e00cee58c808b352a05c9e84d8d490eb61349d5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "9a9cc50d37ea399f7ccc2f14b6c6d4cc4de02efc",
+        "sha256": "9e48ecfa18e2b15169746a3c97beda4d1d6c6796097038498ca434ca7e0ccd44",
+        "bytes": 1063,
+        "url": "https://github.com/github/github-mcp-server/blob/6e00cee58c808b352a05c9e84d8d490eb61349d5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "BerriAI/litellm",
+      "canonical": "BerriAI/litellm",
+      "commit": "1af7a403c66e037bec2e0ae6ea455a1c10b17b1b",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "3bfef5bae9b48c334acf426d5b7f21bc1913aab9",
+        "sha256": "b170d6bf8e8835dd357e011681db028f4d51e2fb0ea892058f56e01fb39b8273",
+        "bytes": 1419,
+        "url": "https://github.com/BerriAI/litellm/blob/1af7a403c66e037bec2e0ae6ea455a1c10b17b1b/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "Portkey-AI/gateway",
+      "canonical": "Portkey-AI/gateway",
+      "commit": "669825cbe89ee51569918b8f78a9db486fd69dd4",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "2c0759f826129145c2b8d792ad1160a0b6342448",
+        "sha256": "ff3fd22e94c9aa1dccf797f543fbe201c1ddb0d1bf6c84480b2bd41a2877412d",
+        "bytes": 1069,
+        "url": "https://github.com/Portkey-AI/gateway/blob/669825cbe89ee51569918b8f78a9db486fd69dd4/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "modelcontextprotocol/typescript-sdk",
+      "canonical": "modelcontextprotocol/typescript-sdk",
+      "commit": "5119ee7fd7790e335a3fb60ef36f85334e2a6326",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "4a93985763241755401a10678395303de4e720ba",
+        "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
+        "bytes": 12227,
+        "url": "https://github.com/modelcontextprotocol/typescript-sdk/blob/5119ee7fd7790e335a3fb60ef36f85334e2a6326/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "modelcontextprotocol/python-sdk",
+      "canonical": "modelcontextprotocol/python-sdk",
+      "commit": "9972c21aa42054fb1450c5fc614761ed11847ec6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "3d48435454b105021b4f777c11b6b07d8d2ffea3",
+        "sha256": "5e13dbbc1d120fc2a03cecde7c91424ae2d7de11b63d58ded2f4431e261ee50d",
+        "bytes": 1071,
+        "url": "https://github.com/modelcontextprotocol/python-sdk/blob/9972c21aa42054fb1450c5fc614761ed11847ec6/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "modelcontextprotocol/servers",
+      "canonical": "modelcontextprotocol/servers",
+      "commit": "d73f99efbfd40c3aa1b61e88728b3d49fb52608f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "4a93985763241755401a10678395303de4e720ba",
+        "sha256": "0382b0057770ca05e9c350a50aa3b1c1fea84da0bc81d723bf00b9aa841be58a",
+        "bytes": 12227,
+        "url": "https://github.com/modelcontextprotocol/servers/blob/d73f99efbfd40c3aa1b61e88728b3d49fb52608f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "upstash/context7",
+      "canonical": "upstash/context7",
+      "commit": "d304ff2c0880110c0b53c8e1e4d4c664feae1e5e",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "17900de42d69131467aaa7a53fa88b92d238dc63",
+        "sha256": "85cfb556dc2b22b55d2565674fcdaac82f3f2f6b7a928d27003132721bb6736c",
+        "bytes": 1079,
+        "url": "https://github.com/upstash/context7/blob/d304ff2c0880110c0b53c8e1e4d4c664feae1e5e/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "anthropics/skills",
+      "canonical": "anthropics/skills",
+      "commit": "41bbe19d1a1a7eaab5e7bb9050a417e5c6cffc8f",
+      "archived": false,
+      "licenseEvidence": null,
+      "issues": [
+        "github-http-404"
+      ],
+      "newSourceFilesImported": 0,
+      "decision": "unverified-no-copy"
+    },
+    {
+      "slug": "agentsmd/agents.md",
+      "canonical": "agentsmd/agents.md",
+      "commit": "6ae22720966e9cca6b2c2dd0780fb7265a87a46c",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "e5ad2c5aa30343f143a5c418004ca1a8d2cfaff4",
+        "sha256": "13df7812ca53ecaae1cb4a868844bb598373047ae1d580e4debfbef1dd5b6915",
+        "bytes": 1063,
+        "url": "https://github.com/agentsmd/agents.md/blob/6ae22720966e9cca6b2c2dd0780fb7265a87a46c/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "temporalio/temporal",
+      "canonical": "temporalio/temporal",
+      "commit": "1458e58c3c9801b171f7d0cac2a64ea5251593e4",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "3349f76795f4409cba6ae18ea56adf9fbd8346f3",
+        "sha256": "6aab9afd99ceb1dcaf6a0d91386b46baef9bce17ae4006044e0f231e31430b69",
+        "bytes": 1152,
+        "url": "https://github.com/temporalio/temporal/blob/1458e58c3c9801b171f7d0cac2a64ea5251593e4/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "cloudflare/agents",
+      "canonical": "cloudflare/agents",
+      "commit": "4e2548595036e0d9c419aa4610445818b7fc2262",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "61cc9d46253c84da017eb24752d0264b433d8d7a",
+        "sha256": "b33ae783f02478cd31787cd07cbf61cd3a6fbee1a50b2baf832b8f0fb7c600f7",
+        "bytes": 1103,
+        "url": "https://github.com/cloudflare/agents/blob/4e2548595036e0d9c419aa4610445818b7fc2262/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "langchain-ai/langgraph",
+      "canonical": "langchain-ai/langgraph",
+      "commit": "81bf17b23123e4ef8b9d5f49fa09a0122fc2edd1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "fc0602feecdd6748623c852ab534e1ca612673c7",
+        "sha256": "d9bb52f2e3540d60ff50d8f0f5b6ba649b7fd346948c4c3d086c8afb120763c7",
+        "bytes": 1072,
+        "url": "https://github.com/langchain-ai/langgraph/blob/81bf17b23123e4ef8b9d5f49fa09a0122fc2edd1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "openai/openai-agents-js",
+      "canonical": "openai/openai-agents-js",
+      "commit": "78b67df64a8486215e5a86bd610f7ff23b57cc6a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "0b9aa14f1d62dc4f93fd48437369ceff7ff27cd8",
+        "sha256": "969d1c8178ad9a1ae2ff1e67534151d4cc58a2626274b272f918995bccd3a6ad",
+        "bytes": 1062,
+        "url": "https://github.com/openai/openai-agents-js/blob/78b67df64a8486215e5a86bd610f7ff23b57cc6a/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "mastra-ai/mastra",
+      "canonical": "mastra-ai/mastra",
+      "commit": "e558ae7c206b1be6ba0021165037920a9c76b253",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "NOASSERTION",
+        "blobSha": "e1b6e4b6455a882dbbf66ee0b13101ec584d5e63",
+        "sha256": "f0351b469d1548e547882f01d2486a90f6bd0ff3c89defec841bbf5641265776",
+        "bytes": 1258,
+        "url": "https://github.com/mastra-ai/mastra/blob/e558ae7c206b1be6ba0021165037920a9c76b253/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "pydantic/pydantic-ai",
+      "canonical": "pydantic/pydantic-ai",
+      "commit": "edcb123c1dd085129c0db1b40904b374da04b663",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "1bf1f55e6d1736b499ded961ec6b94bfebb17aec",
+        "sha256": "bc0e89738f36944c8106e1947c3d69631f9c33b8f1bcb60ec4f89d677d2dfcf4",
+        "bytes": 1100,
+        "url": "https://github.com/pydantic/pydantic-ai/blob/edcb123c1dd085129c0db1b40904b374da04b663/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "mem0ai/mem0",
+      "canonical": "mem0ai/mem0",
+      "commit": "dae67f74f5cc7bf138c7d7d6f9cec5ce4b4373b3",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "d20d5102c3cf97ecbee54afd65893de4a11d26fe",
+        "sha256": "0bbcbe931c353293a2fafce08326181dfeea0e568c566afd4ce8337a70f5e219",
+        "bytes": 11349,
+        "url": "https://github.com/mem0ai/mem0/blob/dae67f74f5cc7bf138c7d7d6f9cec5ce4b4373b3/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "langfuse/langfuse",
+      "canonical": "langfuse/langfuse",
+      "commit": "9d08464e89fbf2e29b55638bda74bd605fc07c04",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "cf2d4abed1de0891f5dd4a20490ee5033f011605",
+        "sha256": "fd09d42b5b16606ad2042cc1edf3a82da1c47743709f170c959c74758af229d6",
+        "bytes": 1612,
+        "url": "https://github.com/langfuse/langfuse/blob/9d08464e89fbf2e29b55638bda74bd605fc07c04/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "promptfoo/promptfoo",
+      "canonical": "promptfoo/promptfoo",
+      "commit": "3f4280b22eca11ea991d01d82aa50d3d5390971f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "af3fa111d9303b3041d225fb851534e50a4bbec2",
+        "sha256": "bf813686553f451e1b833fbd827488aee49b60b189626915bf3108d10b754e44",
+        "bytes": 1053,
+        "url": "https://github.com/promptfoo/promptfoo/blob/3f4280b22eca11ea991d01d82aa50d3d5390971f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "SWE-bench/SWE-bench",
+      "canonical": "SWE-bench/SWE-bench",
+      "commit": "02e7a74ffd0b707aab73d203fe87bdc7c76afc8e",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "969657c73e7be4c9a796dfac715fb0d57b2acf8a",
+        "sha256": "2bd2e08df7147f67a69b42c10efae09bd4bf119df397371036187d5dd1b02f57",
+        "bytes": 1159,
+        "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "UKGovernmentBEIS/inspect_ai",
+      "canonical": "UKGovernmentBEIS/inspect_ai",
+      "commit": "7a5983f7ba48ba589b1a36f78e96e701374a7897",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "72fc87742ef8a944fab4f28fe6231696c62f2fa4",
+        "sha256": "c593c2afc81388521eaeb03f0d1a4b01bc3e5147ed9cb16c1f129e5be353b6af",
+        "bytes": 1081,
+        "url": "https://github.com/UKGovernmentBEIS/inspect_ai/blob/7a5983f7ba48ba589b1a36f78e96e701374a7897/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "microsoft/playwright",
+      "canonical": "microsoft/playwright",
+      "commit": "259ad55d8804666d644c002c443188d1c2503cc5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "df112373eb2e23e459bf93ec412be1764dc5a38b",
+        "sha256": "45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
+        "bytes": 11601,
+        "url": "https://github.com/microsoft/playwright/blob/259ad55d8804666d644c002c443188d1c2503cc5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "browser-use/browser-use",
+      "canonical": "browser-use/browser-use",
+      "commit": "2b1f9d377999a59fe7627c1a5aa88c12aa42e11f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "1ea3836ce58a4cd32c90c0b4f4e736d840d23780",
+        "sha256": "135c57671b0ee957669b05a0ca00cc06f645496d351e2e732832c6e276da9a5e",
+        "bytes": 1069,
+        "url": "https://github.com/browser-use/browser-use/blob/2b1f9d377999a59fe7627c1a5aa88c12aa42e11f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "browserbase/stagehand",
+      "canonical": "browserbase/stagehand",
+      "commit": "d4f16a98a5061279bed997b98fd3f0c17334eedb",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "683c709c95b54b899bb1a49207cd5bff296ba087",
+        "sha256": "fac7e7cd1cfc504054ee1fc53c38e0f3099d7357917e85a73792f6511fe0ea96",
+        "bytes": 1073,
+        "url": "https://github.com/browserbase/stagehand/blob/d4f16a98a5061279bed997b98fd3f0c17334eedb/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "steel-dev/steel-browser",
+      "canonical": "steel-dev/steel-browser",
+      "commit": "2b41124d8e2953b0afe355c534e3c9aa71edae26",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/steel-dev/steel-browser/blob/2b41124d8e2953b0afe355c534e3c9aa71edae26/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "jina-ai/reader",
+      "canonical": "jina-ai/reader",
+      "commit": "1574bfd380d249c86c82db4dace0d9c8fe17e2b1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "4875d6a8549c0d994497eaf961e0307418b9925f",
+        "sha256": "ee3aeb6c37d4222522d759df6c7014542880b6af1b55cdc5b3bfb11f160e9210",
+        "bytes": 10826,
+        "url": "https://github.com/jina-ai/reader/blob/1574bfd380d249c86c82db4dace0d9c8fe17e2b1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "vllm-project/vllm",
+      "canonical": "vllm-project/vllm",
+      "commit": "8ebc5b0a182b3351a1c62fe73e97be2c489ed2a6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/vllm-project/vllm/blob/8ebc5b0a182b3351a1c62fe73e97be2c489ed2a6/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "reference-only"
+    },
+    {
+      "slug": "QwenLM/Qwen3-Coder",
+      "canonical": "QwenLM/Qwen3-Coder",
+      "commit": "33bc6aabd7791ad7b32f7e92104f11f2359ba890",
+      "archived": false,
+      "licenseEvidence": null,
+      "issues": [
+        "github-http-404"
+      ],
+      "newSourceFilesImported": 0,
+      "decision": "reference-only"
+    },
+    {
+      "slug": "ggml-org/llama.cpp",
+      "canonical": "ggml-org/llama.cpp",
+      "commit": "f3f1a8f2760f28325a5ec20c05b171e5b7c83a29",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "e7dca554bcb802f98408383a864404e3aa4eacca",
+        "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+        "bytes": 1078,
+        "url": "https://github.com/ggml-org/llama.cpp/blob/f3f1a8f2760f28325a5ec20c05b171e5b7c83a29/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "reference-only"
+    },
+    {
+      "slug": "ollama/ollama",
+      "canonical": "ollama/ollama",
+      "commit": "83ed7d9965b1ee07e0f0b29fd46e47c31f0fcab8",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "8e3dc978a7ca8c53f56bbedc5b558116140fc02e",
+        "sha256": "5934ed2ce0d15154bcdb9c85203210abac0da4314af34081e36df4599f90b226",
+        "bytes": 1058,
+        "url": "https://github.com/ollama/ollama/blob/83ed7d9965b1ee07e0f0b29fd46e47c31f0fcab8/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "reference-only"
+    },
+    {
+      "slug": "astral-sh/ruff",
+      "canonical": "astral-sh/ruff",
+      "commit": "7d1432f809f1b553f3d69b407c36d5674328fcf0",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "655a0c76fc5539b2f8e63b673741a5fd0e0c5799",
+        "sha256": "2597d854122b77ddc71971564ca2350a37608575ce324adc5650a2b2051c8f18",
+        "bytes": 20731,
+        "url": "https://github.com/astral-sh/ruff/blob/7d1432f809f1b553f3d69b407c36d5674328fcf0/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "biomejs/biome",
+      "canonical": "biomejs/biome",
+      "commit": "ef9f7fab1fe76d92f68ac4c426f5c39d224c0a98",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE-APACHE",
+        "spdx": "NOASSERTION",
+        "blobSha": "cd7ef7e8fb62176ffc2d5816059620132f33c580",
+        "sha256": "e2746aba8799f7a3378259f36a83a079e811ca7926cbdd248a2eb7ca9cbbac5d",
+        "bytes": 10858,
+        "url": "https://github.com/biomejs/biome/blob/ef9f7fab1fe76d92f68ac4c426f5c39d224c0a98/LICENSE-APACHE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "gitleaks/gitleaks",
+      "canonical": "gitleaks/gitleaks",
+      "commit": "b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "3c270b36c539ca8fbc4cc1017d3cbb7be1e44bbc",
+        "sha256": "e3884b252b3bfc045e55be43a34d1e80da070bc6f804ac95bf4660e97d62ebc6",
+        "bytes": 1069,
+        "url": "https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "aquasecurity/trivy",
+      "canonical": "aquasecurity/trivy",
+      "commit": "af9d5108a0f53b3cc0428f342f2239724959bc3f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357,
+        "url": "https://github.com/aquasecurity/trivy/blob/af9d5108a0f53b3cc0428f342f2239724959bc3f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "freeedcom/ai-codereviewer",
+      "canonical": "villesau/ai-codereviewer",
+      "commit": "a9a064dfa1db8c83f40ef63f6e247fa09c935ed6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENCE",
+        "spdx": "MIT",
+        "blobSha": "3aa98d941cfdc83b8c5937afb42da9e9486febd2",
+        "sha256": "ed71c888c28e0a075b3d9d82995e8434cd46d319559a03889240b7ca5c9cf1ed",
+        "bytes": 1071,
+        "url": "https://github.com/villesau/ai-codereviewer/blob/a9a064dfa1db8c83f40ef63f6e247fa09c935ed6/LICENCE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "coollabsio/coolify",
+      "canonical": "coollabsio/coolify",
+      "commit": "1e8a27b0843dada0667ab6b16f0a93923410856a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "e3cc59461d6f83676efd1eb85ae82384a10de2a5",
+        "sha256": "1a3e7d8a466b117e9c26062db5fd6a59bb03caf617517d1f57a4bc7f29dc9d24",
+        "bytes": 11345,
+        "url": "https://github.com/coollabsio/coolify/blob/1e8a27b0843dada0667ab6b16f0a93923410856a/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "Dokploy/dokploy",
+      "canonical": "Dokploy/dokploy",
+      "commit": "1e6ab0fab7955fa1a5773c1cd90923657951e9f9",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.MD",
+        "spdx": "NOASSERTION",
+        "blobSha": "bcef8b36e7ba606844f3b9e268c832cc66391d09",
+        "sha256": "0c29d37f1ed4dbbcd0dcf03c9f1605c6f7b8112fb702bf6f61c6e81868845a61",
+        "bytes": 1015,
+        "url": "https://github.com/Dokploy/dokploy/blob/1e6ab0fab7955fa1a5773c1cd90923657951e9f9/LICENSE.MD",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "license-review-no-copy"
+    },
+    {
+      "slug": "supabase/supabase",
+      "canonical": "supabase/supabase",
+      "commit": "41e6d489f88b656995b663bc7cdd22005431d6b6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "49ea124025275674563eeff03af0f653ca49fdc0",
+        "sha256": "c29468abcd629e248c2f76848155c386b733872bcabcc4cf65ef1e7c61431042",
+        "bytes": 11338,
+        "url": "https://github.com/supabase/supabase/blob/41e6d489f88b656995b663bc7cdd22005431d6b6/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "traefik/traefik",
+      "canonical": "traefik/traefik",
+      "commit": "d48621ce0b6fd221b20bdb6c22e652e7498e5db6",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "MIT",
+        "blobSha": "50d2fa2c7069a50f44252b486f1430c9a7b23b4f",
+        "sha256": "c33e29340498ccde22ba0ab9537d6eb0aa3a2eae0dda61bb6df31df6a032fa5b",
+        "bytes": 1110,
+        "url": "https://github.com/traefik/traefik/blob/d48621ce0b6fd221b20bdb6c22e652e7498e5db6/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "module-review-required"
+    },
+    {
+      "slug": "daytonaio/daytona",
+      "canonical": "daytonaio/daytona",
+      "commit": "ec4c21b2d597091ac09ecc278f3bcc172575a987",
+      "archived": false,
+      "licenseEvidence": null,
+      "issues": [
+        "github-http-404"
+      ],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "coder/coder",
+      "canonical": "coder/coder",
+      "commit": "7846490770867eab2bbc4f479b686420ddbc8cf1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "0ad25db4bd1d86c452db3f9602ccdbe172438f52",
+        "sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+        "bytes": 34523,
+        "url": "https://github.com/coder/coder/blob/7846490770867eab2bbc4f479b686420ddbc8cf1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "gitpod-io/gitpod",
+      "canonical": "gitpod-io/gitpod",
+      "commit": "95fd9de2d36957f07f52dd152b576713f393b9e3",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "AGPL-3.0",
+        "blobSha": "0ad25db4bd1d86c452db3f9602ccdbe172438f52",
+        "sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+        "bytes": 34523,
+        "url": "https://github.com/gitpod-io/gitpod/blob/95fd9de2d36957f07f52dd152b576713f393b9e3/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "warpdotdev/Warp",
+      "canonical": "warpdotdev/warp",
+      "commit": "0d57d4bb2116dc5339ad5d216650ffdaa0c32796",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE-AGPL",
+        "spdx": "NOASSERTION",
+        "blobSha": "3ef47927440e8c48827e853d5b6a31b5bd4474b2",
+        "sha256": "16f8dac5fd5755d74ba05cb377c23f49e794252d200548fb3b227e1c5dcbfaec",
+        "bytes": 34574,
+        "url": "https://github.com/warpdotdev/warp/blob/0d57d4bb2116dc5339ad5d216650ffdaa0c32796/LICENSE-AGPL",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "charmbracelet/crush",
+      "canonical": "charmbracelet/crush",
+      "commit": "6bbfa8a256f6726f1dd0d8e3fce83c6ade05b02a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "NOASSERTION",
+        "blobSha": "950d0d85cee17e533b53572b19ba34d689d42680",
+        "sha256": "3faa5d4f3a51f07e4963b993f27af4b9344d7c509fa20aa856dd878788ba5f18",
+        "bytes": 5318,
+        "url": "https://github.com/charmbracelet/crush/blob/6bbfa8a256f6726f1dd0d8e3fce83c6ade05b02a/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "windmill-labs/windmill",
+      "canonical": "windmill-labs/windmill",
+      "commit": "63c40f046b1cbe8a51c10444d31a3aa6772affb1",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "aea6c58c6f3c72e718a118d94e8970e5ae1dbe01",
+        "sha256": "f8c08feee3f832d3dba0d1fed270fab9fd2528d79e1bc00e8af866b3a1023942",
+        "bytes": 2038,
+        "url": "https://github.com/windmill-labs/windmill/blob/63c40f046b1cbe8a51c10444d31a3aa6772affb1/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "n8n-io/n8n",
+      "canonical": "n8n-io/n8n",
+      "commit": "6f5269acff8e9a7c941a0d34193f15d9b5e25fb7",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE.md",
+        "spdx": "NOASSERTION",
+        "blobSha": "f85f59baa906530c26cee26e0c9ddd6bd5f86dbd",
+        "sha256": "d2f621f59aa4c10eab79b6333e59d9d3d5b53307dcfd16dbd75e40e679e84965",
+        "bytes": 4445,
+        "url": "https://github.com/n8n-io/n8n/blob/6f5269acff8e9a7c941a0d34193f15d9b5e25fb7/LICENSE.md",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "openinterpreter/open-interpreter",
+      "canonical": "openinterpreter/openinterpreter",
+      "commit": "67299aeb7c1089be425cb7809169747af1e61af5",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "Apache-2.0",
+        "blobSha": "4606e72e042564097e8780d66c1d4dcb611869bd",
+        "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+        "bytes": 10926,
+        "url": "https://github.com/openinterpreter/openinterpreter/blob/67299aeb7c1089be425cb7809169747af1e61af5/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "Skyvern-AI/skyvern",
+      "canonical": "Skyvern-AI/skyvern",
+      "commit": "35cb497c99dc940472023e682692613e1014e51f",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "AGPL-3.0",
+        "blobSha": "0ad25db4bd1d86c452db3f9602ccdbe172438f52",
+        "sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+        "bytes": 34523,
+        "url": "https://github.com/Skyvern-AI/skyvern/blob/35cb497c99dc940472023e682692613e1014e51f/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "mendableai/firecrawl",
+      "canonical": "firecrawl/firecrawl",
+      "commit": "f544d065ef9f8c2f3218599b09aaa22f942a04e8",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "AGPL-3.0",
+        "blobSha": "c3670aecd9a8bce47d9be8daa62811a99b809113",
+        "sha256": "9b4649365c4f29d8f41301f4cda1e5bd9da51cf1bbb19ab9d568ff57d56e3b33",
+        "bytes": 35064,
+        "url": "https://github.com/firecrawl/firecrawl/blob/f544d065ef9f8c2f3218599b09aaa22f942a04e8/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "qodo-ai/pr-agent",
+      "canonical": "The-PR-Agent/pr-agent",
+      "commit": "29709d42e805fceab0a74580a191499b2d3c725a",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "MIT",
+        "blobSha": "43fff0c98b18eba319298a18dae01a57ba0eac97",
+        "sha256": "ea19f3b6bfd70ce0bf8d60fc5b15cdb789fcf86a63c0d6542977f888519f5788",
+        "bytes": 1069,
+        "url": "https://github.com/The-PR-Agent/pr-agent/blob/29709d42e805fceab0a74580a191499b2d3c725a/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "qodo-ai/qodo-cover",
+      "canonical": "qodo-ai/qodo-cover",
+      "commit": "adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "AGPL-3.0",
+        "blobSha": "0ad25db4bd1d86c452db3f9602ccdbe172438f52",
+        "sha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
+        "bytes": 34523,
+        "url": "https://github.com/qodo-ai/qodo-cover/blob/adcf55baba40e8fbf8a84e68b70d08bef1e2b9c9/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "judge0/judge0",
+      "canonical": "judge0/judge0",
+      "commit": "9eba69fafb14bc1c6285ccf38f3cf9264130a3fd",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "GPL-3.0",
+        "blobSha": "1034b36f09ce69a358817015eaa91dbff744ef26",
+        "sha256": "e55f461dc7f484326b236b98d345d7a2d2574fa806ba1985023d7a5ef8a9d886",
+        "bytes": 34526,
+        "url": "https://github.com/judge0/judge0/blob/9eba69fafb14bc1c6285ccf38f3cf9264130a3fd/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "zed-industries/zed",
+      "canonical": "zed-industries/zed",
+      "commit": "20d3cd1d7981ed2076be5b72c817a1febbba3cb9",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE-APACHE",
+        "spdx": "NOASSERTION",
+        "blobSha": "461a0fe5ba20a096c281a2686da08fef79f534a3",
+        "sha256": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+        "bytes": 10768,
+        "url": "https://github.com/zed-industries/zed/blob/20d3cd1d7981ed2076be5b72c817a1febbba3cb9/LICENSE-APACHE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "operator-blocked"
+    },
+    {
+      "slug": "semgrep/semgrep",
+      "canonical": "semgrep/semgrep",
+      "commit": "ad20f09ece0b652f4e532803ce3bcf0e1586c618",
+      "archived": false,
+      "licenseEvidence": {
+        "path": "LICENSE",
+        "spdx": "NOASSERTION",
+        "blobSha": "8000a6faacf471c537530805ab29523c7732e11a",
+        "sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331",
+        "bytes": 26526,
+        "url": "https://github.com/semgrep/semgrep/blob/ad20f09ece0b652f4e532803ce3bcf0e1586c618/LICENSE",
+        "reviewedModulePaths": []
+      },
+      "issues": [],
+      "newSourceFilesImported": 0,
+      "decision": "binary-review-only"
+    }
+  ]
+}

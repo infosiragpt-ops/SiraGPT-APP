@@ -1,0 +1,907 @@
+{
+  "schemaVersion": 1,
+  "scope": "New coding V2 source-import candidates; not an inventory of existing vendored code",
+  "unresolvedNames": [
+    "ZCode (no precise source repository supplied)",
+    "claw-code (no precise source repository supplied)",
+    "Claude Agent SDK source (operator prohibits copying)",
+    "DeepSeek-V4 (model name, not an identified repository)",
+    "Roo Code archived dumps (operator prohibits copying)"
+  ],
+  "entries": [
+    {
+      "slug": "anomalyco/opencode",
+      "category": "existing",
+      "intent": "Existing native adaptations; inspect notices before further imports",
+      "target": "backend/src/services/"
+    },
+    {
+      "slug": "openclaw/openclaw",
+      "category": "existing",
+      "intent": "Existing native adaptations; inspect notices before further imports",
+      "target": "backend/src/services/"
+    },
+    {
+      "slug": "NousResearch/hermes-agent",
+      "category": "existing",
+      "intent": "Existing native adaptations; inspect notices before further imports",
+      "target": "backend/src/services/"
+    },
+    {
+      "slug": "sst/opencode",
+      "category": "existing",
+      "intent": "Existing native adaptations; inspect notices before further imports",
+      "target": "backend/src/services/"
+    },
+    {
+      "slug": "alibaba/OpenSandbox",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "e2b-dev/E2B",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "e2b-dev/infra",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "e2b-dev/code-interpreter",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "microsandbox/microsandbox",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "openai/codex-universal",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "agent-infra/sandbox",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "NVIDIA/OpenShell",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "kubernetes-sigs/agent-sandbox",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "anthropics/sandbox-runtime",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "nolabs-ai/nono",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "paradigmxyz/iron-proxy",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "engineer-man/piston",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "vndee/llm-sandbox",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "dagger/container-use",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "firecracker-microvm/firecracker",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "google/gvisor",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "kata-containers/kata-containers",
+      "category": "sandbox",
+      "intent": "Remote sandbox lifecycle, execution and isolation (candidate; no new import)",
+      "target": "backend/src/services/agentes-coding/sandbox/"
+    },
+    {
+      "slug": "OpenHands/software-agent-sdk",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "OpenHands/typescript-client",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "OpenHands/OpenHands",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "earendil-works/pi",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "badlogic/pi-mono",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "vercel/ai",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "deepseek-ai/deepseek-harness",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "openai/codex",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "xai-org/grok-build",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "cline/cline",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "Kilo-Org/kilocode",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "aaif-goose/goose",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "block/goose",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "Aider-AI/aider",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "Hmbown/CodeWhale",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "esengine/DeepSeek-Reasonix",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "QwenLM/qwen-code",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "google-gemini/gemini-cli",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "continuedev/continue",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "microsoft/vscode-copilot-chat",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "SWE-agent/SWE-agent",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "bytedance/trae-agent",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "OpenAutoCoder/Agentless",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "aorwall/moatless-tools",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "plandex-ai/plandex",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "stitionai/devika",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "AntonOsika/gpt-engineer",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "Pythagora-io/gpt-pilot",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "geekan/MetaGPT",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "frdel/agent-zero",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "kortix-ai/suna",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "BloopAI/vibe-kanban",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "TabbyML/tabby",
+      "category": "harness",
+      "intent": "Agent loop, planning, permissions or repair tools (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "cloudflare/vibesdk",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "cloudflare/vibesdk-templates",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "stackblitz/bolt.new",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "stackblitz-labs/bolt.diy",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "dyad-sh/dyad",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "e2b-dev/fragments",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "onlook-dev/onlook",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "srcbookdev/srcbook",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "langchain-ai/open-canvas",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "abi/screenshot-to-code",
+      "category": "builder",
+      "intent": "App-building artifacts, preview repair or templates (candidate; no new import)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "microsoft/monaco-editor",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "codemirror/dev",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "xtermjs/xterm.js",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "brimdata/react-arborist",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "shikijs/shiki",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "rtfpessoa/diff2html",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "yjs/yjs",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "assistant-ui/assistant-ui",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "vercel/ai-elements",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "vercel/streamdown",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "CopilotKit/CopilotKit",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "ag-ui-protocol/ag-ui",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "codesandbox/sandpack",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "pyodide/pyodide",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "coder/code-server",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "gitpod-io/openvscode-server",
+      "category": "ui",
+      "intent": "Web editor, terminal, diff or streaming components (candidate; no new import)",
+      "target": "app/agentes/"
+    },
+    {
+      "slug": "tree-sitter/tree-sitter",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "BurntSushi/ripgrep",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "ast-grep/ast-grep",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "sourcegraph/zoekt",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "oraios/serena",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "microsoft/multilspy",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "microsoft/pyright",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "yamadashy/repomix",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "coderamp-labs/gitingest",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "cocoindex-io/cocoindex",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "pgvector/pgvector",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "potpie-ai/potpie",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "Wilfred/difftastic",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "isomorphic-git/isomorphic-git",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "go-gitea/gitea",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "github/github-mcp-server",
+      "category": "context",
+      "intent": "Code search, repo maps, semantic diagnostics or git (candidate; no new import)",
+      "target": "backend/src/services/sira-code/"
+    },
+    {
+      "slug": "BerriAI/litellm",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "Portkey-AI/gateway",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "modelcontextprotocol/typescript-sdk",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "modelcontextprotocol/python-sdk",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "modelcontextprotocol/servers",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "upstash/context7",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "anthropics/skills",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "agentsmd/agents.md",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "temporalio/temporal",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "cloudflare/agents",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "langchain-ai/langgraph",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "openai/openai-agents-js",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "mastra-ai/mastra",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "pydantic/pydantic-ai",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "mem0ai/mem0",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "langfuse/langfuse",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "promptfoo/promptfoo",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "SWE-bench/SWE-bench",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "UKGovernmentBEIS/inspect_ai",
+      "category": "orchestration",
+      "intent": "Protocol, durable jobs, memory or evaluation patterns (candidate; no new provider activation)",
+      "target": "backend/src/services/agents/"
+    },
+    {
+      "slug": "microsoft/playwright",
+      "category": "browser",
+      "intent": "Browser automation or page extraction (candidate; SSRF review required)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "browser-use/browser-use",
+      "category": "browser",
+      "intent": "Browser automation or page extraction (candidate; SSRF review required)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "browserbase/stagehand",
+      "category": "browser",
+      "intent": "Browser automation or page extraction (candidate; SSRF review required)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "steel-dev/steel-browser",
+      "category": "browser",
+      "intent": "Browser automation or page extraction (candidate; SSRF review required)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "jina-ai/reader",
+      "category": "browser",
+      "intent": "Browser automation or page extraction (candidate; SSRF review required)",
+      "target": "backend/src/services/codex/"
+    },
+    {
+      "slug": "vllm-project/vllm",
+      "category": "models",
+      "intent": "Reference only; no new model serving or provider activation authorized",
+      "target": "none"
+    },
+    {
+      "slug": "QwenLM/Qwen3-Coder",
+      "category": "models",
+      "intent": "Reference only; no new model serving or provider activation authorized",
+      "target": "none"
+    },
+    {
+      "slug": "ggml-org/llama.cpp",
+      "category": "models",
+      "intent": "Reference only; no new model serving or provider activation authorized",
+      "target": "none"
+    },
+    {
+      "slug": "ollama/ollama",
+      "category": "models",
+      "intent": "Reference only; no new model serving or provider activation authorized",
+      "target": "none"
+    },
+    {
+      "slug": "astral-sh/ruff",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "biomejs/biome",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "gitleaks/gitleaks",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "aquasecurity/trivy",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "freeedcom/ai-codereviewer",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "coollabsio/coolify",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "Dokploy/dokploy",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "supabase/supabase",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "traefik/traefik",
+      "category": "quality",
+      "intent": "Sandbox lint, evaluation, security or app deployment API (candidate; no new import)",
+      "target": "infra/agentes-coding/"
+    },
+    {
+      "slug": "daytonaio/daytona",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "coder/coder",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "gitpod-io/gitpod",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "warpdotdev/Warp",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "charmbracelet/crush",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "windmill-labs/windmill",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "n8n-io/n8n",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "openinterpreter/open-interpreter",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "Skyvern-AI/skyvern",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "mendableai/firecrawl",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "qodo-ai/pr-agent",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "qodo-ai/qodo-cover",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "judge0/judge0",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "zed-industries/zed",
+      "category": "blocked",
+      "intent": "Operator prohibits source copy; license metadata is not an override",
+      "target": "none"
+    },
+    {
+      "slug": "semgrep/semgrep",
+      "category": "binary-only",
+      "intent": "Operator allows review of binary use only, never source copy",
+      "target": "infra/agentes-coding/"
+    }
+  ]
+}

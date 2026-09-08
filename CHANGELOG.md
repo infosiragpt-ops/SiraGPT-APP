@@ -8,6 +8,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Coding V2 source inventory: 149 requested repository names (including aliases
+  and operator exclusions), pinned revisions and immutable root-license evidence.
+  Offline contract tests prevent approval from unknown or mixed license labels.
+  Research-only: no new source imports, runtime activation or production changes.
+
 - SiraCode native `multiedit` applies a jailed batch of unique
   `old_str` → `new_str` replacements atomically (nothing is written
   if one edit misses). Commits use the #629 conditional mutation
