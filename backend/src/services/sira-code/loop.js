@@ -35,6 +35,11 @@ const {
   buildToolRoundsStop,
   MAX_TOOL_ROUNDS_DEFAULT,
 } = require('./tool-rounds');
+const {
+  isQuestionTool,
+  normalizeQuestionArgs,
+  publicQuestions,
+} = require('./question-tool');
 
 const MAX_STEPS_DEFAULT = 8;
 
@@ -150,6 +155,7 @@ async function runPrompt(session, text, {
   let hitToolRounds = false;
   let toolRounds = 0;
   let compactedOnce = false;
+  let pausedForQuestion = false;
 
   function maybeCompactStage(didCompact) {
     if (!didCompact || compactedOnce) return;
@@ -218,13 +224,46 @@ async function runPrompt(session, text, {
         });
 
         if (auth.needsPermission) {
+          const questionAsk = auth.tool === 'question' || isQuestionTool(name);
+          let pendingArgs = args;
+          let questions;
+          if (questionAsk) {
+            const normalized = normalizeQuestionArgs(args);
+            if (!normalized.ok) {
+              const result = {
+                ok: false,
+                code: normalized.code || 'validation',
+                error: normalized.error,
+                content: `ERROR: ${normalized.error}`,
+              };
+              toolResults.push({ tool: 'question', ...result });
+              appendEvent(session, 'tool_result', {
+                tool: 'question',
+                ok: false,
+                preview: String(result.content || '').slice(0, 240),
+              });
+              transcript.push({ role: 'tool', content: result.content });
+              continue;
+            }
+            questions = normalized.questions;
+            pendingArgs = { questions };
+          }
           const pid = permissionId();
-          session.pendingPermissions.set(pid, { tool: auth.tool, args, name });
+          session.pendingPermissions.set(pid, {
+            tool: auth.tool,
+            args: pendingArgs,
+            name,
+            kind: questionAsk ? 'question' : 'permission',
+            questions,
+          });
           appendEvent(session, 'permission', {
             permissionId: pid,
             tool: auth.tool,
             decision: 'ask',
-            label: 'Esperando permiso',
+            label: questionAsk ? 'Esperando respuesta' : 'Esperando permiso',
+            kind: questionAsk ? 'question' : 'permission',
+            header: questionAsk && questions[0] ? questions[0].header : undefined,
+            questions: questionAsk ? publicQuestions(questions) : undefined,
           });
           toolResults.push({
             tool: auth.tool,
@@ -234,13 +273,20 @@ async function runPrompt(session, text, {
           });
           transcript.push({
             role: 'tool',
-            content: `ERROR: permiso requerido para ${auth.tool} (${pid})`,
+            content: questionAsk
+              ? `ERROR: pregunta pendiente (${pid})`
+              : `ERROR: permiso requerido para ${auth.tool} (${pid})`,
           });
+          if (questionAsk) {
+            pausedForQuestion = true;
+            break;
+          }
           continue;
         }
 
         stageEvent(session, 'executing', {
           label: auth.tool === 'read' || auth.tool === 'grep' || auth.tool === 'glob'
+            || auth.tool === 'ls' || auth.tool === 'diagnostics'
             ? 'Analizando archivo'
             : 'Ejecutando código',
           tool: auth.tool,
@@ -264,6 +310,7 @@ async function runPrompt(session, text, {
           stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
         }
       }
+      if (pausedForQuestion) break;
       if (hitToolRounds || isToolRoundsExceeded(toolRounds, toolRoundCap)) {
         hitToolRounds = true;
         break;
@@ -305,7 +352,9 @@ async function runPrompt(session, text, {
   if (agent.id === 'planificar' && assistantText) {
     ensureCapturedPlan(session, assistantText, { sourceAgent: 'planificar', status: 'ready' });
   }
-  if (hitToolRounds && (session.status === 'running' || session.status === 'idle')) {
+  if (pausedForQuestion && (session.status === 'running' || session.status === 'idle')) {
+    session.status = 'idle';
+  } else if (hitToolRounds && (session.status === 'running' || session.status === 'idle')) {
     session.status = 'stopped';
     session.stopReason = 'tool_rounds';
     const stop = buildToolRoundsStop({ count: toolRounds, max: toolRoundCap });

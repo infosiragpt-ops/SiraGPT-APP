@@ -236,6 +236,7 @@ function retryFixture(t, { workerStartsBeforeAck = false, failRetryMirror = fals
       taskStore.appendTaskEvent(row, event, state);
     },
     durableExecutionStore: {}, metrics: { counter() {} }, console,
+    ...require('../src/services/agents/agent-task-honest-progress'),
   };
   for (const route of ['cancel', 'retry']) {
     const start = src.indexOf(`router.post('/task/:taskId/${route}',`);

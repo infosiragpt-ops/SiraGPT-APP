@@ -27,6 +27,8 @@ const TOOL_ALIASES = Object.freeze({
   str_replace: 'edit',
   execute_bash: 'bash',
   bash: 'bash',
+  shell: 'bash',
+  execute_shell: 'bash',
   grep: 'grep',
   glob: 'glob',
   list_files: 'glob',
@@ -37,9 +39,22 @@ const TOOL_ALIASES = Object.freeze({
   web_fetch: 'webfetch',
   todo: 'todo',
   todowrite: 'todo',
+  diagnostics: 'diagnostics',
+  lsp_diagnostics: 'diagnostics',
+  diagnostic: 'diagnostics',
+  question: 'question',
+  user_ask: 'question',
+  ask_user: 'question',
+  multiedit: 'multiedit',
+  multi_edit: 'multiedit',
+  batch_edit: 'multiedit',
+  task: 'task',
+  spawn_task: 'task',
+  subagent: 'task',
 });
 
-const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch']);
+const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch', 'multiedit', 'task']);
+const QUESTION_TOOLS = new Set(['question']);
 
 function canonicalTool(name) {
   const raw = String(name || '').trim();
@@ -71,6 +86,43 @@ function isApproved(opts = {}) {
 
 function authorizeTool(agentId, toolName, opts = {}) {
   const tool = canonicalTool(toolName);
+  if (QUESTION_TOOLS.has(tool)) {
+    const verdict = permissionFor(agentId, toolName);
+    const hasAnswers = opts.answers !== undefined || opts.dismissed === true;
+    if (verdict === 'deny') {
+      return {
+        tool,
+        verdict: 'deny',
+        allowed: false,
+        needsPermission: false,
+        denied: true,
+        writable: false,
+        reason: 'permission_denied',
+        composer: resolveComposerPermission(opts),
+      };
+    }
+    if (opts.approved === true || hasAnswers) {
+      return {
+        tool,
+        verdict: 'allow',
+        allowed: true,
+        needsPermission: false,
+        denied: false,
+        writable: false,
+        composer: resolveComposerPermission(opts),
+      };
+    }
+    return {
+      tool,
+      verdict: 'ask',
+      allowed: false,
+      needsPermission: true,
+      denied: false,
+      writable: false,
+      reason: 'question_required',
+      composer: resolveComposerPermission(opts),
+    };
+  }
   const approved = isApproved({ ...opts, tool });
   const composer = authorizeComposerTool(
     opts.permission != null ? opts.permission : resolveComposerPermission(opts),
@@ -143,6 +195,7 @@ function canWrite(agentId) {
 module.exports = {
   TOOL_ALIASES,
   WRITE_TOOLS,
+  QUESTION_TOOLS,
   canonicalTool,
   permissionFor,
   authorizeTool,

@@ -102,6 +102,13 @@ function createOrchestrationContext({ env = process.env } = {}) {
     get sse() { return getSSE(); },
     get search() { return getSearch(); },
     get multichannel() { return getMultichannel(); },
+    /**
+     * Outbound channel send via the OpenClaw adapter. Returns an honest
+     * receipt: accepted ≠ delivered. Transport is injectable for tests.
+     */
+    deliverChannel(payload, opts = {}) {
+      return getMultichannel().deliverOutbound(payload, { env, ...opts });
+    },
     get multiAgent() { return getMultiAgent(); },
     get toolRegistry() { return getToolRegistry(); },
     get logger() { return getLogger(); },

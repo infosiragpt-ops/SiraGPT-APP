@@ -229,9 +229,12 @@ test('heartbeat pulse writes lastEventAt without growing the event log', () => {
 test('agent-task events route honors Last-Event-ID and lastError for /agentes resume', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/routes/agent-task.js'), 'utf8');
   assert.match(src, /resolveEventCursor\(req\.query\.after, lastEventId, allEvents\)/);
+  assert.match(src, /sinceSeq: req\.query\.sinceSeq/);
   assert.match(src, /Last-Event-ID/);
   assert.match(src, /lastError: resume\.lastError/);
   assert.match(src, /updatedAt: resume\.updatedAt/);
   assert.match(src, /lastEventAt: resume\.lastEventAt/);
   assert.match(src, /alive: resume\.alive/);
+  assert.match(src, /resumeStatus: resume\.resumeStatus/);
+  assert.match(src, /resumeLabel: resume\.resumeLabel/);
 });

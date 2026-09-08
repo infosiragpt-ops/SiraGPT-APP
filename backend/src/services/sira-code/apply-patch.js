@@ -8,8 +8,9 @@
  * implementation — not a copy of vendor/opencode/src/tool/apply_patch.ts.
  */
 
-function toolError(code, message) {
-  return { ok: false, code, error: message, content: `ERROR: ${message}` };
+function toolError(code, message, operations = []) {
+  const partial = operations.length > 0;
+  return { ok: false, code, error: message, content: `ERROR: ${message}${partial ? `\nCambios ya aplicados:\n${operations.join('\n')}` : ''}`, operations: [...operations], partial };
 }
 
 function parsePatch(input) {
@@ -115,58 +116,52 @@ async function applyPatchToWorkspace(workspace, input) {
   if (!ops.length) return toolError('validation', 'el parche no tiene operaciones');
   const done = [];
   for (const op of ops) {
-    if (op.type === 'add') {
-      const rel = op.path;
-      if (!rel) return toolError('validation', 'Add File requiere path');
-      try {
-        await workspace.readFile(rel);
-        return toolError('file_exists', `${rel} ya existe`);
-      } catch (err) {
-        if (err && err.code === 'path_traversal') return toolError(err.code, err.message);
+    try {
+      if (op.type === 'add') {
+        const rel = op.path;
+        if (!rel) return toolError('validation', 'Add File requiere path', done);
+        const saved = await workspace.createFile(rel, op.body.join('\n'));
+        done.push(`add ${saved}`);
+        continue;
       }
-      const saved = await workspace.writeFile(rel, op.body.join('\n'));
-      done.push(`add ${saved}`);
-      continue;
-    }
-    if (op.type === 'delete') {
-      if (!op.path) return toolError('validation', 'Delete File requiere path');
-      try {
-        const removed = await workspace.removeFile(op.path);
-        done.push(`delete ${removed}`);
-      } catch (err) {
-        return toolError(err.code || 'delete_failed', err.message || 'delete failed');
-      }
-      continue;
-    }
-    if (op.type === 'update') {
-      if (!op.path) return toolError('validation', 'Update File requiere path');
-      let current;
-      try {
-        current = await workspace.readFile(op.path);
-      } catch (err) {
-        return toolError(err.code || 'read_failed', err.message || 'read failed');
-      }
-      try {
-        for (const hunk of op.hunks) {
-          if (!hunk.length) continue;
-          const { oldText, newText } = hunkToOldNew(hunk);
-          current = applyUnique(current, oldText, newText);
-        }
-      } catch (err) {
-        return toolError(err.code || 'hunk_failed', `${op.path}: ${err.message}`);
-      }
-      const saved = await workspace.writeFile(op.path, current);
-      if (op.moveTo && op.moveTo !== op.path) {
-        await workspace.writeFile(op.moveTo, current);
+      if (op.type === 'delete') {
+        if (!op.path) return toolError('validation', 'Delete File requiere path', done);
         try {
-          await workspace.removeFile(op.path);
+          const removed = await workspace.removeFile(op.path);
+          done.push(`delete ${removed}`);
         } catch (err) {
-          return toolError(err.code || 'move_failed', err.message || 'move failed');
+          return toolError(err.code || 'delete_failed', err.message || 'delete failed', done);
         }
-        done.push(`update ${saved} -> ${op.moveTo}`);
-      } else {
-        done.push(`update ${saved}`);
+        continue;
       }
+      if (op.type === 'update') {
+        if (!op.path) return toolError('validation', 'Update File requiere path', done);
+        let current;
+        let bytes;
+        try {
+          ({ content: current, bytes } = await workspace.readFileForMutation(op.path));
+        } catch (err) {
+          return toolError(err.code || 'read_failed', err.message || 'read failed', done);
+        }
+        try {
+          for (const hunk of op.hunks) {
+            if (!hunk.length) continue;
+            const { oldText, newText } = hunkToOldNew(hunk);
+            current = applyUnique(current, oldText, newText);
+          }
+        } catch (err) {
+          return toolError(err.code || 'hunk_failed', `${op.path}: ${err.message}`, done);
+        }
+        if (op.moveTo && op.moveTo !== op.path) {
+          const saved = await workspace.moveFileIfUnchanged(op.path, op.moveTo, current, bytes);
+          done.push(`update ${op.path} -> ${saved}`);
+        } else {
+          const saved = await workspace.writeFileIfUnchanged(op.path, current, bytes);
+          done.push(`update ${saved}`);
+        }
+      }
+    } catch (err) {
+      return toolError(err.code || 'patch_failed', err.message || 'apply_patch failed', [...done, ...(err.operations || [])]);
     }
   }
   return { ok: true, content: done.join('\n'), operations: done };

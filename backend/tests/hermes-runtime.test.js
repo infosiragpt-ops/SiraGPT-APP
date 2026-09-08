@@ -53,7 +53,7 @@ test('cli bridge exposes Hermes commands', () => {
 
 test('hermes tools include core Hermes tool names', () => {
   const names = new Set(buildHermesTools().map((t) => t.name));
-  for (const expected of ['cronjob', 'send_message', 'session_search', 'memory', 'delegate_task', 'skill_curator']) {
+  for (const expected of ['cronjob', 'send_message', 'session_search', 'memory', 'remember', 'forget', 'recordar', 'olvidar', 'delegate_task', 'skill_curator']) {
     assert.ok(names.has(expected), `missing tool ${expected}`);
   }
 });

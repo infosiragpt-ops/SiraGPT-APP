@@ -21,7 +21,6 @@ import {
   ChevronLeft,
   ChevronRight,
   MessageSquarePlus,
-  Briefcase,
   Search,
   SlidersHorizontal,
   Library,
@@ -598,22 +597,14 @@ export function AppSidebar() {
   const [sendChatFolder, setSendChatFolder] = React.useState<string | null>(null)
   const [sendChatQuery, setSendChatQuery] = React.useState("")
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
-  // Claude-style sidebar mode toggle (header segmented control): "chat"
-  // shows the normal agentic-chat sidebar; "code" shows the APPS tree
-  // (moved out of the chat view). Persisted across reloads.
-  const [sidebarMode, setSidebarMode] = React.useState<"chat" | "code">("chat")
+  // Keep the standard sidebar after retiring the Empresas mode switch.
+  // Discard the old preference so returning users cannot get stuck in code mode.
+  const [sidebarMode] = React.useState<"chat" | "code">("chat")
   React.useEffect(() => {
     try {
-      if (window.localStorage.getItem("sira:sidebar:mode") === "code") setSidebarMode("code")
+      window.localStorage.removeItem("sira:sidebar:mode")
     } catch { /* ignore */ }
   }, [])
-  const switchSidebarMode = React.useCallback((mode: "chat" | "code") => {
-    setSidebarMode(mode)
-    // Empresas is the in-sidebar companies list — never a /code destination.
-    if (mode === "code") setCodexCollapsed(false)
-    try { window.localStorage.setItem("sira:sidebar:mode", mode) } catch { /* ignore */ }
-    if (mode === "chat") navigate("/")
-  }, [navigate])
   // Lote F · #45 — Codex section collapsible with persistent state.
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
@@ -1312,8 +1303,7 @@ export function AppSidebar() {
           )}
         >
           {/* Claude-style chrome strip: collapse + browser history on the
-              left, notifications + the primary new-chat disc on the right.
-              The Agentes ↔ Empresas switch lives as a nav row below. */}
+              left, notifications + the primary new-chat disc on the right. */}
           <div className="flex shrink-0 items-center gap-0.5">
             <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
               <SidebarTrigger
@@ -1524,42 +1514,6 @@ export function AppSidebar() {
 
         </TooltipProvider>
 
-      </div>
-
-      {/* Empresas — mode switch presented as a regular nav row (the old
-          header tablist moved here). Visible in BOTH modes: it is the only
-          way back to Agentes once the chat nav block above hides in code
-          mode. */}
-      <div
-        className={cn(
-          "flex flex-col transition-all",
-          state === "open" ? "gap-0.5 px-2 pb-2" : "px-2 pb-2",
-        )}
-      >
-        <TooltipProvider>
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                aria-label="Empresas"
-                aria-pressed={sidebarMode === "code"}
-                onClick={() => switchSidebarMode(sidebarMode === "code" ? "chat" : "code")}
-                data-sidebar="menu-button"
-                className={cn(
-                  NAV_ROW,
-                  sidebarMode === "code" && NAV_ROW_ACTIVE,
-                  "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
-                )}
-              >
-                <Briefcase className={cn(NAV_ICON, sidebarMode === "code" ? "text-foreground" : "text-muted-foreground")} />
-                <span className="group-data-[state=closed]:hidden truncate">Empresas</span>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>Empresas</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
       </div>
 
       <SidebarContent

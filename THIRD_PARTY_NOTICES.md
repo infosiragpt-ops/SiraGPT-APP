@@ -55,6 +55,60 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   cancel and timeout. Snapshot SHA
   `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`. No OpenClaw runtime was
   vendored.
+  The per-job overlap lease in
+  `backend/src/services/scheduler/overlap-lease.js` (wired into
+  `scheduler.js` and `cron-as-turn.js`) is a native CommonJS rewrite of
+  OpenClaw's in-process active-job set and "already-running" skip: Redis
+  SET NX + PX with token renew/release, Spanish fail-closed copy when
+  the lease is held, and an honest single-process Map if Redis is down.
+  Not a dump of `cron/active-jobs.ts` or `cron/service/ops.ts`. Snapshot
+  SHA `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
+  The lease's Redis recovery is a SiraGPT-owned hardening of that adaptation:
+  later operations probe the configured client again, local holders are not
+  replaced during recovery, and a Redis renewal is never confirmed by a local
+  shadow. No additional upstream runtime, dependency, credentials or gateway
+  is copied for this refinement.
+  The session/tool-budget circuit breaker in
+  `backend/src/services/agents/tool-failure-circuit.js` (wired into
+  `react-agent.js` and `agent-task-runner.js`) is a native CommonJS
+  rewrite of OpenClaw loop-detection ideas: consecutive tool failures,
+  generic repeat, ping-pong, unknown-tool streak, then a fail-closed
+  session circuit with Spanish labels (`E_TIMEOUT`). Not a dump of
+  `agents/tool-loop-detection.ts`. Snapshot SHA
+  `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
+  Honest multichannel delivery receipts in
+  `backend/src/orchestration/multichannel/delivery-receipt.js` (wired
+  through `openclaw-adapter.js`, `orchestration-context.js`,
+  `hermes-gateway-bridge.js` and `cron-as-turn.js`) are a native
+  CommonJS rewrite of OpenClaw's receive/send lifecycle idea: accepting
+  a payload is not a platform receipt. `accepted` and `delivered` stay
+  separate; Spanish errors replace Conectada-style success when the
+  transport never confirmed the send. Not a dump of
+  `docs/concepts/message-lifecycle-refactor.md` or any channel plugin.
+  Gateway-style session isolation in
+  `backend/src/services/agents/session-isolation.js` (wired through
+  `agent-gateway/index.js`, `agent-gateway/event-log.js`,
+  `agent-gateway/http.js`, `agent-task-event-resume.js`,
+  `agent-task-cancel.js`, `tool-failure-circuit.js`, `overlap-lease.js`
+  and `delivery-receipt.js`) is a native CommonJS rewrite of OpenClaw
+  multi-user session-scope ideas: owner-scoped abort, Last-Event-ID
+  exclusive to that owner, and a Spanish `[DENEGACIÓN]` audit line for
+  circuit / lease / receipt denials. Not a dump of `gateway/` or
+  `sessions/`. Snapshot SHA
+  `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
+
+  The scheduled-job completion contract in
+  `backend/src/services/scheduler/scheduler.js` is a native adaptation of
+  OpenClaw commit `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`, specifically
+  `src/cron/types.ts` (`CronRunOutcome`), `src/cron/service/timer.ts`
+  (persisting `lastRunStatus` from the execution outcome), and
+  `src/cron/service.persists-delivered-status.test.ts` (execution outcome
+  distinguished from delivery acknowledgment). The existing inactive
+  snapshot at `src/upstream/openclaw/` preserves the reference; the MIT
+  license is retained at `docs/upstream/OPENCLAW-LICENSE`. No upstream
+  scheduler, gateway, provider fallback or retry runtime is activated.
+  SiraGPT's prohibition on replaying an entire effectful agent turn is a
+  local safety policy, not a claim that OpenClaw disables all retries.
 
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**
@@ -70,16 +124,55 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   (`SessionSummary`: compact snapshot so the client hydrates without
   the full event log), and a per-turn tool-round guard
   (`agent.steps` / last-step finalize: cap tool executions in one
-  user turn and stop with a Spanish /agentes label). The native
-  helpers are local and deterministic — no title-agent LLM, no
-  Effect runtime, no Snapshot git-diff, no MAX_STEPS prompt dump,
-  no global tool-output directory, no silent swallow. No
-  OpenCode source, SST console, Nix, desktop, Electron, or TUI was
-  vendored into this tree.
+  user turn and stop with a Spanish /agentes label), a
+  sandboxed `bash`/`shell` contract (allowlisted read-ish
+  commands, timeout + size caps, no network unless `allowNetwork`,
+  Planificar stays read-only even after permission-resume; ~0%
+  copy of `vendor/opencode` `shell.ts` — see AGENTS.md §25), and
+  workspace-jailed grep/glob matching the OpenCode search contract
+  (`pattern` / `path` / `include` / `limit`, bounded previews), and
+  jailed `read` / `write` / `edit` matching the OpenCode file-tool
+  contract (1-indexed offset, unique old_str, size caps, binary
+  reject, symlink-aware path jail; Planificar stays read-only;
+  Construir writes go through permission-resume when the composer
+  asks), and a workspace-jailed `diagnostics` summary matching the
+  OpenCode LSP.Diagnostic contract (`pretty` / `report`: severity
+  labels, 1-based `[line:col]`, `<diagnostics file>` blocks, per-file
+  cap; optional injectable runner instead of an Effect LSP client),
+  and a native `question` / user-ask tool matching the OpenCode
+  clarifying-ask contract (`questions[]` with `header` / `options` /
+  `multiple`; replies are arrays of labels; Construir pauses on the
+  existing permission-resume card; Planificar may ask read-only
+  clarifications that never unlock writes), batched `multiedit`
+  (atomic jailed edits[] with unique old_str; Planificar stays
+  read-only), and a `task` subagent spawn stub that queues a child
+  job via the existing agent-task APIs (`enqueueAgentTask` /
+  `createTaskRecord`; Planificar only read-only children; no LLM
+  loop in the stub).
+  ~0% copy of `vendor/opencode` `read.ts` / `write.ts` /
+  `edit.ts` / `src/lsp/diagnostic.ts` / `question.ts` / `task.ts`
+  — see AGENTS.md §25.
+  The native helpers are local and deterministic — no title-agent
+  LLM, no Effect runtime, no Snapshot git-diff, no MAX_STEPS
+  prompt dump, no ripgrep sidecar, no global tool-output
+  directory, no silent swallow. No OpenCode source, SST console,
+  Nix, desktop, Electron, or TUI was vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.
   The upstream MIT license text is retained at `vendor/opencode/LICENSE`
   for the historical sidecar reference only; the native engine does not
   depend on that tree.
+
+  Conditional native file mutations draw on
+  `anomalyco/opencode@ecbc6ccac85b3e8087b6445e584318419b9e2b34`,
+  `packages/core/src/file-mutation.ts` and
+  `packages/core/src/effect/keyed-mutex.ts` (MIT, Copyright (c) 2025 opencode).
+  The expected-byte check, cooperating process-local serialization and
+  exclusive-create contract are adapted into
+  `backend/src/services/sira-code/{workspace,file-tools,apply-patch}.js` with Node
+  APIs, not the upstream Effect runtime. The matching MIT text remains in
+  `vendor/opencode/LICENSE`; this pin describes the consulted modules, not
+  the entire historical vendor tree. Evidence and limitations are recorded
+  in `docs/operations/OPENCODE_FILE_MUTATIONS.md`.
 
 - **Simple Icons** (https://simpleicons.org/, CC0 1.0) — brand-colored SVGs
   under `public/conexiones-logos/` used as official marks on `/conexiones`
@@ -110,10 +203,13 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   pinned in `.agents/hermes-upstream/SNAPSHOT.json`).
   The skill-library curator and Biblioteca deposit in
   `backend/src/services/agents/hermes-skill-curator.js`,
+  `backend/src/services/agents/hermes-skill-hygiene.js`,
   `backend/src/services/agents/hermes-biblioteca.js` and
   `.agents/skills/biblioteca-deposit/SKILL.md` adapt Hermes curator
-  observation → stale → archive (never delete) and `logs/curator/REPORT.md`
-  landing. No Python curator was copied; every write is keyed by `userId`.
+  observation → stale → archive (never delete), consolidation/rename-map
+  hygiene, and `logs/curator/REPORT.md` landing. Native hash/name dedupe
+  plus high-signal Biblioteca promote with provenance is SiraGPT-owned.
+  No Python curator was copied; every write is keyed by `userId`.
   The skill-prompt sandbox and content-free `skill_run` audit in
   `backend/src/services/agents/skill-prompt-sandbox.js` adapt Hermes
   skill-load-into-context plus scan-before-inject (same MEMORY/USER
@@ -124,6 +220,18 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   MEMORY.md / USER.md character-limit contract (tools/memory_tool.py)
   plus a per-user write rate-limit. Errors are Spanish with §16 codes
   (`E_PARAMS` / `E_QUOTA`). No Python memory tool was copied.
+  Session-memory compaction and ranked retrieval in
+  `backend/src/services/agents/hermes-memory-compaction.js` adapt the
+  Hermes MEMORY.md / USER.md bounded-store idea (fold older log text,
+  never drop profile facts). Native CommonJS; no `tools/memory_tool.py`
+  dump, no OpenRouter, no paid summarizer on the default path.
+  Profile + compacted-notes export/import in
+  `backend/src/services/agents/hermes-memory-portability.js` adapts the
+  Hermes memories/ portability idea (copy USER.md + folded notes, verify
+  bytes). Snapshots carry a sha256 checksum of a canonical payload;
+  import fails closed on mismatch, size caps, or unsafe content.
+  Spanish errors and §16 codes. Per-user isolation: a snapshot never
+  selects another user's store. No upstream dump.
 
   The owner checks in `backend/src/routes/hermes.js`,
   `backend/src/services/agents/cron/hermes-cron-bridge.js` and

@@ -9,6 +9,8 @@ const activeMemory = require('../active-memory');
 const sessionManager = require('../session-manager');
 const curatedMemory = require('./hermes-curated-memory');
 const { assertMemoryWrite } = require('./memory-write-guard');
+const sessionCompaction = require('./hermes-memory-compaction');
+const memoryPortability = require('./hermes-memory-portability');
 
 function normalizeText(text) {
   return String(text || '')
@@ -70,6 +72,28 @@ function remember(userId, fact, opts = {}) {
   });
 }
 
+function rememberCurated(userId, fact, opts = {}) {
+  return curatedMemory.rememberFact(userId, fact, opts);
+}
+
+function forgetCurated(userId, query) {
+  const curated = curatedMemory.forgetFact(userId, query);
+  let activeRemoved = 0;
+  try {
+    activeRemoved = Number(activeMemory.forget(userId, query)?.removed) || 0;
+  } catch {
+    activeRemoved = 0;
+  }
+  return {
+    ...curated,
+    activeRemoved,
+  };
+}
+
+function promoteMemoryToUser(userId, opts = {}) {
+  return curatedMemory.promoteMemoryToUser(userId, opts);
+}
+
 function recall(userId, query, opts = {}) {
   return activeMemory.recall(userId, query, {
     limit: opts.limit || 8,
@@ -88,6 +112,14 @@ function buildMemoryPrompt(userId, opts = {}) {
   const live = activeMemory.buildMemoryPrompt(userId, opts);
   const frozen = curatedMemory.getFrozenPromptBlock(userId, { chatId: opts.chatId });
   return [frozen, live].filter(Boolean).join('\n\n');
+}
+
+function retrieveRanked(userId, query, opts = {}) {
+  return sessionCompaction.retrieve(userId, query, opts);
+}
+
+function compactSession(userId, opts = {}) {
+  return sessionCompaction.compactLog(userId, opts);
 }
 
 function beginSession(userId, opts = {}) {
@@ -164,9 +196,12 @@ function listEntries(userId) {
 
 function status(userId = null) {
   const base = {
-    providers: ['active-memory', 'session-manager', 'hermes-curated-memory'],
+    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction', 'hermes-memory-portability', 'hermes-memory-conflict'],
+    portability: memoryPortability.status(),
+    conflict: require('./hermes-memory-conflict').status(),
     promotionThreshold: Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10),
     curated: curatedMemory.status(userId),
+    compaction: sessionCompaction.status(userId),
   };
   if (!userId) return base;
   return {
@@ -178,6 +213,9 @@ function status(userId = null) {
 
 module.exports = {
   remember,
+  rememberCurated,
+  forgetCurated,
+  promoteMemoryToUser,
   recall,
   promote,
   buildMemoryPrompt,
@@ -187,7 +225,16 @@ module.exports = {
   curatedReplace: curatedMemory.replace,
   curatedRemove: curatedMemory.remove,
   curatedRead: curatedMemory.read,
+  curatedPin: curatedMemory.pin,
+  curatedUnpin: curatedMemory.unpin,
+  listFacts: curatedMemory.listFacts,
+  resolveConflicts: curatedMemory.resolveConflicts,
   searchSessions,
+  retrieveRanked,
+  compactSession,
+  recordSession: sessionCompaction.record,
+  exportSnapshot: memoryPortability.exportSnapshot,
+  importSnapshot: memoryPortability.importSnapshot,
   nudgePromotion,
   listEntries,
   status,
