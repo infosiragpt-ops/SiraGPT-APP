@@ -259,7 +259,11 @@ describe('hermes memory compaction — triggers and profile preservation', { con
     const chunk = 'Nota de bitácora para llenar el almacén local.';
     let overflowed = false;
     for (let i = 0; i < 80; i += 1) {
-      const added = curated.add(USER_A, { target: 'memory', content: `${chunk} #${i}` });
+      const added = curated.add(USER_A, {
+        target: 'memory',
+        content: `${chunk} #${i}`,
+        rateLimit: false,
+      });
       if (!added.ok) {
         overflowed = true;
         assert.match(String(added.error), /memoria está|superaría|compact/i);
