@@ -10,11 +10,36 @@
 
 const crypto = require('crypto');
 const { getAgent } = require('./agents');
-const { authorizeTool } = require('./permissions');
+const { authorizeTool, WRITE_TOOLS } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
+const { ensureSessionTitle } = require('./session-title');
+const {
+  truncateToolResult,
+  compactTranscript,
+  applyCompactedTranscript,
+  COMPACT_STAGE,
+  COMPACT_LABEL,
+} = require('./tool-result');
 const { shouldStartSiraCodeRun, routeTurn } = require('../trivial-turn');
+const {
+  ensureCapturedPlan,
+  buildSwitchReminder,
+  publicPlan,
+  isTransientLlmError,
+} = require('./plan-handoff');
+const {
+  resolveMaxToolRounds,
+  isToolRoundsExceeded,
+  buildToolRoundsStop,
+  MAX_TOOL_ROUNDS_DEFAULT,
+} = require('./tool-rounds');
+const {
+  isQuestionTool,
+  normalizeQuestionArgs,
+  publicQuestions,
+} = require('./question-tool');
 
 const MAX_STEPS_DEFAULT = 8;
 
@@ -35,10 +60,38 @@ function permissionId() {
   return `perm_${crypto.randomBytes(6).toString('hex')}`;
 }
 
+async function callLlmTurn(complete, args, session) {
+  try {
+    return await complete(args);
+  } catch (err) {
+    if (!isTransientLlmError(err)) throw err;
+    if (args.signal && args.signal.aborted) throw err;
+    stageEvent(session, 'retrying', { label: 'Reintentando' });
+    return complete(args);
+  }
+}
+
+function buildTranscript(session, agent) {
+  const transcript = [
+    { role: 'system', content: agent.systemPrompt },
+  ];
+  if (agent.id === 'construir' && session.plan && session.plan.text) {
+    transcript.push({
+      role: 'system',
+      content: buildSwitchReminder(session.plan),
+    });
+  }
+  for (const message of session.messages) {
+    transcript.push({ role: message.role, content: message.content });
+  }
+  return applyCompactedTranscript(transcript, compactTranscript(transcript));
+}
+
 async function runPrompt(session, text, {
   llmTurn,
   model = '',
   maxSteps = MAX_STEPS_DEFAULT,
+  maxToolRounds = MAX_TOOL_ROUNDS_DEFAULT,
   signal,
   chip,
   attachments,
@@ -65,6 +118,10 @@ async function runPrompt(session, text, {
     attachments,
   };
   const turnDecision = routeTurn({ text, ...routerSignals });
+  const titled = ensureSessionTitle(session, text, { trivial: turnDecision.trivial });
+  if (titled.changed) {
+    appendEvent(session, 'title', { title: titled.title, label: 'Sesión' });
+  }
   try {
     console.log(`[turn-router] plane=${turnDecision.plane} rule_id=${turnDecision.rule_id}`);
   } catch (_err) { /* internal trace only */ }
@@ -88,14 +145,23 @@ async function runPrompt(session, text, {
   session.status = 'running';
   stageEvent(session, 'thinking', { label: 'Pensando' });
 
-  const transcript = [
-    { role: 'system', content: agent.systemPrompt },
-    ...session.messages.map((m) => ({ role: m.role, content: m.content })),
-  ];
+  const transcript = buildTranscript(session, agent);
 
   const complete = typeof llmTurn === 'function' ? llmTurn : defaultLlmTurn();
   const toolResults = [];
+  const toolRoundCap = resolveMaxToolRounds(maxToolRounds);
   let assistantText = '';
+  let hitBudget = false;
+  let hitToolRounds = false;
+  let toolRounds = 0;
+  let compactedOnce = false;
+  let pausedForQuestion = false;
+
+  function maybeCompactStage(didCompact) {
+    if (!didCompact || compactedOnce) return;
+    compactedOnce = true;
+    stageEvent(session, COMPACT_STAGE, { label: COMPACT_LABEL });
+  }
 
   try {
     for (let step = 0; step < maxSteps; step += 1) {
@@ -105,14 +171,18 @@ async function runPrompt(session, text, {
         return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
       }
 
-      const turn = await complete({
+      const packedBefore = compactTranscript(transcript);
+      applyCompactedTranscript(transcript, packedBefore);
+      maybeCompactStage(packedBefore.compacted);
+
+      const turn = await callLlmTurn(complete, {
         messages: transcript,
         tools: TOOL_DEFINITIONS,
         agent: agent.id,
         model: session.model,
         signal: combined,
         step,
-      });
+      }, session);
 
       const calls = Array.isArray(turn && turn.toolCalls) ? turn.toolCalls : [];
       const textPart = turn && typeof turn.text === 'string' ? turn.text : '';
@@ -130,20 +200,70 @@ async function runPrompt(session, text, {
           session.status = 'cancelled';
           return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
         }
+        if (isToolRoundsExceeded(toolRounds, toolRoundCap)) {
+          hitToolRounds = true;
+          const stop = buildToolRoundsStop({ count: toolRounds, max: toolRoundCap });
+          const skipped = call.name || call.tool || '';
+          toolResults.push({
+            tool: skipped,
+            ok: false,
+            code: stop.stopReason,
+            error: stop.label,
+            content: stop.content,
+            skipped: true,
+          });
+          transcript.push({ role: 'tool', content: stop.content });
+          break;
+        }
+        toolRounds += 1;
         const name = call.name || call.tool || '';
         const args = call.arguments || call.args || {};
         const auth = authorizeTool(session.agentId, name, {
           permission: session.permission,
+          grants: session.permissionGrants,
         });
 
         if (auth.needsPermission) {
+          const questionAsk = auth.tool === 'question' || isQuestionTool(name);
+          let pendingArgs = args;
+          let questions;
+          if (questionAsk) {
+            const normalized = normalizeQuestionArgs(args);
+            if (!normalized.ok) {
+              const result = {
+                ok: false,
+                code: normalized.code || 'validation',
+                error: normalized.error,
+                content: `ERROR: ${normalized.error}`,
+              };
+              toolResults.push({ tool: 'question', ...result });
+              appendEvent(session, 'tool_result', {
+                tool: 'question',
+                ok: false,
+                preview: String(result.content || '').slice(0, 240),
+              });
+              transcript.push({ role: 'tool', content: result.content });
+              continue;
+            }
+            questions = normalized.questions;
+            pendingArgs = { questions };
+          }
           const pid = permissionId();
-          session.pendingPermissions.set(pid, { tool: auth.tool, args, name });
+          session.pendingPermissions.set(pid, {
+            tool: auth.tool,
+            args: pendingArgs,
+            name,
+            kind: questionAsk ? 'question' : 'permission',
+            questions,
+          });
           appendEvent(session, 'permission', {
             permissionId: pid,
             tool: auth.tool,
             decision: 'ask',
-            label: 'Esperando permiso',
+            label: questionAsk ? 'Esperando respuesta' : 'Esperando permiso',
+            kind: questionAsk ? 'question' : 'permission',
+            header: questionAsk && questions[0] ? questions[0].header : undefined,
+            questions: questionAsk ? publicQuestions(questions) : undefined,
           });
           toolResults.push({
             tool: auth.tool,
@@ -153,13 +273,20 @@ async function runPrompt(session, text, {
           });
           transcript.push({
             role: 'tool',
-            content: `ERROR: permiso requerido para ${auth.tool} (${pid})`,
+            content: questionAsk
+              ? `ERROR: pregunta pendiente (${pid})`
+              : `ERROR: permiso requerido para ${auth.tool} (${pid})`,
           });
+          if (questionAsk) {
+            pausedForQuestion = true;
+            break;
+          }
           continue;
         }
 
         stageEvent(session, 'executing', {
           label: auth.tool === 'read' || auth.tool === 'grep' || auth.tool === 'glob'
+            || auth.tool === 'ls' || auth.tool === 'diagnostics'
             ? 'Analizando archivo'
             : 'Ejecutando código',
           tool: auth.tool,
@@ -171,14 +298,24 @@ async function runPrompt(session, text, {
           ok: result.ok,
           preview: String(result.content || '').slice(0, 240),
         });
+        const packedResult = truncateToolResult(result.content || result.error || '');
         transcript.push({
           role: 'tool',
-          content: result.content || result.error || '',
+          content: packedResult.content,
         });
-        if (result.ok && (auth.tool === 'write' || auth.tool === 'edit')) {
+        const packedAfter = compactTranscript(transcript);
+        applyCompactedTranscript(transcript, packedAfter);
+        maybeCompactStage(packedResult.truncated || packedAfter.compacted);
+        if (result.ok && WRITE_TOOLS.has(auth.tool)) {
           stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
         }
       }
+      if (pausedForQuestion) break;
+      if (hitToolRounds || isToolRoundsExceeded(toolRounds, toolRoundCap)) {
+        hitToolRounds = true;
+        break;
+      }
+      if (step === maxSteps - 1) hitBudget = true;
     }
   } catch (err) {
     const aborted = combined.aborted
@@ -212,7 +349,25 @@ async function runPrompt(session, text, {
     parts,
   });
   appendEvent(session, 'message', { role: 'assistant', content: assistantText });
-  if (session.status === 'running') {
+  if (agent.id === 'planificar' && assistantText) {
+    ensureCapturedPlan(session, assistantText, { sourceAgent: 'planificar', status: 'ready' });
+  }
+  if (pausedForQuestion && (session.status === 'running' || session.status === 'idle')) {
+    session.status = 'idle';
+  } else if (hitToolRounds && (session.status === 'running' || session.status === 'idle')) {
+    session.status = 'stopped';
+    session.stopReason = 'tool_rounds';
+    const stop = buildToolRoundsStop({ count: toolRounds, max: toolRoundCap });
+    stageEvent(session, stop.step, {
+      label: stop.label,
+      count: stop.count,
+      max: stop.max,
+    });
+  } else if (hitBudget && session.status === 'running') {
+    session.status = 'stopped';
+    session.stopReason = 'step_budget';
+    stageEvent(session, 'budgetExceeded', { label: 'Presupuesto agotado' });
+  } else if (session.status === 'running') {
     session.status = 'idle';
     stageEvent(session, 'done', { label: 'Listo' });
   }
@@ -224,6 +379,12 @@ async function runPrompt(session, text, {
     toolResults,
     parts,
     message: { parts },
+    plan: publicPlan(session.plan),
+    toolRounds,
+    maxToolRounds: toolRoundCap,
+    stopReason: session.status === 'stopped'
+      ? (session.stopReason || (hitToolRounds ? 'tool_rounds' : 'step_budget'))
+      : undefined,
   };
 }
 
@@ -232,4 +393,5 @@ module.exports = {
   defaultLlmTurn,
   shouldStartSiraCodeRun,
   MAX_STEPS_DEFAULT,
+  MAX_TOOL_ROUNDS_DEFAULT,
 };

@@ -7,6 +7,8 @@ const componentPath = path.join(process.cwd(), "components", "chat-interface-enh
 const source = fs.readFileSync(componentPath, "utf8")
 const agenticStepsPath = path.join(process.cwd(), "components", "agentic-steps.tsx")
 const agenticStepsSource = fs.readFileSync(agenticStepsPath, "utf8")
+const artifactChromePath = path.join(process.cwd(), "components", "doc", "document-artifact-chrome.tsx")
+const artifactChromeSource = fs.readFileSync(artifactChromePath, "utf8")
 const thinkingLoaderPath = path.join(process.cwd(), "components", "thinking-status-loader.tsx")
 const thinkingLoaderSource = fs.readFileSync(thinkingLoaderPath, "utf8")
 const thinkingKitPath = path.join(process.cwd(), "lib", "thinking-loaders.ts")
@@ -125,7 +127,12 @@ describe("chat agentic loop routing source contract", () => {
     assert.match(thinkingKitSource, /"buscando-internet": "Buscando en internet…"/)
     assert.match(thinkingKitSource, /completado: "¡Listo!"/)
     assert.match(agenticStepsSource, /ThinkingIndicator/)
-    assert.match(agenticStepsSource, /rounded-2xl border border-border\//)
+    // Both generated and edited documents now share the same card chrome.
+    // Check the real import and consumption as well as the extracted style;
+    // checking only the helper would miss a disconnected card implementation.
+    assert.match(agenticStepsSource, /import \{[^}]*DOCUMENT_CARD_CLASS[^}]*\} from "@\/components\/doc\/document-artifact-chrome"/)
+    assert.match(agenticStepsSource, /className=\{cn\(DOCUMENT_CARD_CLASS,/)
+    assert.match(artifactChromeSource, /export const DOCUMENT_CARD_CLASS = "[^"\n]*rounded-2xl border border-border\//)
   })
 
   it("keeps reloaded empty agent states visible instead of collapsing to a plain spinner", () => {

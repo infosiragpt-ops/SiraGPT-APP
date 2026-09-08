@@ -61,8 +61,8 @@ export const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
   const trailingText = raw.slice(match[0].length).trim();
   const finalText = typeof state?.finalText === 'string' ? state.finalText.trim() : '';
   const status = typeof state?.status === 'string' ? state.status.toLowerCase() : '';
-  const done = state?.done === true || status === 'completed';
-  const error = Boolean(state?.error) || status === 'failed' || status === 'error';
+  const done = state?.done === true || ['completed', 'failed', 'error', 'cancelled', 'canceled'].includes(status);
+  const error = Boolean(state?.error) || ['failed', 'error', 'cancelled', 'canceled'].includes(status);
   const meta = state?.meta && typeof state.meta === 'object'
     ? state.meta as Record<string, unknown>
     : null;
@@ -114,9 +114,11 @@ const shouldPreserveLocalAssistantContent = (incomingContent: unknown, localCont
 
   // Durable task completion can reach the event log just before the final
   // assistant message is committed. A refresh during that narrow window must
-  // not replace a locally completed bubble (and its download cards) with the
-  // older pending copy of the very same task.
-  if (sameAgentTask && localTask.done && !localTask.error && !incomingTask.done) return true;
+  // not replace a terminal bubble (including errors/cancellation) with the
+  // older pending copy of the very same task, regardless of payload length.
+  if (sameAgentTask && localTask.done && !incomingTask.done) return true;
+  if (sameAgentTask && incomingTask.done && !localTask.done) return false;
+  if (incomingTask.taskId && localTask.taskId && !sameAgentTask) return false;
 
   if (incomingCompleted && !localCompleted) return false;
   if (incomingCompleted && localCompleted) {

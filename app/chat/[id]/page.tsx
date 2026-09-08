@@ -26,8 +26,8 @@ export default async function ChatIdRedirectPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ id: string }> | { id: string }
-  searchParams?: Promise<Search> | Search
+  params: Promise<{ id: string }>
+  searchParams?: Promise<Search>
 }) {
   const resolved = await Promise.resolve(params)
   const sp = flattenSearch(await Promise.resolve(searchParams || {}))

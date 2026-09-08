@@ -227,7 +227,7 @@ test('slash plane commands and generate guards keep tools schema', () => {
 test('generate path still applies trivial guards and logs plane/rule_id', () => {
   const aiRoute = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
   assert.match(aiRoute, /applyTrivialTurnGuards\(req, prompt\)/);
-  assert.match(aiRoute, /trivial turn kept on direct mode; Extra\/Max skipped/);
+  assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.trivial_kept_direct'/);
   const routerSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'turn-router.js'), 'utf8');
   assert.match(routerSrc, /\[turn-router\] plane=\$\{plane\} rule_id=\$\{rule_id\}/);
   const loopSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'sira-code', 'loop.js'), 'utf8');

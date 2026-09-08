@@ -14,6 +14,7 @@ const { executeTool } = require('./tools');
 const { formatSse, subscribe, replay, appendEvent, stageEvent } = require('./events');
 const {
   createSession,
+  getSession,
   requireOwnedSession,
   switchAgent: switchStoredAgent,
   abortSession,
@@ -22,6 +23,12 @@ const {
 } = require('./session-store');
 const { runPrompt, shouldStartSiraCodeRun } = require('./loop');
 const { publicModelLabel, sanitizePublicObject } = require('./display');
+const { applyAgentChange, publicPlan } = require('./plan-handoff');
+const {
+  resolveSessionPermission,
+  publicResolvePayload,
+} = require('./permission-resume');
+const { buildSessionSummary } = require('./session-summary');
 
 function sidecarRequested(env = process.env) {
   return ['1', 'true', 'on', 'yes'].includes(String(env.SIRAGPT_OPENCODE_SIDECAR || '').trim().toLowerCase());
@@ -50,24 +57,47 @@ function get(id, userId) {
   return publicSession(requireOwnedSession(id, userId));
 }
 
-function switchAgent(id, agentId, userId) {
+function summarize(id, userId) {
   const session = requireOwnedSession(id, userId);
-  switchStoredAgent(session, agentId);
+  return sanitizePublicObject(buildSessionSummary(session));
+}
+
+function emitAgentSwitch(session, nextAgentId) {
+  const change = applyAgentChange(session, nextAgentId, switchStoredAgent);
   appendEvent(session, 'agent', {
     agent: session.agentId,
     label: getAgent(session.agentId).label,
   });
+  if (change.handoff) {
+    stageEvent(session, 'planReady', {
+      label: 'Plan listo',
+      from: change.from,
+      to: change.to,
+    });
+    appendEvent(session, 'handoff', {
+      from: change.from,
+      to: change.to,
+      plan: publicPlan(session.plan),
+    });
+  }
+  return change;
+}
+
+function switchAgent(id, agentId, userId) {
+  const session = requireOwnedSession(id, userId);
+  emitAgentSwitch(session, agentId);
   return publicSession(session);
 }
 
 async function prompt(id, text, opts = {}) {
   const session = requireOwnedSession(id, opts.userId);
-  if (opts.agent) switchStoredAgent(session, opts.agent);
+  if (opts.agent) emitAgentSwitch(session, opts.agent);
   if (opts.permission != null) session.permission = opts.permission;
   const result = await runPrompt(session, text, {
     llmTurn: opts.llmTurn,
     model: opts.model,
     maxSteps: opts.maxSteps,
+    maxToolRounds: opts.maxToolRounds,
     signal: opts.signal,
     chip: opts.chip,
     attachments: opts.attachments,
@@ -96,7 +126,7 @@ async function readFile(id, relPath, userId) {
     err.status = 400;
     throw err;
   }
-  return { path: relPath, content: result.content };
+  return { path: relPath, content: result.text != null ? result.text : result.content };
 }
 
 async function listFiles(id, userId) {
@@ -105,40 +135,41 @@ async function listFiles(id, userId) {
   return { files };
 }
 
-function resolvePermission(id, permissionId, decision, userId) {
+async function resolvePermission(id, permissionId, decision, userId, extras = {}) {
   const session = requireOwnedSession(id, userId);
-  const pending = session.pendingPermissions.get(permissionId);
-  if (!pending) {
-    const err = new Error('permiso no encontrado');
-    err.code = 'permission_not_found';
-    err.status = 404;
-    throw err;
-  }
-  const allow = decision === 'allow';
-  session.pendingPermissions.delete(permissionId);
-  appendEvent(session, 'permission_resolved', {
-    permissionId,
-    tool: pending.tool,
-    decision: allow ? 'allow' : 'deny',
-  });
-  return { ok: true, allowed: allow, tool: pending.tool };
+  const payload = await resolveSessionPermission(session, permissionId, decision, extras);
+  return publicResolvePayload(payload, session);
 }
 
 function streamEvents(res, { sessionId, userId, lastEventId } = {}) {
-  let session = null;
+  const uid = String(userId || '');
+  if (!uid.trim()) {
+    const err = new Error('autenticación requerida');
+    err.code = 'authentication_required';
+    err.status = 401;
+    throw err;
+  }
+
+  function emitOwnedEvent(event) {
+    if (sessionId && event.sessionId !== sessionId) return;
+    const owner = getSession(event.sessionId);
+    if (!owner || String(owner.userId || '') !== uid) return;
+    res.write(formatSse(event));
+  }
+
   if (sessionId) {
-    session = requireOwnedSession(sessionId, userId);
+    const session = requireOwnedSession(sessionId, uid);
+    if (String(session.userId || '') !== uid) {
+      const err = new Error('sesión no encontrada');
+      err.code = 'session_not_found';
+      err.status = 404;
+      throw err;
+    }
     for (const event of replay(session, { afterId: lastEventId })) {
-      res.write(formatSse(event));
+      emitOwnedEvent(event);
     }
   }
-  return subscribe((event) => {
-    if (userId && session && session.userId && event.sessionId === session.id && session.userId !== String(userId)) {
-      return;
-    }
-    if (sessionId && event.sessionId !== sessionId) return;
-    res.write(formatSse(event));
-  }, { sessionId });
+  return subscribe(emitOwnedEvent, { sessionId });
 }
 
 function agentCanWrite(agentId) {
@@ -149,7 +180,9 @@ module.exports = {
   health,
   create,
   get,
+  summarize,
   switchAgent,
+  emitAgentSwitch,
   prompt,
   abort,
   readFile,

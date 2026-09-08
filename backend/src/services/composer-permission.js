@@ -27,11 +27,20 @@ const WRITE_TOOLS = new Set([
   'computer_write_file',
   'computer_edit_file',
   'clone_project',
+  'apply_patch',
+  'multiedit',
+  'multi_edit',
+  'batch_edit',
+  'task',
+  'spawn_task',
+  'subagent',
 ]);
 
 const COMMAND_TOOLS = new Set([
   'bash',
   'execute_bash',
+  'shell',
+  'execute_shell',
   'host_bash',
 ]);
 
@@ -51,11 +60,32 @@ const TOOL_ALIASES = Object.freeze({
   str_replace: 'edit',
   execute_bash: 'bash',
   bash: 'bash',
+  shell: 'bash',
+  execute_shell: 'bash',
   host_bash: 'host_bash',
   host_file: 'host_file',
   computer_write_file: 'computer_write_file',
   computer_edit_file: 'computer_edit_file',
   clone_project: 'clone_project',
+  ls: 'ls',
+  list_dir: 'ls',
+  apply_patch: 'apply_patch',
+  webfetch: 'webfetch',
+  web_fetch: 'webfetch',
+  todo: 'todo',
+  todowrite: 'todo',
+  diagnostics: 'diagnostics',
+  lsp_diagnostics: 'diagnostics',
+  diagnostic: 'diagnostics',
+  question: 'question',
+  user_ask: 'question',
+  ask_user: 'question',
+  multiedit: 'multiedit',
+  multi_edit: 'multiedit',
+  batch_edit: 'multiedit',
+  task: 'task',
+  spawn_task: 'task',
+  subagent: 'task',
 });
 
 function canonicalTool(name) {

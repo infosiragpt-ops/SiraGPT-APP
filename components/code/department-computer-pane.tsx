@@ -85,6 +85,88 @@ type AgentSession = {
 
 const sessionCache = new Map<string, AgentSession>()
 
+/**
+ * Always-on computer policy.
+ * The desktop must survive blips, restarts and stale tabs instead of
+ * spinning "Preparando escritorio…" forever:
+ * - session acquire retries a few times with backoff (transport/5xx only,
+ *   never isolation/auth errors),
+ * - a cached session is revalidated before use (a tab can outlive the
+ *   server-side session record),
+ * - a heartbeat revalidates the live session every minute and silently
+ *   rebuilds after consecutive misses,
+ * - when everything fails the pane says so with a Reintentar button.
+ */
+export const COMPUTER_ACQUIRE_ATTEMPTS = 3
+export const COMPUTER_ACQUIRE_RETRY_DELAYS_MS = [1000, 2500]
+export const COMPUTER_HEARTBEAT_INTERVAL_MS = 60_000
+export const COMPUTER_HEARTBEAT_MAX_MISSES = 2
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    if (typeof (timer as unknown as { unref?: unknown }).unref === "function") {
+      (timer as unknown as { unref: () => void }).unref()
+    }
+  })
+}
+
+function isRetriableComputerError(err: unknown): boolean {
+  const status = Number((err as { status?: unknown })?.status)
+  if (status === 400 || status === 401 || status === 403 || status === 409) return false
+  if ((err as { emptyChat?: unknown })?.emptyChat) return false
+  const msg = String(
+    (err as { message?: unknown })?.message
+    ?? (err as { body?: { message?: unknown } })?.body?.message
+    ?? "",
+  )
+  if (/aislar|isolation|login|permiso|forbidden|unauthorized|No se pudo aislar/i.test(msg)) return false
+  return true
+}
+
+async function acquireMemberDesktopWithRetry(
+  conversationId: string | null,
+): Promise<AgentSession> {
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < COMPUTER_ACQUIRE_ATTEMPTS; attempt += 1) {
+    try {
+      return await ensureMemberDesktop(conversationId)
+    } catch (err) {
+      lastErr = err
+      const last = attempt >= COMPUTER_ACQUIRE_ATTEMPTS - 1
+      if (last || !isRetriableComputerError(err)) throw err
+      await sleep(COMPUTER_ACQUIRE_RETRY_DELAYS_MS[Math.min(attempt, COMPUTER_ACQUIRE_RETRY_DELAYS_MS.length - 1)])
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("No se pudo abrir la computadora.")
+}
+
+async function validateAgentSession(
+  sessionId: string,
+  conversationId: string | null,
+): Promise<boolean> {
+  const id = String(sessionId || "").trim()
+  if (!id) return false
+  try {
+    const chatId = String(conversationId || "").trim()
+    const qs = chatId ? `?conversationId=${encodeURIComponent(chatId)}` : ""
+    const res = await authenticatedFetch(
+      `${computerApiBase()}/agent-computer/sessions/${encodeURIComponent(id)}${qs}`,
+      {
+        method: "GET",
+        credentials: "include",
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(8_000),
+      },
+    )
+    if (!res.ok) return false
+    const body = (await res.json().catch(() => null)) as { sessionId?: string } | null
+    return Boolean(body && body.sessionId)
+  } catch {
+    return false
+  }
+}
+
 const GENERIC_DESKTOP_UNAVAILABLE =
   "No se pudo abrir la computadora. El escritorio no está disponible."
 const PREPARING_DESKTOP_ES = "Preparando escritorio…"
@@ -175,6 +257,16 @@ function embedFrom(session: AgentSession): string {
   const id = session.sessionId
   if (!id) return ""
   return `/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=sessions/${id}/novnc/websockify`
+}
+
+function rfbWsFromSession(session: AgentSession): string {
+  const id = String(session.sessionId || "").trim()
+  if (!id) return ""
+  const raw = String(session.novncWsUrl || "").trim()
+  if (raw && !/computer\.(siragpt|chatagic)\.com/i.test(raw) && !/api\.siragpt\.com/i.test(raw)) {
+    return raw
+  }
+  return `/sessions/${id}/novnc/websockify`
 }
 
 async function postMemberDesktop(chatId: string, useQuery: boolean) {
@@ -282,14 +374,57 @@ export function DepartmentComputerPane({
   const [desktopLease, setDesktopLease] = React.useState<DesktopLease | null>(null)
   const [prepareProgress, setPrepareProgress] = React.useState(12)
   const [expanded, setExpanded] = React.useState(false)
+  const [buildId, setBuildId] = React.useState(0)
+  const [exhausted, setExhausted] = React.useState(false)
+  const buildIdRef = React.useRef(0)
+  const autoRebuiltRef = React.useRef<string | null>(null)
+  const heartbeatMissesRef = React.useRef(0)
   const dept = String(departmentId || "").trim() || "ceo-office"
   const resolvedName = departmentName || (dept === "ceo-office" ? "CEO Office" : dept)
   const embedUrl = session ? embedFrom(session) : ""
   const bound = Boolean(session?.conversationBound && chatId)
 
+  const bumpBuild = React.useCallback(() => {
+    buildIdRef.current += 1
+    setBuildId(buildIdRef.current)
+  }, [])
+
+  const rebuildDesktop = React.useCallback(() => {
+    sessionCache.delete(cacheKey(chatId || null))
+    setSession(null)
+    setDesktopLease(null)
+    setError(null)
+    setExhausted(false)
+    setLoading(true)
+    setStatusLine(PREPARING_DESKTOP_ES)
+    setPrepareProgress(18)
+    heartbeatMissesRef.current = 0
+    bumpBuild()
+  }, [chatId, bumpBuild])
+
+  const handleViewerConnectionError = React.useCallback(() => {
+    const stamp = `${chatId || "-"}:${buildIdRef.current}`
+    if (autoRebuiltRef.current === stamp) {
+      // A freshly rebuilt session died too: stop looping, say so honestly,
+      // and let the user retry on purpose.
+      setExhausted(true)
+      setLoading(false)
+      setError((prev) => prev || "La conexión con el escritorio se interrumpió.")
+      return
+    }
+    autoRebuiltRef.current = stamp
+    rebuildDesktop()
+  }, [chatId, rebuildDesktop])
+
+  const handleManualRetry = React.useCallback(() => {
+    autoRebuiltRef.current = null
+    rebuildDesktop()
+  }, [rebuildDesktop])
+
   React.useEffect(() => {
     let cancelled = false
     setError(null)
+    setExhausted(false)
     setDesktopLease(null)
     const cached = sessionCache.get(cacheKey(chatId || null)) ?? null
     if (!cached) {
@@ -333,10 +468,32 @@ export function DepartmentComputerPane({
         }
       }
 
-      try {
-        const row = await ensureMemberDesktop(chatId || null)
+      // A cached session can outlive the server-side record (orchestrator
+      // restart, deploy, tab left open). Revalidate before trusting it; a
+      // stale id re-acquires instead of pointing the viewer at a ghost.
+      let row = sessionCache.get(cacheKey(chatId || null)) ?? null
+      if (row?.sessionId) {
+        const valid = await validateAgentSession(row.sessionId, chatId || null)
+        if (cancelled) return
+        if (!valid) {
+          sessionCache.delete(cacheKey(chatId || null))
+          row = null
+        }
+      }
+
+      if (row) {
         if (cancelled) return
         setSession(row)
+        setStatusLine("En vivo")
+        setLoading(false)
+        setError(null)
+        return
+      }
+
+      try {
+        const fresh = await acquireMemberDesktopWithRetry(chatId || null)
+        if (cancelled) return
+        setSession(fresh)
         setStatusLine("En vivo")
         setLoading(false)
       } catch (err: any) {
@@ -361,12 +518,41 @@ export function DepartmentComputerPane({
         setError(userFacingComputerError(err?.message, nextHint))
         setStatusLine(userFacingComputerError(err?.message, nextHint))
         setLoading(false)
+        setExhausted(true)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [computerRunId, chatId])
+  }, [computerRunId, chatId, buildId])
+
+  // Keepalive: while a desktop is live, revalidate the session every minute.
+  // After consecutive misses the desktop is rebuilt silently once; if the
+  // rebuild also fails the honest error card takes over (never a silent
+  // freeze, never a retry storm).
+  React.useEffect(() => {
+    const id = session?.sessionId || desktopLease?.sessionId
+    if (!id || loading || exhausted) return
+    let cancelled = false
+    const timer = setInterval(() => {
+      void (async () => {
+        const ok = await validateAgentSession(id, chatId || null)
+        if (cancelled || ok) {
+          if (ok) heartbeatMissesRef.current = 0
+          return
+        }
+        heartbeatMissesRef.current += 1
+        if (heartbeatMissesRef.current >= COMPUTER_HEARTBEAT_MAX_MISSES) {
+          heartbeatMissesRef.current = 0
+          handleViewerConnectionError()
+        }
+      })()
+    }, COMPUTER_HEARTBEAT_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [session?.sessionId, desktopLease?.sessionId, chatId, loading, exhausted, handleViewerConnectionError])
 
   const chooseDock = React.useCallback((next: DepartmentComputerDock) => {
     setDock(next)
@@ -377,7 +563,8 @@ export function DepartmentComputerPane({
   }, [chatId])
 
   const attachUrl = bound || !chatId ? embedUrl : ""
-  const hasLiveDesktop = Boolean(attachUrl || desktopLease)
+  const orchRfbWs = session && (bound || !chatId) ? rfbWsFromSession(session) : ""
+  const hasLiveDesktop = Boolean(desktopLease || orchRfbWs || attachUrl)
 
   React.useEffect(() => {
     if (!expanded) return
@@ -397,9 +584,9 @@ export function DepartmentComputerPane({
     if (!onStatusChange) return
     if (loading) onStatusChange("starting")
     else if (error && poolWarm <= 0) onStatusChange("error")
-    else if ((session && attachUrl) || desktopLease) onStatusChange("live")
+    else if (desktopLease || orchRfbWs || (session && attachUrl)) onStatusChange("live")
     else onStatusChange("idle")
-  }, [loading, error, session, attachUrl, desktopLease, poolWarm, onStatusChange])
+  }, [loading, error, session, attachUrl, orchRfbWs, desktopLease, poolWarm, onStatusChange])
 
   return (
     <section
@@ -471,18 +658,46 @@ export function DepartmentComputerPane({
               : "absolute inset-0 h-full w-full min-h-0",
           )}
         >
-          {attachUrl ? (
-            <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
-          ) : desktopLease ? (
+          {desktopLease ? (
             <DesktopScreen
-              key={desktopLease.sessionId}
+              key={`${desktopLease.sessionId}:${buildId}`}
               sessionId={desktopLease.sessionId}
               wsUrl={desktopLease.wsUrl}
               viewerToken={desktopLease.viewerToken}
               viewOnly={desktopLease.inputMode !== "human"}
               className="absolute inset-0 h-full w-full min-h-0"
               onFirstFrame={() => setStatusLine("En vivo")}
+              onConnectionError={handleViewerConnectionError}
             />
+          ) : orchRfbWs && session?.sessionId ? (
+            <DesktopScreen
+              key={`${session.sessionId}:${buildId}`}
+              sessionId={session.sessionId}
+              wsUrl={orchRfbWs}
+              viewOnly={false}
+              className="absolute inset-0 h-full w-full min-h-0"
+              onFirstFrame={() => setStatusLine("En vivo")}
+              onConnectionError={handleViewerConnectionError}
+            />
+          ) : attachUrl ? (
+            <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
+          ) : exhausted && error ? (
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="alert">
+              <div className="flex flex-col items-center gap-3" data-testid="desktop-error-card">
+                <p className="max-w-xs text-sm text-zinc-300" data-testid="desktop-error-message">
+                  {userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: false })}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  data-testid="desktop-retry"
+                  onClick={handleManualRetry}
+                >
+                  Reintentar
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
               <div className="flex flex-col items-center gap-3">

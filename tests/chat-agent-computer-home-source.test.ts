@@ -92,6 +92,8 @@ describe("chat agent computer home", () => {
       assert.doesNotMatch(src, new RegExp(bootEs, "i"), `${name} must not contain ${bootEs}`)
       assert.doesNotMatch(src, new RegExp(runEs, "i"), `${name} must not contain ${runEs}`)
     }
+    assert.match(panel, /Pantalla de SiraGPT/)
+    assert.doesNotMatch(panel, /Pantalla de Siragpt/)
     assert.match(panel, /AgentComputerShell/)
     assert.match(panel, /DepartmentComputerPane/)
     assert.match(panel, /conversationId=\{chatId\}/)

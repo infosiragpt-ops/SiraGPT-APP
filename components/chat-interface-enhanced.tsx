@@ -6,6 +6,7 @@ import {
   Send,
   Paperclip,
   Mic,
+  Clapperboard,
   Square,
   FileText,
   Video,
@@ -228,6 +229,11 @@ const VoiceCatalogModal = dynamic(
   () => import("./voice/voice-catalog-modal"),
   { ssr: false, loading: () => null },
 )
+// Sira Voz — Estudio de voz (VoiceStudio, open source, local, gratis).
+const VoiceStudioModal = dynamic(
+  () => import("./voice/voice-studio-modal"),
+  { ssr: false, loading: () => null },
+)
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
@@ -243,7 +249,11 @@ import {
 } from "@/lib/research-artifacts"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
+import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
+import { DOCUMENT_SANDBOX_NEED_ORIGINAL, historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
+import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { agentsHomeHref, conversationIdFromLocation } from "@/lib/agents-home-path"
@@ -379,6 +389,9 @@ import {
   providerForMediaModel,
   readStoredVoiceSetting,
   writeStoredVoiceSettings,
+  isSiraVozModel,
+  readStoredVoiceStudioVoice,
+  writeStoredVoiceStudioVoice,
   type ImageAspectRatio,
   type ImageGenerationCount,
   type ImageQuality,
@@ -537,6 +550,7 @@ const findRecoverableAgentTaskMessage = (messages: any[] = [], taskId?: string |
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    if (parseDocumentJobPointer(message.metadata)) continue // this durable job has its own authenticated recovery contract
     const state = parseAgentTaskMessageState(message?.content)
     if (!state || state.done) continue
     totalCandidates += 1
@@ -2435,6 +2449,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect,
   onOpenVoiceCatalog,
   selectedVoiceName,
+  onOpenVoiceStudio,
+  selectedSiraVoiceName,
   isMusicGenerationActive,
   setIsMusicGenerationActive,
   selectedMusicModel,
@@ -2526,6 +2542,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
   onOpenVoiceCatalog: () => void;
   selectedVoiceName?: string | null;
+  onOpenVoiceStudio: (tab?: "voices" | "dub" | "transcribe" | "audiobook" | "jobs") => void;
+  selectedSiraVoiceName?: string | null;
   isMusicGenerationActive: boolean;
   setIsMusicGenerationActive: (value: boolean) => void;
   selectedMusicModel: MusicModel;
@@ -3223,7 +3241,7 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Google", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : isSiraVozModel(name) ? "VoiceStudio" : "Google", surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
@@ -3239,6 +3257,36 @@ const ActiveToolsDisplay = ({
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
           </button>}
+
+          {/* Sira Voz (VoiceStudio, local, gratis): the user's cloned voice +
+              the studio (clonar / doblar / transcribir / audiolibro). */}
+          {isSiraVozModel(selectedVoiceModel) && (
+            <>
+              <button
+                type="button"
+                data-testid="sira-voz-voice-pill"
+                onClick={() => onOpenVoiceStudio("voices")}
+                title="Elegir o clonar una voz"
+                aria-label={`Voz de Sira Voz: ${selectedSiraVoiceName || "predeterminada"}. Elegir o clonar una voz`}
+                className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+              >
+                <Mic className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 max-w-[110px] truncate">{selectedSiraVoiceName || "Voz de Sira"}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="sira-voz-studio-button"
+                onClick={() => onOpenVoiceStudio("dub")}
+                title="Estudio de voz: clonar, doblar vídeos, transcribir y crear audiolibros (gratis, 100 % local)"
+                aria-label="Abrir el estudio de voz"
+                className="group/voice-studio relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-950 bg-zinc-950 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-white shadow-[0_10px_24px_-20px_rgba(15,23,42,0.6)] transition-all duration-200 hover:bg-zinc-800 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <Clapperboard className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 hidden sm:inline">Estudio de voz</span>
+                <span className="relative z-10 sm:hidden">Estudio</span>
+              </button>
+            </>
+          )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -5347,6 +5395,28 @@ function ChatInterfaceContent() {
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
+  // Sira Voz (VoiceStudio): the user's cloned voice for the local engine and
+  // the studio dialog (clone / dub / transcribe / audiobook / jobs).
+  const [selectedSiraVoiceId, setSelectedSiraVoiceId] = React.useState<string>("")
+  const [selectedSiraVoiceName, setSelectedSiraVoiceName] = React.useState<string>("")
+  const [voiceStudioOpen, setVoiceStudioOpen] = React.useState(false)
+  const [voiceStudioTab, setVoiceStudioTab] = React.useState<"voices" | "dub" | "transcribe" | "audiobook" | "jobs">("voices")
+  React.useEffect(() => {
+    const stored = readStoredVoiceStudioVoice()
+    if (stored.id) {
+      setSelectedSiraVoiceId(stored.id)
+      setSelectedSiraVoiceName(stored.name)
+    }
+  }, [])
+  const handleSelectSiraVoice = React.useCallback((voice: { id: string; name: string } | null) => {
+    setSelectedSiraVoiceId(voice?.id || "")
+    setSelectedSiraVoiceName(voice?.name || "")
+    writeStoredVoiceStudioVoice(voice && voice.id ? voice : null)
+  }, [])
+  const openVoiceStudio = React.useCallback((tab: "voices" | "dub" | "transcribe" | "audiobook" | "jobs" = "voices") => {
+    setVoiceStudioTab(tab)
+    setVoiceStudioOpen(true)
+  }, [])
   React.useEffect(() => {
     try {
       const id = localStorage.getItem("siragpt:selectedVoiceId") || ""
@@ -5873,6 +5943,11 @@ function ChatInterfaceContent() {
     }
   }, [syncActiveLocalJobs]);
 
+  const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentSandboxChat({
+    currentChat, userId: user?.id || null, selectedModel, setCurrentChat, selectChat,
+    markBusy: markLocalJobBusy, markIdle: markLocalJobIdle, notify: (message) => toast.error(message),
+  });
+
   // ─── Durable agent-task recovery ───────────────────────────────────
   // Agent/document tasks execute on the backend and can outlive this page.
   // Reconnect the visible message bubble after reload or chat navigation by
@@ -5913,17 +5988,13 @@ function ChatInterfaceContent() {
       setCurrentChat(prevChat => {
         if (!prevChat || prevChat.id !== chatId) return prevChat;
         const messages = [...(prevChat.messages || [])];
-        let messageIndex = messages.findIndex((message: any) => {
-          const parsedState = parseAgentTaskMessageState(message?.content);
-          return getAgentTaskIdFromMessage(message, parsedState) === taskId;
+        const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
+        const messageIndex = findRecoveredAgentAssistantIndex(messages, {
+          chatId,
+          taskId,
+          bubbleMessageId,
+          legacyMessageId: recoverable?.message.id,
         });
-        if (messageIndex < 0 && bubbleMessageId) {
-          messageIndex = messages.findIndex((message: any) => message?.id === bubbleMessageId);
-        }
-        if (messageIndex < 0) {
-          const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
-          if (recoverable) messageIndex = messages.findIndex((message: any) => message?.id === recoverable.message.id);
-        }
 
         if (messageIndex >= 0) {
           const previous = messages[messageIndex];
@@ -6405,6 +6476,8 @@ function ChatInterfaceContent() {
 
   const stopActiveGeneration = React.useCallback(() => {
     const targetChatId = currentChatId;
+    // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
+    if (stopDocumentSandbox(targetChatId)) return;
     const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
 
@@ -6520,7 +6593,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -10093,6 +10166,62 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    const sandboxDecision = resolveDocumentSandboxAdmission(msg, {
+      attachments: composerFiles,
+      historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+      previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      wordHtml: isWordConnectorActive
+        ? (wordConnectorRef.current?.getHTML() || (currentChat as { wordContent?: string } | null)?.wordContent || "")
+        : "",
+      connectorOpen: Boolean(isWordConnectorActive || isExcelConnectorActive),
+    });
+    if (sandboxDecision.route === "need_original") {
+      toast.error(DOCUMENT_SANDBOX_NEED_ORIGINAL);
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+    if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
+      setInput("");
+      setSelectedMentionIds([]);
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+      setMentionSearchQuery("");
+      chatDraft.clear();
+      uploadedFilesRef.current = [];
+      setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        if (sandboxDecision.route === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, sandboxDecision.attachments, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = composerFiles;
+          setUploadedFiles(composerFiles);
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
+    }
+
     // Handle rewrite request
     if (selectedWordText) {
       setIsRewriting(true);
@@ -10519,6 +10648,46 @@ REWRITTEN TEXT:`;
       || isVoiceGenerationActive
       || isMusicGenerationActive
       || isVideoGenerationActive;
+    // Word/Excel connector generation already returned above. Explicit edits
+    // were admitted before those returns so they cannot be skipped here.
+    const documentSandboxRoute = resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route;
+    if (!hasMediaGenerator && (documentSandboxRoute === "edit" || documentSandboxRoute === "clarify")) {
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        // The old classifier is broader than an editing authorization (it
+        // even matches discussion). Clarify instead of invoking its editor.
+        if (documentSandboxRoute === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        // Preserve the user's draft when preflight rejects a model, permission or input.
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = filesToSend;
+          setUploadedFiles(filesToSend);
+          // Transfer a rejected queued turn back to the visible draft. Leaving
+          // it in the automatic drain would retry an unsupported edit forever.
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
+    }
     const shouldUseWorkModeAgent = isWorkModeActive
       && !hasDedicatedConnector
       && !hasMediaGenerator
@@ -10528,9 +10697,8 @@ REWRITTEN TEXT:`;
       customGptId: currentChat?.customGptId,
       customGpt: currentChat?.customGpt,
     });
-    // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
-    // enter the durable agent-task path. That backend path owns the current
-    // source-preserving Office/PDF editor, artifact persistence and validation.
+    // Explicit edits and ambiguous legacy edit classifications returned above;
+    // remaining document questions retain their existing retrieval path.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
@@ -11897,6 +12065,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (queueDrainClaims.has(item.id)) return false;
       if (activeStreamingChatIds.includes(item.chatId)) return false;
       if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
+      // Original-file editing needs the canonical admission path. Keep these
+      // queued turns until their chat is opened; never bypass it via addMessage.
+      if (resolveDocumentSandboxAdmission(item.msg, { attachments: item.files || [] }).route) return false;
       return true;
     });
     if (bgIndex < 0) return;
@@ -12079,6 +12250,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isSendingForCurrentChat = Boolean(
     isSending && sendingChatId && currentChatId && sendingChatId === currentChatId
   );
+  const isNewChatAdmissionPending = Boolean(
+    !currentChatId && isSending && sendingChatId === null
+    && sendInFlightChatsRef.current.has('__new__') && intentAbortControllerRef.current
+  );
   // Media flags (image/voice/video/PPT/music) are GLOBAL booleans, but the
   // Stop button must only take over the composer in the chat that OWNS the
   // job (media handlers call markLocalJobBusy(chatId)). Otherwise, while chat
@@ -12087,12 +12262,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isCurrentChatMediaBusy =
     isCurrentChatLocalJobBusy &&
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
-  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT;
+  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT && !isSendingForCurrentChat && !isNewChatAdmissionPending;
   const isStopButtonVisible = !isIdlePlaceholderComposer && (
     isCurrentChatLoading ||
     isCurrentChatStreaming ||
     (pendingStop && isCurrentChatStreaming) ||
     isSendingForCurrentChat ||
+    isNewChatAdmissionPending ||
     isCurrentChatLocalJobBusy ||
     isCurrentChatMediaBusy
   );
@@ -12119,6 +12295,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVoiceEffect, setSelectedVoiceEffect,
     onOpenVoiceCatalog: () => setVoiceCatalogOpen(true),
     selectedVoiceName,
+    onOpenVoiceStudio: openVoiceStudio,
+    selectedSiraVoiceName,
     isMusicGenerationActive, setIsMusicGenerationActive,
     selectedMusicModel, setSelectedMusicModel,
     selectedMusicStyle, setSelectedMusicStyle,
@@ -12913,6 +13091,38 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // "service unavailable" answer. Like image/video/music, Voice now uses a
   // dedicated, deterministic backend path that ALWAYS produces the MP3 and
   // persists it as a "Generation N" chat artifact via the same renderer.
+  // Files already attached in this chat (chunked uploads included) so the
+  // studio can dub/transcribe media above the direct-upload limit.
+  const voiceStudioChatFiles = React.useMemo(() => {
+    const out: Array<{ id: string; name: string; mimeType: string | null; size?: number | null }> = []
+    const seen = new Set<string>()
+    for (const message of currentChat?.messages || []) {
+      for (const file of parseMessageFilesForRender((message as any)?.files) as any[]) {
+        const id = typeof file?.id === "string" ? file.id : ""
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        out.push({
+          id,
+          name: String(file?.originalName || file?.name || file?.filename || "archivo"),
+          mimeType: typeof file?.mimeType === "string" ? file.mimeType : typeof file?.type === "string" ? file.type : null,
+          size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
+        })
+      }
+    }
+    return out
+  }, [currentChat?.messages])
+  const ensureVoiceStudioChatId = React.useCallback(async (): Promise<string | null> => {
+    if (currentChat?.id) return currentChat.id
+    try {
+      const response = await apiClient.createChat({ title: "Estudio de voz", model: selectedModel })
+      const id = response?.chat?.id || null
+      if (id) await selectChat(id)
+      return id
+    } catch {
+      return null
+    }
+  }, [currentChat?.id, selectedModel, selectChat])
+
   const handleVoiceGeneration = async (msg: string, filesToSend: any[] = []) => {
     const narration = (msg || '').trim();
     if (!narration) {
@@ -13006,7 +13216,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -13119,7 +13329,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -13747,6 +13957,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   effectOptions={VOICE_EFFECT_OPTIONS}
                   stability={selectedVoiceStability}
                   onStabilityChange={setSelectedVoiceStability}
+                />
+                <VoiceStudioModal
+                  open={voiceStudioOpen}
+                  onOpenChange={setVoiceStudioOpen}
+                  initialTab={voiceStudioTab}
+                  selectedVoiceId={selectedSiraVoiceId || null}
+                  onSelectVoice={handleSelectSiraVoice}
+                  language={selectedVoiceLanguage}
+                  languageOptions={VOICE_LANGUAGE_OPTIONS}
+                  chatFiles={voiceStudioChatFiles}
+                  ensureChatId={ensureVoiceStudioChatId}
+                  onJobFinished={(job) => { if (job?.chatId) void selectChat(job.chatId) }}
+                  onInsertText={(text) => setInput((prev) => (prev ? `${prev}\n\n${text}` : text))}
                 />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}

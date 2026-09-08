@@ -168,6 +168,52 @@ function createOrchestrator(opts = {}) {
     return sessionPayload(row);
   }
 
+  /**
+   * Boot reconciliation for the always-on computer: the session store is
+   * in-memory, so an orchestrator restart (deploy, host reboot, crash)
+   * used to orphan live desktops — their containers keep running
+   * (unless-stopped) but no session pointed at them, and every viewer
+   * stayed on "Preparando escritorio…". Re-register every running
+   * sira-ac-user-* container so open tabs reconnect to the same computer.
+   * Best-effort: never throws, never blocks boot.
+   */
+  async function reconcileContainers() {
+    if (driver === 'fake' || !runtime || typeof runtime.listComputers !== 'function') {
+      return { reconciled: 0 };
+    }
+    let rows = [];
+    try {
+      rows = await runtime.listComputers();
+    } catch (_) {
+      return { reconciled: 0 };
+    }
+    let reconciled = 0;
+    for (const row of rows) {
+      try {
+        if (!row || !row.running || !row.name) continue;
+        const userId = String(row.name).replace(/^sira-ac-user-/, '');
+        if (!userId || userId === row.name) continue;
+        const sid = sessionIdFor(userId);
+        if (store.getById(sid)) continue;
+        let host = row.name;
+        try {
+          const info = await runtime.inspectContainer(row.name);
+          host = runtime.containerIp(info) || row.name;
+        } catch (_) { /* keep container-name fallback */ }
+        store.put({
+          sessionId: sid,
+          userId,
+          container: row.name,
+          host,
+          reused: true,
+          reconciled: true,
+        });
+        reconciled += 1;
+      } catch (_) { /* one bad row must not stop the rest */ }
+    }
+    return { reconciled };
+  }
+
   async function handleAction(session, body) {
     const type = actionType(body);
     const command = buildActionCommand(body);
@@ -302,7 +348,8 @@ function createOrchestrator(opts = {}) {
       try {
         const body = await readBody(req);
         const urlToOpen = String(body.url || body.href || '').trim();
-        const cmd = `(google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ${JSON.stringify(urlToOpen)} || chromium --no-sandbox --disable-dev-shm-usage --new-window ${JSON.stringify(urlToOpen)} || xdg-open ${JSON.stringify(urlToOpen)}) >/tmp/sira-nav.log 2>&1 & echo Opening`;
+        const chromeFlags = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-infobars --test-type --start-maximized --window-size=1920,1080 --window-position=0,0 --user-data-dir=/workspace/.chrome';
+        const cmd = `(google-chrome ${chromeFlags} --new-window ${JSON.stringify(urlToOpen)} || chromium ${chromeFlags} --new-window ${JSON.stringify(urlToOpen)} || xdg-open ${JSON.stringify(urlToOpen)}) >/tmp/sira-nav.log 2>&1 & echo Opening`;
         if (driver === 'fake' && !opts.execImpl) {
           return json(res, 200, { ok: true, url: urlToOpen, fake: true });
         }
@@ -361,6 +408,7 @@ function createOrchestrator(opts = {}) {
     onRequest,
     onUpgrade,
     driver,
+    reconcileContainers,
   };
 }
 
@@ -375,6 +423,17 @@ function listen(opts = {}) {
       port,
       driver: orch.driver,
     }));
+    void Promise.resolve()
+      .then(() => orch.reconcileContainers())
+      .then((result) => {
+        if (result && result.reconciled > 0) {
+          console.log(JSON.stringify({
+            evt: 'computer_orchestrator_reconciled',
+            reconciled: result.reconciled,
+          }));
+        }
+      })
+      .catch(() => { /* boot must never fail on reconcile */ });
   });
   return orch;
 }

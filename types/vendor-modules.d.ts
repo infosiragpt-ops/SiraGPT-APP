@@ -4,6 +4,8 @@ declare module "@novnc/novnc" {
     viewOnly: boolean
     scaleViewport: boolean
     clipViewport: boolean
+    resizeSession?: boolean
+    showDotCursor?: boolean
     addEventListener(type: string, cb: (ev: Event) => void): void
     removeEventListener(type: string, cb: (ev: Event) => void): void
     disconnect(): void

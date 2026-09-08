@@ -1376,11 +1376,12 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
  *   • predictable styling under light/dark mode
  *   • runs entirely in the browser — no server round-trip
  */
-export function PdfRenderer({ a }: { a: AttachmentLike }) {
+export function PdfRenderer({ a, toolbarContainer }: { a: AttachmentLike; toolbarContainer?: HTMLElement | null }) {
   // pdf.js accepts a URL string OR a `{ data: Uint8Array }` payload.
   // Using `data` for in-memory File blobs avoids creating a blob URL
   // that pdf.js would have to refetch over HTTP.
   const [source, setSource] = React.useState<{ url: string } | { data: Uint8Array } | null>(null)
+  const activeSourceRef = React.useRef<typeof source>(null)
   const [err, setErr] = React.useState<string | null>(null)
   const [numPages, setNumPages] = React.useState<number>(0)
   const [scale, setScale] = React.useState<number>(1)
@@ -1391,25 +1392,46 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   const [pageAspect, setPageAspect] = React.useState<number>(0)
   // Once the user zooms by hand we stop auto-fitting so we never fight them.
   const manualZoomRef = React.useRef(false)
-  const markManualZoom = React.useCallback(() => { manualZoomRef.current = true }, [])
+  const activePageRef = React.useRef(1)
+  const zoomAnchorRef = React.useRef<number | null>(null)
+  const markManualZoom = React.useCallback(() => {
+    manualZoomRef.current = true
+    zoomAnchorRef.current = activePageRef.current
+  }, [])
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const pageRefs = React.useRef<Record<number, HTMLDivElement | null>>({})
   const [activePage, setActivePage] = React.useState<number>(1)
+  React.useEffect(() => { activePageRef.current = activePage }, [activePage])
 
   // Resolve through the same authenticated byte loader used by the
   // other document renderers. A plain pdf.js URL load cannot attach the
   // Bearer token required by protected /uploads assets.
   React.useEffect(() => {
     let cancelled = false
+    activeSourceRef.current = null
+    setSource(null)
+    setErr(null)
+    setNumPages(0)
+    setActivePage(1)
+    activePageRef.current = 1
+    zoomAnchorRef.current = null
+    setPageAspect(0)
+    setScale(1)
+    manualZoomRef.current = false
+    pageRefs.current = {}
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        if (!cancelled) setSource({ data: new Uint8Array(cloneArrayBuffer(buf)) })
+        if (!cancelled) {
+          const loadedSource = { data: new Uint8Array(cloneArrayBuffer(buf)) }
+          activeSourceRef.current = loadedSource
+          setSource(loadedSource)
+        }
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "Error")
       }
     })()
-    return () => { cancelled = true }
+    return () => { cancelled = true; activeSourceRef.current = null }
   }, [a])
 
   // Track container width for "fit-to-width" rendering.
@@ -1419,14 +1441,14 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
     const ro = new ResizeObserver(entries => {
       for (const entry of entries) {
         // Subtract scrollbar gutter so pages don't overflow.
-        const w = Math.max(320, Math.floor(entry.contentRect.width) - 24)
+        const w = Math.max(200, Math.floor(entry.contentRect.width) - 24)
         setContainerWidth(w)
         setContainerHeight(Math.max(240, Math.floor(entry.contentRect.height)))
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [source, err])
 
   // Smart auto-fit: scale so the whole first page fits the viewport
   // (fit-to-page) the moment the PDF + its dimensions are known, and keep it
@@ -1435,7 +1457,7 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   // pageAspect) just fits the available viewport height.
   const fitPageScale = React.useMemo(() => {
     if (!pageAspect || !containerWidth || !containerHeight) return 1
-    const avail = Math.max(200, containerHeight - 88) // leave room for the controls bar
+    const avail = Math.max(200, containerHeight - 32) // page padding; controls live above the document
     const raw = avail / (containerWidth * pageAspect)
     return Math.min(1, Math.max(0.5, +raw.toFixed(2)))
   }, [pageAspect, containerWidth, containerHeight])
@@ -1466,7 +1488,7 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
       el.removeEventListener("wheel", onWheel)
       el.removeEventListener("dblclick", onDoubleClick)
     }
-  }, [markManualZoom])
+  }, [markManualZoom, source, err])
 
   // IntersectionObserver — track which page is currently most visible so
   // the "page X of Y" indicator stays accurate while the user scrolls.
@@ -1474,17 +1496,26 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
     if (!numPages) return
     const root = containerRef.current
     if (!root) return
-    const visibility = new Map<number, number>()
     const io = new IntersectionObserver(
-      entries => {
-        for (const e of entries) {
-          const n = Number((e.target as HTMLElement).dataset.pageNum)
-          if (Number.isFinite(n)) visibility.set(n, e.intersectionRatio)
+      () => {
+        // IO entries are only the pages crossing a threshold, not a complete
+        // snapshot. Cached ratios from before a page jump can override a newer
+        // explicit selection. Read one current geometry snapshot instead.
+        const viewport = root.getBoundingClientRect()
+        const visibility = new Map<number, number>()
+        for (const [number, element] of Object.entries(pageRefs.current)) {
+          if (!element) continue
+          const rect = element.getBoundingClientRect()
+          const width = Math.max(0, Math.min(rect.right, viewport.right) - Math.max(rect.left, viewport.left))
+          const height = Math.max(0, Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top))
+          visibility.set(Number(number), rect.width && rect.height ? width * height / (rect.width * rect.height) : 0)
         }
-        let bestPage = 1
-        let bestRatio = 0
+        // Several landscape slides can fit at once. Keep the explicitly
+        // selected page on visibility ties instead of always choosing page 1.
+        let bestPage = activePageRef.current
+        let bestRatio = visibility.get(bestPage) || 0
         visibility.forEach((ratio, page) => {
-          if (ratio > bestRatio) { bestRatio = ratio; bestPage = page }
+          if (ratio > bestRatio + 0.001) { bestRatio = ratio; bestPage = page }
         })
         if (bestRatio > 0) setActivePage(bestPage)
       },
@@ -1495,9 +1526,16 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   }, [numPages])
 
   const goToPage = (p: number) => {
+    zoomAnchorRef.current = null
     const target = Math.min(Math.max(1, p), numPages || 1)
+    activePageRef.current = target
     const el = pageRefs.current[target]
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+    const root = containerRef.current
+    if (el && root) {
+      // Discrete page navigation must not let intermediate animation frames
+      // overwrite the selected page (several landscape pages may be visible).
+      root.scrollTo({ top: root.scrollTop + el.getBoundingClientRect().top - root.getBoundingClientRect().top, behavior: "instant" })
+    }
     setActivePage(target)
   }
 
@@ -1530,53 +1568,13 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
   if (err) return <ErrorState error={err} hint="Si el archivo está cifrado o protegido, descárgalo y ábrelo en un visor PDF nativo." />
   if (!source) return <LoadingState label="Cargando PDF…" />
 
-  const renderWidth = Math.floor(containerWidth * scale)
-
-  return (
-    <div className="relative flex h-full flex-col">
-      {/* Pages */}
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 pb-20 pt-4">
-        <PdfDocument
-          file={source}
-          onLoadSuccess={(pdf: any) => {
-            setNumPages(pdf?.numPages || 0)
-            // Read the first page's intrinsic size so auto-fit knows the
-            // page aspect ratio and can fit the whole page on load.
-            try {
-              pdf?.getPage?.(1)?.then((page: any) => {
-                const vp = page?.getViewport?.({ scale: 1 })
-                if (vp?.width) setPageAspect(vp.height / vp.width)
-              }).catch(() => {})
-            } catch { /* non-fatal: falls back to fit-width */ }
-          }}
-          onLoadError={(e) => setErr(e?.message || "No se pudo abrir el PDF")}
-          loading={<LoadingState label="Renderizando PDF…" />}
-          error={<ErrorState error="No se pudo abrir el PDF" />}
-          className="flex flex-col items-center gap-3"
-        >
-          {Array.from({ length: numPages }, (_, i) => i + 1).map(p => (
-            <div
-              key={p}
-              data-page-num={p}
-              ref={el => { pageRefs.current[p] = el }}
-              className="rounded-sm bg-white dark:bg-zinc-800 shadow-md ring-1 ring-border/30"
-            >
-              <PdfPage
-                pageNumber={p}
-                width={renderWidth}
-                renderTextLayer
-                renderAnnotationLayer
-              />
-            </div>
-          ))}
-        </PdfDocument>
-      </div>
-
-      {/* Bottom liquid-glass controls */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-3">
-        <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5", liquidControlShellClass)}>
+  // Reuse the same page state in the generated-document header. Uploaded PDFs
+  // get an inline top toolbar; neither path covers the document with controls.
+  const controls = (
+      <nav aria-label="Navegación y zoom del documento" data-testid="pdf-preview-controls" className="flex max-w-full justify-center">
+        <div className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", liquidControlShellClass)}>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            disabled={activePage <= 1}
+            disabled={!numPages || activePage <= 1}
             onClick={() => goToPage(activePage - 1)}
             aria-label="Página anterior" title="Página anterior">
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -1609,7 +1607,7 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
 
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => { markManualZoom(); setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2))) }}
-            aria-label="Reducir zoom" title="Reducir (⌘−)">
+            disabled={scale <= 0.5} aria-label="Reducir zoom" title="Reducir (⌘−)">
             <Minus className="h-3.5 w-3.5" />
           </Button>
           <button
@@ -1622,16 +1620,80 @@ export function PdfRenderer({ a }: { a: AttachmentLike }) {
           </button>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => { markManualZoom(); setScale(s => Math.min(3, +(s + 0.25).toFixed(2))) }}
-            aria-label="Aumentar zoom" title="Aumentar (⌘+)">
+            disabled={scale >= 3} aria-label="Aumentar zoom" title="Aumentar (⌘+)">
             <Plus className="h-3.5 w-3.5" />
           </Button>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            onClick={() => { manualZoomRef.current = false; setScale(fitPageScale) }}
+            onClick={() => { zoomAnchorRef.current = activePage; manualZoomRef.current = false; setScale(fitPageScale) }}
             aria-label="Ajustar a la página" title="Ajustar a la página (vista completa)">
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
         </div>
+      </nav>
+  )
+
+  const renderWidth = Math.floor(containerWidth * scale)
+
+  return (
+    <div className="relative flex h-full flex-col">
+      {toolbarContainer
+        ? createPortal(controls, toolbarContainer)
+        : toolbarContainer === undefined && <div className="shrink-0 border-b border-border/40 bg-background px-2 py-2">{controls}</div>}
+      {/* Pages */}
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 py-4">
+        <PdfDocument
+          file={source}
+          onLoadSuccess={(pdf: any) => {
+            if (activeSourceRef.current !== source) return
+            setNumPages(pdf?.numPages || 0)
+            // Read the first page's intrinsic size so auto-fit knows the
+            // page aspect ratio and can fit the whole page on load.
+            try {
+              pdf?.getPage?.(1)?.then((page: any) => {
+                if (activeSourceRef.current !== source) return
+                const vp = page?.getViewport?.({ scale: 1 })
+                if (vp?.width) setPageAspect(vp.height / vp.width)
+              }).catch(() => {})
+            } catch { /* non-fatal: falls back to fit-width */ }
+          }}
+          onLoadError={(e) => {
+            if (activeSourceRef.current === source) setErr(e?.message || "No se pudo abrir el PDF")
+          }}
+          loading={<LoadingState label="Renderizando PDF…" />}
+          error={<ErrorState error="No se pudo abrir el PDF" />}
+          className="flex w-max min-w-full flex-col items-center gap-3"
+        >
+          {Array.from({ length: numPages }, (_, i) => i + 1).map(p => (
+            <div
+              key={p}
+              data-page-num={p}
+              ref={el => { pageRefs.current[p] = el }}
+              className="rounded-sm bg-white dark:bg-zinc-800 shadow-md ring-1 ring-border/30"
+            >
+              <PdfPage
+                pageNumber={p}
+                width={renderWidth}
+                renderTextLayer
+                renderAnnotationLayer
+                onRenderSuccess={() => {
+                  if (activeSourceRef.current !== source || zoomAnchorRef.current !== p) return
+                  const root = containerRef.current
+                  const page = pageRefs.current[p]
+                  if (!root || !page) return
+                  // Keep the current page in view after the new canvas size is
+                  // painted, instead of jumping back to an earlier page on zoom.
+                  root.scrollTo({ top: root.scrollTop + page.getBoundingClientRect().top - root.getBoundingClientRect().top, behavior: "auto" })
+                  activePageRef.current = p
+                  setActivePage(p)
+                  zoomAnchorRef.current = null
+                }}
+              />
+            </div>
+          ))}
+        </PdfDocument>
       </div>
+
+
     </div>
   )
 }

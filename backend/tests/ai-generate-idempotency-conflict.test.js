@@ -33,7 +33,7 @@ test('idempotency payload conflict does not 409 or call respondGenerateTurnError
 
   assert.match(
     conflictBlock,
-    /console\.warn\(\s*'\[ai\/generate\] idempotency payload conflict — continuing as new turn'/,
+    /generateLog\.warn\(\s*'idempotency\.payload_conflict'/,
     'conflict must log and continue as a new turn',
   );
   assert.doesNotMatch(
@@ -62,7 +62,7 @@ test('in-memory idempotency mismatch drops the stale Map entry instead of 409', 
 
   assert.match(
     mismatchBlock,
-    /\[ai\/generate\] in-memory idempotency mismatch — dropping stale turn/,
+    /generateLog\.warn\(\s*'idempotency\.stale_turn_dropped'/,
     'mismatch must log the stale-turn drop',
   );
   assert.match(
@@ -132,12 +132,12 @@ test('aborted or closed request releases an incomplete activeGenerateTurns owner
   );
   assert.match(
     src,
-    /Client response closed for chat:[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
+    /generateLog\.info\(\s*'client\.detached',[\s\S]{0,240}source:\s*'response_close'[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
     'socket close before completion must drop a zombie owner',
   );
   assert.match(
     src,
-    /Client request aborted for chat:[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
+    /generateLog\.info\(\s*'client\.detached',[\s\S]{0,240}source:\s*'request_abort'[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
     'request abort before completion must drop a zombie owner',
   );
 });

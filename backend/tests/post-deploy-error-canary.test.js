@@ -184,17 +184,26 @@ test('runCanary passes on timeout when the only reason was insufficient traffic'
   assert.equal(result.reason, 'timeout_with_insufficient_traffic');
 });
 
-test('deploy workflow wires the canary after the version check inside the rollback window', () => {
+test('read-only release workflow does not pretend to run a traffic canary; Lenovo publisher verifies health inside rollback protection', () => {
   const deployYml = fs.readFileSync(
     path.resolve(__dirname, '../../.github/workflows/deploy.yml'),
     'utf8',
   );
-  assert.match(deployYml, /post-deploy-error-canary\.js/);
-  const canaryIndex = deployYml.indexOf('post-deploy-error-canary.js');
-  const versionCheckIndex = deployYml.indexOf('Deploy version check passed');
-  const cleanupIndex = deployYml.lastIndexOf('cleanup_old_rollback_images');
-  assert.ok(canaryIndex > versionCheckIndex, 'canary must run after the version check');
-  assert.ok(canaryIndex < cleanupIndex, 'canary must run before rollback images are cleaned');
+  const publisher = fs.readFileSync(path.resolve(__dirname, '../../deploy/iliagpt/publish-reviewed.sh'), 'utf8');
+  // Lenovo has no Prometheus service. Preserve the pure canary tests above,
+  // but do not claim that its traffic/SLO check runs in this release path.
+  assert.doesNotMatch(deployYml, /post-deploy-error-canary\.js|appleboy\/|\bssh\b|\bscp\b/);
+  assert.match(deployYml, /node scripts\/verify-lenovo-release\.cjs/);
+  assert.match(publisher, /for service in runner backend frontend; do/);
+  assert.match(publisher, /\/api\/health\/ready/);
+  assert.match(publisher, /\["database","redis","migrations"\]/);
+  const trap = publisher.indexOf('trap finish EXIT');
+  const activation = publisher.indexOf('ACTIVATED=1');
+  const verified = publisher.indexOf('wait_release "$TARGET" || die');
+  const success = publisher.indexOf('Target release healthy and verified.');
+  assert.ok(trap >= 0 && activation > trap && verified > activation && success > verified);
+  assert.match(publisher, /wait_release "\$PREVIOUS" \|\| rollback_ok=0/);
+  assert.doesNotMatch(publisher, /trap - EXIT[\s\S]*ACTIVATED=1[\s\S]*trap - EXIT/);
 });
 
 test('production Prometheus loads the SLO rules file the canary queries through', () => {

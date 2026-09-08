@@ -838,7 +838,7 @@ router.delete('/users/:id', async (req, res) => {
       preDeleteSessions = [];
     }
 
-    await hardDeleteUser({
+    const deletion = await hardDeleteUser({
       userId: req.params.id,
       actorId: req.user.id,
     });
@@ -871,6 +871,10 @@ router.delete('/users/:id', async (req, res) => {
       console.warn('[admin/users:id] session_admin_revoked audit failed:', auditErr?.message || auditErr);
     }
 
+    if (deletion.deletionPending) return res.status(202).json({
+      code: 'DOC_CLEANUP_PENDING', deletionPending: true,
+      message: 'La cuenta está desactivada; la eliminación de sus documentos está pendiente.',
+    });
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);

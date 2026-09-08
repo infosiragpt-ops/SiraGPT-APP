@@ -104,5 +104,5 @@ test('fair-queue 409 JSON is retryable so the client does not freeze Pensando', 
   assert.ok(idx >= 0);
   const block = src.slice(idx, idx + 900);
   assert.match(block, /retryable:\s*fairRetryable/);
-  assert.match(block, /\[ai\/generate\] fair queue reject/);
+  assert.match(block, /generateLog\.warn\(\s*'queue\.rejected'/);
 });

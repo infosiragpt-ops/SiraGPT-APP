@@ -57,8 +57,8 @@ test('trivial turns disable thinking and do not inject test-time-compute', () =>
 test('generate path skips Extra/Max and TTC on trivial turns (source contract)', () => {
   const aiRoute = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
   assert.match(aiRoute, /applyTrivialTurnGuards\(req, prompt\)/);
-  assert.match(aiRoute, /trivial turn kept on direct mode; Extra\/Max skipped/);
-  assert.match(aiRoute, /skipped trivial turn/);
+  assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.trivial_kept_direct'/);
+  assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.test_time_compute_skipped'/);
   assert.match(aiRoute, /req\._thinkingLevel = 'disabled'/);
   assert.match(aiRoute, /thinkingLevel: req\._thinkingLevel/);
   assert.match(aiRoute, /req\.body\.disableAgentic = true/);

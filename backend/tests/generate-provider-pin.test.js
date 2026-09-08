@@ -164,7 +164,7 @@ test('getClient factory wires Anthropic / Kimi / xAI — not OpenRouter or OpenA
 });
 
 test('Mini short_chitchat skips test-time-compute and slims the system prompt', () => {
-  assert.match(aiRoute, /skipped Mini short_chitchat/);
+  assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.test_time_compute_skipped'/);
   assert.match(aiRoute, /req\._miniShortChitchat/);
   assert.match(aiRoute, /MINI_SHORT_CHITCHAT_SYSTEM/);
   assert.match(aiRoute, /mini-short-chitchat/);
@@ -174,9 +174,9 @@ test('Mini short_chitchat skips test-time-compute and slims the system prompt', 
 });
 
 test('trivial turns skip Extra/Max effort so greetings stay fast', () => {
-  assert.match(aiRoute, /trivial turn kept on direct mode; Extra\/Max skipped/);
+  assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.trivial_kept_direct'/);
   assert.match(aiRoute, /applyTrivialTurnGuards\(req, prompt\)/);
-  assert.match(aiRoute, /skipped trivial turn/);
+  assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.test_time_compute_skipped'/);
 });
 
 test('duplicate Mini replay emits text_delta and omits raw model_id', () => {

@@ -1,12 +1,4 @@
 {
-  "expiresOn": "2026-09-15",
   "level": "high",
-  "allowed": [
-    {
-      "package": "sharp",
-      "source": 1124066,
-      "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
-      "reason": "Sharp 0.35 is a breaking native-image upgrade and Next.js plus Transformers currently resolve 0.34.x; retain a 14-day exception while a dedicated compatibility upgrade is validated."
-    }
-  ]
+  "allowed": []
 }

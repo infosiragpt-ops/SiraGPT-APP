@@ -81,3 +81,160 @@ test('agent state reducer keeps queue, document policy, gates and repairs', () =
   assert.equal(state.qualityGates[0].passed, true);
   assert.equal(state.repairs[0].status, 'resolved');
 });
+
+const {
+  resolveEventCursor,
+  resolveTaskLastError,
+  resolveTaskLastEventAt,
+  isFreshSnapshot,
+  isTaskStillAlive,
+  isInFlightTaskStatus,
+  isTerminalTaskStatus,
+  isTerminalLookupStatus,
+  buildTaskEventsResumePayload,
+  SNAPSHOT_FRESH_MS,
+} = require('../src/services/agents/agent-task-event-resume');
+const {
+  WORKER_STALLED_REASON,
+  WORKER_STALLED_MESSAGE,
+} = require('../src/services/agents/agent-task-runtime-watchdog');
+
+test('resume cursor prefers numeric after, then Last-Event-ID, then event id', () => {
+  const events = [
+    { id: 'task-seq:1', seq: 1, type: 'queue_status' },
+    { id: 'task-seq:2', seq: 2, type: 'step_start' },
+  ];
+
+  assert.equal(resolveEventCursor('2', 'task-seq:1', events), 2);
+  assert.equal(resolveEventCursor('', 'task-seq:2', events), 2);
+  assert.equal(resolveEventCursor('', '7', events), 7);
+  assert.equal(resolveEventCursor('', '', events), 0);
+  assert.equal(resolveEventCursor('missing', '', events), 0);
+});
+
+test('lastError prefers the latest error event, then streamState, then worker_stalled', () => {
+  assert.equal(resolveTaskLastError({
+    events: [
+      { type: 'step_start', seq: 1 },
+      { type: 'error', message: 'primero', seq: 2 },
+      { type: 'error', message: WORKER_STALLED_MESSAGE, seq: 3 },
+    ],
+  }), WORKER_STALLED_MESSAGE);
+
+  assert.equal(resolveTaskLastError({
+    events: [],
+    streamState: { error: 'stream boom' },
+  }), 'stream boom');
+
+  assert.equal(resolveTaskLastError({
+    events: [],
+    failedReason: WORKER_STALLED_REASON,
+  }), WORKER_STALLED_MESSAGE);
+
+  assert.equal(resolveTaskLastError(null), null);
+});
+
+test('fresh snapshot + in-flight status keep resume alive after SSE drop', () => {
+  assert.equal(isInFlightTaskStatus('running'), true);
+  assert.equal(isInFlightTaskStatus('queued'), true);
+  assert.equal(isTerminalTaskStatus('failed'), true);
+  assert.equal(isTerminalLookupStatus(404), true);
+  assert.equal(isTerminalLookupStatus(500), false);
+
+  const now = Date.parse('2026-09-07T16:00:00.000Z');
+  assert.equal(isFreshSnapshot(new Date(now - 10_000).toISOString(), { now }), true);
+  assert.equal(isFreshSnapshot(new Date(now - SNAPSHOT_FRESH_MS - 1).toISOString(), { now }), false);
+  assert.equal(isFreshSnapshot('not-a-date', { now }), false);
+});
+
+test('events resume payload slices after cursor and exposes lastError + updatedAt', () => {
+  const task = {
+    taskId: 'task-resume',
+    status: 'error',
+    updatedAt: '2026-09-07T16:00:00.000Z',
+    lastEventSeq: 3,
+    events: [
+      { type: 'queue_status', seq: 1 },
+      { type: 'step_start', seq: 2 },
+      { type: 'error', message: WORKER_STALLED_MESSAGE, seq: 3 },
+    ],
+  };
+
+  const resume = buildTaskEventsResumePayload(task, { after: 2 });
+  assert.equal(resume.events.length, 1);
+  assert.equal(resume.events[0].type, 'error');
+  assert.equal(resume.lastEventSeq, 3);
+  assert.equal(resume.updatedAt, '2026-09-07T16:00:00.000Z');
+  assert.equal(resume.lastEventAt, '2026-09-07T16:00:00.000Z');
+  assert.equal(resume.alive, false);
+  assert.equal(resume.lastError, WORKER_STALLED_MESSAGE);
+});
+
+test('lastEventAt prefers the dedicated pulse over updatedAt and marks in-flight jobs alive', () => {
+  const now = Date.parse('2026-09-07T16:00:00.000Z');
+  const running = {
+    status: 'running',
+    updatedAt: '2026-09-07T15:58:00.000Z',
+    lastEventAt: '2026-09-07T15:59:50.000Z',
+    streamState: { heartbeatAt: '2026-09-07T15:59:40.000Z' },
+  };
+  assert.equal(resolveTaskLastEventAt(running), '2026-09-07T15:59:50.000Z');
+  assert.equal(isTaskStillAlive(running, { now }), true);
+
+  const stale = {
+    status: 'running',
+    updatedAt: '2026-09-07T15:50:00.000Z',
+    lastEventAt: '2026-09-07T15:50:00.000Z',
+  };
+  assert.equal(isTaskStillAlive(stale, { now }), false);
+
+  const done = {
+    status: 'completed',
+    lastEventAt: '2026-09-07T15:59:50.000Z',
+  };
+  assert.equal(isTaskStillAlive(done, { now }), false);
+  assert.equal(resolveTaskLastEventAt(null), null);
+  assert.equal(resolveTaskLastEventAt({ lastEventAt: 1_725_724_800_000 }).endsWith('Z'), true);
+});
+
+test('heartbeat pulse writes lastEventAt without growing the event log', () => {
+  process.env.AGENT_TASK_PRISMA_SYNC = '0';
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-last-event-at-'));
+  taskStore.writeTaskSnapshot({
+    taskId: 'task-pulse',
+    userId: 'user-a',
+    status: 'running',
+    displayGoal: 'Informe largo',
+    updatedAt: '2026-09-07T15:00:00.000Z',
+    lastEventAt: '2026-09-07T15:00:00.000Z',
+    events: [{ type: 'queue_status', seq: 1 }],
+    lastEventSeq: 1,
+    streamState: { steps: [], artifacts: [], finalText: '', done: false },
+  });
+
+  const touched = taskStore.touchTaskHeartbeat('task-pulse', 'user-a');
+  assert.equal(touched.status, 'running');
+  assert.equal((touched.events || []).length, 1);
+  assert.ok(Date.now() - Date.parse(touched.lastEventAt) < 5_000);
+  assert.equal(touched.lastEventAt, touched.streamState.lastEventAt);
+  assert.equal(touched.lastEventAt, touched.streamState.heartbeatAt);
+
+  const resume = buildTaskEventsResumePayload(touched, { after: 1, now: Date.now() });
+  assert.equal(resume.events.length, 0);
+  assert.equal(resume.lastEventSeq, 1);
+  assert.equal(resume.alive, true);
+  assert.equal(resume.lastEventAt, touched.lastEventAt);
+});
+
+test('agent-task events route honors Last-Event-ID and lastError for /agentes resume', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../src/routes/agent-task.js'), 'utf8');
+  assert.match(src, /resolveEventCursor\(req\.query\.after, lastEventId, allEvents\)/);
+  assert.match(src, /sinceSeq: req\.query\.sinceSeq/);
+  assert.match(src, /Last-Event-ID/);
+  assert.match(src, /lastError: resume\.lastError/);
+  assert.match(src, /updatedAt: resume\.updatedAt/);
+  assert.match(src, /lastEventAt: resume\.lastEventAt/);
+  assert.match(src, /alive: resume\.alive/);
+  assert.match(src, /resumeStatus: resume\.resumeStatus/);
+  assert.match(src, /resumeLabel: resume\.resumeLabel/);
+});

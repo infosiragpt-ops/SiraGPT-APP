@@ -29,6 +29,10 @@ const {
   refuseOpenRouterComputerModel,
 } = require('../services/computer/computer-code-guard');
 const loginHandoff = require('../services/computer/login-handoff');
+const {
+  chromeOpenUrlCommand,
+  chromeMaximizeOrLaunch,
+} = require('../services/computer/chrome-desktop-flags');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -193,11 +197,7 @@ async function navigateMemberDesktop(session, url) {
   // Skip agentPost(session, '/navigate') until the computer agent implements it.
   // The orch http-proxy hangs ~120s (express.json already consumed the body);
   // FE AbortSignal.timeout(30s) then toasts "signal timed out" and chrome never runs.
-  const cmd = '('
-    + 'google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ' + JSON.stringify(url)
-    + ' || chromium --no-sandbox --disable-dev-shm-usage --new-window ' + JSON.stringify(url)
-    + ' || xdg-open ' + JSON.stringify(url)
-    + ') >/tmp/sira-nav.log 2>&1 & echo Opening';
+  const cmd = chromeOpenUrlCommand(url);
   try {
     const opened = await persistent.dockerExec(session, cmd, { timeoutMs: 8000 });
     return { ok: true, url, result: opened, sessionId: session.sessionId, fallback: 'chrome' };
@@ -247,8 +247,8 @@ router.get('/sessions/:id', requireFlag, authenticateToken, async (req, res) => 
 });
 
 const FOCUS_CMDS = {
-  chrome: XD + ' search --onlyvisible --class google-chrome windowactivate || ' + XD + ' search --onlyvisible --name Chrome windowactivate || google-chrome --no-first-run --disable-gpu about:blank',
-  browser: XD + ' search --onlyvisible --class google-chrome windowactivate || google-chrome --no-first-run --disable-gpu about:blank',
+  chrome: chromeMaximizeOrLaunch({ xdotool: XD }),
+  browser: chromeMaximizeOrLaunch({ xdotool: XD }),
   thunar: XD + ' search --onlyvisible --class Thunar windowactivate || thunar /workspace',
   files: XD + ' search --onlyvisible --class Thunar windowactivate || thunar /workspace',
   terminal: XD + ' search --onlyvisible --class xfce4-terminal windowactivate || xfce4-terminal --working-directory=/workspace',

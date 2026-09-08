@@ -87,4 +87,13 @@ describe('composer permission policy', () => {
     const plan = authorizeTool('planificar', 'write', { permission: 'default' });
     assert.equal(plan.denied, true);
   });
+
+  it('an approved ask does not override Solo lectura or a denied write', () => {
+    const bash = authorizeTool('planificar', 'bash', { permission: 'default', approved: true });
+    assert.equal(bash.allowed, true);
+    const write = authorizeTool('planificar', 'write', { permission: 'default', approved: true });
+    assert.equal(write.denied, true);
+    const read = authorizeTool('construir', 'write', { permission: 'read', approved: true });
+    assert.equal(read.denied, true);
+  });
 });

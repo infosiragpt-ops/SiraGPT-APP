@@ -4,17 +4,30 @@
 # Also installs pandoc for document-conversion routes.
 # ──────────────────────────────────────────────────────────────
 
+# Global ARG: must be declared BEFORE the first FROM so BuildKit can
+# interpolate FROM whisper-seed-${BUNDLE_WHISPER_MODEL}. An ARG inside a
+# later stage is not visible to FROM and resolves to whisper-seed- (invalid).
+# Default 0 keeps CI on WHISPER_MODEL_URL (HuggingFace). Lenovo: copy the
+# cached bin into the backend/ build context and pass
+# --build-arg BUNDLE_WHISPER_MODEL=1 so seed-1 is used. BuildKit does not
+# execute unused seed-1, so CI does not need the file present.
+ARG BUNDLE_WHISPER_MODEL=0
+
 # ─── Stage 1: Install dependencies ───────────────────────────
 FROM node:22-alpine AS deps
 WORKDIR /app
+
+# The final image installs Alpine's Chromium; npm needs no bundled browser.
+ENV PUPPETEER_SKIP_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Install OS deps needed for native modules (node-gyp → python3) and document gen.
 RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
 # Install Node deps
 COPY package.json package-lock.json ./
+COPY scripts/image-size-security-patch.cjs ./scripts/
 RUN for attempt in 1 2 3; do \
-      npm ci --omit=dev --prefer-offline --no-audit --no-fund && break; \
+      npm ci --prefer-offline --no-audit --no-fund && break; \
       status=$?; \
       if [ "$attempt" = "3" ]; then exit "$status"; fi; \
       sleep $((attempt * 10)); \
@@ -26,7 +39,7 @@ WORKDIR /app
 
 RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
-# Copy prod node_modules from deps stage (avoids re-download)
+# Build with pinned TypeScript, then remove development dependencies.
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
 
@@ -34,7 +47,17 @@ COPY --from=deps /app/package.json ./package.json
 COPY . .
 
 # Generate Prisma client (needed at runtime for queries)
-RUN npx prisma generate
+RUN npx prisma generate && npm run build:doc-sandbox && npm prune --omit=dev --ignore-scripts
+
+# Optional bundled ggml-base.bin. Stage pick uses the global
+# BUNDLE_WHISPER_MODEL ARG declared before the first FROM.
+FROM node:22-alpine AS whisper-seed-0
+RUN mkdir -p /whisper-seed
+
+FROM node:22-alpine AS whisper-seed-1
+COPY ggml-base.bin /whisper-seed/ggml-base.bin
+
+FROM whisper-seed-${BUNDLE_WHISPER_MODEL} AS whisper-seed
 
 # ─── Stage 3: Production runner ─────────────────────────────
 FROM node:22-alpine AS runner
@@ -42,7 +65,10 @@ WORKDIR /app
 
 # Runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows, plus
 # git/openssh-client for APPS/GitHub workspace clone, pull, diff, push.
+# bash: SiraCode workspace exec spawns /bin/bash -lc (Planificar permission
+# resume). Alpine's node image does not ship it; do not fall back to sh.
 RUN apk add --no-cache \
+    bash \
     chromium \
     docker-cli \
     font-liberation \
@@ -77,20 +103,25 @@ RUN addgroup -S appgroup 2>/dev/null || true; \
 # Local Whisper (whisper.cpp + ggml-base). No API key. Used when OpenAI
 # Whisper is unset or returns 401/403. See scripts/install-local-whisper.sh
 # and docs/operations/LOCAL_WHISPER.md.
-# Alpine has no bash — invoke the installer with sh. Do not attach `|| true`
-# to the install itself (that previously turned a missing-bash no-op into
-# a green layer). apk del is grouped so its failure cannot mask the install.
+# The whisper installer is POSIX sh — invoke it with sh even after bash is
+# installed for SiraCode. Do not attach `|| true` to the install itself
+# (that previously turned a missing-binary no-op into a green layer).
+# apk del is grouped so its failure cannot mask the install.
 # Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load.
 # install-local-whisper.sh builds with -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF
 # -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DBUILD_SHARED_LIBS=OFF.
+ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 ENV WHISPER_CPP_BIN=/usr/local/bin/whisper-cli \
     WHISPER_CPP_MODEL=/usr/local/share/whisper/ggml-base.bin \
     WHISPER_LANGUAGE=es \
+    WHISPER_MODEL_URL=${WHISPER_MODEL_URL} \
     LD_LIBRARY_PATH=/usr/local/lib
+COPY --from=whisper-seed /whisper-seed/ /tmp/whisper-seed/
 COPY scripts/install-local-whisper.sh /tmp/install-local-whisper.sh
 RUN sh /tmp/install-local-whisper.sh \
     && { apk del --no-network cmake make g++ linux-headers || true; } \
     && rm -f /tmp/install-local-whisper.sh \
+    && rm -rf /tmp/whisper-seed \
     && whisper-cli -h >/dev/null \
     && test -s "${WHISPER_CPP_MODEL}" \
     && ffmpeg -hide_banner -loglevel error -nostdin -y \
@@ -105,9 +136,13 @@ COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
 COPY --from=build --chown=appuser:appgroup /app/package.json ./package.json
 COPY --from=build --chown=appuser:appgroup /app/index.js ./index.js
 COPY --from=build --chown=appuser:appgroup /app/src ./src
+COPY --from=build --chown=appuser:appgroup /app/dist ./dist
 COPY --from=build --chown=appuser:appgroup /app/prisma ./prisma
 COPY --from=build --chown=appuser:appgroup /app/scripts ./scripts
 COPY --from=build --chown=appuser:appgroup /app/docs ./docs
+
+# Verify the actual runtime tree, not only the build-stage dependency manifest.
+RUN node scripts/image-size-security-patch.cjs --verify
 
 # Ensure uploads directory exists and is writable. Runtime uploads are mounted or
 # generated by the app, so the build context may legitimately not contain one.
@@ -116,6 +151,11 @@ RUN mkdir -p /app/uploads /srv/sites /codex-exports && \
 
 # Switch to non-root user
 USER appuser
+
+# Fail the image if /bin/bash is missing or not a real Bash. SiraCode
+# permission-resume spawns this path as appuser; CI on Ubuntu will not
+# catch an Alpine-only ENOENT. Do not substitute sh.
+RUN /bin/bash -lc 'set -euo pipefail; test -n "${BASH_VERSION}"'
 
 # Immutable release provenance is declared after expensive runtime layers so a
 # new commit does not invalidate the document-toolchain installation cache.

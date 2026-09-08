@@ -17,6 +17,7 @@ const { COMPUTER_TOOL_DEFINITIONS, makeComputerExecutors } = require('../agent-r
 const { HAS_COMPUTER_POLICY_ES, POLICY_ES } = require('./login-handoff');
 const { createWorkspaceFileApi } = require('./workspace-files');
 const { authorizeComposerTool, composerDeniedResult } = require('../composer-permission');
+const { chromeOpenUrlCommand } = require('./chrome-desktop-flags');
 
 const COMPUTER_TOOL_NAMES = Object.freeze([
   'computer_screenshot',
@@ -92,7 +93,7 @@ function buildNavigateTool({ userId, conversationId, env }) {
           // (orch http-proxy hangs ~120s). Open Chrome in the running session.
           const opened = await persistent.dockerExec(
             session,
-            `(google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ${JSON.stringify(url)} || chromium --no-sandbox --disable-dev-shm-usage --new-window ${JSON.stringify(url)} || xdg-open ${JSON.stringify(url)}) >/tmp/sira-nav.log 2>&1 & echo Opening`,
+            chromeOpenUrlCommand(url),
             { signal: ctx.signal, timeoutMs: 8000 },
           );
           return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };

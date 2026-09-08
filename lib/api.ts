@@ -903,6 +903,67 @@ export type OrganizationInvitationAcceptResult = {
   role?: OrganizationRole
 }
 
+// ── Sira Voz (VoiceStudio) contracts ─────────────────────────────────────
+export interface VoiceStudioStatus {
+  configured: boolean;
+  ok: boolean;
+  status: string;
+  device?: string | null;
+  version?: string | null;
+  voices?: number;
+  limits?: { cloneSampleMb: number; directMediaMb: number; bookFileMb: number; speechPreviewChars: number; maxVoices: number; maxActiveJobs: number };
+  features?: { clone: boolean; dub: boolean; transcribe: boolean; audiobook: boolean; free: boolean; local: boolean };
+}
+
+export interface VoiceStudioVoice {
+  id: string;
+  name: string;
+  language: string;
+  kind: string;
+  createdAt: string;
+  previewUrl: string;
+}
+
+export interface VoiceStudioTranscription {
+  ok: boolean;
+  text: string;
+  language: string | null;
+  duration: number | null;
+  segments: Array<{ start: number; end: number; text: string }>;
+  srt: string;
+  model: string;
+}
+
+export interface VoiceStudioJob {
+  id: string;
+  kind: 'dub' | 'audiobook' | string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | string;
+  stage: string | null;
+  progress: number;
+  title: string | null;
+  chatId: string | null;
+  input: Record<string, unknown> | null;
+  result: {
+    kind?: string;
+    filename?: string;
+    mime?: string;
+    sizeBytes?: number;
+    downloadUrl?: string;
+    summary?: string;
+    title?: string;
+    chapters?: number;
+    segments?: number;
+    durationSeconds?: number | null;
+    targetLanguage?: string;
+    format?: string;
+    messageId?: string | null;
+  } | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -3436,6 +3497,122 @@ class ApiClient {
       throw new Error(error.error || `HTTP ${response.status}`);
     }
 
+    return response.blob();
+  }
+
+  // ── Sira Voz — VoiceStudio (open source, local, free) ─────────────────
+  async getVoiceStudioStatus(): Promise<VoiceStudioStatus> {
+    return this.request('/voice-studio/status', { suppressFailureLog: true });
+  }
+
+  async listVoiceStudioVoices(): Promise<{ voices: VoiceStudioVoice[] }> {
+    return this.request('/voice-studio/voices');
+  }
+
+  async cloneVoiceStudioVoice(data: { audio: Blob; filename?: string; name: string; language?: string; refText?: string }): Promise<{ voice: VoiceStudioVoice }> {
+    const formData = new FormData();
+    formData.append('audio', data.audio, data.filename || 'muestra.webm');
+    formData.append('name', data.name);
+    if (data.language) formData.append('language', data.language);
+    if (data.refText) formData.append('refText', data.refText);
+    return this.request('/voice-studio/voices/clone', { method: 'POST', body: formData, timeoutMs: 180000, maxRetries: 0 });
+  }
+
+  async deleteVoiceStudioVoice(voiceId: string): Promise<{ ok: boolean }> {
+    return this.request(`/voice-studio/voices/${encodeURIComponent(voiceId)}`, { method: 'DELETE' });
+  }
+
+  /** Reference clip of a cloned voice, as a Blob (needs the auth header, so never a bare <audio src>). */
+  async fetchVoiceStudioVoicePreview(voiceId: string): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/voices/${encodeURIComponent(voiceId)}/preview`, {
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+    });
+    if (!response.ok) throw new Error('No se pudo cargar la muestra de la voz');
+    return response.blob();
+  }
+
+  /** Short, non-persisted synthesis to audition a voice (≤ 600 chars). */
+  async previewVoiceStudioSpeech(data: { text: string; voiceId?: string | null; language?: string | null; speed?: number }): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/speech/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      let message = 'No se pudo generar la prueba de voz';
+      try { const body = await response.json(); if (body?.error) message = body.error; } catch { /* non-JSON */ }
+      throw new Error(message);
+    }
+    return response.blob();
+  }
+
+  async transcribeWithVoiceStudio(data: { media?: Blob; filename?: string; fileId?: string; language?: string }): Promise<VoiceStudioTranscription> {
+    if (data.media) {
+      const formData = new FormData();
+      formData.append('media', data.media, data.filename || 'audio.webm');
+      if (data.language) formData.append('language', data.language);
+      return this.request('/voice-studio/transcriptions', { method: 'POST', body: formData, timeoutMs: 30 * 60 * 1000, maxRetries: 0 });
+    }
+    return this.request('/voice-studio/transcriptions', {
+      method: 'POST',
+      body: JSON.stringify({ fileId: data.fileId, language: data.language }),
+      timeoutMs: 30 * 60 * 1000,
+      maxRetries: 0,
+    });
+  }
+
+  async startVoiceStudioDub(data: { media?: Blob; filename?: string; fileId?: string; targetLanguage: string; sourceLanguage?: string; voiceId?: string | null; numSpeakers?: number | null; keepBackground?: boolean; chatId?: string | null }): Promise<{ job: VoiceStudioJob }> {
+    const formData = new FormData();
+    if (data.media) formData.append('media', data.media, data.filename || 'video.mp4');
+    if (data.fileId) formData.append('fileId', data.fileId);
+    formData.append('targetLanguage', data.targetLanguage);
+    if (data.sourceLanguage) formData.append('sourceLanguage', data.sourceLanguage);
+    if (data.voiceId) formData.append('voiceId', data.voiceId);
+    if (data.numSpeakers) formData.append('numSpeakers', String(data.numSpeakers));
+    if (data.keepBackground === false) formData.append('keepBackground', 'false');
+    if (data.chatId) formData.append('chatId', data.chatId);
+    return this.request('/voice-studio/jobs/dub', { method: 'POST', body: formData, timeoutMs: 10 * 60 * 1000, maxRetries: 0 });
+  }
+
+  async startVoiceStudioAudiobook(data: { text?: string; file?: Blob; filename?: string; fileId?: string; title?: string; author?: string; voiceId?: string | null; language?: string; format?: 'm4b' | 'mp3'; chatId?: string | null }): Promise<{ job: VoiceStudioJob }> {
+    const formData = new FormData();
+    if (data.file) formData.append('file', data.file, data.filename || 'libro.txt');
+    if (data.fileId) formData.append('fileId', data.fileId);
+    if (data.text) formData.append('text', data.text);
+    if (data.title) formData.append('title', data.title);
+    if (data.author) formData.append('author', data.author);
+    if (data.voiceId) formData.append('voiceId', data.voiceId);
+    if (data.language) formData.append('language', data.language);
+    if (data.format) formData.append('format', data.format);
+    if (data.chatId) formData.append('chatId', data.chatId);
+    return this.request('/voice-studio/jobs/audiobook', { method: 'POST', body: formData, timeoutMs: 10 * 60 * 1000, maxRetries: 0 });
+  }
+
+  async listVoiceStudioJobs(): Promise<{ jobs: VoiceStudioJob[] }> {
+    return this.request('/voice-studio/jobs', { suppressFailureLog: true });
+  }
+
+  async getVoiceStudioJob(jobId: string): Promise<{ job: VoiceStudioJob }> {
+    return this.request(`/voice-studio/jobs/${encodeURIComponent(jobId)}`, { suppressFailureLog: true });
+  }
+
+  async cancelVoiceStudioJob(jobId: string): Promise<{ job: VoiceStudioJob }> {
+    return this.request(`/voice-studio/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+  }
+
+  async downloadVoiceStudioJob(jobId: string): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/jobs/${encodeURIComponent(jobId)}/download`, {
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+    });
+    if (!response.ok) throw new Error('El resultado todavía no está disponible');
+    return response.blob();
+  }
+
+  async downloadVoiceStudioSubtitles(jobId: string): Promise<Blob> {
+    const response = await this.authenticatedFetch(`${this.baseURL}/voice-studio/jobs/${encodeURIComponent(jobId)}/subtitles`, {
+      headers: { ...(this.token && { Authorization: `Bearer ${this.token}` }) },
+    });
+    if (!response.ok) throw new Error('Este trabajo no tiene subtítulos');
     return response.blob();
   }
 

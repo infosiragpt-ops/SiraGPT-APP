@@ -8,8 +8,13 @@
 #   WHISPER_PREFIX       install prefix (default /usr/local, or ~/.local if not root)
 #   WHISPER_MODEL_DIR    model directory (default $PREFIX/share/whisper)
 #   WHISPER_CPP_REF      git tag/branch (default v1.7.5)
-#   WHISPER_MODEL_URL    ggml model URL (default official ggml-base.bin)
+#   WHISPER_MODEL_URL    ggml model URL (default official ggml-base.bin).
+#                        file:// and absolute paths copy locally (no HuggingFace).
+#   WHISPER_SEED_FILE    extra local file to copy before any download
 #   WHISPER_SKIP_MODEL=1 compile the binary only
+# Pre-seeded files skip HuggingFace: $MODEL_DIR/$MODEL_NAME (non-empty),
+# /tmp/whisper-seed/$MODEL_NAME (Dockerfile BUNDLE_WHISPER_MODEL=1),
+# /tmp/$MODEL_NAME.
 set -eu
 # pipefail when the shell supports it (ash on Alpine, bash)
 (set -o pipefail) 2>/dev/null && set -o pipefail
@@ -51,6 +56,23 @@ fi
 download() {
   url="$1"
   dest="$2"
+  local_src=""
+  case "${url}" in
+    file://*)
+      local_src="${url#file://}"
+      ;;
+    /*)
+      local_src="${url}"
+      ;;
+  esac
+  if [ -n "${local_src}" ]; then
+    if [ -s "${local_src}" ]; then
+      cp -f "${local_src}" "${dest}"
+      return 0
+    fi
+    echo "install-local-whisper: local model missing at ${local_src}" >&2
+    return 1
+  fi
   attempt=1
   while [ "${attempt}" -le 4 ]; do
     if command -v wget >/dev/null 2>&1; then
@@ -150,6 +172,30 @@ install_cli() {
   install -m 0755 "${src}" "${dest}"
 }
 
+# Prefer a local ggml file over HuggingFace. Dest already present (re-run or
+# image layer) or a file dropped at /tmp/whisper-seed /tmp / WHISPER_SEED_FILE
+# all skip the network download.
+seed_model() {
+  dest="${MODEL_DIR}/${MODEL_NAME}"
+  if [ -s "${dest}" ]; then
+    echo "install-local-whisper: skipping download; model already present at ${dest}" >&2
+    return 0
+  fi
+  for candidate in \
+    "${WHISPER_SEED_FILE:-}" \
+    "/tmp/whisper-seed/${MODEL_NAME}" \
+    "/tmp/${MODEL_NAME}"
+  do
+    [ -n "${candidate}" ] || continue
+    if [ -s "${candidate}" ] && ! same_file "${candidate}" "${dest}"; then
+      echo "install-local-whisper: seeding model from ${candidate}" >&2
+      cp -f "${candidate}" "${dest}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 rm -rf "${SRC_DIR}"
 git clone --depth 1 --branch "${REF}" https://github.com/ggerganov/whisper.cpp.git "${SRC_DIR}"
 # Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load
@@ -201,7 +247,7 @@ copy_shared_libs
 register_dynamic_libs
 
 if [ "${WHISPER_SKIP_MODEL:-0}" != "1" ]; then
-  if [ ! -s "${MODEL_DIR}/${MODEL_NAME}" ]; then
+  if ! seed_model; then
     download "${MODEL_URL}" "${MODEL_DIR}/${MODEL_NAME}"
   fi
   if [ ! -s "${MODEL_DIR}/${MODEL_NAME}" ]; then

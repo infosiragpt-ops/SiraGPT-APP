@@ -91,7 +91,8 @@ describe("composer effort picker source contract", () => {
       assert.ok(effortMenu.includes(copy), `missing approved effort copy: ${copy}`)
     }
     assert.doesNotMatch(effortMenu, /effort-caption|caption:/, "the compact reference has no descriptive caption")
-    assert.doesNotMatch(effortMenu, /effort-value/, "the selected value stays in the toolbar chip, not the popover header")
+    assert.match(effortMenu, /<span className="effort-title" id=\{titleId\}>Esfuerzo<\/span>/, "the title labels the slider")
+    assert.match(effortMenu, /<span className="effort-level" id=\{valueId\}>\{active\.label\}<\/span>/, "the header names the level in text — never color alone (WCAG 1.4.1)")
   })
 
   it("supports real dragging, not just stop clicks", () => {
@@ -111,6 +112,13 @@ describe("composer effort picker source contract", () => {
       /indexFromPointer/,
       "any x on the track must map to the nearest stop"
     )
+    assert.match(section![1], /aria-labelledby=\{\s*`\$\{titleId\} \$\{valueId\}`\s*\}/, "title + value name the slider, never a bare number")
+    assert.match(section![1], /aria-orientation="horizontal"/)
+    assert.match(section![1], /PageUp/, "PageUp jumps forward")
+    assert.match(section![1], /PageDown/, "PageDown jumps back")
+    assert.match(section![1], /className="effort-ticks"/, "discrete step marks under the rail")
+    assert.match(section![1], /className="effort-bubble"/, "value bubble follows the thumb while dragging")
+    assert.match(section![1], /data-dragging=\{dragging \? "true" : undefined\}/)
     assert.match(
       globals,
       /\.effort-track \{[\s\S]{0,520}overflow: hidden/,

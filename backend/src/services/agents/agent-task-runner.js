@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const reactAgent = require('../react-agent');
+const { statusForAgentStopReason, canRecoverAgentStopReason } = require('./react-run-outcome');
 const { buildTaskTools } = require('./task-tools');
 const taskStore = require('./task-store');
 const auditLog = require('./audit-log');
@@ -31,6 +32,10 @@ const durableExecutionStore = require('./durable-execution-store');
 const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
 const outputFormat = require('../output-format-contract');
 const { getQueueName } = require('./agent-task-queue');
+const {
+  createHonestProgressTracker,
+  enrichAgentTaskEvent,
+} = require('./agent-task-honest-progress');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const {
@@ -1947,6 +1952,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   task.runtimeModel = runtimeModelProfile.runtimeModel;
 
   const artifacts = [];
+  const progressTracker = createHonestProgressTracker({
+    startedAt,
+    maxSteps,
+    maxRuntimeMs,
+    cycleTotal: Array.isArray(cycle?.stages) ? cycle.stages.length : 0,
+  });
   // Throttle in-flight progress upserts. A long-running task emits
   // hundreds of events; firing a Prisma upsert + BullMQ updateProgress
   // on every single one wastes DB connections and Redis round-trips.
@@ -1959,6 +1970,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const isTerminal = status !== 'running';
     if (!force && !isTerminal && now - lastProgressAt < PROGRESS_THROTTLE_MS) return;
     lastProgressAt = now;
+    const progress = progressTracker.snapshot(now);
     void persistence.upsertAgentTask({
       ...task,
       status,
@@ -1970,23 +1982,32 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // can reject mid-failover. Without .catch() the rejection goes
       // unhandled and (depending on Node policy) can terminate the
       // worker. Progress is best-effort observability — never fatal.
-      Promise.resolve(job.updateProgress({ status, lastEventSeq: task.lastEventSeq || 0 })).catch(() => {});
+      Promise.resolve(job.updateProgress({
+        status,
+        lastEventSeq: task.lastEventSeq || 0,
+        percent: progress.percent,
+        etaMs: progress.etaMs,
+        etaLabel: progress.etaLabel,
+        phase: progress.phase,
+        phaseLabel: progress.phaseLabel,
+      })).catch(() => {});
     }
   };
   const emit = (event) => {
-    streamState = internals.reduceAgentState(streamState, event);
+    const enriched = enrichAgentTaskEvent(event, progressTracker);
+    streamState = internals.reduceAgentState(streamState, enriched);
     task.streamState = streamState;
-    const written = taskStore.appendTaskEvent(task, event, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
+    const written = taskStore.appendTaskEvent(task, enriched, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
     if (written) {
       task.events = written.events || task.events;
       task.checkpoints = written.checkpoints || task.checkpoints;
       task.lastEventSeq = written.lastEventSeq || task.lastEventSeq;
       task.artifacts = written.artifacts || task.artifacts;
     }
-    void persistence.appendAgentTaskEvent(task, task.events?.[task.events.length - 1] || event);
-    metrics.counter('agent_task_events_total', { type: event.type || 'unknown' });
+    void persistence.appendAgentTaskEvent(task, task.events?.[task.events.length - 1] || enriched);
+    metrics.counter('agent_task_events_total', { type: enriched.type || 'unknown' });
     persistProgress('running');
-    return event;
+    return enriched;
   };
 
   emit({
@@ -2192,7 +2213,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   }, maxRuntimeMs + 5000);
   runtimeTimer.unref?.();
 
-  // ── BullMQ lock heartbeat ──────────────────────────────────────────
+  // ── Liveness + BullMQ lock heartbeat ───────────────────────────────
   // Agent tasks routinely run 10–20 min (max_steps=80 reached at ~19min
   // in prod logs). BullMQ's automatic lock renewal fires every
   // lockDuration/2 and any single failed renew (Upstash failover, quota
@@ -2205,18 +2226,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // single tick fails we retry on the next tick instead of giving up,
   // and we throttle warns so a Redis outage logs once per minute, not
   // once per heartbeat. Cleared in the outer `finally` below.
+  //
+  // The same tick pulses `touchTaskHeartbeat` so the runtime watchdog
+  // can tell a live runner from a dead one (OpenClaw-style no-output
+  // stall). Local in-process runs have no BullMQ lock but still need
+  // the snapshot pulse — otherwise a crashed local runner leaves
+  // /agentes stuck on "Pensando…".
   const lockHeartbeatIntervalMs = Math.max(
     5_000,
     Number.parseInt(process.env.AGENT_WORKER_LOCK_HEARTBEAT_MS || '30000', 10) || 30_000,
   );
   const lockHeartbeatExtendMs = Math.max(
     lockHeartbeatIntervalMs * 4,
-    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60 * 1000,
+    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60_000,
   );
   let lockHeartbeatTimer = null;
   let lockHeartbeatLastWarnAt = 0;
-  if (job && typeof job.extendLock === 'function' && job.token) {
-    const tick = async () => {
+  const tickHeartbeat = async () => {
+    try {
+      taskStore.touchTaskHeartbeat(taskId, user.id);
+    } catch { /* never break the live run */ }
+    if (job && typeof job.extendLock === 'function' && job.token) {
       try {
         await job.extendLock(job.token, lockHeartbeatExtendMs);
       } catch (err) {
@@ -2228,13 +2258,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           );
         }
       }
-    };
-    // Refresh immediately so the first long step doesn't race the
-    // initial 30s renew, then on a steady cadence.
-    tick();
-    lockHeartbeatTimer = setInterval(tick, lockHeartbeatIntervalMs);
-    if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
-  }
+    }
+  };
+  // Refresh immediately so the first long step doesn't race the
+  // initial 30s renew / watchdog stale window, then on a steady cadence.
+  tickHeartbeat();
+  lockHeartbeatTimer = setInterval(() => { tickHeartbeat(); }, lockHeartbeatIntervalMs);
+  if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
   const finishDeterministicTask = async ({
     finalMarkdown,
     stoppedReason,
@@ -2242,6 +2272,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     artifactsList = artifacts,
     metadata = {},
   }) => {
+    const status = statusForAgentStopReason(stoppedReason);
+    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const doneEvent = emit({
       type: 'done',
@@ -2249,8 +2281,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       stats: { steps, artifacts: artifactsList.length },
     });
 
-    const status = 'completed';
-    task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
       chatId,
@@ -3173,6 +3203,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     const { createAuthorizationGate } = require('./tool-authorization-gate');
     const toolManifest = require('./tool-manifest');
+    const { attachToolFailureCircuit } = require('./tool-failure-circuit');
     const toolGate = createAuthorizationGate();
     const toolUsageMap = {};
     const toolCtx = {
@@ -3220,6 +3251,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         emit(payloadEvent);
       },
     };
+    attachToolFailureCircuit(toolCtx, { sessionKey: taskId });
 
     // Chat-only requests against an attachment have no artifact to
     // produce — the agent only needs to read the file, reason, and
@@ -3411,7 +3443,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
-    if (attachmentFinalNeedsRecovery) {
+    if (attachmentFinalNeedsRecovery && canRecoverAgentStopReason(stoppedReason)) {
       // Built only on the recovery path: buildToolObservationFallbackContext is
       // a pure full step×action walk (+ JSON.stringify per observation) that was
       // previously computed on every finalization and discarded on the happy path.
@@ -3438,7 +3470,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       finalMarkdown = finalFallbackMarkdown;
       stoppedReason = recoveredMarkdown
         ? 'attachment_empty_response_recovery'
-        : 'attachment_unreadable_empty_response_recovery';
+        : statusForAgentStopReason(stoppedReason) !== 'completed'
+          ? stoppedReason
+          : 'attachment_unreadable_empty_response_recovery';
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
@@ -3513,13 +3547,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     // F2: the rebuild above re-derives autoGenerate from the goal text — a
     // runner-claimed turn that failed must keep the generic auto-document
     // pipeline banned even after the rebuild.
-    if (agentRunnerFailure && documentPolicy) {
+    if ((agentRunnerFailure || statusForAgentStopReason(stoppedReason) !== 'completed') && documentPolicy) {
       documentPolicy = {
         ...documentPolicy,
         autoGenerate: false,
         thresholds: {
           ...(documentPolicy?.thresholds || {}),
-          agentRunnerFailure: agentRunnerFailure.reason,
+          ...(agentRunnerFailure ? { agentRunnerFailure: agentRunnerFailure.reason } : {}),
         },
       };
     }
@@ -3660,6 +3694,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
     }
 
+    const status = statusForAgentStopReason(stoppedReason);
+    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const completedStepCount = Math.max(result.steps.length, stepIdCounter);
     const doneEvent = emit({
@@ -3668,8 +3704,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       stats: { steps: completedStepCount, artifacts: artifacts.length },
     });
 
-    const status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
-    task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
       chatId,
@@ -3831,9 +3865,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         },
       });
     }
-    const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
+    const errorEvent = controller.signal.aborted
+      ? { type: 'error', message: 'Tarea detenida por el usuario.' }
+      : toAgentTaskErrorEvent(err || 'agent task failed');
+    const message = errorEvent.message;
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
-    emit({ type: 'error', message });
+    emit(errorEvent);
     taskStore.markTaskStatus(task, task.status, {
       streamState,
       stats: { durationMs: Date.now() - startedAt, error: message },
@@ -3891,13 +3928,15 @@ function withJitter(baseMs) {
  * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
  * (0 = immediate, >0 = backoff).
  */
-const { classifyTaskError } = require('../../utils/task-error-classifier');
+const { classifyTaskError, presentTaskError, toAgentTaskErrorEvent } = require('../../utils/task-error-classifier');
 
 module.exports = {
   runAgentTaskJob,
   buildFinalizeProfile,
   buildOpenAICompatibleClient,
   classifyTaskError,
+  presentTaskError,
+  toAgentTaskErrorEvent,
   normalizeAgentRuntimeModel,
   resolveAgentRuntimeClient,
   detectAgentRuntimeProvider,
