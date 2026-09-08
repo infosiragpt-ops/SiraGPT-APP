@@ -29,6 +29,8 @@ services:
       - "127.0.0.1:9090:9090"   # UI/API loopback-only on the host
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # SLO burn-rate recording/alerting rules consumed via rule_files.
+      - ./docs/prometheus-rules.yml:/etc/prometheus/siragpt-rules.yml:ro
       - prometheus_data:/prometheus
     environment:
       # From .env; same value the backend validates on every scrape.

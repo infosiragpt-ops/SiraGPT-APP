@@ -3614,8 +3614,8 @@ function CompanyHome({
               <div
                 key={department.id}
                 className={cn(
-                  "group/dept relative flex min-h-[58px] w-full items-center gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
-                  hideFooter && "min-h-[46px] gap-1 rounded-md px-1.5 py-1.5",
+                  "group/dept relative flex min-h-[58px] w-full items-start gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
+                  hideFooter && "min-h-[52px] gap-1 rounded-md px-1.5 py-1.5",
                   department.id === "ceo-office" && "bg-muted/50",
                   isPinned && "bg-sky-50/70 ring-1 ring-sky-500/10 dark:bg-sky-950/20",
                   menuOpen && "bg-muted/55",
@@ -3625,8 +3625,9 @@ function CompanyHome({
                 <button
                   type="button"
                   className={cn(
-                    "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    hideFooter && "gap-2",
+                    "flex min-w-0 flex-1 items-start gap-3 rounded-md px-0.5 text-left transition-colors hover:bg-transparent active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                    hideFooter && "gap-2 pr-14 [@media(hover:hover)]:pr-0",
+                    !hideFooter && "pr-16 [@media(hover:hover)]:pr-0",
                   )}
                   onClick={() => onOpenDepartment(department.id)}
                   aria-label={`Abrir ${department.name}`}
@@ -3648,8 +3649,16 @@ function CompanyHome({
                     />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
+                    <span className="flex min-w-0 items-start gap-1.5">
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-snug [overflow-wrap:anywhere] xl:whitespace-normal xl:overflow-visible xl:text-clip",
+                          hideFooter && "text-[11px]",
+                        )}
+                        title={department.name}
+                        data-dept-name-wrap="1"
+                        data-dept-name-1280="wrap"
+                      >
                         {department.name}
                       </span>
                       {isPinned ? (
@@ -3683,11 +3692,18 @@ function CompanyHome({
                   </span>
                 </button>
 
+                <div
+                  className={cn(
+                    "absolute right-1 top-2 z-10 flex items-center gap-0.5",
+                    "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/dept:opacity-100 [@media(hover:hover)]:group-focus-within/dept:opacity-100",
+                    menuOpen && "opacity-100",
+                  )}
+                >
                 {onOpenComputer ? (
                   <button
                     type="button"
                     className={cn(
-                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/90 hover:text-foreground",
+                      "inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/90 hover:text-foreground active:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                       hideFooter && "h-7 w-7",
                     )}
                     aria-label={`Abrir computadora de ${department.name}`}
@@ -3712,9 +3728,7 @@ function CompanyHome({
                       className={cn(
                         "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-background/90 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         hideFooter && "h-7 w-7",
-                        menuOpen
-                          ? "bg-background/90 text-foreground opacity-100"
-                          : "opacity-100 sm:opacity-0 sm:group-hover/dept:opacity-100 sm:group-focus-within/dept:opacity-100",
+                        menuOpen && "bg-background/90 text-foreground opacity-100",
                       )}
                       aria-label={`Opciones de ${department.name}`}
                       data-testid={`agent-company-department-menu-${department.id}`}
@@ -3759,15 +3773,7 @@ function CompanyHome({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-
-                <ChevronRight
-                  className={cn(
-                    "hidden h-4 w-4 shrink-0 text-muted-foreground/45 transition-opacity sm:block",
-                    menuOpen || isPinned
-                      ? "sm:hidden"
-                      : "sm:group-hover/dept:hidden sm:group-focus-within/dept:hidden",
-                  )}
-                />
+                </div>
               </div>
             )
           })}
@@ -3858,7 +3864,7 @@ function CompanyNavRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 active:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
         compact && "h-8 gap-2 rounded-md px-2 text-xs",
         active && "bg-muted/65 text-foreground",
       )}

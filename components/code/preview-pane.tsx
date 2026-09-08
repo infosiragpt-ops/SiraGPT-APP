@@ -26,11 +26,9 @@ import {
   Monitor,
   MonitorSmartphone,
   MousePointer2,
-  Play,
   RefreshCw,
   RotateCw,
   Smartphone,
-  Square,
   Tablet,
   TerminalSquare,
   Zap,
@@ -1399,33 +1397,8 @@ export function PreviewPane() {
             onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
           />
           <span className="mx-0.5 h-4 w-px bg-border/50" />
-          {/* Phase B — auto-run stays primary; manual run is available when idle/error. */}
-          {canRunProject ? (
-            <>
-              {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
-                <button
-                  type="button"
-                  onClick={stopApp}
-                  title="Detener el dev server"
-                  className="flex h-6 items-center gap-1 rounded-md bg-red-600/90 px-2 text-[11px] font-medium text-white transition-colors hover:bg-red-600"
-                >
-                  {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
-                  <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void runApp()}
-                  title="Instalar dependencias y correr el app (npm)"
-                  className="flex h-6 items-center gap-1 rounded-md bg-emerald-600 px-2 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500"
-                >
-                  <Play className="h-3 w-3" />
-                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
-                </button>
-              )}
-              <span className="mx-0.5 h-4 w-px bg-border/50" />
-            </>
-          ) : null}
+          {/* Manual run/stop lives in the workspace ⋯ overflow — no green
+              Ejecutar / Arrancando play button in this chrome. Auto-run stays. */}
 
           {/* Type-check verdict for the live run: verifying → clean → or the
               error count while the agent auto-repairs. Host runner only. */}

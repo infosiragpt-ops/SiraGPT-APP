@@ -133,7 +133,7 @@ export function AdminSidebar() {
             <SidebarMenu className="gap-0">
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  onClick={() => handleNavigation("/chat")}
+                  onClick={() => handleNavigation("/agentes")}
                   className="h-10 w-full justify-start rounded-md px-2.5 text-[12px] font-normal text-zinc-400 hover:bg-transparent hover:text-zinc-700 md:h-8"
                   tooltip={expanded ? undefined : "Volver al chat"}
                 >

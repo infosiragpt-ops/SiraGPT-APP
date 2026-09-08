@@ -305,6 +305,27 @@ router.get('/oauth/:platform/callback', async (req, res) => {
       metadata: { platform },
       tags: ['social', 'oauth'],
     });
+    if (platform === 'linkedin' || platform === 'x') {
+      try {
+        const apps = require('../services/apps');
+        await apps.upsertFromOAuth(prisma, {
+          userId: result.userId,
+          appId: platform,
+          sourceId: result.connection.id,
+          accountLabel: result.connection.accountName || null,
+          scopes: result.connection.scopes,
+          expiresAt: result.connection.expiresAt,
+        });
+        await apps.auditAppEvent(prisma, {
+          userId: result.userId,
+          action: 'app_connected',
+          appId: platform,
+          connectionId: result.connection.id,
+        });
+      } catch (syncErr) {
+        console.warn(`[social-posts] ${platform} app connection sync failed:`, syncErr.message);
+      }
+    }
     return res.redirect(postCallbackUrl(platform, 'connected'));
   } catch (error) {
     if (isOAuthStateInfrastructureError(error)) {
@@ -647,7 +668,17 @@ router.delete('/connections/:platform', async (req, res) => {
     where: { userId_platform: { userId: req.user.id, platform } },
   });
   if (!existing) return res.status(204).end();
-  await prisma.socialConnection.delete({ where: { id: existing.id } });
+  if (platform === 'linkedin' || platform === 'x') {
+    try {
+      const apps = require('../services/apps');
+      await apps.disconnectApp(prisma, { userId: req.user.id, appId: platform, req });
+    } catch (syncErr) {
+      console.warn(`[social-posts] ${platform} app disconnect failed:`, syncErr.message);
+      await prisma.socialConnection.delete({ where: { id: existing.id } }).catch(() => {});
+    }
+  } else {
+    await prisma.socialConnection.delete({ where: { id: existing.id } });
+  }
   await writeAuditLog(prisma, {
     req,
     action: 'social_connection_deleted',

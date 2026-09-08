@@ -645,12 +645,63 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Agent computer",
+        "status": {
+          "live": "Live",
+          "starting": "Thinking…",
+          "error": "Error",
+          "idle": "Waiting"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
+        },
+        "routines": {
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+        }
+      }
     }
   },
   "meta": {
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "chatSearch": {
+    "placeholder": "チャットを検索…",
+    "noResults": "結果なし",
+    "noResultsFor": "「{query}」に一致するチャットは見つかりませんでした",
+    "serverFallback": "サーバー検索に失敗しました。ローカルのタイトル一致を表示しています。",
+    "emptyHistory": "まだチャットがありません",
+    "emptyHistoryHint": "会話を始めるとここに表示されます",
+    "resultCountOne": "{count} 件のチャット",
+    "resultCountMany": "{count} 件のチャット"
   }
 }

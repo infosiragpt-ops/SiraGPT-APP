@@ -282,6 +282,13 @@ test('agent-task: claimed create turn served by the AgentRunner — loop and pip
 
 test('agent-task: claimed create turn + runner failure → honest error, NEVER the generic pipeline', async () => {
   const env = setupAgentTaskEnv('runner-402');
+  const autoDocument = require('../src/services/agents/auto-document-delivery');
+  const originalGenerate = autoDocument.generateAutoDocument;
+  let genericPipelineCalls = 0;
+  autoDocument.generateAutoDocument = async () => {
+    genericPipelineCalls += 1;
+    throw new Error('generic pipeline must not run after a claimed runner failure');
+  };
   let reactInvoked = false;
   env.setReactRun(async () => {
     reactInvoked = true;
@@ -316,8 +323,13 @@ test('agent-task: claimed create turn + runner failure → honest error, NEVER t
         maxRuntimeMs: 60_000,
       });
       const snapshot = taskStore.getTaskSnapshotForUser('task-f2-runner-402-1', 'user-f2-2');
-      assert.equal(result.status, 'completed');
+      assert.equal(result.status, 'failed');
+      assert.equal(snapshot.status, 'failed');
+      assert.equal(snapshot.terminalMetricStatus, 'error');
+      assert.ok(snapshot.failedAt);
+      assert.equal(snapshot.completedAt, null);
       assert.equal(result.artifacts, 0, 'no stub deck may be fabricated');
+      assert.equal(genericPipelineCalls, 0, 'the generic generator must never be invoked');
       assert.equal(env.counters.persistedArtifacts, 0, 'generateAutoDocument (advanced pipeline) must be unreachable');
       assert.equal(reactInvoked, false, 'the LLM loop (create_document) must be unreachable');
       assert.equal(snapshot.streamState.stoppedReason, 'agent_runner_failed');
@@ -326,6 +338,7 @@ test('agent-task: claimed create turn + runner failure → honest error, NEVER t
       assert.equal(snapshot.streamState.artifacts.length, 0);
     });
   } finally {
+    autoDocument.generateAutoDocument = originalGenerate;
     env.cleanup();
   }
 });

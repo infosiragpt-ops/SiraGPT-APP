@@ -217,6 +217,14 @@ restart_pm2_backend() {
     log "PM2 backend default '$PM2_APP' not found; using detected process: $resolved_pm2_app"
   fi
 
+  # Stamp the process from the tree being deployed — never a leftover
+  # GIT_COMMIT key in .env from an older PR. Do not write .env.
+  if GIT_COMMIT="$(git -C "${APP_DIR}" rev-parse HEAD 2>/dev/null)" \
+    && [[ "${GIT_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    export GIT_COMMIT
+    log "GIT_COMMIT from ${APP_DIR} HEAD=${GIT_COMMIT}"
+  fi
+
   log "Restarting PM2 backend: $resolved_pm2_app"
   pm2 restart "$resolved_pm2_app" --update-env
 }

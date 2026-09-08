@@ -93,8 +93,8 @@ const upgradePlans: UpgradePlan[] = [
     subtitle: "Sigue usando SiraGPT con acceso básico y FlashGPT gratis e ilimitado.",
     icon: Sparkles,
     cta: "Seguir con Gratis",
-    accent: "#e8e2d8",
-    accentRgb: "232,226,216",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Acceso inicial",
     accessLine: "FlashGPT gratis e ilimitado, siempre.",
     features: [
@@ -114,8 +114,8 @@ const upgradePlans: UpgradePlan[] = [
     featured: true,
     badge: "Más popular",
     cta: "Empezar con Pro",
-    accent: "#ff3b30",
-    accentRgb: "255,59,48",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Todos los modelos",
     accessLine: "GPT, Claude, Gemini, Grok y más en un solo chat.",
     features: [
@@ -134,8 +134,8 @@ const upgradePlans: UpgradePlan[] = [
     subtitle: "Todo lo de Pro con el doble de volumen para producir sin frenar.",
     icon: Rocket,
     cta: "Elegir Pro Extendido",
-    accent: "#6255ff",
-    accentRgb: "98,85,255",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Doble capacidad",
     accessLine: "Para quien usa IA todos los días sin recortar herramientas.",
     features: [
@@ -153,8 +153,8 @@ const upgradePlans: UpgradePlan[] = [
     subtitle: "Para equipos y empresas con necesidades específicas.",
     icon: Building2,
     cta: "Comunícate al WhatsApp",
-    accent: "#d8a900",
-    accentRgb: "216,169,0",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Equipo y seguridad",
     accessLine: "Configuración, soporte e integraciones a la medida.",
     features: [
@@ -181,16 +181,16 @@ function FeatureRow({
       <div
         className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border"
         style={{
-          borderColor: active ? "rgba(var(--plan-rgb),0.42)" : "rgba(255,255,255,0.16)",
-          background: active ? "rgba(var(--plan-rgb),0.18)" : "rgba(255,255,255,0.08)",
-          color: active ? "var(--plan-accent)" : "rgba(255,255,255,0.78)",
+          borderColor: active ? "rgba(17,24,39,0.22)" : "rgba(0,0,0,0.10)",
+          background: active ? "rgba(17,24,39,0.08)" : "#f4f4f5",
+          color: active ? "#111827" : "#52525b",
         } as React.CSSProperties}
       >
         <Icon className="h-3 w-3" />
       </div>
       <div className="min-w-0">
-        <div className="text-[13px] font-semibold leading-4 text-white">{title}</div>
-        <div className="text-[11px] leading-4 text-white/[0.58]">{desc}</div>
+        <div className="text-[13px] font-semibold leading-4 text-zinc-900">{title}</div>
+        <div className="text-[11px] leading-4 text-zinc-600">{desc}</div>
       </div>
     </div>
   )
@@ -261,108 +261,72 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="w-[96vw] max-w-[1320px] overflow-hidden border border-white/[0.15] bg-[#111111] p-0 text-white shadow-[0_40px_140px_-28px_rgba(0,0,0,0.82)] [&>button]:right-5 [&>button]:top-3 [&>button]:rounded-full [&>button]:border [&>button]:border-white/[0.15] [&>button]:bg-black/25 [&>button]:p-2 [&>button]:text-white/80 [&>button]:backdrop-blur-xl [&>button]:transition-colors [&>button]:hover:bg-white/[0.15] [&>button]:hover:text-white"
+        className="w-[96vw] max-w-[1320px] overflow-hidden border border-zinc-200 bg-white p-0 text-zinc-900 shadow-[0_32px_80px_-20px_rgba(0,0,0,0.25)] [&>button]:right-5 [&>button]:top-3 [&>button]:rounded-full [&>button]:border [&>button]:border-zinc-200 [&>button]:bg-white [&>button]:p-2 [&>button]:text-zinc-600 [&>button]:transition-colors [&>button]:hover:bg-zinc-50 [&>button]:hover:text-zinc-900"
         style={{ maxHeight: "92vh", borderRadius: 28 }}
       >
         <style>{`
-          @keyframes siragptLiquidFlow {
-            0% { transform: translate3d(-2%, -1%, 0) scale(1); opacity: .88; }
-            50% { transform: translate3d(2%, 1%, 0) scale(1.02); opacity: 1; }
-            100% { transform: translate3d(-2%, -1%, 0) scale(1); opacity: .88; }
-          }
           .siragpt-upgrade-scroll::-webkit-scrollbar { width: 10px; }
-          .siragpt-upgrade-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,.07); border-radius: 999px; }
-          .siragpt-upgrade-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.42); border-radius: 999px; border: 2px solid rgba(20,20,20,.55); }
-          .siragpt-liquid-card {
-            background:
-              linear-gradient(155deg, rgba(255,255,255,.24), rgba(255,255,255,.08) 44%, rgba(255,255,255,.13)),
-              linear-gradient(22deg, rgba(var(--plan-rgb),.20), transparent 54%),
-              rgba(255,255,255,.08);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.24), 0 22px 70px -42px rgba(0,0,0,.95);
-            backdrop-filter: blur(28px) saturate(150%);
-            -webkit-backdrop-filter: blur(28px) saturate(150%);
+          .siragpt-upgrade-scroll::-webkit-scrollbar-track { background: #f4f4f5; border-radius: 999px; }
+          .siragpt-upgrade-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 999px; border: 2px solid #ffffff; }
+          .siragpt-plan-card {
+            background: #ffffff;
+            border: 1px solid #e4e4e7;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
           }
-          .siragpt-liquid-card::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            background: linear-gradient(115deg, rgba(255,255,255,.22), transparent 27%, rgba(255,255,255,.08) 55%, transparent 76%);
-            opacity: 0;
-            transition: opacity .24s ease;
-          }
-          .siragpt-liquid-card:hover::before,
-          .siragpt-liquid-card:focus-within::before {
-            opacity: 1;
+          .siragpt-plan-card--featured {
+            border-color: #18181b;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.06);
           }
         `}</style>
 
-        <div className="relative overflow-hidden" style={{ borderRadius: 28 }}>
-          <div
-            className="absolute inset-0"
-            style={{
-              background:
-                "linear-gradient(120deg, #090909 0%, #2b2926 22%, #5b626b 52%, #353033 74%, #080808 100%)",
-            }}
-          />
-          <div
-            className="absolute inset-[-12%]"
-            style={{
-              animation: reduceMotion ? undefined : "siragptLiquidFlow 12s ease-in-out infinite",
-              background:
-                "linear-gradient(105deg, rgba(255,59,48,.26), transparent 28%, rgba(98,85,255,.26) 51%, transparent 66%, rgba(216,169,0,.22))",
-              filter: "blur(44px)",
-            }}
-          />
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.12),rgba(255,255,255,0.03)_34%,rgba(0,0,0,0.28))]" />
-
-          <div className="siragpt-upgrade-scroll relative max-h-[92vh] overflow-y-auto px-5 py-6 sm:px-7 lg:px-8">
-            <DialogHeader className="relative z-10 pt-7 sm:pt-0">
-              <div className="mb-3 inline-flex w-fit max-w-[calc(100%-4.5rem)] items-center gap-2 rounded-full border border-white/[0.16] bg-white/[0.12] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/[0.78] shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-xl sm:max-w-none">
-                <Sparkles className="h-3.5 w-3.5 text-[#ff6b61]" />
+        <div className="relative overflow-hidden bg-white" style={{ borderRadius: 28 }}>
+          <div className="siragpt-upgrade-scroll relative max-h-[92vh] overflow-y-auto bg-white px-5 py-6 sm:px-7 lg:px-8">
+            <DialogHeader className="relative pt-7 sm:pt-0">
+              <div className="mb-3 inline-flex w-fit max-w-[calc(100%-4.5rem)] items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600 sm:max-w-none">
+                <Sparkles className="h-3.5 w-3.5 text-zinc-900" />
                 {POSITIONING.eyebrow}
               </div>
               <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                  <DialogTitle className="max-w-4xl text-balance text-2xl font-semibold tracking-[-0.03em] text-white sm:text-[34px] sm:leading-[1.06]">
+                  <DialogTitle className="max-w-4xl text-balance text-2xl font-semibold tracking-[-0.03em] text-zinc-900 sm:text-[34px] sm:leading-[1.06]">
                     {POSITIONING.headline}
                   </DialogTitle>
-                  <p className="mt-3 max-w-3xl text-[13px] leading-5 text-white/70 sm:text-sm">
+                  <p className="mt-3 max-w-3xl text-[13px] leading-5 text-zinc-600 sm:text-sm">
                     {POSITIONING.subhead}
                   </p>
                   <DialogDescription className="sr-only">
                     {POSITIONING.subhead}
                   </DialogDescription>
                 </div>
-                <div className="flex shrink-0 items-center gap-2 rounded-full border border-white/[0.15] bg-black/[0.18] px-3 py-2 text-xs text-white/70 backdrop-blur-xl">
+                <div className="flex shrink-0 items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
                   <span>Plan actual:</span>
-                  <span className="font-semibold text-white">{currentPlan}</span>
+                  <span className="font-semibold text-zinc-900">{currentPlan}</span>
                 </div>
               </div>
             </DialogHeader>
 
-            <div className="relative z-10 mt-5 grid gap-3 lg:grid-cols-[1.35fr_.9fr]">
-              <div className="rounded-2xl border border-white/[0.14] bg-white/10 px-4 py-3 text-[13px] leading-5 text-white/[0.72] shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl">
+            <div className="mt-5 grid gap-3 lg:grid-cols-[1.35fr_.9fr]">
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-[13px] leading-5 text-zinc-700">
                 Una sola suscripción de ChatGPT, Claude o Gemini cuesta{" "}
-                <span className="font-bold text-white">$20/mes</span>. SiraGPT te da{" "}
-                <span className="font-bold text-white">todos los modelos líderes</span>, formatos creativos, documentos, código y agentes{" "}
-                <span className="font-bold text-[#ff6b61]">desde $5/mes</span>.
+                <span className="font-bold text-zinc-900">$20/mes</span>. SiraGPT te da{" "}
+                <span className="font-bold text-zinc-900">todos los modelos líderes</span>, formatos creativos, documentos, código y agentes{" "}
+                <span className="font-bold text-zinc-900">desde $5/mes</span>.
               </div>
               {usageRatio >= 0.7 ? (
-                <div className="flex items-center gap-3 rounded-2xl border border-[#ff6b61]/25 bg-[#ff3b30]/[0.12] px-4 py-3 text-[13px] text-white/[0.76] backdrop-blur-2xl">
-                  <span className="h-2 w-2 rounded-full bg-[#ff6b61]" />
+                <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-zinc-700">
+                  <span className="h-2 w-2 rounded-full bg-amber-500" />
                   <span>
-                    Has usado <strong className="text-white">{usagePct}%</strong> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
+                    Has usado <strong className="text-zinc-900">{usagePct}%</strong> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
                   </span>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-white/[0.14] bg-black/[0.14] px-4 py-3 text-[13px] leading-5 text-white/[0.68] backdrop-blur-2xl">
+                <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[13px] leading-5 text-zinc-600">
                   Todos los planes mantienen tu cuenta, historial y acceso a las capacidades de SiraGPT.
                 </div>
               )}
             </div>
 
-            <div className="relative z-10 mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
               {upgradePlans.map((plan, idx) => {
                 const Icon = plan.icon
                 const isCurrent = currentPlan === plan.id
@@ -383,18 +347,16 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                     onMouseLeave={() => setHoveredPlan(null)}
                     onFocus={() => setHoveredPlan(plan.id)}
                     onBlur={() => setHoveredPlan(null)}
-                    className="siragpt-liquid-card group relative flex min-h-[610px] overflow-hidden rounded-[22px] border p-0"
+                    className={`group relative flex min-h-[610px] overflow-hidden rounded-[22px] ${plan.featured ? "siragpt-plan-card siragpt-plan-card--featured" : "siragpt-plan-card"}`}
                     style={{
-                      "--plan-accent": plan.accent,
-                      "--plan-rgb": plan.accentRgb,
-                      borderColor: isCurrent || isHovered ? `rgba(${plan.accentRgb},0.72)` : "rgba(255,255,255,0.22)",
+                      borderColor: isCurrent ? "#18181b" : isHovered ? "#a1a1aa" : undefined,
                     } as React.CSSProperties}
                   >
                     <div
-                      className="absolute inset-x-0 top-0 flex h-7 items-center justify-center text-[10px] font-bold uppercase tracking-[0.08em] text-white transition-opacity duration-200"
+                      className="absolute inset-x-0 top-0 flex h-7 items-center justify-center text-[10px] font-bold uppercase tracking-[0.08em] transition-opacity duration-200"
                       style={{
-                        background: isCurrent || isHovered ? plan.accent : "rgba(255,255,255,0.14)",
-                        color: plan.id === "FREE" && (isCurrent || isHovered) ? "#141414" : "#fff",
+                        background: isCurrent || isHovered ? "#18181b" : plan.featured ? "#18181b" : "#f4f4f5",
+                        color: isCurrent || isHovered || plan.featured ? "#ffffff" : "#52525b",
                         opacity: topLabel ? 1 : 0,
                       }}
                     >
@@ -402,15 +364,14 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                       {topLabel}
                     </div>
 
-                    <div className="relative flex min-w-0 flex-1 flex-col px-4 pb-4 pt-12 sm:px-5">
+                    <div className="relative flex min-w-0 flex-1 flex-col bg-white px-4 pb-4 pt-12 sm:px-5">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/[0.52]">{plan.eyebrow}</div>
-                          <h3 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-white">{plan.name}</h3>
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">{plan.eyebrow}</div>
+                          <h3 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-zinc-900">{plan.name}</h3>
                         </div>
                         <div
-                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/[0.18] bg-white/[0.12] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
-                          style={{ color: isActive ? plan.accent : "rgba(255,255,255,0.78)" }}
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${isActive ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-zinc-50 text-zinc-700"}`}
                         >
                           <Icon className="h-[18px] w-[18px]" />
                         </div>
@@ -418,27 +379,27 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
 
                       <div className="mt-6">
                         <div className="flex min-h-[48px] items-baseline gap-1.5">
-                          <span className="text-[40px] font-semibold leading-none tracking-[-0.05em] text-white sm:text-[43px]">
+                          <span className="text-[40px] font-semibold leading-none tracking-[-0.05em] text-zinc-900 sm:text-[43px]">
                             {plan.price}
                           </span>
-                          {plan.priceSuffix ? <span className="text-xs font-semibold text-white/[0.62]">{plan.priceSuffix}</span> : null}
+                          {plan.priceSuffix ? <span className="text-xs font-semibold text-zinc-600">{plan.priceSuffix}</span> : null}
                         </div>
-                        <p className="mt-4 min-h-[40px] text-[12px] leading-5 text-white/[0.68]">{plan.subtitle}</p>
+                        <p className="mt-4 min-h-[40px] text-[12px] leading-5 text-zinc-600">{plan.subtitle}</p>
                       </div>
 
                       <Button
                         size="sm"
                         disabled={isCurrent || !!isLoading}
                         onClick={() => handlePlanAction(plan.id)}
-                        className="mt-5 h-10 w-full rounded-full border-0 px-4 text-[13px] font-semibold transition-all"
+                        className="mt-5 h-10 w-full rounded-full border px-4 text-[13px] font-semibold transition-all"
                         style={{
                           background: isCurrent
-                            ? "rgba(255,255,255,0.18)"
+                            ? "#f4f4f5"
                             : isActive
-                              ? "rgba(255,255,255,0.92)"
-                              : "rgba(0,0,0,0.30)",
-                          color: isCurrent ? "rgba(255,255,255,0.78)" : isActive ? "#151515" : "#fff",
-                          boxShadow: isActive ? `0 14px 34px -24px rgba(${plan.accentRgb},0.95)` : "inset 0 1px 0 rgba(255,255,255,0.12)",
+                              ? "#18181b"
+                              : "#ffffff",
+                          color: isCurrent ? "#71717a" : isActive ? "#ffffff" : "#18181b",
+                          borderColor: isCurrent ? "#e4e4e7" : isActive ? "#18181b" : "#e4e4e7",
                         }}
                       >
                         {isCurrent ? (
@@ -461,29 +422,29 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
                         )}
                       </Button>
 
-                      <div className="mt-5 border-t border-white/[0.14] pt-4">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/[0.45]">Capacidad operativa</div>
-                        <div className="mt-2 flex items-center gap-2 text-[13px] font-semibold text-white">
-                          <Zap className="h-4 w-4" style={{ color: plan.accent }} />
+                      <div className="mt-5 border-t border-zinc-200 pt-4">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Capacidad operativa</div>
+                        <div className="mt-2 flex items-center gap-2 text-[13px] font-semibold text-zinc-900">
+                          <Zap className="h-4 w-4 text-zinc-900" />
                           {plan.capacity}
                         </div>
-                        <p className="mt-2 text-[11px] leading-4 text-white/[0.58]">{plan.accessLine}</p>
+                        <p className="mt-2 text-[11px] leading-4 text-zinc-600">{plan.accessLine}</p>
                       </div>
 
-                      <div className="mt-5 border-t border-white/[0.14] pt-4">
-                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/[0.45]">Modelos incluidos</div>
+                      <div className="mt-5 border-t border-zinc-200 pt-4">
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Modelos incluidos</div>
                         <div className="space-y-1.5">
                           {MODEL_STACK.map((model) => (
-                            <div key={model} className="flex items-center gap-2 text-[11px] font-semibold text-white/70">
-                              <Layers3 className="h-3.5 w-3.5" style={{ color: plan.accent }} />
+                            <div key={model} className="flex items-center gap-2 text-[11px] font-semibold text-zinc-700">
+                              <Layers3 className="h-3.5 w-3.5 text-zinc-900" />
                               {model}
                             </div>
                           ))}
                         </div>
                       </div>
 
-                      <div className="mt-5 flex-1 border-t border-white/[0.14] pt-4">
-                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/[0.45]">Lo que desbloqueas</div>
+                      <div className="mt-5 flex-1 border-t border-zinc-200 pt-4">
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Lo que desbloqueas</div>
                         {plan.features.map((feature) => (
                           <FeatureRow key={feature.title} {...feature} active={isActive} />
                         ))}
@@ -494,11 +455,11 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               })}
             </div>
 
-            <div className="relative z-10 mt-5 flex flex-col items-center gap-3 border-t border-white/[0.12] pt-4 text-center">
+            <div className="mt-5 flex flex-col items-center gap-3 border-t border-zinc-200 pt-4 text-center">
               <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
                 {TRUST_ROW.map((t, i) => (
-                  <span key={t} className="inline-flex items-center gap-1.5 text-[11px] text-white/[0.58]">
-                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5 text-[#ff6b61]" /> : <Check className="h-3 w-3 text-white/[0.45]" />}
+                  <span key={t} className="inline-flex items-center gap-1.5 text-[11px] text-zinc-600">
+                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5 text-zinc-900" /> : <Check className="h-3 w-3 text-zinc-400" />}
                     {t}
                   </span>
                 ))}
@@ -506,7 +467,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="text-[12px] text-white/[0.58] underline-offset-4 transition-colors hover:text-white hover:underline"
+                className="text-[12px] text-zinc-600 underline-offset-4 transition-colors hover:text-zinc-900 hover:underline"
               >
                 Seguir con el plan gratis. FlashGPT es gratis e ilimitado, siempre.
               </button>

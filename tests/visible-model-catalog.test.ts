@@ -17,6 +17,7 @@ describe("visible text model catalog", () => {
       { id: "kimi-db", name: "moonshotai/kimi-k2.6", displayName: "Kimi old", provider: "OpenRouter", type: "TEXT", isActive: true },
       { id: "gpt-db", name: "openai/gpt-5.5", displayName: "GPT old", provider: "OpenRouter", type: "TEXT", isActive: true },
       { id: "inactive-opus", name: "anthropic/claude-opus-4.7", displayName: "Opus disabled", provider: "OpenRouter", type: "TEXT", isActive: false },
+      { id: "unset-row", name: "custom/unset", displayName: "Unset", provider: "Custom", type: "TEXT" },
       { id: "__virtual_gemini__", name: "google/gemini-3.5", displayName: "Gemini virtual", provider: "OpenRouter", type: "TEXT" },
       { id: "old", name: "gpt-4o", displayName: "GPT-4o", provider: "OpenAI", type: "TEXT", isActive: true },
     ])
@@ -37,6 +38,17 @@ describe("visible text model catalog", () => {
 
   it("does not invent virtual visible models when admin has no active row", () => {
     assert.deepEqual(curateVisibleTextModels([]), [])
+  })
+
+  it("surfaces active Meta Model API rows with direct Meta routing", () => {
+    const models = curateVisibleTextModels([
+      { id: "meta-12", name: "muse-spark-1.2", displayName: "old", provider: "OpenRouter", type: "TEXT", isActive: true },
+      { id: "meta-11", name: "muse-spark-1.1", displayName: "old", provider: "OpenRouter", type: "TEXT", isActive: true },
+    ])
+
+    assert.deepEqual(models.map((model: any) => model.name), ["muse-spark-1.2", "muse-spark-1.1"])
+    assert.deepEqual(models.map((model: any) => model.provider), ["Meta", "Meta"])
+    assert.deepEqual(models.map((model: any) => model.icon), ["MetaLogo", "MetaLogo"])
   })
 
   it("keeps admin-enabled flagship models FREE-eligible in the router catalog", () => {

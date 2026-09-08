@@ -158,6 +158,36 @@ test('transcription skill forwards an audio-capable provider client', async () =
   assert.equal(forwarded, audioClient);
 });
 
+test('transcription skill treats local-whisper as success', async () => {
+  const result = await transcribeSkill.execute({}, {
+    userId: 'user-a',
+    mediaRuntime: {
+      async resolveOwnedMediaSource() {
+        return {
+          localPath: '/private/audio.ogg',
+          source: { fileId: 'audio-1', filename: 'nota.ogg', mimeType: 'audio/ogg' },
+          cleanup: async () => {},
+        };
+      },
+    },
+    audioTranscriber: {
+      AUDIO_MAX_FILE_BYTES: 100,
+      async transcribe() {
+        return {
+          method: 'local-whisper',
+          transcript: 'Nota de voz transcrita sin clave de OpenAI.',
+          model: 'base',
+          language: 'es',
+          segments: [],
+        };
+      },
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.transcript, 'Nota de voz transcrita sin clave de OpenAI.');
+  assert.equal(result.model, 'base');
+});
+
 test('transcription skill never reports placeholder output as success and still cleans up', async () => {
   let cleanupCalls = 0;
   await assert.rejects(

@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const diskPersistence = require('./cowork-disk-persistence');
+const { assertMemoryWrite } = require('./agents/memory-write-guard');
 
 const hydratedUsers = new Set();
 const persistTimers = new Map();
@@ -49,6 +50,9 @@ function schedulePersistUserMemory(userId) {
 
 function createMemoryEntry(userId, fact, opts = {}) {
   hydrateUserMemory(userId);
+  // Size only here — rate-limit lives on the Hermes write paths (remember /
+  // curated add) so chat-side fact extractors are not starved mid-turn.
+  assertMemoryWrite(userId, fact, { rateLimit: false, maxChars: opts.maxChars });
   const normalized = normalizeFactForDedup(fact);
   const nearHash = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
   for (const entry of store.values()) {
@@ -95,7 +99,16 @@ function createMemoryEntry(userId, fact, opts = {}) {
 
   store.set(id, entry);
   schedulePersistUserMemory(userId);
+  maybeMirrorToCurated(entry);
   return entry;
+}
+
+function maybeMirrorToCurated(entry) {
+  try {
+    require('./agents/hermes-curated-memory').learnFromEntry(entry);
+  } catch {
+    // Curated MEMORY/USER mirroring must never break the fact store.
+  }
 }
 
 function findExisting(userId, hash) {
@@ -355,6 +368,14 @@ function forget(userId, query) {
     }
   }
 
+  if (removed) {
+    try {
+      require('./agents/hermes-curated-memory').forgetMatching(userId, query);
+    } catch {
+      // Best-effort: fact-store forget still succeeded.
+    }
+  }
+
   return { removed };
 }
 
@@ -365,6 +386,11 @@ function clearUserMemory(userId) {
       store.delete(id);
       cleared++;
     }
+  }
+  try {
+    require('./agents/hermes-curated-memory').clearUser(userId);
+  } catch {
+    // Best-effort companion clear.
   }
   return { cleared };
 }

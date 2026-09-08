@@ -68,11 +68,13 @@ export function normalizeChatInput(raw: unknown): NormalizedChatInput {
     typeof raw === "string" ? raw : raw == null ? "" : String(raw);
   const originalLength = original.length;
 
-  let value = original
-    .replace(ZERO_WIDTH_AND_BOM_RE, "")
-    .replace(LINE_PARA_SEP_RE, "\n")
-    .replace(NUL_RE, "")
-    .replace(FORBIDDEN_CONTROLS_RE, "");
+  let value = collapseStackedLetters(
+    original
+      .replace(ZERO_WIDTH_AND_BOM_RE, "")
+      .replace(LINE_PARA_SEP_RE, "\n")
+      .replace(NUL_RE, "")
+      .replace(FORBIDDEN_CONTROLS_RE, ""),
+  );
 
   let truncated = false;
   if (value.length > MAX_CHAT_INPUT_CHARS) {
@@ -97,6 +99,20 @@ export function shouldWarnUser(normalized: NormalizedChatInput): boolean {
   return normalized.truncated;
 }
 
+/**
+ * "h\\no\\nl\\na" is a CSS/min-content trap that also leaks into stored
+ * user turns. If every line is a single character, join them so the
+ * bubble can hug "hola" on one line. Real multi-word lines are kept.
+ */
+export function collapseStackedLetters(raw: string): string {
+  const text = String(raw ?? "")
+  const lines = text.split(/\r?\n/)
+  const body = lines.length > 1 && lines[lines.length - 1] === "" ? lines.slice(0, -1) : lines
+  if (body.length < 2) return text
+  // Only a visible one-character line (not TAB/space/CR leftovers).
+  if (body.some((line) => !/^.$/u.test(line) || /^\s$/.test(line))) return text
+  return body.join("")
+}
 
 /** OLA200_WAVE_G FE-065 — normalize only the outbound payload; never mutate the visible draft. */
 export function normalizeChatInputPayload(draft: unknown): NormalizedChatInput {
