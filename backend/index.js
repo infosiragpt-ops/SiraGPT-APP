@@ -1718,6 +1718,16 @@ async function startServer() {
         logger.warn({ err: err.message }, 'realtime_socket_init_failed');
     }
 
+    // Coding-sandbox PTY stub (`/api/agentes-coding/terminal`). Flag off ⇒
+    // upgrade handler closes 4404. Does not change /agentes chrome (UI-lock).
+    try {
+        if (typeof agentesCodingRoutes.attachTerminalWebSocket === 'function') {
+            agentesCodingRoutes.attachTerminalWebSocket(server);
+        }
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'agentes_coding_terminal_ws_init_failed');
+    }
+
     // Wire scheduler → agent: register the invoker so cron/webhook jobs
     // can run the agent without the scheduler module importing the agent
     // layer (which would circular-require via the skills registry).

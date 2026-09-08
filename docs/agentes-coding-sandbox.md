@@ -20,6 +20,7 @@ that file is not on the branch yet). License / Tier S catalog:
 | HTTP | `GET /api/agentes-coding/health` always 200 `{ ok, enabled }` |
 | Sessions | `/api/agentes-coding/sessions*` — **404** unless the flag is on |
 | Repo-map | `GET|POST /sessions/:id/map` — Phase 3b, see [`docs/agentes-coding-repomap.md`](./agentes-coding-repomap.md) |
+| Terminal | `POST /sessions/:id/terminal*` — Phase 3d PTY stub, see [`docs/agentes-coding-terminal.md`](./agentes-coding-terminal.md) |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
 Interface (same on memory + docker drivers):
@@ -66,9 +67,11 @@ Cloning user repos, enabling the flag on the Lenovo origin, Daytona
 Monaco on `/agentes`): [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md).
 Phase 3c structural edit (ast-grep patterns, flag-gated):
 [`docs/agentes-coding-struct-edit.md`](./agentes-coding-struct-edit.md).
+Phase 3d terminal channel (API-only PTY stub):
+[`docs/agentes-coding-terminal.md`](./agentes-coding-terminal.md).
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js
 ```

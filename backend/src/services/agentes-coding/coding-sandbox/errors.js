@@ -70,6 +70,10 @@ const CATALOG = Object.freeze({
     status: 500,
     message: 'No se pudo aplicar la edición estructural.',
   },
+  E_TERMINAL_FAILED: {
+    status: 500,
+    message: 'No se pudo abrir el canal de terminal.',
+  },
 });
 
 class CodingSandboxError extends Error {

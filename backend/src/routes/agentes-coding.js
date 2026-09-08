@@ -12,13 +12,21 @@
  *   POST   /api/agentes-coding/sessions/:id/map       → repo-map hints (query body)
  *   POST   /api/agentes-coding/sessions/:id/struct-edit        → preview ast-grep diffs (Phase 3c)
  *   POST   /api/agentes-coding/sessions/:id/struct-edit/apply  → apply diffs via writeFile
+ *   POST   /api/agentes-coding/sessions/:id/terminal           → open PTY-stub channel (Phase 3d)
+ *   GET    /api/agentes-coding/sessions/:id/terminal/:channelId
+ *   POST   /api/agentes-coding/sessions/:id/terminal/:channelId/input
+ *   POST   /api/agentes-coding/sessions/:id/terminal/:channelId/resize
+ *   POST   /api/agentes-coding/sessions/:id/terminal/:channelId/exec
+ *   GET    /api/agentes-coding/sessions/:id/terminal/:channelId/stream  (SSE)
+ *   DELETE /api/agentes-coding/sessions/:id/terminal/:channelId
  *   POST   /api/agentes-coding/sessions/:id/read      → readFile
  *   PUT    /api/agentes-coding/sessions/:id/files     → writeFile
  *   POST   /api/agentes-coding/sessions/:id/expose    → exposePort (stub)
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
  * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
- * only when health.enabled. See docs/agentes-coding-ide.md.
+ * only when health.enabled. Phase 3d is API-only (UI-lock). See
+ * docs/agentes-coding-terminal.md.
  */
 
 const express = require('express');
@@ -29,17 +37,26 @@ const {
   getDefaultSandbox,
   CodingSandboxError,
 } = require('../services/agentes-coding/coding-sandbox');
+const { fail } = require('../services/agentes-coding/coding-sandbox/errors');
 const { mapForRequest } = require('../services/agentes-coding/repo-map');
 const {
   previewForRequest,
   applyForRequest,
 } = require('../services/agentes-coding/structural-edit');
+const {
+  createTerminalHub,
+  createSseTransport,
+  attachTerminalWebSocket,
+  WS_PATH,
+} = require('../services/agentes-coding/terminal');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
   const sandbox = opts.sandbox || null;
   const getSandbox = () => sandbox || getDefaultSandbox();
   const structRunner = opts.sgRunner || opts.structuralEditRunner || null;
+  const authenticate = opts.authenticate || authenticateToken;
+  const hub = opts.terminalHub || createTerminalHub({ env, sandbox: getSandbox() });
 
   const router = express.Router();
 
@@ -61,6 +78,13 @@ function createAgentesCodingRouter(opts = {}) {
     return next();
   });
 
+  function acceptQueryToken(req, _res, next) {
+    if (!req.headers.authorization && req.query && req.query.token) {
+      req.headers.authorization = `Bearer ${String(req.query.token)}`;
+    }
+    return next();
+  }
+
   function sendSandboxError(res, err) {
     if (err instanceof CodingSandboxError) {
       return res.status(err.status).json(err.toJSON());
@@ -74,7 +98,7 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Create a coding-sandbox session (flag on).
    */
-  router.post('/sessions', authenticateToken, async (req, res) => {
+  router.post('/sessions', authenticate, async (req, res) => {
     try {
       const body = req.body || {};
       const session = await getSandbox().createSession({
@@ -94,7 +118,7 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Exec a command inside the session workspace.
    */
-  router.post('/sessions/:id/exec', authenticateToken, async (req, res) => {
+  router.post('/sessions/:id/exec', authenticate, async (req, res) => {
     try {
       const result = await getSandbox().exec(req.params.id, req.body && req.body.command, {
         timeoutMs: req.body && req.body.timeoutMs,
@@ -109,7 +133,7 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * List files in the session workspace.
    */
-  router.get('/sessions/:id/files', authenticateToken, async (req, res) => {
+  router.get('/sessions/:id/files', authenticate, async (req, res) => {
     try {
       const files = await getSandbox().listFiles(req.params.id, req.query.path || '.');
       return res.json({ ok: true, files });
@@ -136,13 +160,13 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Ranked file/symbol hints (Aider-pattern repo-map). Header-only.
    */
-  router.get('/sessions/:id/map', authenticateToken, handleRepoMap);
-  router.post('/sessions/:id/map', authenticateToken, handleRepoMap);
+  router.get('/sessions/:id/map', authenticate, handleRepoMap);
+  router.post('/sessions/:id/map', authenticate, handleRepoMap);
 
   /**
    * ast-grep pattern preview (proposed diffs). Never writes.
    */
-  router.post('/sessions/:id/struct-edit', authenticateToken, async (req, res) => {
+  router.post('/sessions/:id/struct-edit', authenticate, async (req, res) => {
     try {
       const body = req.body || {};
       const result = await previewForRequest(getSandbox(), req.params.id, {
@@ -164,7 +188,7 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Apply proposed diffs through sandbox.writeFile (path jail).
    */
-  router.post('/sessions/:id/struct-edit/apply', authenticateToken, async (req, res) => {
+  router.post('/sessions/:id/struct-edit/apply', authenticate, async (req, res) => {
     try {
       const body = req.body || {};
       const result = await applyForRequest(getSandbox(), req.params.id, {
@@ -185,9 +209,116 @@ function createAgentesCodingRouter(opts = {}) {
   });
 
   /**
+   * Open a PTY-stub terminal channel (API-only; UI-lock keeps the HTTP stub).
+   */
+  router.post('/sessions/:id/terminal', authenticate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const channel = await hub.open({
+        sessionId: req.params.id,
+        cwd: body.cwd,
+        cols: body.cols,
+        rows: body.rows,
+      });
+      return res.status(201).json({
+        ok: true,
+        channel,
+        wsPath: `${WS_PATH}?channelId=${encodeURIComponent(channel.channelId)}`,
+        ssePath: `/api/agentes-coding/sessions/${encodeURIComponent(req.params.id)}/terminal/${encodeURIComponent(channel.channelId)}/stream`,
+      });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/terminal/:channelId', authenticate, async (req, res) => {
+    try {
+      const channel = hub.snapshot(req.params.channelId);
+      if (channel.sessionId !== req.params.id) failSessionMismatch();
+      return res.json({ ok: true, channel });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.post('/sessions/:id/terminal/:channelId/input', authenticate, async (req, res) => {
+    try {
+      const channel = hub.get(req.params.channelId);
+      if (channel.sessionId !== req.params.id) failSessionMismatch();
+      const snap = await channel.receiveInput(req.body && req.body.data);
+      return res.json({ ok: true, channel: snap });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.post('/sessions/:id/terminal/:channelId/resize', authenticate, async (req, res) => {
+    try {
+      const channel = hub.get(req.params.channelId);
+      if (channel.sessionId !== req.params.id) failSessionMismatch();
+      const snap = channel.resize(req.body && req.body.cols, req.body && req.body.rows);
+      return res.json({ ok: true, channel: snap });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.post('/sessions/:id/terminal/:channelId/exec', authenticate, async (req, res) => {
+    try {
+      const channel = hub.get(req.params.channelId);
+      if (channel.sessionId !== req.params.id) failSessionMismatch();
+      const snap = await channel.runCommand(req.body && req.body.command, {
+        cwd: req.body && req.body.cwd,
+        timeoutMs: req.body && req.body.timeoutMs,
+      });
+      return res.json({ ok: true, channel: snap });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get(
+    '/sessions/:id/terminal/:channelId/stream',
+    acceptQueryToken,
+    authenticate,
+    (req, res) => {
+      try {
+        const channel = hub.get(req.params.channelId);
+        if (channel.sessionId !== req.params.id) failSessionMismatch();
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          Connection: 'keep-alive',
+        });
+        const transport = createSseTransport(res);
+        channel.attach(transport);
+        req.on('close', () => channel.detach(transport));
+      } catch (err) {
+        return sendSandboxError(res, err);
+      }
+      return undefined;
+    },
+  );
+
+  router.delete('/sessions/:id/terminal/:channelId', authenticate, async (req, res) => {
+    try {
+      const channel = hub.get(req.params.channelId);
+      if (channel.sessionId !== req.params.id) failSessionMismatch();
+      const snap = hub.close(req.params.channelId);
+      return res.json({ ok: true, channel: snap });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  function failSessionMismatch() {
+    fail('E_SESSION_NOT_FOUND', 'El canal no pertenece a esta sesión.');
+  }
+
+  /**
    * Read one file (JSON body to avoid path-in-URL traversal).
    */
-  router.post('/sessions/:id/read', authenticateToken, async (req, res) => {
+  router.post('/sessions/:id/read', authenticate, async (req, res) => {
     try {
       const buf = await getSandbox().readFile(req.params.id, req.body && req.body.path);
       return res.json({
@@ -204,7 +335,7 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Write one file into the session workspace.
    */
-  router.put('/sessions/:id/files', authenticateToken, async (req, res) => {
+  router.put('/sessions/:id/files', authenticate, async (req, res) => {
     try {
       const written = await getSandbox().writeFile(
         req.params.id,
@@ -220,7 +351,7 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Optional preview-port stub (deny-by-default).
    */
-  router.post('/sessions/:id/expose', authenticateToken, async (req, res) => {
+  router.post('/sessions/:id/expose', authenticate, async (req, res) => {
     try {
       const exposed = await getSandbox().exposePort(req.params.id, req.body && req.body.port);
       return res.json({ ok: true, exposed });
@@ -232,8 +363,9 @@ function createAgentesCodingRouter(opts = {}) {
   /**
    * Destroy the session and its container.
    */
-  router.delete('/sessions/:id', authenticateToken, async (req, res) => {
+  router.delete('/sessions/:id', authenticate, async (req, res) => {
     try {
+      hub.closeSession(req.params.id);
       const out = await getSandbox().destroy(req.params.id);
       return res.json(out);
     } catch (err) {
@@ -245,9 +377,22 @@ function createAgentesCodingRouter(opts = {}) {
     return res.status(404).json({ error: 'not_found' });
   });
 
+  router.attachTerminalWebSocket = (httpServer, extra = {}) => attachTerminalWebSocket(httpServer, {
+    hub,
+    env,
+    ...extra,
+  });
+
   return router;
 }
 
-module.exports = createAgentesCodingRouter();
+const defaultRouter = createAgentesCodingRouter();
+module.exports = defaultRouter;
 module.exports.createAgentesCodingRouter = createAgentesCodingRouter;
 module.exports.createCodingSandbox = createCodingSandbox;
+module.exports.attachTerminalWebSocket = (httpServer, extra = {}) => {
+  if (typeof defaultRouter.attachTerminalWebSocket === 'function') {
+    return defaultRouter.attachTerminalWebSocket(httpServer, extra);
+  }
+  return attachTerminalWebSocket(httpServer, extra);
+};

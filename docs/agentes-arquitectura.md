@@ -154,7 +154,8 @@ row in `docs/oss-catalog.md`.
 When `AGENTES_CODING_V2` is on, `/agentes` mounts a coding IDE shell
 behind the existing chrome (file tree + Monaco + diff + terminal stub).
 See [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md). xterm.js
-is still a stub (`data-ws-ready`); no new npm dep in this phase.
+is still a stub (`data-ws-ready`); no new npm dep. Phase 3d lands the
+API-only PTY-stub channel (`docs/agentes-coding-terminal.md`).
 
 While the flag is off:
 
@@ -234,7 +235,7 @@ Do not set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 
 1. OpenSandbox or E2B Apache adapter + Docker service on Lenovo (Phase 2a memory + docker DEV landed)
 2. TypeScript harness in the sandbox, wired to SiraCode contracts
-3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub). **Phase 3b landed**: Aider-pattern repo-map hints (flag-gated `/map`, header-only). **Phase 3c landed**: ast-grep-pattern structural edit (flag-gated `/struct-edit`, apply via `writeFile` only)
+3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub). **Phase 3b landed**: Aider-pattern repo-map hints (flag-gated `/map`, header-only). **Phase 3c landed**: ast-grep-pattern structural edit (flag-gated `/struct-edit`, apply via `writeFile` only). **Phase 3d landed**: API-only terminal channel (SSE+POST / injectable WS PTY stub; UI-lock keeps the HTTP stub)
 4. K8s + gVisor/Firecracker when Docker isolation is proven
 5. e2e “todo app” golden on the sandbox path
 

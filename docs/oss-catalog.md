@@ -70,7 +70,7 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `SWE-agent/SWE-agent` | MIT | Eval / benchmark harness | pattern for evals only — never the production control plane | `backend/scripts/` eval (future) | tier-s |
 | `SWE-bench/SWE-bench` | MIT | Coding-agent benchmark corpus | pattern / fixture ideas for goldens — not a runtime dep | eval harness (future) | tier-s |
 | `mem0ai/mem0` | Apache-2.0 | Long-term agent memory (profile / search / conclude) | **pattern only**. Complements Hermes MEMORY/USER; no Python dump, no hosted lock-in in Phase 1 | `backend/src/services/agents/hermes-*.js` (future) | tier-s |
-| `xtermjs/xterm.js` | MIT | In-browser terminal | stub in Phase 3a (`data-ws-ready`); npm later after SBOM | `/agentes` terminal pane | tier-s |
+| `xtermjs/xterm.js` | MIT | In-browser terminal | **pattern only** (JSON/SSE/WS PTY stub). Phase 3a stub (`data-ws-ready`) stays; no `@xterm/xterm` npm (UI-lock + SBOM later) | `backend/src/services/agentes-coding/terminal/` | already fused (pattern) |
 | `microsoft/playwright-mcp` | Apache-2.0 | Official Playwright MCP server (a11y snapshots, no vision required) | pattern / optional Apache npm after SSRF + secret review. Not a community MCP dump | existing MCP client + preview QA (future) | tier-s |
 | `aaif-goose/goose` (was `block/goose`) | Apache-2.0 | Recipe / ACP-style local agent (AAIF / Linux Foundation) | **pattern only** (recipes, tool loop). Not the desktop app, not a vendor of the Rust tree | harness recipes (future) | tier-s |
 
