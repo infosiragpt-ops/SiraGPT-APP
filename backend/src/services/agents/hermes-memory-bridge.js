@@ -8,6 +8,7 @@
 const activeMemory = require('../active-memory');
 const sessionManager = require('../session-manager');
 const curatedMemory = require('./hermes-curated-memory');
+const { assertMemoryWrite } = require('./memory-write-guard');
 
 function normalizeText(text) {
   return String(text || '')
@@ -54,11 +55,18 @@ function sliceBookend(history, fromEnd = false, count = 3) {
 }
 
 function remember(userId, fact, opts = {}) {
+  assertMemoryWrite(userId, fact, {
+    now: opts.now,
+    maxChars: opts.maxChars,
+    maxWrites: opts.maxWrites,
+    windowMs: opts.windowMs,
+  });
   return activeMemory.createMemoryEntry(userId, fact, {
     source: opts.source || 'hermes-memory-bridge',
     category: opts.category || 'general',
     tags: opts.tags || ['hermes'],
     confidence: opts.confidence ?? 0.75,
+    maxChars: opts.maxChars,
   });
 }
 
