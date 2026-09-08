@@ -21,6 +21,7 @@ model User {
   isAdmin          Boolean @default(false)
   isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
   apiUsage         BigInt  @default(0)
+  docQuotaEpoch    BigInt  @default(0)
   gemaTokenUsage   BigInt  @default(0)
   gemaTokenLimit   BigInt  @default(0)
   monthlyCallLimit BigInt  @default(3) // NEW: counts number of generate calls / month
@@ -118,50 +119,60 @@ model User {
   webauthnCredentials Json?
 
   // Relations
-  chats                   Chat[]
-  chatRuns                ChatRun[]
-  payments                Payment[]
-  invoices                Invoice[]
-  apiUsages               ApiUsage[]
-  sessions                Session[]
-  files                   File[]
-  documentCollections     DocumentCollection[]
-  collectionDocuments     CollectionDocument[]
-  documentCollectionChunks DocumentCollectionChunk[]
-  createdGpts             CustomGpt[]
-  projects                Project[]
-  designs                 DesignProject[]
-  scheduledPosts          ScheduledPost[]
-  socialConnections       SocialConnection[]
-  searchBrainSettings     SearchBrainSettings?
-  usageAlerts             UsageAlert[]
-  notifications           Notification[]
-  subscriptionEvents      SubscriptionEvent[]
-  agentTasks              AgentTask[]
-  goalRuns                GoalRun[]
-  codexProjects           CodexProject[]
-  codexRuns               CodexRun[]
-  deployments             Deployment[]
-  generatedArtifacts      GeneratedArtifact[]
-  documentAnalyses        DocumentAnalysis[]
-  pushSubscriptions       PushSubscription[]
-  savedSearches           SavedSearch[]
-  bookmarks               Bookmark[]
-  researchCollections     ResearchCollection[]
-  researchReferences      ResearchReference[]
+  chats                      Chat[]
+  chatRuns                   ChatRun[]
+  payments                   Payment[]
+  invoices                   Invoice[]
+  apiUsages                  ApiUsage[]
+  sessions                   Session[]
+  files                      File[]
+  documentCollections        DocumentCollection[]
+  collectionDocuments        CollectionDocument[]
+  documentCollectionChunks   DocumentCollectionChunk[]
+  createdGpts                CustomGpt[]
+  projects                   Project[]
+  companies                  Company[]
+  designs                    DesignProject[]
+  scheduledPosts             ScheduledPost[]
+  socialConnections          SocialConnection[]
+  searchBrainSettings        SearchBrainSettings?
+  usageAlerts                UsageAlert[]
+  notifications              Notification[]
+  subscriptionEvents         SubscriptionEvent[]
+  agentTasks                 AgentTask[]
+  docSandboxJobs             DocSandboxJob[]
+  goalRuns                   GoalRun[]
+  codexProjects              CodexProject[]
+  codexRuns                  CodexRun[]
+  codexCompanyLeads          CodexCompanyLead[]
+  codexCompanyInboxItems     CodexCompanyInboxItem[]
+  codexExternalActions       CodexExternalAction[]
+  codexMissions              CodexMission[]
+  codexMissionArtifacts      CodexMissionArtifact[]
+  codexActivityReports       CodexActivityReport[]
+  codexCeoApprovals          CodexCeoApproval[]
+  codexSwarms                CodexSwarm[]
+  deployments                Deployment[]
+  generatedArtifacts         GeneratedArtifact[]
+  documentAnalyses           DocumentAnalysis[]
+  pushSubscriptions          PushSubscription[]
+  savedSearches              SavedSearch[]
+  bookmarks                  Bookmark[]
+  researchCollections        ResearchCollection[]
+  researchReferences         ResearchReference[]
   researchReferenceConflicts ResearchReferenceConflict[]
   researchCollectionShares   ResearchCollectionShare[]   @relation("ResearchCollectionSharedBy")
   researchCollectionComments ResearchCollectionComment[] @relation("ResearchCollectionCommentAuthor")
   researchTemplates          ResearchTemplate[]          @relation("ResearchTemplateCreator")
-  webhookEndpoints        WebhookEndpoint[]
-  slackIntegrations       SlackIntegration[]
-  policyAcceptances       PolicyAcceptance[]
-  apiKeys                 ApiKey[]
-  emailVerificationTokens EmailVerificationToken[]
-  passwordResetTokens     PasswordResetToken[]
-  phoneVerifications      PhoneVerification[]
-  twoFAChallenges         TwoFAChallenge[]
-  partialSessions         PartialSession[]
+  webhookEndpoints           WebhookEndpoint[]
+  slackIntegrations          SlackIntegration[]
+  policyAcceptances          PolicyAcceptance[]
+  apiKeys                    ApiKey[]
+  emailVerificationTokens    EmailVerificationToken[]
+  passwordResetTokens        PasswordResetToken[]
+  phoneVerifications         PhoneVerification[]
+  twoFAChallenges            TwoFAChallenge[]
+  partialSessions            PartialSession[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -181,6 +192,19 @@ model User {
   // Agent harness — external MCP servers registered by this user.
   mcpServers McpServer[]
 
+  // Cowork control plane — versioned workspaces, steerable runs, durable
+  // approvals, scheduled work, connector vaults and append-only audit.
+  coworkWorkspaces    CoworkWorkspace[]
+  coworkRuns          CoworkRun[]
+  coworkSteeringNotes CoworkSteeringNote[]
+  agentApprovals      AgentApproval[]
+  scheduledAgentTasks ScheduledAgentTask[]
+  connectorAccounts   ConnectorAccount[]
+  businessChannels    BusinessChannel[]
+  coworkMemories      CoworkMemory[]
+  agentAuditLogs      AgentAuditLog[]
+  coworkCostDaily     CoworkCostDaily[]
+
   // F1 — declarative RBAC. `userRoles` joins to `user_roles` and
   // ultimately to `roles` + `permissions`. The legacy `isSuperAdmin`
   // flag stays as a shadow until F5 sunset.
@@ -194,6 +218,11 @@ model User {
   workspaces            Workspace[]
   hostingTargets        HostingTarget[]
   deployEnvs            DeployEnv[]
+  appConnections        AppConnection[]
+
+  // Sira Voz (VoiceStudio, local): cloned voices + studio jobs (dub, audiobook).
+  voiceProfiles   VoiceProfile[]
+  voiceStudioJobs VoiceStudioJob[]
 
   @@index([deletedAt])
   @@index([lastActiveAt])
@@ -465,6 +494,22 @@ model Chat {
   // draft survives across devices.
   draftText String? @db.Text
 
+  // Rolling context compaction (services/conversation-compactor): summary of
+  // the turns older than `contextSummaryUntil`; those rows are no longer
+  // replayed verbatim. Cleared when a covered message is edited or deleted.
+  contextSummary      String?   @db.Text @map("context_summary")
+  contextSummaryUntil DateTime? @map("context_summary_until")
+  contextSummaryMeta  Json?     @map("context_summary_meta")
+
+  // Persistent app pins for this conversation (Apps panel + composer
+  // rail). Array of catalog app ids in visual order, max 4. Server-side
+  // validation: only apps the user has an active connection for can be
+  // pinned. Unpinning never disconnects the underlying OAuth.
+  pinnedAppIds Json? @map("pinned_app_ids")
+  // Monotonic revision for concurrency (If-Match on writes). Bumped by
+  // every effective pin mutation; idempotent no-ops keep it unchanged.
+  pinRevision Int @default(0) @map("pin_revision")
+
   // Language policy — persisted resolution of "what language should the
   // assistant reply in for this thread". Set on first turn (or on any
   // explicit "respond in X" instruction); reused on every subsequent turn
@@ -493,6 +538,11 @@ model Chat {
   projectId String?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
+  // Cowork workspace mounted by this chat. Optional and additive: legacy
+  // chats continue to work without a workspace.
+  coworkWorkspaceId String?          @map("cowork_workspace_id")
+  coworkWorkspace   CoworkWorkspace? @relation(fields: [coworkWorkspaceId], references: [id], onDelete: SetNull)
+
   // Organization sharing (cycle 27). When non-null, members of the
   // organization with at least VIEWER role can see this chat. The
   // chat owner remains `userId`; sharing does not transfer ownership.
@@ -508,10 +558,13 @@ model Chat {
   goalRuns           GoalRun[]
   generatedArtifacts GeneratedArtifact[]
   runs               ChatRun[]
+  coworkRuns         CoworkRun[]
+  agentApprovals     AgentApproval[]
 
   @@index([userId, updatedAt])
   @@index([customGptId])
   @@index([projectId])
+  @@index([coworkWorkspaceId])
   @@index([organizationId, sharedAt])
   @@index([userId, isPinned, pinnedAt])
   @@map("chats")
@@ -685,6 +738,273 @@ model ChatRun {
   @@map("chat_runs")
 }
 
+// ────────────────────────────────────────────────────────────
+// Cowork — workspace-first, steerable and auditable agent work.
+// Content bytes are immutable and content-addressed in object storage;
+// Postgres stores the file tree and version graph.
+// ────────────────────────────────────────────────────────────
+model CoworkWorkspace {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chats          Chat[]
+  files          CoworkFile[]
+  runs           CoworkRun[]
+  scheduledTasks ScheduledAgentTask[]
+  memories       CoworkMemory[]
+  auditLogs      AgentAuditLog[]
+
+  @@index([userId, updatedAt])
+  @@map("cowork_workspaces")
+}
+
+model CoworkFile {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  path           String
+  contentHash    String   @map("content_hash")
+  storageRef     String   @map("storage_ref") @db.Text
+  artifactId     String?  @map("artifact_id")
+  size           Int
+  mime           String
+  updatedBy      String   @default("user") @map("updated_by") // user | agent
+  currentVersion Int      @default(1) @map("current_version")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspace CoworkWorkspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions  CoworkFileVersion[]
+
+  @@unique([workspaceId, path])
+  @@index([workspaceId, updatedAt])
+  @@index([contentHash])
+  @@map("cowork_files")
+}
+
+model CoworkFileVersion {
+  id          String   @id @default(cuid())
+  fileId      String
+  version     Int
+  contentHash String   @map("content_hash")
+  storageRef  String   @map("storage_ref") @db.Text
+  artifactId  String?  @map("artifact_id")
+  size        Int
+  mime        String
+  authorRunId String?  @map("author_run_id")
+  createdAt   DateTime @default(now())
+
+  file      CoworkFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  authorRun CoworkRun? @relation(fields: [authorRunId], references: [id], onDelete: SetNull)
+
+  @@unique([fileId, version])
+  @@index([authorRunId])
+  @@index([contentHash])
+  @@map("cowork_file_versions")
+}
+
+model CoworkRun {
+  id             String    @id @default(cuid())
+  userId         String
+  chatId         String?
+  workspaceId    String?
+  parentRunId    String?
+  status         String    @default("queued") // queued | running | paused | waiting_approval | completed | failed | cancelled
+  kind           String    @default("chat")
+  prompt         String    @db.Text
+  checklist      Json?
+  maxSteps       Int       @default(12)
+  maxCostUsd     Float?
+  costUsd        Float     @default(0)
+  tokensEstimate Int       @default(0)
+  currentStep    Int       @default(0)
+  lastEvent      String?   @db.Text
+  checkpoint     Json?
+  controlVersion Int       @default(0)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat          Chat?                @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  workspace     CoworkWorkspace?     @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  parentRun     CoworkRun?           @relation("CoworkRunChildren", fields: [parentRunId], references: [id], onDelete: SetNull)
+  childRuns     CoworkRun[]          @relation("CoworkRunChildren")
+  steeringNotes CoworkSteeringNote[]
+  approvals     AgentApproval[]
+  fileVersions  CoworkFileVersion[]
+  auditLogs     AgentAuditLog[]
+
+  @@index([userId, status, updatedAt])
+  @@index([chatId, status])
+  @@index([workspaceId, updatedAt])
+  @@index([parentRunId])
+  @@map("cowork_runs")
+}
+
+model CoworkSteeringNote {
+  id         String    @id @default(cuid())
+  runId      String
+  userId     String
+  note       String    @db.Text
+  status     String    @default("queued") // queued | consumed
+  createdAt  DateTime  @default(now())
+  consumedAt DateTime?
+
+  run  CoworkRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status, createdAt])
+  @@index([userId, createdAt])
+  @@map("cowork_steering_notes")
+}
+
+model AgentApproval {
+  id               String    @id @default(cuid())
+  userId           String
+  chatId           String?
+  runId            String?
+  tool             String
+  args             Json?
+  humanDescription String?   @db.Text
+  status           String    @default("pending") // pending | approved | denied | expired
+  decision         String?
+  expiresAt        DateTime
+  resolvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat Chat?      @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  run  CoworkRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, expiresAt])
+  @@index([chatId, status])
+  @@index([runId, status])
+  @@map("agent_approvals")
+}
+
+model ScheduledAgentTask {
+  id          String    @id @default(cuid())
+  userId      String
+  workspaceId String?
+  prompt      String    @db.Text
+  cronExpr    String    @map("cron_expr")
+  tz          String    @default("UTC")
+  enabled     Boolean   @default(true)
+  lastRunAt   DateTime?
+  lastStatus  String?
+  nextRunAt   DateTime
+  deliver     String    @default("chat") // chat | email | telegram
+  createdFrom String    @default("ui")
+  maxSteps    Int       @default(12)
+  maxCostUsd  Float?
+  lockedBy    String?
+  lockedUntil DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace CoworkWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([enabled, nextRunAt])
+  @@index([userId, createdAt])
+  @@index([lockedUntil])
+  @@map("scheduled_agent_tasks")
+}
+
+model ConnectorAccount {
+  id              String    @id @default(cuid())
+  userId          String
+  organizationId  String?
+  provider        String
+  accountLabel    String?
+  authType        String    @default("oauth2")
+  scopes          Json?
+  tokenEncrypted  String?   @db.Text
+  configEncrypted String?   @db.Text
+  status          String    @default("disconnected") // disconnected | connected | broken
+  lastHealthAt    DateTime?
+  lastError       String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user               User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization       Organization?                @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  companyAssignments ProjectConnectorAssignment[]
+  businessChannels   BusinessChannel[]
+
+  @@unique([userId, provider])
+  @@index([userId, status])
+  @@index([organizationId, status])
+  @@map("connector_accounts")
+}
+
+model CoworkMemory {
+  id           String   @id @default(cuid())
+  userId       String
+  workspaceId  String
+  fact         String   @db.Text
+  sourceChatId String?
+  createdAt    DateTime @default(now())
+
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace CoworkWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@map("cowork_memories")
+}
+
+model AgentAuditLog {
+  id            String   @id @default(cuid())
+  userId        String
+  workspaceId   String?
+  runId         String?
+  action        String
+  targetType    String?
+  targetId      String?
+  inputSummary  String?  @db.Text
+  resultSummary String?  @db.Text
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace CoworkWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  run       CoworkRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([runId, createdAt])
+  @@index([action, createdAt])
+  @@map("agent_audit_logs")
+}
+
+model CoworkCostDaily {
+  id             String   @id @default(cuid())
+  userId         String
+  scopeKey       String
+  workspaceId    String?
+  chatId         String?
+  day            DateTime @db.Date
+  costUsd        Float    @default(0)
+  tokensEstimate Int      @default(0)
+  runCount       Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeKey, day])
+  @@index([userId, day])
+  @@index([workspaceId, day])
+  @@index([chatId, day])
+  @@map("cowork_cost_daily")
+}
+
 // Saved searches — see migration 20260519050000_add_saved_search.
 // `filters` is a free-form JSON bag (chatId, dateRange, role, etc.)
 // so the search panel can grow new knobs without a migration.
@@ -750,8 +1070,8 @@ model ResearchCollection {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  user  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items ResearchCollectionItem[]
+  user     User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items    ResearchCollectionItem[]
   shares   ResearchCollectionShare[]
   comments ResearchCollectionComment[]
 
@@ -1028,6 +1348,106 @@ model AgentTaskEvent {
   @@map("agent_task_events")
 }
 
+// Documents are encrypted private objects; this row contains references, not instructions.
+model DocSandboxJob {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  status              String    @default("queued")
+  admissionReady      Boolean   @default(false) @map("admission_ready")
+  mode                String    @default("preserve")
+  engine              String    @default("anthropic")
+  modelTier           String    @map("model_tier")
+  requestedModel      String    @map("requested_model")
+  tokenBudget         Int       @map("token_budget")
+  quotaReservedTokens BigInt    @default(0) @map("quota_reserved_tokens")
+  quotaEpoch          BigInt    @default(0) @map("quota_epoch")
+  quotaSettledTokens  BigInt?   @map("quota_settled_tokens")
+  quotaSettledAt      DateTime? @map("quota_settled_at") @db.Timestamptz(3)
+  accountPurgeRequested Boolean @default(false) @map("account_purge_requested")
+  instructionsKey     String    @map("instructions_key")
+  inputKeys           String[]  @map("input_keys")
+  outputKeys          String[]  @default([]) @map("output_keys")
+  editPlanKey         String?   @map("edit_plan_key")
+  editPlanHash        String?   @map("edit_plan_hash")
+  validationReportKey String?   @map("validation_report_key")
+  errorCode           String?   @map("error_code")
+  outcome             String?
+  usage               Json      @default("{}")
+  costUsd             Decimal   @default(0) @map("cost_usd") @db.Decimal(18, 8)
+  maxCostUsd          Decimal   @default(0) @map("max_cost_usd") @db.Decimal(18, 8)
+  costReservations    Json      @default("[]") @map("cost_reservations")
+  purgedKeys          String[]  @default([]) @map("purged_keys")
+  storageKeys         String[]  @default([]) @map("storage_keys")
+  attempts            Int       @default(0)
+  fence               Int       @default(0)
+  leaseToken          String?   @map("lease_token")
+  leaseExpiresAt      DateTime? @map("lease_expires_at") @db.Timestamptz(3)
+  eventSeq            Int       @default(0) @map("event_seq")
+  sessionRef          String?   @map("session_ref")
+  providerFiles       Json      @default("[]") @map("provider_files")
+  providerContainers  Json      @default("[]") @map("provider_containers")
+  attemptLeases       Json      @default("[]") @map("attempt_leases")
+  cleanupPending      Boolean   @default(false) @map("cleanup_pending")
+  cleanupNotBefore    DateTime? @map("cleanup_not_before") @db.Timestamptz(3)
+  parentJobId         String?   @map("parent_job_id")
+  idempotencyKey      String    @map("idempotency_key")
+  payloadHash         String    @map("payload_hash")
+  promptVersion       String    @map("prompt_version")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  startedAt           DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(3)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user                User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  parent              DocSandboxJob? @relation("DocSandboxChildren", fields: [parentJobId], references: [id], onDelete: Restrict)
+  children            DocSandboxJob[] @relation("DocSandboxChildren")
+  events              DocSandboxJobEvent[]
+  artifacts           DocSandboxJobArtifact[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@index([expiresAt])
+  @@index([cleanupPending])
+  @@map("doc_jobs")
+}
+
+model DocSandboxJobEvent {
+  id          String    @id @default(uuid())
+  jobId       String    @map("job_id")
+  seq         Int
+  type        String
+  payload     Json
+  outbox      String?
+  dispatchedAt DateTime? @map("dispatched_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  job         DocSandboxJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, seq])
+  @@index([outbox, dispatchedAt, createdAt])
+  @@map("doc_job_events")
+}
+
+model DocSandboxJobArtifact {
+  id           String    @id @default(uuid())
+  jobId        String    @map("job_id")
+  attempt      Int
+  kind         String
+  storageKey   String    @unique @map("storage_key")
+  filename     String
+  mime         String
+  size         BigInt
+  sha256       String
+  published    Boolean   @default(false)
+  purgedAt     DateTime?  @map("purged_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  job          DocSandboxJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, kind])
+  @@map("doc_job_artifacts")
+}
+
 // Persistent /goal background runs. Mirrors the AgentTask + AgentTaskEvent
 // shape: the parent row tracks status/counters/final report, and the
 // child event log replays the SSE timeline so the chat composer can
@@ -1104,6 +1524,7 @@ model GeneratedArtifact {
 
   @@index([userId, createdAt])
   @@index([taskId, createdAt])
+  @@index([userId, chatId, createdAt])
   @@map("generated_artifacts")
 }
 
@@ -1147,13 +1568,13 @@ model File {
   processingStageAt DateTime?
 
   // Relations
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  documentAnalysis DocumentAnalysis?
-  documentChunks   DocumentChunk[]
+  user                User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentAnalysis    DocumentAnalysis?
+  documentChunks      DocumentChunk[]
   collectionDocuments CollectionDocument[]
   collectionChunks    DocumentCollectionChunk[]
-  documentTables   DocumentTable[]
-  documentNodes    DocumentNode[]
+  documentTables      DocumentTable[]
+  documentNodes       DocumentNode[]
 
   customGptId String?
   customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id], onDelete: SetNull)
@@ -1273,17 +1694,17 @@ model CollectionDocument {
 }
 
 model DocumentCollectionChunk {
-  id           String                 @id @default(cuid())
-  collectionId String                 @map("collection_id")
-  documentId   String                 @map("document_id")
-  ownerId      String                 @map("owner_id")
-  content      String                 @db.Text
+  id           String   @id @default(cuid())
+  collectionId String   @map("collection_id")
+  documentId   String   @map("document_id")
+  ownerId      String   @map("owner_id")
+  content      String   @db.Text
   page         Int?
   offset       Int?
-  tokenCount   Int                    @default(0) @map("token_count")
-  contentHash  String                 @map("content_hash")
+  tokenCount   Int      @default(0) @map("token_count")
+  contentHash  String   @map("content_hash")
   metadata     Json?
-  createdAt    DateTime               @default(now()) @map("created_at")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   collection DocumentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
   document   File               @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -1727,7 +2148,7 @@ model CustomGpt {
   // Per-GPT tool capability toggles: { webBrowsing, dataAnalysis,
   // imageGeneration, codeInterpreter, documents, skillsEnabled }.
   // null = legacy GPT (no gating).
-  capabilities         Json?
+  capabilities Json?
 
   // Publishing
   visibility GptVisibility @default(PRIVATE)
@@ -1760,9 +2181,11 @@ model CustomGpt {
 // the project via Chat.projectId, files via File.projectId, and the
 // ai.js route reads both and injects them into the system prompt.
 model Project {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             String        @id @default(cuid())
+  userId         String
+  organizationId String?
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   name         String
   description  String? @db.Text
@@ -1789,17 +2212,20 @@ model Project {
   shareId String? @unique
 
   // Relations — file bucket + chats created inside this project.
-  files     File[]            @relation("ProjectFiles")
-  chats     Chat[]
-  memories  ProjectMemory[]
-  documents ProjectDocument[]
+  files                File[]                       @relation("ProjectFiles")
+  chats                Chat[]
+  memories             ProjectMemory[]
+  documents            ProjectDocument[]
+  codexLink            CompanyCodexProjectLink?
+  connectorAssignments ProjectConnectorAssignment[]
+  company              Company?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Soft-delete tombstone. The Project list view should filter on
   // `deletedAt: null` via the prisma-soft-delete helper.
-  deletedAt DateTime?
+  deletedAt   DateTime?
   // Retention deadline shown in the Empresas trash. Projects are code
   // workspaces, so deletion is reversible for 30 days instead of being
   // hard-deleted from the main UI.
@@ -1808,7 +2234,119 @@ model Project {
   @@index([userId, updatedAt])
   @@index([userId, deletedAt])
   @@index([userId, deleteAfter])
+  @@index([organizationId, updatedAt])
   @@map("projects")
+}
+
+// Durable business identity shared by every department and channel. Project
+// remains the user-facing workspace; Company supplies business semantics and
+// an explicit root for channel policy.
+model Company {
+  id             String  @id @default(cuid())
+  userId         String
+  projectId      String  @unique
+  organizationId String?
+  name           String
+  mission        String? @db.Text
+  vision         String? @db.Text
+  industry       String?
+  urls           Json?
+  metadata       Json?
+  brief          Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project         Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  organization    Organization?             @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  codexLinks      CompanyCodexProjectLink[]
+  channels        BusinessChannel[]
+  inboxMessages   InboxMessage[]
+  channelPairings BusinessChannelPairing[]
+
+  @@index([userId, updatedAt])
+  @@index([organizationId, updatedAt])
+  @@map("companies")
+}
+
+model BusinessChannel {
+  id                   String    @id @default(cuid())
+  companyId            String
+  userId               String
+  connectorAccountId   String?
+  kind                 String
+  label                String?
+  credentialsEncrypted String?   @db.Text
+  dmPolicy             String    @default("pairing") // pairing | allowlist | open | closed
+  allowFrom            String[]  @default([])
+  outboundMode         String    @default("review") // review | auto | off
+  status               String    @default("active") // active | paused | broken
+  metadata             Json?
+  lastInboundAt        DateTime?
+  lastOutboundAt       DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  company          Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectorAccount ConnectorAccount?        @relation(fields: [connectorAccountId], references: [id], onDelete: SetNull)
+  messages         InboxMessage[]
+  pairings         BusinessChannelPairing[]
+
+  @@unique([id, companyId])
+  @@index([companyId, status, updatedAt])
+  @@index([userId, kind, status])
+  @@index([connectorAccountId])
+  @@map("business_channels")
+}
+
+model InboxMessage {
+  id           String   @id @default(cuid())
+  companyId    String
+  channelId    String
+  externalId   String
+  threadId     String?
+  from         String
+  body         String   @db.Text
+  direction    String   @default("inbound") // inbound | outbound
+  status       String   @default("received") // received | routed | drafted | waiting_approval | sent | failed | dismissed
+  departmentId String?
+  intent       String?
+  confidence   Float?
+  metadata     Json?
+  receivedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel BusinessChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, externalId])
+  @@index([companyId, status, receivedAt])
+  @@index([channelId, threadId, receivedAt])
+  @@index([departmentId, status])
+  @@map("inbox_messages")
+}
+
+model BusinessChannelPairing {
+  id         String    @id @default(cuid())
+  companyId  String
+  channelId  String
+  senderRef  String
+  codeHash   String
+  status     String    @default("pending") // pending | approved | expired | revoked
+  expiresAt  DateTime
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  company Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel BusinessChannel @relation(fields: [channelId, companyId], references: [id, companyId], onDelete: Cascade)
+
+  @@unique([channelId, senderRef])
+  @@index([companyId, status, expiresAt])
+  @@map("business_channel_pairings")
 }
 
 // Project memory — durable facts the assistant should remember across
@@ -1997,8 +2535,8 @@ model SocialConnection {
   platform     String // facebook | instagram | youtube | tiktok | linkedin | x
   accountId    String? // platform-side user id / page id
   accountName  String? // handle displayed to the user ("@tu_marca")
-  accessToken  String? @db.Text // encrypted TokenVault envelope
-  refreshToken String? @db.Text // legacy only; new refresh tokens live in the envelope
+  accessToken  String?   @db.Text // encrypted TokenVault envelope
+  refreshToken String?   @db.Text // legacy only; new refresh tokens live in the envelope
   expiresAt    DateTime?
 
   // Profile snapshot the LLM grounds post generation on:
@@ -2012,6 +2550,34 @@ model SocialConnection {
   @@unique([userId, platform])
   @@index([userId])
   @@map("social_connections")
+}
+
+// ChatGPT-style first-party apps on /conexiones (Phase 1: github, linkedin, x).
+// Tokens stay in the existing sealed vaults (GithubAccount.encryptedTokens /
+// SocialConnection.accessToken). This row only stores a secretRef + health.
+model AppConnection {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  appId          String
+  status         String    @default("error")
+  scopes         Json?
+  expiresAt      DateTime?
+  lastHealthAt   DateTime?
+  lastHealthOk   DateTime?
+  lastError      String?   @db.Text
+  secretRef      String
+  accountLabel   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, appId])
+  @@index([userId, status])
+  @@index([secretRef])
+  @@map("app_connections")
 }
 
 model UniversalSearchCache {
@@ -2261,18 +2827,25 @@ model Organization {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  owner             User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  memberships       OrgMembership[]
-  invitations       OrgInvitation[]
-  chats             Chat[]
-  webhookEndpoints  WebhookEndpoint[]
-  slackIntegrations SlackIntegration[]
-  apiKeys           ApiKey[]
-  announcements     OrgAnnouncement[]
-  pendingTransfers  OrgPendingTransfer[]
-  researchCollectionShares   ResearchCollectionShare[]
-  researchCollectionComments ResearchCollectionComment[]
-  researchTemplates          ResearchTemplate[]
+  owner                       User                         @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships                 OrgMembership[]
+  invitations                 OrgInvitation[]
+  chats                       Chat[]
+  webhookEndpoints            WebhookEndpoint[]
+  slackIntegrations           SlackIntegration[]
+  apiKeys                     ApiKey[]
+  announcements               OrgAnnouncement[]
+  pendingTransfers            OrgPendingTransfer[]
+  researchCollectionShares    ResearchCollectionShare[]
+  researchCollectionComments  ResearchCollectionComment[]
+  researchTemplates           ResearchTemplate[]
+  projects                    Project[]
+  companies                   Company[]
+  codexProjects               CodexProject[]
+  connectorAccounts           ConnectorAccount[]
+  appConnections              AppConnection[]
+  companyCodexLinks           CompanyCodexProjectLink[]
+  projectConnectorAssignments ProjectConnectorAssignment[]
 
   @@index([ownerId])
   @@index([slug])
@@ -2330,29 +2903,469 @@ model OrgInvitation {
 // timeline append-only (codex_events) reproducible tras recarga.
 
 model CodexProject {
-  id            String   @id @default(cuid())
-  userId        String
-  name          String
-  status        String   @default("provisioning") // provisioning | ready | error
-  workspacePath String? // relativo al volumen del runner: projects/<id>
-  previewUrl    String?
-  brief         Json?
-  error         String?  @db.Text
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  name           String
+  status         String    @default("provisioning") // provisioning | ready | error
+  workspacePath  String? // relativo al volumen del runner: projects/<id>
+  previewUrl     String?
+  brief          Json?
+  error          String?   @db.Text
   // Lifecycle tombstone used by the future database/workspace reconciler.
   // These columns are inert until CODEX_PROJECT_DATABASES is enabled.
-  deletedAt     DateTime?
-  deleteAfter   DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  deletedAt      DateTime?
+  deleteAfter    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  runs        CodexRun[]
-  checkpoints CodexCheckpoint[]
-  database    CodexProjectDatabase?
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization      Organization?            @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  runs              CodexRun[]
+  usageEntries      CodexUsageEntry[]
+  swarms            CodexSwarm[]
+  departmentPools   CodexDepartmentPool[]
+  checkpoints       CodexCheckpoint[]
+  sessionStates     CodexSessionState[]
+  database          CodexProjectDatabase?
+  companyLeads      CodexCompanyLead[]
+  companyInboxItems CodexCompanyInboxItem[]
+  externalActions   CodexExternalAction[]
+  missions          CodexMission[]
+  missionArtifacts  CodexMissionArtifact[]
+  activityReports   CodexActivityReport[]
+  ceoApprovals      CodexCeoApproval[]
+  proactiveLease    CodexProactiveLease?
+  companyLink       CompanyCodexProjectLink?
 
   @@index([userId, updatedAt])
   @@index([userId, deleteAfter])
+  @@index([organizationId, updatedAt])
   @@map("codex_projects")
+}
+
+// Physical execution capacity for one company department. `size` is kept
+// separate from the department's logical-agent target so a large planning
+// fleet cannot accidentally become an unbounded process fleet.
+model CodexDepartmentPool {
+  id             String   @id @default(cuid())
+  projectId      String
+  departmentId   String
+  size           Int      @default(1)
+  dailyBudgetUsd Float?
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, departmentId])
+  @@index([projectId, enabled])
+  @@map("codex_department_pools")
+}
+
+// Explicit, durable Company (Project) ↔ CodexProject association. Legacy
+// browser-only links are intentionally not backfilled: an owner must confirm
+// each orphan through the association wizard before agents can act on it.
+model CompanyCodexProjectLink {
+  id             String   @id @default(cuid())
+  projectId      String   @unique
+  codexProjectId String   @unique
+  companyId      String?  @unique
+  organizationId String?
+  linkedByUserId String
+  source         String   @default("manual") // manual | created_for_company
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  codexProject CodexProject  @relation(fields: [codexProjectId], references: [id], onDelete: Cascade)
+  company      Company?      @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, updatedAt])
+  @@index([linkedByUserId, updatedAt])
+  @@map("company_codex_project_links")
+}
+
+// A connector remains encrypted in connector_accounts. This table only grants
+// a specific Company permission to use that account; it never duplicates
+// tokens or provider configuration.
+model ProjectConnectorAssignment {
+  id                 String   @id @default(cuid())
+  projectId          String
+  connectorAccountId String
+  organizationId     String?
+  assignedByUserId   String
+  status             String   @default("active") // active | revoked
+  capabilities       Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  connectorAccount ConnectorAccount @relation(fields: [connectorAccountId], references: [id], onDelete: Cascade)
+  organization     Organization?    @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, connectorAccountId])
+  @@index([organizationId, projectId, status])
+  @@index([connectorAccountId, status])
+  @@index([assignedByUserId, updatedAt])
+  @@map("project_connector_assignments")
+}
+
+// Tenant-isolated operating records for CEO Office. These tables store
+// evidence and approval state, never OAuth credentials or provider secrets.
+model CodexCompanyLead {
+  id              String    @id @default(cuid())
+  projectId       String
+  userId          String
+  fingerprint     String
+  companyName     String
+  contactName     String?
+  domain          String?
+  websiteUrl      String?
+  email           String?
+  sourceUrl       String
+  sourceTitle     String?
+  evidence        String?   @db.Text
+  status          String    @default("discovered") // discovered | qualified | review | contacted | replied | won | lost | do_not_contact
+  score           Int       @default(0)
+  tags            Json?
+  lastContactedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, fingerprint])
+  @@index([userId, projectId, status, updatedAt])
+  @@index([projectId, score])
+  @@map("codex_company_leads")
+}
+
+model CodexCompanyInboxItem {
+  id              String    @id @default(cuid())
+  projectId       String
+  userId          String
+  provider        String    @default("gmail")
+  externalId      String
+  threadId        String?
+  senderEmail     String?
+  senderName      String?
+  subject         String?
+  snippet         String?   @db.Text
+  receivedAt      DateTime?
+  category        String    @default("other") // lead | support | billing | operations | other
+  urgency         String    @default("normal") // low | normal | high | critical
+  status          String    @default("pending_review") // pending_review | drafted | approved | sent | dismissed | error
+  draftBody       String?   @db.Text
+  modelConfidence Float     @default(0)
+  providerDraftId String?
+  sentMessageId   String?
+  metadata        Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, provider, externalId])
+  @@index([userId, projectId, status, updatedAt])
+  @@index([projectId, category, urgency])
+  @@map("codex_company_inbox_items")
+}
+
+model CodexExternalAction {
+  id             String    @id @default(cuid())
+  projectId      String
+  userId         String
+  kind           String // email_reply | email_send | email_forward | lead_outreach | social_reply
+  targetRef      String
+  idempotencyKey String    @unique
+  status         String    @default("pending_review") // pending_review | approved | executing | completed | rejected | error | expired | delivery_uncertain
+  payload        Json
+  result         Json?
+  approvedAt     DateTime?
+  expiresAt      DateTime?
+  consumedAt     DateTime?
+  attemptId      String?
+  revokedAt      DateTime?
+  executedAt     DateTime?
+  error          String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, projectId, status, createdAt])
+  @@index([projectId, kind, createdAt])
+  @@index([projectId, status, expiresAt])
+  @@map("codex_external_actions")
+}
+
+// Durable objective -> execution -> evidence -> CEO review chain. These
+// records contain references and redacted summaries, never provider secrets.
+model CodexMission {
+  id          String    @id @default(cuid())
+  projectId   String
+  userId      String
+  missionKey  String
+  title       String
+  department  String
+  objective   String?   @db.Text
+  status      String    @default("in_progress") // in_progress | completed | blocked
+  source      String
+  sourceRef   String
+  version     Int       @default(1)
+  contentHash String
+  summary     String    @db.Text
+  author      String
+  startedAt   DateTime?
+  completedAt DateTime?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project   CodexProject           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artifacts CodexMissionArtifact[]
+  approvals CodexCeoApproval[]
+
+  @@unique([projectId, sourceRef])
+  @@index([userId, projectId, status, updatedAt])
+  @@index([projectId, missionKey, version])
+  @@index([contentHash])
+  @@map("codex_missions")
+}
+
+model CodexMissionArtifact {
+  id          String   @id @default(cuid())
+  missionId   String
+  projectId   String
+  userId      String
+  artifactKey String
+  name        String
+  type        String
+  status      String   @default("recorded") // recorded | verified
+  source      String
+  sourceRef   String?
+  version     Int      @default(1)
+  contentHash String
+  storageRef  String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  mission CodexMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([missionId, artifactKey, version])
+  @@index([userId, projectId, createdAt])
+  @@index([projectId, type, status])
+  @@index([contentHash])
+  @@map("codex_mission_artifacts")
+}
+
+model CodexActivityReport {
+  id          String   @id @default(cuid())
+  projectId   String
+  userId      String
+  reportKey   String
+  title       String
+  summary     String   @db.Text
+  status      String   @default("draft") // draft | queued
+  source      String
+  version     Int      @default(1)
+  contentHash String
+  periodFrom  DateTime
+  periodTo    DateTime
+  counts      Json
+  delivery    Json
+  author      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   CodexProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approvals CodexCeoApproval[]
+
+  @@unique([projectId, reportKey, version])
+  @@index([userId, projectId, status, createdAt])
+  @@index([contentHash])
+  @@map("codex_activity_reports")
+}
+
+// Append-only CEO decisions. The resourceHash binds every decision to the
+// exact mission/report version that was reviewed.
+model CodexCeoApproval {
+  id           String   @id @default(cuid())
+  projectId    String
+  userId       String
+  missionId    String?
+  reportId     String?
+  resourceType String
+  resourceId   String
+  decision     String // approved | changes_requested | rejected | pending
+  note         String?  @db.Text
+  reviewerName String
+  resourceHash String
+  source       String   @default("ceo_review")
+  createdAt    DateTime @default(now())
+
+  project CodexProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mission CodexMission?        @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  report  CodexActivityReport? @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([userId, projectId, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+  @@index([missionId, createdAt])
+  @@index([reportId, createdAt])
+  @@map("codex_ceo_approvals")
+}
+
+model CodexProactiveLease {
+  projectId String   @id
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("codex_proactive_leases")
+}
+
+// Durable control plane for large coding swarms. A swarm may contain up to
+// 10,000 logical tasks while maxConcurrency and maxConcurrentWriters keep the
+// effective execution fan-out bounded (research up to 256; writers isolation-capped).
+model CodexSwarm {
+  id                   String    @id @default(cuid())
+  userId               String
+  projectId            String
+  name                 String
+  strategy             String    @default("dag") // dag | map_reduce
+  status               String    @default("queued") // queued | running | paused | cancelling | completed | completed_with_errors | failed | cancelled
+  taskLimit            Int       @default(10000)
+  maxConcurrency       Int       @default(64)
+  maxConcurrentWriters Int       @default(4)
+  metadata             Json?
+  cancellationReason   String?   @db.Text
+  cancelRequestedAt    DateTime?
+  startedAt            DateTime?
+  finishedAt           DateTime?
+  totalTaskCount       Int       @default(0)
+  queuedTaskCount      Int       @default(0)
+  blockedTaskCount     Int       @default(0)
+  runningTaskCount     Int       @default(0)
+  succeededTaskCount   Int       @default(0)
+  failedTaskCount      Int       @default(0)
+  cancelledTaskCount   Int       @default(0)
+  progressPercent      Float     @default(0)
+  version              Int       @default(0)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project CodexProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   CodexSwarmTask[]
+
+  @@index([userId, status, updatedAt])
+  @@index([projectId, createdAt])
+  @@index([status, updatedAt])
+  @@map("codex_swarms")
+}
+
+// A task stores dependency keys directly so the entire DAG remains durable
+// without introducing an unbounded join graph. claimId makes worker retries
+// idempotent; leaseToken prevents stale workers from committing results.
+model CodexSwarmTask {
+  id              String    @id @default(cuid())
+  swarmId         String
+  key             String
+  ordinal         Int
+  title           String
+  role            String // writer | read-only | reviewer | integrator
+  stage           String    @default("work") // work | map | reduce | integrate
+  status          String    @default("queued") // queued | blocked | running | succeeded | failed | cancelled
+  priority        Int       @default(0)
+  dependsOn       String[]  @default([])
+  input           Json?
+  result          Json?
+  error           String?   @db.Text
+  maxAttempts     Int       @default(3)
+  attemptCount    Int       @default(0)
+  claimId         String?   @unique
+  leaseOwner      String?
+  leaseToken      String?   @unique
+  leaseExpiresAt  DateTime?
+  claimedAt       DateTime?
+  lastHeartbeatAt DateTime?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  version         Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  swarm CodexSwarm @relation(fields: [swarmId], references: [id], onDelete: Cascade)
+
+  @@unique([swarmId, key])
+  @@unique([swarmId, ordinal])
+  @@index([swarmId, status, priority, ordinal])
+  @@index([swarmId, role, status])
+  @@index([status, leaseExpiresAt])
+  @@map("codex_swarm_tasks")
+}
+
+// Provider usage generated outside a CodexRun (for example read-only swarm
+// agents and periodic fleet QA). Keeping it in an append-only ledger makes
+// project and department kill-switches account for every autonomous LLM turn.
+model CodexUsageEntry {
+  id               String   @id @default(cuid())
+  projectId        String
+  departmentPoolId String?
+  source           String
+  sourceId         String
+  idempotencyKey   String   @unique
+  tokensIn         Int      @default(0)
+  tokensOut        Int      @default(0)
+  model             String?
+  costSource        String?
+  costOriginalUsd  Float    @default(0)
+  costAppliedUsd   Float    @default(0)
+  costInputUsd     Float    @default(0)
+  costOutputUsd    Float    @default(0)
+  createdAt        DateTime @default(now())
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([departmentPoolId, createdAt])
+  @@index([source, sourceId])
+  @@map("codex_usage_entries")
+}
+// Control-plane persistence for Codex transcripts and resumable loop
+// snapshots. Keeping this outside the executable workspace prevents generated
+// code and agent tools from reading, replacing or racing their own history.
+model CodexSessionState {
+  id         String   @id @default(cuid())
+  projectId  String
+  sessionId  String
+  transcript Json
+  snapshot   Json?
+  revision   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project CodexProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sessionId])
+  @@index([projectId, updatedAt])
+  @@map("codex_session_states")
 }
 
 // Metadata for a future PostgreSQL resource dedicated to one Codex project.
@@ -2468,21 +3481,25 @@ model AppKvEntry {
 }
 
 model CodexRun {
-  id         String    @id @default(cuid())
-  projectId  String
-  userId     String
-  mode       String // plan | build
-  status     String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
-  jobId      String?   @unique
-  prompt     String?   @db.Text // user's context/instructions for this run
-  model      String?
-  tier       String?
-  planRunId  String?
-  error      String?   @db.Text
-  createdAt  DateTime  @default(now())
-  startedAt  DateTime?
-  finishedAt DateTime?
-  updatedAt  DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  projectId        String
+  userId           String
+  mode             String // plan | build
+  status           String    @default("queued") // queued | running | waiting_approval | done | error | cancelled
+  jobId            String?   @unique
+  prompt           String?   @db.Text // user's context/instructions for this run
+  model            String?
+  tier             String?
+  reasoningEffort  String? // low | medium | high | max (max maps to provider high)
+  planRunId        String?
+  idempotencyKey   String?   @unique
+  departmentPoolId String?
+  swarmTaskId      String?
+  error            String?   @db.Text
+  createdAt        DateTime  @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  updatedAt        DateTime  @updatedAt
 
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   project     CodexProject      @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -2493,6 +3510,8 @@ model CodexRun {
 
   @@index([projectId, createdAt])
   @@index([userId, status, updatedAt])
+  @@index([departmentPoolId, createdAt])
+  @@index([swarmTaskId, createdAt])
   @@map("codex_runs")
 }
 
@@ -2588,7 +3607,7 @@ model Deployment {
   remotePath            String?
   url                   String?
   error                 String?
-  logTail               String? @db.Text
+  logTail               String?   @db.Text
   startedAt             DateTime?
   finishedAt            DateTime?
 
@@ -2626,8 +3645,8 @@ model Deployment {
   deletedAt DateTime?
 
   user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  connectedRepository ConnectedRepository?  @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
-  hostingTarget       HostingTarget?        @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
+  connectedRepository ConnectedRepository? @relation(fields: [connectedRepositoryId], references: [id], onDelete: Cascade)
+  hostingTarget       HostingTarget?       @relation(fields: [hostingTargetId], references: [id], onDelete: Cascade)
   versions            DeploymentVersion[]
   domains             DeploymentDomain[]
   logs                DeploymentLog[]
@@ -2945,20 +3964,20 @@ model AgentCheckpoint {
 }
 
 model UserMemory {
-  id              String   @id @default(cuid())
-  userId          String   @map("user_id")
-  content         String   @db.Text
+  id              String                       @id @default(cuid())
+  userId          String                       @map("user_id")
+  content         String                       @db.Text
   category        String?
-  importanceScore Float    @default(0) @map("importance_score")
-  confidence      Float    @default(0.8) @map("confidence")
-  lastAccessedAt  DateTime @default(now()) @map("last_accessed_at")
-  accessCount     Int      @default(0) @map("access_count")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  importanceScore Float                        @default(0) @map("importance_score")
+  confidence      Float                        @default(0.8) @map("confidence")
+  lastAccessedAt  DateTime                     @default(now()) @map("last_accessed_at")
+  accessCount     Int                          @default(0) @map("access_count")
+  createdAt       DateTime                     @default(now()) @map("created_at")
+  updatedAt       DateTime                     @updatedAt @map("updated_at")
   // Cross-chat recall (cross-chat-retrieval.js): pgvector embedding written
   // by raw SQL with ON CONFLICT (user_id, content_hash). Declared here so a
   // future `prisma db push` doesn't drop the columns the service depends on.
-  contentHash     String?  @map("content_hash")
+  contentHash     String?                      @map("content_hash")
   source          String?
   embedding       Unsupported("vector(1536)")?
 
@@ -3169,7 +4188,7 @@ model AccountingInvoice {
 model AccountingInvoiceLine {
   id          String  @id @default(cuid())
   invoiceId   String
-  productId    String?
+  productId   String?
   code        String?
   description String
   quantity    Decimal @default(1) @db.Decimal(18, 4)
@@ -3192,20 +4211,68 @@ model AccountingInvoiceLine {
 // never modified, so "restaurar versión anterior" is just re-serving an older
 // artifact. Additive table; no backfill needed for existing rows.
 model FileVersion {
-  id             String   @id @default(cuid())
-  fileId         String   // the ORIGINAL uploaded File this version derives from
-  userId         String   // denormalised for cheap ownership checks
-  version        Int      // 1..N, monotonic per fileId
-  artifactId     String?  // agent artifact holding the edited bytes
-  filename       String
-  summary        String?  @db.Text // human-readable "qué cambió"
-  editPlan       Json?    // the structured operations that produced it
-  validationPassed Boolean @default(true)
-  createdByChatId String?
-  createdAt      DateTime @default(now())
+  id               String   @id @default(cuid())
+  fileId           String // the ORIGINAL uploaded File this version derives from
+  userId           String // denormalised for cheap ownership checks
+  version          Int // 1..N, monotonic per fileId
+  artifactId       String? // agent artifact holding the edited bytes
+  filename         String
+  summary          String?  @db.Text // human-readable "qué cambió"
+  editPlan         Json? // the structured operations that produced it
+  validationPassed Boolean  @default(true)
+  createdByChatId  String?
+  content          String?  @db.Text // edited Markdown for manual /chat edits (MVP; null for artifact-based versions)
+  createdAt        DateTime @default(now())
 
   @@unique([fileId, version])
   @@index([fileId])
   @@index([userId])
   @@map("file_versions")
+}
+
+// ── Sira Voz (VoiceStudio, open source, 100 % local) ─────────────────────────
+// VoiceStudio keeps one flat list of voice profiles; this table scopes each
+// cloned voice to the SiraGPT user who created it. `providerId` is the
+// VoiceStudio profile id (what its `voice` / `profile_id` fields accept).
+model VoiceProfile {
+  id         String    @id @default(cuid())
+  userId     String
+  providerId String    @unique
+  name       String
+  language   String?
+  kind       String    @default("clone")
+  sampleName String?
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("voice_profiles")
+}
+
+// Long-running studio work (dub a video, render an audiobook). Polled by the
+// UI through /api/voice-studio/jobs/:id; the result is persisted into the
+// chat as an assistant message when it finishes.
+model VoiceStudioJob {
+  id         String    @id @default(cuid())
+  userId     String
+  chatId     String?
+  kind       String
+  status     String    @default("queued")
+  stage      String?
+  progress   Int       @default(0)
+  title      String?
+  input      Json?
+  result     Json?
+  error      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("voice_studio_jobs")
 }

@@ -41,6 +41,22 @@ const EXT_LANG: Record<string, string> = {
   txt: "plaintext",
 }
 
+export function joinWorkspacePath(...parts: string[]): string {
+  const joined = parts.map((p) => String(p || "").replace(/\\/g, "/")).filter(Boolean).join("/")
+  const normalized = joined.replace(/\/+/g, "/")
+  if (!normalized) return ""
+  if (normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) {
+    throw new Error("workspace_path_absolute")
+  }
+  const segs: string[] = []
+  for (const seg of normalized.split("/")) {
+    if (!seg || seg === ".") continue
+    if (seg === "..") throw new Error("workspace_path_escape")
+    segs.push(seg)
+  }
+  return segs.join("/")
+}
+
 export function languageForPath(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? ""
   return EXT_LANG[ext] || "plaintext"
@@ -100,6 +116,34 @@ export type CodeBlock = {
 /** A fence line: up to 3 spaces of indent, 3+ backticks, optional info string. */
 const FENCE_LINE_RE = /^ {0,3}(`{3,})([^`]*)$/
 
+function looksLikeSourcePath(value: string): boolean {
+  const cleaned = String(value || "").replace(/^["'`]+|["'`]+$/g, "").trim()
+  if (!cleaned || cleaned.length > 180 || /\s/.test(cleaned)) return false
+  if (cleaned.includes("://")) return false
+  return /(?:^|\/)[\w.-]+\.[a-z0-9]{1,8}$/i.test(cleaned)
+}
+
+function extractPathComment(line: string): string | null {
+  const m =
+    line.match(/^\s*\/\/\s*(?:path|filepath|file)\s*:\s*(.+?)\s*$/i) ||
+    line.match(/^\s*#\s*(?:path|file)\s*:\s*(.+?)\s*$/i) ||
+    line.match(/^\s*\{\s*filename\s*=\s*["']([^"']+)["']\s*\}\s*$/i) ||
+    line.match(/^\s*\/\/\s+((?:[\w.-]+\/)+[\w.-]+\.[a-z0-9]{1,8})\s*$/i)
+  if (!m) return null
+  const candidate = m[1].replace(/^["'`]+|["'`]+$/g, "").trim()
+  return looksLikeSourcePath(candidate) ? normalizePath(candidate) : null
+}
+
+function extractPathHeading(line: string): string | null {
+  const stripped = String(line || "")
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^\*\*|\*\*$/g, "")
+    .replace(/^`+|`+$/g, "")
+    .replace(/^(?:file|archivo)\s*:\s*/i, "")
+    .trim()
+  return looksLikeSourcePath(stripped) ? normalizePath(stripped) : null
+}
+
 /**
  * Extract fenced code blocks from a markdown-ish string and best-effort
  * infer the target file path. We support three signal styles common in
@@ -109,7 +153,9 @@ const FENCE_LINE_RE = /^ {0,3}(`{3,})([^`]*)$/
  *      ```tsx app/code/page.tsx
  *   2. Fence info string is the path itself:
  *      ```app/code/page.tsx
- *   3. First content line is `// path: app/code/page.tsx` (or `# path:` for shells).
+ *   3. First content line is `// path:`, `// filepath:`, `// File:`,
+ *      `# path:`, `{filename="..."}`, or a lone `// src/App.tsx`.
+ *   4. The markdown heading immediately above the fence is a file path.
  *
  * Anything else falls back to language-only and `path: null`, which the
  * UI renders as "no apply target".
@@ -136,6 +182,7 @@ export function parseCodeBlocks(text: string): CodeBlock[] {
   let i = 0
   while (lineNo < lines.length) {
     const open = lines[lineNo].match(FENCE_LINE_RE)
+    const fenceLineIndex = lineNo
     lineNo++
     if (!open) continue
 
@@ -177,7 +224,11 @@ export function parseCodeBlocks(text: string): CodeBlock[] {
     if (info) {
       const parts = info.split(/\s+/).filter(Boolean)
       const first = parts[0]
-      if (first && /[./]/.test(first) && !/^[a-z0-9+\-]+$/.test(first)) {
+      const named = info.match(/\b(?:file(?:name)?|path)\s*=\s*["']?([^\s"']+)/i)?.[1]
+      if (named && looksLikeSourcePath(named)) {
+        path = normalizePath(named)
+        language = first && /^[a-z0-9+\-]+$/i.test(first) ? first : languageForPath(path)
+      } else if (first && /[./]/.test(first) && !/^[a-z0-9+\-]+$/.test(first)) {
         // Fence info is a path (style 2).
         path = normalizePath(first)
         language = languageForPath(path)
@@ -191,14 +242,18 @@ export function parseCodeBlocks(text: string): CodeBlock[] {
 
     if (!path) {
       const firstLine = body.split("\n", 1)[0] || ""
-      const m =
-        firstLine.match(/^\s*\/\/\s*path:\s*(.+)\s*$/i) ||
-        firstLine.match(/^\s*#\s*path:\s*(.+)\s*$/i)
-      if (m) {
-        path = normalizePath(m[1])
+      const fromComment = extractPathComment(firstLine)
+      if (fromComment) {
+        path = fromComment
         body = body.split("\n").slice(1).join("\n")
         if (language === "plaintext") language = languageForPath(path)
       }
+    }
+
+    if (!path) {
+      const heading = lines[fenceLineIndex - 1] || ""
+      const fromHeading = extractPathHeading(heading)
+      if (fromHeading) path = fromHeading
     }
 
     if (path && language === "plaintext") language = languageForPath(path)

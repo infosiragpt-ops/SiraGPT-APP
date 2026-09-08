@@ -4,6 +4,7 @@ const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const eventStore = require('../src/services/codex/event-store');
+const pubsub = require('../src/services/codex/redis-pubsub');
 const { appendEvent, listEvents, createSeqGate, _resetSeqCache } = eventStore;
 
 // In-memory fake of the Prisma codexEvent model with the real unique
@@ -44,9 +45,15 @@ beforeEach(() => _resetSeqCache());
 test('appendEvent assigns monotonic seqs starting at 1', async () => {
   const prisma = makeFakePrisma();
   const publishes = [];
-  const publish = async (runId, env) => { publishes.push([runId, env]); };
+  let resolvePublished;
+  const allPublished = new Promise((resolve) => { resolvePublished = resolve; });
+  const publish = async (runId, env) => {
+    publishes.push([runId, env]);
+    if (publishes.length === 2) resolvePublished();
+  };
   const a = await appendEvent('r1', 'run_status', { status: 'running' }, { prisma, publish });
   const b = await appendEvent('r1', 'narrative_delta', { text: 'hola' }, { prisma, publish });
+  await allPublished;
   assert.equal(a.seq, 1);
   assert.equal(b.seq, 2);
   assert.equal(publishes.length, 2);
@@ -73,6 +80,34 @@ test('concurrent appends produce 1..N with no gaps or duplicates', async () => {
   assert.deepEqual(seqs, Array.from({ length: N }, (_, i) => i + 1));
 });
 
+test('concurrent appends publish in seq order even when the first publish is slow', async () => {
+  const prisma = makeFakePrisma();
+  const published = [];
+  let releaseFirst;
+  let firstStarted;
+  let resolveSecond;
+  const firstStartedPromise = new Promise((resolve) => { firstStarted = resolve; });
+  const secondPublished = new Promise((resolve) => { resolveSecond = resolve; });
+  const firstPublishReleased = new Promise((resolve) => { releaseFirst = resolve; });
+  const publish = async (_runId, envelope) => {
+    published.push(envelope.seq);
+    if (envelope.seq === 1) {
+      firstStarted();
+      await firstPublishReleased;
+    }
+    if (envelope.seq === 2) resolveSecond();
+  };
+
+  const first = appendEvent('r-order', 'narrative_delta', { text: 'one' }, { prisma, publish });
+  await firstStartedPromise;
+  const second = appendEvent('r-order', 'narrative_delta', { text: 'two' }, { prisma, publish });
+  releaseFirst();
+  await Promise.all([first, second]);
+  await secondPublished;
+
+  assert.deepEqual(published, [1, 2]);
+});
+
 test('seq counter recovers from a unique collision via retry', async () => {
   const prisma = makeFakePrisma();
   // Prime the in-memory counter to next=2 with one normal append.
@@ -93,6 +128,93 @@ test('Redis-down publish failure does not break the durable append', async () =>
   const ev = await appendEvent('r3', 'narrative_delta', { text: 'still saved' }, { prisma, publish });
   assert.equal(ev.seq, 1);
   assert.equal(prisma._rows.length, 1); // persisted despite publish throwing
+  assert.equal(prisma._rows[0].payload.text, 'still saved');
+});
+
+test('a publish promise that never settles cannot block appendEvent', async () => {
+  const prisma = makeFakePrisma();
+  const hungPublish = () => new Promise(() => {});
+  const append = appendEvent(
+    'r-hung',
+    'narrative_delta',
+    { text: 'durable before fan-out' },
+    {
+      prisma,
+      publish: hungPublish,
+      env: { CODEX_REDIS_PUBLISH_TIMEOUT_MS: '25' },
+    },
+  );
+
+  const ev = await Promise.race([
+    append,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('appendEvent remained blocked')), 250);
+      timer.unref?.();
+    }),
+  ]);
+
+  assert.equal(ev.seq, 1);
+  assert.equal(prisma._rows.length, 1);
+  assert.equal(prisma._rows[0].payload.text, 'durable before fan-out');
+});
+
+test('concurrent durable appends settle without waiting for a hung publisher chain', async () => {
+  const prisma = makeFakePrisma();
+  const N = 25;
+  const startedAt = Date.now();
+  const appends = Array.from({ length: N }, (_, i) => appendEvent(
+    'r-hung-many',
+    'narrative_delta',
+    { text: String(i) },
+    {
+      prisma,
+      publish: () => new Promise(() => {}),
+      env: { CODEX_REDIS_PUBLISH_TIMEOUT_MS: '25' },
+    },
+  ));
+
+  await Promise.race([
+    Promise.all(appends),
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('durable appends remained blocked')), 100);
+      timer.unref?.();
+    }),
+  ]);
+
+  assert.equal(prisma._rows.length, N);
+  assert.ok(Date.now() - startedAt < 100, 'durable path must not accumulate publish timeouts');
+});
+
+test('publisher connection refuses offline queuing and limits retries', () => {
+  const options = pubsub.publisherRedisOptions({
+    CODEX_REDIS_PUBLISH_TIMEOUT_MS: '75',
+  });
+
+  assert.equal(options.lazyConnect, true);
+  assert.equal(options.enableOfflineQueue, false);
+  assert.equal(options.maxRetriesPerRequest, 1);
+  assert.equal(options.connectTimeout, 75);
+  assert.equal(options.commandTimeout, 75);
+  assert.equal(options.retryStrategy(1), 50);
+  assert.equal(options.retryStrategy(2), null);
+});
+
+test('publishEvent times out fail-open and rate-limits warnings', async () => {
+  const warnings = [];
+  const connection = {
+    status: 'ready',
+    publish: () => new Promise(() => {}),
+  };
+  const options = {
+    connection,
+    env: { NODE_ENV: 'production', CODEX_REDIS_PUBLISH_TIMEOUT_MS: '25' },
+    logger: { warn: (...args) => warnings.push(args.join(' ')) },
+  };
+
+  assert.equal(await pubsub.publishEvent('r-timeout', { seq: 1 }, options), false);
+  assert.equal(await pubsub.publishEvent('r-timeout', { seq: 2 }, options), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /durable replay remains available/);
 });
 
 test('listEvents returns events after a seq in ascending order', async () => {
@@ -116,6 +238,29 @@ test('listEvents: an explicit limit of 0 clamps to 1, not the 5000 default', asy
   // `Number(0) || 5000` used to balloon limit:0 into 5000 → all 3 returned.
   const rows = await listEvents('r5', { afterSeq: 0, limit: 0, prisma });
   assert.equal(rows.length, 1, 'limit 0 must not be treated as the 5000 default');
+});
+
+test('listEvents transparently pages the default replay past 5000 events', async () => {
+  const prisma = makeFakePrisma();
+  for (let seq = 1; seq <= 5001; seq += 1) {
+    prisma._rows.push({
+      id: `page-${seq}`,
+      runId: 'r-pages',
+      seq,
+      type: seq === 5001 ? 'run_status' : 'narrative_delta',
+      payload: seq === 5001 ? { status: 'done' } : { text: String(seq) },
+      createdAt: new Date('2026-06-13T00:00:00.000Z'),
+    });
+  }
+
+  const events = await listEvents('r-pages', { prisma });
+  assert.equal(events.length, 5001);
+  assert.equal(events[0].seq, 1);
+  assert.equal(events.at(-1).seq, 5001);
+  assert.equal(events.at(-1).data.status, 'done');
+
+  const explicitUndefined = await listEvents('r-pages', { prisma, limit: undefined });
+  assert.equal(explicitUndefined.length, 5001, 'limit: undefined must use paginated default replay');
 });
 
 test('createSeqGate emits each seq exactly once; heartbeats always pass', () => {

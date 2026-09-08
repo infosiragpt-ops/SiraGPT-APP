@@ -20,7 +20,11 @@ function baseRunner({ execResults, files = {} } = {}) {
   return {
     written,
     exec: async (_p, cmd) => {
-      if (Array.isArray(cmd) && cmd[0] === 'bunx') {
+      if (
+        Array.isArray(cmd)
+        && cmd[0] === 'node'
+        && cmd[1] === 'node_modules/typescript/bin/tsc'
+      ) {
         const r = execResults[Math.min(execIdx, execResults.length - 1)];
         execIdx += 1;
         return r;

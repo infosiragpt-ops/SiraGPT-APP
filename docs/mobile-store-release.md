@@ -3,6 +3,21 @@
 ## Current State
 
 - Current native source version is `0.4.4` / build `4004`.
+- The PWA install path is live on `https://siragpt.com/descargas`: the
+  `#iphone` section teaches the Safari Compartir → Añadir a pantalla de
+  inicio steps (with an iOS install coach, since Safari never fires
+  `beforeinstallprompt`), and Chromium browsers get a real install prompt
+  via `PWAInstallPrompt`.
+- Android APK sideload is live via `/api/mobile/download?platform=android`
+  (`lib/mobile-releases.ts` + `/api/mobile/releases`): it resolves the
+  latest public GitHub release carrying an APK (tag families
+  `native-mobile-qa-*` / `native-android-signed-*`) and falls back to the
+  known `native-mobile-qa-v0.4.4-92849df` asset when GitHub is unreachable.
+- Store distribution remains owner-gated: `/descargas` shows an honest
+  "App Store (nativa Capacitor) — pendiente" status card (issue #6) and the
+  Android card notes Google Play is blocked on Play Console enrollment
+  (issue #5). No store badges or store URLs are published until the
+  listings exist.
 - Android debug APK QA builds successfully in GitHub Actions.
 - Android release AAB QA builds successfully in GitHub Actions.
 - Capacitor app ID is `com.siragpt.app`.

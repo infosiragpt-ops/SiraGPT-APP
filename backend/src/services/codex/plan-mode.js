@@ -14,7 +14,15 @@
 
 const { extractJson } = require('../builder/llm');
 
-function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback, openclawPromptBlock } = {}) {
+function buildPlanMessages({
+  project,
+  prompt,
+  fileTree,
+  priorPlan,
+  feedback,
+  openclawPromptBlock,
+  companySoul,
+} = {}) {
   const appsMode = /MODO APPS TIPO CODEX/i.test(String(prompt || ''));
   const system = [
     'Eres un agente de software senior que planifica proyectos web en español.',
@@ -34,6 +42,9 @@ function buildPlanMessages({ project, prompt, fileTree, priorPlan, feedback, ope
       : null,
     'Sé concreto y conciso. 3–8 tareas accionables ordenadas.',
     openclawPromptBlock || null,
+    companySoul
+      ? `SOUL.md DE LA EMPRESA (generado desde Company; respeta esta identidad y sus límites):\n${String(companySoul).slice(0, 8000)}`
+      : null,
   ].filter(Boolean).join('\n');
 
   const parts = [`Proyecto: ${project?.name || 'Sin nombre'}`];
@@ -94,6 +105,7 @@ async function runPlanMode({ run, project, deps }) {
       priorPlan: deps.priorPlan,
       feedback: deps.feedback,
       openclawPromptBlock: deps.openclawPromptBlock,
+      companySoul: deps.companySoul,
     });
     return [{ role: 'system', content: system }, { role: 'user', content: user }];
   })();

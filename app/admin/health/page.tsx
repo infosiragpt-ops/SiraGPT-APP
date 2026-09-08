@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { AlertTriangle, CheckCircle, XCircle, MinusCircle, RefreshCw, Activity, Server, Database, Wifi, HardDrive, Eye, EyeOff } from "lucide-react"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
@@ -52,8 +53,36 @@ function iconForCheck(name: string) {
     case "queue": return Activity
     case "process": return HardDrive
     case "model_providers": return Wifi
+    case "r2_artifacts": return HardDrive
+    case "gvisor_runsc": return Server
+    case "deepseek": return Wifi
+    case "generate_path": return Activity
     default: return Activity
   }
+}
+
+
+function InfraMiniBadge({
+  health,
+  name,
+  label,
+}: {
+  health: HealthData | null
+  name: string
+  label: string
+}) {
+  const check = health?.checks.find((c) => c.name === name)
+  const status = (check?.status || "skipped") as CheckStatus
+  const tone = status === "healthy"
+    ? "default"
+    : status === "unhealthy"
+      ? "destructive"
+      : "secondary"
+  return (
+    <Badge variant={tone} className="text-xs px-2 py-0.5" aria-label={`${label}: ${statusLabel(status)}`}>
+      {label}: {statusLabel(status)}
+    </Badge>
+  )
 }
 
 export default function HealthDashboard() {
@@ -97,23 +126,25 @@ export default function HealthDashboard() {
   const allHealthy = health?.checks.every((c) => c.status === "healthy" || c.status === "skipped")
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard de Salud</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Estado del sistema siraGPT
-          </p>
-        </div>
+    <>
+      <AdminPageHeader
+        title="Estado"
+        description="Salud del sistema Sira GPT"
+        actions={
         <div className="flex items-center gap-3">
           {health && (
-            <Badge
-              variant={allHealthy ? "default" : criticalCount > 0 ? "destructive" : "secondary"}
-              className="text-sm px-3 py-1"
-            >
-              {allHealthy ? "Todo bien" : criticalCount > 0 ? `${criticalCount} crítico(s)` : "Degradado"}
-            </Badge>
+            <>
+              <InfraMiniBadge health={health} name="r2_artifacts" label="R2" />
+              <InfraMiniBadge health={health} name="gvisor_runsc" label="gVisor" />
+              <InfraMiniBadge health={health} name="deepseek" label="DeepSeek" />
+              <InfraMiniBadge health={health} name="generate_path" label="Generate F2" />
+              <Badge
+                variant={allHealthy ? "default" : criticalCount > 0 ? "destructive" : "secondary"}
+                className="text-sm px-3 py-1"
+              >
+                {allHealthy ? "Todo bien" : criticalCount > 0 ? `${criticalCount} crítico(s)` : "Degradado"}
+              </Badge>
+            </>
           )}
           <Button variant="outline" size="sm" onClick={() => setAutoRefresh((v) => !v)} className="gap-1.5">
             {autoRefresh ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -124,7 +155,9 @@ export default function HealthDashboard() {
             Recargar
           </Button>
         </div>
-      </div>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       {/* Error state */}
       {error && (
@@ -244,6 +277,7 @@ export default function HealthDashboard() {
           </div>
         </>
       )}
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

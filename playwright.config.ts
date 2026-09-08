@@ -19,6 +19,8 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${port}`
  */
 export default defineConfig({
   testDir: "./e2e",
+  // Real document acceptance has its own explicit environment and budget gate.
+  testIgnore: ["**/document-sandbox.spec.ts"],
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,

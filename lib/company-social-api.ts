@@ -1,7 +1,7 @@
 import { authenticatedFetch } from "./authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 
-export type CompanySocialPlatform = "facebook" | "linkedin" | "x"
+export type CompanySocialPlatform = "facebook" | "instagram" | "linkedin" | "whatsapp" | "x" | "youtube"
 
 export type CompanySocialConnection = {
   id: string
@@ -64,6 +64,31 @@ export type CompanySocialPost = {
   createdAt: string
 }
 
+export type CompanySocialPublishResult = {
+  action: string
+  postId?: string
+  published?: number
+  failed?: number
+  post?: CompanySocialPost
+}
+
+export type CompanySocialLegacySummary = {
+  total: number
+  assignable: number
+  skipped: number
+  skippedByReason: Record<string, number>
+  deniedPlatforms: string[]
+}
+
+export type CompanySocialLegacyAssignment = {
+  workspaceId: string
+  total: number
+  assigned: number
+  skipped: number
+  skippedByReason: Record<string, number>
+  deniedPlatforms: string[]
+}
+
 const BASE = `${getNormalizedApiBaseUrl()}/social-posts`
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -84,16 +109,34 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const errorBody = body as { error?: string; code?: string } | null
     throw Object.assign(
       new Error(errorBody?.error || `Social operations HTTP ${response.status}`),
-      { status: response.status, code: errorBody?.code, body },
+      { status: response.status, code: errorBody?.code || mapOAuthErrorCode(errorBody || body), body },
     )
   }
   return body as T
 }
 
 export const companySocialApi = {
-  operations: () => request<CompanySocialOperations>("/operations", { cache: "no-store" }),
-  listPosts: () => request<{ posts: CompanySocialPost[] }>("/", { cache: "no-store" })
+  operations: (workspaceId?: string | null) =>
+    request<CompanySocialOperations>(
+      `/operations${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+      { cache: "no-store" },
+    ),
+  listPosts: (workspaceId?: string | null) =>
+    request<{ posts: CompanySocialPost[] }>(
+      `/${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`,
+      { cache: "no-store" },
+    )
     .then((result) => result.posts),
+  legacySummary: (workspaceId: string) =>
+    request<{ workspaceId: string; legacy: CompanySocialLegacySummary }>(
+      `/legacy?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { cache: "no-store" },
+    ).then((result) => result.legacy),
+  assignLegacyPosts: (workspaceId: string) =>
+    request<CompanySocialLegacyAssignment>("/legacy/assign", {
+      method: "POST",
+      body: JSON.stringify({ workspaceId, confirm: true }),
+    }),
   connectUrl: (platform: CompanySocialPlatform) =>
     request<{ platform: CompanySocialPlatform; url: string }>(`/connect/${platform}`),
   disconnect: (platform: CompanySocialPlatform) =>
@@ -108,7 +151,7 @@ export const companySocialApi = {
     caption: string
     platforms: CompanySocialPlatform[]
     scheduledAt?: string
-    workspaceId?: string | null
+    workspaceId: string
   }) => request<{ post: CompanySocialPost }>("/queue", {
     method: "POST",
     body: JSON.stringify({
@@ -118,5 +161,25 @@ export const companySocialApi = {
     }),
   }).then((result) => result.post),
   publishNow: (postId: string) =>
-    request<{ result: unknown }>(`/${encodeURIComponent(postId)}/publish-now`, { method: "POST" }),
+    request<{ result: CompanySocialPublishResult }>(
+      `/${encodeURIComponent(postId)}/publish-now`,
+      { method: "POST" },
+    ),
+}
+
+const OAUTH_CODE_RE = /\b(invalid_grant|access_denied|invalid_request|invalid_client|unauthorized_client|unsupported_response_type|invalid_scope|server_error|temporarily_unavailable|bad_verification_code)\b/i
+
+/** FE-057: map OAuth errors to a stable code, never HTML from a popup. */
+export function mapOAuthErrorCode(input: unknown): string {
+  if (input == null) return "oauth_error"
+  if (typeof input === "object") {
+    const rec = input as { code?: unknown; error?: unknown; message?: unknown }
+    const direct = String(rec.code || rec.error || "")
+    const m = OAUTH_CODE_RE.exec(direct) || OAUTH_CODE_RE.exec(String(rec.message || ""))
+    if (m) return m[1].toLowerCase()
+  }
+  const text = String(input)
+  if (/<html|<!doctype/i.test(text)) return "oauth_popup_html"
+  const m = OAUTH_CODE_RE.exec(text)
+  return m ? m[1].toLowerCase() : "oauth_error"
 }

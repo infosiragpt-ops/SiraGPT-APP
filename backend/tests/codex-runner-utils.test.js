@@ -18,9 +18,14 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
+  migrateLegacyViteProxyConfig,
+  previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
+  buildPreflightEnabled,
+  previewDocumentReady,
   shouldIgnoreExportPath,
   buildRunnerEnv,
   isControlRequestAuthorized,
@@ -47,6 +52,13 @@ test('sanitizeProjectId accepts cuid-like ids and rejects everything else', () =
   assert.equal(sanitizeProjectId('x'.repeat(65)), null);
 });
 
+test('sanitizeRunId accepts durable run ids and rejects path-like values', () => {
+  assert.equal(sanitizeRunId('run_01-HHZZ'), 'run_01-HHZZ');
+  assert.equal(sanitizeRunId('../../main'), null);
+  assert.equal(sanitizeRunId('run/branch'), null);
+  assert.equal(sanitizeRunId('x'.repeat(97)), null);
+});
+
 test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () => {
   assert.equal(resolveProjectRelPath('src/main.js'), 'src/main.js');
   assert.equal(resolveProjectRelPath('./a//b.txt'), 'a/b.txt');
@@ -58,9 +70,71 @@ test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () 
   assert.equal(resolveProjectRelPath(''), null);
 });
 
-test('isAllowedCommand allows git/bun/bunx/node and blocks the rest', () => {
+test('migrateLegacyViteProxyConfig scopes only the exact legacy starter proxy', () => {
+  const legacy = `const port = Number(process.env.PORT) || 5173
+const apiPort = Number(process.env.API_PORT) || port + 1000
+
+export default {
+  base: process.env.VITE_BASE || '/',
+  server: {
+    proxy: {
+      '^.*/api/': {
+        target: 'http://localhost:6173',
+        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),
+      },
+    },
+  },
+}
+`;
+  const migrated = migrateLegacyViteProxyConfig(legacy);
+  assert.equal(migrated.changed, true);
+  assert.match(migrated.content, /const apiBase = `\$\{base\}api`/);
+  assert.match(migrated.content, /\[apiBase\]/);
+  assert.doesNotMatch(migrated.content, /\^\.\*\/api\//);
+  assert.match(migrated.content, /p\.startsWith\(apiBase\)/);
+  assert.doesNotMatch(migrated.content, /VITE_HMR/);
+  assert.equal(migrateLegacyViteProxyConfig(migrated.content).changed, false);
+
+  const managedWithDisabledHmr = migrated.content.replace(
+    '  server: {\n',
+    "  server: {\n    hmr: process.env.VITE_HMR === 'false' ? false : undefined,\n",
+  );
+  const hmrMigrated = migrateLegacyViteProxyConfig(managedWithDisabledHmr);
+  assert.equal(hmrMigrated.changed, true);
+  assert.doesNotMatch(hmrMigrated.content, /VITE_HMR/);
+  assert.equal(migrateLegacyViteProxyConfig(hmrMigrated.content).changed, false);
+
+  const custom = legacy.replace("  base: process.env.VITE_BASE || '/',", "  base: '/custom/',");
+  assert.deepEqual(migrateLegacyViteProxyConfig(custom), { changed: false, content: custom });
+});
+
+test('preview config migration commits clean repos, restores system drift, and skips user edits', () => {
+  assert.equal(previewConfigMigrationMode({
+    status: '',
+    headContent: 'old',
+    migratedContent: 'new',
+  }), 'commit');
+  assert.equal(previewConfigMigrationMode({
+    status: ' M vite.config.ts\n',
+    headContent: 'managed',
+    migratedContent: 'managed',
+  }), 'restore');
+  assert.equal(previewConfigMigrationMode({
+    status: ' M vite.config.ts\n',
+    headContent: 'old',
+    migratedContent: 'user-edited',
+  }), 'skip');
+  assert.equal(previewConfigMigrationMode({
+    status: null,
+    headContent: 'old',
+    migratedContent: 'new',
+  }), 'skip');
+});
+
+test('isAllowedCommand allows git/bun/bunx/node/npm and blocks the rest', () => {
   assert.equal(isAllowedCommand(['git', 'init']), true);
   assert.equal(isAllowedCommand(['bun', 'install']), true);
+  assert.equal(isAllowedCommand(['npm', 'run', 'test']), true);
   assert.equal(isAllowedCommand(['rm', '-rf', '/']), false);
   assert.equal(isAllowedCommand(['sh', '-c', 'echo hi']), false);
   assert.equal(isAllowedCommand([]), false);
@@ -74,6 +148,21 @@ test('isAllowedCommand blocks interactive scaffolds that should be written by to
   assert.equal(isAllowedCommand(['bun', 'create', 'vite', '.']), false);
   assert.match(commandRejectionReason(['bunx', 'create-next-app@latest', '.']), /interactive_scaffold_disallowed/);
   assert.equal(commandRejectionReason(['bun', 'install']), null);
+});
+
+test('build preflight defaults on in production and remains explicitly configurable', () => {
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'production' }), true);
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'development' }), false);
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'production', CODE_RUNNER_BUILD_PREFLIGHT: '0' }), false);
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'development', CODE_RUNNER_BUILD_PREFLIGHT: '1' }), true);
+});
+
+test('preview readiness rejects status errors, blank HTML, and framework overlays', () => {
+  assert.equal(previewDocumentReady({ status: 500, contentType: 'text/html', body: '<html>ok</html>' }), false);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '   ' }), false);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '<vite-error-overlay></vite-error-overlay>' }), false);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '<html><body><div id="root"></div><script></script></body></html>' }), true);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'application/json', body: '' }), true);
 });
 
 test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () => {

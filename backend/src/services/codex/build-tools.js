@@ -3,8 +3,7 @@
 /**
  * codex/build-tools — the tools the build loop can call against the workspace
  * (feature 06), all routed through the runner client (the only process with
- * filesystem access). Five tools: run_command, read_file, write_file,
- * edit_file, web_search. Each declares its `kind` (for the timeline chip icon),
+ * filesystem access). Each declares its `kind` (for the timeline chip icon),
  * how to derive `command`/`path` for the action record, and a pure-ish
  * `execute(args, ctx)` returning a normalised result the loop turns into
  * action_start/action_end events + a CodexAction row.
@@ -125,15 +124,55 @@ function normalisePackageSpecs(raw) {
 const TOOLS = {
   run_command: {
     kind: 'terminal',
-    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, ls, cat, wc). Para instalar paquetes npm usa install_dependencies; no pases flags arbitrarios por run_command. No uses scaffolds interactivos como create-next-app/create-vite; para landings/apps simples escribe archivos con write_file/edit_file.',
-    parameters: { type: 'object', properties: { cmd: { type: 'array', items: { type: 'string' } }, timeoutMs: { type: 'number' } }, required: ['cmd'] },
+    description: 'Ejecuta un comando no interactivo en el workspace (allowlist: git, bun, bunx, node, npm, ls, cat, wc). Con background:true devuelve taskId inmediatamente; consulta task_logs y termina con task_stop. Para instalar paquetes npm usa install_dependencies; para scripts usa npm run; no uses scaffolds interactivos.',
+    parameters: {
+      type: 'object',
+      properties: {
+        cmd: { type: 'array', items: { type: 'string' } },
+        timeoutMs: { type: 'number', description: 'Timeout del comando; en background es la vida máxima de la tarea.' },
+        background: { type: 'boolean', description: 'Ejecutar en segundo plano y devolver taskId.' },
+      },
+      required: ['cmd'],
+    },
     commandFor: (args) => (Array.isArray(args?.cmd) ? args.cmd.join(' ') : String(args?.cmd || '')),
     pathFor: () => null,
     async execute(args, ctx) {
       const cmd = Array.isArray(args?.cmd) ? args.cmd : null;
       if (!cmd) return { isError: true, summary: 'cmd debe ser un array de strings', observation: 'Error: cmd debe ser un array de strings.' };
+      // eslint-disable-next-line global-require
+      const commandPolicy = require('./project-settings').commandDecision(ctx.projectSettings, cmd);
+      if (!commandPolicy.allowed) {
+        return {
+          isError: true,
+          summary: commandPolicy.reason,
+          observation: `Error de política: ${commandPolicy.reason}. Ajusta .sira/settings.json o usa un comando permitido.`,
+        };
+      }
+      if (args?.background) {
+        try {
+          // eslint-disable-next-line global-require
+          const service = ctx.backgroundTaskService || require('./background-tasks').backgroundTaskService;
+          const task = await service.start({
+            runner: ctx.runner,
+            project: ctx.project,
+            cmd,
+            timeoutMs: args.timeoutMs,
+            env: ctx.env || process.env,
+          });
+          if (typeof ctx.watchBackgroundTask === 'function') {
+            ctx.watchBackgroundTask(task, service);
+          }
+          return {
+            isError: false,
+            summary: `tarea background iniciada: ${task.taskId}`,
+            observation: `OK: tarea ${task.taskId} iniciada en background (pid aislado ${task.pid || 'asignado'}). Usa task_logs {"taskId":"${task.taskId}"} para ver estado/salida y task_stop para detenerla.`,
+          };
+        } catch (err) {
+          return { isError: true, summary: `background falló: ${err.message}`, observation: `Error iniciando tarea background: ${err.message}` };
+        }
+      }
       try {
-        const out = await ctx.runner.exec(ctx.project, cmd, { timeoutMs: args.timeoutMs });
+        const out = await ctx.runner.exec(ctx.project, cmd, { timeoutMs: args.timeoutMs, signal: ctx.signal });
         const body = summarise([out.stdout, out.stderr].filter(Boolean).join('\n'));
         const ok = out.exitCode === 0;
         return {
@@ -143,6 +182,68 @@ const TOOLS = {
         };
       } catch (err) {
         return { isError: true, summary: `runner error: ${err.message}`, observation: `Error ejecutando comando: ${err.message}` };
+      }
+    },
+  },
+
+  task_logs: {
+    kind: 'terminal',
+    description: 'Consulta estado y últimas líneas de una tarea iniciada con run_command background:true. No bloquea.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string' },
+        tailChars: { type: 'number', description: 'Caracteres finales de log (default 20000, máximo 30000).' },
+      },
+      required: ['taskId'],
+    },
+    commandFor: (args) => `task logs: ${args?.taskId || '?'}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        // eslint-disable-next-line global-require
+        const service = ctx.backgroundTaskService || require('./background-tasks').backgroundTaskService;
+        const result = await service.logs({
+          runner: ctx.runner,
+          project: ctx.project,
+          taskId: args?.taskId,
+          tailBytes: args?.tailChars,
+        });
+        const task = result.task || {};
+        const details = [
+          `taskId=${task.taskId || args?.taskId}`,
+          `status=${task.status || 'unknown'}`,
+          task.exitCode != null ? `exitCode=${task.exitCode}` : null,
+          task.signal ? `signal=${task.signal}` : null,
+          '',
+          result.log || '(sin logs)',
+        ].filter((line) => line != null).join('\n');
+        return { isError: false, summary: `${task.taskId || args?.taskId}: ${task.status || 'unknown'}`, observation: summarise(details, 32_000) };
+      } catch (err) {
+        return { isError: true, summary: `task_logs falló: ${err.message}`, observation: `Error consultando la tarea: ${err.message}` };
+      }
+    },
+  },
+
+  task_stop: {
+    kind: 'terminal',
+    description: 'Detiene de forma cooperativa y luego forzada, si fuera necesario, una tarea background del mismo workspace.',
+    parameters: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] },
+    commandFor: (args) => `task stop: ${args?.taskId || '?'}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        // eslint-disable-next-line global-require
+        const service = ctx.backgroundTaskService || require('./background-tasks').backgroundTaskService;
+        const result = await service.stop({ runner: ctx.runner, project: ctx.project, taskId: args?.taskId });
+        const task = result.task || {};
+        return {
+          isError: false,
+          summary: `${task.taskId || args?.taskId}: ${task.status || 'stopping'}`,
+          observation: `OK: tarea ${task.taskId || args?.taskId} en estado ${task.status || 'stopping'}. Consulta task_logs para confirmar su cierre.`,
+        };
+      } catch (err) {
+        return { isError: true, summary: `task_stop falló: ${err.message}`, observation: `Error deteniendo la tarea: ${err.message}` };
       }
     },
   },
@@ -222,6 +323,11 @@ const TOOLS = {
       try {
         const out = await ctx.runner.readFile(ctx.project, args.path);
         let content = out?.content ?? '';
+        // File-state is scoped to the active run (AbortSignal) when available.
+        // Store the full-file fingerprint even for a sliced read so edit_file
+        // can reject stale or never-read edits deterministically.
+        // eslint-disable-next-line global-require
+        require('./file-state').trackerForContext(ctx).markRead(args.path, content);
         const totalLines = lineCount(content);
         const offset = Number.isFinite(Number(args.offset)) && Number(args.offset) > 1 ? Math.floor(Number(args.offset)) : 1;
         const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Math.floor(Number(args.limit)) : 0;
@@ -236,6 +342,45 @@ const TOOLS = {
         return { isError: false, summary: summarise(content), linesRead: totalLines, observation: summarise(content, 8000) };
       } catch (err) {
         return { isError: true, summary: `no se pudo leer: ${err.message}`, observation: `Error leyendo ${args.path}: ${err.message}` };
+      }
+    },
+  },
+
+  read_media: {
+    kind: 'file_read',
+    description: 'Lee y VE una imagen (PNG/JPEG/GIF/WebP) o PDF del workspace. Las imágenes se entregan como contenido multimodal al modelo activo; los PDF se convierten a texto y, con Claude, también se adjunta el documento para comprender PDFs escaneados. Usa read_file para SVG o texto.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Ruta relativa de la imagen o PDF.' },
+      },
+      required: ['path'],
+    },
+    commandFor: () => null,
+    pathFor: (args) => args?.path || null,
+    async execute(args, ctx) {
+      if (!args?.path) return { isError: true, summary: 'path requerido', observation: 'Error: path requerido.' };
+      try {
+        // eslint-disable-next-line global-require
+        const result = await require('./workspace-media').readWorkspaceMedia({
+          runner: ctx.runner,
+          project: ctx.project,
+          path: args.path,
+          modelCapabilities: ctx.modelCapabilities,
+          provider: ctx.modelProvider,
+          env: ctx.env || process.env,
+        });
+        return {
+          isError: false,
+          summary: `${result.mediaType} leído (${result.bytes} bytes)`,
+          observation: result.observation,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          summary: `no se pudo leer el medio: ${err.message}`,
+          observation: `Error leyendo ${args.path} como imagen/PDF: ${err.message}`,
+        };
       }
     },
   },
@@ -265,6 +410,49 @@ const TOOLS = {
         return { isError: false, summary: `${files.length} archivos`, observation: text || 'Sin archivos que coincidan.' };
       } catch (err) {
         return { isError: true, summary: `no se pudo listar: ${err.message}`, observation: `Error listando archivos: ${err.message}` };
+      }
+    },
+  },
+
+  glob: {
+    kind: 'file_read',
+    description: 'Encuentra archivos con globs reales relativos al workspace (por ejemplo src/**/*.tsx, **/*.test.js). Usa pathspec glob de Git sin shell, respeta .gitignore y rechaza rutas absolutas o segmentos "..".',
+    parameters: {
+      type: 'object',
+      properties: {
+        patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Uno o más globs relativos seguros.',
+        },
+        maxResults: { type: 'number', description: 'Máximo de rutas devueltas (default 500, máximo 2000).' },
+      },
+      required: ['patterns'],
+    },
+    commandFor: (args) => `glob: ${Array.isArray(args?.patterns) ? args.patterns.join(', ') : ''}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      // eslint-disable-next-line global-require
+      const { runSafeGlob } = require('./safe-glob');
+      try {
+        const result = await runSafeGlob({
+          runner: ctx.runner,
+          project: ctx.project,
+          patterns: args?.patterns,
+          maxResults: args?.maxResults,
+        });
+        if (!result.ok) {
+          return { isError: true, summary: 'glob inválido o fallido', observation: `Error ejecutando glob: ${summarise(result.error, 1600)}` };
+        }
+        const body = result.files.join('\n');
+        const suffix = result.truncated ? `\n…[+${result.total - result.files.length} rutas]` : '';
+        return {
+          isError: false,
+          summary: `${result.total} archivo${result.total === 1 ? '' : 's'}`,
+          observation: body ? `${body}${suffix}` : 'Sin archivos que coincidan.',
+        };
+      } catch (err) {
+        return { isError: true, summary: `glob falló: ${err.message}`, observation: `Error ejecutando glob: ${err.message}` };
       }
     },
   },
@@ -300,7 +488,7 @@ const TOOLS = {
 
   write_file: {
     kind: 'file_write',
-    description: 'Crea o sobrescribe un archivo del workspace con el contenido dado.',
+    description: 'Crea un archivo nuevo o sobrescribe uno existente. Para sobrescribir exige haber leído primero su versión vigente con read_file y falla si cambió desde esa lectura.',
     parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
     commandFor: () => null,
     pathFor: (args) => args?.path || null,
@@ -309,7 +497,50 @@ const TOOLS = {
         return { isError: true, summary: 'path y content requeridos', observation: 'Error: path y content (string) requeridos.' };
       }
       try {
+        // eslint-disable-next-line global-require
+        const fileStateModule = require('./file-state');
+        const fileState = fileStateModule.trackerForContext(ctx);
+        let currentContent = null;
+        const enforceState = fileStateModule.shouldEnforceFileState(ctx);
+        if (enforceState) {
+          try {
+            const current = await ctx.runner.readFile(ctx.project, args.path);
+            currentContent = current?.content ?? '';
+          } catch (readError) {
+            const missing = readError?.status === 404 || readError?.body?.error === 'file_not_found' || readError?.message === 'file_not_found';
+            if (!missing) throw readError;
+          }
+        }
+        if (currentContent != null && enforceState) {
+          const state = fileState.checkEdit(args.path, currentContent);
+          if (!state.ok) {
+            if (state.reason === 'not_read') {
+              return {
+                isError: true,
+                summary: `${args.path} debe leerse antes de sobrescribir`,
+                observation: `Error: read-before-write. ${args.path} ya existe; léelo con read_file antes de sobrescribirlo. Para crear archivos nuevos no hace falta una lectura previa.`,
+              };
+            }
+            if (state.reason === 'changed_since_read') {
+              fileState.forget(args.path);
+              return {
+                isError: true,
+                summary: `${args.path} cambió desde la última lectura`,
+                observation: `Error: ${args.path} cambió desde la última lectura. Vuelve a leerlo y reintenta la sobrescritura sobre su estado vigente.`,
+              };
+            }
+            return {
+              isError: true,
+              summary: `ruta insegura: ${args.path}`,
+              observation: `Error: la ruta ${args.path} no es una ruta relativa segura del workspace.`,
+            };
+          }
+        }
         await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: args.content }]);
+        // A successful write becomes the new known state for follow-up edits in
+        // the same run. This does not waive read-before-edit for other runs.
+        // eslint-disable-next-line global-require
+        fileState.markWritten(args.path, args.content);
         const bytes = Buffer.byteLength(args.content, 'utf8');
         return { isError: false, summary: `escrito ${args.path} (${bytes} bytes)`, observation: `OK: escrito ${args.path} (${bytes} bytes).` };
       } catch (err) {
@@ -331,6 +562,34 @@ const TOOLS = {
       try {
         const cur = await ctx.runner.readFile(ctx.project, args.path);
         const content = cur?.content ?? '';
+        // eslint-disable-next-line global-require
+        const fileStateModule = require('./file-state');
+        const fileState = fileStateModule.trackerForContext(ctx);
+        if (fileStateModule.shouldEnforceFileState(ctx)) {
+          const state = fileState.checkEdit(args.path, content);
+          if (!state.ok) {
+            if (state.reason === 'not_read') {
+              return {
+                isError: true,
+                summary: `${args.path} debe leerse antes de editar`,
+                observation: `Error: read-before-edit. Lee ${args.path} con read_file antes de editarlo; edit_file no modifica archivos que esta ejecución no haya leído.`,
+              };
+            }
+            if (state.reason === 'changed_since_read') {
+              fileState.forget(args.path);
+              return {
+                isError: true,
+                summary: `${args.path} cambió desde la última lectura`,
+                observation: `Error: ${args.path} cambió desde la última lectura. Vuelve a leer el archivo con read_file, revisa su contenido actual y reintenta la edición con un fragmento vigente.`,
+              };
+            }
+            return {
+              isError: true,
+              summary: `ruta insegura: ${args.path}`,
+              observation: `Error: la ruta ${args.path} no es una ruta relativa segura del workspace.`,
+            };
+          }
+        }
         // Graduated match ladder (edit-matching.js): exact byte match first;
         // if the model quoted the fragment with drifted indentation, a UNIQUE
         // line-trimmed window still lands the edit (re-indented to the file).
@@ -344,11 +603,77 @@ const TOOLS = {
           return { isError: true, summary: `texto a reemplazar no encontrado en ${args.path}`, observation: `Error: el texto a reemplazar no existe en ${args.path} (ni exacto ni por líneas). Lee el archivo con read_file y copia el fragmento real.` };
         }
         await ctx.runner.writeFiles(ctx.project, [{ path: args.path, content: result.next }]);
+        fileState.markWritten(args.path, result.next);
         const n = result.occurrences;
         const via = result.strategy === 'line-trimmed' ? ' — coincidencia por líneas, indentación del archivo conservada' : '';
         return { isError: false, summary: `editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'})`, observation: `OK: editado ${args.path} (${n} reemplazo${n === 1 ? '' : 's'}${via}).` };
       } catch (err) {
         return { isError: true, summary: `no se pudo editar: ${err.message}`, observation: `Error editando ${args.path}: ${err.message}` };
+      }
+    },
+  },
+
+  resolve_conflict: {
+    kind: 'file_write',
+    description: 'Resuelve un archivo que Git marque actualmente como conflicto (U): escribe el contenido final sin marcadores y lo añade al índice. Rechaza archivos que no estén en conflicto.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        content: { type: 'string', description: 'Contenido final completo, sin <<<<<<<, ======= ni >>>>>>>.' },
+      },
+      required: ['path', 'content'],
+    },
+    commandFor: (args) => `git add -- ${args?.path || '?'}`,
+    pathFor: (args) => args?.path || null,
+    async execute(args, ctx) {
+      // eslint-disable-next-line global-require
+      const path = require('./file-state').normalizeWorkspacePath(args?.path);
+      if (!path || typeof args?.content !== 'string') {
+        return { isError: true, summary: 'path/content inválidos', observation: 'Error: path relativo seguro y content string son requeridos.' };
+      }
+      if (/^(?:<{7}|={7}|>{7})(?:\s|$)/m.test(args.content)) {
+        return { isError: true, summary: 'persisten marcadores de conflicto', observation: 'Error: elimina todos los marcadores <<<<<<<, ======= y >>>>>>> antes de resolver.' };
+      }
+      try {
+        const unresolved = await ctx.runner.exec(
+          ctx.project,
+          ['git', 'diff', '--name-only', '--diff-filter=U', '-z', '--', path],
+          { timeoutMs: 15_000 },
+        );
+        if (unresolved.exitCode !== 0) {
+          return { isError: true, summary: `git diff exit ${unresolved.exitCode}`, observation: `Error comprobando conflictos: ${summarise(unresolved.stderr || unresolved.stdout, 1200)}` };
+        }
+        const paths = String(unresolved.stdout || '').split('\0').filter(Boolean);
+        if (!paths.includes(path)) {
+          return { isError: true, summary: `${path} no está en conflicto`, observation: `Error: Git no marca ${path} como conflicto sin resolver; no se modificó el archivo.` };
+        }
+
+        const write = await ctx.runner.writeFiles(ctx.project, [{ path, content: args.content }]);
+        if (write?.ok === false || (Number.isFinite(Number(write?.written)) && Number(write.written) < 1)) {
+          return { isError: true, summary: `no se pudo escribir ${path}`, observation: `Error: el runner no escribió ${path}.` };
+        }
+        const staged = await ctx.runner.exec(ctx.project, ['git', 'add', '--', path], { timeoutMs: 15_000 });
+        if (staged.exitCode !== 0) {
+          return { isError: true, summary: `git add exit ${staged.exitCode}`, observation: `El archivo se escribió, pero Git no pudo marcarlo resuelto:\n${summarise(staged.stderr || staged.stdout, 1200)}` };
+        }
+        const remaining = await ctx.runner.exec(
+          ctx.project,
+          ['git', 'diff', '--name-only', '--diff-filter=U', '-z'],
+          { timeoutMs: 15_000 },
+        );
+        const remainingPaths = remaining.exitCode === 0
+          ? String(remaining.stdout || '').split('\0').filter(Boolean)
+          : [];
+        return {
+          isError: false,
+          summary: `conflicto resuelto: ${path}`,
+          observation: remainingPaths.length
+            ? `OK: ${path} quedó resuelto y staged. Conflictos restantes: ${remainingPaths.join(', ')}.`
+            : `OK: ${path} quedó resuelto y staged. No quedan conflictos Git sin resolver.`,
+        };
+      } catch (err) {
+        return { isError: true, summary: `resolve_conflict falló: ${err.message}`, observation: `Error resolviendo ${path}: ${err.message}` };
       }
     },
   },
@@ -375,11 +700,32 @@ const TOOLS = {
     },
   },
 
+  web_fetch: {
+    kind: 'web',
+    description: 'Obtiene el contenido de una URL pública concreta con protección SSRF, DNS anti-rebinding, redirects revalidados y extracción de texto limitada. Usa web_search para descubrir URLs y web_fetch para leer una.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        maxChars: { type: 'number', description: 'Máximo de texto extraído (500-50000).' },
+        raw: { type: 'boolean', description: 'Devuelve body textual sin extracción HTML.' },
+        timeoutMs: { type: 'number', description: 'Timeout de red.' },
+      },
+      required: ['url'],
+    },
+    commandFor: (args) => (args?.url ? `fetch: ${args.url}` : null),
+    pathFor: () => null,
+    async execute(args, ctx) {
+      // eslint-disable-next-line global-require
+      return require('./web-fetch').executeCodexWebFetch(args, ctx);
+    },
+  },
+
   type_check: {
     kind: 'terminal',
     description: 'Instala dependencias declaradas con bun install y compila el proyecto con TypeScript (tsc --noEmit), devolviendo los errores REALES de tipos/imports. Úsalo SIEMPRE después de crear, editar o instalar dependencias, y corrige lo que salga antes de terminar.',
     parameters: { type: 'object', properties: { timeoutMs: { type: 'number' } }, required: [] },
-    commandFor: () => 'bun install && bunx tsc --noEmit',
+    commandFor: () => 'bun install && node node_modules/typescript/bin/tsc --noEmit',
     pathFor: () => null,
     async execute(args, ctx) {
       try {
@@ -392,7 +738,13 @@ const TOOLS = {
             observation: `No pude instalar las dependencias declaradas antes del type check:\n${diagnostics}\nCorrige package.json/bun.lock o usa install_dependencies con paquetes válidos.`,
           };
         }
-        const out = await ctx.runner.exec(ctx.project, ['bunx', 'tsc', '--noEmit', '--pretty', 'false'], { timeoutMs: args?.timeoutMs || 120000 });
+        // eslint-disable-next-line global-require
+        const { localCliCommand } = require('./local-cli');
+        const out = await ctx.runner.exec(
+          ctx.project,
+          localCliCommand('tsc', '--noEmit', '--pretty', 'false'),
+          { timeoutMs: args?.timeoutMs || 120000 },
+        );
         if (out.exitCode === 0) {
           return { isError: false, summary: 'dependencias instaladas + type check limpio', observation: 'OK: dependencias instaladas y el proyecto compila sin errores de TypeScript.' };
         }
@@ -403,7 +755,7 @@ const TOOLS = {
           observation: `El proyecto NO compila. Errores de TypeScript:\n${diagnostics}\nCorrige estos errores editando los archivos afectados.`,
         };
       } catch (err) {
-        // A missing tsconfig / offline bunx is informational, not a build failure.
+        // A missing tsconfig / unavailable local CLI is informational, not a build failure.
         return { isError: false, summary: `type check no disponible: ${err.message}`, observation: `No pude ejecutar el type check (${err.message}). Continúa con cuidado.` };
       }
     },
@@ -468,13 +820,16 @@ const TOOLS = {
 
   run_subagent: {
     kind: 'agent',
-    description: 'Delega una tarea grande o especializada en un subagente experto con contexto fresco: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y datos), db_architect (modelo de datos), qa_reviewer (revisión y verificación), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de software empresarial: CRM/ERP/inventario/facturación/RRHH), más los agentes custom que el proyecto defina en .sira/agents.json. La política del workspace decide si varias delegaciones se serializan o ejecutan en paralelo. Recibes solo su informe final.',
+    description: 'Delega una tarea en un subagente con contexto fresco: explorer (solo lectura y barato), planner, frontend_builder, backend_engineer, db_architect, qa_reviewer, debugger, enterprise_analyst o agentes custom de .sira/agents.json. model y effort permiten elegir capacidad por especialista. background:true inicia agentes read-only en paralelo y devuelve taskId; consulta subagent_status o detén con subagent_stop.',
     parameters: {
       type: 'object',
       properties: {
         agent: { type: 'string', description: 'Nombre del subagente.' },
         task: { type: 'string', description: 'Tarea concreta y autocontenida para el subagente.' },
         context: { type: 'string', description: 'Contexto extra del proyecto que el subagente necesita.' },
+        model: { type: 'string', description: 'Modelo opcional compatible con el proveedor activo.' },
+        effort: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Esfuerzo de razonamiento del especialista.' },
+        background: { type: 'boolean', description: 'Ejecutar en background. Por seguridad, solo agentes read-only salvo aislamiento explícito.' },
       },
       required: ['agent', 'task'],
     },
@@ -486,16 +841,110 @@ const TOOLS = {
       const sdk = require('./agent-sdk');
       try {
         const customAgents = await sdk.loadWorkspaceAgents({ runner: ctx.runner, project: ctx.project });
-        const outcome = await sdk.runSubagent({
+        const definition = sdk.getSubagent(String(args?.agent || '')) || customAgents[String(args?.agent || '')] || null;
+        if (!definition) {
+          return { isError: true, summary: 'subagente desconocido', observation: `Subagente desconocido: ${String(args?.agent || '')}.` };
+        }
+        const configuredModel = definition.readOnly && String(args?.agent || '') === 'explorer'
+          ? ctx.projectSettings?.subagents?.explorerModel
+          : ctx.projectSettings?.subagents?.defaultModel;
+        const model = String(args?.model || configuredModel || definition.model || '').trim().slice(0, 160) || null;
+        const effort = ['low', 'medium', 'high'].includes(String(args?.effort || '').toLowerCase())
+          ? String(args.effort).toLowerCase()
+          : (ctx.projectSettings?.subagents?.defaultEffort || ctx.effort || definition.effort || 'medium');
+        const execute = ({ signal = ctx.signal } = {}) => sdk.runSubagent({
           name: String(args?.agent || ''),
           task: String(args?.task || ''),
           context: String(args?.context || ''),
-          deps: { runner: ctx.runner, project: ctx.project, webSearch: ctx.webSearch, env: ctx.env, llmTurn: ctx.llmTurn, tier: ctx.tier || null, signal: ctx.signal, onUsage: ctx.onUsage, emitAction: ctx.emitAction, customAgents },
+          model,
+          effort,
+          deps: {
+            runner: ctx.runner,
+            project: ctx.project,
+            webSearch: ctx.webSearch,
+            env: ctx.env,
+            llmTurn: ctx.llmTurn,
+            tier: ctx.tier || null,
+            signal,
+            onUsage: ctx.onUsage,
+            emitAction: ctx.emitAction,
+            customAgents,
+            projectSettings: ctx.projectSettings,
+            companySoul: ctx.companySoul,
+            modelCapabilities: ctx.modelCapabilities,
+            modelProvider: ctx.modelProvider,
+          },
         });
+        if (args?.background) {
+          if (!definition.readOnly && String(ctx.env?.CODEX_PARALLEL_WRITE_SUBAGENTS || '') !== '1') {
+            return {
+              isError: true,
+              summary: 'background rechazado para subagente escritor',
+              observation: 'Error: background solo está habilitado para subagentes read-only. Usa explorer/planner/qa_reviewer o un sandbox con worktree aislado.',
+            };
+          }
+          // eslint-disable-next-line global-require
+          const manager = ctx.backgroundSubagentManager || require('./background-subagents').backgroundSubagentManager;
+          const task = manager.start({
+            runId: ctx.run?.id,
+            project: ctx.project,
+            agent: String(args.agent),
+            execute,
+            parentSignal: ctx.signal,
+            onComplete: async (finished) => {
+              if (typeof ctx.notifyBackgroundSubagent === 'function') await ctx.notifyBackgroundSubagent(finished);
+            },
+          });
+          return {
+            isError: false,
+            summary: `subagente background iniciado: ${task.taskId}`,
+            observation: `OK: ${args.agent} trabaja en background con taskId=${task.taskId}. Recibirás una notificación al terminar; usa subagent_status para consultar o recoger su informe.`,
+          };
+        }
+        const outcome = await execute();
         const report = sdk.formatSubagentReport(outcome);
         return { isError: !outcome.ok, summary: `${outcome.agent}: ${outcome.ok ? 'completado' : 'falló'} (${outcome.toolCallsCount} herramientas)`, observation: report };
       } catch (err) {
         return { isError: true, summary: `subagente falló: ${err.message}`, observation: `Error ejecutando el subagente: ${err.message}` };
+      }
+    },
+  },
+
+  subagent_status: {
+    kind: 'agent',
+    description: 'Consulta el estado y recoge el informe de un subagente iniciado con run_subagent background:true.',
+    parameters: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] },
+    commandFor: (args) => `subagent status: ${args?.taskId || '?'}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        // eslint-disable-next-line global-require
+        const manager = ctx.backgroundSubagentManager || require('./background-subagents').backgroundSubagentManager;
+        const task = manager.status({ taskId: args?.taskId, runId: ctx.run?.id, project: ctx.project });
+        const report = task.outcome
+          ? `[SUBAGENTE ${task.agent}] ${task.status}\n${task.outcome.result}`
+          : `[SUBAGENTE ${task.agent}] ${task.status}${task.error ? `\nError: ${task.error}` : ''}`;
+        return { isError: task.status === 'error', summary: `${task.agent}: ${task.status}`, observation: report };
+      } catch (err) {
+        return { isError: true, summary: `subagent_status falló: ${err.message}`, observation: `Error consultando subagente: ${err.message}` };
+      }
+    },
+  },
+
+  subagent_stop: {
+    kind: 'agent',
+    description: 'Cancela cooperativamente un subagente background del mismo run y proyecto.',
+    parameters: { type: 'object', properties: { taskId: { type: 'string' } }, required: ['taskId'] },
+    commandFor: (args) => `subagent stop: ${args?.taskId || '?'}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      try {
+        // eslint-disable-next-line global-require
+        const manager = ctx.backgroundSubagentManager || require('./background-subagents').backgroundSubagentManager;
+        const task = manager.stop({ taskId: args?.taskId, runId: ctx.run?.id, project: ctx.project });
+        return { isError: false, summary: `${task.agent}: ${task.status}`, observation: `Cancelación solicitada para ${task.taskId}; estado=${task.status}.` };
+      } catch (err) {
+        return { isError: true, summary: `subagent_stop falló: ${err.message}`, observation: `Error cancelando subagente: ${err.message}` };
       }
     },
   },
@@ -572,8 +1021,16 @@ const TOOLS = {
           return { isError: true, summary: 'dev server no listo para el navegador', observation: `El dev server no llegó a estar listo${status?.error ? ` (${status.error})` : ''} — usa dev_server_check para el detalle de logs.` };
         }
         const url = bc.devUrlFor(ctx.env || process.env, status.port || 5173);
-        const result = await bc.checkApp({ url, env: ctx.env || process.env });
-        const report = bc.formatReport(result, url);
+        const supportsVision = ctx.modelCapabilities?.supportsImages === true;
+        const result = await bc.checkApp({
+          url,
+          env: ctx.env || process.env,
+          captureScreenshot: supportsVision,
+        });
+        const report = bc.formatObservation(result, url, {
+          supportsVision,
+          provider: ctx.modelProvider || 'anthropic',
+        });
         if (result.unavailable) {
           return { isError: false, summary: 'navegador no disponible (informacional)', observation: report };
         }
@@ -635,6 +1092,37 @@ const TOOLS = {
     },
   },
 
+  mcp_list_tools: {
+    kind: 'agent',
+    description: 'Descubre las herramientas de servidores MCP habilitados en .sira/mcp.json. Cada servidor se valida con la política MCP y falla de forma aislada. Devuelve nombres mcp__servidor__tool para usarlos con mcp_call.',
+    parameters: { type: 'object', properties: {}, required: [] },
+    commandFor: () => 'mcp list tools',
+    pathFor: () => '.sira/mcp.json',
+    async execute(args, ctx) {
+      // eslint-disable-next-line global-require
+      return require('./mcp-tools').executeMcpList(args, ctx);
+    },
+  },
+
+  mcp_call: {
+    kind: 'agent',
+    description: 'Ejecuta una herramienta MCP namespaced descubierta previamente con mcp_list_tools. Los argumentos deben respetar el input schema mostrado en el catálogo.',
+    parameters: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', description: 'Nombre exacto mcp__servidor__tool.' },
+        arguments: { type: 'object', additionalProperties: true },
+      },
+      required: ['tool'],
+    },
+    commandFor: (args) => `mcp call: ${args?.tool || '?'}`,
+    pathFor: () => '.sira/mcp.json',
+    async execute(args, ctx) {
+      // eslint-disable-next-line global-require
+      return require('./mcp-tools').executeMcpCall(args, ctx);
+    },
+  },
+
   inspect_database: {
     kind: 'database',
     description: 'Inspecciona el esquema de base de datos del proyecto (Prisma). Devuelve el provider, los modelos/tablas con sus campos y los enums, para rastrear y razonar sobre la base de datos antes de generar o modificar código que la use. No requiere conexión viva.',
@@ -665,6 +1153,32 @@ const TOOLS = {
   },
 };
 
+/**
+ * Run-worktree seam (CODEX_RUN_WORKTREES, default OFF): translate a
+ * workspace-relative tool path into the run's isolated worktree
+ * (`.sira-worktrees/wt-<runId>/<path>`) so N concurrent runs of one project
+ * stop sharing a working tree. Today build tools hand `args.path` straight to
+ * `ctx.runner.*(ctx.project, path)`, which the runner resolves against the
+ * workspace root — this helper is the single choke point tool executes can
+ * adopt to prefix those paths. Identity (the exact input path) whenever:
+ *   - the flag is off (default) or ctx has no run id, or
+ *   - the runner is already run-scoped (`runner.scope` — the worktree is
+ *     resolved runner-side and prefixing again would double-map it), or
+ *   - the path is absolute or contains `..` (left untouched for each tool's
+ *     own validation to reject).
+ */
+function resolveToolPath(ctx, relPath) {
+  if (relPath == null) return relPath;
+  const path = String(relPath);
+  if (!path) return path;
+  if (ctx?.runner?.scope) return path;
+  if (/^[/\\]/.test(path) || path.split(/[\\/]/).includes('..')) return path;
+  // eslint-disable-next-line global-require
+  const { resolveRunCwd } = require('./git-workflow');
+  const runCwd = resolveRunCwd({ runId: ctx?.run?.id, env: ctx?.env || process.env });
+  return runCwd ? `${runCwd}/${path}` : path;
+}
+
 /** Registry projection for prompted-tool-calling: [{ name, description, parameters }]. */
 function toolRegistry(names = Object.keys(TOOLS)) {
   return names.filter((n) => TOOLS[n]).map((name) => ({ name, description: TOOLS[name].description, parameters: TOOLS[name].parameters }));
@@ -684,5 +1198,6 @@ module.exports = {
   formatSchema,
   normalisePlanTasks,
   normalisePackageSpecs,
+  resolveToolPath,
   PLAN_TASK_STATUSES,
 };

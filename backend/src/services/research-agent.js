@@ -67,6 +67,23 @@ function getPlaywright() {
   return playwrightModule;
 }
 
+function chromiumLaunchOptions(env = process.env) {
+  const executablePath = String(
+    env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+      || env.CHROMIUM_PATH
+      || '',
+  ).trim();
+  return {
+    headless: true,
+    ...(executablePath
+      ? {
+          executablePath,
+          args: ['--no-sandbox', '--disable-dev-shm-usage'],
+        }
+      : {}),
+  };
+}
+
 let aiServiceModule = null;
 function getAiService() {
   if (aiServiceModule !== null) return aiServiceModule;
@@ -83,7 +100,7 @@ function getAiService() {
  * Degrades gracefully when Playwright isn't installed or chromium isn't
  * present — visit() then returns a stub with no screenshot.
  */
-function createBrowserSession({ totalBudgetMs }) {
+function createBrowserSession({ totalBudgetMs, validateUrl = null }) {
   const pw = getPlaywright();
   let browser = null;
   let elapsedSinceStart = 0;
@@ -92,7 +109,7 @@ function createBrowserSession({ totalBudgetMs }) {
   async function lazyInit() {
     if (browser || !pw) return;
     try {
-      browser = await pw.chromium.launch({ headless: true });
+      browser = await pw.chromium.launch(chromiumLaunchOptions());
     } catch (err) {
       // Browser exec missing or launch failed — degrade to text-only. Surface
       // the actionable Playwright message (e.g. "Executable doesn't exist")
@@ -125,6 +142,23 @@ function createBrowserSession({ totalBudgetMs }) {
       javaScriptEnabled: true,
     });
     const page = await context.newPage();
+    let blockedRequestError = null;
+    if (typeof validateUrl === 'function') {
+      await page.route('**/*', async (route) => {
+        const target = route.request().url();
+        if (!/^https?:/i.test(target)) {
+          await route.continue();
+          return;
+        }
+        try {
+          await validateUrl(target);
+          await route.continue();
+        } catch (error) {
+          blockedRequestError = error;
+          await route.abort('blockedbyclient');
+        }
+      });
+    }
     // Bound the post-navigation ops (title/evaluate/screenshot) — goto +
     // waitForLoadState pass explicit timeouts that override this default, but
     // screenshot otherwise defaults to 0 (no timeout) and a wedged renderer
@@ -151,7 +185,7 @@ function createBrowserSession({ totalBudgetMs }) {
         stub.error = 'screenshot_too_large';
       }
     } catch (err) {
-      stub.error = err.message || String(err);
+      stub.error = blockedRequestError?.message || err.message || String(err);
     } finally {
       // Bound cleanup so a wedged/zombied renderer can't hang the run's finally.
       try {
@@ -490,6 +524,7 @@ module.exports = {
   run,
   _internal: {
     createBrowserSession,
+    chromiumLaunchOptions,
     analysePage,
     decideNextAction,
     synthesise,

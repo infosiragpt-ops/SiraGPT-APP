@@ -116,17 +116,34 @@ function createAgentHarnessRouter({
       body('permissionId').isString().trim().isLength({ min: 8, max: 64 }),
       body('decision').isString().trim().isIn(permissionManager.DECISIONS),
     ],
-    (req, res) => {
+    async (req, res) => {
       if (handleValidation(req, res)) return;
-      const result = permissionManager.resolvePermission({
+      const result = await permissionManager.resolvePermission({
         permissionId: req.body.permissionId,
         decision: req.body.decision,
         userId: req.user?.id || req.user?.userId || null,
+        prisma,
       });
       if (!result.ok) {
         return res.status(result.status || 400).json({ error: result.error });
       }
-      return res.json({ ok: true, decision: result.decision });
+      if (result.requiresResume && result.runId) {
+        const uid = req.user?.id || req.user?.userId;
+        setImmediate(() => {
+          const { resumeCoworkRun } = require('../services/cowork/headless-runner');
+          resumeCoworkRun(prisma, {
+            runId: result.runId,
+            userId: uid,
+          }).catch((error) => {
+            try { console.warn('[cowork] durable run resume failed:', error.message); } catch (_) { /* noop */ }
+          });
+        });
+      }
+      return res.json({
+        ok: true,
+        decision: result.decision,
+        resumeScheduled: Boolean(result.requiresResume && result.runId),
+      });
     },
   );
 

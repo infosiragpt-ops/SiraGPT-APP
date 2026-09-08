@@ -67,6 +67,25 @@ test('checkApp: healthy render → ok', async () => {
   assert.match(bc.formatReport(r, 'http://x:5173'), /Render OK/);
 });
 
+test('checkApp: expected marker rejects a stale but otherwise healthy preview', async () => {
+  const r = await bc.checkApp({
+    url: 'http://x:5173',
+    expectedText: 'RUN-2',
+    settleMs: 1,
+    puppeteerImpl: fakePuppeteer({
+      snapshot: {
+        title: 'Mi App',
+        rootChars: 240,
+        expectedTextFound: false,
+        overlay: null,
+      },
+    }),
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.expectedTextFound, false);
+  assert.match(bc.formatReport(r, 'http://x:5173'), /versión anterior/);
+});
+
 test('checkApp: blank root + exception + overlay → not ok, all reported', async () => {
   const r = await bc.checkApp({
     url: 'http://x:5173',

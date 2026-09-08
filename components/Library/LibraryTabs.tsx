@@ -86,6 +86,12 @@ const MediaLibrary: React.FC = () => {
     const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
     // Object URL for the currently-open artifact (audio/music/webapp/mobileapp).
     const [artifactUrl, setArtifactUrl] = useState<string | null>(null);
+    // HTML text of the currently-open webapp artifact. Rendered via
+    // srcDoc into a sandboxed iframe WITHOUT allow-same-origin (#253
+    // regime): the artifact gets an opaque origin and cannot reach
+    // the app's cookies or localStorage. Never mount agent HTML with
+    // a blob: src + allow-same-origin — blob: inherits the app origin.
+    const [webappPreviewHtml, setWebappPreviewHtml] = useState<string>('');
     const [artifactLoading, setArtifactLoading] = useState(false);
     const [artifactError, setArtifactError] = useState<string | null>(null);
     // Web-app projects (created via "Proyecto en la nube" → tipo "App web").
@@ -169,12 +175,18 @@ const MediaLibrary: React.FC = () => {
         setArtifactLoading(true);
         setArtifactError(null);
         setArtifactUrl(null);
+        setWebappPreviewHtml('');
         apiClient
             .getMediaArtifactBlob(source)
             .then((blob) => {
                 if (cancelled) return;
                 objectUrl = URL.createObjectURL(blob);
                 setArtifactUrl(objectUrl);
+                if (selectedMedia.type === 'webapp') {
+                    blob.text().then((text) => {
+                        if (!cancelled) setWebappPreviewHtml(text);
+                    }).catch(() => {});
+                }
             })
             .catch((e: any) => {
                 if (!cancelled) setArtifactError(e?.message || 'No se pudo cargar el archivo');
@@ -211,16 +223,45 @@ const MediaLibrary: React.FC = () => {
     // originating chat (rare) fall back to the in-place preview modal.
     const handleItemClick = (item: MediaItem) => {
         if (item.chatId) {
-            router.push(`/chat?id=${encodeURIComponent(item.chatId)}`);
+            router.push(`/agentes?id=${encodeURIComponent(item.chatId)}`);
             return;
         }
         openMediaModal(item);
+    };
+
+    // "Open in new tab" for a webapp artifact. The tab gets a static
+    // wrapper that embeds the artifact bytes (fetched with auth) into
+    // a sandboxed opaque-origin iframe — never top-level agent HTML.
+    const openWebappInNewTab = (source: string | null, filename: string) => {
+        if (!source) return;
+        apiClient
+            .getMediaArtifactBlob(source)
+            .then((blob) => blob.text())
+            .then((text) => {
+                const payload = JSON.stringify(text).replace(/</g, '\\u003c');
+                const escapedTitle = filename.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+                const wrapper = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapedTitle}</title>
+<style>html,body{margin:0;height:100%;background:#fff}iframe{display:block;width:100%;height:100%;border:0}</style>
+</head><body><iframe id="frame" sandbox="allow-scripts allow-forms allow-popups allow-modals" title="${escapedTitle}"></iframe>
+<script>
+(function(){
+  var doc = ${payload};
+  var f = document.getElementById('frame');
+  f.srcdoc = doc;
+})();
+</script></body></html>`;
+                const url = URL.createObjectURL(new Blob([wrapper], { type: 'text/html' }));
+                window.open(url, '_blank', 'noopener,noreferrer');
+                setTimeout(() => URL.revokeObjectURL(url), 30_000);
+            })
+            .catch(() => {});
     };
 
     const closeMediaModal = () => {
         setShowModal(false);
         setSelectedMedia(null);
         setArtifactUrl(null);
+        setWebappPreviewHtml('');
         setArtifactError(null);
         setArtifactLoading(false);
     };
@@ -336,14 +377,14 @@ const MediaLibrary: React.FC = () => {
                         key={`project-${project.id}`}
                         className="library-card group cursor-pointer aspect-square"
                         onClick={() => router.push(`/projects/${project.id}`)}
-                        title={`Abrir proyecto: ${project.name}`}
+                        title={`Abrir empresa: ${project.name}`}
                     >
                         <div className="flex flex-col items-center justify-center w-full h-full p-3 text-center gap-2">
                             <div className="library-card-badge"><Globe className="w-7 h-7" /></div>
                             <p className="library-card-title" title={project.name}>
                                 {project.name}
                             </p>
-                            <span className="text-xs text-[hsl(var(--muted-foreground))]">Proyecto · App web</span>
+                            <span className="text-xs text-[hsl(var(--muted-foreground))]">Empresa · App web</span>
                         </div>
                     </div>
                 ))}
@@ -512,12 +553,12 @@ const MediaLibrary: React.FC = () => {
                                                 <div className="flex flex-col gap-3">
                                                     <iframe
                                                         title={selectedMedia.filename || 'App web'}
-                                                        src={artifactUrl}
+                                                        srcDoc={webappPreviewHtml}
                                                         className="w-full h-[60vh] bg-white rounded-lg border border-gray-700"
-                                                        sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+                                                        sandbox="allow-scripts allow-forms allow-popups allow-modals"
                                                     />
                                                     <button
-                                                        onClick={() => window.open(artifactUrl, '_blank', 'noopener,noreferrer')}
+                                                        onClick={() => openWebappInNewTab(artifactUrl, selectedMedia.filename || 'App web')}
                                                         className="inline-flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition self-center"
                                                     >
                                                         <ExternalLink className="w-4 h-4" />

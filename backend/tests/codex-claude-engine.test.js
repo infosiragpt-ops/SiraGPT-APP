@@ -20,10 +20,25 @@ const {
 } = require('../src/services/codex/anthropic-turn');
 const { defaultLlmTurn, resolveTurnEngine } = require('../src/services/codex/llm-turn');
 const buildTools = require('../src/services/codex/build-tools');
-const { runAgentLoop, compactMessages, verifyWorkspace, verifyDevServer } = require('../src/services/codex/agent-loop');
+const {
+  runAgentLoop,
+  compactMessages,
+  messageChars,
+  verifyWorkspace,
+  verifyDevServer,
+  effortForStage,
+} = require('../src/services/codex/agent-loop');
 
 // ---------------------------------------------------------------------------
 // anthropic-turn config + message conversion
+
+test('effortForStage respects durable user depth and escalates repairs', () => {
+  assert.equal(effortForStage({ tier: 'power', reasoningEffort: 'low', env: {} }), 'low');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'medium', env: {} }), 'medium');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'high', env: {} }), 'high');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'max', env: {} }), 'high');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'low', verifyRounds: 1, env: {} }), 'high');
+});
 
 test('getAnthropicTurnConfig: sin key → disabled; tier controla modelo y elegibilidad', () => {
   assert.equal(getAnthropicTurnConfig({ env: {}, tier: 'power' }).enabled, false);
@@ -314,6 +329,26 @@ test('compactMessages: recorta TOOL_RESULT antiguos y respeta system/prompt/cola
   assert.equal(compactMessages(small, { maxChars: 10_000 }), 0, 'bajo presupuesto no toca nada');
 });
 
+test('compactMessages: la cola patológica de diez mensajes queda bajo el presupuesto real', () => {
+  const limit = 12_000;
+  const messages = [
+    { role: 'system', content: `system ${'s'.repeat(9_000)}` },
+    { role: 'user', content: `task ${'t'.repeat(3_000)}` },
+    { role: 'user', content: `[COMPACTION · RESUMEN DE CONTEXTO]\n${'r'.repeat(12_000)}` },
+    ...Array.from({ length: 10 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user',
+      content: `tail-${index} ${String(index).repeat(8_000)}`,
+    })),
+  ];
+
+  const compacted = compactMessages(messages, { maxChars: limit });
+
+  assert.ok(compacted >= 10, 'la cola que causaba el overflow debe compactarse');
+  assert.ok(messageChars(messages) <= limit, `contexto=${messageChars(messages)} límite=${limit}`);
+  assert.match(messages.at(-1).content, /contexto recortado por límite/);
+  assert.equal(compactMessages(messages, { maxChars: limit }), 0, 'la segunda pasada ya cumple el invariant');
+});
+
 test('verifyWorkspace: tsconfig inválido o ausente → no-op determinista', async () => {
   const noopEvents = { appendEvent: async () => {} };
   const clock = () => new Date(0);
@@ -339,7 +374,7 @@ test('build loop: verificación falla → ronda de reparación → done', async 
     writeFiles: async (_p, writes) => { for (const w of writes) files.set(w.path, w.content); return { ok: true }; },
     exec: async (_p, cmd) => {
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') {
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') {
         tscRuns += 1;
         // Primera verificación falla; tras la reparación pasa.
         return tscRuns === 1
@@ -371,6 +406,7 @@ test('build loop: verificación falla → ronda de reparación → done', async 
       eventStore: { appendEvent: async (_r, type, data) => { events.push({ type, data }); }, listEvents: async () => [] },
       actionStore: { recordAction: async () => {} },
       clock: (() => { let t = 0; return () => new Date(1_000_000 + (t += 10)); })(),
+      env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
     },
   });
   assert.equal(res.status, 'done');
@@ -394,7 +430,7 @@ function devRunner({ devStatusSeq = [], startDevImpl, files = new Map([['tsconfi
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -427,6 +463,44 @@ test('verifyDevServer: flag on + dev server ready → verificación OK', async (
   assert.equal(runner.calls.startDev, 1, 'arrancó el dev server para verificar');
   assert.ok(events.some((e) => e.t === 'action_start' && /verificación runtime: dev server/.test(e.d.command || '')));
   assert.ok(events.some((e) => e.t === 'action_end' && e.d.status === 'done'));
+});
+
+test('verifyDevServer: un error histórico del tail no envenena un HMR actualmente verde', async () => {
+  const historical = '[vite] Internal server error: Failed to resolve import "./old"';
+  const runner = devRunner({
+    devStatusSeq: [
+      { running: true, ready: true, project: 'p1', port: 5173, tail: [historical] },
+      { running: true, ready: true, project: 'p1', port: 5173, tail: [historical, '[vite] hmr update /src/App.tsx'] },
+    ],
+  });
+  let browserCalls = 0;
+  const browserCheck = {
+    devUrlFor: () => 'http://runner:5173',
+    checkApp: async () => {
+      browserCalls += 1;
+      return { unavailable: false, ok: true, rendered: true, rootChars: 12, errors: [] };
+    },
+    formatReport: () => 'browser failure',
+  };
+
+  const out = await verifyDevServer({
+    ...RT_BASE,
+    runner,
+    browserCheck,
+    eventStore: { appendEvent: async () => {} },
+    clock: () => new Date(0),
+    env: {
+      CODEX_VERIFY_DEV_SERVER: '1',
+      CODEX_VERIFY_BROWSER: '1',
+      CODEX_VERIFY_DEV_TIMEOUT_MS: '3000',
+    },
+    strict: true,
+  });
+
+  assert.equal(out.ok, true, 'el estado/browser actuales prevalecen sobre el error anterior al probe');
+  assert.equal(out.browser.ok, true);
+  assert.equal(browserCalls, 1, 'el tail viejo no evita comprobar el navegador actual');
+  assert.equal(runner.calls.startDev, 0, 'reutiliza el servidor listo sin reiniciarlo');
 });
 
 test('verifyDevServer: flag on + dev server error → ok:false con errores realimentados', async () => {
@@ -473,7 +547,7 @@ test('build loop: flag on + dev server error → inyecta [VERIFICACIÓN RUNTIME]
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -518,6 +592,174 @@ test('build loop: flag on + dev server error → inyecta [VERIFICACIÓN RUNTIME]
   assert.ok(rtActions.length >= 1, 'la verificación runtime aparece en la timeline');
 });
 
+function finalRuntimeGateFixture(runtimeOutcomes) {
+  const files = new Map([
+    ['package.json', JSON.stringify({ scripts: {}, dependencies: {}, devDependencies: {} })],
+    ['tsconfig.json', JSON.stringify({ compilerOptions: { jsx: 'react-jsx' }, include: ['src'] })],
+    ['src/App.tsx', 'export default function App(){ return null }\n'],
+  ]);
+  const outcomes = runtimeOutcomes.slice();
+  const events = [];
+  const state = {
+    afterStart: false,
+    checkpointCalls: 0,
+    browserCalls: 0,
+    startCalls: 0,
+  };
+  const runner = {
+    readFile: async (_project, path) => {
+      if (!files.has(path)) throw new Error(`no existe ${path}`);
+      return { content: files.get(path) };
+    },
+    writeFiles: async (_project, writes) => {
+      for (const file of writes) files.set(file.path, file.content);
+      return { ok: true };
+    },
+    exec: async (_project, command) => {
+      if (command[0] === 'git' && command[1] === 'status') {
+        return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+      }
+      if (command[0] === 'git' && command[1] === 'diff') {
+        return { exitCode: 0, stdout: ' 1 file changed, 1 insertion(+), 1 deletion(-)\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    devStatus: async () => {
+      if (!state.afterStart) return { running: false, ready: false, project: 'p1' };
+      state.afterStart = false;
+      const outcome = outcomes.shift() || 'error';
+      return outcome === 'ready'
+        ? { running: true, ready: true, project: 'p1', port: 5173, tail: ['VITE ready'] }
+        : {
+          running: false,
+          ready: false,
+          project: 'p1',
+          error: 'Failed to resolve import "./still-broken"',
+          tail: ['[vite] Internal server error', 'Cannot find module ./still-broken'],
+        };
+    },
+    startDev: async () => {
+      state.startCalls += 1;
+      state.afterStart = true;
+      return { port: 5173 };
+    },
+    stopDev: async () => ({ ok: true }),
+  };
+  const browserCheck = {
+    devUrlFor: () => 'http://runner:5173',
+    checkApp: async () => {
+      state.browserCalls += 1;
+      return { unavailable: false, ok: true, root: { textLength: 12 } };
+    },
+    formatReport: () => 'browser failure',
+  };
+  const checkpointService = {
+    createCheckpoint: async () => {
+      state.checkpointCalls += 1;
+      return {
+        id: `cp-${state.checkpointCalls}`,
+        commitSha: 'abcdef1234567890',
+        createdAt: new Date('2026-08-03T00:00:00.000Z'),
+      };
+    },
+  };
+  return {
+    events,
+    files,
+    state,
+    deps: {
+      runner,
+      browserCheck,
+      checkpointService,
+      backgroundTaskService: { quiesce: async () => ({ ok: true, stopped: 0 }) },
+      eventStore: {
+        appendEvent: async (_runId, type, data) => { events.push({ type, data }); },
+        listEvents: async () => [],
+      },
+      actionStore: { recordAction: async () => {} },
+      metrics: {
+        recordAction: () => {},
+        recordLlmUsage: () => {},
+        finalize: async () => ({ costAppliedUsd: 0 }),
+      },
+      fileTree: '',
+      plan: null,
+      clock: (() => { let now = 0; return () => new Date(1_000_000 + (now += 10)); })(),
+      env: {
+        NODE_ENV: 'test',
+        CODEX_AUTO_VERIFY: '1',
+        CODEX_VERIFY_DEV_SERVER: '1',
+        CODEX_VERIFY_BROWSER: '1',
+        CODEX_VERIFY_DEV_TIMEOUT_MS: '3000',
+        CODEX_MAX_VERIFY_ROUNDS: '1',
+        CODEX_VERIFY_ROUNDS: '1',
+        CODEX_RUN_BRANCHES: '0',
+      },
+    },
+  };
+}
+
+test('build loop: runtime roto al agotar reparaciones falla cerrado y no crea checkpoint', async () => {
+  const fixture = finalRuntimeGateFixture(['error', 'error']);
+  let sawRepairPrompt = false;
+  fixture.deps.llmTurn = async ({ messages }) => {
+    const last = String(messages[messages.length - 1]?.content || '');
+    if (last.startsWith('[VERIFICACIÓN RUNTIME]')) sawRepairPrompt = true;
+    return { text: 'No pude corregirlo.', toolCalls: [] };
+  };
+
+  const result = await runAgentLoop({
+    run: { id: 'runtime-fail', mode: 'build', prompt: 'haz una app', tier: 'eco' },
+    project: { id: 'p1', name: 'Runtime fail', brief: {} },
+    deps: fixture.deps,
+  });
+
+  assert.equal(sawRepairPrompt, true, 'el primer fallo realimenta una reparación');
+  assert.equal(result.status, 'error');
+  assert.equal(fixture.state.startCalls, 2, 'hay un probe inicial y un gate final independiente');
+  assert.equal(fixture.state.checkpointCalls, 0, 'un runtime rojo nunca llega al checkpoint');
+  assert.ok(result.close.projectGateVerification.blockingGates.includes('dev_server_check'));
+  assert.ok(fixture.events.some((event) => (
+    event.type === 'action_start'
+    && event.data.actionId === 'quality-runtime-final'
+  )));
+});
+
+test('build loop: reparación límite que deja runtime y browser verdes sí termina done', async () => {
+  const fixture = finalRuntimeGateFixture(['error', 'ready']);
+  let sawRepairPrompt = false;
+  fixture.deps.llmTurn = async ({ messages }) => {
+    const last = String(messages[messages.length - 1]?.content || '');
+    if (last.startsWith('[VERIFICACIÓN RUNTIME]')) {
+      sawRepairPrompt = true;
+      return {
+        text: 'Corrijo el último error.',
+        toolCalls: [{
+          name: 'edit_file',
+          args: {
+            path: 'src/App.tsx',
+            find: 'return null',
+            replace: 'return <main>Lista</main>',
+          },
+        }],
+      };
+    }
+    return { text: 'Listo.', toolCalls: [] };
+  };
+
+  const result = await runAgentLoop({
+    run: { id: 'runtime-pass', mode: 'build', prompt: 'haz una app', tier: 'eco' },
+    project: { id: 'p1', name: 'Runtime pass', brief: {} },
+    deps: fixture.deps,
+  });
+
+  assert.equal(sawRepairPrompt, true);
+  assert.equal(result.status, 'done');
+  assert.equal(result.close.projectGateVerification.clean, true);
+  assert.equal(fixture.state.browserCalls, 1, 'el gate final exige evidencia del navegador');
+  assert.equal(fixture.state.checkpointCalls, 1, 'checkpoint sólo después de runtime/browser verdes');
+});
+
 test('build loop: flag OFF → NO arranca el dev server (startDev nunca se llama)', async () => {
   let startDevCalled = 0;
   const files = new Map([['tsconfig.json', JSON.stringify({ compilerOptions: {} })]]);
@@ -526,7 +768,7 @@ test('build loop: flag OFF → NO arranca el dev server (startDev nunca se llama
     readFile: async (_p, path) => { if (!files.has(path)) throw new Error(`no existe ${path}`); return { content: files.get(path) }; },
     writeFiles: async (_p, w) => { for (const f of w) files.set(f.path, f.content); return { ok: true }; },
     exec: async (_p, cmd) => {
-      if (cmd[0] === 'bunx' && cmd[1] === 'tsc') return { exitCode: 0, stdout: '', stderr: '' };
+      if (cmd[0] === 'node' && cmd[1] === 'node_modules/typescript/bin/tsc') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'bun' && cmd[1] === 'install') return { exitCode: 0, stdout: '', stderr: '' };
       if (cmd[0] === 'git' && cmd[1] === 'status') return { exitCode: 0, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -572,7 +814,7 @@ test('build loop: tool calls por encima del budget se reportan al modelo', async
   const f = {
     llmTurn,
     runner: {
-      readFile: async () => { throw new Error('no'); },
+      readFile: async () => { throw new Error('file_not_found'); },
       writeFiles: async () => ({ ok: true }),
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     },
@@ -581,6 +823,7 @@ test('build loop: tool calls por encima del budget se reportan al modelo', async
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');
@@ -606,7 +849,7 @@ test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucl
   const f = {
     llmTurn,
     runner: {
-      readFile: async () => { throw new Error('no'); },
+      readFile: async () => { throw new Error('file_not_found'); },
       writeFiles: async () => ({ ok: true }),
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     },
@@ -615,7 +858,7 @@ test('build loop: reescribir el mismo archivo N veces inyecta el aviso anti-bucl
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
-    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', CODEX_AUTO_VERIFY: '0', NODE_ENV: 'test' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');
@@ -642,12 +885,12 @@ test('build loop: reescrituras INTERCALADAS del mismo archivo también disparan 
   };
   const f = {
     llmTurn,
-    runner: { readFile: async () => { throw new Error('no'); }, writeFiles: async () => ({ ok: true }), exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    runner: { readFile: async () => { throw new Error('file_not_found'); }, writeFiles: async () => ({ ok: true }), exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }) },
     fileTree: '', plan: null,
     eventStore: { appendEvent: async () => {}, listEvents: async () => [] },
     actionStore: { recordAction: async () => {} },
     clock: () => new Date(0),
-    env: { CODEX_MAX_SAME_FILE_WRITES: '3', NODE_ENV: 'test' },
+    env: { CODEX_MAX_SAME_FILE_WRITES: '3', CODEX_AUTO_VERIFY: '0', NODE_ENV: 'test' },
   };
   const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'x', tier: 'eco' }, project: { id: 'p1' }, deps: f });
   assert.equal(res.status, 'done');

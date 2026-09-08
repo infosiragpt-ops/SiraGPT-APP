@@ -32,11 +32,45 @@ const { body, validationResult } = require('express-validator');
 
 const { authenticateToken } = require('../middleware/auth');
 const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
+const { buildPublicStreamError } = require('../services/observability/public-stream-error');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
 
 const router = express.Router();
+
+// ── Model tiering (DeepSeek) ──────────────────────────────────────
+const FLASH = process.env.AGENT_BATCH_FLASH_MODEL || 'deepseek-v4-flash';
+const PRO = process.env.AGENT_BATCH_PRO_MODEL || 'deepseek-v4-pro';
+// Escape hatch: comma-separated allowlist of fallback models (e.g.
+// "gpt-4o,claude-sonnet-4") so a DeepSeek outage does not strand the
+// batch queue behind `model_forbidden`.
+const FALLBACK_MODELS = String(process.env.AGENT_BATCH_FALLBACK_MODELS || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+function resolveBatchModel(model) {
+  const raw = String(model || '').toLowerCase();
+  if (!raw) return FLASH;
+  // Any DeepSeek id (bare or aggregator slug like openrouter/deepseek/…)
+  // normalizes to the flash/pro tier pair.
+  if (/deepseek/.test(raw)) {
+    return /v4-pro|reasoner/.test(raw) ? PRO : FLASH;
+  }
+  // Escape hatch first: allowlisted fallback models pass through untouched
+  // so a DeepSeek outage cannot strand the batch queue.
+  if (FALLBACK_MODELS.length > 0 && FALLBACK_MODELS.includes(raw)) {
+    return raw;
+  }
+  // Explicit non-DeepSeek provider ids are rejected (drift posture); truly
+  // unknown bare ids collapse to the cheap FLASH tier instead of erroring.
+  if (/openrouter|openai|gemini|gpt-|claude|anthropic/.test(raw)) {
+    const err = new Error('model_forbidden');
+    err.code = 'model_forbidden';
+    err.status = 400;
+    throw err;
+  }
+  return FLASH;
+}
 
 // ── Limits / defaults ─────────────────────────────────────────────
 const MAX_TASKS_PER_BATCH = parseInt(process.env.AGENT_BATCH_MAX_TASKS, 10) || 50;
@@ -74,22 +108,41 @@ async function defaultRunner(task, ctx) {
     systemContract: task.systemContract || '',
     files: Array.isArray(task.files) ? task.files : [],
     chatId: task.chatId || null,
-    model: task.model || 'gpt-4o',
+    model: resolveBatchModel(task.model),
     maxSteps: task.maxSteps || 60,
     maxRuntimeMs: task.maxRuntimeMs || ctx.timeoutMs,
+    // Direct batch execution stays in-process, so the caller signal can be
+    // threaded into the runner. Queue-backed jobs omit this non-serializable
+    // field and keep using their persisted cancellation path.
+    signal: ctx.signal,
   };
-  const onAbort = () => {
-    // The runner reads its own AbortController internally — best we
-    // can do is bubble the abort error, which fail-fast/timeout below
-    // already convert into a structured error event.
+  const result = await runner.runAgentTaskJob(payload);
+  const status = String(result?.status || '').toLowerCase();
+  const cancelled = status === 'cancelled' || status === 'canceled';
+  const failed = ['failed', 'failure', 'error'].includes(status) || result?.ok === false;
+  return {
+    taskId,
+    ok: !cancelled && !failed,
+    cancelled,
+    status: status || (failed ? 'failed' : 'completed'),
+    result,
   };
-  ctx.signal.addEventListener('abort', onAbort, { once: true });
-  try {
-    const result = await runner.runAgentTaskJob(payload);
-    return { taskId, ok: true, result };
-  } finally {
-    ctx.signal.removeEventListener('abort', onAbort);
-  }
+}
+
+function classifyRunnerOutcome(result) {
+  const status = String(result?.status || result?.result?.status || '').toLowerCase();
+  if (result?.cancelled === true || ['cancelled', 'canceled'].includes(status)) return 'cancelled';
+  if (result?.ok === false || result?.result?.ok === false || ['failed', 'failure', 'error'].includes(status)) return 'failed';
+  return 'completed';
+}
+
+function runnerOutcomeError(outcome) {
+  const cancelled = outcome === 'cancelled';
+  const error = new Error(cancelled ? 'agent task cancelled' : 'agent task failed');
+  error.name = cancelled ? 'AbortError' : 'AgentTaskFailedError';
+  error.code = cancelled ? 'AGENT_TASK_CANCELLED' : 'AGENT_TASK_FAILED';
+  error.batchOutcome = outcome;
+  return error;
 }
 
 // ── SSE writer ────────────────────────────────────────────────────
@@ -165,13 +218,12 @@ function computeTaskHash(task) {
   return crypto.createHash('sha256').update(json).digest('hex');
 }
 
-function sanitizeError(err) {
-  if (!err) return { message: 'unknown error' };
-  if (err.name === 'AbortError') return { message: 'aborted', code: 'aborted' };
-  return {
-    message: String(err.message || err),
-    code: err.code || err.name || 'runner_error',
-  };
+function sanitizeError(err, context = {}) {
+  return buildPublicStreamError(err || new Error('unknown error'), {
+    req: context.req || null,
+    surface: 'agent.batch',
+    traceId: context.traceId || null,
+  });
 }
 
 // ── Validation ────────────────────────────────────────────────────
@@ -308,7 +360,7 @@ router.post('/batch', authenticateToken, enforcePlanQuota({ surface: 'agent.batc
       } catch (err) {
         // Unexpected: leader's wrapper always resolves. Treat as failure.
         summary.failed++;
-        writeEvent({ type: 'error', taskIndex, taskId, error: sanitizeError(err) });
+        writeEvent({ type: 'error', taskIndex, taskId, error: sanitizeError(err, { req, traceId }) });
       }
       return;
     }
@@ -342,13 +394,17 @@ router.post('/batch', authenticateToken, enforcePlanQuota({ surface: 'agent.batc
 
     try {
       const result = await runner(task, ctx);
+      const runnerOutcome = classifyRunnerOutcome(result);
+      if (runnerOutcome !== 'completed') throw runnerOutcomeError(runnerOutcome);
       if (masterController.signal.aborted) {
         summary.cancelled++;
+        const cancelled = Object.assign(new Error('batch cancelled'), { name: 'AbortError' });
+        const cancelledPayload = sanitizeError(cancelled, { req, traceId });
         writeEvent({
           type: 'error', taskIndex, taskId,
-          error: { message: 'cancelled', code: 'cancelled' },
+          error: cancelledPayload,
         });
-        resolveOutcome({ ok: false, cancelled: true, error: { message: 'cancelled', code: 'cancelled' } });
+        resolveOutcome({ ok: false, cancelled: true, error: cancelledPayload });
         return;
       }
       summary.ok++;
@@ -356,15 +412,19 @@ router.post('/batch', authenticateToken, enforcePlanQuota({ surface: 'agent.batc
       resolveOutcome({ ok: true, result });
     } catch (err) {
       const aborted = taskController.signal.aborted || err?.name === 'AbortError';
-      if (aborted && masterController.signal.aborted) {
+      const outcomeCancelled = err?.batchOutcome === 'cancelled';
+      if (outcomeCancelled || (aborted && masterController.signal.aborted)) {
         summary.cancelled++;
       } else {
         summary.failed++;
       }
-      const errPayload = sanitizeError(err);
+      const effectiveError = taskController.signal.aborted && !masterController.signal.aborted
+        ? (taskController.signal.reason || err)
+        : err;
+      const errPayload = sanitizeError(effectiveError, { req, traceId });
       writeEvent({ type: 'error', taskIndex, taskId, error: errPayload });
-      resolveOutcome({ ok: false, cancelled: aborted && masterController.signal.aborted, error: errPayload });
-      if (failFast && !aborted) {
+      resolveOutcome({ ok: false, cancelled: outcomeCancelled || (aborted && masterController.signal.aborted), error: errPayload });
+      if (failFast && !aborted && !outcomeCancelled) {
         stopped = true;
         masterController.abort();
       }
@@ -405,8 +465,13 @@ router.INTERNAL = {
   setRunner,
   getRunner,
   defaultRunner,
+  classifyRunnerOutcome,
   pickStreamMode,
   computeTaskHash,
+  resolveBatchModel,
+  FLASH,
+  PRO,
+  FALLBACK_MODELS,
   limits: {
     MAX_TASKS_PER_BATCH,
     DEFAULT_CONCURRENCY,
@@ -417,3 +482,4 @@ router.INTERNAL = {
 };
 
 module.exports = router;
+module.exports.INTERNAL = router.INTERNAL;

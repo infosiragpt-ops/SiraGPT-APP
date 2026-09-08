@@ -25,20 +25,17 @@ describe("premium tool preview source contract", () => {
     assert.notEqual(premiumMenuEnd, -1, "missing premium tools menu end")
 
     const premiumMenu = source.slice(premiumMenuStart, premiumMenuEnd)
-    for (const label of ["Imágenes", "Voz", "Video Generation", "Música", "Generador de tesis"]) {
+    for (const label of ["Imágenes", "Voz", "Video Generation", "Música"]) {
       assert.match(premiumMenu, new RegExp(label), `missing premium menu label ${label}`)
     }
-    // The graduation-cap logo shipped as an emoji span and was later
-    // restyled to the lucide <GraduationCap /> icon in the liquid menu —
-    // either rendering satisfies the visual contract.
-    assert.match(
+    assert.doesNotMatch(
       premiumMenu,
-      /aria-hidden="true">🎓<\/span>|<GraduationCap\b/,
-      "thesis generator premium menu item should show the graduation cap logo"
+      /Generador de tesis|Vista previa de tesis|<GraduationCap\b/,
+      "the unavailable thesis generator must not be shown in the plus menu"
     )
 
     const previewDisabledCount = (premiumMenu.match(/disabled=\{isPremiumPreviewSwitchDisabled\}/g) || []).length
-    assert.equal(previewDisabledCount, 5, "all five premium preview tools should use the narrow preview disabled guard")
+    assert.equal(previewDisabledCount, 4, "all four premium preview tools should use the narrow preview disabled guard")
     assert.doesNotMatch(
       premiumMenu,
       /disabled=\{[^}]*currentPlan[^}]*FREE|disabled=\{isToolSwitchDisabled\}/,

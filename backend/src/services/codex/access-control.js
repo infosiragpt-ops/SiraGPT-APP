@@ -42,7 +42,7 @@ function openToAll(env = process.env, runtime = getSandboxRuntime()) {
 }
 
 function canUseCodexAgent(user, env = process.env, runtime = getSandboxRuntime()) {
-  if (!user) return false;
+  if (!user || user.deletedAt != null) return false;
   if (openToAll(env, runtime)) return true;
   if (user.isSuperAdmin || user.isAdmin) return true;
   const ids = parseAllowlist(env);

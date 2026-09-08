@@ -1,7 +1,7 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
-import { streamSseJson } from "./sse-client"
+import { streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
 
 /**
  * design-service — client for /api/design.
@@ -125,9 +125,8 @@ export const designService = {
    * the `final` event carries the complete HTML document, which
    * the iframe then renders.
    *
-   * `model` is threaded to the backend so its provider router
-   * picks OpenAI / OpenRouter / Gemini based on the model name.
-   * Omitted → backend default (gpt-4o).
+   * `model` is clamped to DeepSeek V4 Flash/Pro. Fresh POST does not send
+   * Last-Event-ID (a new run must not skip events).
    */
   async *generate(
     id: string,
@@ -138,8 +137,9 @@ export const designService = {
     const res = await authenticatedFetch(`${API_ROOT}/design/${id}/generate`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ instruction, model, effort }),
+      headers: { "Content-Type": "application/json", ...freshGenerateHeaders(), ...authHeader() },
+      body: JSON.stringify({ instruction, model: clampDeepSeekModel(model), effort }),
+      cache: "no-store",
       signal,
     })
     if (!res.ok) {

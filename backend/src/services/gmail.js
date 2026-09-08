@@ -1,9 +1,19 @@
 const { google } = require('googleapis');
 const { OAuth2Client } = require('google-auth-library');
 
+function safeMailHeader(value, name = 'header') {
+  const text = String(value ?? '').trim();
+  if (!text || /[\r\n]/.test(text)) {
+    const error = new Error(`Invalid ${name}`);
+    error.code = 'invalid_mail_header';
+    throw error;
+  }
+  return text;
+}
+
 class GmailService {
-  constructor() {
-    this.oauth2Client = new OAuth2Client(
+  constructor({ oauth2Client = null } = {}) {
+    this.oauth2Client = oauth2Client || new OAuth2Client(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
       process.env.GOOGLE_REDIRECT_URI
@@ -104,6 +114,8 @@ class GmailService {
   async sendEmail({ to, subject, body, from = 'me' }) {
     try {
       const gmail = this.getGmailClient();
+      const safeTo = safeMailHeader(to, 'recipient');
+      const safeSubject = safeMailHeader(subject, 'subject');
 
       // Convert line breaks to HTML for proper display in Gmail
       const htmlBody = body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
@@ -113,8 +125,8 @@ class GmailService {
       const email = [
         'Content-Type: text/html; charset="UTF-8"',
         'MIME-Version: 1.0',
-        `To: ${to}`,
-        `Subject: ${subject}`,
+        `To: ${safeTo}`,
+        `Subject: ${safeSubject}`,
         '',
         formattedBody
       ].join('\n');
@@ -286,15 +298,20 @@ class GmailService {
       const originalFrom = getHeader('From');
       const originalSubject = getHeader('Subject');
       const replySubject = originalSubject.startsWith('Re: ') ? originalSubject : `Re: ${originalSubject}`;
+      const safeFrom = safeMailHeader(originalFrom, 'reply recipient');
+      const safeSubject = safeMailHeader(replySubject, 'reply subject');
+      const messageHeader = safeMailHeader(getHeader('Message-ID'), 'message id');
+      const references = getHeader('References');
+      if (/[\r\n]/.test(references)) throw new Error('Invalid references header');
 
       // Create reply email
       const email = [
         'Content-Type: text/html; charset="UTF-8"',
         'MIME-Version: 1.0',
-        `To: ${originalFrom}`,
-        `Subject: ${replySubject}`,
-        `In-Reply-To: ${getHeader('Message-ID')}`,
-        `References: ${getHeader('References') || ''} ${getHeader('Message-ID')}`,
+        `To: ${safeFrom}`,
+        `Subject: ${safeSubject}`,
+        `In-Reply-To: ${messageHeader}`,
+        `References: ${references || ''} ${messageHeader}`,
         '',
         body
       ].join('\n');
@@ -420,6 +437,8 @@ class GmailService {
   async createDraft({ to, subject, body, from = 'me' }) {
     try {
       const gmail = this.getGmailClient();
+      const safeTo = safeMailHeader(to, 'recipient');
+      const safeSubject = safeMailHeader(subject, 'subject');
 
       // Convert line breaks to HTML for proper display in Gmail
       const htmlBody = body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
@@ -429,8 +448,8 @@ class GmailService {
       const email = [
         'Content-Type: text/html; charset="UTF-8"',
         'MIME-Version: 1.0',
-        `To: ${to}`,
-        `Subject: ${subject}`,
+        `To: ${safeTo}`,
+        `Subject: ${safeSubject}`,
         '',
         formattedBody
       ].join('\n');
@@ -455,6 +474,72 @@ class GmailService {
     } catch (error) {
       console.error('Error creating draft:', error);
       throw new Error(`Failed to create draft: ${error.message}`);
+    }
+  }
+
+  async createReplyDraft({ threadId, messageId, body, userId = 'me' }) {
+    try {
+      const gmail = this.getGmailClient();
+      const originalMessage = await gmail.users.messages.get({
+        userId,
+        id: messageId,
+        format: 'full'
+      });
+      const headers = originalMessage.data.payload.headers || [];
+      const getHeader = (name) => headers.find(
+        (header) => String(header.name || '').toLowerCase() === name.toLowerCase()
+      )?.value || '';
+      const originalSubject = getHeader('Subject');
+      const replySubject = /^re:/i.test(originalSubject) ? originalSubject : `Re: ${originalSubject}`;
+      const safeFrom = safeMailHeader(getHeader('From'), 'reply recipient');
+      const safeSubject = safeMailHeader(replySubject, 'reply subject');
+      const messageHeader = safeMailHeader(getHeader('Message-ID'), 'message id');
+      const references = getHeader('References');
+      if (/[\r\n]/.test(references)) throw new Error('Invalid references header');
+      const email = [
+        'Content-Type: text/plain; charset="UTF-8"',
+        'MIME-Version: 1.0',
+        `To: ${safeFrom}`,
+        `Subject: ${safeSubject}`,
+        `In-Reply-To: ${messageHeader}`,
+        `References: ${[references, messageHeader].filter(Boolean).join(' ')}`,
+        '',
+        body
+      ].join('\n');
+      const raw = Buffer.from(email).toString('base64')
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const response = await gmail.users.drafts.create({
+        userId,
+        requestBody: { message: { raw, threadId } }
+      });
+      return {
+        success: true,
+        draftId: response.data.id,
+        messageId: response.data.message?.id || null,
+        threadId
+      };
+    } catch (error) {
+      console.error('Error creating Gmail reply draft:', error);
+      throw new Error(`Failed to create reply draft: ${error.message}`);
+    }
+  }
+
+  async sendDraft({ draftId, userId = 'me' }) {
+    try {
+      const gmail = this.getGmailClient();
+      const response = await gmail.users.drafts.send({
+        userId,
+        requestBody: { id: draftId }
+      });
+      return {
+        success: true,
+        draftId,
+        messageId: response.data.id,
+        threadId: response.data.threadId
+      };
+    } catch (error) {
+      console.error('Error sending Gmail draft:', error);
+      throw new Error(`Failed to send draft: ${error.message}`);
     }
   }
 
@@ -508,4 +593,9 @@ class GmailService {
   }
 }
 
-module.exports = new GmailService();
+const defaultGmailService = new GmailService();
+
+module.exports = defaultGmailService;
+module.exports.GmailService = GmailService;
+module.exports.createGmailService = (options) => new GmailService(options);
+module.exports.safeMailHeader = safeMailHeader;

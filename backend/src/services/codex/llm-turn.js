@@ -104,7 +104,21 @@ function resolveTurnEngine({ tier = null, env = process.env } = {}) {
  */
 let _warnedEcoLadderFallback = false;
 
-async function defaultLlmTurn({ messages, tools = [], signal, env = process.env, tier = null, createClient, createAnthropicClient, temperature = 0.3, maxTokens } = {}) {
+async function defaultLlmTurn({
+  messages,
+  tools = [],
+  signal,
+  env = process.env,
+  tier = null,
+  createClient,
+  createAnthropicClient,
+  temperature = 0.3,
+  maxTokens,
+  onTextDelta = null,
+  onReasoningDelta = null,
+  model = null,
+  effort = null,
+} = {}) {
   // Native Claude engine for eligible tiers (composer Power selector): best
   // tool-calling fidelity. On failure it degrades to the prompted ladder
   // below (which itself may reach Anthropic in prompted mode, or OpenRouter/
@@ -122,7 +136,17 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   let claudeDegraded = false;
   if (resolveTurnEngine({ tier, env }) === 'anthropic') {
     try {
-      const opts = { messages, tools, signal, env, tier };
+      const opts = {
+        messages,
+        tools,
+        signal,
+        env,
+        tier,
+        onTextDelta,
+        onReasoningDelta,
+        model,
+        effort,
+      };
       if (createAnthropicClient) opts.createClient = createAnthropicClient;
       return await anthropicTurn(opts);
     } catch (err) {
@@ -144,36 +168,68 @@ async function defaultLlmTurn({ messages, tools = [], signal, env = process.env,
   // (tests + explicit Cerebras callers) and behaves identically.
   const ecoDirectCerebras = !claudeDegraded && getCerebrasConfig({ env }).enabled;
 
+  // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
+  // quarantine-based failover. Reached when (a) a paid tier degraded from
+  // native Claude, (b) an eco run but Cerebras isn't configured, or (c) the
+  // direct Cerebras call failed (402 payment_required, invalid key, …) — in
+  // which case "something over nothing" wins, warned once so ops can see the
+  // eco tier is not actually running free.
+  const runLadder = async () => {
+    if (!claudeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
+      _warnedEcoLadderFallback = true;
+      console.warn('[codex llm-turn] tier eco sin Cerebras utilizable — usando el ladder (puede cobrar un proveedor de pago)');
+    }
+    const out = await llmProvider.chatComplete({
+      messages: effective,
+      temperature,
+      maxTokens,
+      signal,
+      env,
+      onTextDelta,
+      onReasoningDelta,
+      model,
+      effort,
+    });
+    content = out.content;
+    reasoningText = out.reasoning || '';
+    usage = out.usage;
+  };
+
   if (createClient || ecoDirectCerebras) {
     // Direct Cerebras (free tier) path: OpenAI-style client, max_tokens 2048.
     const cfg = getCerebrasConfig({ env });
     if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
     const client = createClient ? createClient({ env }) : cerebrasClientModule.createCerebrasClient({ env });
     if (!client?.chat?.completions) throw new Error('codex llm-turn: invalid LLM client');
-    const resp = await client.chat.completions.create(
-      { model: cfg.model, messages: effective, temperature, max_tokens: maxTokens || 2048 },
-      signal ? { signal } : undefined,
-    );
-    const choice = resp?.choices?.[0]?.message || {};
-    content = typeof choice.content === 'string' ? choice.content : '';
-    reasoningText = typeof choice.reasoning === 'string'
-      ? choice.reasoning
-      : (typeof choice.reasoning_content === 'string' ? choice.reasoning_content : '');
-    usage = extractUsage(resp, cfg.model);
-  } else {
-    // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
-    // quarantine-based failover. Reached when (a) a paid tier degraded from
-    // native Claude, or (b) it's an eco run but Cerebras isn't configured — in
-    // which case "something over nothing" wins, warned once so ops can see the
-    // eco tier is not actually running free.
-    if (!claudeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
-      _warnedEcoLadderFallback = true;
-      console.warn('[codex llm-turn] tier eco sin Cerebras configurado — usando el ladder (puede cobrar un proveedor de pago)');
+    try {
+      const out = await llmProvider.callOpenAICompatible({
+        messages: effective,
+        temperature,
+        maxTokens: maxTokens || 2048,
+        signal,
+        model: llmProvider.modelFor('cerebras', env, model) || cfg.model,
+        client,
+        providerLabel: 'Cerebras',
+        onTextDelta,
+        onReasoningDelta,
+        effort,
+      });
+      content = out.content;
+      reasoningText = out.reasoning || '';
+      usage = out.usage;
+    } catch (err) {
+      // An aborted run must stay aborted — don't burn another call on it.
+      if (signal?.aborted) throw err;
+      // An injected createClient (tests / explicit Cerebras callers) is a hard
+      // requirement — never silently replace the caller's chosen provider.
+      if (createClient) throw err;
+      if (env?.NODE_ENV !== 'test') {
+        console.warn(`[codex llm-turn] tier eco degradando al ladder — Cerebras falló (${String(err?.message || err).slice(0, 200)}); revisa CEREBRAS_API_KEY/billing (402 payment_required sin recargar revienta todos los runs eco)`);
+      }
+      await runLadder();
     }
-    const out = await llmProvider.chatComplete({ messages: effective, temperature, maxTokens, signal, env });
-    content = out.content;
-    reasoningText = out.reasoning || '';
-    usage = out.usage;
+  } else {
+    await runLadder();
   }
 
   const names = new Set((tools || []).map((t) => t.name));

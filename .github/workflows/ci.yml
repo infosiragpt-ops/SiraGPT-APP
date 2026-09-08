@@ -15,6 +15,10 @@ concurrency:
 
 env:
   NODE_VERSION: '24'
+  # onnxruntime-node already bundles the CPU runtime used by the web build.
+  # Its optional Linux CUDA provider is fetched from NuGet during postinstall,
+  # which makes ordinary CPU-only CI depend on a large, unrelated GPU download.
+  ONNXRUNTIME_NODE_INSTALL: skip
   # Dummy NEXT_PUBLIC_* values for `next build`. The build step statically
   # evaluates them into client bundles; real values are injected at deploy
   # time via the host's env (Vercel/VPS/etc.), not baked into CI artifacts.
@@ -265,10 +269,22 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: npm ci --prefer-offline --no-audit --no-fund
+        run: npm ci --include=dev --prefer-offline --no-audit --no-fund
 
       - name: Install DOCX test dependency
         run: python -m pip install --disable-pip-version-check --no-cache-dir 'python-docx>=1.1.0'
+
+      # Shard 1 is the only shard that runs the document-sandbox validation /
+      # documents / readiness suites (see the `matrix.shard == 1` steps below).
+      # Installing LibreOffice/Poppler on every shard would activate unrelated
+      # soffice-gated tests (e.g. agent-runner render checks) on shards that do
+      # not need these tools, so scope the install to shard 1.
+      - name: Install real document validators (no skipped validation tests)
+        if: matrix.shard == 1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
+          python -m pip install --disable-pip-version-check --no-cache-dir -r ../infra/doc-validation/requirements-test.txt
 
       - name: Configure Redis for auth-security readiness
         run: |
@@ -291,6 +307,55 @@ jobs:
 
       - name: Prisma · generate client
         run: npx prisma generate --schema prisma/schema.prisma
+
+      - name: Compile document sandbox (strict TypeScript)
+        run: npm run build:doc-sandbox
+
+      - name: Document sandbox migration rehearsal guards (no production connection)
+        if: matrix.shard == 1
+        run: node --test ../tests/phase1-migration-rehearsal.test.cjs
+
+      - name: Document sandbox contracts and real database/queue tests
+        if: matrix.shard == 1
+        env:
+          NODE_ENV: test
+          DOC_SANDBOX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
+          DOC_SANDBOX_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: npm run test:doc-sandbox:unit && npm run test:doc-sandbox:auxiliary && npm run test:doc-sandbox:runtime && npm run test:doc-sandbox:persistence && npm run test:doc-sandbox:queue-recovery && npm run test:doc-sandbox:documents && npm run test:doc-sandbox:readiness
+
+      - name: Document sandbox real private storage and cleanup
+        if: matrix.shard == 1
+        timeout-minutes: 10
+        env:
+          NODE_ENV: test
+          DOC_SANDBOX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
+          DOC_SANDBOX_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+          DOC_SANDBOX_TEST_S3_ACCESS_KEY_ID: docfixture
+          DOC_SANDBOX_TEST_S3_SECRET_ACCESS_KEY: fixture-only-isolated-s3
+        run: |
+          set -euo pipefail
+          # Generate both controls with the real installed Python before any
+          # storage service starts. This transport is not part of unit coverage.
+          failure_bundle_dir=$(mktemp -d "${RUNNER_TEMP:?}/doc-failure-evidence.XXXXXXXX")
+          failure_bundle_dir=$(realpath "$failure_bundle_dir")
+          test "$(stat -c %a "$failure_bundle_dir")" = 700
+          failure_bundle_sha=$(DOC_SANDBOX_TEST_PYTHON="$(command -v python)" \
+            node --import tsx tests/helpers/doc-sandbox-failure-evidence-bundle.ts "$failure_bundle_dir/failure-evidence.json")
+          [[ "$failure_bundle_sha" =~ ^[a-f0-9]{64}$ ]]
+          storage_id=$(docker run -d --rm --label siragpt.scope=doc-sandbox-ci-test \
+            --publish 127.0.0.1:19000:9000 \
+            -e MINIO_ROOT_USER=docfixture -e MINIO_ROOT_PASSWORD=fixture-only-isolated-s3 \
+            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data)
+          trap 'docker stop "$storage_id" >/dev/null' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19000/minio/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:19000/minio/health/ready >/dev/null
+          npm run test:doc-sandbox:http-storage
+          DOC_SANDBOX_TEST_FAILURE_BUNDLE_PATH="$failure_bundle_dir/failure-evidence.json" \
+            DOC_SANDBOX_TEST_FAILURE_BUNDLE_SHA256="$failure_bundle_sha" \
+            npm run test:doc-sandbox:failure-retention
 
       # CI and production share the same `prisma migrate deploy` path (U0).
       # `db push` alone is intentionally not used — it skips migration history
@@ -375,6 +440,24 @@ jobs:
           kill "$SERVER_PID" 2>/dev/null || true
           exit 1
 
+      # Run after the existing suites and boot smoke so a known coverage gap
+      # cannot hide their results. This is the full F1 unit denominator, not
+      # the general backend shard sample or the separately executed auxiliaries.
+      - name: Document sandbox strict unit coverage (81% hard gate)
+        if: matrix.shard == 1
+        env:
+          NODE_ENV: test
+        run: npm run test:doc-sandbox:coverage
+
+      - name: Upload document sandbox strict coverage
+        if: matrix.shard == 1 && always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: doc-sandbox-strict-unit-coverage
+          path: backend/coverage/doc-sandbox-unit/coverage-summary.json
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Upload server log on failure
         if: failure()
         uses: actions/upload-artifact@v6
@@ -386,14 +469,13 @@ jobs:
   # ───────────────────────────────────────────────────────────────────
   # SECURITY — npm audit + SBOM (hard gate for critical vulnerabilities)
   # ───────────────────────────────────────────────────────────────────
-  # Blocks newly introduced critical production vulnerabilities and emits
-  # CycloneDX SBOM artifacts from the lockfiles for enterprise review.
-  # High/moderate advisories remain documented debt because several fixes
-  # require framework/runtime migrations that must be handled separately.
+  # Blocks high/critical production vulnerabilities. The one locally patched
+  # dependency must pass byte-for-byte installed-tree attestation; its upstream
+  # advisory remains visible in the audit report and SBOM.
   security-audit:
     name: Security · npm audit + SBOM
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -403,12 +485,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Frontend · npm audit (critical only)
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Frontend · npm audit (high and critical)
+        run: npm audit --omit=dev --audit-level=high
 
-      - name: Backend · npm audit (critical only)
-        working-directory: backend
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Backend · install isolated tree for security attestation
+        run: |
+          npm ci --prefix backend --omit=dev --ignore-scripts --no-audit --no-fund
+          node backend/scripts/image-size-security-patch.cjs
+      - name: Backend · audit high/critical with verified patch provenance
+        run: node scripts/audit-backend-production.cjs
 
       - name: Generate CycloneDX SBOMs
         run: npm run sbom:generate
@@ -647,7 +732,7 @@ jobs:
   dependency-audit:
     name: Dependency audit · npm audit production
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -666,7 +751,9 @@ jobs:
 
       - name: Audit backend dependencies
         run: |
-          npm --prefix backend audit --omit=dev --audit-level=critical
+          npm ci --prefix backend --omit=dev --ignore-scripts --no-audit --no-fund
+          node backend/scripts/image-size-security-patch.cjs
+          node scripts/audit-backend-production.cjs
 
   drizzle-migrations-dry-run:
     name: Drizzle migrations · dry run
@@ -742,13 +829,14 @@ jobs:
           done
           # Pre-warm heavy routes so the first spec navigation is NOT a cold
           # compile that would exceed the 30s test timeout and flake the gate.
+          curl -s -o /dev/null --max-time 120 http://localhost:3005/agentes || true
           curl -s -o /dev/null --max-time 120 http://localhost:3005/chat || true
           curl -s -o /dev/null --max-time 30 http://localhost:3005/auth/login || true
           sleep 3
           # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
           # and runs against this pre-warmed instance.
           STATUS=0
-          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts || STATUS=$?
+          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts e2e/document-task-error-recovery.spec.ts || STATUS=$?
           kill "$SERVER_PID" 2>/dev/null || true
           exit $STATUS
 
@@ -764,6 +852,103 @@ jobs:
           retention-days: 7
 
   # ───────────────────────────────────────────────────────────────────
+  # F7.0 — sira-desktop provision (Docker is on ubuntu-latest)
+  # Unit contracts also run in the backend shard; this job is the
+  # honest docker-build + health + screenshot gate. If Docker were
+  # missing the test file skips — it is not missing here.
+  # ───────────────────────────────────────────────────────────────────
+  desktop-f70:
+    name: Desktop · F7.0 sira-desktop provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: F7.0 DesktopProvider + docker provision gate
+        run: node --test tests/desktop-provider-f70.test.js
+
+  desktop-f71:
+    name: Desktop · F7.1 warm-pool provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: F7.1 warm-pool acquire SLO + reaper (no Docker/E2B)
+        run: node --test tests/desktop-f7-provision.test.js
+
+  desktop-f72:
+    name: Desktop · F7.2 DCP + WS proxy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: F7.2 DCP contract + authenticated WS proxy (no Docker/E2B)
+        run: node --test tests/desktop-f7-dcp.test.js
+
+  desktop-f73:
+    name: Desktop · F7.3 CU-loop + SiraAction
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: F7.3 CU-loop + adapters (no Docker/E2B)
+        run: node --test tests/desktop-f7-cu-loop.test.js
+
+  # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
   # Branch protection on `main` can require this single status instead
@@ -771,7 +956,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, backend, desktop-f70, desktop-f71, desktop-f72, desktop-f73, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -783,6 +968,22 @@ jobs:
           fi
           if [[ "${{ needs.backend.result }}" != "success" ]]; then
             echo "✗ backend: ${{ needs.backend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f70.result }}" != "success" ]]; then
+            echo "✗ desktop-f70: ${{ needs.desktop-f70.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f71.result }}" != "success" ]]; then
+            echo "✗ desktop-f71: ${{ needs.desktop-f71.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f72.result }}" != "success" ]]; then
+            echo "✗ desktop-f72: ${{ needs.desktop-f72.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f73.result }}" != "success" ]]; then
+            echo "✗ desktop-f73: ${{ needs.desktop-f73.result }}"
             exit 1
           fi
           if [[ "${{ needs.licenses.result }}" != "success" ]]; then

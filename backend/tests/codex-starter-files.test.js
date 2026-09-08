@@ -25,6 +25,7 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
     'src/main.tsx', 'src/App.tsx', 'src/index.css',
     'src/lib/ai.ts', 'src/lib/storage.ts',
     'src/ui/button.tsx', 'src/ui/card.tsx', 'src/ui/input.tsx', 'src/ui/badge.tsx', 'src/ui/index.ts',
+    'SIRA.md', '.sira/settings.json', '.sira/hooks.json', '.sira/notes.md',
     '.gitignore',
   ]);
   const pkg = JSON.parse(files.find((f) => f.path === 'package.json').content);
@@ -56,6 +57,9 @@ test('emits a runnable React 18 + Vite 7 + TS project', () => {
   assert.match(html, /<div id="root">/);
   assert.match(html, /src="\/src\/main\.tsx"/);
   assert.match(files.find((f) => f.path === '.gitignore').content, /node_modules/);
+  assert.equal(JSON.parse(files.find((f) => f.path === '.sira/settings.json').content).mode, 'auto');
+  assert.deepEqual(JSON.parse(files.find((f) => f.path === '.sira/hooks.json').content).stop, []);
+  assert.match(files.find((f) => f.path === 'SIRA.md').content, /browser_check/);
   // Vite 7 host-checks the Host header: without allowedHosts the platform
   // proxy and the browser verifier (http://runner:5173) get 403 Blocked.
   const vite = files.find((f) => f.path === 'vite.config.ts').content;
@@ -99,11 +103,13 @@ test('full-stack starter runs on the pinned Node/npm preview runtime AND behind 
   assert.match(db, /node:sqlite/);
   assert.match(by('server/index.js').content, /from '\.\/db\.js'/);
   // Vite reads port/base from env (the runner launches `npm run dev`, no CLI
-  // flags reach the inner vite) and the /api proxy matches under ANY base.
+  // flags reach the inner vite) and scopes the API proxy after that exact base.
   const vite = by('vite.config.ts').content;
   assert.match(vite, /process\.env\.PORT/);
   assert.match(vite, /process\.env\.VITE_BASE/);
-  assert.match(vite, /\^\.\*\/api\//);
+  assert.match(vite, /const apiBase =/);
+  assert.match(vite, /\[apiBase\]/);
+  assert.doesNotMatch(vite, /\^\.\*\/api\//);
   // Frontend prefixes API calls with BASE_URL — a bare /api escapes the base.
   const app = by('src/App.tsx').content;
   assert.match(app, /import\.meta\.env\.BASE_URL/);

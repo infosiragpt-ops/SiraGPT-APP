@@ -28,6 +28,7 @@ const { body, param, query, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const projectMemory = require('../services/project-memory');
+const { hasOrganizationAccess } = require('../services/codex/company-association-service');
 const { buildProjectContextManifest } = require('../services/project-context');
 const { buildChatListWhere, parsePositiveInt } = require('../services/chat-scope');
 const { softDeleteWhere } = require('../utils/prisma-soft-delete');
@@ -86,7 +87,7 @@ function ownProject(userId, id) {
   // hosting, …) would happily act on a project already in the trash.
   return prisma.project.findFirst({
     where: softDeleteWhere({ id, userId }),
-    select: { id: true, userId: true, name: true, type: true },
+    select: { id: true, userId: true, organizationId: true, name: true, type: true },
   });
 }
 
@@ -145,6 +146,7 @@ router.get(
         orderBy,
         select: {
           id: true, name: true, description: true, instructions: true,
+          organizationId: true,
           type: true, hostingProvider: true,
           isStarred: true, shareId: true, createdAt: true, updatedAt: true,
           deletedAt: true, deleteAfter: true,
@@ -184,11 +186,19 @@ router.post(
     body('instructions').optional().isString().isLength({ max: 16000 }),
     body('type').optional().isIn(['general', 'webapp']),
     body('hostingProvider').optional().isIn(['sira-cloud', 'github']),
+    body('organizationId').optional({ nullable: true }).isString().isLength({ min: 1, max: 160 }),
   ],
   async (req, res) => {
     try {
       if (validationFail(req, res)) return;
       const { name, description, instructions, type, hostingProvider } = req.body;
+      const organizationId = req.body.organizationId || null;
+      if (organizationId && !(await hasOrganizationAccess(prisma, {
+        userId: req.user.id,
+        organizationId,
+      }))) {
+        return res.status(404).json({ error: 'Organization not found' });
+      }
 
       // GitHub-backed hosting isn't wired yet (no OAuth / repo push). Reject
       // it explicitly so the client can't create an orphaned "github" project
@@ -203,6 +213,7 @@ router.post(
       const project = await prisma.project.create({
         data: {
           userId: req.user.id,
+          organizationId,
           name: name.trim(),
           description: description?.trim() || null,
           instructions: instructions?.trim() || null,

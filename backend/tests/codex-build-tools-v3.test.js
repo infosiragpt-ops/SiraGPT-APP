@@ -46,7 +46,7 @@ test('type_check clean pass', async () => {
   assert.equal(r.isError, false);
   assert.deepEqual(calls, [
     ['bun', 'install'],
-    ['bunx', 'tsc', '--noEmit', '--pretty', 'false'],
+    ['node', 'node_modules/typescript/bin/tsc', '--noEmit', '--pretty', 'false'],
   ]);
   assert.match(r.observation, /compila sin errores/);
 });
@@ -134,7 +134,7 @@ test('new tools carry timeline metadata (kind/commandFor/pathFor)', () => {
   assert.equal(TOOLS.dev_server_check.kind, 'terminal');
   assert.equal(TOOLS.run_subagent.kind, 'agent');
   assert.equal(TOOLS.install_dependencies.kind, 'terminal');
-  assert.equal(TOOLS.type_check.commandFor({}), 'bun install && bunx tsc --noEmit');
+  assert.equal(TOOLS.type_check.commandFor({}), 'bun install && node node_modules/typescript/bin/tsc --noEmit');
   assert.equal(TOOLS.install_dependencies.commandFor({ packages: ['zod'], dev: true }), 'bun add -d zod');
   assert.match(TOOLS.run_subagent.commandFor({ agent: 'planner', task: 'plan the CRM' }), /subagent planner/);
 });

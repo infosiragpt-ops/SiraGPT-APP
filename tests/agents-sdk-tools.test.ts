@@ -23,7 +23,9 @@ describe("Agents SDK tools surface", () => {
     assert.match(tools, /case "web_search"/)
     assert.match(tools, /case "web_fetch"/)
     assert.match(tools, /resolveInRoot/)
-    assert.match(tools, /BASH_BLOCKLIST/)
+    assert.match(tools, /getEffectiveToolAllowSet/)
+    assert.match(tools, /bash deshabilitado/)
+    assert.doesNotMatch(tools, /(?:node:)?child_process/)
     assert.doesNotMatch(tools, /result placeholder/)
   })
 
@@ -59,6 +61,9 @@ describe("Agents SDK tools surface", () => {
     assert.match(panel, /CRM de ventas/)
     assert.match(panel, /enterprise_analyst/)
     assert.match(panel, /buildAutonomousPrompt/)
-    assert.match(panel, /Composer disabled=\{false\}/)
+    // Composer stays enabled for first-send bootstrap (props may be multi-line).
+    assert.match(panel, /<Composer[\s\S]*?disabled=\{false\}/)
+    assert.match(panel, /surface=\{surface === "apps" \? "apps" : "code"\}/)
+    assert.match(panel, /tier: surface === "apps" \? "power" : DEFAULT_TIER/)
   })
 })

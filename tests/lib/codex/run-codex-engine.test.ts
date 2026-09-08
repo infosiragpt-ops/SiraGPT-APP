@@ -86,6 +86,43 @@ describe('codex-engine-mapping — foldCodexEvent', () => {
     expect(s.summaryMetrics).toMatchObject({ timeWorkedMs: 42000, actionsCount: 3, additions: 12 })
   })
 
+  it('keeps the latest bounded patch per file and formats it for the live chat', async () => {
+    const { codexLivePatchMarkdown } = await import('@/lib/code-agent/codex-engine-mapping')
+    const s = reduceFold([
+      { seq: 1, type: 'run_status', data: { status: 'running' } },
+      { seq: 2, type: 'file_patch', data: { path: 'src/App.tsx', patch: '@@ -1 +1 @@\n-old\n+new', truncated: false } },
+      { seq: 3, type: 'file_patch', data: { path: 'src/App.tsx', patch: '@@ -2 +2 @@\n-a\n+b', truncated: false } },
+    ])
+    expect(s.codeChanges).toHaveLength(1)
+    expect(s.codeChanges[0].patch).toContain('-a')
+    expect(codexLivePatchMarkdown(s)).toContain('Cambios en vivo')
+    expect(codexLivePatchMarkdown(s)).toContain('```diff')
+  })
+
+  it('folds the executive close-out and formats the concise final answer', async () => {
+    const { codexExecutiveSummaryMarkdown } = await import('@/lib/code-agent/codex-engine-mapping')
+    const s = reduceFold([
+      {
+        seq: 1,
+        type: 'executive_summary',
+        data: {
+          status: 'passed',
+          department: 'CEO Office',
+          title: 'Mejorar onboarding',
+          result: 'Trabajo completado.',
+          impact: '2 archivos cambiados.',
+          risks: [],
+          nextActions: ['Continuar con la siguiente prioridad.'],
+          evidence: ['type_check: ok'],
+          audioText: 'Trabajo completado.',
+        },
+      },
+    ])
+    expect(s.executiveSummary?.audioText).toBe('Trabajo completado.')
+    expect(codexExecutiveSummaryMarkdown(s)).toContain('Resumen ejecutivo')
+    expect(codexExecutiveSummaryMarkdown(s)).toContain('2 archivos cambiados')
+  })
+
   it('folds the terminal run_status and isCodexTerminalStatus recognises it', () => {
     const s = reduceFold(BUILD_EVENTS)
     expect(s.status).toBe('done')

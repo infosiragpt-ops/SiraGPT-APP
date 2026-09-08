@@ -76,3 +76,15 @@ test('clean additive migration produces no findings', () => {
   const findings = scanFile(f);
   assert.deepStrictEqual(findings, []);
 });
+
+test('flags credential hashes in migration SQL', () => {
+  const f = writeTmp("SELECT '$2b$12$fixture-only-not-a-real-hash';");
+  const findings = scanFile(f);
+  assert.ok(findings.some((x) => x.ruleId === 'credential-hash-literal' && x.severity === 'forbidden'));
+});
+
+test('flags user password mutations without a literal hash', () => {
+  const f = writeTmp('UPDATE "users" SET "password" = current_setting(\'app.bootstrap_password\');');
+  const findings = scanFile(f);
+  assert.ok(findings.some((x) => x.ruleId === 'user-password-dml' && x.severity === 'forbidden'));
+});

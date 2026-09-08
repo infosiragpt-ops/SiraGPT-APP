@@ -26,12 +26,17 @@ function createAccumulator({ run, clock = () => new Date() } = {}) {
   let tokensOut = 0;
   let model = null;
   const usageRecords = [];
+  const usageObjects = new WeakSet();
 
   return {
     recordAction() { actionsCount += 1; },
     recordLinesRead(n) { if (Number.isFinite(n) && n > 0) itemsReadLines += n; },
     recordLlmUsage(u) {
       if (!u) return;
+      if (typeof u === 'object') {
+        if (usageObjects.has(u)) return;
+        usageObjects.add(u);
+      }
       usageRecords.push(u);
       tokensIn += Number(u.tokensIn) || 0;
       tokensOut += Number(u.tokensOut) || 0;

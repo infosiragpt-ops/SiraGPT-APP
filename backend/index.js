@@ -324,6 +324,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const { redactPreviewUrl } = require('./src/utils/preview-url-redaction');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
@@ -418,6 +419,8 @@ const apiProxyRoutes = require('./src/routes/api');
 const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
 const figmaRoutes = require('./src/routes/figma');
+const agentComputerRoutes = require('./src/routes/agent-computer');
+const desktopRoutes = require('./src/routes/desktop');
 const {
     router: computerUseRoutes,
     initializeWebSocketServer,
@@ -431,6 +434,7 @@ const {
 const thesisRoutes = require('./src/routes/thesis');
 const thesisEngineRoutes = require('./src/routes/thesis-engine');
 const voiceGrokRoutes = require('./src/routes/voice-grok');
+const voiceStudioRoutes = require('./src/routes/voice-studio');
 const researchRoutes = require('./src/routes/research');
 const scientificSearchRoutes = require('./src/routes/scientific-search');
 const answerRoutes = require('./src/routes/answer');
@@ -466,7 +470,8 @@ const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
-const { createUploadStaticAccessGuard, createUploadR2Fallback } = require('./src/middleware/upload-static-access');
+const { createUploadStaticAccessGuard, createUploadR2Fallback, uploadAttachmentDisposition } = require('./src/middleware/upload-static-access');
+const { shouldForceDownload: shouldForceUploadDownload } = require('./src/services/upload-security-policy');
 const searchAgenticRoutes = require('./src/routes/search-agentic');
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
@@ -483,6 +488,7 @@ const docRoutes = require('./src/routes/doc');
 const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
+const appsRoutes = require('./src/routes/apps');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
 const codexV2Routes = require('./src/routes/codex');
@@ -490,6 +496,8 @@ const deploymentsRoutes = require('./src/routes/deployments');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
+const { createCoworkPlatformRouter } = require('./src/routes/cowork-platform');
+const { createCoworkAiControlRouter } = require('./src/routes/cowork-ai-control');
 const memoryRoutes = require('./src/routes/memory');
 const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
@@ -503,8 +511,13 @@ const {
     shutdownWriteBehindCache,
 } = require('./src/middleware/auth');
 const scheduler = require('./src/services/scheduler/scheduler');
+const coworkScheduler = require('./src/services/cowork/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
+const {
+  startAgentTaskRuntimeWatchdog,
+  stopAgentTaskRuntimeWatchdog,
+} = require('./src/services/agents/agent-task-runtime-watchdog');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
 const { closeChatRunQueue } = require('./src/services/chat-run-queue');
@@ -517,6 +530,11 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 // configured implementer adapter is unknown.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
 const { startProactiveScheduler, closeProactiveScheduler } = require('./src/services/codex/proactive-queue');
+const {
+    startSwarmWorker,
+    recoverSwarmJobs,
+    closeSwarmRuntime,
+} = require('./src/services/codex/swarm-runner');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
@@ -678,6 +696,9 @@ const apiLimiterSpecificPrefixes = [
     '/api/agent',
     '/api/rag',
     '/api/document-ai',
+    '/api/doc/',
+    '/api/docs/jobs',
+    '/api/doc-agent',
 ];
 const apiLimiter = rateLimit({
     ...makeLimiterCommon('api'),
@@ -728,6 +749,9 @@ app.use('/api/auth', authLimiter);
 app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
+app.use('/api/doc', expensiveLimiter);
+app.use('/api/docs/jobs', expensiveLimiter);
+app.use('/api/doc-agent', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
 // Autonomous research loop (planner→search→browser→vision LLM) and the
 // scientific-search fan-out (10-16 external APIs in parallel per call) are
@@ -955,7 +979,8 @@ maintenanceMode.setPrisma(prisma);
 app.use(maintenanceMode.maintenanceMiddleware({ prisma }));
 
 if (process.env.NODE_ENV !== 'production') {
-    app.use(morgan('dev'));
+    morgan.token('safe-url', (req) => redactPreviewUrl(req.originalUrl || req.url));
+    app.use(morgan(':method :safe-url :status :res[content-length] - :response-time ms'));
 }
 
 // Static files + hardened presentation downloads
@@ -982,19 +1007,31 @@ app.get('/uploads/presentations/:filename/download', async (req, res) => {
     }
 });
 
-app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
-app.use('/uploads', express.static(uploadsDir, {
-    setHeaders: (res, filePath) => {
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
-        if (/\.pptx$/i.test(filePath)) {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-        }
+// Every format is accepted at upload time, so the serving layer is where
+// executables / scripts / HTML-like active content are neutralised: they are
+// always delivered as downloads, never rendered inline on this origin.
+// (`<img>` ignores Content-Disposition, so SVG image previews still work.)
+const setUploadStaticHeaders = (res, filePath) => {
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+    if (/\.pptx$/i.test(filePath)) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     }
-}));
-// When the binary is not on local disk (R2-backed / scaled deploys), redirect
-// to a short-lived signed R2 URL. Runs only for authorized requests (the
-// access guard above already enforced ownership).
+    if (shouldForceUploadDownload({ filename: filePath })) {
+        res.setHeader('Content-Disposition', uploadAttachmentDisposition(filePath));
+    }
+};
+app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
+app.use('/uploads', express.static(uploadsDir, { setHeaders: setUploadStaticHeaders }));
+// When the binary is not on local disk (R2-backed / scaled deploys), stream
+// the object through this origin. A 302 to a signed R2 URL breaks chat
+// preview (CORS / Failed to fetch). Auth already enforced by the guard above.
 app.use('/uploads', createUploadR2Fallback());
+// Authenticated /api alias of the same stack. Chat preview can fetch
+// `/api/uploads/<user>/<file>` (credentials + Bearer) when `/uploads` is
+// rewritten to a host the browser cannot follow. Same guard + stream.
+app.use('/api/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
+app.use('/api/uploads', express.static(uploadsDir, { setHeaders: setUploadStaticHeaders }));
+app.use('/api/uploads', createUploadR2Fallback());
 
 
 // ── Health probes ───────────────────────────────────────────────
@@ -1162,6 +1199,9 @@ app.get('/internal/metrics', metricsHandler);
 // See backend/src/routes/api-docs.js for the env-gate semantics
 // and docs/api-docs.md for the operator runbook.
 const { buildApiDocsRouter } = require('./src/routes/api-docs');
+const { createDocumentSandboxModule } = require('./src/services/doc-sandbox-module');
+const documentSandboxModule = createDocumentSandboxModule({ prisma, authenticate: authenticateToken, logger });
+app.use('/api/docs/jobs', documentSandboxModule.router);
 app.use('/api-docs', buildApiDocsRouter());
 // Alias under /api/docs — same env-gate, same Swagger UI. Kept as a
 // separate router instance so the two surfaces are independently
@@ -1188,6 +1228,7 @@ app.use('/api/appshots', appshotsRoutes);
 // Read-only failover/key-pool/key-health diagnostics. Mounted BEFORE the
 // generic /api/ai router so /api/ai/failover/* takes precedence. GET-only.
 app.use('/api/ai/failover', aiFailoverHealthRoutes);
+app.use('/api/ai', createCoworkAiControlRouter());
 app.use('/api/ai', aiRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin/queues', adminQueuesRoutes);
@@ -1239,9 +1280,13 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/agent-computer', agentComputerRoutes);
+app.use('/api/desktop', desktopRoutes.router);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
+// Sira Voz — VoiceStudio (open source, local): cloning, dubbing, transcription, audiobooks. Free tier.
+app.use('/api/voice-studio', voiceStudioRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/scientific-search', scientificSearchRoutes);
 app.use('/api/answer', answerRoutes);
@@ -1297,6 +1342,7 @@ app.use('/api/doc', docRoutes);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
+app.use('/api/apps', appsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/codex', codexRunsRoutes);
 // Codex Agent V2 (flag CODEX_AGENT_V2). Mounted AFTER codex-runs so the legacy
@@ -1325,6 +1371,7 @@ try {
     /* telegram is optional */
 }
 app.use('/api/push', pushRoutes);
+app.use('/api/cowork', createCoworkPlatformRouter());
 app.use('/api/cowork', coworkRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
@@ -1538,9 +1585,18 @@ async function startServer() {
     startDatabasePoolAutoscaler();
 
     recoverAgentTasksAfterBoot({ logger });
+    startAgentTaskRuntimeWatchdog({ logger });
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
     startAgentTaskWorker();
+    documentSandboxModule.start().catch(() => logger.error({ code: 'DOC_WORKER_START_FAILED' }, 'doc_sandbox'));
+    try {
+      const { startAgentRunnerWorker } = require('./src/services/agent-runner/queue');
+      const { createRedisConnection } = require('./src/services/agents/agent-task-queue');
+      startAgentRunnerWorker({ connection: createRedisConnection({ label: 'agent-runner' }) });
+    } catch (err) {
+      logger.warn({ err: err && err.message }, 'agent_runner_worker_not_started');
+    }
     startGoalWorker();
     // Codex V2: validate config, recover interrupted runs, then start the worker
     // (all no-op when the flag is off). Fire-and-forget recovery never throws;
@@ -1556,6 +1612,10 @@ async function startServer() {
     } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
+    startSwarmWorker();
+    recoverSwarmJobs()
+      .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
+      .catch((err) => logger.warn({ err: err.message }, 'codex_swarm_recovery_failed'));
     startDocumentCollectionWorker();
     // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
     // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
@@ -1625,6 +1685,25 @@ async function startServer() {
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
+    // Token-authenticated Vite HMR tunnel for the legacy /code host runner.
+    // HTTP preview requests are handled by code-runner.js; upgrades must be
+    // attached to the underlying Node server because Express never sees them.
+    codeRunnerRoutes.attachPreviewWebSocketProxy(server);
+
+    // F7.2 same-origin noVNC proxy (/ws/desktop/:sessionId). Kill-switch
+    // fail-closed; token scoped to userId/chatId. Does not publish
+    // container ports and does not replace the live computer orchestrator.
+    try {
+        desktopRoutes.attachDesktopWebSocketProxy(server);
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'desktop_ws_proxy_init_failed');
+    }
+
+    // Token-authenticated Vite HMR tunnel for cross-origin Codex previews.
+    // Caddy forwards the upgrade to this HTTP server; the route resolves the
+    // owning project's isolated runner port before bridging either direction.
+    codexV2Routes.attachPreviewWebSocketProxy(server);
+
     // Initialize realtime WebSocket scaffolding (presence, typing, cursor)
     // Lives on a separate path (`/ws/realtime`) so it can't collide with
     // the computer-use socket above.
@@ -1644,6 +1723,7 @@ async function startServer() {
     const { classifyTaskError } = require('./src/services/agents/agent-task-runner');
     scheduler.setJobClassifier(classifyTaskError);
     scheduler.start();
+    coworkScheduler.startSchedulerWorker(prisma);
 
     try {
         const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
@@ -1752,10 +1832,12 @@ async function startServer() {
         5000,
     );
 
+    shutdownRegistry.register('doc_sandbox_close', () => documentSandboxModule.close(), 25000);
     // Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
         try { stopGoalRecovery(); } catch { }
         try { stopGoalCleanup(); } catch { }
+        try { stopAgentTaskRuntimeWatchdog(); } catch { }
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
@@ -1764,6 +1846,7 @@ async function startServer() {
             closeGoalQueue(),
             closeCodexWorker(),
             closeCodexQueue(),
+            closeSwarmRuntime(),
             closeProactiveScheduler(),
             closeDocumentCollectionWorker(),
             closeDocumentCollectionQueue(),
@@ -1805,6 +1888,7 @@ async function startServer() {
         try { internalHealthSystem.stopScheduler(); } catch { }
         try { defaultQueueHealthProbe.stop(); } catch { }
         try { scheduler.stop?.(); } catch { }
+        try { coworkScheduler.stopSchedulerWorker(); } catch { }
         try {
             const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');
             shutdownHermesRuntime();

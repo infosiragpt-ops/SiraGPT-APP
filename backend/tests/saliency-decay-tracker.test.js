@@ -19,10 +19,11 @@ test('observe + classify: a single fresh feature lands in live', () => {
 });
 
 test('repeated activation bumps strength', () => {
-  tracker.observe({ userId: 'u', chatId: 'c', features: [{ kind: 'topic', label: 'auth', weight: 0.5 }] });
-  const first = tracker.classify({ userId: 'u', chatId: 'c' }).live[0];
-  tracker.observe({ userId: 'u', chatId: 'c', features: [{ kind: 'topic', label: 'auth', weight: 0.5 }] });
-  const second = tracker.classify({ userId: 'u', chatId: 'c' }).live[0];
+  const now = Date.now();
+  tracker.observe({ userId: 'u', chatId: 'c', features: [{ kind: 'topic', label: 'auth', weight: 0.5 }], now });
+  const first = tracker.classify({ userId: 'u', chatId: 'c', now }).live[0];
+  tracker.observe({ userId: 'u', chatId: 'c', features: [{ kind: 'topic', label: 'auth', weight: 0.5 }], now });
+  const second = tracker.classify({ userId: 'u', chatId: 'c', now }).live[0];
   assert.ok(second.strength > first.strength);
   assert.strictEqual(second.activationCount, 2);
 });

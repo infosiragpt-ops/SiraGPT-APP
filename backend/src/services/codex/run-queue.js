@@ -83,10 +83,31 @@ function getCodexQueue() {
  * (the documented call shape) or in opts, so a contract drift between the two
  * can never silently discard it again.
  */
-async function enqueueCodexRun({ runId, jobId } = {}, opts = {}) {
+function normaliseResumeSnapshot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const sessionId = String(value.sessionId || '').trim();
+  const cursorSeq = Number(value.cursorSeq);
+  const checkpointSha = value.checkpointSha == null ? null : String(value.checkpointSha).trim();
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/.test(sessionId)
+    || !Number.isSafeInteger(cursorSeq)
+    || cursorSeq < 0
+    || (checkpointSha && !/^[0-9a-f]{7,64}$/i.test(checkpointSha))
+  ) {
+    return null;
+  }
+  return { sessionId, cursorSeq, checkpointSha };
+}
+
+async function enqueueCodexRun({ runId, jobId, resumeSnapshot } = {}, opts = {}) {
   if (!runId) throw new Error('runId is required');
   const q = getCodexQueue();
-  return q.add('codex-run', { runId }, { jobId: jobId || opts.jobId || String(runId), priority: opts.priority });
+  const resume = normaliseResumeSnapshot(resumeSnapshot);
+  return q.add(
+    'codex-run',
+    { runId, ...(resume ? { resumeSnapshot: resume } : {}) },
+    { jobId: jobId || opts.jobId || String(runId), priority: opts.priority },
+  );
 }
 
 /** Remove a not-yet-running job. Running runs cancel cooperatively (status flip). */
@@ -119,7 +140,11 @@ function createDefaultCodexJobHandler({ env = process.env, processRun } = {}) {
   return (job) => {
     const sourceEnv = capturedEnv || process.env;
     const jobEnv = Object.freeze({ ...sourceEnv, [IMPLEMENTER_ADAPTER_ENV]: adapter.id });
-    return runJob({ runId: job.data?.runId, env: jobEnv });
+    return runJob({
+      runId: job.data?.runId,
+      resumeSnapshot: normaliseResumeSnapshot(job.data?.resumeSnapshot),
+      env: jobEnv,
+    });
   };
 }
 
@@ -230,5 +255,6 @@ module.exports = {
   getCodexQueueHealth,
   closeCodexWorker,
   closeCodexQueue,
+  normaliseResumeSnapshot,
   __setQueueForTests,
 };

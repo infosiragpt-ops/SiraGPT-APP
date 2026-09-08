@@ -6,7 +6,7 @@ let runtime = null;
 
 function intervalMs(env = process.env) {
   const raw = Number.parseInt(env.CODEX_PROACTIVE_INTERVAL_MS || '', 10);
-  return Number.isFinite(raw) && raw >= 60_000 ? raw : 5 * 60_000;
+  return Number.isFinite(raw) && raw >= 60_000 ? raw : 2 * 60_000;
 }
 
 async function processProactiveTick({

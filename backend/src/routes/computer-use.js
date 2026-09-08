@@ -30,6 +30,7 @@ const {
   getBridgeStatus,
   planLocalComputerTask,
 } = require('../services/local-computer-bridge');
+const { attachWebSocketPath } = require('../utils/websocket-upgrade-router');
 const router = express.Router();
 
 // Initialize OpenAI client
@@ -620,7 +621,8 @@ let computerUseRevalidationTimer = null;
 const initializeWebSocketServer = (server, opts = {}) => {
   if (wss) return wss;
   wssClosePromise = null;
-  wss = new WebSocket.Server({ server, path: '/ws/computer-use' });
+  wss = new WebSocket.Server({ noServer: true });
+  wss.detachUpgrade = attachWebSocketPath(server, wss, '/ws/computer-use');
   const prismaClient = opts.prismaClient || prisma;
   const jwtSecret = opts.jwtSecret || process.env.JWT_SECRET;
   const userIndex = new Map();
@@ -774,6 +776,7 @@ function closeComputerUseWebSocketServer() {
   computerUseRevalidationTimer = null;
   try { unsubscribeWsRevocations?.(); } catch {}
   unsubscribeWsRevocations = null;
+  try { server.detachUpgrade?.(); } catch {}
   let resolveClose;
   let rejectClose;
   wssClosePromise = new Promise((resolve, reject) => {
@@ -1355,7 +1358,11 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       const screenshotBase64 = screenshotBytes.toString('base64');
       broadcastToSession(sessionId, {
         type: 'screenshot',
-        data: { image: `data:image/png;base64,${screenshotBase64}`, step: stepCount }
+        data: {
+          image: `data:image/png;base64,${screenshotBase64}`,
+          step: stepCount,
+          url: page.url(),
+        }
       });
 
       // 2. Obtener un DOM simplificado para la IA, en lugar del screenshot

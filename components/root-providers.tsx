@@ -15,6 +15,8 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/lib/auth-context-integrated"
 import { SettingsProvider } from "@/lib/settings-context"
 import { AppWrapper } from "@/components/app-wrapper"
+import { ChatProvider } from "@/lib/chat-context-integrated"
+import { BackgroundStreamsProvider } from "@/lib/background-streams-context"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalDropRedirector } from "@/components/GlobalDropRedirector"
 import { Toaster } from "@/components/ui/sonner"
@@ -26,11 +28,15 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
       <AuthProvider>
         <SettingsProvider>
-          <AppWrapper>
-            <ErrorBoundary label="root:app">
-              {children}
-            </ErrorBoundary>
-          </AppWrapper>
+          <BackgroundStreamsProvider>
+            <ChatProvider>
+              <AppWrapper>
+                <ErrorBoundary label="root:app">
+                  {children}
+                </ErrorBoundary>
+              </AppWrapper>
+            </ChatProvider>
+          </BackgroundStreamsProvider>
           <GlobalDropRedirector />
           <KeyboardShortcutsProvider />
           <OfflineBanner />

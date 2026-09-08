@@ -206,7 +206,8 @@ describe('POST /api/agent/batch (stream=ndjson)', () => {
     assert.equal(res.status, 200);
     const errEvt = res.events.find((e) => e.type === 'error');
     assert.ok(errEvt);
-    assert.equal(errEvt.error.message, 'kaboom');
+    assert.equal(errEvt.error.message, 'La operación no pudo completarse.');
+    assert.equal(JSON.stringify(res.events).includes('kaboom'), false);
     const summary = res.events.find((e) => e.type === 'batch_done').summary;
     assert.equal(summary.ok, 1);
     assert.equal(summary.failed, 1);

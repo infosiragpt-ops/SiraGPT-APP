@@ -1,6 +1,7 @@
 'use strict';
 
 const { writeAuditLog } = require('../../utils/audit-log');
+const companyResources = require('../codex/company-resources');
 const { PLATFORM_IDS } = require('./platforms');
 const {
   POLICY_PREFIX,
@@ -8,8 +9,46 @@ const {
   readPolicy,
 } = require('./policy');
 
+const SOCIAL_AUTOPILOT_LOCK_CLASS = 1_397_705_289;
+
 function dayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
+}
+
+function hashInt32(value) {
+  let hash = 0x811c9dc5;
+  const bytes = Buffer.from(String(value));
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash | 0;
+}
+
+async function createScheduledPostOnce({ prisma, userId, batchId, data }) {
+  const create = async (client) => {
+    const existing = await client.scheduledPost.findFirst({
+      where: { userId, batchId },
+      select: { id: true, status: true },
+    });
+    if (existing) return { post: existing, created: false };
+    return {
+      post: await client.scheduledPost.create({ data }),
+      created: true,
+    };
+  };
+
+  const canLock = typeof prisma?.$transaction === 'function'
+    && typeof prisma?.$queryRawUnsafe === 'function';
+  if (!canLock) return create(prisma);
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe(
+      'WITH _lock AS (SELECT pg_advisory_xact_lock($1::int, $2::int)) SELECT 1::int AS locked FROM _lock',
+      SOCIAL_AUTOPILOT_LOCK_CLASS,
+      hashInt32(`${userId}:${batchId}`),
+    );
+    return create(tx);
+  });
 }
 
 function extractJson(text) {
@@ -88,13 +127,22 @@ async function generateDepartmentPost({
   project,
   ledger = [],
   objectives = [],
+  allowedPlatforms = null,
   chatComplete: explicitChatComplete,
   now = () => new Date(),
 } = {}) {
   if (!prisma || !project?.userId || !project?.id) {
     return { action: 'skipped_invalid_project' };
   }
-  const policy = await readPolicy(prisma, project.userId);
+  const activeProject = await companyResources.loadActiveOwnedCompanyProject({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+  });
+  if (!activeProject) {
+    return { action: 'skipped_project_not_found' };
+  }
+  const policy = await readPolicy(prisma, activeProject.userId, activeProject.id);
   if (!policy.enabled || !policy.autopilot || !policy.objective) {
     return {
       action: 'skipped_policy',
@@ -102,20 +150,33 @@ async function generateDepartmentPost({
       reason: !policy.enabled ? 'disabled' : !policy.autopilot ? 'autopilot_disabled' : 'objective_missing',
     };
   }
-  const batchId = `proactive-marketing:${dayKey(now())}:${project.userId}:${project.id}`;
+  const batchId = `proactive-marketing:${dayKey(now())}:${activeProject.userId}:${activeProject.id}`;
   const exists = await prisma.scheduledPost.findFirst({
-    where: { userId: project.userId, batchId },
+    where: { userId: activeProject.userId, batchId },
     select: { id: true, status: true },
   });
   if (exists) return { action: 'already_generated', postId: exists.id, status: exists.status, batchId };
 
   const connections = await prisma.socialConnection.findMany({
-    where: { userId: project.userId, platform: { in: PLATFORM_IDS } },
-    select: { platform: true },
+    where: { userId: activeProject.userId, platform: { in: PLATFORM_IDS } },
+    select: {
+      id: true,
+      platform: true,
+      accountId: true,
+      accessToken: true,
+      profile: true,
+    },
   });
   const connected = new Set(connections.map((row) => row.platform));
+  const assigned = companyResources.marketingSocialPlatforms(activeProject, connections);
+  const requestedAllowlist = allowedPlatforms == null
+    ? null
+    : new Set(Array.isArray(allowedPlatforms) ? allowedPlatforms : []);
   const platforms = PLATFORM_IDS.filter(
-    (platform) => connected.has(platform) && policy.platforms[platform] !== false,
+    (platform) => connected.has(platform)
+      && policy.platforms[platform] !== false
+      && assigned.has(platform)
+      && (requestedAllowlist === null || requestedAllowlist.has(platform)),
   );
   if (platforms.length === 0) return { action: 'skipped_no_connections', batchId };
 
@@ -125,7 +186,7 @@ async function generateDepartmentPost({
     policy,
     platforms,
     chatComplete,
-    project,
+    project: activeProject,
     ledger,
     objectives,
   });
@@ -133,9 +194,8 @@ async function generateDepartmentPost({
 
   const auto = policy.mode === 'auto';
   const createdAt = now();
-  const post = await prisma.scheduledPost.create({
-    data: {
-      userId: project.userId,
+  const data = {
+      userId: activeProject.userId,
       prompt: policy.objective,
       caption: content.caption,
       platforms,
@@ -145,7 +205,7 @@ async function generateDepartmentPost({
       config: {
         approved: auto,
         source: 'proactive_marketing',
-        projectId: project.id,
+        projectId: activeProject.id,
         workspaceId: policy.workspaceId,
         mediaBrief: content.mediaBrief,
         generateImage: Boolean(content.mediaBrief),
@@ -153,17 +213,31 @@ async function generateDepartmentPost({
         generatedAt: createdAt.toISOString(),
         policyMode: policy.mode,
       },
-    },
+  };
+  const creation = await createScheduledPostOnce({
+    prisma,
+    userId: activeProject.userId,
+    batchId,
+    data,
   });
+  const post = creation.post;
+  if (!creation.created) {
+    return {
+      action: 'already_generated',
+      postId: post.id,
+      status: post.status,
+      batchId,
+    };
+  }
   void writeAuditLog(prisma, {
     actorType: 'system',
-    userId: project.userId,
+    userId: activeProject.userId,
     action: auto ? 'social_post_scheduled' : 'social_post_drafted',
     resource: 'scheduled_post',
     resourceId: post.id,
     metadata: {
       source: 'proactive_marketing',
-      projectId: project.id,
+      projectId: activeProject.id,
       platforms,
       policyMode: policy.mode,
     },
@@ -187,41 +261,96 @@ async function runAutopilot({
 } = {}) {
   // eslint-disable-next-line global-require
   const prisma = explicitPrisma || require('../../config/database');
-  const rows = await prisma.systemSettings.findMany({
-    where: { key: { startsWith: POLICY_PREFIX } },
-    take: Math.max(1, Math.min(Number(maxUsers) || 25, 100)),
-  });
-  const policies = rows.map(parsePolicyRow).filter(Boolean);
+  const pageSize = Math.max(1, Math.min(Number(maxUsers) || 25, 100));
+  const rows = [];
+  const seenPolicyKeys = new Set();
+  let cursor = null;
+  for (;;) {
+    // Read every page before deduplication so a legacy row can never mask a
+    // newer v2 policy merely because the two records straddle a page boundary.
+    // eslint-disable-next-line no-await-in-loop
+    const page = await prisma.systemSettings.findMany({
+      where: { key: { startsWith: POLICY_PREFIX } },
+      orderBy: { key: 'asc' },
+      take: pageSize,
+      ...(cursor ? { cursor: { key: cursor }, skip: 1 } : {}),
+    });
+    const fresh = page.filter((row) => (
+      row && typeof row.key === 'string' && !seenPolicyKeys.has(row.key)
+    ));
+    for (const row of fresh) {
+      seenPolicyKeys.add(row.key);
+      rows.push(row);
+    }
+    if (page.length < pageSize || fresh.length === 0) break;
+    cursor = page[page.length - 1].key;
+  }
+  const policiesByScope = new Map();
+  for (const entry of rows.map(parsePolicyRow).filter(Boolean)) {
+    // A user-wide legacy value cannot safely authorize an arbitrary company.
+    if (!entry.workspaceId) continue;
+    const scopeKey = `${entry.userId}\u0000${entry.workspaceId}`;
+    const current = policiesByScope.get(scopeKey);
+    if (!current || entry.storageVersion > current.storageVersion) {
+      policiesByScope.set(scopeKey, entry);
+    }
+  }
+  const policies = [...policiesByScope.values()];
   const results = [];
   for (const entry of policies) {
-    const { userId, policy } = entry;
+    const { userId, workspaceId, policy } = entry;
     if (!policy.enabled || policy.mode !== 'auto' || !policy.autopilot || !policy.objective) {
       continue;
     }
-    const batchId = `ceo-autopilot:${dayKey(now())}:${userId}`;
+    const batchId = `ceo-autopilot:${dayKey(now())}:${userId}:${workspaceId}`;
     try {
-      // One CEO-generated publication per UTC day. The user's daily limit still
-      // applies in the publisher and can be used for manually queued content.
+      // workspaceId is the owned CodexProject boundary for v2 policies.
+      // eslint-disable-next-line no-await-in-loop
+      const project = await companyResources.loadActiveOwnedCompanyProject({
+        prisma,
+        projectId: workspaceId,
+        userId,
+      });
+      if (!project) {
+        results.push({ action: 'skipped_project_not_found', userId, workspaceId });
+        continue;
+      }
+      // One CEO-generated publication per company and UTC day. The scoped
+      // daily limit still applies in the publisher alongside manual content.
       // eslint-disable-next-line no-await-in-loop
       const exists = await prisma.scheduledPost.findFirst({
         where: { userId, batchId },
         select: { id: true, status: true },
       });
       if (exists) {
-        results.push({ action: 'already_generated', userId, postId: exists.id });
+        results.push({
+          action: 'already_generated',
+          userId,
+          workspaceId,
+          postId: exists.id,
+        });
         continue;
       }
       // eslint-disable-next-line no-await-in-loop
       const connections = await prisma.socialConnection.findMany({
         where: { userId, platform: { in: PLATFORM_IDS } },
-        select: { platform: true },
+        select: {
+          id: true,
+          platform: true,
+          accountId: true,
+          accessToken: true,
+          profile: true,
+        },
       });
       const connected = new Set(connections.map((row) => row.platform));
+      const allowedPlatforms = companyResources.marketingSocialPlatforms(project, connections);
       const platforms = PLATFORM_IDS.filter(
-        (platform) => connected.has(platform) && policy.platforms[platform] !== false,
+        (platform) => connected.has(platform)
+          && policy.platforms[platform] !== false
+          && allowedPlatforms.has(platform),
       );
       if (platforms.length === 0) {
-        results.push({ action: 'skipped_no_connections', userId });
+        results.push({ action: 'skipped_no_connections', userId, workspaceId });
         continue;
       }
       // eslint-disable-next-line global-require
@@ -230,12 +359,11 @@ async function runAutopilot({
       // eslint-disable-next-line no-await-in-loop
       const content = await generateContent({ policy, platforms, chatComplete });
       if (!content) {
-        results.push({ action: 'skipped_invalid_content', userId });
+        results.push({ action: 'skipped_invalid_content', userId, workspaceId });
         continue;
       }
       // eslint-disable-next-line no-await-in-loop
-      const post = await prisma.scheduledPost.create({
-        data: {
+      const data = {
           userId,
           prompt: policy.objective,
           caption: content.caption,
@@ -249,26 +377,49 @@ async function runAutopilot({
             mediaBrief: content.mediaBrief,
             generateImage: Boolean(content.mediaBrief),
             mediaMode: content.mediaBrief ? 'generated' : 'text',
-            workspaceId: policy.workspaceId,
+            workspaceId,
             generatedAt: now().toISOString(),
           },
-        },
+      };
+      // eslint-disable-next-line no-await-in-loop
+      const creation = await createScheduledPostOnce({
+        prisma,
+        userId,
+        batchId,
+        data,
       });
+      const post = creation.post;
+      if (!creation.created) {
+        results.push({
+          action: 'already_generated',
+          userId,
+          workspaceId,
+          postId: post.id,
+        });
+        continue;
+      }
       void writeAuditLog(prisma, {
         actorType: 'system',
         userId,
         action: 'social_post_generated',
         resource: 'scheduled_post',
         resourceId: post.id,
-        metadata: { source: 'ceo_autopilot', platforms, workspaceId: policy.workspaceId },
+        metadata: { source: 'ceo_autopilot', platforms, workspaceId },
         tags: ['social', 'autonomous-company', 'ceo-office'],
       });
-      results.push({ action: 'generated', userId, postId: post.id, platforms });
+      results.push({
+        action: 'generated',
+        userId,
+        workspaceId,
+        postId: post.id,
+        platforms,
+      });
     } catch (error) {
-      logger.warn?.(`[social-autopilot] generation failed for ${userId}: ${error?.message || error}`);
+      logger.warn?.(`[social-autopilot] generation failed for ${userId}/${workspaceId}: ${error?.message || error}`);
       results.push({
         action: 'error',
         userId,
+        workspaceId,
         error: String(error?.message || error).slice(0, 200),
       });
     }
@@ -277,9 +428,11 @@ async function runAutopilot({
 }
 
 module.exports = {
+  createScheduledPostOnce,
   dayKey,
   extractJson,
   generateContent,
   generateDepartmentPost,
+  hashInt32,
   runAutopilot,
 };

@@ -60,4 +60,28 @@ describe("mobile model selector source contract", () => {
       "when Admin disables all VIDEO models the selected video model should be cleared"
     )
   })
+
+  it("keeps the GPT/project Modelo submenu professional on phones (solid light surface, no fixed 360px panel)", () => {
+    assert.match(
+      source,
+      /gpt-model-submenu/,
+      "GPT/project model submenu must use the mobile-professional submenu class"
+    )
+    assert.doesNotMatch(
+      source,
+      /DropdownMenuSubContent[^>]*w-\[360px\]/,
+      "model submenus must not use a fixed 360px width that overflows phones"
+    )
+    assert.match(
+      source,
+      /gpt-model-submenu[\s\S]{0,220}w-\[min\(calc\(100vw-1\.25rem\),20rem\)\]/,
+      "model submenu width must clamp to the phone viewport"
+    )
+    assert.doesNotMatch(
+      source,
+      /DropdownMenuSubContent[^>]*bg-background\/90[^>]*before:bg-\[radial-gradient/,
+      "model submenu must not use translucent gradient glass on mobile"
+    )
+  })
+
 })

@@ -124,3 +124,57 @@ export function resolveImageAttachmentUrl(file: any, baseUrl?: string | null) {
 export function appendUploadAuthToken(url: unknown, _token?: string | null) {
   return String(url || "").trim();
 }
+
+
+export async function refreshPresignedUrl(url: string): Promise<string | null> {
+  const raw = String(url || "").trim()
+  if (!raw) return null
+  try {
+    const { authenticatedFetch } = await import("./authenticated-fetch")
+    const { getNormalizedApiBaseUrl } = await import("./api-base-url")
+    const base = getNormalizedApiBaseUrl().replace(/\/+$/, "")
+    const res = await authenticatedFetch(`${base}/artifacts/re-presign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: raw }),
+    })
+    if (!res.ok) return null
+    const body = await res.json().catch(() => null) as { url?: unknown } | null
+    const next = typeof body?.url === "string" ? body.url.trim() : ""
+    return next || null
+  } catch {
+    return null
+  }
+}
+
+export async function fetchWithPresignRetry(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const first = await fetch(url, init)
+  if (first.status !== 403 && !isExpiredPresignUrl(url)) return first
+  const next = await refreshPresignedUrl(url)
+  if (!next || next === url) return first
+  return fetch(next, init)
+}
+
+export function isExpiredPresignUrl(url: unknown, nowMs = Date.now()): boolean {
+  const raw = String(url || "").trim()
+  if (!raw || !/^https?:/i.test(raw)) return false
+  try {
+    const parsed = new URL(raw)
+    const amzDate = parsed.searchParams.get("X-Amz-Date")
+    const expires = Number(parsed.searchParams.get("X-Amz-Expires") || parsed.searchParams.get("Expires") || 0)
+    if (amzDate && expires > 0 && /^\d{8}T\d{6}Z$/.test(amzDate)) {
+      const y = Number(amzDate.slice(0, 4))
+      const mo = Number(amzDate.slice(4, 6)) - 1
+      const d = Number(amzDate.slice(6, 8))
+      const h = Number(amzDate.slice(9, 11))
+      const mi = Number(amzDate.slice(11, 13))
+      const s = Number(amzDate.slice(13, 15))
+      const started = Date.UTC(y, mo, d, h, mi, s)
+      return nowMs > started + expires * 1000
+    }
+  } catch { /* ignore */ }
+  return false
+}

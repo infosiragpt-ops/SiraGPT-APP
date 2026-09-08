@@ -23,7 +23,14 @@
  * downgrades to "no resume available" — the request path is never broken.
  */
 
-const DEFAULT_TTL_SECONDS = 5 * 60; // 5 minutes
+const configuredTtlSeconds = Number.parseInt(process.env.AI_STREAM_RESUME_TTL_SECONDS || '', 10);
+// Long-running agent turns can spend hours thinking or executing tools without
+// emitting content. Active owners renew this bounded lease independently of
+// the browser socket (see touch()), so runtime is unbounded while terminal or
+// abandoned records are reclaimed promptly.
+const DEFAULT_TTL_SECONDS = Number.isFinite(configuredTtlSeconds) && configuredTtlSeconds >= 300
+  ? configuredTtlSeconds
+  : 10 * 60;
 const DEFAULT_MAX_CHUNKS = 4000;    // hard cap per-stream to bound memory
 const KEY_PREFIX = 'sira:sse-resume:';
 // Hard cap on distinct sessions held in the in-process fallback Map so an
@@ -34,6 +41,7 @@ const SWEEP_INTERVAL_MS = 60 * 1000; // proactive expiry sweep cadence
 
 let _injectedRedis = null;
 let _ioredisClient = null;
+let _nowFn = () => Date.now();
 const _memoryStore = new Map(); // streamId -> { record, expiresAt }
 
 // ─── Per-streamId serialization ────────────────────────────────────────
@@ -76,11 +84,15 @@ function _ensureSweeper() {
   if (_sweepTimer && typeof _sweepTimer.unref === 'function') _sweepTimer.unref();
 }
 
-function _now() { return Date.now(); }
+function _now() { return _nowFn(); }
 
 function _setInjectedRedis(client) {
   // Test seam — pass an ioredis-compatible fake.
   _injectedRedis = client;
+}
+
+function _setNowForTests(nowFn) {
+  _nowFn = typeof nowFn === 'function' ? nowFn : () => Date.now();
 }
 
 function _resetForTests() {
@@ -88,6 +100,7 @@ function _resetForTests() {
   _ioredisClient = null;
   _memoryStore.clear();
   _opChains.clear();
+  _nowFn = () => Date.now();
   if (_sweepTimer) {
     clearInterval(_sweepTimer);
     _sweepTimer = null;
@@ -150,16 +163,20 @@ function _memorySet(streamId, record, ttlSeconds) {
   }
 }
 
-async function _redisGet(streamId) {
+async function _redisLookup(streamId) {
   const redis = _getRedis();
-  if (!redis) return null;
+  if (!redis) return { record: null, storeError: false };
   try {
     const raw = await redis.get(`${KEY_PREFIX}${streamId}`);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    if (!raw) return { record: null, storeError: false };
+    return { record: JSON.parse(raw), storeError: false };
   } catch {
-    return null;
+    return { record: null, storeError: true };
   }
+}
+
+async function _redisGet(streamId) {
+  return (await _redisLookup(streamId)).record;
 }
 
 async function _redisSet(streamId, record, ttlSeconds) {
@@ -225,10 +242,10 @@ function generateStreamId() {
  */
 async function open({ streamId = null, ttlSeconds = DEFAULT_TTL_SECONDS } = {}) {
   if (streamId) {
-    const fromRedis = await _redisGet(streamId);
-    if (fromRedis) return { streamId, record: fromRedis, isResume: true };
     const fromMem = _memoryGet(streamId);
     if (fromMem) return { streamId, record: fromMem, isResume: true };
+    const fromRedis = await _redisGet(streamId);
+    if (fromRedis) return { streamId, record: fromRedis, isResume: true };
   }
   const id = streamId || generateStreamId();
   const record = { chunks: [], complete: false, error: null, ttlSeconds };
@@ -236,6 +253,29 @@ async function open({ streamId = null, ttlSeconds = DEFAULT_TTL_SECONDS } = {}) 
   _memorySet(id, record, ttlSeconds);
   await _redisSet(id, record, ttlSeconds);
   return { streamId: id, record, isResume: false };
+}
+
+/**
+ * Look up an existing session without creating one.
+ *
+ * Memory is checked first because the active owner updates it synchronously
+ * before its best-effort Redis write settles. A Redis read is only a fallback
+ * for another process; its failure is surfaced to explicit resume callers so
+ * they cannot accidentally fall through into a new generation.
+ *
+ * @returns {Promise<{streamId, record: object|null, found: boolean, storeError: boolean}>}
+ */
+async function openExisting({ streamId } = {}) {
+  if (!streamId) return { streamId: null, record: null, found: false, storeError: false, isResume: true };
+  const fromMem = _memoryGet(streamId);
+  if (fromMem) {
+    return { streamId, record: fromMem, found: true, storeError: false, isResume: true };
+  }
+  const fromRedis = await _redisLookup(streamId);
+  if (fromRedis.record) {
+    return { streamId, record: fromRedis.record, found: true, storeError: false, isResume: true };
+  }
+  return { streamId, record: null, found: false, storeError: fromRedis.storeError, isResume: true };
 }
 
 /**
@@ -261,6 +301,30 @@ async function _appendImpl(streamId, chunk, ttlSeconds) {
 async function append(streamId, chunk, { ttlSeconds = DEFAULT_TTL_SECONDS } = {}) {
   if (!streamId) return 0;
   return _runExclusive(streamId, () => _appendImpl(streamId, chunk, ttlSeconds));
+}
+
+/**
+ * Renew an active stream's resumability lease without adding a content frame.
+ * This is deliberately independent of res.write: a detached browser socket
+ * must not make a still-running owner lose its Last-Event-ID record.
+ */
+async function _touchImpl(streamId, ttlSeconds) {
+  const record = _memoryGet(streamId) || await _redisGet(streamId);
+  if (!record) return false;
+  const effectiveTtl = Number.isFinite(ttlSeconds) && ttlSeconds > 0
+    ? ttlSeconds
+    : (Number.isFinite(record.ttlSeconds) && record.ttlSeconds > 0
+      ? record.ttlSeconds
+      : DEFAULT_TTL_SECONDS);
+  record.ttlSeconds = effectiveTtl;
+  _memorySet(streamId, record, effectiveTtl);
+  await _redisSet(streamId, record, effectiveTtl);
+  return true;
+}
+
+async function touch(streamId, options = {}) {
+  if (!streamId) return false;
+  return _runExclusive(streamId, () => _touchImpl(streamId, options.ttlSeconds));
 }
 
 /**
@@ -322,7 +386,9 @@ async function load(streamId) {
 
 module.exports = {
   open,
+  openExisting,
   append,
+  touch,
   complete,
   fail,
   destroy,
@@ -333,5 +399,6 @@ module.exports = {
   DEFAULT_MAX_CHUNKS,
   // Test seams
   _setInjectedRedis,
+  _setNowForTests,
   _resetForTests,
 };

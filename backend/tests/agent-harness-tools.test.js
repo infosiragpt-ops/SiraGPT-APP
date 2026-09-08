@@ -23,11 +23,12 @@ const { executeRunJavascript } = require('../src/services/agent-harness/tools/ru
 
 // ── web_fetch: URL safety ───────────────────────────────────────────────────
 
-test('web_fetch: private, loopback, link-local, metadata and non-http URLs are blocked', () => {
+test('web_fetch: private, metadata, IP-literal and non-http URLs are blocked', () => {
   const blocked = [
     'http://localhost:3000/x',
     'http://app.localhost/x',
     'http://127.0.0.1/x',
+    'http://93.184.216.34/',
     'http://10.1.2.3/x',
     'http://172.16.0.9/x',
     'http://192.168.1.1/router',
@@ -43,7 +44,6 @@ test('web_fetch: private, loopback, link-local, metadata and non-http URLs are b
     assert.throws(() => assertSafeUrl(url), `expected block: ${url}`);
   }
   assert.ok(assertSafeUrl('https://example.com/page?q=1'));
-  assert.ok(assertSafeUrl('http://93.184.216.34/'), 'public IP literals are allowed');
 });
 
 test('web_fetch: redirects are re-validated per hop — a public page cannot bounce into metadata', async () => {

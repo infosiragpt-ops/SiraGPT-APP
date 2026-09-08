@@ -13,8 +13,8 @@ describe("Codex project creation from /code", () => {
     assert.notEqual(end, -1, "dispatch must follow runCodexEngine")
     assert.match(
       source.slice(start, end),
-      /codexApi\.createProject\(title, text\)/,
-      "the first /code turn must not drop the brief used to choose the project starter",
+      /codexApi\.createProject\(title, text, companyOrganizationId\)/,
+      "the first /code turn must preserve both the starter brief and the company tenant",
     )
   })
 })

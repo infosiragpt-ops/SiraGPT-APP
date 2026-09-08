@@ -6,6 +6,7 @@
  */
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 
 // Only boring, non-secret process settings may cross the control-plane ->
 // generated-code boundary. Project-specific HOME/cache/tmp and runtime values
@@ -28,8 +29,9 @@ const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVAT
 
 // Sandbox-internal allowlist: the agent's terminal goes through the runner,
 // but only via these binaries (extended deliberately, per phase).
-const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'ls', 'cat', 'wc']);
+const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'npm', 'ls', 'cat', 'wc']);
 const INTERACTIVE_SCAFFOLD_RE = /^(?:create-next-app|create-vite|create-react-app|create-remix)(?:@.*)?$/i;
+const PREVIEW_ERROR_RE = /(?:<vite-error-overlay\b|<nextjs-portal\b|__NEXT_ERROR|failed to compile|internal server error|pre-transform error|error when starting dev server)/i;
 
 function commandRejectionReason(cmd) {
   if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((c) => typeof c === 'string')) return 'invalid_command';
@@ -48,6 +50,11 @@ function sanitizeProjectId(raw) {
   return PROJECT_ID_RE.test(id) ? id : null;
 }
 
+function sanitizeRunId(raw) {
+  const id = String(raw || '').trim();
+  return RUN_ID_RE.test(id) ? id : null;
+}
+
 function resolveProjectRelPath(relPath) {
   const p = String(relPath || '').replaceAll('\\', '/').trim();
   if (!p || p.startsWith('/') || /^[A-Za-z]:/.test(p)) return null;
@@ -60,8 +67,86 @@ function resolveProjectRelPath(relPath) {
   return parts.length ? parts.join('/') : null;
 }
 
+/**
+ * Upgrade the exact Vite config emitted by SiraGPT's full-stack starter.
+ * Besides narrowing the legacy API regex, remove the short-lived HMR-disable
+ * line from managed configs now that the backend proxies authenticated Vite
+ * WebSocket upgrades to the owning project's runner port.
+ *
+ * Refuse partial/custom matches to avoid rewriting user configs.
+ */
+function migrateLegacyViteProxyConfig(content) {
+  const source = String(content || '');
+  const portLine = 'const apiPort = Number(process.env.API_PORT) || port + 1000';
+  const baseLine = "  base: process.env.VITE_BASE || '/',";
+  const proxyLine = "      '^.*/api/': {";
+  const rewriteLine = "        rewrite: (p) => p.replace(/^.*?\\/api\\//, '/api/'),";
+  const managedBaseLine = "const base = process.env.VITE_BASE || '/'";
+  const managedApiBaseLine = 'const apiBase = `${base}api`';
+  const managedProxyLine = '      [apiBase]: {';
+  const managedRewriteLine = "        rewrite: (p) => p.startsWith(apiBase) ? `/api${p.slice(apiBase.length)}` : p,";
+  const serverLine = '  server: {';
+  const hmrLine = "    hmr: process.env.VITE_HMR === 'false' ? false : undefined,";
+
+  let upgraded = source;
+  const isLegacy = source.includes(portLine)
+    && source.includes(baseLine)
+    && source.includes(proxyLine)
+    && source.includes(rewriteLine);
+  if (isLegacy) {
+    upgraded = upgraded
+      .replace(
+        portLine,
+        `${portLine}\n${managedBaseLine}\n${managedApiBaseLine}`,
+      )
+      .replace(baseLine, '  base,')
+      .replace(proxyLine, managedProxyLine)
+      .replace(rewriteLine, managedRewriteLine);
+  }
+
+  const isManaged = upgraded.includes(portLine)
+    && upgraded.includes(managedBaseLine)
+    && upgraded.includes(managedApiBaseLine)
+    && upgraded.includes('  base,')
+    && upgraded.includes(managedProxyLine)
+    && upgraded.includes(managedRewriteLine)
+    && upgraded.includes(serverLine);
+  if (isManaged && upgraded.includes(hmrLine)) {
+    upgraded = upgraded.replace(`${hmrLine}\n`, '');
+  }
+
+  return { changed: upgraded !== source, content: upgraded };
+}
+
+function previewConfigMigrationMode({ status, headContent, migratedContent } = {}) {
+  if (typeof status !== 'string') return 'skip';
+  if (!status.trim()) return 'commit';
+  if (typeof headContent === 'string' && migratedContent === headContent) return 'restore';
+  return 'skip';
+}
+
 function isAllowedCommand(cmd) {
   return commandRejectionReason(cmd) === null;
+}
+
+function buildPreflightEnabled(env = {}) {
+  const configured = String(env.CODE_RUNNER_BUILD_PREFLIGHT ?? '').trim();
+  if (configured) return configured !== '0';
+  return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+/**
+ * An open TCP port is not a usable preview. For HTML responses, reject blank
+ * documents and known Vite/Next error overlays before reporting readiness.
+ * Non-HTML custom dev servers remain compatible as long as they return 2xx.
+ */
+function previewDocumentReady({ status, contentType = '', body = '' } = {}) {
+  const code = Number(status);
+  if (!Number.isInteger(code) || code < 200 || code >= 300) return false;
+  if (!/text\/html|application\/xhtml\+xml/i.test(String(contentType))) return true;
+  const html = String(body || '').trim();
+  if (!html || PREVIEW_ERROR_RE.test(html)) return false;
+  return /<(?:html|body|main|div|script)\b/i.test(html);
 }
 
 function isSensitiveEnvKey(key) {
@@ -214,9 +299,13 @@ const IGNORED_EXPORT_DIRS = new Set([
 function shouldIgnoreExportPath(relPath) {
   const p = String(relPath || '').replaceAll('\\', '/').trim();
   if (!p) return true;
-  for (const seg of p.split('/')) {
+  const segments = p.split('/');
+  for (const seg of segments) {
     if (seg && IGNORED_EXPORT_DIRS.has(seg)) return true;
   }
+  // Excluir archivos de entorno con secretos (.env, .env.local…) del export.
+  const leaf = segments[segments.length - 1];
+  if (leaf === '.env' || /^\.env\.[A-Za-z0-9_-]+$/.test(leaf)) return true;
   return false;
 }
 
@@ -363,9 +452,14 @@ function createDevPool({ ports, now = () => Date.now() } = {}) {
 
 module.exports = {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
+  migrateLegacyViteProxyConfig,
+  previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
+  buildPreflightEnabled,
+  previewDocumentReady,
   ALLOWED_BINS,
   IGNORED_EXPORT_DIRS,
   shouldIgnoreExportPath,

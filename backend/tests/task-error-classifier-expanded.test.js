@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { classifyTaskError } = require('../src/utils/task-error-classifier');
+const { classifyTaskError, presentTaskError, TASK_ERROR_LABELS } = require('../src/utils/task-error-classifier');
 
 const CASES = [
   // retryable rate/concurrency pressure
@@ -175,4 +175,116 @@ test('classifyTaskError covers at least 100 production error fingerprints', () =
     assert.equal(result.reason, reason, `${input} reason`);
     if (retryable) assert.ok(result.ttlMs > 0, `${input} should include retry TTL`);
   }
+});
+
+test('presentTaskError: 503, cancel and timeout keep distinct Spanish labels', () => {
+  const unavailable = presentTaskError(Object.assign(new Error('maintenance'), { statusCode: 503 }));
+  assert.equal(unavailable.code, 'E_PROVIDER');
+  assert.equal(unavailable.label, TASK_ERROR_LABELS.E_PROVIDER_UNAVAILABLE);
+
+  const cancelled = presentTaskError(Object.assign(new Error('cancelled by user'), { name: 'AbortError' }));
+  assert.equal(cancelled.code, 'E_CANCELLED');
+  assert.equal(cancelled.label, TASK_ERROR_LABELS.E_CANCELLED);
+
+  const timedOut = presentTaskError(Object.assign(new Error('upstream timeout'), { statusCode: 504 }));
+  assert.equal(timedOut.code, 'E_TIMEOUT');
+  assert.equal(timedOut.label, TASK_ERROR_LABELS.E_TIMEOUT);
+
+  assert.notEqual(unavailable.label, cancelled.label);
+  assert.notEqual(unavailable.label, timedOut.label);
+  assert.notEqual(cancelled.label, timedOut.label);
+});
+
+test('presentTaskError: deadline exceeded presents as timeout, not cancel', () => {
+  const presented = presentTaskError(new Error('context deadline exceeded'));
+  assert.equal(presented.code, 'E_TIMEOUT');
+  assert.equal(presented.label, TASK_ERROR_LABELS.E_TIMEOUT);
+  assert.equal(presented.reason, 'aborted');
+});
+
+test('presentTaskError: other 5xx stay E_PROVIDER without the 503 copy', () => {
+  const presented = presentTaskError(Object.assign(new Error('provider exploded'), { statusCode: 500 }));
+  assert.equal(presented.code, 'E_PROVIDER');
+  assert.equal(presented.label, TASK_ERROR_LABELS.E_PROVIDER);
+  assert.notEqual(presented.label, TASK_ERROR_LABELS.E_PROVIDER_UNAVAILABLE);
+});
+
+test('presentTaskError: already-Spanish labels are not rewritten', () => {
+  const presented = presentTaskError(new Error('El worker dejó de responder. La tarea se cerró.'));
+  assert.match(presented.label, /dejó de responder/);
+});
+
+test('presentTaskError: upstream 429 is a Spanish backoff, not a plan-upgrade', () => {
+  const {
+    RATE_LIMIT_USER_MESSAGE,
+    toAgentTaskErrorEvent,
+  } = require('../src/utils/task-error-classifier');
+  const err = Object.assign(new Error('429 Too Many Requests: rate limit exceeded'), { statusCode: 429 });
+  const presented = presentTaskError(err);
+  assert.equal(presented.reason, 'rate-limited');
+  assert.equal(presented.retryable, true);
+  assert.equal(presented.code, 'E_QUOTA');
+  assert.equal(presented.label, RATE_LIMIT_USER_MESSAGE);
+  assert.doesNotMatch(presented.label, /plan|actualiza|OpenRouter|DeepSeek|sk-/i);
+  assert.notEqual(presented.label, TASK_ERROR_LABELS.E_QUOTA);
+
+  const quota = presentTaskError(Object.assign(new Error('payment required'), { statusCode: 402 }));
+  assert.equal(quota.reason, 'quota-exhausted');
+  assert.equal(quota.label, TASK_ERROR_LABELS.E_QUOTA);
+  assert.notEqual(quota.label, RATE_LIMIT_USER_MESSAGE);
+
+  const event = toAgentTaskErrorEvent(err);
+  assert.equal(event.type, 'error');
+  assert.equal(event.message, RATE_LIMIT_USER_MESSAGE);
+  assert.equal(event.code, 'E_QUOTA');
+});
+
+test('classifyTaskError: honors Retry-After seconds without jitter', () => {
+  const err = Object.assign(new Error('too many requests'), {
+    statusCode: 429,
+    headers: { 'Retry-After': '12' },
+  });
+  const result = classifyTaskError(err);
+  assert.equal(result.reason, 'rate-limited');
+  assert.equal(result.retryable, true);
+  assert.equal(result.ttlMs, 12_000);
+  assert.equal(result.retryAfterMs, 12_000);
+  assert.match(result.userMessage, /12 segundos/);
+  assert.doesNotMatch(result.userMessage, /plan|OpenRouter|sk-/i);
+});
+
+test('classifyTaskError: honors retry-after-ms and clamps long cooldowns', () => {
+  const { MAX_RETRY_AFTER_MS } = require('../src/utils/task-error-classifier');
+  const err = Object.assign(new Error('throttled'), {
+    statusCode: 429,
+    headers: { 'retry-after-ms': '90000' },
+  });
+  const result = classifyTaskError(err);
+  assert.equal(result.ttlMs, MAX_RETRY_AFTER_MS);
+  assert.equal(result.retryAfterMs, MAX_RETRY_AFTER_MS);
+  assert.match(result.userMessage, /60 segundos/);
+});
+
+test('classifyTaskError: honors HTTP-date Retry-After', () => {
+  const when = new Date(Date.now() + 8_000).toUTCString();
+  const err = Object.assign(new Error('rate_limit_error'), {
+    statusCode: 429,
+    headers: { 'retry-after': when },
+  });
+  const result = classifyTaskError(err);
+  assert.equal(result.reason, 'rate-limited');
+  assert.ok(result.ttlMs >= 1_000 && result.ttlMs <= 12_000, `ttlMs out of band: ${result.ttlMs}`);
+  assert.match(result.userMessage, /demasiadas solicitudes/);
+});
+
+test('toAgentTaskErrorEvent: Retry-After seconds travel on the SSE error', () => {
+  const { toAgentTaskErrorEvent } = require('../src/utils/task-error-classifier');
+  const err = Object.assign(new Error('429 Too Many Requests'), {
+    statusCode: 429,
+    retryAfterMs: 15_000,
+  });
+  const event = toAgentTaskErrorEvent(err);
+  assert.equal(event.retryAfterMs, 15_000);
+  assert.equal(event.retryAfterSec, 15);
+  assert.match(event.message, /15 segundos/);
 });

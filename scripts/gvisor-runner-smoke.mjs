@@ -6,7 +6,7 @@ const origin = 'http://127.0.0.1:4097';
 const token = process.env.CODE_RUNNER_CONTROL_TOKEN;
 const project = 'gvisor-smoke';
 const fullStackProject = 'fullstack-smoke';
-const fullStackBase = '/fullstack-preview/';
+const fullStackBase = '/api/codex/projects/fullstack-smoke/preview/gvisor-token/app/';
 const fullStackUid = Number(process.env.GVISOR_SMOKE_PROJECT_UID);
 
 assert.ok(token, 'CODE_RUNNER_CONTROL_TOKEN is required by the smoke client');
@@ -214,6 +214,94 @@ assert.equal(written.written, 3);
 const readback = await response(`/workspace/file?project=${project}&path=README.md`);
 assert.equal(readback.content, '# gVisor runner smoke\n');
 
+for (const cmd of [
+  ['git', 'add', '-A'],
+  [
+    'git',
+    '-c',
+    'user.name=SiraGPT gVisor Smoke',
+    '-c',
+    'user.email=gvisor-smoke@siragpt.local',
+    'commit',
+    '-m',
+    'test(runner): establish worktree gate fixture',
+  ],
+]) {
+  const committed = await response('/workspace/exec', {
+    method: 'POST',
+    body: { project, cmd, timeoutMs: 15_000 },
+  });
+  assert.equal(committed.exitCode, 0, committed.stderr || committed.stdout);
+}
+
+const firstRunWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-a', baseBranch: 'main' },
+});
+assert.equal(firstRunWorktree.ok, true);
+const blockedSiblingWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-b', baseBranch: 'main' },
+  expectedStatus: 409,
+});
+assert.equal(blockedSiblingWorktree.error, 'run_concurrency_isolation_unavailable');
+const firstRunCleanup = await response('/workspace/worktree/remove', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-a' },
+});
+assert.equal(firstRunCleanup.ok, true);
+const sequentialRunWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-b', baseBranch: 'main' },
+});
+assert.equal(sequentialRunWorktree.ok, true);
+const sequentialRunCleanup = await response('/workspace/worktree/remove', {
+  method: 'POST',
+  body: { project, run: 'gvisor-gate-b' },
+});
+assert.equal(sequentialRunCleanup.ok, true);
+
+const dirtyFixture = await response('/workspace/write', {
+  method: 'POST',
+  body: {
+    project,
+    files: [{ path: 'RECOVERY_PROBE.txt', content: 'preserve this operator change\n' }],
+  },
+});
+assert.equal(dirtyFixture.written, 1);
+const dirtyWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery', baseBranch: 'main' },
+  expectedStatus: 409,
+});
+assert.equal(dirtyWorktree.error, 'working_tree_dirty');
+const recoveredBase = await response('/workspace/worktree/recover-base', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery', baseBranch: 'main' },
+});
+assert.equal(recoveredBase.ok, true);
+assert.equal(recoveredBase.recovered, true);
+assert.match(recoveredBase.recoveryRef, /^refs\/sira\/recovery\/gvisor-recovery-/);
+const recoveryRefProbe = await response('/workspace/exec', {
+  method: 'POST',
+  body: {
+    project,
+    cmd: ['git', 'rev-parse', '--verify', recoveredBase.recoveryRef],
+    timeoutMs: 15_000,
+  },
+});
+assert.equal(recoveryRefProbe.exitCode, 0, recoveryRefProbe.stderr || recoveryRefProbe.stdout);
+const recoveredWorktree = await response('/workspace/worktree', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery', baseBranch: 'main' },
+});
+assert.equal(recoveredWorktree.ok, true);
+const recoveredWorktreeCleanup = await response('/workspace/worktree/remove', {
+  method: 'POST',
+  body: { project, run: 'gvisor-recovery' },
+});
+assert.equal(recoveredWorktreeCleanup.ok, true);
+
 const nodeProbe = await response('/workspace/exec', {
   method: 'POST',
   body: {
@@ -297,7 +385,10 @@ const fullStackStarted = await response('/run', {
   body: { project: fullStackProject, basePath: fullStackBase },
 });
 assert.equal(fullStackStarted.ok, true);
-await waitForProjectReady(fullStackProject);
+const firstFullStackStatus = await waitForProjectReady(fullStackProject);
+assert.equal(firstFullStackStatus.preflight?.install?.status, 'passed');
+assert.equal(firstFullStackStatus.preflight?.build?.status, 'passed');
+assert.equal(firstFullStackStatus.preflight?.render?.status, 'passed');
 
 const htmlResponse = await previewFetch(fullStackStarted.port, fullStackBase);
 assert.equal(htmlResponse.status, 200);
@@ -346,16 +437,48 @@ await waitForProjectProcessesStopped(fullStackUid);
 const stoppedStatus = await response(`/status?project=${fullStackProject}`);
 assert.equal(stoppedStatus.running, false);
 
+const secondRunMarker = `gVisor second run ${Date.now()}`;
+const currentApp = await response(`/workspace/file?project=${fullStackProject}&path=src/App.tsx`);
+assert.match(currentApp.content, /<h1/);
+const secondApp = currentApp.content.replace(
+  /(<h1[^>]*>)([^<]+)(<\/h1>)/,
+  `$1${secondRunMarker}$3`,
+);
+assert.notEqual(secondApp, currentApp.content, 'second run must update the rendered app');
+await response('/workspace/write', {
+  method: 'POST',
+  body: {
+    project: fullStackProject,
+    files: [{ path: 'src/App.tsx', content: secondApp }],
+  },
+});
+const secondBuild = await response('/workspace/exec', {
+  method: 'POST',
+  body: {
+    project: fullStackProject,
+    cmd: ['npm', 'run', 'build'],
+    timeoutMs: 120_000,
+  },
+});
+assert.equal(secondBuild.exitCode, 0, secondBuild.stderr || secondBuild.stdout);
+
 const restarted = await response('/run', {
   method: 'POST',
   body: { project: fullStackProject, basePath: fullStackBase },
 });
 assert.equal(restarted.ok, true);
-await waitForProjectReady(fullStackProject);
+const secondFullStackStatus = await waitForProjectReady(fullStackProject);
+assert.equal(secondFullStackStatus.preflight?.build?.status, 'passed');
 assert.deepEqual(
   await waitForPreviewJson(restarted.port, `${fullStackBase}api/health`),
   { ok: true },
 );
+const secondRunSource = await previewFetch(
+  restarted.port,
+  `${fullStackBase}src/App.tsx`,
+);
+assert.equal(secondRunSource.status, 200);
+assert.match(await secondRunSource.text(), new RegExp(secondRunMarker));
 
 items = await previewJson(restarted.port, `${fullStackBase}api/items`);
 assert.ok(
@@ -401,7 +524,9 @@ console.log(JSON.stringify({
     basePath: fullStackBase,
     dependencies: ['express', 'react', 'vite', 'concurrently'],
     health: true,
+    buildPreflight: true,
     frontendCompiled: true,
+    secondRunContinued: true,
     sqliteCrudAndRestart: true,
     processTreeStopped: true,
     projectUid: fullStackUid,

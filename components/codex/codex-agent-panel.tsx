@@ -10,9 +10,11 @@ import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } 
 import clsx from "clsx"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { Loader2, Plus, Eye, FileCode2, ListChecks, Plug, Play } from "lucide-react"
 import { codexApi, type CodexAccess, type CodexProject, type CodexRunMetric } from "@/lib/codex/codex-api"
 import { DEFAULT_TIER } from "@/lib/codex/model-tiers"
+import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { useCodexRun } from "@/lib/codex/use-codex-run"
 import { useOptionalCodeWorkspace } from "@/lib/code-workspace-context"
 import { codexIdForProject, upsertCodexProject } from "@/lib/codex-projects"
@@ -21,6 +23,7 @@ import { PlanCard } from "./plan-card"
 import { CheckpointCard } from "./checkpoint-card"
 import { RunSummaryCard, type RunSessionUsage } from "./run-summary-card"
 import { ActionRequiredCard } from "./action-required-card"
+import { ToolPermissionCard } from "./tool-permission-card"
 import { Composer, type ComposerSendPayload } from "./composer"
 import { BottomTabBar } from "./bottom-tab-bar"
 import { WebTab } from "./web-tab"
@@ -29,6 +32,7 @@ import { FilesTab } from "./files-tab"
 import { McpServersCard } from "@/components/settings/McpServersCard"
 import { tabsReducer, initialTabsState, type CodexTabId } from "@/lib/codex/workspace-tabs"
 import type { TimelineItem } from "@/lib/codex/timeline-reducer"
+import { buildAppsModePrompt } from "@/lib/code-agent/apps-mode-contract"
 
 // Right-pane tabs on the desktop 3-pane layout (the left pane is always the
 // Agent chat). Web is folded into Preview here; Agent never appears on the right.
@@ -39,18 +43,6 @@ const RIGHT_TABS: { id: CodexTabId; labelKey: string; icon: typeof Eye }[] = [
   { id: "connections", labelKey: "tabs.connections", icon: Plug },
 ]
 
-/** Tracks the md breakpoint so the tab bar only exists on mobile. */
-function useIsMobile(): boolean {
-  const [mobile, setMobile] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)")
-    const update = () => setMobile(mq.matches)
-    update()
-    mq.addEventListener("change", update)
-    return () => mq.removeEventListener("change", update)
-  }, [])
-  return mobile
-}
 
 export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps" } = {}) {
   const t = useTranslations("codex")
@@ -165,13 +157,16 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   const approvePlan = useCallback(async (planRunId = activeRunId, tier?: string) => {
     if (!project || !planRunId) return
     try {
-      const build = await codexApi.approvePlan(project.id, planRunId, tier)
+      // APPS builds must keep running after the browser tab closes / for hours.
+      const build = await codexApi.approvePlan(project.id, planRunId, tier, {
+        autoExecute: surface === "apps",
+      })
       markApproved()
       setActiveRunId(build.id)
     } catch (e: any) {
       toast.error(e?.message || t("errors.approvePlan"))
     }
-  }, [activeRunId, markApproved, project, t])
+  }, [activeRunId, markApproved, project, surface, t])
 
   useEffect(() => {
     if (!pendingAutoBuild || !activeRunId) return
@@ -225,6 +220,24 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
         return <RunSummaryCard metrics={item.metrics} session={sessionUsage} />
       case "action_required":
         return <ActionRequiredCard title={item.title} rawError={item.rawError} blockedCapabilities={item.blockedCapabilities} remediationUrl={item.remediationUrl} />
+      case "tool_permission":
+        return (
+          <ToolPermissionCard
+            toolName={item.toolName}
+            humanDescription={item.humanDescription}
+            argsPreview={item.argsPreview}
+            decision={item.decision}
+            onResolve={async (decision) => {
+              if (!activeRunId) return
+              try {
+                await codexApi.resolveToolPermission(activeRunId, item.permissionId, decision)
+              } catch (error: any) {
+                toast.error(error?.message || "No se pudo resolver el permiso")
+                throw error
+              }
+            }}
+          />
+        )
       default:
         return null
     }
@@ -286,19 +299,19 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   }
 
   function buildAutonomousPrompt(fullPrompt: string): string {
+    // Single source of truth for APPS durability + Claude Code / Codex parity.
+    const base = buildAppsModePrompt(fullPrompt)
+    if (surface !== "apps") return base
     return [
-      "MODO APPS TIPO CODEX:",
-      "- No hagas preguntas de intake ni esperes confirmacion del usuario.",
-      "- Si falta contexto, propone internamente un brief completo con defaults razonables.",
-      "- Primero genera un plan tecnico concreto; si la ejecucion continua, construye, prueba/itera y entrega el resultado en preview/codigo.",
-      "- Solo pide accion del usuario si hay un bloqueo externo real: creditos, secreto, permisos o servicio caido.",
-      "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturacion, RRHH, POS, gestion de clientes/proveedores/proyectos): delega PRIMERO en enterprise_analyst y construye una app multi-modulo con navegacion lateral, dashboard con KPIs y datos de ejemplo realistas del dominio (nunca lorem ipsum).",
-      "- Para UI usa frontend_builder; para datos/API backend_engineer o db_architect; cierra con qa_reviewer o debugger si hay errores de tsc/dev server.",
-      "- Puedes emitir VARIOS run_subagent en el mismo turno cuando las tareas no dependan entre si.",
-      "- Trabaja como Claude Code: lee el workspace, escribe archivos completos, verifica con type_check/dev_server_check y corrige hasta que el preview arranque.",
+      base,
       "",
-      "SOLICITUD DEL USUARIO:",
-      fullPrompt,
+      "ORQUESTACIÓN CLAUDE CODE / CURSOR / CODEX:",
+      "- Explora el workspace con list/read/glob/grep antes de escribir (nunca asumas el árbol).",
+      "- Prefiere edit quirúrgico sobre reescritura total cuando el archivo ya existe.",
+      "- Si el pedido es software de EMPRESA (CRM, ERP, inventario, facturación, RRHH, POS): delega PRIMERO en enterprise_analyst y construye multi-módulo con sidebar, KPIs y seeds realistas.",
+      "- Usa subagentes en paralelo cuando las tareas no dependan entre sí (frontend_builder + backend_engineer + db_architect).",
+      "- Cierra con qa_reviewer/debugger si typecheck o preview fallan; no declares éxito sin evidencia.",
+      "- Entrega como Claude Code: archivos, checks, preview URL y riesgos reales pendientes.",
     ].join("\n")
   }
 
@@ -308,7 +321,8 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   // Claude Code never asks you to "create a folder" before the first prompt.
   async function send(payload: ComposerSendPayload) {
     const attachText = payload.attachments.map((a) => `--- ${a.name} ---\n${a.content}`).join("\n\n")
-    const fullPrompt = [attachText, payload.prompt].filter(Boolean).join("\n\n").trim()
+    const expanded = expandCodexSlashCommand(payload.prompt)
+    const fullPrompt = [attachText, expanded.prompt].filter(Boolean).join("\n\n").trim()
     if (!fullPrompt) return
 
     setBusy(true)
@@ -328,6 +342,8 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
         mode: "plan",
         prompt: buildAutonomousPrompt(fullPrompt),
         tier: payload.tier,
+        // APPS: durable multi-hour execution (plan auto-continues into build).
+        autoExecute: surface === "apps",
       })
       setActivePlanOnly(payload.planOnly)
       if (!payload.planOnly) setPendingAutoBuild({ planRunId: run.id, tier: payload.tier })
@@ -343,7 +359,13 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   }
 
   async function sendStarter(prompt: string) {
-    await send({ prompt, planOnly: false, tier: DEFAULT_TIER, attachments: [] })
+    // APPS product builds need the strongest available model tier by default.
+    await send({
+      prompt,
+      planOnly: false,
+      tier: surface === "apps" ? "power" : DEFAULT_TIER,
+      attachments: [],
+    })
   }
 
   async function stop() {
@@ -380,10 +402,16 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
   const appsStarters: { title: string; blurb: string; prompt: string }[] = surface === "apps"
     ? [
         {
+          title: "Asistente tipo ChatGPT",
+          blurb: "Chat streaming, memoria, archivos y admin",
+          prompt:
+            "Crea un software de asistente de IA al nivel de ChatGPT/Claude (sin copiar marca ni UI exacta): chat con streaming vía adaptador de proveedores, historial de hilos, memoria, adjuntos, selector de modelos (mock si no hay keys), sidebar de conversaciones, settings, auth light, rate limits, panel admin básico, seeds realistas en español y estados loading/empty/error. Compila todas las capas (dominio, datos SQLite, API Express, UI React/Vite/Tailwind, integración, calidad) y deja preview usable. Trabaja de forma autónoma durante horas si hace falta.",
+        },
+        {
           title: "CRM de ventas",
           blurb: "Pipeline, clientes, cotizaciones y KPIs",
           prompt:
-            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light.",
+            "Crea un CRM de ventas completo: pipeline kanban, ficha de clientes, cotizaciones con estados, y dashboard con KPIs realistas (MRR, conversión, ticket promedio). Navegación lateral multi-módulo, datos de ejemplo en español, diseño profesional dark/light. Compila todas las capas y verifica preview.",
         },
         {
           title: "Inventario multi-almacén",
@@ -422,7 +450,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
         {activeRunId ? (
-          <CodexRunTimeline state={state} cardRenderer={renderCard} />
+          <CodexRunTimeline state={state} cardRenderer={renderCard} runId={activeRunId} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-5 overflow-y-auto px-6 py-8">
             <div className="max-w-lg text-center">
@@ -431,7 +459,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
               </div>
               <p className="text-sm leading-relaxed text-zinc-500">
                 {surface === "apps"
-                  ? "Escribe qué quieres (CRM, ERP, landing, dashboard…) y el agente planifica, delega en subagentes, escribe código, verifica y abre el preview. Sin intake ni preguntas innecesarias."
+                  ? "Escribe una instrucción simple (CRM, ERP, SaaS, dashboard…) y la IA compila todas las capas: dominio, datos, API, UI, integración y calidad. Los agentes pueden trabajar durante horas, iterar solos y dejar preview usable."
                   : project
                     ? t("panel.emptyDescribe")
                     : t("panel.emptySelect")}
@@ -466,7 +494,15 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
         )}
       </div>
       {/* Composer always enabled: first send auto-creates the workspace (Claude Code ergonomics). */}
-      <Composer disabled={false} busy={busy} active={active} showPlanToggle onSend={send} onStop={stop} />
+      <Composer
+        disabled={false}
+        busy={busy}
+        active={active}
+        showPlanToggle
+        surface={surface === "apps" ? "apps" : "code"}
+        onSend={send}
+        onStop={stop}
+      />
     </div>
   )
 

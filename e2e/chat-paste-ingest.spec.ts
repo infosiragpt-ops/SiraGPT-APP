@@ -43,7 +43,7 @@ const LONG_PLAIN_TEXT = (
  * mounts (unauthenticated CI) — callers early-return in that case.
  */
 async function gotoChatAndFindComposer(page: Page): Promise<Locator | null> {
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
     response!.ok() || (response!.status() >= 300 && response!.status() < 400),

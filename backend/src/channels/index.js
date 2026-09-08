@@ -5,12 +5,13 @@ const { TelegramAdapter } = require('./telegram');
 const { DiscordAdapter } = require('./discord');
 const { SlackAdapter } = require('./slack');
 const { WhatsAppAdapter } = require('./whatsapp');
+const { EmailAdapter } = require('./email');
 const { DedupCache } = require('./dedup-cache');
 const { ChannelMetrics, sharedMetrics, KINDS } = require('./metrics');
 
 /**
- * Lightweight registry for plugged-in channel adapters. Keeps adapter
- * lookup centralized so route handlers can dispatch by `channel` name.
+ * Legacy registry for plugged-in adapter instances. New business-channel
+ * ingress uses services/business-channels/registry (factory based).
  */
 class ChannelRegistry {
   constructor() { this._adapters = new Map(); }
@@ -34,6 +35,7 @@ module.exports = {
   DiscordAdapter,
   SlackAdapter,
   WhatsAppAdapter,
+  EmailAdapter,
   DedupCache,
   ChannelMetrics,
   ChannelRegistry,

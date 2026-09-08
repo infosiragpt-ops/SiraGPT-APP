@@ -9,7 +9,8 @@
  * web_search. The security posture here is deny-by-class instead of
  * allow-by-list, reusing the hub's hardened primitives:
  *
- *   - http/https only; credentials in the URL rejected.
+ *   - http/https default ports only; credentials and IP-literal targets
+ *     rejected.
  *   - private / loopback / link-local / CGNAT / cloud-metadata addresses
  *     blocked BOTH as URL literals and after a fresh DNS resolution of the
  *     hostname (anti DNS-rebinding), via connectors/web-fetch.js
@@ -27,6 +28,7 @@
 
 const net = require('node:net');
 const { z } = require('zod');
+const { Agent, fetch: undiciFetch } = require('undici');
 const {
   isPrivateOrReservedAddress,
   resolveAndAssertSafe,
@@ -68,24 +70,78 @@ function assertSafeUrl(rawUrl) {
   if (parsed.username || parsed.password) {
     throw new WebFetchError('web_fetch_credentials_rejected', 400, 'URLs with embedded credentials are not allowed');
   }
+  // URL normalizes an explicitly specified protocol-default port to "".
+  // Any remaining port is non-standard (including https:80 / http:443) and
+  // would turn this public-page reader into a service/port scanner.
+  if (parsed.port) {
+    throw new WebFetchError(
+      'web_fetch_nonstandard_port_rejected',
+      400,
+      'only the default HTTP/HTTPS ports are reachable from this tool',
+    );
+  }
   const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   if (!host) throw new WebFetchError('web_fetch_no_host', 400, 'url has no host component');
   if (BLOCKED_HOSTNAMES.has(host) || host.endsWith('.localhost') || host.endsWith('.internal') || host.endsWith('.local')) {
     throw new WebFetchError('web_fetch_blocked_host', 400, `host "${host}" is not reachable from this tool`);
   }
   if (net.isIP(host)) {
-    // Public IP literals are allowed; private/reserved/metadata ranges never.
-    if (isPrivateOrReservedAddress(host)) {
-      throw new WebFetchError('web_fetch_blocked_host', 400, 'private / reserved IP addresses are not reachable from this tool');
-    }
+    // Hostnames are required even for globally routed addresses. Besides
+    // reducing abuse, this prevents hairpin/NAT routes to a host's own public
+    // IP from bypassing an external firewall.
+    throw new WebFetchError(
+      isPrivateOrReservedAddress(host) ? 'web_fetch_blocked_host' : 'web_fetch_ip_literal_rejected',
+      400,
+      'IP literal targets are not reachable from this tool',
+    );
   }
   return parsed;
 }
 
 async function assertSafeTarget(parsedUrl, lookup) {
   const host = parsedUrl.hostname.replace(/^\[|\]$/g, '');
-  if (net.isIP(host)) return; // literal already vetted by assertSafeUrl
-  await resolveAndAssertSafe(host, lookup); // DNS layer (anti-rebinding)
+  const family = net.isIP(host);
+  if (family) return [{ address: host, family }]; // literal already vetted by assertSafeUrl
+  return resolveAndAssertSafe(host, lookup); // DNS layer (anti-rebinding)
+}
+
+function createPinnedLookup(expectedHost, records) {
+  const host = String(expectedHost || '').toLowerCase();
+  const safeRecords = (Array.isArray(records) ? records : [])
+    .map((record) => ({
+      address: String(record?.address || ''),
+      family: Number(record?.family) || net.isIP(String(record?.address || '')),
+    }))
+    .filter((record) => record.address && [4, 6].includes(record.family));
+  if (!host || !safeRecords.length) throw new WebFetchError('web_fetch_dns_empty', 502, 'DNS returned no usable addresses');
+
+  return (hostname, options, callback) => {
+    if (String(hostname || '').toLowerCase() !== host) {
+      const error = new Error('pinned DNS hostname mismatch');
+      error.code = 'EAI_FAIL';
+      callback(error);
+      return;
+    }
+    const opts = options && typeof options === 'object' ? options : {};
+    const requestedFamily = Number(opts.family) || 0;
+    const candidates = requestedFamily
+      ? safeRecords.filter((record) => record.family === requestedFamily)
+      : safeRecords;
+    const selected = candidates.length ? candidates : safeRecords;
+    if (opts.all) {
+      callback(null, selected.map((record) => ({ ...record })));
+      return;
+    }
+    callback(null, selected[0].address, selected[0].family);
+  };
+}
+
+function createPinnedDispatcher(host, records) {
+  return new Agent({
+    connect: {
+      lookup: createPinnedLookup(host, records),
+    },
+  });
 }
 
 async function readCappedBody(response, maxBytes) {
@@ -160,17 +216,22 @@ function capText(text, maxChars) {
  * @param {object} [options]   — { fetch, lookup, timeoutMs } injectables for tests.
  */
 async function executeAgentWebFetch(args, options = {}) {
-  const fetchImpl = options.fetch || globalThis.fetch;
+  const fetchImpl = options.fetch || undiciFetch;
   const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : DEFAULT_TIMEOUT_MS;
   const maxChars = args.maxChars || MAX_TEXT_CHARS;
 
   let current = assertSafeUrl(args.url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const dispatchers = [];
   try {
     let response = null;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      await assertSafeTarget(current, options.lookup);
+      const addresses = await assertSafeTarget(current, options.lookup);
+      const dispatcher = typeof options.createDispatcher === 'function'
+        ? options.createDispatcher(current.hostname, addresses)
+        : (options.fetch ? null : createPinnedDispatcher(current.hostname, addresses));
+      if (dispatcher && typeof dispatcher.close === 'function') dispatchers.push(dispatcher);
       let res;
       try {
         res = await fetchImpl(current.toString(), {
@@ -181,6 +242,10 @@ async function executeAgentWebFetch(args, options = {}) {
             'user-agent': 'siraGPT-agent-web-fetch/1.0 (+https://siragpt.com)',
             accept: 'text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5',
           },
+          ...(dispatcher ? { dispatcher } : {}),
+          // Test injectables can assert the exact addresses without performing
+          // a second DNS lookup. Undici ignores this non-standard field.
+          pinnedAddresses: addresses,
         });
       } catch (err) {
         if (err && err.name === 'AbortError') {
@@ -238,6 +303,7 @@ async function executeAgentWebFetch(args, options = {}) {
     };
   } finally {
     clearTimeout(timer);
+    await Promise.all(dispatchers.map((dispatcher) => Promise.resolve(dispatcher.close()).catch(() => {})));
   }
 }
 
@@ -263,6 +329,8 @@ function buildWebFetchTool(options = {}) {
 module.exports = {
   buildWebFetchTool,
   executeAgentWebFetch,
+  createPinnedLookup,
+  createPinnedDispatcher,
   assertSafeUrl,
   htmlToReadableText,
   capText,
