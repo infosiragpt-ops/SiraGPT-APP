@@ -558,6 +558,77 @@ test('defaultDescription and aliases stay vendor-free', () => {
   assert.match(TASK_ERRORS.planificar_readonly, /lectura/);
 });
 
+test('stale multiedit snapshot reports file_changed and keeps the newer file', async () => {
+  await withWorkspace('sc-me-stale', async (workspace) => {
+    await workspace.writeFile('a.txt', 'old');
+    const original = workspace.readFileForMutation;
+    workspace.readFileForMutation = async (rel) => {
+      const snap = await original.call(workspace, rel);
+      await workspace.writeFile(rel, 'newer');
+      return snap;
+    };
+    const result = await executeTool(session('construir', workspace), 'multiedit', {
+      edits: [{ path: 'a.txt', old_str: 'old', new_str: 'replaced' }],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'file_changed');
+    assert.match(result.error, /cambió/);
+    assert.equal(await workspace.readFile('a.txt'), 'newer');
+  });
+});
+
+test('two concurrent multiedit calls on one file have a single winner', { timeout: 3000 }, async () => {
+  await withWorkspace('sc-me-race', async (workspace) => {
+    await workspace.writeFile('file.txt', 'A\nB\n');
+    const read = workspace.readFileForMutation.bind(workspace);
+    let arrived = 0;
+    let release;
+    const barrier = new Promise((resolve) => { release = resolve; });
+    workspace.readFileForMutation = async (rel) => {
+      const snapshot = await read(rel);
+      if (++arrived === 2) release();
+      await barrier;
+      return snapshot;
+    };
+    const results = await Promise.all([
+      executeTool(session('construir', workspace), 'multiedit', {
+        edits: [{ path: 'file.txt', old_str: 'A', new_str: 'FIRST' }],
+      }),
+      executeTool(session('construir', workspace), 'multiedit', {
+        edits: [{ path: 'file.txt', old_str: 'B', new_str: 'SECOND' }],
+      }),
+    ]);
+    assert.equal(results.filter((row) => row.ok).length, 1);
+    assert.equal(results.find((row) => !row.ok).code, 'file_changed');
+  });
+});
+
+test('conflict on the second file restores the first write', async () => {
+  await withWorkspace('sc-me-restore', async (workspace) => {
+    await workspace.writeFile('keep.txt', 'ok');
+    await workspace.writeFile('other.txt', 'stay');
+    const original = workspace.writeFileIfUnchanged.bind(workspace);
+    workspace.writeFileIfUnchanged = async (rel, next, expected) => {
+      if (rel === 'other.txt' || String(rel).endsWith('other.txt')) {
+        const err = new Error('El archivo cambió. Léelo de nuevo antes de editarlo.');
+        err.code = 'file_changed';
+        throw err;
+      }
+      return original(rel, next, expected);
+    };
+    const result = await executeTool(session('construir', workspace), 'multiedit', {
+      edits: [
+        { path: 'keep.txt', old_str: 'ok', new_str: 'changed' },
+        { path: 'other.txt', old_str: 'stay', new_str: 'x' },
+      ],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'multiedit_partial');
+    assert.equal(await workspace.readFile('keep.txt'), 'ok');
+    assert.equal(await workspace.readFile('other.txt'), 'stay');
+  });
+});
+
 test('new modules do not import vendor/opencode', () => {
   const files = [
     path.join(__dirname, '../src/services/sira-code/file-tools.js'),

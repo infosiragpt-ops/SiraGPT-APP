@@ -49,6 +49,7 @@ const ERRORS = Object.freeze({
   validation_files_limit: 'demasiados archivos en el lote',
   multiedit_failed: 'no se pudo aplicar el lote',
   multiedit_partial: 'el lote no se aplicó; se restauraron los archivos',
+  file_changed: 'El archivo cambió. Léelo de nuevo antes de editarlo.',
 });
 
 function cap(text) {
@@ -375,6 +376,30 @@ function applyEditsInMemory(current, edits) {
   return { text: next, replacements };
 }
 
+async function snapshotForEdit(workspace, rel) {
+  if (typeof workspace.readFileForMutation === 'function') {
+    return workspace.readFileForMutation(rel);
+  }
+  const content = await workspace.readFile(rel);
+  return { content, bytes: Buffer.from(content, 'utf8') };
+}
+
+async function commitIfUnchanged(workspace, rel, next, expected) {
+  if (typeof workspace.writeFileIfUnchanged === 'function') {
+    return workspace.writeFileIfUnchanged(rel, next, expected);
+  }
+  return workspace.writeFile(rel, next);
+}
+
+async function restoreIfUnchanged(workspace, rel, original, writtenText) {
+  const writtenBytes = Buffer.from(writtenText, 'utf8');
+  try {
+    await commitIfUnchanged(workspace, rel, original, writtenBytes);
+  } catch {
+    // Another writer won after our commit; do not clobber newer bytes.
+  }
+}
+
 async function runMultiedit(workspace, args) {
   const normalized = normalizeEdits(args || {});
   if (!normalized.ok) return toolError(normalized.code, normalized.error);
@@ -389,14 +414,15 @@ async function runMultiedit(workspace, args) {
   try {
     for (const [rel, fileEdits] of byFile) {
       await resolveTarget(workspace, rel);
-      const current = await workspace.readFile(rel);
-      const applied = applyEditsInMemory(current, fileEdits);
+      const snapshot = await snapshotForEdit(workspace, rel);
+      const applied = applyEditsInMemory(snapshot.content, fileEdits);
       if (Buffer.byteLength(applied.text, 'utf8') > MAX_FILE_BYTES) {
         return toolError('file_too_large', ERRORS.file_too_large);
       }
       planned.push({
         path: rel,
-        original: current,
+        original: snapshot.content,
+        expected: snapshot.bytes,
         text: applied.text,
         replacements: applied.replacements,
       });
@@ -408,16 +434,12 @@ async function runMultiedit(workspace, args) {
   const written = [];
   try {
     for (const file of planned) {
-      const saved = await workspace.writeFile(file.path, file.text);
+      const saved = await commitIfUnchanged(workspace, file.path, file.text, file.expected);
       written.push({ ...file, path: saved });
     }
   } catch (err) {
     for (const file of written) {
-      try {
-        await workspace.writeFile(file.path, file.original);
-      } catch {
-        // best-effort restore; the batch still fails
-      }
+      await restoreIfUnchanged(workspace, file.path, file.original, file.text);
     }
     const mapped = mapFsError(err, 'multiedit_failed', ERRORS.multiedit_failed);
     return { ...mapped, code: written.length ? 'multiedit_partial' : mapped.code };

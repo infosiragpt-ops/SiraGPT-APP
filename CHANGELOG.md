@@ -10,9 +10,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 - SiraCode native `multiedit` applies a jailed batch of unique
   `old_str` → `new_str` replacements atomically (nothing is written
-  if one edit misses). Planificar stays read-only; Construir goes
-  through composer / permission-resume. Spanish errors. Not a dump
-  of anomalyco/opencode `edit.ts`.
+  if one edit misses). Commits use the #629 conditional mutation
+  guards (`readFileForMutation` / `writeFileIfUnchanged`) so a
+  concurrent edit is `file_changed`, not a silent overwrite.
+  Planificar stays read-only; Construir goes through composer /
+  permission-resume. Spanish errors. Not a dump of
+  anomalyco/opencode `edit.ts`.
 - SiraCode `task` is a subagent spawn stub: it queues a child job
   via the existing agent-task APIs (`enqueueAgentTask` /
   `createTaskRecord`). Planificar may only spawn read-only children
