@@ -91,6 +91,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- SiraCode text edits and patch updates compare the complete original bytes
+  before committing, so cooperating edits cannot silently lose each other's
+  changes. Patch Add is exclusive; Move refuses an existing destination.
+  Oversized/invalid UTF-8 inputs and unsupported mutation targets fail closed,
+  and edit replacement markers remain literal. Native OpenCode-inspired port;
+  no upstream runtime, new provider or production configuration changes.
+
 - `/agentes` task failures no longer collapse 503, cancel and timeout
   into one generic banner. `presentTaskError` maps classified reasons to
   AGENTS.md §16 codes (`E_PROVIDER` / `E_CANCELLED` / `E_TIMEOUT`) and
