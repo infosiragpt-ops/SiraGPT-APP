@@ -14,6 +14,7 @@ const skillsRegistry = require('../skills-registry');
 const { buildHermesIntegrationMap, recommendAdaptedPlaybooks } = require('./hermes-playbook-bridge');
 const skillCurator = require('./hermes-skill-curator');
 const biblioteca = require('./hermes-biblioteca');
+const { isMemoryWriteError } = require('./memory-write-guard');
 
 function ctxUser(ctx) {
   return ctx?.userId || ctx?.user?.id || null;
@@ -136,7 +137,12 @@ const hermesMemoryTool = {
       case 'read':
         return memoryBridge.curatedRead(userId, { target: args.target });
       case 'remember':
-        return { ok: true, entry: memoryBridge.remember(userId, args.fact) };
+        try {
+          return { ok: true, entry: memoryBridge.remember(userId, args.fact) };
+        } catch (err) {
+          if (isMemoryWriteError(err)) return err.toJSON();
+          throw err;
+        }
       case 'recall':
         return { ok: true, entries: memoryBridge.recall(userId, args.query) };
       case 'promote':

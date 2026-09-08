@@ -125,7 +125,8 @@ describe('hermes curated memory — stores and isolation', () => {
     const huge = 'x'.repeat(curated.MEMORY_CHAR_LIMIT + 10);
     const overflow = curated.add(USER_A, { target: 'memory', content: huge });
     assert.equal(overflow.ok, false);
-    assert.match(String(overflow.error), /exceed the limit/);
+    assert.equal(overflow.code, 'E_PARAMS');
+    assert.match(String(overflow.error), /supera el l[ií]mite|est[aá] en \d+\/\d+ caracteres/i);
   });
 
   test('missing userId never writes and never leaks', () => {
