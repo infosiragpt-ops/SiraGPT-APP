@@ -3,6 +3,7 @@
 
 import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
+import { isLiveComputerUsePrompt } from "./computer-login-handoff"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -181,6 +182,9 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
     'For every file deliverable, verify row counts, sheet names, paragraph/page counts, headers, and non-empty content before finalizing.',
     'For uploaded document editing, never mutate the source file. Copy/reconstruct into a new artifact, apply only requested edits, and preserve document structure, logos, tables, formulas, sheet names, headers, footers, slide layouts, and visual hierarchy whenever possible.',
     'Separate verified evidence from assumptions and keep citations/DOIs/URLs/years intact.',
+    'Audio y canciones: si el usuario ya dio el texto («créame un audio con lo siguiente: …»), genera el audio de inmediato con generate_speech — sin preguntar. Si pide una canción o audio SIN dar la letra/el texto, haz UNA sola pregunta corta antes de crear (por ejemplo: «¿Escribo yo la letra sobre ese tema, o me pasas el texto exacto? ¿Algún estilo o voz?») y luego créala.',
+    'El entregable de voz es SIEMPRE un archivo MP3/WAV descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API o un reproductor en el navegador.',
+    'Ediciones iterativas de audio/canción: cuando el usuario pida cambios («hazla más alegre», «cambia el final», «más corta»), edita la pieza ANTERIOR de esta conversación — conserva letra, voz y estilo salvo lo que pida cambiar — y vuelve a generar el audio con la versión revisada. Nunca respondas que no puedes generar audio: cada chat tiene generate_speech disponible.',
   ].join('\n'),
   web_search: [
     'Ground the answer in real sources. Prefer recent, authoritative, citable references when the user asks for academic, scientific, legal, market, or current information.',
@@ -461,6 +465,14 @@ export function shouldEditExistingDocument(
 ): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
+  // Describing an edit or explicitly preserving the original does not grant
+  // editing authority. Keep genuinely mixed read/edit requests conservative.
+  const command = normalized.replace(/^[¿¡]\s*/, '').replace(/^(?:por favor\s*[, :]?\s*)+/, '')
+  const readOnly = /^(?:explica\b|describe\b|dime\s+(?:si|como|que)\b|no\s+(?:edites|reescribas)\b)/.test(command)
+    || (/^(?:resume|analiza|revisa)\b/.test(command)
+      && /\b(?:sin (?:editar|modificar|cambiar)|no (?:edites|modifiques|cambies))\b/.test(command))
+  const asksForMutation = /(?:[,;.]|\by\b|\bluego\b|\bdespues\b)\s*(?:cambia|edita|modifica|corrige|reemplaza|reescribe|elimina|agrega)\b/.test(command)
+  if (readOnly && !asksForMutation) return false
   const hasDocumentContext = hasDocumentAttachmentContext(conversationHistory)
   if (
     hasDocumentContext
@@ -525,12 +537,13 @@ export function shouldUseExistingDocumentFileContext(
     || shouldEditExistingDocument(prompt, conversationHistory)
 }
 
-const ROUTING_PATTERNS = {
+export const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
   urlReference: /\bhttps?:\/\/\S+|\bwww\.\S+/i,
-  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
-  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
+  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(ofertas?|descuentos?|rebajas?|promociones?|precios?|cu[aá]nto cuesta|d[oó]nde comprar)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
+  computerRequest: /\b(abre|abrir|usa|usar|enciende|prende|entra a|abre me)\b[\s\S]{0,40}\b(tu\s+)?(computadora|ordenador|pc|navegador|browser|escritorio virtual)\b|\btu computadora\b/i,
+  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r|me|nos)?|b[uú]sca(me|nos)|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|svg|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|software|app|aplicacion|aplicaci[oó]n|runtime|debug|bug|corrige(r)?|arregla(r)?|fix|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
@@ -653,6 +666,7 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   const asksForLongRunningAgent = ROUTING_PATTERNS.longRunningAgent.test(normalized)
 
   if (ROUTING_PATTERNS.gmail.test(normalized)) return 'gmail'
+  if (isLiveComputerUsePrompt(text)) return 'agent_task'
   if (ROUTING_PATTERNS.googleServices.test(normalized)) return 'google_services'
 
   if (
@@ -968,6 +982,10 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     }
     return true
   }
+  // Live computer-use (shop / book / DMV / "abre tu computadora") must run
+  // the durable agent-task loop so F7 computer_* tools and the overlay fire.
+  if (isLiveComputerUsePrompt(prompt)) return true
+
   if (isLightweightConversationalPrompt(normalized)) return false
 
   // Word / PPT / Excel creation must use the durable agent-task (BullMQ)
@@ -1090,6 +1108,11 @@ export function isAmbiguousPrompt(prompt: string): boolean {
   return false
 }
 
+/** True when the user explicitly asks the agent to use its computer/browser. */
+export function isComputerRequestPrompt(prompt: string): boolean {
+  return ROUTING_PATTERNS.computerRequest.test(normalizePrompt(prompt))
+}
+
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
 
@@ -1101,10 +1124,25 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   // through to the lightweight chat path below.
   if (isAmbiguousPrompt(prompt)) return 'ambiguous'
 
+  // Live computer / overlay browser (shop, book, DMV, "abre tu computadora").
+  // Must beat lightweight chat, google_services ("agenda") and web_search cop-outs.
+  if (isLiveComputerUsePrompt(prompt)) return 'agent_task'
+
   if (isLightweightConversationalPrompt(lc)) return 'text'
 
   if (ROUTING_PATTERNS.gmail.test(lc)) return 'gmail'
+
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
+
+  // "Abre tu computadora y …" — the user is explicitly asking for the
+  // agent computer. Route to the agentic runtime (tools + steps) instead
+  // of the plain model, which would truthfully answer it has no browser.
+  if (ROUTING_PATTERNS.computerRequest.test(lc)) return 'agent_task'
+
+  // Media generation wins over research keywords: «créame un audio con lo
+  // siguiente: Juan vende papas en el mercado» must create audio, not fall
+  // into web_search because "mercado" smells like market research.
+  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
 
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
   const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(lc)
@@ -1132,7 +1170,6 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.doc.test(lc) || OUTPUT_FORMAT_REQUEST_RE.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
-  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
   // Image ANALYSIS questions ("describe esta imagen") are vision chat, not
   // generation — same gate as signalIntentFromText.
   if (ROUTING_PATTERNS.image.test(lc) && !IMAGE_ANALYSIS_PROMPT_RE.test(lc)) return 'image'
@@ -1212,6 +1249,10 @@ export class AIService {
     conversationHistory: any[] = [],
     signal?: AbortSignal
   ): Promise<ChatIntent> {
+
+    if (isLiveComputerUsePrompt(prompt)) {
+      return 'agent_task';
+    }
 
     if (shouldEditExistingDocument(prompt, conversationHistory)) {
       return 'agent_task';

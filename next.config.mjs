@@ -65,6 +65,8 @@ const nextConfig = {
     webpackMemoryOptimizations: true,
   },
 
+  transpilePackages: ['@novnc/novnc'],
+
   // Prevent Next.js from issuing a 308 redirect when the URL has a trailing
   // slash. Without this, /sira-promo/ → 308 → /sira-promo happens BEFORE
   // beforeFiles rewrites run, which causes the Replit cloud proxy to 502.
@@ -132,6 +134,41 @@ const nextConfig = {
   // NOTE: Next.js standalone may evaluate rewrites while loading .env.local.
   // Replit deployments must ignore stale localhost:5000 values from that file
   // and match scripts/start-all.cjs's BACKEND_PORT default (5050).
+  async redirects() {
+    return [
+      {
+        source: '/chat',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/chat/',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/chat/:id',
+        destination: '/agentes/:id',
+        permanent: false,
+      },
+      {
+        source: '/code',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/code/',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/code/:path*',
+        destination: '/agentes',
+        permanent: false,
+      },
+    ]
+  },
+
   async rewrites() {
     const backendBase = resolveBackendInternalUrl()
     return {
@@ -153,6 +190,11 @@ const nextConfig = {
         {
           source: '/api/:path*',
           destination: `${backendBase}/api/:path*`,
+        },
+        // F7.2 same-origin desktop viewer. Never api.siragpt.com.
+        {
+          source: '/ws/desktop/:sessionId',
+          destination: `${backendBase}/ws/desktop/:sessionId`,
         },
         // `/uploads/*` is served by Express via `express.static(uploadDir)`.
         {

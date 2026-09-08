@@ -466,6 +466,7 @@ function buildMediaIntentHint(intent) {
     if (s.style) params.push(`- style: "${s.style}"`);
   } else if (intent.kind === 'audio') {
     params.push('- text: el texto que el usuario quiere escuchar (extráelo del mensaje; si pidió "narra esto" usa el texto provisto o genéralo a partir del tema).');
+    params.push('- Entrega un archivo MP3/WAV descargable. PROHIBIDO crear HTML con speechSynthesis / Web Speech API o un reproductor en el navegador.');
     if (s.language) params.push(`- idioma preferido: ${s.language}`);
     if (s.voice) params.push(`- voz preferida: ${s.voice}`);
   } else if (intent.kind === 'music') {

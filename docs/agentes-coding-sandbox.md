@@ -1,0 +1,72 @@
+# Coding-sandbox session adapter (AGENTES_CODING_V2 Phase 2a)
+
+Internal adapter for isolated **coding sessions** behind
+`AGENTES_CODING_V2` (default **OFF**). Canonical UI stays `/agentes`.
+This is not a `/code` revival, not F7 / SiraComputer, and not a
+Kubernetes OpenSandbox cluster.
+
+Architecture contract (Phase 1):
+[`docs/agentes-arquitectura.md`](./agentes-arquitectura.md) (PR #635 if
+that file is not on the branch yet). License / Tier S catalog:
+[`docs/oss-catalog.md`](./oss-catalog.md). Product planes:
+[`AGENTS.md`](../AGENTS.md).
+
+## What this PR adds
+
+| Piece | Path |
+|---|---|
+| Flag | `AGENTES_CODING_V2` → `isAgentesCodingV2Enabled()` |
+| Module | `backend/src/services/agentes-coding/coding-sandbox/` |
+| HTTP | `GET /api/agentes-coding/health` always 200 `{ ok, enabled }` |
+| Sessions | `/api/agentes-coding/sessions*` — **404** unless the flag is on |
+| Repo-map | `GET|POST /sessions/:id/map` — Phase 3b, see [`docs/agentes-coding-repomap.md`](./agentes-coding-repomap.md) |
+| DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
+
+Interface (same on memory + docker drivers):
+
+`createSession` · `exec` · `readFile` · `writeFile` · `listFiles` ·
+`exposePort` (deny-by-default stub) · `destroy`
+
+## Drivers
+
+| Driver | When | Isolation |
+|---|---|---|
+| `memory` | default, CI, no Docker | in-process Map, path jail |
+| `docker` | `AGENTES_CODING_SANDBOX_DRIVER=docker` | `docker run` per session |
+
+Docker DEV argv (Lenovo / F1-style, injectable in tests):
+
+- `--network none` unless an allowlist attaches `siragpt-coding-sandbox`
+  (compose network is `internal: true`)
+- `--memory` / `--cpus` / `--pids-limit` stubs
+- `--security-opt no-new-privileges`, `--cap-drop ALL`, `--read-only`
+- tmpfs `/workspace`, user `10001:10001`
+- **no** Docker socket, **no** prod `.env`, **no** control Postgres/Redis
+
+```bash
+# DEV only — does not start on default compose up
+docker compose -f docker-compose.yml -f docker-compose.coding-sandbox.yml \
+  --profile agentes-coding build
+```
+
+The overlay does **not** run a shared long-lived executor. The Node
+adapter `docker run`s one ephemeral container per session from
+`siragpt-coding-sandbox:dev` (see `infra/coding-sandbox/Dockerfile`).
+
+## Errors (Spanish)
+
+Stable codes: `E_FLAG_OFF` `E_PARAMS` `E_SESSION_NOT_FOUND`
+`E_SESSION_EXPIRED` `E_PATH_ESCAPE` `E_NETWORK_DENIED` `E_PORT_DENIED`
+`E_TIMEOUT` `E_QUOTA` `E_PROVIDER` `E_CANCELLED` (AGENTS.md §16).
+
+## Out of scope
+
+Cloning user repos, enabling the flag on the Lenovo origin, Daytona
+(AGPL), full OpenSandbox/K8s deploy. Phase 3a IDE shell (flag-gated
+Monaco on `/agentes`): [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md).
+
+## Tests
+
+```bash
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js
+```

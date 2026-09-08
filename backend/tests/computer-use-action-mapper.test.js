@@ -8,6 +8,11 @@ const {
   getActionLabel,
   normalizeDragPath,
   normalizeKey,
+  clampComputerPoint,
+  normalizeComputerButton,
+  throwIfComputerActionAborted,
+  normalizeComputerAction,
+  mapComputerActions,
 } = require('../src/services/computer-use-action-mapper');
 
 describe('normalizeKey', () => {
@@ -197,6 +202,64 @@ describe('getActionLabel', () => {
 
   test('falls back to the raw type for an unknown action type', () => {
     assert.equal(getActionLabel({ type: 'frobnicate' }), 'frobnicate');
+  });
+});
+
+describe('bounds / button / abort', () => {
+  test('clampComputerPoint stays inside the viewport', () => {
+    const inside = clampComputerPoint(10, 20, { width: 800, height: 600 });
+    assert.deepEqual({ x: inside.x, y: inside.y, clamped: inside.clamped }, { x: 10, y: 20, clamped: false });
+    const out = clampComputerPoint(9000, -4, { width: 800, height: 600 });
+    assert.equal(out.x, 799);
+    assert.equal(out.y, 0);
+    assert.equal(out.clamped, true);
+  });
+
+  test('normalizeComputerButton accepts left/middle/right and refuses others', () => {
+    assert.equal(normalizeComputerButton('RIGHT').button, 'right');
+    assert.equal(normalizeComputerButton(undefined).button, 'left');
+    const bad = normalizeComputerButton('laser');
+    assert.equal(bad.ok, false);
+    assert.equal(bad.code, 'computer_button_invalid');
+  });
+
+  test('throwIfComputerActionAborted fail-closes on parent cancel', () => {
+    assert.doesNotThrow(() => throwIfComputerActionAborted(undefined));
+    assert.throws(
+      () => throwIfComputerActionAborted({ aborted: true }),
+      (err) => err.code === 'computer_action_aborted',
+    );
+  });
+
+  test('normalizeComputerAction clamps click and maps screenshot/type/scroll', () => {
+    const click = normalizeComputerAction({ type: 'click', x: 5000, y: -1, button: 'left' }, { bounds: { width: 1024, height: 768 } });
+    assert.equal(click.ok, true);
+    assert.equal(click.action.x, 1023);
+    assert.equal(click.action.y, 0);
+    const shot = normalizeComputerAction({ type: 'screenshot' });
+    assert.equal(shot.ok, true);
+    const badBtn = normalizeComputerAction({ type: 'click', x: 1, y: 1, button: 'laser' });
+    assert.equal(badBtn.ok, false);
+    const aborted = { aborted: true };
+    assert.throws(() => normalizeComputerAction({ type: 'wait' }, { signal: aborted }), (err) => err.code === 'computer_action_aborted');
+  });
+
+  test('mapComputerActions refuses unsupported types and honors abort mid-list', () => {
+    const ok = mapComputerActions([
+      { type: 'screenshot' },
+      { type: 'scroll', x: 1, y: 2, scrollY: 40 },
+    ]);
+    assert.equal(ok.ok, true);
+    assert.equal(ok.actions.length, 2);
+    const bad = mapComputerActions([{ type: 'explode' }]);
+    assert.equal(bad.ok, false);
+    assert.equal(bad.code, 'computer_action_unsupported');
+    const ac = { aborted: false };
+    assert.throws(
+      () => mapComputerActions([{ type: 'click', x: 1, y: 1 }], { signal: { aborted: true } }),
+      (err) => err.code === 'computer_action_aborted',
+    );
+    void ac;
   });
 });
 

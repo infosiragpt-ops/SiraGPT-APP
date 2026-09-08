@@ -18,6 +18,10 @@ const { createEventLog } = require('./event-log');
 const { createSessionDlq } = require('./session-dlq');
 const { SIDE_EFFECT_METHODS } = require('./protocol');
 const { createIdempotencyStore, isSideEffectMethod } = require('../agent-runner/engine-advance');
+const {
+  authorizeSessionAbort,
+  recordDenialAudit,
+} = require('../agents/session-isolation');
 
 const SURFACES = Object.freeze(['chat', 'code']);
 const ALLOWED_MODELS = Object.freeze({
@@ -73,7 +77,10 @@ function createGateway({
   const jobs = [];
 
   function emitTo(sessionKey, frame) {
-    try { eventLog.remember(sessionKey, frame); } catch (_) { /* ring is best-effort */ }
+    const owner = sessions.get(String(sessionKey || ''));
+    try {
+      eventLog.remember(sessionKey, frame, { ownerUserId: owner && owner.userId });
+    } catch (_) { /* ring is best-effort */ }
     const set = subscribers.get(String(sessionKey || ''));
     if (!set) return;
     for (const fn of set) { try { fn(frame); } catch (_) { /* isolate */ } }
@@ -165,6 +172,20 @@ function createGateway({
     if (actorProvided) {
       if (owner && actor && owner !== actor) throw fail('forbidden', 'forbidden');
       if (owner && !actor) throw fail('forbidden', 'forbidden');
+    }
+    const isolation = authorizeSessionAbort({
+      ownerUserId: owner,
+      actorUserId,
+      sessionKnown: Boolean(sess),
+    });
+    if (!isolation.allowed) {
+      recordDenialAudit({
+        kind: 'abort',
+        code: isolation.code,
+        reason: isolation.reason,
+        label: isolation.message,
+      });
+      throw fail(isolation.message, isolation.code);
     }
     const out = queue.abortSession(key, reason || 'user_abort');
     const rec = runs.get(out.runId);
@@ -499,8 +520,14 @@ module.exports.assertNativeGatewayGenerate = assertNativeGatewayGenerate;
 
 
 /** 3H-BE-009 — replay gateway events after Last-Event-ID. */
-function gatewayReplayFrom(gateway, sessionKey, lastId) {
+function gatewayReplayFrom(gateway, sessionKey, lastId, actorUserId) {
   if (!gateway || !gateway.eventLog || typeof gateway.eventLog.replayFrom !== 'function') return [];
-  return gateway.eventLog.replayFrom(sessionKey, lastId);
+  const sess = gateway.getSession && gateway.getSession(sessionKey);
+  const stamped = gateway.eventLog.ownerOf && gateway.eventLog.ownerOf(sessionKey);
+  return gateway.eventLog.replayFrom(sessionKey, lastId, {
+    actorUserId,
+    ownerUserId: (sess && sess.userId) || stamped,
+    requireOwner: actorUserId != null,
+  });
 }
 module.exports.gatewayReplayFrom = gatewayReplayFrom;

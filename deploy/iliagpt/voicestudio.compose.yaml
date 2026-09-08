@@ -1,0 +1,75 @@
+# Sira Voz — VoiceStudio (https://github.com/debpalash/VoiceStudio, AGPL-3.0)
+# as a private service of the iliagpt compose project on the Lenovo.
+#
+# Paste the service under `services:` in /home/user/deployments/iliagpt/compose.yaml
+# and the two volumes under `volumes:`. No host port is published: only
+# iliagpt-backend reaches it through the internal `app` network
+# (http://siragpt-voicestudio:3900). The image is the upstream CUDA build,
+# which runs CPU-only on this host (no GPU) — OmniVoice + WhisperX on 32 cores.
+#
+# Secrets live ONLY in the deploy .env (never in this file, never in the chat):
+#   VOICESTUDIO_API_KEY=<64 hex from /dev/urandom>   # the container's admin key
+#   VOICESTUDIO_URL=http://siragpt-voicestudio:3900   # read by the backend
+# The backend service already loads .env via env_file, so it needs no extra
+# `environment:` entries — just a `docker compose up -d --no-deps --force-recreate backend`.
+#
+# First start: the container pulls the default models on demand. Warm them
+# once so the first user never waits (see docs/voice-studio.md):
+#   POST /models/install {"repo_id":"k2-fsa/OmniVoice"} and
+#   POST /models/install {"repo_id":"Systran/faster-whisper-large-v3"}
+#   (Authorization: Bearer $VOICESTUDIO_API_KEY, from inside the network).
+
+services:
+  voicestudio:
+    image: palashdeb/omnivoice-studio:0.5.1
+    container_name: siragpt-voicestudio
+    hostname: siragpt-voicestudio
+    restart: unless-stopped
+    environment:
+      OMNIVOICE_API_KEY: ${VOICESTUDIO_API_KEY:?set VOICESTUDIO_API_KEY in the deploy .env}
+      OMNIVOICE_BIND_HOST: "0.0.0.0"
+      OMNIVOICE_SERVER_MODE: "1"
+      OMNIVOICE_DATA_DIR: /app/omnivoice_data
+      HF_HOME: /app/omnivoice_data/huggingface
+      PYTHONPATH: /app/backend
+      PYTHONUNBUFFERED: "1"
+      # CPU host: no CUDA/ROCm. Generation budgets grow with the text length.
+      OMNIVOICE_DEVICE: cpu
+      OMNIVOICE_CPU_GENERATE_TIMEOUT_S: "1800"
+      OMNIVOICE_GENERATE_TIMEOUT_S: "1800"
+      OMNIVOICE_CPU_POOL: "8"
+      OMP_NUM_THREADS: "12"
+      MKL_NUM_THREADS: "12"
+      # Headless: no MCP server, no dictation ASR preload (RAM), analytics off.
+      OMNIVOICE_MCP_DISABLE: "1"
+      OMNIVOICE_PRELOAD_CAPTURE_ASR: "0"
+      # ASR: WhisperX with large-v3 int8 on CPU; dubbing keeps word timings.
+      OMNIVOICE_ASR_BACKEND: whisperx
+      ASR_MODEL_WHISPERX: large-v3
+      ASR_COMPUTE_TYPE: int8
+      TZ: America/Lima
+    volumes:
+      - voicestudio_data:/app/omnivoice_data
+      - voicestudio_models:/app/omnivoice_data/huggingface
+    expose:
+      - "3900"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3900/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    networks:
+      - app
+    deploy:
+      resources:
+        limits:
+          memory: 20G
+          cpus: "16"
+    # In the live compose.yaml add `logging: *json_logging` like the other services.
+
+volumes:
+  voicestudio_data:
+    name: iliagpt-voicestudio-data
+  voicestudio_models:
+    name: iliagpt-voicestudio-models

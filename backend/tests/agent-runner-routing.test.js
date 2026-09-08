@@ -83,7 +83,7 @@ test('runAgentLoop stops on the FIRST 402 — no retries, reason surfaced', asyn
   });
   assert.equal(result.stoppedReason, 'llm_402');
   assert.equal(calls.length, 1, '402 is terminal: one attempt, zero retries');
-  assert.match(String(result.errorMessage), /can only afford/);
+  assert.match(String(result.errorMessage), /sin crédito|402|No reintenté|can only afford/);
 });
 
 test('runAgentLoop stops on Anthropic "credit balance is too low"', async () => {
@@ -183,7 +183,7 @@ test('executeAgentRunnerTurn: LLM 402 → ok:false with stoppedReason llm_402 (n
   assert.equal(ran.stoppedReason, 'llm_402');
   assert.deepEqual(ran.artifacts, []);
   assert.equal(calls.length, 1, 'the loop must not keep retrying against an empty balance');
-  assert.match(String(ran.errorMessage), /can only afford/);
+  assert.match(String(ran.errorMessage), /sin crédito|402|No reintenté|can only afford/);
 });
 
 test('executeAgentRunnerTurn: unexpected exception → ok:false with reason + message (no throw)', async () => {

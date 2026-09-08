@@ -31,7 +31,8 @@ describe('computer control loop 25/3 + cdpMode', () => {
     assert.equal(flags.resolveObservationMode({ model: 'deepseek-v4-flash', env: {} }), 'cdp');
     assert.equal(flags.resolveObservationMode({ model: 'deepseek-v4-pro', env: {} }), 'cdp');
     assert.equal(flags.resolveComputerModel('openrouter/gpt-4o'), flags.DEEPSEEK_FLASH);
-    assert.equal(flags.publicComputerHost({ COMPUTER_PUBLIC_HOST: 'computer.chatagic.com' }), 'computer.siragpt.com');
+    assert.equal(flags.publicComputerHost({ COMPUTER_PUBLIC_HOST: 'computer.chatagic.com' }), 'siragpt.com');
+    assert.equal(flags.publicComputerHost({ AGENT_COMPUTER_PUBLIC_BASE: 'https://computer.siragpt.com' }), 'siragpt.com');
   });
 
   test('observe() returns CDP text and never a PNG when cdpConnect is used', async () => {

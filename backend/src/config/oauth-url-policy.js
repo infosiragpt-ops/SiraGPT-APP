@@ -348,7 +348,7 @@ function getSpotifyPostCallbackURL(status, env = process.env) {
     const base = secureFrontendDestination(
       env,
       env.SPOTIFY_OAUTH_SUCCESS_REDIRECT,
-      '/chat',
+      '/agentes',
     );
     return withQuery(base, { spotify_connected: 'true' });
   }

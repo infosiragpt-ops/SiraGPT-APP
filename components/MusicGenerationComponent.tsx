@@ -17,6 +17,7 @@ import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ChatAudioPlayer } from "@/components/chat/media-preview-players"
 interface MusicStyle {
   id: string;
   name: string;
@@ -366,50 +367,22 @@ const downloadMusic = async () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <audio
-              ref={audioRef}
+            <ChatAudioPlayer
               src={`${apiClient.apiBaseURL}${generatedMusic.audio_url}`}
-              preload="metadata"
+              title={generatedMusic.text_prompt || generatedMusic.filename || "audio"}
+              durationSeconds={generatedMusic.duration}
+              variant="generated"
+              className="max-w-none"
             />
-
-            {/* Player Controls */}
-            <div className="flex items-center gap-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={togglePlayPause}
-                className="flex items-center gap-2"
-              >
-                {isPlaying ? (
-                  <Pause className="h-4 w-4" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                {isPlaying ? 'Pause' : 'Play'}
-              </Button>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={downloadMusic}
-                className="flex items-center gap-2"
-              >
-                <Download className="h-4 w-4" />
-                Download
-              </Button>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="space-y-2">
-              <Progress 
-                value={totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0} 
-                className="h-2"
-              />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{formatTime(currentTime)}</span>
-                <span>{formatTime(totalDuration)}</span>
-              </div>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadMusic}
+              className="flex items-center gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Download
+            </Button>
 
             {/* Volume Control */}
             <div className="flex items-center gap-2">

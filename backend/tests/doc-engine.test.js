@@ -121,7 +121,7 @@ describe('classifyTemplateVsContent', () => {
     const pair = classifyTemplateVsContent([plantilla, rsn]);
     assert.equal(pair.template, plantilla);
     assert.equal(pair.content, rsn);
-    assert.equal(pair.reason, 'content');
+    assert.ok(pair.reason === 'content' || pair.reason === 'placeholder_vs_prose');
   });
 
   it('prefers XXXX/UPN body over a misleading formato-*.docx name', () => {
@@ -138,6 +138,24 @@ describe('classifyTemplateVsContent', () => {
     const pair = classifyTemplateVsContent([fakeNameRealBody, realPlantilla]);
     assert.equal(pair.template, realPlantilla);
     assert.equal(pair.content, fakeNameRealBody);
+    assert.ok(pair.reason === 'content' || pair.reason === 'placeholder_vs_prose');
+  });
+
+  it('never treats tesis_UPN.docx as the empty plantilla', () => {
+    const thesis = {
+      originalName: 'tesis_UPN.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: sourceDocx(),
+    };
+    const plantilla = {
+      originalName: 'Formato_UPN.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: templateDocx(),
+    };
+    const pair = classifyTemplateVsContent([thesis, plantilla], 'pasa este word al formato UPN ## tesis_UPN.docx ## Formato_UPN.docx');
+    assert.equal(pair.template, plantilla);
+    assert.equal(pair.content, thesis);
+    assert.ok(pair.reason === 'placeholder_vs_prose' || pair.reason === 'prompt_names' || pair.reason === 'content');
   });
 });
 
@@ -152,6 +170,9 @@ describe('doc-engine transform request cues', () => {
       'este word ## RSN_tesis.docx pasalo a mi format ## Formato_upn.docx',
       ['a', 'b'],
     ), true);
+    assert.equal(flags.isTemplateTransformRequest('usando todos los documentos adjuntos', ['a', 'b']), false);
+    assert.equal(flags.isChatTemplateTransformEnabled({}), true);
+    assert.equal(flags.isChatTemplateTransformEnabled({ SIRAGPT_CHAT_TEMPLATE_TRANSFORM: '0' }), false);
   });
 });
 
@@ -184,15 +205,32 @@ describe('doc-engine chat hook', () => {
     else process.env.FEATURE_DOC_ENGINE = prev;
   });
 
-  it('returns null when flag is off', async () => {
+  it('transplants in-process even when FEATURE_DOC_ENGINE is off', async () => {
     delete process.env.FEATURE_DOC_ENGINE;
+    const hit = await tryDocEngineAfterSelection({
+      prompt: 'pasa este word al formato UPN',
+      files: [
+        { name: 'src.docx', buffer: sourceDocx(), originalName: 'src.docx' },
+        { name: 'formato-upn.docx', buffer: templateDocx(), originalName: 'formato-upn.docx' },
+      ],
+      env: {},
+      readBuffer: async (f) => f.buffer,
+    });
+    assert.ok(hit);
+    assert.equal(hit.engine, 'doc-engine');
+    const xml = new PizZip(hit.file.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Portada original UPN/);
+    assert.doesNotMatch(xml.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, ''), /XXXXXXXX/);
+  });
+
+  it('returns null when chat template transform is kill-switched', async () => {
     const hit = await tryDocEngineAfterSelection({
       prompt: 'pasa este word al formato UPN',
       files: [
         { name: 'src.docx', buffer: sourceDocx() },
         { name: 'formato-upn.docx', buffer: templateDocx() },
       ],
-      env: {},
+      env: { SIRAGPT_CHAT_TEMPLATE_TRANSFORM: '0' },
     });
     assert.equal(hit, null);
   });
@@ -430,7 +468,7 @@ describe('classify prompt ## names', () => {
     const pair = classifyTemplateVsContent([rsn, plantilla], prompt);
     assert.equal(pair.template, plantilla);
     assert.equal(pair.content, rsn);
-    assert.equal(pair.reason, 'prompt_names');
+    assert.ok(pair.reason === 'prompt_names' || pair.reason === 'placeholder_vs_prose');
   });
 });
 

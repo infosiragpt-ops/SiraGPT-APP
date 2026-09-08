@@ -126,6 +126,29 @@ del _r
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024; // 1 MiB per stream
 const HARD_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
+// Session workdirs we are allowed to reap (sira-sbx-* under os.tmpdir()).
+const registeredSandboxWorkdirs = [];
+
+function registerLocalSandboxWorkdir(dir, opts) {
+  try {
+    const w61 = require('../agent-runner/engine-3h61');
+    if (typeof w61.registerSandboxWorkdirClosed === 'function') {
+      return w61.registerSandboxWorkdirClosed(registeredSandboxWorkdirs, dir, opts);
+    }
+  } catch (_) { /* 3H61 fail-open */ }
+  return { registered: false, path: dir == null ? '' : String(dir) };
+}
+
+function reapLocalSandboxOrphans(opts = {}) {
+  try {
+    const w61 = require('../agent-runner/engine-3h61');
+    if (typeof w61.reapOrphanSandboxDirsClosed === 'function') {
+      return w61.reapOrphanSandboxDirsClosed(registeredSandboxWorkdirs, opts);
+    }
+  } catch (_) { /* 3H61 fail-open */ }
+  return { reap: [], removed: [], count: 0, code: null };
+}
+
 const ALLOWED_LANGUAGES = Object.freeze(new Set(['python', 'node', 'bash']));
 
 // Language → { interpreter, code-flag }. We pass user code as a single
@@ -208,9 +231,39 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   // Prepend memory-limit preamble for Python to contain runaway allocations.
   const finalCode = language === 'python' ? PYTHON_RESOURCE_PREAMBLE + code : code;
 
-  const [bin, baseArgs] = INTERPRETERS[language]();
-  const argv = [...baseArgs, finalCode];
+  const [bin0, baseArgs] = INTERPRETERS[language]();
+  let bin = bin0;
+  let argv = [...baseArgs, finalCode];
   const spawnImpl = typeof opts.spawnImpl === 'function' ? opts.spawnImpl : spawn;
+  let sandboxGuards = null;
+  try {
+    const w64 = require('../agent-runner/engine-3h64');
+    const ad = require('../agent-runner/engine-adapter');
+    if (typeof w64.applySandboxSpawnGuardsClosed === 'function') {
+      sandboxGuards = w64.applySandboxSpawnGuardsClosed({
+        bin: bin,
+        argv: argv,
+        env: env,
+        sandboxKillAfterGraceMs: ad.sandboxKillAfterGraceMs,
+        sandboxNetFailClosed: ad.sandboxNetFailClosed,
+        sandboxNoNewPrivs: ad.sandboxNoNewPrivs,
+        wrapSandboxSpawnWithRssCpu: ad.wrapSandboxSpawnWithRssCpu,
+        tmpCleanupOnCancel: ad.tmpCleanupOnCancel,
+        reapBackgroundBashOnAbort: ad.reapBackgroundBashOnAbort,
+        pollBackgroundBash: ad.pollBackgroundBash,
+      });
+      // wrapSandboxSpawnWithRssCpu uses `ulimit -v` (virtual address
+      // space). V8 reserves multi-GB ranges, so applying the wrap to
+      // the node interpreter FatalOOMs. Still call the live helper;
+      // only apply bash+ulimit to python/bash.
+      const looksLikeNode = /node(\.exe)?$/i.test(String(bin0))
+        || bin0 === process.execPath;
+      if (sandboxGuards && sandboxGuards.bin && Array.isArray(sandboxGuards.argv) && !looksLikeNode) {
+        bin = sandboxGuards.bin;
+        argv = sandboxGuards.argv;
+      }
+    }
+  } catch (_) { /* 3H64 spawn wrap fail-open */ }
 
   // Acquire a concurrency slot before spawning.  The deadline is half the
   // execution timeout so a queued call still has time to run if it gets through.
@@ -228,6 +281,9 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
 
   const startedAt = performance.now();
   const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt));
+  const sessionWorkdir = args.cwd || args.workdir || null;
+  if (sessionWorkdir) registerLocalSandboxWorkdir(sessionWorkdir);
+  try { reapLocalSandboxOrphans({ now: Date.now() }); } catch (_) { /* best-effort */ }
   let child;
   try {
     child = spawnImpl(bin, argv, {
@@ -243,6 +299,22 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     sem.release();
     return { ok: false, code: 'sandbox_spawn_failed', message: err && err.message };
   }
+  try {
+    const w66bg = require('../agent-runner/engine-3h66');
+    const adBg = require('../agent-runner/engine-adapter');
+    if (w66bg && typeof w66bg.applyReadHygieneClosed === 'function') {
+      w66bg.applyReadHygieneClosed({
+        bashId: child && child.pid,
+        cmd: String(language || 'bash'),
+        kill: function () { try { if (child) child.kill('SIGKILL'); } catch (_) { /* swallow */ } },
+        stripUtf8BomOnRead: adBg.stripUtf8BomOnRead,
+        sliceReadWindow: adBg.sliceReadWindow,
+        formatReadWithLineNumbers: adBg.formatReadWithLineNumbers,
+        startBackgroundBash: adBg.startBackgroundBash,
+        resetBackgroundBash: adBg.resetBackgroundBash,
+      });
+    }
+  } catch (_) { /* 3H66 bash track fail-open */ }
 
   return new Promise((resolve) => {
     let stdoutBuf = Buffer.alloc(0);
@@ -254,6 +326,23 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     let externalAbortHandler = null;
 
     function appendCapped(buf, chunk, which) {
+      try {
+        const w60 = require('../agent-runner/engine-3h60');
+        if (typeof w60.sandboxStreamChunkCap === 'function') {
+          const capped = w60.sandboxStreamChunkCap({
+            chunk,
+            used: buf.length,
+            cap: maxOutputBytes,
+          });
+          if (capped && capped.truncated) {
+            if (which === 'stdout') stdoutTruncated = true;
+            else stderrTruncated = true;
+          }
+          if (capped && capped.chunk) {
+            return Buffer.concat([buf, Buffer.from(capped.chunk)]);
+          }
+        }
+      } catch (_) { /* 3H60 fail-open */ }
       const remaining = Math.max(0, maxOutputBytes - buf.length);
       if (remaining === 0) {
         if (which === 'stdout') stdoutTruncated = true;
@@ -276,10 +365,61 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       child.stderr.on('data', (chunk) => { stderrBuf = appendCapped(stderrBuf, chunk, 'stderr'); });
     }
 
+    function releaseChild() {
+      try { if (child.stdout) child.stdout.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { if (child.stderr) child.stderr.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { child.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { if (child.stdout && !child.stdout.destroyed) child.stdout.destroy(); } catch (_) { /* ignore */ }
+      try { if (child.stderr && !child.stderr.destroyed) child.stderr.destroy(); } catch (_) { /* ignore */ }
+      try { if (typeof child.unref === 'function') child.unref(); } catch (_) { /* ignore */ }
+    }
+
     function killChild(reason) {
       if (killedReason) return;
       killedReason = reason;
-      try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      try {
+        const adKill = require('../agent-runner/engine-adapter');
+        if (typeof adKill.sandboxKillAfterGraceMs === 'function') {
+          adKill.sandboxKillAfterGraceMs({
+            pid: (child && child.pid) || 1,
+            graceMs: 20,
+            killFn: function (_id, sig) {
+              try { child.kill(sig || 'SIGKILL'); } catch (_) { /* swallow */ }
+            },
+            setTimeoutFn: setTimeout,
+          });
+        } else {
+          try { child.kill('SIGKILL'); } catch { /* swallow */ }
+        }
+      } catch (_) {
+        try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      }
+      if (reason === 'aborted') {
+        try {
+          const w60 = require('../agent-runner/engine-3h60');
+          if (typeof w60.sandboxFinallyCleanupOnAbort === 'function') {
+            w60.sandboxFinallyCleanupOnAbort({
+              aborted: true,
+              workdir: args.cwd || args.workdir || null,
+              pid: child && child.pid,
+            });
+          }
+        } catch (_) { /* 3H60 fail-open */ }
+        try {
+          const w66r = require('../agent-runner/engine-3h66');
+          const adR = require('../agent-runner/engine-adapter');
+          if (w66r && typeof w66r.applyReadHygieneClosed === 'function') {
+            w66r.applyReadHygieneClosed({
+              reset: true,
+              stripUtf8BomOnRead: adR.stripUtf8BomOnRead,
+              sliceReadWindow: adR.sliceReadWindow,
+              formatReadWithLineNumbers: adR.formatReadWithLineNumbers,
+              startBackgroundBash: adR.startBackgroundBash,
+              resetBackgroundBash: adR.resetBackgroundBash,
+            });
+          }
+        } catch (_) { /* 3H66 bash reset fail-open */ }
+      }
     }
 
     timer = setTimeout(() => killChild('timeout'), timeoutMs);
@@ -296,6 +436,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     child.on('error', (err) => {
       if (timer) clearTimeout(timer);
       sem.release();
+      releaseChild();
       if (externalAbortHandler && opts.signal) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
@@ -314,11 +455,68 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
       let durationMs = elapsedMs();
-      const stdout = stdoutBuf.toString('utf8');
-      const stderr = stderrBuf.toString('utf8');
+      let stdout = stdoutBuf.toString('utf8');
+      let stderr = stderrBuf.toString('utf8');
+      try {
+        const w67out = require('../agent-runner/engine-3h67');
+        const adOut = require('../agent-runner/engine-adapter');
+        if (typeof w67out.applySandboxOutCapClosed === 'function') {
+          const capped = w67out.applySandboxOutCapClosed({
+            stdout,
+            stderr,
+            stripAnsiFromSandboxOut: adOut.stripAnsiFromSandboxOut,
+            stderrByteCapPerCommand: adOut.stderrByteCapPerCommand,
+            stdoutByteCapPerCommand: adOut.stdoutByteCapPerCommand,
+            combinedStdoutStderr96KiB: adOut.combinedStdoutStderr96KiB,
+            capStdoutLine8KiB: adOut.capStdoutLine8KiB,
+          });
+          if (capped) {
+            if (capped.stdout != null) stdout = capped.stdout;
+            if (capped.stderr != null) stderr = capped.stderr;
+            if (capped.truncated) {
+              stdoutTruncated = true;
+              stderrTruncated = true;
+            }
+          }
+        }
+      } catch (_) { /* 3H67 sandbox out cap fail-open */ }
+      releaseChild();
 
       if (killedReason === 'timeout') {
         durationMs = Math.max(durationMs, timeoutMs);
+        let cleaned = null;
+        try {
+          const w61 = require('../agent-runner/engine-3h61');
+          if (typeof w61.cleanupSandboxOnTimeoutClosed === 'function') {
+            cleaned = w61.cleanupSandboxOnTimeoutClosed({
+              elapsedMs: durationMs,
+              timeoutMs,
+              workdir: sessionWorkdir,
+            });
+          } else {
+            const w59 = require('../agent-runner/engine-3h59');
+            if (typeof w59.sandboxTimeoutThenCleanup === 'function') {
+              cleaned = w59.sandboxTimeoutThenCleanup({
+                elapsedMs: durationMs,
+                timeoutMs,
+                workdir: sessionWorkdir,
+              });
+            }
+          }
+        } catch (_) { /* 3H61/3H59 fail-open */ }
+        if (sessionWorkdir) {
+          try {
+            const idx = registeredSandboxWorkdirs.findIndex((d) => {
+              const p = typeof d === 'string' ? d : d && d.path;
+              return p === sessionWorkdir;
+            });
+            if (idx !== -1) registeredSandboxWorkdirs[idx] = {
+              path: sessionWorkdir,
+              mtimeMs: Date.now(),
+              orphan: true,
+            };
+          } catch (_) { /* ignore */ }
+        }
         resolve({
           ok: false,
           code: 'sandbox_timeout',
@@ -326,10 +524,30 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
           stdout, stderr,
           stdoutTruncated, stderrTruncated,
           durationMs,
+          cleaned: Boolean(cleaned && cleaned.cleanup),
+          cleanupCode: cleaned && cleaned.code,
         });
         return;
       }
       if (killedReason === 'aborted') {
+        try {
+          const w64ab = require('../agent-runner/engine-3h64');
+          const adAb = require('../agent-runner/engine-adapter');
+          if (typeof w64ab.applySandboxSpawnGuardsClosed === 'function') {
+            w64ab.applySandboxSpawnGuardsClosed({
+              aborted: true,
+              dirs: sessionWorkdir ? [sessionWorkdir] : [],
+              pid: child && child.pid,
+              sandboxKillAfterGraceMs: adAb.sandboxKillAfterGraceMs,
+              sandboxNetFailClosed: adAb.sandboxNetFailClosed,
+              sandboxNoNewPrivs: adAb.sandboxNoNewPrivs,
+              wrapSandboxSpawnWithRssCpu: adAb.wrapSandboxSpawnWithRssCpu,
+              tmpCleanupOnCancel: adAb.tmpCleanupOnCancel,
+              reapBackgroundBashOnAbort: adAb.reapBackgroundBashOnAbort,
+              pollBackgroundBash: adAb.pollBackgroundBash,
+            });
+          }
+        } catch (_) { /* 3H64 abort cleanup fail-open */ }
         resolve({
           ok: false,
           code: 'sandbox_aborted',
@@ -360,6 +578,8 @@ module.exports = {
   isLocalSandboxAvailable,
   resolveLocalConfig,
   buildChildEnv,
+  registerLocalSandboxWorkdir,
+  reapLocalSandboxOrphans,
   ALLOWED_LANGUAGES,
   DEFAULT_TIMEOUT_MS,
   HARD_MAX_TIMEOUT_MS,

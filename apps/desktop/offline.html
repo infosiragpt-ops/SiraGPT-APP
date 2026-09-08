@@ -34,7 +34,7 @@
     </main>
     <script>
       const params = new URLSearchParams(window.location.search);
-      const target = params.get('target') || 'https://siragpt.com/chat';
+      const target = params.get('target') || 'https://siragpt.com/agentes';
       const retry = () => {
         document.getElementById('status').textContent = 'Conectando…';
         window.location.replace(target);

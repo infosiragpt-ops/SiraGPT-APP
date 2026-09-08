@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const taskStorePrismaSync = require('./task-store-prisma-sync');
 const agentMetrics = require('./metrics');
+const { statusForAgentStopReason } = require('./react-run-outcome');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -77,7 +78,14 @@ function sanitizeTaskRecord(record = {}) {
     status: record.status || 'running',
     createdAt: record.createdAt || now,
     updatedAt: record.updatedAt || now,
+    // Liveness stamp for still-alive UI after SSE drop. Heartbeats pulse
+    // this without appending events (OpenClaw lastEventAt idea, native rewrite).
+    lastEventAt: record.lastEventAt || record.updatedAt || now,
     cancelledAt: record.cancelledAt || null,
+    // Latch for idempotent Stop after SSE reconnect (#588). A second
+    // POST /cancel must not append another E_CANCELLED. Native rewrite
+    // of OpenClaw's already-aborted / idempotent run-handle clear.
+    cancelRequestedAt: record.cancelRequestedAt || null,
     completedAt: record.completedAt || null,
     failedAt: record.failedAt || null,
     terminalMetricRecorded: record.terminalMetricRecorded === true,
@@ -217,13 +225,32 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
     seq,
     ts: event.ts || nowIso(),
   };
+  const explicitRetry = snapshotLike.status === 'queued'
+    && snapshotLike.jobId && String(snapshotLike.jobId) !== String(existing.jobId || '')
+    && ['repair_attempt', 'queue_status'].includes(stamped.type) && stamped.status === 'queued';
+  const alreadyFinished = TERMINAL_STATUSES.has(existing.status) && existing.streamState?.done && !explicitRetry;
+  // The replay log is public execution state too: keeping the failed status
+  // while appending a late successful done/text/artifact would still publish
+  // contradictory results on reconnect. No write, sequence or dual-write for
+  // an already closed attempt. Final metadata is persisted via markTaskStatus.
+  if (alreadyFinished) return existing;
+  const observedStatus = terminalStatusObservedByEvent(stamped, snapshotLike.status);
+  // Done must already be terminal when persisted, before the producer awaits
+  // message persistence. Later progress can carry its stale running snapshot;
+  // only an explicit retry starts a new attempt, never a late step or done.
+  const status = observedStatus || (stamped.type === 'checkpoint' && TERMINAL_STATUSES.has(existing.status)
+    ? existing.status
+    : snapshotLike.status || existing.status);
+  const nextState = explicitRetry
+    ? { ...(streamState || existing.streamState), done: false, error: undefined, stoppedReason: undefined }
+    : streamState || existing.streamState;
   const events = trimEvents([...(existing.events || []), stamped], options.eventLimit || DEFAULT_EVENT_LIMIT);
   const checkpoints = [...(existing.checkpoints || [])];
   if (shouldCheckpoint(stamped)) {
     checkpoints.push({
       ts: stamped.ts,
       type: stamped.type,
-      status: snapshotLike.status || existing.status,
+      status,
       eventCount: events.length,
       stepCount: streamState?.steps?.length || existing.streamState?.steps?.length || 0,
       artifactCount: streamState?.artifacts?.length || existing.streamState?.artifacts?.length || 0,
@@ -231,14 +258,24 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   }
   const next = {
     ...existing,
-    status: snapshotLike.status || existing.status,
+    status,
+    ...(explicitRetry ? {
+      jobId: String(snapshotLike.jobId),
+      queueName: snapshotLike.queueName || existing.queueName,
+      cancelledAt: null,
+      cancelRequestedAt: null,
+    } : {}),
     assistantMessageId: snapshotLike.assistantMessageId || existing.assistantMessageId || null,
-    streamState: streamState || existing.streamState,
+    streamState: nextState,
     events,
     lastEventSeq: seq,
+    lastEventAt: stamped.ts || nowIso(),
     checkpoints: trimEvents(checkpoints, 200),
     updatedAt: nowIso(),
   };
+  if (status === 'failed' || status === 'error') next.failedAt = existing.failedAt || stamped.ts;
+  if (status === 'cancelled') next.cancelledAt = existing.cancelledAt || stamped.ts;
+  if (status === 'completed') next.completedAt = existing.completedAt || stamped.ts;
   if (stamped.type === 'file_artifact' && stamped.artifact) {
     const current = Array.isArray(next.artifacts) ? [...next.artifacts] : [];
     const filename = String(stamped.artifact.filename || '').trim().toLowerCase();
@@ -257,7 +294,7 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   }
   const written = persistTerminalMetricObservation({
     current: existing,
-    observedStatus: terminalStatusObservedByEvent(stamped, snapshotLike.status),
+    observedStatus: status,
     persist: (markerPatch) => writeTaskSnapshot({ ...next, ...markerPatch }),
   });
   taskStorePrismaSync.schedulePrismaSync(written, stamped);
@@ -279,10 +316,13 @@ const AUTO_COMPACT_EVENT_THRESHOLD = 400;
 const AUTO_COMPACT_KEEP_RECENT = 150;
 
 function terminalStatusObservedByEvent(event, snapshotStatus) {
-  if (TERMINAL_STATUSES.has(snapshotStatus)) return snapshotStatus;
   if (event?.type === 'done') {
-    return event.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+    if (snapshotStatus === 'cancelled') return 'cancelled';
+    const status = statusForAgentStopReason(event.stoppedReason);
+    if (status === 'completed' && ['failed', 'error'].includes(snapshotStatus)) return snapshotStatus;
+    return status;
   }
+  if (TERMINAL_STATUSES.has(snapshotStatus)) return snapshotStatus;
   return null;
 }
 
@@ -319,6 +359,20 @@ function persistTerminalMetricObservation({
 
 function markTaskStatus(taskLike, status, patch = {}) {
   if (!taskLike?.taskId || !taskLike?.userId) return null;
+  const existing = getTaskSnapshotForUser(taskLike.taskId, taskLike.userId);
+  // Defend against legacy producers treating every closed stream as success.
+  // Explicit queued/running transitions remain available for a user retry.
+  if (status === 'completed' && ['failed', 'error', 'cancelled'].includes(existing?.status) && existing.streamState?.done) {
+    status = existing.status;
+    patch = {
+      ...patch,
+      streamState: existing.streamState,
+      completedAt: existing.completedAt || null,
+      stats: { ...(patch.stats || {}), ...(existing.stats || {}), stoppedReason: existing.streamState.stoppedReason },
+    };
+  }
+  const state = patch.streamState || existing?.streamState || taskLike.streamState;
+  if (status === 'completed' && state?.done) status = statusForAgentStopReason(state.stoppedReason);
   const stamp = nowIso();
   const statusPatch = { status, updatedAt: stamp, ...patch };
   // A completed run's loop checkpoint is dead weight (and a spurious-resume
@@ -327,7 +381,6 @@ function markTaskStatus(taskLike, status, patch = {}) {
   if (status === 'completed') statusPatch.completedAt = patch.completedAt || stamp;
   if (status === 'cancelled') statusPatch.cancelledAt = patch.cancelledAt || stamp;
   if (status === 'error' || status === 'failed') statusPatch.failedAt = patch.failedAt || stamp;
-  const existing = getTaskSnapshotForUser(taskLike.taskId, taskLike.userId);
   const current = existing || sanitizeTaskRecord(taskLike);
   const result = persistTerminalMetricObservation({
     current,
@@ -755,6 +808,39 @@ function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {})
   return stale;
 }
 
+/**
+ * Cheap liveness pulse for an in-flight task. Bumps `updatedAt` +
+ * `lastEventAt` so the runtime watchdog and the still-alive UI can tell a
+ * live worker from a dead one without appending events (which would grow
+ * the replay log). Also refreshes streamState.lastEventAt / heartbeatAt so
+ * GET /events after an SSE drop can keep "Pensando…" from going stale.
+ * No-ops on missing, foreign, or already-terminal snapshots. Never throws
+ * — a heartbeat must not break the live run.
+ */
+function touchTaskHeartbeat(taskId, userId) {
+  if (!taskId || !userId) return null;
+  try {
+    const existing = getTaskSnapshotForUser(taskId, userId);
+    if (!existing) return null;
+    if (existing.status !== 'running' && existing.status !== 'queued') return existing;
+    const stamp = nowIso();
+    const streamState = existing.streamState && typeof existing.streamState === 'object'
+      ? existing.streamState
+      : {};
+    return updateTaskSnapshot(taskId, userId, {
+      updatedAt: stamp,
+      lastEventAt: stamp,
+      streamState: {
+        ...streamState,
+        lastEventAt: stamp,
+        heartbeatAt: stamp,
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
 function recoverStaleRunningTasks({
   staleAfterMs = DEFAULT_STALE_RUNNING_MS,
   markAs = 'error',
@@ -767,6 +853,7 @@ function recoverStaleRunningTasks({
   // were skipped FOREVER: rescanned and logged on every boot while their
   // chats showed an eternal in-progress state.
   jobBackedStaleAfterMs = 24 * 60 * 60 * 1000,
+  errorMessage = null,
 } = {}) {
   const stale = findStaleRunningTasks({ staleAfterMs });
   const recovered = [];
@@ -788,7 +875,9 @@ function recoverStaleRunningTasks({
     const seq = (Number(snapshot.lastEventSeq) || 0) + 1;
     const recoveryEvent = {
       type: 'error',
-      message: `Task ${reason}; was stuck in ${snapshot.status}`,
+      message: (typeof errorMessage === 'string' && errorMessage.trim())
+        ? errorMessage.trim()
+        : `Task ${reason}; was stuck in ${snapshot.status}`,
       ts: stamp,
       seq,
       id: `${snapshot.taskId}:${seq}`,
@@ -1172,6 +1261,7 @@ module.exports = {
   readTaskSnapshot,
   rebuildIndex,
   recoverStaleRunningTasks,
+  touchTaskHeartbeat,
   removeFromIndex,
   safeTaskId,
   sanitizeTaskRecord,
