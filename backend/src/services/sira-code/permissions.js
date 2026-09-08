@@ -45,9 +45,15 @@ const TOOL_ALIASES = Object.freeze({
   question: 'question',
   user_ask: 'question',
   ask_user: 'question',
+  multiedit: 'multiedit',
+  multi_edit: 'multiedit',
+  batch_edit: 'multiedit',
+  task: 'task',
+  spawn_task: 'task',
+  subagent: 'task',
 });
 
-const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch']);
+const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch', 'multiedit', 'task']);
 const QUESTION_TOOLS = new Set(['question']);
 
 function canonicalTool(name) {

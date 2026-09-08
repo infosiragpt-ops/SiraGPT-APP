@@ -39,6 +39,13 @@ replies are arrays of labels). Construir pauses via the existing
 permission-resume card; Planificar may ask read-only clarifications.
 It does not copy `question.ts`, the Effect Question service, or the
 TUI question queue.
+Batched `multiedit` is a native rewrite of the OpenCode / coding-agent
+file-edit contract (edits[] with unique old_str → new_str, jail,
+atomic apply). It does not copy edit.ts or a vendor MultiEdit module.
+The `task` tool is a native enqueue stub: it queues a child job through
+SiraGPT's existing agent-task APIs (`enqueueAgentTask` /
+`createTaskRecord`). It does not copy `task.ts`, the Effect Task
+service, BackgroundJob, or a subagent TUI.
 
 SiraGPT and SiraCode are not affiliated with, endorsed by, or
 sponsored by OpenCode or Anomaly.
