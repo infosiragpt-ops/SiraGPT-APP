@@ -32,6 +32,10 @@ const durableExecutionStore = require('./durable-execution-store');
 const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
 const outputFormat = require('../output-format-contract');
 const { getQueueName } = require('./agent-task-queue');
+const {
+  createHonestProgressTracker,
+  enrichAgentTaskEvent,
+} = require('./agent-task-honest-progress');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const {
@@ -1948,6 +1952,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   task.runtimeModel = runtimeModelProfile.runtimeModel;
 
   const artifacts = [];
+  const progressTracker = createHonestProgressTracker({
+    startedAt,
+    maxSteps,
+    maxRuntimeMs,
+    cycleTotal: Array.isArray(cycle?.stages) ? cycle.stages.length : 0,
+  });
   // Throttle in-flight progress upserts. A long-running task emits
   // hundreds of events; firing a Prisma upsert + BullMQ updateProgress
   // on every single one wastes DB connections and Redis round-trips.
@@ -1960,6 +1970,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const isTerminal = status !== 'running';
     if (!force && !isTerminal && now - lastProgressAt < PROGRESS_THROTTLE_MS) return;
     lastProgressAt = now;
+    const progress = progressTracker.snapshot(now);
     void persistence.upsertAgentTask({
       ...task,
       status,
@@ -1971,23 +1982,32 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // can reject mid-failover. Without .catch() the rejection goes
       // unhandled and (depending on Node policy) can terminate the
       // worker. Progress is best-effort observability — never fatal.
-      Promise.resolve(job.updateProgress({ status, lastEventSeq: task.lastEventSeq || 0 })).catch(() => {});
+      Promise.resolve(job.updateProgress({
+        status,
+        lastEventSeq: task.lastEventSeq || 0,
+        percent: progress.percent,
+        etaMs: progress.etaMs,
+        etaLabel: progress.etaLabel,
+        phase: progress.phase,
+        phaseLabel: progress.phaseLabel,
+      })).catch(() => {});
     }
   };
   const emit = (event) => {
-    streamState = internals.reduceAgentState(streamState, event);
+    const enriched = enrichAgentTaskEvent(event, progressTracker);
+    streamState = internals.reduceAgentState(streamState, enriched);
     task.streamState = streamState;
-    const written = taskStore.appendTaskEvent(task, event, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
+    const written = taskStore.appendTaskEvent(task, enriched, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
     if (written) {
       task.events = written.events || task.events;
       task.checkpoints = written.checkpoints || task.checkpoints;
       task.lastEventSeq = written.lastEventSeq || task.lastEventSeq;
       task.artifacts = written.artifacts || task.artifacts;
     }
-    void persistence.appendAgentTaskEvent(task, task.events?.[task.events.length - 1] || event);
-    metrics.counter('agent_task_events_total', { type: event.type || 'unknown' });
+    void persistence.appendAgentTaskEvent(task, task.events?.[task.events.length - 1] || enriched);
+    metrics.counter('agent_task_events_total', { type: enriched.type || 'unknown' });
     persistProgress('running');
-    return event;
+    return enriched;
   };
 
   emit({
