@@ -4,9 +4,8 @@
  * Hermes USER/MEMORY fact conflict resolution.
  *
  * Native rewrite of the Hermes MEMORY.md vs USER.md *idea* (profile facts
- * vs agent notes, keep one value per topic). Not a dump of
- * NousResearch/hermes-agent — no Python memory_tool, no OpenRouter, no
- * paid LLM on this path.
+ * vs agent notes, keep one value per topic). Not a dump of NousResearch/hermes-agent
+ * — no Python memory_tool, no OpenRouter, no paid LLM on this path.
  *
  * Rules (deterministic, bilingual ES/EN):
  *   1. Pinned USER profile wins, even if a MEMORY (or unpinned USER) fact
@@ -187,7 +186,7 @@ function extractSlots(text) {
 
   const push = (key, value) => {
     const k = String(key || '').trim();
-    const v = normalizeFactText(value);
+    const v = normalizeFactText(value).replace(/[.,;:!?]+$/g, '');
     if (!k || !v) return;
     const id = `${k}::${v}`;
     if (seen.has(id)) return;
@@ -232,7 +231,7 @@ function extractSlots(text) {
 
   const prefLang = firstMatch(
     norm,
-    /\b(?:prefier\w+|i prefer|user prefers|me gusta)\b.{0,32}\b(typescript|javascript|python|golang|rust|java|ruby|\bgo\b)\b/,
+    /\b(?:prefier\w+|i prefer|user prefers|me gusta)\s+(?:el\s+|la\s+|los\s+|un\s+|una\s+)?(typescript|javascript|python|golang|rust|java|ruby|go)\b/,
   );
   if (prefLang) push('prefers_lang', pickMapped(prefLang, LANG_VALUES) || prefLang);
 

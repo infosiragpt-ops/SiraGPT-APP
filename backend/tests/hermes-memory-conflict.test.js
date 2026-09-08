@@ -192,8 +192,8 @@ describe('hermes memory conflict — curated pin and apply', { concurrency: 1 },
     assert.equal(memoryOnly.ok, false);
     assert.match(memoryOnly.error, /Ningún dato del perfil/);
 
-    curated.add(USER_A, { target: 'user', content: 'Prefiere modo oscuro en el editor.', now: 2, rateLimit: false });
-    curated.add(USER_A, { target: 'user', content: 'Editor es vim.', now: 3, rateLimit: false });
+    curated.add(USER_A, { target: 'user', content: 'Usa el editor vscode.', now: 2, rateLimit: false });
+    curated.add(USER_A, { target: 'user', content: 'El editor es vim.', now: 3, rateLimit: false });
     const ambiguous = curated.pin(USER_A, { old_text: 'editor' });
     assert.equal(ambiguous.ok, false);
     assert.match(ambiguous.error, /Varios datos del perfil/);
