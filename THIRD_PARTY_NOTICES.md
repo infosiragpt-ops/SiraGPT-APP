@@ -127,6 +127,18 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   for the historical sidecar reference only; the native engine does not
   depend on that tree.
 
+  Conditional native file mutations draw on
+  `anomalyco/opencode@ecbc6ccac85b3e8087b6445e584318419b9e2b34`,
+  `packages/core/src/file-mutation.ts` and
+  `packages/core/src/effect/keyed-mutex.ts` (MIT, Copyright (c) 2025 opencode).
+  The expected-byte check, cooperating process-local serialization and
+  exclusive-create contract are adapted into
+  `backend/src/services/sira-code/{workspace,file-tools,apply-patch}.js` with Node
+  APIs, not the upstream Effect runtime. The matching MIT text remains in
+  `vendor/opencode/LICENSE`; this pin describes the consulted modules, not
+  the entire historical vendor tree. Evidence and limitations are recorded
+  in `docs/operations/OPENCODE_FILE_MUTATIONS.md`.
+
 - **Simple Icons** (https://simpleicons.org/, CC0 1.0) — brand-colored SVGs
   under `public/conexiones-logos/` used as official marks on `/conexiones`
   and `/gpts` app cards.

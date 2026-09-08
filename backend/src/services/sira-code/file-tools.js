@@ -134,7 +134,7 @@ function replaceUnique(haystack, oldStr, newStr, { replaceAll = false } = {}) {
     }
     return out + haystack.slice(from);
   }
-  const second = haystack.indexOf(oldStr, first + oldStr.length);
+  const second = haystack.indexOf(oldStr, first + 1);
   if (second !== -1) {
     const err = new Error(ERRORS.edit_ambiguous);
     err.code = 'edit_ambiguous';
@@ -271,7 +271,7 @@ async function runEdit(workspace, args) {
   const oldStr = String(oldRaw);
   const newStr = String(newRaw == null ? '' : newRaw);
   try {
-    const current = await workspace.readFile(rel);
+    const { content: current, bytes } = await workspace.readFileForMutation(rel);
     const ending = detectLineEnding(current);
     const needle = applyLineEnding(oldStr, ending);
     const replacement = applyLineEnding(newStr, ending);
@@ -279,7 +279,7 @@ async function runEdit(workspace, args) {
     if (Buffer.byteLength(next, 'utf8') > MAX_FILE_BYTES) {
       return toolError('file_too_large', ERRORS.file_too_large);
     }
-    const saved = await workspace.writeFile(rel, next);
+    const saved = await workspace.writeFileIfUnchanged(rel, next, bytes);
     return toolOk(`edited ${saved}`, {
       path: saved,
       text: next,
