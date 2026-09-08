@@ -326,7 +326,7 @@ const REASON_TO_CODE = Object.freeze({
 });
 
 const PRESERVED_LABEL_RE =
-  /dej[oó] de responder|se detuvo|super[oó] el tiempo|no est[aá] disponible|tuvo un problema|Has alcanzado el l[ií]mite|sesi[oó]n expir[oó]|pol[ií]tica de contenido|Faltan datos|ag[eé]ntica fall[oó]|demasiadas solicitudes/i;
+  /dej[oó] de responder|se detuvo|super[oó] el tiempo|no est[aá] disponible|tuvo un problema|Has alcanzado el l[ií]mite|sesi[oó]n expir[oó]|pol[ií]tica de contenido|Faltan datos|ag[eé]ntica fall[oó]|demasiadas solicitudes|circuito|presupuesto de fallos/i;
 
 function httpStatusOf(err) {
   if (!err || typeof err !== 'object') return '';
@@ -353,6 +353,9 @@ function codeForClassification(classified, err) {
   // listed §16 code `E_QUOTA` so existing clients do not see a new enum,
   // but never let a "timeout" word inside a 429 body steal the label.
   if (classified.reason === 'rate-limited' || status === '429') return 'E_QUOTA';
+  if (/circuito|presupuesto de fallos/i.test(msg) || /circuito|presupuesto de fallos/i.test(String((err && err.message) || ''))) {
+    return 'E_TIMEOUT';
+  }
   if (looksLikeTimeout(err, msg, status)) return 'E_TIMEOUT';
   if (classified.reason === 'aborted') return 'E_CANCELLED';
   if (looksLikeUnavailable(err, msg, status)) return 'E_PROVIDER';
