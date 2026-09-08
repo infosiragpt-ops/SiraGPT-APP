@@ -105,6 +105,15 @@ function spanishMessage(code, params = {}) {
     candidate_promote: `Candidato a promover: ${a} (alta señal).`,
     merged_conflict: `Conflicto fusionado en Biblioteca: ${a}.`,
     already_promoted: `${a} ya estaba en Biblioteca (mismo hash).`,
+    prior_kept: `Se conservó la revisión previa de ${a}.`,
+    restored: `Restaurada ${a} a hash ${params.hash || ''}.`,
+    already_current: `${a} ya está en esa revisión.`,
+    revision_not_found: params.hash
+      ? `No hay revisión con hash ${params.hash} en Biblioteca.`
+      : 'No hay revisión con ese hash en Biblioteca.',
+    missing_hash: 'Falta el hash de la revisión.',
+    hash_ambiguous: `El prefijo ${params.hash || ''} coincide con varias revisiones.`,
+    rollback_ok: `Rollback de ${a} a hash ${params.hash || ''}.`,
     rate_limited: `Escritura limitada: espera ${params.seconds || 0}s (tope de escrituras).`,
     skill_cap: `Tope de skills alcanzado (${params.n || 0}/${params.max || MAX_USER_SKILLS}).`,
     body_too_large: `Cuerpo excede el tope de ${params.n || MAX_SKILL_CHARS} caracteres.`,
@@ -134,6 +143,24 @@ function readSkillRaw(userId, name, opts = {}) {
     return String(fsImpl.readFileSync(filePath, 'utf8') || '');
   } catch {
     return '';
+  }
+}
+
+function writeSkillRaw(userId, name, raw, opts = {}) {
+  if (typeof opts.writeSkill === 'function') {
+    return opts.writeSkill(name, raw, userId);
+  }
+  const fsImpl = resolveFs(opts);
+  const home = resolveSkillsHome(opts.skillsHome, opts.env);
+  const filePath = skillMdPath(home, userId, name);
+  try {
+    if (typeof fsImpl.mkdirSync === 'function') {
+      fsImpl.mkdirSync(path.dirname(filePath), { recursive: true });
+    }
+    fsImpl.writeFileSync(filePath, normalizeSkillBody(raw), 'utf8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
 }
 
@@ -366,7 +393,7 @@ function findPromoteCandidates(fingerprints, opts = {}) {
   });
 }
 
-function renderProvenance({ skill, userId, hash, prevHash, merged }) {
+function renderProvenance({ skill, userId, hash, prevHash, merged, revision, priorKept }) {
   const lines = [
     '# Skill promovida',
     '',
@@ -374,13 +401,19 @@ function renderProvenance({ skill, userId, hash, prevHash, merged }) {
     'procedencia: skill de usuario',
     `userId: ${userId}`,
     `hash: ${hash}`,
+    `revision: ${Number(revision) > 0 ? Number(revision) : 1}`,
     `usos: ${skill.uses || 0}`,
     `ultima_vez: ${skill.lastUsedAt || 0}`,
     `marca: ${BRAND_LABEL}`,
   ];
-  if (merged && prevHash) {
+  if (prevHash) {
     lines.push(`hash_previo: ${prevHash}`);
+  }
+  if (merged && prevHash) {
     lines.push('fusion: conflicto de nombre con hash distinto');
+  }
+  if (priorKept) {
+    lines.push('conserva_previa: si');
   }
   lines.push('', '## Cuerpo', '', String(skill.body || skill.raw || '').trim(), '');
   lines.push('Adaptado del patrón curator de Hermes Agent (MIT). Sin código upstream.');
@@ -424,13 +457,21 @@ function promoteSkill(userId, skill, opts = {}) {
     ? opts.promotedState
     : {};
   const prior = promotedState[print.name];
-  if (prior && prior.hash === print.contentHash) {
+  const revisionOpts = {
+    store: opts.revisionStore,
+    ledger: opts.revisionLedger,
+    save: opts.save,
+    list: opts.list,
+  };
+  const ledgerHit = biblioteca.findRevision(id, print.name, print.contentHash, revisionOpts);
+  if ((prior && prior.hash === print.contentHash) || ledgerHit) {
     return {
       ok: true,
       skipped: true,
       alreadyPromoted: true,
-      asset_id: prior.assetId || null,
+      asset_id: (ledgerHit && ledgerHit.assetId) || (prior && prior.assetId) || null,
       hash: print.contentHash,
+      priorKept: true,
       message: spanishMessage('already_promoted', { a: print.name }),
     };
   }
@@ -448,18 +489,25 @@ function promoteSkill(userId, skill, opts = {}) {
       alreadyPromoted: true,
       asset_id: (matches[0] && matches[0].id) || (prior && prior.assetId) || null,
       hash: print.contentHash,
+      priorKept: true,
       message: spanishMessage('already_promoted', { a: print.name }),
     };
   }
 
-  const merged = Boolean(prior && prior.hash && prior.hash !== print.contentHash)
-    || matches.length > 0;
+  const knownRevisions = biblioteca.listRevisions(id, print.name, revisionOpts);
+  const priorHash = prior && prior.hash && prior.hash !== print.contentHash ? prior.hash : null;
+  const priorAlreadyListed = priorHash && knownRevisions.some((row) => row.hash === priorHash);
+  const merged = Boolean(priorHash) || matches.length > 0 || knownRevisions.length > 0;
+  const priorKept = merged;
+  const nextRevision = knownRevisions.length + (priorHash && !priorAlreadyListed ? 1 : 0) + 1;
   const body = renderProvenance({
     skill: print,
     userId: id,
     hash: print.contentHash,
-    prevHash: prior ? prior.hash : null,
+    prevHash: priorHash || (knownRevisions[knownRevisions.length - 1] || {}).hash || null,
     merged,
+    revision: nextRevision,
+    priorKept,
   });
   if (opts.dryRun) {
     return {
@@ -468,6 +516,8 @@ function promoteSkill(userId, skill, opts = {}) {
       name: print.name,
       hash: print.contentHash,
       merged,
+      priorKept,
+      revision: nextRevision,
       message: spanishMessage(merged ? 'merged_conflict' : 'promoted', { a: print.name }),
       body,
     };
@@ -478,13 +528,19 @@ function promoteSkill(userId, skill, opts = {}) {
     return { ok: false, rateLimited: true, message: gate.message, retryAfterMs: gate.retryAfterMs };
   }
 
-  const deposit = biblioteca.deposit({
+  const deposit = biblioteca.depositRevision({
     userId: id,
     chatId: opts.chatId || null,
-    title: `skill-promote-${print.name}`,
+    skillName: print.name,
+    hash: print.contentHash,
     body,
+    prevHash: prior ? prior.hash : null,
+    priorAssetId: prior ? prior.assetId : null,
+    merged,
     kind: 'plan',
     save: opts.save,
+    store: opts.revisionStore,
+    ledger: opts.revisionLedger,
   });
   if (!deposit.ok) {
     return { ok: false, message: deposit.error || 'no se pudo depositar', deposit };
@@ -506,11 +562,14 @@ function promoteSkill(userId, skill, opts = {}) {
     name: print.name,
     hash: print.contentHash,
     merged,
+    priorKept: deposit.priorKept === true || priorKept,
+    revision: deposit.revision,
+    revisions: deposit.revisions || [],
     asset_id: deposit.asset_id,
     brand_label: deposit.brand_label || BRAND_LABEL,
     userId: id,
     message: spanishMessage(merged ? 'merged_conflict' : 'promoted', { a: print.name }),
-    biblioteca: deposit,
+    biblioteca: deposit.biblioteca || deposit,
     memoryNote,
     provenance: {
       source: 'user-skill',
@@ -521,7 +580,76 @@ function promoteSkill(userId, skill, opts = {}) {
       userId: id,
       prevHash: prior ? prior.hash : null,
       merged,
+      revision: deposit.revision,
+      priorKept: deposit.priorKept === true || priorKept,
     },
+  };
+}
+
+function listPromotedRevisions(userId, skillName, opts = {}) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, message: spanishMessage('missing_user'), revisions: [] };
+  const revisions = biblioteca.listRevisions(id, skillName, {
+    store: opts.revisionStore,
+    ledger: opts.revisionLedger,
+    list: opts.list,
+    hydrate: opts.hydrate,
+  });
+  return { ok: true, userId: id, name: skillName || null, revisions };
+}
+
+function restorePromotedRevision(userId, hash, opts = {}) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, message: spanishMessage('missing_user') };
+  if (!String(hash || '').trim()) {
+    return { ok: false, message: spanishMessage('missing_hash') };
+  }
+
+  const restored = biblioteca.restoreByHash(id, hash, {
+    store: opts.revisionStore,
+    ledger: opts.revisionLedger,
+    list: opts.list,
+    readBody: opts.readBody,
+    body: opts.body,
+    dryRun: opts.dryRun === true,
+    hydrate: opts.hydrate,
+  });
+  if (!restored.ok) {
+    const err = String(restored.error || '');
+    let code = 'revision_not_found';
+    if (err.includes('Falta el userId')) code = 'missing_user';
+    else if (err.includes('Falta el hash') || err.includes('no es válido')) code = 'missing_hash';
+    else if (err.includes('coincide con varias')) code = 'hash_ambiguous';
+    return {
+      ok: false,
+      message: spanishMessage(code, { hash: String(hash).trim().toLowerCase(), a: restored.skillName }),
+      error: restored.error,
+    };
+  }
+
+  if (opts.dryRun) {
+    return {
+      ...restored,
+      message: spanishMessage('dry_run'),
+    };
+  }
+
+  if (restored.alreadyCurrent) {
+    return {
+      ...restored,
+      message: spanishMessage('already_current', { a: restored.skillName }),
+    };
+  }
+
+  let written = null;
+  if (opts.write !== false && restored.skillBody) {
+    written = writeSkillRaw(id, restored.skillName, restored.skillBody, opts);
+  }
+
+  return {
+    ...restored,
+    written,
+    message: spanishMessage('restored', { a: restored.skillName, hash: restored.hash }),
   };
 }
 
@@ -591,6 +719,9 @@ module.exports = {
   findPromoteCandidates,
   renderProvenance,
   promoteSkill,
+  listPromotedRevisions,
+  restorePromotedRevision,
+  writeSkillRaw,
   inspectHygiene,
   resetForTests,
 };

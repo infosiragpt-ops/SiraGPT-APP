@@ -285,6 +285,33 @@ describe('hermes skill hygiene — promote with provenance', { concurrency: 1 },
     assert.equal(memoryList(USER_A).filter((item) => item.filename.includes('echo-notes')).length, before);
   });
 
+  test('second promote keeps the prior Biblioteca revision', () => {
+    const first = hygiene.promoteSkill(USER_A, {
+      name: 'versioned',
+      body: skillMd('versioned', 'r1'),
+      uses: 4,
+      source: 'user',
+    }, { save: memorySave, remember: false });
+    const second = hygiene.promoteSkill(USER_A, {
+      name: 'versioned',
+      body: skillMd('versioned', 'r2'),
+      uses: 5,
+      source: 'user',
+    }, {
+      save: memorySave,
+      remember: false,
+      promotedState: { versioned: { hash: first.hash, assetId: first.asset_id } },
+    });
+    assert.equal(second.priorKept, true);
+    assert.equal(biblioteca.listRevisions(USER_A, 'versioned').length, 2);
+    const restored = hygiene.restorePromotedRevision(USER_A, first.hash, {
+      list: memoryList,
+      write: false,
+    });
+    assert.equal(restored.ok, true);
+    assert.match(restored.skillBody, /r1/);
+  });
+
   test('same name different hash merges provenance', () => {
     const older = hygiene.hashSkillBody(skillMd('brief', 'v1'));
     const out = hygiene.promoteSkill(USER_A, {
@@ -449,9 +476,11 @@ describe('hermes skill curator — injected FS stubs', { concurrency: 1 }, () =>
       path.join(__dirname, '../src/services/agents/hermes-tools.js'),
       'utf8',
     );
-    assert.match(src, /enum: \['observe', 'status', 'run', 'record', 'pin', 'list', 'dedupe', 'promote'\]/);
+    assert.match(src, /enum: \['observe', 'status', 'run', 'record', 'pin', 'list', 'dedupe', 'promote', 'list_revisions', 'restore'\]/);
     assert.match(src, /case 'dedupe':/);
     assert.match(src, /case 'promote':/);
+    assert.match(src, /case 'list_revisions':/);
+    assert.match(src, /case 'restore':/);
     const status = curator.status(USER_A);
     assert.equal(status.neverDeletes, true);
     assert.deepEqual(status.hygiene.dedupeBy, ['hash', 'name']);

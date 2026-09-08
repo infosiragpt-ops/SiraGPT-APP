@@ -16,6 +16,7 @@
  *   - Growth candidates: unmapped Hermes skills rewritten as SiraGPT mappings
  *   - Hygiene: hash/name dedupe, merge/archive proposals, high-signal
  *     promote to Biblioteca with provenance + conflict merge
+ *   - Versioning: promote keeps prior Biblioteca revision; restore by hash
  *
  * Isolation: every read/write is keyed by userId.
  */
@@ -325,12 +326,47 @@ function applyMergeArchives(userId, proposals, opts = {}) {
 function rememberPromote(state, result) {
   if (!state.promoted) state.promoted = {};
   if (!result || !result.ok || result.skipped) return;
+  const prior = state.promoted[result.name] || { revisions: [] };
+  const revisions = Array.isArray(prior.revisions) ? [...prior.revisions] : [];
+  if (prior.hash && prior.hash !== result.hash && !revisions.some((row) => row.hash === prior.hash)) {
+    revisions.push({
+      hash: prior.hash,
+      assetId: prior.assetId || null,
+      at: prior.at || 0,
+      merged: prior.merged === true,
+    });
+  }
+  if (result.hash && !revisions.some((row) => row.hash === result.hash)) {
+    revisions.push({
+      hash: result.hash,
+      assetId: result.asset_id || null,
+      at: Date.now(),
+      merged: result.merged === true,
+    });
+  }
   state.promoted[result.name] = {
     hash: result.hash,
     assetId: result.asset_id || null,
     at: Date.now(),
     merged: result.merged === true,
-    prevHash: result.provenance ? result.provenance.prevHash : null,
+    prevHash: result.provenance ? result.provenance.prevHash : (prior.hash || null),
+    revisions,
+    currentRevision: revisions.length,
+  };
+}
+
+function rememberRestore(state, result) {
+  if (!state.promoted) state.promoted = {};
+  if (!result || !result.ok || !result.skillName) return;
+  const prior = state.promoted[result.skillName] || { revisions: [] };
+  state.promoted[result.skillName] = {
+    ...prior,
+    hash: result.hash,
+    assetId: result.asset_id || prior.assetId || null,
+    at: Date.now(),
+    prevHash: prior.hash && prior.hash !== result.hash ? prior.hash : prior.prevHash || null,
+    revisions: Array.isArray(prior.revisions) ? prior.revisions : [],
+    currentRevision: result.revision || prior.currentRevision || 0,
   };
 }
 
@@ -369,6 +405,26 @@ function promoteHighSignal(userId, opts = {}) {
     promoted,
     messages,
   };
+}
+
+function listRevisions(userId, skillName, opts = {}) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, error: 'userId required', message: hygiene.spanishMessage('missing_user'), revisions: [] };
+  return hygiene.listPromotedRevisions(id, skillName, opts);
+}
+
+function restoreRevision(userId, hash, opts = {}) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, error: 'userId required', message: hygiene.spanishMessage('missing_user') };
+  const out = hygiene.restorePromotedRevision(id, hash, {
+    ...opts,
+    promotedState: stateFor(id).promoted || {},
+  });
+  if (out.ok && !out.dryRun && !out.skipped) {
+    rememberRestore(stateFor(id), out);
+    persistUser(id);
+  }
+  return out;
 }
 
 function dedupe(userId, opts = {}) {
@@ -500,16 +556,28 @@ function status(userId) {
       promoteMinUses: hygiene.PROMOTE_MIN_USES,
       writeLimit: hygiene.WRITE_LIMIT,
       skillCap: hygiene.MAX_USER_SKILLS,
+      versioning: true,
+      restoreByHash: true,
     },
   };
   if (!id) return base;
   const state = stateFor(id);
+  const promoted = state.promoted || {};
+  const promotedRevisions = {};
+  for (const [name, row] of Object.entries(promoted)) {
+    const revisions = Array.isArray(row.revisions) ? row.revisions : [];
+    promotedRevisions[name] = {
+      currentHash: row.hash || null,
+      count: revisions.length || (row.hash ? 1 : 0),
+    };
+  }
   return {
     ...base,
     lastRunAt: state.lastRunAt,
     trackedSkills: Object.keys(state.skills).length,
     pinned: [...state.pinned],
-    promoted: Object.keys(state.promoted || {}),
+    promoted: Object.keys(promoted),
+    promotedRevisions,
   };
 }
 
@@ -519,6 +587,7 @@ function clearUser(userId) {
   liveByUser.delete(id);
   hydratedUsers.delete(id);
   try { diskPersistence.clearSkillCurator(id); } catch { /* best-effort */ }
+  try { biblioteca.clearUser(id); } catch { /* best-effort */ }
   return { cleared: true };
 }
 
@@ -526,6 +595,7 @@ function resetForTests() {
   liveByUser.clear();
   hydratedUsers.clear();
   hygiene.resetForTests();
+  biblioteca.resetForTests();
 }
 
 module.exports = {
@@ -538,6 +608,8 @@ module.exports = {
   run,
   dedupe,
   promoteHighSignal,
+  listRevisions,
+  restoreRevision,
   archiveSkill,
   status,
   growthCandidates,
