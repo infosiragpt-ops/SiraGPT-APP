@@ -126,6 +126,10 @@ const PENDING_TRANSFER_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PENDING_TRANSFER
 // but each search carries its own daily/weekly nextRunAt so provider traffic
 // remains bounded and manual searches are never executed in the background.
 const RESEARCH_ALERT_SCHEDULE = process.env.SYSTEM_CRON_RESEARCH_ALERT_SCHEDULE || '30 * * * *';
+// Proactive stale-run watchdog (Plataforma Alertas Proactivas). Scans every
+// minute for AgentTask/CodexRun rows stuck non-terminal past the stall
+// threshold; per-run cooldown inside the job keeps channel noise bounded.
+const STALE_RUN_WATCHDOG_SCHEDULE = process.env.SYSTEM_CRON_STALE_RUN_WATCHDOG_SCHEDULE || '* * * * *';
 
 let _state = null;
 
@@ -1016,6 +1020,38 @@ function start(opts = {}) {
     schedule: RESEARCH_ALERT_SCHEDULE,
     task: researchAlertsTask,
     meta: researchAlertsMeta,
+  });
+
+  let staleRunWatchdogRunning = false;
+  const staleRunWatchdogMeta = {};
+  const staleRunWatchdogTask = cron.schedule(
+    STALE_RUN_WATCHDOG_SCHEDULE,
+    async () => {
+      if (staleRunWatchdogRunning) return;
+      staleRunWatchdogRunning = true;
+      const finish = recordRun(staleRunWatchdogMeta, 'stale-run-watchdog');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./stale-run-watchdog');
+        const res = await job.scanStaleRuns({ env: process.env });
+        if (res.skipped) logger.info?.(`[system-cron] stale-run-watchdog skipped: ${res.skipped}`);
+        else if (res.alerted > 0 || res.notifiedUsers > 0) logger.warn?.(`[system-cron] stale-run-watchdog: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] stale-run-watchdog failed: ${err && err.message}`);
+      } finally {
+        staleRunWatchdogRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'stale-run-watchdog',
+    schedule: STALE_RUN_WATCHDOG_SCHEDULE,
+    task: staleRunWatchdogTask,
+    meta: staleRunWatchdogMeta,
   });
 
   for (const t of tasks) {
