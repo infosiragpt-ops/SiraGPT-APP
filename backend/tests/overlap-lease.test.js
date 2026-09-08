@@ -326,6 +326,163 @@ describe('Redis down fallback (documented honesty)', () => {
   });
 });
 
+describe('recovery after transient Redis failures', () => {
+  test('a later acquisition returns to Redis after the local holder releases', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now, failOn: 'set' });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const localClaim = await lease.acquire({ jobId: 'recover', ownerId: 'u1' });
+    assert.equal(localClaim.distributed, false);
+    await lease.release(localClaim);
+    redis.failOn = null;
+    const recovered = await lease.acquire({ jobId: 'recover', ownerId: 'u1' });
+    assert.equal(recovered.mode, 'redis');
+    assert.equal(recovered.distributed, true);
+    assert.equal(lease.snapshot().redisDisabled, false);
+    assert.equal((await createOverlapLease({ redis, now: clock.now }).acquire({ jobId: 'recover', ownerId: 'u1' })).ok, false);
+  });
+
+  test('reattaching Redis cannot replace an active local-only holder', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now, failOn: 'set' });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const localClaim = await lease.acquire({ jobId: 'local-running', ownerId: 'u1' });
+    redis.failOn = null;
+    lease.attachRedis(redis);
+    const skip = await lease.acquire({ jobId: 'local-running', ownerId: 'u1' });
+    assert.equal(skip.ok, false);
+    assert.equal(skip.distributed, false);
+    assert.equal(redis.kv.size, 0, 'do not create a second claim in Redis');
+    clock.advance(80);
+    assert.equal((await lease.renew(localClaim)).mode, 'local');
+    clock.advance(80);
+    assert.equal((await lease.acquire({ jobId: 'local-running', ownerId: 'u1' })).ok, false);
+    await lease.release(localClaim);
+    assert.equal((await lease.acquire({ jobId: 'local-running', ownerId: 'u1' })).mode, 'redis');
+  });
+
+  test('an expired local-only holder does not block recovery forever', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now, failOn: 'set' });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const old = await lease.acquire({ jobId: 'local-expired', ownerId: 'u1' });
+    redis.failOn = null;
+    clock.advance(91);
+    const current = await lease.acquire({ jobId: 'local-expired', ownerId: 'u1' });
+    assert.equal(current.mode, 'redis');
+    assert.equal(await lease.release(old), false);
+    assert.equal(await redis.get(current.key), current.token);
+  });
+
+  test('a second failed Redis renewal never reports local renewal success', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const claim = await lease.acquire({ jobId: 'renew-down', ownerId: 'u1' });
+    redis.failOn = 'eval';
+    assert.equal((await lease.renew(claim)).ok, false);
+    const again = await lease.renew(claim);
+    assert.equal(again.ok, false);
+    assert.equal(again.reason, 'redis_unavailable');
+  });
+
+  test('renewal recovers against the real token, never only its local shadow', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const claim = await lease.acquire({ jobId: 'renew-recovered', ownerId: 'u1' });
+    redis.failOn = 'eval';
+    assert.equal((await lease.renew(claim)).ok, false);
+    redis.failOn = null;
+    clock.advance(20);
+    const renewed = await lease.renew(claim);
+    assert.equal(renewed.ok, true);
+    assert.equal(renewed.mode, 'redis');
+    assert.equal(await redis.pttl(claim.key), 90);
+    assert.equal(lease.snapshot().redisDisabled, false);
+  });
+
+  test('recovery cannot renew or release a replacement owner token', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const old = await lease.acquire({ jobId: 'replacement', ownerId: 'u1' });
+    redis.failOn = 'eval';
+    await lease.renew(old);
+    redis.failOn = null;
+    redis.kv.set(old.key, { value: 'replacement-owner-fixture', expiresAt: clock.now() + 90 });
+    const renewed = await lease.renew(old);
+    assert.equal(renewed.ok, false);
+    assert.equal(renewed.reason, 'wrong_token');
+    await lease.release(old);
+    assert.equal(await redis.get(old.key), 'replacement-owner-fixture');
+  });
+
+  test('only one same-worker acquisition is in flight per key, even across a failure', async () => {
+    const clock = createClock();
+    let failFirst;
+    let calls = 0;
+    const redis = { set: () => {
+      calls++;
+      return new Promise((_resolve, reject) => { failFirst = reject; });
+    } };
+    const lease = createOverlapLease({ redis, now: clock.now });
+    const first = lease.acquire({ jobId: 'pending', ownerId: 'u1' });
+    const second = lease.acquire({ jobId: 'pending', ownerId: 'u1' });
+    // Inspect before awaiting: the regression must not leave the fixture hanging.
+    assert.equal(calls, 1);
+    assert.equal((await second).ok, false);
+    failFirst(Object.assign(new Error('redis_down'), { code: 'ECONNREFUSED' }));
+    const localClaim = await first;
+    assert.equal(localClaim.mode, 'local');
+    assert.equal(lease.snapshot().pendingAcquires, 0);
+    await lease.release(localClaim);
+  });
+
+  test('default helpers reuse their configured client through fallback and recovery', async () => {
+    const previous = getDefaultOverlapLease();
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now, failOn: 'set' });
+    setDefaultOverlapLease(createOverlapLease({ now: clock.now }));
+    let created = 0;
+    const options = { env: { NODE_ENV: 'production', REDIS_URL: 'redis://fixture' }, createClient: () => { created++; return redis; } };
+    try {
+      ensureDefaultRedisClient(options);
+      const first = await acquireJobOverlap({ jobId: 'singleton', ownerId: 'u1' });
+      await releaseJobOverlap(first);
+      ensureDefaultRedisClient(options);
+      assert.equal(created, 1, 'do not leak a second client after fallback');
+      redis.failOn = null;
+      assert.equal((await acquireJobOverlap({ jobId: 'singleton', ownerId: 'u1' })).mode, 'redis');
+    } finally { setDefaultOverlapLease(previous); }
+  });
+
+  test('detaching Redis cannot turn distributed renewal into local success', async () => {
+    const clock = createClock();
+    const redis = createFakeRedis({ now: clock.now });
+    const lease = createOverlapLease({ redis, now: clock.now, ttlMs: 90 });
+    const claim = await lease.acquire({ jobId: 'detached', ownerId: 'u1' });
+    lease.attachRedis(null);
+    const renewed = await lease.renew(claim);
+    assert.equal(renewed.ok, false);
+    assert.equal(renewed.reason, 'redis_unavailable');
+  });
+
+  test('a denied command clears the acquisition reservation and never falls back locally', async () => {
+    const clock = createClock();
+    const redis = { set: async () => { throw new Error('NOPERM fixture command denied'); } };
+    const lease = createOverlapLease({ redis, now: clock.now });
+    const denied = await lease.acquire({ jobId: 'denied', ownerId: 'u1' });
+    assert.equal(denied.ok, false);
+    assert.equal(lease.snapshot().pendingAcquires, 0);
+    assert.equal(lease.snapshot().fallbackCount, 0);
+    assert.equal(lease.snapshot().liveLocal, 0);
+    assert.equal(JSON.stringify(denied).includes('NOPERM'), false);
+    lease.attachRedis(createFakeRedis({ now: clock.now }));
+    assert.equal((await lease.acquire({ jobId: 'denied', ownerId: 'u1' })).ok, true);
+  });
+});
+
 describe('withLease and renew timers', () => {
   test('withLease runs the function and releases afterwards', async () => {
     const clock = createClock();

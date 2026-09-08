@@ -105,6 +105,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Scheduled-agent overlap coordination recovers after transient Redis failures
+  without replacing a still-running local holder or leaking new clients.
+  Failed distributed renewal no longer reports a successful local renewal;
+  same-key acquisitions are reserved while in flight. No agent turn replay.
+
 - SiraCode text edits and patch updates compare the complete original bytes
   before committing, so cooperating edits cannot silently lose each other's
   changes. Patch Add is exclusive; Move refuses an existing destination.
