@@ -95,8 +95,15 @@ const {
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
 const {
   resolveEventCursor,
+  resolveResumeCursor,
   resolveTaskLastError,
   buildTaskEventsResumePayload,
+  classifyResumeCursor,
+  selectResumeEvents,
+  hasAckedTerminal,
+  eventSeq,
+  beginSseResume,
+  formatSseEventFrame,
 } = require('../services/agents/agent-task-event-resume');
 const {
   claimTaskCancel,
@@ -748,7 +755,11 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
   const allEvents = task.events || [];
   const lastEventId = (req.get && (req.get('Last-Event-ID') || req.get('last-event-id'))) || '';
   const after = resolveEventCursor(req.query.after, lastEventId, allEvents);
-  const resume = buildTaskEventsResumePayload(task, { after });
+  const resume = buildTaskEventsResumePayload(task, {
+    after,
+    sinceSeq: req.query.sinceSeq,
+    lastEventId,
+  });
   res.json({
     ok: true,
     taskId: task.taskId,
@@ -760,6 +771,15 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     streamState: task.streamState || null,
     artifacts: task.artifacts || task.streamState?.artifacts || [],
     lastEventSeq: resume.lastEventSeq,
+    sinceSeq: resume.sinceSeq,
+    resumeStatus: resume.resumeStatus,
+    resumeLabel: resume.resumeLabel,
+    gapFrom: resume.gapFrom,
+    gapTo: resume.gapTo,
+    firstRetainedSeq: resume.firstRetainedSeq,
+    skippedCount: resume.skippedCount,
+    skippedSideEffects: resume.skippedSideEffects,
+    ackedTerminal: resume.ackedTerminal,
     updatedAt: resume.updatedAt,
     lastEventAt: resume.lastEventAt,
     alive: resume.alive,
@@ -2563,7 +2583,10 @@ function streamTaskEvents(req, res, taskId, userId) {
 
   // ── SSE hardening (mirrors inline path) ────────────────────────────
   let clientConnected = true;
-  let lastSeq = 0;
+  const lastEventId = (req.get && (req.get('Last-Event-ID') || req.get('last-event-id'))) || '';
+  const sinceRaw = req.query && (req.query.sinceSeq != null ? req.query.sinceSeq : req.query.after);
+  let lastSeq = null;
+  let resumeAdvisorySent = false;
   let pollTimer = null;
   let heartbeatTimer = null;
   // Whether the client has already received a terminal (`done`/`error`)
@@ -2577,10 +2600,11 @@ function streamTaskEvents(req, res, taskId, userId) {
   const send = (obj) => {
     if (!clientConnected || res.writableEnded || res.destroyed) return false;
     try {
-      const serialized = safeJsonStringify(obj);
       const t = obj && obj.type;
-      if (t === 'done' || t === 'error') terminalEmitted = true;
-      return res.write(`data: ${serialized}\n\n`) !== false;
+      if (t === 'done' || t === 'error' || t === 'run.succeeded' || t === 'run.failed') {
+        terminalEmitted = true;
+      }
+      return res.write(formatSseEventFrame(obj, safeJsonStringify)) !== false;
     } catch {
       safeCloseQueuedConnection();
       return false;
@@ -2635,13 +2659,29 @@ function streamTaskEvents(req, res, taskId, userId) {
       safeCloseQueuedConnection();
       return;
     }
-    for (const event of snapshot.events || []) {
-      const seq = Number(event.seq) || 0;
+    if (lastSeq == null) {
+      const started = beginSseResume({
+        sinceSeq: sinceRaw,
+        after: req.query && req.query.after,
+        lastEventId,
+        events: snapshot.events,
+        lastEventSeq: snapshot.lastEventSeq,
+      });
+      lastSeq = started.lastSeq;
+      if (started.ackedTerminal) terminalEmitted = true;
+      if (started.advisory && !resumeAdvisorySent) {
+        resumeAdvisorySent = true;
+        send(started.advisory);
+      }
+    }
+    for (const event of selectResumeEvents(snapshot.events, lastSeq)) {
+      const seq = eventSeq(event);
       if (seq <= lastSeq) continue;
       lastSeq = seq;
       send(event);
     }
     if (['completed', 'cancelled', 'error', 'failed'].includes(snapshot.status)) {
+      if (hasAckedTerminal(snapshot.events, lastSeq)) terminalEmitted = true;
       safeCloseQueuedConnection();
     }
   };
@@ -3505,7 +3545,13 @@ router.INTERNAL = {
   normalizeSystemContract,
   reduceAgentState,
   resolveEventCursor,
+  resolveResumeCursor,
   resolveTaskLastError,
+  classifyResumeCursor,
+  selectResumeEvents,
+  hasAckedTerminal,
+  beginSseResume,
+  formatSseEventFrame,
   safeJsonStringify,
   resolveQueuedStreamTimeoutMs,
   shouldResumeGeneratedArtifactForDocumentFollowup,
