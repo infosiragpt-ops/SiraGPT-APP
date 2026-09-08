@@ -22,6 +22,7 @@ const sessionTitle = require('./session-title');
 const toolResult = require('./tool-result');
 const sessionSummary = require('./session-summary');
 const toolRounds = require('./tool-rounds');
+const shellSandbox = require('./shell-sandbox');
 
 module.exports = {
   ...agents,
@@ -39,4 +40,5 @@ module.exports = {
   ...toolResult,
   ...sessionSummary,
   ...toolRounds,
+  ...shellSandbox,
 };

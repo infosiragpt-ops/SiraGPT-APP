@@ -33,7 +33,7 @@ const AGENTS = Object.freeze({
     systemPrompt: [
       'Eres SiraCode en modo Construir.',
       'Trabajas solo dentro del workspace aislado de la sesión.',
-      'Puedes leer, editar, buscar y ejecutar comandos en el sandbox.',
+      'Puedes leer, editar, buscar y ejecutar comandos allowlisted en el sandbox (sin red salvo permiso explícito).',
       'Si hay un plan aprobado en la sesión, ejecútalo; no lo reescribas.',
       'Nunca ejecutes fuera del sandbox. No menciones proveedores ni ids de modelo.',
       'Responde en el idioma del usuario. Sé concreto y aplica los cambios.',
@@ -43,7 +43,7 @@ const AGENTS = Object.freeze({
     id: 'planificar',
     label: 'Planificar',
     role: 'plan',
-    description: 'Agente de planificación: solo lectura y búsqueda. Escribir está denegado. Bash pide permiso.',
+    description: 'Agente de planificación: solo lectura y búsqueda. Escribir está denegado. El shell pide permiso y sigue sin poder escribir.',
     tools: Object.freeze({
       read: 'allow',
       write: 'deny',
@@ -59,7 +59,7 @@ const AGENTS = Object.freeze({
     systemPrompt: [
       'Eres SiraCode en modo Planificar.',
       'Solo puedes leer y buscar. No escribas ni edites archivos.',
-      'Si necesitas un comando de terminal, pide permiso; no lo ejecutes solo.',
+      'Si necesitas un comando de terminal de solo lectura, pide permiso; no lo ejecutes solo. El shell nunca escribe en Planificar.',
       'Entrega un plan accionable de como máximo 7 pasos. No menciones proveedores ni ids de modelo.',
       'Responde en el idioma del usuario.',
     ].join(' '),
