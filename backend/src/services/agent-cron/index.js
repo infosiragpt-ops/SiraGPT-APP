@@ -212,10 +212,11 @@ function createCron({
     for (const job of due) {
       const runSession = `cron-run:${job.id}:${t}:${job.runCount || 0}`;
       try {
+        let dispatched = null;
         if (runner && typeof runner.startAgent === 'function') {
-          await dispatchCronJobAsAgentTurn(runner, { ...job, sessionKey: runSession }, t);
+          dispatched = await dispatchCronJobAsAgentTurn(runner, { ...job, sessionKey: runSession }, t);
         } else if (runner && typeof runner.run === 'function') {
-          await runner.run({
+          dispatched = await runner.run({
             message: job.prompt,
             sessionKey: runSession,
             userId: job.userId,
@@ -227,7 +228,25 @@ function createCron({
         } else {
           throw new Error('runner.run no inyectado');
         }
-        job.lastStatus = 'ok';
+        // Acceptance of a tick is not Conectada / delivered. Honor the
+        // dispatcher result and any honest channel receipt.
+        if (dispatched && dispatched.ok === false) {
+          job.lastStatus = 'error';
+          job.lastError = dispatched.error || dispatched.code || 'cron_dispatch_failed';
+        } else if (dispatched && dispatched.delivery && dispatched.delivery.delivered !== true) {
+          job.lastStatus = 'accepted';
+          job.lastError = dispatched.delivery.error ? dispatched.delivery.error.message : null;
+        } else {
+          job.lastStatus = 'ok';
+          job.lastError = null;
+        }
+        if (dispatched && dispatched.delivery) {
+          job.lastDelivery = {
+            accepted: dispatched.delivery.accepted === true,
+            delivered: dispatched.delivery.delivered === true,
+            status: dispatched.delivery.status,
+          };
+        }
       } catch (err) {
         job.lastStatus = 'error';
         job.lastError = err && err.message ? err.message : String(err);

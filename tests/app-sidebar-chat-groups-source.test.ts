@@ -118,13 +118,12 @@ describe("app sidebar recent-chats toolbar source contract", () => {
   it("keeps Spanish collapse tooltips and the Claude-style header strip", () => {
     assert.match(source, /Contraer barra lateral ⌘B/)
     assert.match(source, /Expandir barra lateral ⌘B/)
-    // The old Agentes|Empresas tablist moved out of the header; Empresas is
-    // now a nav-row mode toggle and the strip carries history + new chat.
+    // The header keeps history + new chat after the Empresas mode row is removed.
     assert.doesNotMatch(source, /Modo de la barra lateral/)
     assert.match(source, /aria-label="Atrás"/)
     assert.match(source, /aria-label="Adelante"/)
     assert.match(source, /aria-label="Nuevo agente ⌘N"/)
-    assert.match(source, /aria-label="Empresas"/)
+    assert.doesNotMatch(source, /aria-label="Empresas"/)
     assert.doesNotMatch(source, /data-testid="sidebar-apps-tab"/)
     assert.doesNotMatch(source, /aria-label="Chats"/)
     assert.doesNotMatch(source, /<Code2/)

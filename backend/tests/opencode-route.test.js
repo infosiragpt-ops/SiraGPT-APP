@@ -314,3 +314,41 @@ test('upstreamFail returns a generic 502 and never leaks the raw upstream messag
     console.error = realErr;
   }
 });
+
+test('POST /session/:id/permission records question answers without a new UI', async () => {
+  let calls = 0;
+  const app = buildApp(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        text: '',
+        toolCalls: [{
+          name: 'question',
+          arguments: {
+            questions: [{
+              question: '¿Qué stack?',
+              header: 'Stack',
+              options: [{ label: 'Express' }, { label: 'Fastify' }],
+            }],
+          },
+        }],
+      };
+    }
+    return { text: 'Sigo.', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'construir' });
+  const id = created.body.session.id;
+  await request(app).post(`/api/opencode/session/${id}/prompt`).send({ text: 'elige stack' });
+  const got = await request(app).get(`/api/opencode/session/${id}`);
+  assert.equal(got.body.session.pendingPermissions[0].tool, 'question');
+  assert.equal(got.body.session.pendingPermissions[0].label, 'Esperando respuesta');
+  const pending = got.body.session.pendingPermissions[0];
+  const res = await request(app)
+    .post(`/api/opencode/session/${id}/permission`)
+    .send({ permissionId: pending.permissionId, decision: 'allow', answers: [['Express']] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.executed, true);
+  assert.deepEqual(res.body.answers, [['Express']]);
+  assert.match(String(res.body.result && res.body.result.preview), /Express/);
+  assert.ok(!JSON.stringify(res.body).includes('model_id'));
+});

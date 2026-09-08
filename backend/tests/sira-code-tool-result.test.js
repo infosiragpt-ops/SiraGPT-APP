@@ -134,7 +134,9 @@ describe('loop wiring', () => {
     const toolMsg = seen.find((m) => m.role === 'tool');
     assert.ok(toolMsg, 'second LLM turn must see the tool result');
     assert.ok(toolMsg.content.includes(TRUNCATION_MARKER));
-    assert.ok(toolMsg.content.length < huge.length);
+    const lastLine = `dump-${TOOL_RESULT_MAX_LINES + 79}`;
+    assert.equal(toolMsg.content.includes(lastLine), false, 'tail of a huge read must not reach the next LLM turn');
+    assert.ok(toolMsg.content.split('\n').length <= TOOL_RESULT_MAX_LINES + 4);
     const stored = siraCode.getSession(session.id);
     assert.ok(stored.events.some((ev) => ev.label === COMPACT_LABEL || ev.step === 'compacting'));
     assert.equal(result.toolResults[0].content.includes(TRUNCATION_MARKER), true);

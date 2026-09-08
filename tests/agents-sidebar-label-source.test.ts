@@ -18,14 +18,18 @@ describe("agentes sidebar chrome", () => {
     assert.doesNotMatch(sidebar, />Chats</)
   })
 
-  it("keeps Empresas reachable as a nav-row mode toggle in both modes", () => {
+  it("removes the Empresas mode row and clears its obsolete saved preference", () => {
     const sidebar = source("components/app-sidebar.tsx")
+    assert.doesNotMatch(sidebar, /aria-label="Empresas"/)
+    assert.doesNotMatch(sidebar, />Empresas</)
+    assert.doesNotMatch(sidebar, /\bBriefcase\b/)
+    assert.doesNotMatch(sidebar, /switchSidebarMode/)
+    assert.doesNotMatch(sidebar, /localStorage\.getItem\("sira:sidebar:mode"\)/)
     assert.match(
       sidebar,
-      /aria-label="Empresas"[\s\S]{0,260}switchSidebarMode\(sidebarMode === "code" \? "chat" : "code"\)/,
-      "the Empresas row must toggle the sidebar mode",
+      /localStorage\.removeItem\("sira:sidebar:mode"\)/,
+      "returning users must not remain in the mode whose only exit was removed",
     )
-    assert.match(sidebar, /aria-pressed=\{sidebarMode === "code"\}/)
   })
 
   it("keeps the history back/forward arrows off the agents canvas header", () => {
