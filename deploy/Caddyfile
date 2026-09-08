@@ -24,19 +24,8 @@ siragpt.com, www.siragpt.com, office.siragpt.com {
 	# Repo-only SSE reminder. Live gateway uses the iliagpt @sse handle
 	# (stronger: generate* + stream* + pending-stream*). Do not replace
 	# /home/user/deployments/iliagpt/Caddyfile with this file.
-	encode zstd gzip {
-		match {
-			header Content-Type text/*
-			header Content-Type application/json*
-			header Content-Type application/javascript*
-			header Content-Type application/xhtml+xml*
-			header Content-Type application/xml*
-			header Content-Type image/svg+xml*
-			header Content-Type font/*
-			header Content-Type application/wasm*
-			not header Content-Type text/event-stream*
-		}
-	}
+	@compressible not path /api/ai/generate* /api/ai/stream* /api/*/pending-stream*
+	encode @compressible zstd gzip
 
 	handle /api/ai/generate* {
 		reverse_proxy backend:5000 {
