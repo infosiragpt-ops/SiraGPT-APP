@@ -2,14 +2,13 @@
 
 /**
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
- * Also ls (directory listing) and apply_patch (unique hunks).
+ * Also ls (directory listing), apply_patch, webfetch and todo.
  *
  * File tools stay inside the session workspace. bash/shell runs through
  * the native allowlist (shell-sandbox) then execInWorkspace (scrubbed
  * env + cwd jail). Never execs on the repo root or the raw host tree.
  */
 
-const path = require('path');
 const { authorizeTool } = require('./permissions');
 const { execInWorkspace } = require('./workspace');
 const { applyPatchToWorkspace } = require('./apply-patch');
@@ -17,6 +16,7 @@ const { truncateToolResult } = require('./tool-result');
 const { runWebFetch } = require('./webfetch');
 const { runTodo } = require('./todos');
 const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox');
+const { searchGrep, searchGlob } = require('./search');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -28,12 +28,6 @@ function toolError(code, message) {
 
 function toolOk(content, extra = {}) {
   return { ok: true, content: cap(content), ...extra };
-}
-
-function matchGlob(relPath, pattern) {
-  const pat = String(pattern || '').replace(/^\.\//, '');
-  const escaped = pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '§§').replace(/\*/g, '[^/]*').replace(/§§/g, '.*');
-  return new RegExp(`^${escaped}$`).test(relPath.replace(/^\.\//, ''));
 }
 
 async function runRead(workspace, args) {
@@ -114,35 +108,16 @@ async function runBash(workspace, args, ctx = {}) {
   return toolOk(content, { className: gate.className, truncated: Boolean(result.truncated) });
 }
 
-async function runGrep(workspace, args) {
-  const pattern = String(args.pattern || args.query || '');
-  if (!pattern) return toolError('validation', 'pattern is required');
-  let regex;
-  try {
-    regex = new RegExp(pattern, args.ignoreCase ? 'i' : '');
-  } catch {
-    return toolError('validation', 'invalid regex');
-  }
-  const files = await workspace.listFiles(args.path || '.', { maxFiles: 80 });
-  const hits = [];
-  for (const file of files) {
-    const lines = String(file.content || '').split('\n');
-    lines.forEach((line, idx) => {
-      if (hits.length >= 50) return;
-      if (regex.test(line)) hits.push(`${file.path}:${idx + 1}:${line}`);
-    });
-    if (hits.length >= 50) break;
-  }
-  return toolOk(hits.length ? hits.join('\n') : '(no matches)');
+async function runGrep(workspace, args, ctx = {}) {
+  const result = await searchGrep(workspace, args || {}, ctx);
+  if (result.ok) return { ...result, content: cap(result.content) };
+  return result;
 }
 
-async function runGlob(workspace, args) {
-  const pattern = String(args.pattern || args.glob || '').trim();
-  if (!pattern) return toolError('validation', 'pattern is required');
-  if (/[;&|`$]/.test(pattern)) return toolError('validation', 'pattern must be a plain glob');
-  const files = await workspace.listFiles('.', { maxFiles: 80 });
-  const matched = files.map((f) => f.path).filter((p) => matchGlob(p, pattern) || matchGlob(path.basename(p), pattern));
-  return toolOk(matched.length ? matched.join('\n') : '(no matches)');
+async function runGlob(workspace, args, ctx = {}) {
+  const result = await searchGlob(workspace, args || {}, ctx);
+  if (result.ok) return { ...result, content: cap(result.content) };
+  return result;
 }
 
 async function runLs(workspace, args) {
@@ -289,12 +264,14 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'grep',
-      description: 'Busca un patrón en los archivos del workspace.',
+      description: 'Busca un patrón (regex) en los archivos del workspace. path acota el árbol; include filtra por glob; limit acota coincidencias.',
       parameters: {
         type: 'object',
         properties: {
           pattern: { type: 'string' },
           path: { type: 'string' },
+          include: { type: 'string' },
+          limit: { type: 'integer' },
         },
         required: ['pattern'],
       },
@@ -304,11 +281,13 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'glob',
-      description: 'Lista archivos del workspace que coinciden con un glob.',
+      description: 'Lista archivos del workspace que coinciden con un glob. path acota el árbol; limit acota resultados.',
       parameters: {
         type: 'object',
         properties: {
           pattern: { type: 'string' },
+          path: { type: 'string' },
+          limit: { type: 'integer' },
         },
         required: ['pattern'],
       },

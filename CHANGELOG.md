@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode grep/glob now walk the session workspace jail with the
+  OpenCode search contract (`pattern`, `path`, `include`, `limit`),
+  size/timeout caps, Spanish errors, and blocked path escape. Native
+  CommonJS walker — no ripgrep binary, no Effect LocationSearch, no
+  vendor dump. Available in Planificar (read-only) and Construir.
+
 - Hermes fusion: session memory compaction folds older MEMORY log
   entries into a compact note when the store hits its cap, keeps USER
   profile facts intact, and ranks retrieval as profile > recent log >
