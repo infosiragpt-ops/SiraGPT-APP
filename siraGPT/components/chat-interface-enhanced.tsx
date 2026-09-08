@@ -8507,7 +8507,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${goalText.substring(0, 30)}`,
+          title: goalText.substring(0, 30),
           model: selectedModel,
         });
         activeChat = response.chat;

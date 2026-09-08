@@ -140,6 +140,8 @@ export function toDocumentViewerAttachment(
       record.url,
       record.downloadUrl,
       record.download_url,
+      record.preview,
+      record.objectUrl,
       record.previewUrl,
       record.preview_url,
       record.dataUrl,

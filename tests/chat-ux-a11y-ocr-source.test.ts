@@ -27,6 +27,24 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(code, /aria-label=\{isCopied \? "Código copiado" : "Copiar código"\}/)
   })
 
+  it("routes language-less fenced blocks to the dark block renderer, never the inline pill", () => {
+    // Regression: la transcripción de imágenes devuelve fences sin lenguaje
+    // (```\nsiragpt.com\n```). Antes caían al pill `bg-muted` dentro de un
+    // <pre> oscuro de prose = texto invisible en /agentes (claro y oscuro).
+    const message = source("components/message-component.tsx")
+    assert.match(message, /codeTextForKind/)
+    assert.match(message, /const isBlock = inline === false \|\| match != null/)
+    assert.match(message, /const language = match \? match\[1\] : 'text'/)
+    assert.match(message, /className=\{blockClassName\}/)
+    assert.match(message, /const lang = \(\(match && match\[1\]\) \|\| 'text'\)\.toLowerCase\(\)/)
+  })
+
+  it("forces code inside prose pre to inherit block colors (no light-on-light pill)", () => {
+    const css = source("app/globals.css")
+    assert.match(css, /\.prose pre code,/)
+    assert.match(css, /Guard anti-píldora-invisible/)
+  })
+
   it("shares --content-max 46rem across messages, attachments, and composer", () => {
     const css = source("app/globals.css")
     assert.match(css, /--content-max: 46rem;/)
@@ -69,11 +87,12 @@ describe("chat UX / a11y / OCR source contracts", () => {
     const rail = source("components/MessageActionRail.tsx")
     assert.match(chat, /brandModelLabel/)
     assert.match(chat, /brandProviderLabel/)
-    assert.match(rail, /brandModelLabel\(model\)/)
+    assert.match(rail, /resolveReplyBadgeLabel/)
+    assert.doesNotMatch(rail, /brandModelLabel\(undefined\)/)
     assert.doesNotMatch(chat, /prettifyModelId/)
   })
 
-  it("defines brand / surface tokens and a brand-colored send button", () => {
+  it("defines brand / surface tokens and a focus-visible send button", () => {
     const css = source("app/globals.css")
     const composer = source("components/chat/ChatComposerSurface.tsx")
     assert.match(css, /--brand:/)
@@ -81,8 +100,8 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(css, /--surface-2:/)
     assert.match(css, /--surface-3:/)
     assert.match(css, /color-scheme: light dark/)
-    assert.match(css, /background-color: var\(--brand/)
-    assert.match(css, /composer-send-button:focus-visible[\s\S]{0,80}outline: 2px solid var\(--brand/)
+    assert.match(css, /var\(--brand/)
+    assert.match(css, /composer-send-button:focus-visible[\s\S]{0,80}outline: 2px solid #0d0d0d/)
     assert.match(composer, /disabled=\{!canSend \|\| busy\}/)
   })
 
@@ -95,7 +114,7 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(css, /\.chat-assistant-message :is\(p, li, td, blockquote\) \{\s*line-height: 1\.6;/)
     assert.match(sidebar, /chat-history-item/)
     assert.match(sidebar, /CreditsBadge/)
-    assert.match(chat, /CreditsBadge/)
+    assert.doesNotMatch(chat, /CreditsBadge/)
     assert.match(css, /content-visibility: auto;/)
   })
 

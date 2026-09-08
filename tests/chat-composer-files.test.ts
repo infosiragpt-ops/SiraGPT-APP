@@ -4,6 +4,7 @@ import { describe, it } from "node:test"
 import {
   buildAgentFileMetadata,
   collectMessageFileIds,
+  collectProcessingFileIds,
   collectUploadFileIds,
   isComposerFileProcessingPending,
   isComposerFileUploadFailed,
@@ -69,5 +70,31 @@ describe("chat composer files", () => {
     assert.equal(metadata[0].isLongPasteDocument, true)
     assert.equal("text" in (metadata[0].longPasteMeta || {}), false)
     assert.equal(metadata[0].longPasteMeta?.preview, "contenido privado…")
+  })
+})
+
+describe("collectProcessingFileIds", () => {
+  const TXT = "text/plain"
+
+  it("lists attachments that still need polling and skips settled or id-less ones", () => {
+    const ids = collectProcessingFileIds([
+      { id: "paste-1", name: "campo-contenido-2026-09-02T20-31-40.txt", mimeType: TXT, status: "processing", processingStage: "extracting" },
+      { id: "doc-2", name: "informe.pdf", mimeType: "application/pdf", status: "processing", processingStage: "chunking" },
+      { id: "ready-3", name: "notas.txt", mimeType: TXT, status: "ready", processingStage: "ready" },
+      { id: "failed-4", name: "roto.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", status: "failed", processingStage: "failed" },
+      { tempId: "tmp-5", name: "subiendo.txt", mimeType: TXT, status: "uploading" },
+      { id: "img-6", name: "foto.png", mimeType: "image/png", status: "ready" },
+    ])
+    assert.deepEqual(ids, ["paste-1", "doc-2"])
+  })
+
+  it("keeps a chip flagged processing without any stage (upload response arrived before the pipeline reported)", () => {
+    assert.deepEqual(
+      collectProcessingFileIds([{ id: "paste-7", name: "campo-contenido.txt", mimeType: TXT, status: "processing" }]),
+      ["paste-7"],
+    )
+    assert.deepEqual(collectProcessingFileIds([{ id: "x", name: "campo-contenido.txt", mimeType: TXT, status: "processing", processingStage: "ready" }]), [])
+    assert.deepEqual(collectProcessingFileIds([]), [])
+    assert.deepEqual(collectProcessingFileIds([null, undefined, "junk"] as any), [])
   })
 })

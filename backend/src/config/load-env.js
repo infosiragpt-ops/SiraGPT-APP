@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
+const { applyGitCommitFromDeployedTree } = require('../utils/deployed-tree-commit');
 
 const BACKEND_DIR = path.resolve(__dirname, '..', '..');
 const ROOT_DIR = path.resolve(BACKEND_DIR, '..');
@@ -28,13 +29,21 @@ function loadEnvFiles(options = {}) {
     loadedFiles.push(envPath);
   }
 
-  const result = Object.freeze({ loadedFiles });
+  // Default boot path only — isolated tests pass custom candidates and
+  // must not rewrite the process GIT_COMMIT as a side effect.
+  let gitCommit = null;
+  if (useCache) {
+    gitCommit = applyGitCommitFromDeployedTree();
+  }
+
+  const result = Object.freeze({ loadedFiles, gitCommit });
   if (useCache) loaded = result;
   return result;
 }
 
 module.exports = {
   loadEnvFiles,
+  applyGitCommitFromDeployedTree,
   ENV_CANDIDATES,
   BACKEND_DIR,
   ROOT_DIR,

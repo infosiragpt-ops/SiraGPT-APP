@@ -1,6 +1,10 @@
 'use strict';
 const { parseLastEventId } = require('../observability/sse-event-id');
 const { publicError, httpStatusFor } = require('../error_codes');
+const {
+  authorizeEventReplay,
+  recordDenialAudit,
+} = require('../agents/session-isolation');
 
 /**
  * Express-style HTTP+SSE adapter for the Agent Gateway.
@@ -152,6 +156,24 @@ function createGatewayRouter(gateway) {
       if (sess && sess.userId && String(sess.userId) !== String(userId)) {
         return json(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } });
       }
+      const stamped = gateway.eventLog && typeof gateway.eventLog.ownerOf === 'function'
+        ? gateway.eventLog.ownerOf(sessionKey)
+        : '';
+      const isolation = authorizeEventReplay({
+        ownerUserId: (sess && sess.userId) || stamped,
+        actorUserId: userId,
+        sessionKnown: Boolean(sess) || Boolean(stamped),
+      });
+      if (!isolation.allowed) {
+        recordDenialAudit({
+          kind: 'replay',
+          code: isolation.code,
+          reason: isolation.reason,
+          label: isolation.message,
+        });
+        const status = isolation.code === 'user_required' ? 401 : 403;
+        return json(res, status, { ok: false, error: { code: isolation.code, message: isolation.message } });
+      }
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -161,7 +183,11 @@ function createGatewayRouter(gateway) {
       const lastId = parseLastEventId(req);
       try {
         const replay = gateway.eventLog && typeof gateway.eventLog.replayFrom === 'function'
-          ? gateway.eventLog.replayFrom(sessionKey, lastId)
+          ? gateway.eventLog.replayFrom(sessionKey, lastId, {
+            actorUserId: userId,
+            ownerUserId: (sess && sess.userId) || stamped,
+            requireOwner: true,
+          })
           : [];
         for (const frame of replay) {
           const eventId = frame.id || frame.seq || '';

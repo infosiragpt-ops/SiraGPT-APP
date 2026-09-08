@@ -21,6 +21,11 @@ export type ClaudeTimelineStep = {
   elapsedSec?: number | null
   expandable?: boolean
   details?: string
+  // "prose" renders the details as muted paragraphs (live reasoning, Claude
+  // style) instead of a monospace block; `defaultOpen` shows them unfolded
+  // while the step is active so the user watches the thinking as it streams.
+  detailsKind?: "code" | "prose"
+  defaultOpen?: boolean
   tool?: string
   path?: string
   loaderState?: LoaderState
@@ -124,8 +129,14 @@ export function ClaudeStepIcon({
 }
 
 function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(Boolean(step.defaultOpen))
+  const detailsRef = React.useRef<HTMLPreElement | null>(null)
   const active = step.status === "active"
+  // Live reasoning keeps its tail in view while it streams.
+  useEffect(() => {
+    if (!open || !active || !detailsRef.current) return
+    detailsRef.current.scrollTop = detailsRef.current.scrollHeight
+  }, [open, active, step.details])
   const color = step.status === "error" ? CLAUDE_THINK_FAILED : active ? CLAUDE_THINK_ACTIVE : CLAUDE_THINK_DONE
   const kind = step.kind || inferClaudeKind(step)
   const loaderState = inferLoaderState(step)
@@ -149,7 +160,17 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
               <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
               {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
             </summary>
-            <pre className="mb-1.5 ml-10 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/40 px-2 py-1.5 font-mono text-[11px] leading-4 text-muted-foreground">{step.details}</pre>
+            {step.detailsKind === "prose" ? (
+              <pre
+                ref={detailsRef}
+                data-thinking-prose="1"
+                className="claude-think-prose mb-1.5 ml-10 max-h-48 overflow-auto whitespace-pre-wrap break-words border-l border-border/60 pl-3 font-sans text-[13px] leading-5 text-muted-foreground"
+              >
+                {step.details}
+              </pre>
+            ) : (
+              <pre ref={detailsRef} className="mb-1.5 ml-10 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/40 px-2 py-1.5 font-mono text-[11px] leading-4 text-muted-foreground">{step.details}</pre>
+            )}
           </details>
         ) : (
           <>

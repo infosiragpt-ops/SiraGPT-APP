@@ -25,6 +25,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const {
   buildSofficeConvertArgs,
+  sofficeSpawnEnv,
   isNativePdfFilename,
   pdfExportFilterFor,
 } = require('./soffice-pdf-export');
@@ -105,7 +106,7 @@ async function convertToPdf(sourcePath, outPath) {
   await fsp.mkdir(outDir, { recursive: true });
   try {
     const args = buildSofficeConvertArgs({ sourcePath, outDir, profileDir });
-    await _execFile(process.env.SOFFICE_BIN || 'soffice', args, { timeout: CONVERT_TIMEOUT_MS });
+    await _execFile(process.env.SOFFICE_BIN || 'soffice', args, { timeout: CONVERT_TIMEOUT_MS, env: sofficeSpawnEnv(profileDir) });
     const produced = (await fsp.readdir(outDir)).find((f) => f.endsWith('.pdf'));
     if (!produced) throw new Error('conversion produced no PDF');
     await fsp.mkdir(path.dirname(outPath), { recursive: true });

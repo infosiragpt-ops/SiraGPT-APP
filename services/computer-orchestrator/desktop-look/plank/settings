@@ -1,0 +1,17 @@
+[PlankDockPreferences]
+# Grok Bot look: centered bottom dock, three launchers only.
+Alignment=3
+AutoHide=0
+DockItems=10-chrome.dockitem;;20-thunar.dockitem;;30-terminal.dockitem
+HideMode=0
+IconSize=48
+LockItems=true
+Monitor=
+Offset=0
+PinnedOnly=true
+Position=0
+ShowDockItem=false
+Theme=Gtk+
+UnhideDelay=0
+ZoomEnabled=true
+ZoomPercent=150

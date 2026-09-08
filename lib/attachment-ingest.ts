@@ -13,7 +13,7 @@
  * Three exports the composer wires up:
  *   extractFilesFromDataTransfer(dt)  — drop / drag handlers
  *   extractFilesFromClipboard(cb)     — onPaste / global clipboard
- *   validateFile(file, opts)          — per-file allowlist + size gate
+ *   validateFile(file, opts)          — per-file size + sanity gate (any type)
  *
  * The composer itself owns upload + chip-rendering + state — this
  * utility is pure data extraction so it can be unit-tested in isolation
@@ -21,59 +21,13 @@
  * builder → knowledge files, etc.).
  */
 
-// ─── Allowlist (mirror of backend/src/middleware/upload.js) ──────────
-// Keep these two sources in sync — every type listed here must be
-// accepted by the backend, otherwise the user sees an upload error
-// after the chip has already rendered (bad UX).
-const ALLOWED_MIMES = new Set<string>([
-  // Images
-  "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
-  "image/bmp", "image/tiff", "image/svg+xml",
-  "image/heic", "image/heif",
-  // Documents
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/vnd.oasis.opendocument.text",
-  "application/vnd.oasis.opendocument.spreadsheet",
-  "application/vnd.oasis.opendocument.presentation",
-  "text/plain", "text/csv", "text/tab-separated-values", "text/markdown",
-  "text/html", "text/xml", "application/xml",
-  "application/json",
-  "application/rtf", "text/rtf",
-  "message/rfc822",
-  "application/vnd.ms-outlook",
-  // Audio (mirror of upload-security-policy.js)
-  "audio/mpeg", "audio/wav", "audio/ogg", "audio/webm", "audio/mp4",
-  // Video
-  "video/mp4", "video/mpeg", "video/quicktime", "video/webm",
-  // Archives / e-books
-  "application/zip", "application/x-zip", "application/x-zip-compressed",
-  "application/epub+zip",
-])
-
-const ALLOWED_EXTENSIONS = new Set<string>([
-  // Images
-  "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff",
-  "svg", "heic", "heif",
-  // Office / OpenDocument
-  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-  "odt", "ods", "odp",
-  // Text
-  "txt", "md", "markdown", "csv", "tsv", "rtf",
-  // Web/structured
-  "html", "htm", "json", "xml",
-  // Email
-  "eml", "msg",
-  // Audio / video (mirror of upload-security-policy.js)
-  "mp3", "wav", "ogg", "m4a", "mp4", "mov", "webm", "mpeg", "mpg",
-  // Archives / e-books
-  "zip", "epub",
-])
+// ─── Type policy ─────────────────────────────────────────────────────
+// The chat bar accepts ANY file format. There is deliberately no client
+// allowlist: the OS picker is unfiltered and `validateFile` only enforces
+// size, emptiness and Office lock-file sanity. The backend policy
+// (backend/src/services/upload-security-policy.js) is the single source of
+// truth for byte-level checks (filename sanitisation, size, known-extension
+// vs magic-byte mismatch) and mirrors the same "any type" stance.
 
 // Configurable client-side caps (universal ingest spec): 400 files per
 // batch, 100 MB per file. Overridable per deployment via NEXT_PUBLIC_*
@@ -84,6 +38,19 @@ function envInt(value: string | undefined, fallback: number): number {
 }
 const DEFAULT_MAX_BYTES =
   envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 100) * 1024 * 1024
+// Audio / video are uploaded in chunks (lib/composer/chunked-upload) and
+// transcribed server-side, so they get a much larger cap than documents.
+export const DEFAULT_MAX_MEDIA_BYTES =
+  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 2048) * 1024 * 1024
+const MEDIA_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "mp4", "mov", "webm", "mpeg", "mpg"])
+
+export function isMediaUpload(file: { type?: string; name?: string } | null | undefined): boolean {
+  const mime = String(file?.type || "").toLowerCase()
+  if (/^(audio|video)\//.test(mime)) return true
+  const name = String(file?.name || "")
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : ""
+  return MEDIA_EXTENSIONS.has(ext)
+}
 const DEFAULT_MAX_COUNT = envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILES, 400)
 
 export type IngestSource =
@@ -102,11 +69,11 @@ export interface IngestValidation {
   /** Localized, user-facing reason if !ok. */
   reason?: string
   /** Programmatic error code for telemetry. */
-  code?: "type_not_allowed" | "size_exceeded" | "empty_file" | "count_exceeded" | "office_temp_lock_file" | "mime_mismatch" | "hash_failed"
+  code?: "size_exceeded" | "empty_file" | "count_exceeded" | "office_temp_lock_file" | "mime_mismatch" | "hash_failed"
 }
 
 export interface IngestResult {
-  /** Files ready to upload (already validated against allowlist + size). */
+  /** Files ready to upload (already validated for size + sanity). */
   files: File[]
   /** Files that were rejected with the reason — caller surfaces a toast. */
   rejected: Array<{ file: File; reason: string; code: string }>
@@ -135,7 +102,7 @@ function isOfficeTemporaryLockFile(file: File): boolean {
 }
 
 /**
- * Per-file allowlist + size validation. Pure function — caller decides
+ * Per-file size + sanity validation. Pure function — caller decides
  * what to do with rejections (toast, persistent banner, etc.).
  */
 const MAGIC_MIME: Array<{ mime: string; test: (b: Uint8Array) => boolean }> = [
@@ -193,7 +160,7 @@ export function validateFile(
   file: File,
   opts: { maxBytes?: number } = {}
 ): IngestValidation {
-  const max = opts.maxBytes ?? DEFAULT_MAX_BYTES
+  const max = opts.maxBytes ?? (isMediaUpload(file) ? DEFAULT_MAX_MEDIA_BYTES : DEFAULT_MAX_BYTES)
   if (!file || file.size === 0) {
     return { ok: false, reason: "El archivo está vacío", code: "empty_file" }
   }
@@ -212,22 +179,16 @@ export function validateFile(
       code: "size_exceeded",
     }
   }
-  const mime = (file.type || "").toLowerCase()
-  const ext = extOf(file)
-  if (!ALLOWED_MIMES.has(mime) && !ALLOWED_EXTENSIONS.has(ext)) {
-    return {
-      ok: false,
-      reason: `Tipo no permitido: ${mime || ext || "desconocido"}`,
-      code: "type_not_allowed",
-    }
-  }
+  // Every format is accepted — unknown MIME types and extensions included.
+  // Unknown binaries are stored and described to the model by name/size;
+  // anything text-like is read as text server-side.
   return { ok: true }
 }
 
 /**
  * Convert an arbitrary Blob into a File with a sensible name. Used for
  * clipboard image paste (Cmd+Shift+4 → Cmd+V) where the blob has no
- * filename — without a name the upload would fail extension validation.
+ * filename — a stable name keeps chips, dedupe and server-side sniffing sane.
  */
 export function blobToFile(blob: Blob, hint?: string): File {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)
@@ -302,7 +263,8 @@ export function extractFilesFromDataTransfer(
  *   - sanitized HTML (opt-in; off by default to avoid injection risk)
  *
  * Screenshots arrive as image blobs WITHOUT a filename — we synthesize
- * one in `blobToFile` so the backend's extension check accepts them.
+ * one in `blobToFile` so the chip, dedupe key and server sniffing have a
+ * real name to work with.
  */
 export function extractFromClipboardEvent(
   e: ClipboardEvent,

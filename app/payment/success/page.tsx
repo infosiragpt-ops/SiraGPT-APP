@@ -105,7 +105,7 @@ function PaymentSuccessContent() {
 
   const handleContinue = () => {
     // Redirect to chat or profile page
-    router.push('/chat')
+    router.push('/agentes')
   }
 
   if (loading) {
@@ -322,7 +322,7 @@ function PaymentSuccessContent() {
                     </p>
                   )}
                   <div className="space-y-3">
-                    <Button onClick={() => router.push('/chat')} className="w-full">
+                    <Button onClick={() => router.push('/agentes')} className="w-full">
                       Reintentar
                     </Button>
                     <Button
