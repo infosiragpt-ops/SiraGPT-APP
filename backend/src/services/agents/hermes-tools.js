@@ -229,20 +229,21 @@ const hermesToolsetTool = {
 
 const hermesSkillCuratorTool = {
   name: 'skill_curator',
-  description: 'Hermes-style skill-library curator. observe/status/run (dry-run default) / record / pin / dedupe / promote. Never deletes bundled skills. High-signal skills land in Biblioteca with provenance.',
+  description: 'Hermes-style skill-library curator. observe/status/run (dry-run default) / record / pin / dedupe / promote / list_revisions / restore. Never deletes bundled skills. High-signal skills land in Biblioteca with provenance and revision history.',
   parameters: {
     type: 'object',
     required: ['action'],
     properties: {
-      action: { type: 'string', enum: ['observe', 'status', 'run', 'record', 'pin', 'list', 'dedupe', 'promote'] },
+      action: { type: 'string', enum: ['observe', 'status', 'run', 'record', 'pin', 'list', 'dedupe', 'promote', 'list_revisions', 'restore'] },
       skillName: { type: 'string' },
+      hash: { type: 'string' },
       dryRun: { type: 'boolean' },
       chatId: { type: 'string' },
     },
   },
   async execute(args, ctx = {}) {
     const userId = ctxUser(ctx);
-    if (!userId) return { ok: false, error: 'userId required' };
+    if (!userId) return { ok: false, error: 'Falta el userId.' };
     switch (args.action) {
       case 'observe':
         return skillCurator.observe(userId);
@@ -270,8 +271,15 @@ const hermesSkillCuratorTool = {
           chatId: args.chatId || ctx.chatId || null,
           skillName: args.skillName,
         });
+      case 'list_revisions':
+        return skillCurator.listRevisions(userId, args.skillName);
+      case 'restore':
+        return skillCurator.restoreRevision(userId, args.hash, {
+          dryRun: args.dryRun === true,
+          chatId: args.chatId || ctx.chatId || null,
+        });
       default:
-        return { ok: false, error: 'invalid action' };
+        return { ok: false, error: 'acción inválida' };
     }
   },
 };

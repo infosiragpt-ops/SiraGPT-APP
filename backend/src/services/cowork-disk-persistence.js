@@ -153,6 +153,36 @@ function clearSkillCurator(userId) {
   try { fs.unlinkSync(filePath); } catch { /* already gone */ }
 }
 
+function emptyRevisionLedger() {
+  return { skills: {} };
+}
+
+function loadSkillRevisions(userId) {
+  const row = loadJson(userPath('skill-revisions', userId), emptyRevisionLedger());
+  const skills = row.skills && typeof row.skills === 'object' && !Array.isArray(row.skills)
+    ? row.skills
+    : {};
+  return {
+    skills,
+    updatedAt: Number(row.updatedAt) || 0,
+  };
+}
+
+function saveSkillRevisions(userId, ledger) {
+  saveJson(userPath('skill-revisions', userId), {
+    userId: String(userId),
+    updatedAt: Date.now(),
+    skills: ledger?.skills && typeof ledger.skills === 'object' && !Array.isArray(ledger.skills)
+      ? ledger.skills
+      : {},
+  });
+}
+
+function clearSkillRevisions(userId) {
+  const filePath = userPath('skill-revisions', userId);
+  try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+}
+
 module.exports = {
   STORE_ROOT,
   loadMemoryEntries,
@@ -166,4 +196,7 @@ module.exports = {
   loadSkillCurator,
   saveSkillCurator,
   clearSkillCurator,
+  loadSkillRevisions,
+  saveSkillRevisions,
+  clearSkillRevisions,
 };

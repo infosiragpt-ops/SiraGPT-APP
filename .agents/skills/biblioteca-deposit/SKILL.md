@@ -21,10 +21,14 @@ user's Biblioteca.
 
 1. Produce the report or plan in markdown.
 2. Call `hermes-biblioteca.deposit({ userId, chatId, title, body, kind })`.
+   Skill versions use `depositRevision({ userId, skillName, hash, body })`.
 3. Confirm the returned `asset_id` is owner-scoped.
 4. Mid-chat writes persist immediately; listing is `listForUser(userId)`.
-5. Skill-curator promotes include `hash` + `procedencia` in the markdown body.
-   Same hash → skip. Same name, different hash → merge provenance, do not dump upstream.
+   Revisions: `listRevisions(userId, skillName)`.
+5. Skill-curator promotes include `hash` + `procedencia` + `revision` in the
+   markdown body. Same hash → skip. Same name, different hash → new revision
+   that **keeps** the prior artifact; `restoreByHash(userId, hash)` rolls
+   the current pointer back without dumping Hermes upstream.
 
 ## Hermes pattern
 
