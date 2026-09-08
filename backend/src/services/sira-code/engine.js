@@ -126,7 +126,7 @@ async function readFile(id, relPath, userId) {
     err.status = 400;
     throw err;
   }
-  return { path: relPath, content: result.content };
+  return { path: relPath, content: result.text != null ? result.text : result.content };
 }
 
 async function listFiles(id, userId) {

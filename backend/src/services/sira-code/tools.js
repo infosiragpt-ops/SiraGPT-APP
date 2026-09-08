@@ -17,6 +17,7 @@ const { runWebFetch } = require('./webfetch');
 const { runTodo } = require('./todos');
 const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox');
 const { searchGrep, searchGlob } = require('./search');
+const { runRead, runWrite, runEdit } = require('./file-tools');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -28,54 +29,6 @@ function toolError(code, message) {
 
 function toolOk(content, extra = {}) {
   return { ok: true, content: cap(content), ...extra };
-}
-
-async function runRead(workspace, args) {
-  const rel = String(args.path || args.filename || '').trim();
-  if (!rel) return toolError('validation', 'path is required');
-  try {
-    let text = await workspace.readFile(rel);
-    const offset = Number(args.offset) || 0;
-    const limit = Number(args.limit) || 0;
-    if (offset > 0 || limit > 0) {
-      const lines = text.split('\n');
-      const start = Math.max(0, offset);
-      text = lines.slice(start, limit > 0 ? start + limit : undefined).join('\n');
-    }
-    return toolOk(text, { path: rel });
-  } catch (err) {
-    return toolError(err.code || 'read_failed', err.message || 'read failed');
-  }
-}
-
-async function runWrite(workspace, args) {
-  const rel = String(args.path || args.filename || '').trim();
-  if (!rel) return toolError('validation', 'path is required');
-  try {
-    const saved = await workspace.writeFile(rel, args.content == null ? '' : args.content);
-    return toolOk(`wrote ${saved}`, { path: saved });
-  } catch (err) {
-    return toolError(err.code || 'write_failed', err.message || 'write failed');
-  }
-}
-
-async function runEdit(workspace, args) {
-  const rel = String(args.path || args.filename || '').trim();
-  const oldStr = String(args.old_str || args.oldString || '');
-  const newStr = String(args.new_str || args.newString || args.content || '');
-  if (!rel) return toolError('validation', 'path is required');
-  if (!oldStr) return toolError('validation', 'old_str is required');
-  try {
-    const current = await workspace.readFile(rel);
-    const count = current.split(oldStr).length - 1;
-    if (count === 0) return toolError('edit_miss', 'old_str not found');
-    if (count > 1) return toolError('edit_ambiguous', 'old_str occurs more than once');
-    const next = current.replace(oldStr, newStr);
-    const saved = await workspace.writeFile(rel, next);
-    return toolOk(`edited ${saved}`, { path: saved });
-  } catch (err) {
-    return toolError(err.code || 'edit_failed', err.message || 'edit failed');
-  }
 }
 
 async function runBash(workspace, args, ctx = {}) {
@@ -201,7 +154,7 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'read',
-      description: 'Lee un archivo de texto del workspace de la sesión.',
+      description: 'Lee un archivo de texto del workspace aislado (jail). offset es 1-indexado; limit acota líneas. Rechaza binarios, tamaños excesivos y rutas fuera del workspace.',
       parameters: {
         type: 'object',
         properties: {
@@ -217,7 +170,7 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'write',
-      description: 'Crea o sobrescribe un archivo UTF-8 en el workspace.',
+      description: 'Crea o sobrescribe un archivo UTF-8 dentro del workspace. Planificar: denegado. Construir: sujeto a permiso/revisor. Tope de tamaño del jail.',
       parameters: {
         type: 'object',
         properties: {
@@ -232,7 +185,7 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'edit',
-      description: 'Reemplaza old_str por new_str en un archivo (una sola ocurrencia).',
+      description: 'Reemplaza old_str por new_str (una ocurrencia, o replaceAll). Planificar: denegado. Construir: sujeto a permiso/revisor. No interpola $ de replace.',
       parameters: {
         type: 'object',
         properties: {

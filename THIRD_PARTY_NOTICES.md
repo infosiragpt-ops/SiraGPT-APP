@@ -93,7 +93,13 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   Planificar stays read-only even after permission-resume; ~0%
   copy of `vendor/opencode` `shell.ts` — see AGENTS.md §25), and
   workspace-jailed grep/glob matching the OpenCode search contract
-  (`pattern` / `path` / `include` / `limit`, bounded previews).
+  (`pattern` / `path` / `include` / `limit`, bounded previews), and
+  jailed `read` / `write` / `edit` matching the OpenCode file-tool
+  contract (1-indexed offset, unique old_str, size caps, binary
+  reject, symlink-aware path jail; Planificar stays read-only;
+  Construir writes go through permission-resume when the composer
+  asks). ~0% copy of `vendor/opencode` `read.ts` / `write.ts` /
+  `edit.ts` — see AGENTS.md §25.
   The native helpers are local and deterministic — no title-agent
   LLM, no Effect runtime, no Snapshot git-diff, no MAX_STEPS
   prompt dump, no ripgrep sidecar, no global tool-output

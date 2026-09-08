@@ -28,6 +28,18 @@ function workspaceRootFor(sessionId) {
   return path.join(os.tmpdir(), 'sira-code', safe);
 }
 
+function pathTraversalError() {
+  const err = new Error('ruta fuera del workspace');
+  err.code = 'path_traversal';
+  return err;
+}
+
+function isInsideRoot(root, abs) {
+  const rootReal = path.resolve(root);
+  const resolved = path.resolve(abs);
+  return resolved === rootReal || resolved.startsWith(rootReal + path.sep);
+}
+
 function jailPath(root, relPath) {
   const raw = String(relPath || '').replace(/\\/g, '/').trim() || '.';
   const stripped = raw.replace(/^\/workspace\/?/, '');
@@ -38,12 +50,51 @@ function jailPath(root, relPath) {
   }
   const resolved = path.resolve(root, stripped);
   const rootReal = path.resolve(root);
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + path.sep)) {
-    const err = new Error('ruta fuera del workspace');
-    err.code = 'path_traversal';
-    throw err;
+  if (!isInsideRoot(rootReal, resolved)) {
+    throw pathTraversalError();
   }
   return resolved;
+}
+
+/**
+ * Lexical jail plus symlink follow. A mid-path link that escapes the
+ * workspace is rejected even when the requested string looks in-tree.
+ * Missing tails (new files) return the lexical path after parents pass.
+ */
+async function jailRealPath(root, relPath) {
+  const resolved = jailPath(root, relPath);
+  let rootReal;
+  try {
+    rootReal = await fs.realpath(root);
+  } catch {
+    rootReal = path.resolve(root);
+  }
+  const rel = path.relative(rootReal, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw pathTraversalError();
+  }
+  let cursor = rootReal;
+  const parts = rel === '' ? [] : rel.split(path.sep).filter(Boolean);
+  for (const part of parts) {
+    cursor = path.join(cursor, part);
+    let st;
+    try {
+      st = await fs.lstat(cursor);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return resolved;
+      throw err;
+    }
+    if (!st.isSymbolicLink()) continue;
+    let real;
+    try {
+      real = await fs.realpath(cursor);
+    } catch {
+      throw pathTraversalError();
+    }
+    if (!isInsideRoot(rootReal, real)) throw pathTraversalError();
+    cursor = real;
+  }
+  return cursor;
 }
 
 async function createWorkspace(sessionId) {
@@ -54,8 +105,11 @@ async function createWorkspace(sessionId) {
     resolve(relPath) {
       return jailPath(root, relPath);
     },
+    async resolveSafe(relPath) {
+      return jailRealPath(root, relPath);
+    },
     async readFile(relPath) {
-      const abs = jailPath(root, relPath);
+      const abs = await jailRealPath(root, relPath);
       const stat = await fs.stat(abs);
       if (!stat.isFile()) {
         const err = new Error('no es un archivo');
@@ -69,7 +123,7 @@ async function createWorkspace(sessionId) {
       return fs.readFile(abs, 'utf8');
     },
     async writeFile(relPath, content) {
-      const abs = jailPath(root, relPath);
+      const abs = await jailRealPath(root, relPath);
       await fs.mkdir(path.dirname(abs), { recursive: true });
       const text = String(content == null ? '' : content);
       if (Buffer.byteLength(text) > MAX_FILE_BYTES) {
@@ -110,11 +164,11 @@ async function createWorkspace(sessionId) {
           }
         }
       }
-      await walk(jailPath(root, relDir), 0);
+      await walk(await jailRealPath(root, relDir), 0);
       return files;
     },
     async listDir(relDir = '.', { maxEntries = 200 } = {}) {
-      const abs = jailPath(root, relDir);
+      const abs = await jailRealPath(root, relDir);
       const stat = await fs.stat(abs);
       if (!stat.isDirectory()) {
         const err = new Error('no es un directorio');
@@ -148,7 +202,7 @@ async function createWorkspace(sessionId) {
       return out;
     },
     async removeFile(relPath) {
-      const abs = jailPath(root, relPath);
+      const abs = await jailRealPath(root, relPath);
       const stat = await fs.stat(abs);
       if (!stat.isFile()) {
         const err = new Error('no es un archivo');
@@ -274,6 +328,8 @@ module.exports = {
   MAX_OUTPUT_BYTES,
   workspaceRootFor,
   jailPath,
+  jailRealPath,
+  isInsideRoot,
   createWorkspace,
   execInWorkspace,
 };

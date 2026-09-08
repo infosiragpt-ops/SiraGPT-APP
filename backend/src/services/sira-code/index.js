@@ -24,6 +24,7 @@ const sessionSummary = require('./session-summary');
 const toolRounds = require('./tool-rounds');
 const search = require('./search');
 const shellSandbox = require('./shell-sandbox');
+const fileTools = require('./file-tools');
 
 module.exports = {
   ...agents,
@@ -43,4 +44,9 @@ module.exports = {
   ...toolRounds,
   ...search,
   ...shellSandbox,
+  runRead: fileTools.runRead,
+  runWrite: fileTools.runWrite,
+  runEdit: fileTools.runEdit,
+  replaceUnique: fileTools.replaceUnique,
+  FILE_TOOL_ERRORS: fileTools.ERRORS,
 };
