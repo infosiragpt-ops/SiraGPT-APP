@@ -20,6 +20,9 @@
  *   - A held lease fails closed (does not run) with a Spanish reason
  *     and stable code `overlap_skipped`.
  *
+ * A later lease operation probes the same client again after a failure;
+ * Redis-down is not a permanent process-lifetime decision. This never
+ * replays an agent invocation. Local holders stay local until release/expiry.
  * No new env vars. Uses the existing REDIS_URL only when a client is
  * injected or lazily attached outside NODE_ENV=test.
  */
@@ -145,10 +148,11 @@ function createLocalStore(now) {
   }
 
   return {
+    peek,
     tryAcquire(key, token, ttlMs, t) {
       gc(t);
       if (peek(key, t)) return null;
-      const row = { token, expiresAt: t + ttlMs, ttlMs, acquiredAt: t };
+      const row = { token, expiresAt: t + ttlMs, ttlMs, acquiredAt: t, mode: 'local' };
       leases.set(key, row);
       return row;
     },
@@ -168,7 +172,7 @@ function createLocalStore(now) {
       return true;
     },
     write(key, token, ttlMs, t) {
-      leases.set(key, { token, expiresAt: t + ttlMs, ttlMs, acquiredAt: t });
+      leases.set(key, { token, expiresAt: t + ttlMs, ttlMs, acquiredAt: t, mode: 'redis' });
     },
     size(t) {
       gc(t);
@@ -182,6 +186,7 @@ function createOverlapLease(opts = {}) {
   const tokenFactory = typeof opts.tokenFactory === 'function' ? opts.tokenFactory : newToken;
   const defaultTtlMs = clampTtl(opts.ttlMs);
   const local = createLocalStore(now);
+  const acquiring = new Set();
   let redis = opts.redis || null;
   let redisDisabled = false;
   let fallbackCount = 0;
@@ -246,38 +251,53 @@ function createOverlapLease(opts = {}) {
     const token = String(tokenFactory());
     const t = now();
 
-    if (redis && !redisDisabled) {
-      try {
-        const won = await redisSetNx(key, token, ttl);
-        if (won) {
-          shadowLocal(key, token, ttl, t);
-          acquireCount += 1;
-          return {
-            ok: true,
-            token,
-            key,
-            jobId: String(jobId),
-            ownerId: ownerId == null ? null : String(ownerId),
-            holderId: holderId || null,
-            expiresAt: t + ttl,
-            ttlMs: ttl,
-            distributed: true,
-            fallback: null,
-            mode: 'redis',
-          };
-        }
-        heldCount += 1;
-        return heldResult({ jobId, distributed: true, fallback: null });
-      } catch (err) {
-        if (!isRedisUnavailable(err)) {
+    const localHolder = local.peek(key, t)?.mode === 'local';
+    // Recovery must not replace a task that started in local fallback. Reserve
+    // the acquisition too: two pending SETs must not cross Redis/local modes.
+    if (localHolder || acquiring.has(key)) {
+      heldCount += 1;
+      return heldResult({ jobId, distributed: false,
+        fallback: localHolder ? (redis ? 'redis_unavailable' : 'local_only') : null });
+    }
+    acquiring.add(key);
+    try {
+      // One bounded Redis operation per new request, no background replay.
+      // The production client retains its existing command/connect timeouts.
+      if (redis) {
+        try {
+          const won = await redisSetNx(key, token, ttl);
+          redisDisabled = false;
+          if (won) {
+            shadowLocal(key, token, ttl, t);
+            acquireCount += 1;
+            return {
+              ok: true,
+              token,
+              key,
+              jobId: String(jobId),
+              ownerId: ownerId == null ? null : String(ownerId),
+              holderId: holderId || null,
+              expiresAt: t + ttl,
+              ttlMs: ttl,
+              distributed: true,
+              fallback: null,
+              mode: 'redis',
+            };
+          }
           heldCount += 1;
           return heldResult({ jobId, distributed: true, fallback: null });
+        } catch (err) {
+          if (!isRedisUnavailable(err)) {
+            heldCount += 1;
+            return heldResult({ jobId, distributed: true, fallback: null });
+          }
+          markFallback();
         }
-        markFallback();
       }
+      return acquireLocal(spec);
+    } finally {
+      acquiring.delete(key);
     }
-
-    return acquireLocal(spec);
   }
 
   async function renew(claim, { ttlMs } = {}) {
@@ -287,9 +307,12 @@ function createOverlapLease(opts = {}) {
     const ttl = clampTtl(ttlMs ?? claim.ttlMs ?? defaultTtlMs);
     const t = now();
 
-    if (claim.mode === 'redis' && redis && !redisDisabled) {
+    if (claim.mode === 'redis') {
+      // A local shadow is not proof that Redis renewed the distributed lease.
+      if (!redis) return { ok: false, code: 'LEASE_INVALID', reason: 'redis_unavailable', fallback: 'redis_unavailable' };
       try {
         const updated = await redisEval(RENEW_SCRIPT, claim.key, claim.token, String(ttl));
+        redisDisabled = false;
         if (updated) {
           shadowLocal(claim.key, claim.token, ttl, t);
           return { ok: true, expiresAt: t + ttl, mode: 'redis' };
@@ -316,6 +339,7 @@ function createOverlapLease(opts = {}) {
     if (claim.mode === 'redis' && redis) {
       try {
         redisReleased = (await redisEval(RELEASE_SCRIPT, claim.key, claim.token)) > 0;
+        redisDisabled = false;
       } catch (err) {
         if (isRedisUnavailable(err)) markFallback();
       }
@@ -359,6 +383,8 @@ function createOverlapLease(opts = {}) {
   function snapshot() {
     return {
       liveLocal: local.size(now()),
+      pendingAcquires: acquiring.size,
+      redisConfigured: Boolean(redis),
       redisAttached: Boolean(redis) && !redisDisabled,
       redisDisabled,
       acquireCount,
@@ -406,7 +432,7 @@ function resetDefaultOverlapLease() {
 function ensureDefaultRedisClient({ env = process.env, createClient } = {}) {
   if (env.NODE_ENV === 'test') return getDefaultOverlapLease();
   const lease = getDefaultOverlapLease();
-  if (lease.snapshot().redisAttached) return lease;
+  if (lease.snapshot().redisConfigured) return lease;
   const url = env.REDIS_URL;
   if (!url) return lease;
   try {
@@ -437,7 +463,7 @@ function ensureDefaultRedisClient({ env = process.env, createClient } = {}) {
 
 function acquireJobOverlap(spec) {
   const lease = getDefaultOverlapLease();
-  if (!lease.snapshot().redisAttached) return lease.acquireLocal(spec);
+  if (!lease.snapshot().redisConfigured) return lease.acquireLocal(spec);
   return lease.acquire(spec);
 }
 

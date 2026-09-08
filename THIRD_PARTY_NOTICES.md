@@ -63,6 +63,11 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   the lease is held, and an honest single-process Map if Redis is down.
   Not a dump of `cron/active-jobs.ts` or `cron/service/ops.ts`. Snapshot
   SHA `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
+  The lease's Redis recovery is a SiraGPT-owned hardening of that adaptation:
+  later operations probe the configured client again, local holders are not
+  replaced during recovery, and a Redis renewal is never confirmed by a local
+  shadow. No additional upstream runtime, dependency, credentials or gateway
+  is copied for this refinement.
   The session/tool-budget circuit breaker in
   `backend/src/services/agents/tool-failure-circuit.js` (wired into
   `react-agent.js` and `agent-task-runner.js`) is a native CommonJS
