@@ -947,6 +947,7 @@ module.exports = {
   getProviderRuntimeProfile,
   buildProviderChatPayload,
   sanitizeMessagesForProvider,
+  isDeepSeekV4ModelId,
   createGatewayPlan,
   dispatchGatewayCall,
   createLiteLLMGateway,
