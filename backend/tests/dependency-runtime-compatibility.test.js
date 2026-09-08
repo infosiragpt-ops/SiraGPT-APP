@@ -16,7 +16,7 @@ const officeParser = require('officeparser');
 
 test('document writers declare their YAML runtime dependency instead of borrowing a parent or transitive install', async () => {
   const manifest = require('../package.json');
-  assert.equal(manifest.dependencies['js-yaml'], '4.3.1');
+  assert.equal(manifest.dependencies['js-yaml'], '4.3.2');
   const backendDirectory = path.resolve(__dirname, '..');
   assert.ok(require.resolve('js-yaml').startsWith(path.join(backendDirectory, 'node_modules') + path.sep));
   const yaml = require('js-yaml');
