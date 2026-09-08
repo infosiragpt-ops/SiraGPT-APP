@@ -168,6 +168,9 @@ const hermesDelegateTool = {
     return delegateBridge.delegateTask({
       userId,
       prompt: args.prompt,
+      model: ctx.model,
+      provider: ctx.provider,
+      signal: ctx.signal,
       mode: args.mode || 'async',
       thinking: args.thinking || 'low',
       parentTaskId: args.parentTaskId || ctx.taskId || null,

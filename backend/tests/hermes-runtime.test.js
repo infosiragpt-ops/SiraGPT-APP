@@ -171,6 +171,11 @@ test('session search returns Hermes-style match windows and bookends', () => {
 test('agent bridge adds a learning nudge after complex tool-using runs without UI changes', async () => {
   const agentEntryPath = require.resolve('../src/services/agents/agent-entry');
   const originalExports = require(agentEntryPath);
+  const nativeLlm = require('../src/services/agent-runner/native-llm');
+  const originalResolveClient = nativeLlm.resolveAgentLlmClient;
+  nativeLlm.resolveAgentLlmClient = () => ({ chat: { completions: { create: async () => {
+    throw new Error('learning fixture must not call a model');
+  } } } });
   const calls = [];
   require.cache[agentEntryPath].exports = {
     ...originalExports,
@@ -197,7 +202,7 @@ test('agent bridge adds a learning nudge after complex tool-using runs without U
     const result = await agentBridge.runTurn({
       userId: `hermes-learn-${Date.now()}`,
       prompt: 'Investiga, modifica código, corre pruebas y deja el flujo reutilizable.',
-      model: 'test-model',
+      model: 'Sira Pro',
       learning: true,
     });
 
@@ -212,5 +217,6 @@ test('agent bridge adds a learning nudge after complex tool-using runs without U
     assert.ok(result.learning.skillCandidate.tools.includes('monitor_ci'));
   } finally {
     require.cache[agentEntryPath].exports = originalExports;
+    nativeLlm.resolveAgentLlmClient = originalResolveClient;
   }
 });
