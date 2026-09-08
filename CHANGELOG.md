@@ -22,6 +22,13 @@ and improvement cycles follow a sequential number with the date the work landed.
   errors. `GET /api/agentes-coding/health` stays `{ ok, enabled }`.
   No Monaco, no `/code`, no Daytona, flag stays off in production.
   See `docs/agentes-coding-sandbox.md`.
+- Phase 3a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  flag-gated IDE shell on `/agentes` (file tree, Monaco editor, diff
+  pane, WebSocket-ready terminal stub) wired to
+  `createSession` / `listFiles` / `readFile` / `writeFile`. The client
+  mounts chrome only when `GET /api/agentes-coding/health` reports
+  `enabled:true`. No `/code` revival, no xterm npm dep, flag stays
+  off in production. See `docs/agentes-coding-ide.md`.
 
 
 - SiraCode native `multiedit` applies a jailed batch of unique

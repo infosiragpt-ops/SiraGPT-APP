@@ -60,8 +60,9 @@ Stable codes: `E_FLAG_OFF` `E_PARAMS` `E_SESSION_NOT_FOUND`
 
 ## Out of scope
 
-Monaco / xterm UI, cloning user repos, enabling the flag on the Lenovo
-origin, Daytona (AGPL), full OpenSandbox/K8s deploy. Later PRs.
+Cloning user repos, enabling the flag on the Lenovo origin, Daytona
+(AGPL), full OpenSandbox/K8s deploy. Phase 3a IDE shell (flag-gated
+Monaco on `/agentes`): [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md).
 
 ## Tests
 

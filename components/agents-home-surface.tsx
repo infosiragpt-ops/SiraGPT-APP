@@ -9,6 +9,7 @@ import * as React from "react"
 import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 
+import { AgentesCodingIdeGate } from "@/components/agentes/coding-ide-gate"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { AGENTS_HOME_PATH } from "@/lib/agents-home-path"
 import { useAuth } from "@/lib/auth-context-integrated"
@@ -58,6 +59,7 @@ export function AgentsHomeSurface() {
   return (
     <div className="relative h-full min-h-0" data-testid="agents-home">
       <ChatInterface />
+      <AgentesCodingIdeGate />
     </div>
   )
 }

@@ -11,6 +11,12 @@ Attributions for third-party ARCHITECTURE adapted into this codebase.
   Kubernetes operator was vendored. Daytona (AGPL) is not used.
   See `docs/agentes-coding-sandbox.md` and `docs/agentes-arquitectura.md`.
 
+- **Monaco Editor** (`monaco-editor` / `@monaco-editor/react`, MIT) — Phase 3a
+  reuses the existing npm wrapper already in `package.json` for the
+  flag-gated `/agentes` IDE (`components/agentes/coding-ide-shell.tsx`,
+  `components/code/monaco-code-area.tsx`). No additional vendor tree.
+  See `docs/agentes-coding-ide.md`.
+
 (Package licence texts live in the generated THIRD_PARTY_LICENSES.md —
 do not add entries there by hand; the licenses CI gate regenerates it.)
 

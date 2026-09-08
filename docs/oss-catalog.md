@@ -69,7 +69,7 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `SWE-agent/SWE-agent` | MIT | Eval / benchmark harness | pattern for evals only — never the production control plane | `backend/scripts/` eval (future) | tier-s |
 | `SWE-bench/SWE-bench` | MIT | Coding-agent benchmark corpus | pattern / fixture ideas for goldens — not a runtime dep | eval harness (future) | tier-s |
 | `mem0ai/mem0` | Apache-2.0 | Long-term agent memory (profile / search / conclude) | **pattern only**. Complements Hermes MEMORY/USER; no Python dump, no hosted lock-in in Phase 1 | `backend/src/services/agents/hermes-*.js` (future) | tier-s |
-| `xtermjs/xterm.js` | MIT | In-browser terminal | code via npm when the flag-gated `/agentes` IDE lands | `/agentes` terminal pane (later PR, UI-lock) | tier-s |
+| `xtermjs/xterm.js` | MIT | In-browser terminal | stub in Phase 3a (`data-ws-ready`); npm later after SBOM | `/agentes` terminal pane | tier-s |
 | `microsoft/playwright-mcp` | Apache-2.0 | Official Playwright MCP server (a11y snapshots, no vision required) | pattern / optional Apache npm after SSRF + secret review. Not a community MCP dump | existing MCP client + preview QA (future) | tier-s |
 | `aaif-goose/goose` (was `block/goose`) | Apache-2.0 | Recipe / ACP-style local agent (AAIF / Linux Foundation) | **pattern only** (recipes, tool loop). Not the desktop app, not a vendor of the Rust tree | harness recipes (future) | tier-s |
 
@@ -79,7 +79,7 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 |---|---|---|---|---|---|
 | `kata-containers/kata-containers` | Apache-2.0 | Alternate microVM RuntimeClass | pattern | later K8s isolation | next |
 | `google/nsjail` | Apache-2.0 | Process jail for untrusted commands | pattern | harness exec gate (future) | next |
-| `microsoft/monaco-editor` | MIT | In-browser code editor | code via npm (`monaco-editor`) when the flag-gated `/agentes` IDE lands | `/agentes` web IDE (later PR, UI-lock) | next |
+| `microsoft/monaco-editor` | MIT | In-browser code editor | reuse existing `@monaco-editor/react` npm (already in package.json) on the flag-gated `/agentes` IDE | `/agentes` web IDE (Phase 3a) | next |
 | `tree-sitter/tree-sitter` | MIT | Syntax-aware repo map / edits | pattern or official grammar packages — not a monorepo dump | harness repo-map (future) | next |
 | `BurntSushi/ripgrep` | MIT / Unlicense | Fast workspace search | pattern (SiraCode already has a jailed walker). Binary sidecar only if a later PR proves need | `sira-code/search.js` (already patterned) | next |
 | `modelcontextprotocol/typescript-sdk` | MIT | Official MCP TypeScript SDK | code via npm if a later PR needs protocol types | existing `backend/src/services/agent-harness/mcp-client.js` | next |
@@ -147,7 +147,8 @@ policy. Procedure: `AGENTS.md` §25.
 
 - Clone 176 (or 120) repos into `third_party/`
 - Vendor OpenSandbox, E2B, Monaco, xterm, or tree-sitter
-- Ship a Monaco IDE or change default `/agentes` UX
+- Ship a Monaco IDE on default `/agentes` UX (Phase 3a is flag-gated;
+  off ⇒ identical first paint)
 - Enable `AGENTES_CODING_V2` in production
 - Touch F7 / #492 / SiraComputer
 - Introduce OpenRouter as a user-visible vendor
