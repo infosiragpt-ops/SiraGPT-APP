@@ -1353,9 +1353,9 @@ app.use('/api/codex', codexV2Routes);
 // Deployments / Publishing (flag DEPLOYMENTS_V2). Bearer-auth, CSRF-exempt like
 // codex; flag off ⇒ every route except /health is 404.
 app.use('/api/deployments', deploymentsRoutes);
-// Coding Agents V2 scaffold (flag AGENTES_CODING_V2). Public /health always
-// 200 with { ok, enabled }; default OFF in prod. Flag off ⇒ no /agentes UX
-// change (UI-lock). Phase 1 has no other routes.
+// Coding Agents V2 (flag AGENTES_CODING_V2). Public /health always 200 with
+// { ok, enabled }; default OFF. Flag off ⇒ every other path is 404. Phase 2a
+// adds the coding-sandbox session adapter; no /agentes UX change (UI-lock).
 app.use('/api/agentes-coding', agentesCodingRoutes);
 // Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.

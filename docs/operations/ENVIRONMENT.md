@@ -433,7 +433,9 @@ payload in the recovery record.
 | `SIRAGPT_MEMORY_EMBED_MODEL` | Memory embedding model; must return 1024 dimensions | `voyage-3-large` |
 | `VOYAGE_API_KEY` | Voyage AI key for 1024-dimension memory embeddings | (required when provider is `voyage`) |
 | `JINA_API_KEY` | Jina AI key for 1024-dimension memory embeddings | (required when provider is `jina`) |
-| `AGENTES_CODING_V2` | Coding Agents Phase 1 flag (`1`/`true`/`on`). Query `GET /api/agentes-coding/health`. Default OFF in production; does not change `/agentes` UX when off | (off) |
+| `AGENTES_CODING_V2` | Coding Agents flag (`1`/`true`/`on`). Query `GET /api/agentes-coding/health`. Default OFF in production; does not change `/agentes` UX when off. Phase 2a session adapter: `docs/agentes-coding-sandbox.md` | (off) |
+| `AGENTES_CODING_SANDBOX_DRIVER` | DEV session driver: `memory` (default) or `docker` | `memory` |
+| `AGENTES_CODING_SANDBOX_IMAGE` | Image the docker driver `docker run`s per session | `siragpt-coding-sandbox:dev` |
 
 ## 🧰 MCP Connectors
 

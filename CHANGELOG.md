@@ -14,6 +14,15 @@ and improvement cycles follow a sequential number with the date the work landed.
   Playwright MCP, Goose) plus `/agentes` architecture, license gate,
   and an off-by-default flag helper (`GET /api/agentes-coding/health`).
   Default `/agentes` UX is unchanged. No monorepo dump.
+- Phase 2a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  internal `coding-sandbox` session adapter (`createSession` / `exec` /
+  `readFile` / `writeFile` / `listFiles` / `exposePort` / `destroy`)
+  with a memory driver and a Docker-compose DEV driver (injectable
+  stubs, deny-by-default network, CPU/RAM limit flags). Spanish
+  errors. `GET /api/agentes-coding/health` stays `{ ok, enabled }`.
+  No Monaco, no `/code`, no Daytona, flag stays off in production.
+  See `docs/agentes-coding-sandbox.md`.
+
 
 - SiraCode native `multiedit` applies a jailed batch of unique
   `old_str` → `new_str` replacements atomically (nothing is written

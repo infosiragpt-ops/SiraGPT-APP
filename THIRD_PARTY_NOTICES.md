@@ -1,6 +1,16 @@
 # Third-party notices
 
 Attributions for third-party ARCHITECTURE adapted into this codebase.
+
+- **OpenSandbox** (https://github.com/opensandbox-group/OpenSandbox,
+  Apache-2.0) and **E2B** (https://github.com/e2b-dev/E2B, Apache-2.0)
+  — the `coding-sandbox` session adapter
+  (`backend/src/services/agentes-coding/coding-sandbox/`) is a native
+  CommonJS rewrite of the lifecycle idea (create / exec / files /
+  destroy) plus deny-by-default egress. No upstream SDK, CLI, or
+  Kubernetes operator was vendored. Daytona (AGPL) is not used.
+  See `docs/agentes-coding-sandbox.md` and `docs/agentes-arquitectura.md`.
+
 (Package licence texts live in the generated THIRD_PARTY_LICENSES.md —
 do not add entries there by hand; the licenses CI gate regenerates it.)
 
