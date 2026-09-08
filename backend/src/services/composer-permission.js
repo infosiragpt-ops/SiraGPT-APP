@@ -68,6 +68,9 @@ const TOOL_ALIASES = Object.freeze({
   web_fetch: 'webfetch',
   todo: 'todo',
   todowrite: 'todo',
+  diagnostics: 'diagnostics',
+  lsp_diagnostics: 'diagnostics',
+  diagnostic: 'diagnostics',
 });
 
 function canonicalTool(name) {

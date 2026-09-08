@@ -25,6 +25,7 @@ const toolRounds = require('./tool-rounds');
 const search = require('./search');
 const shellSandbox = require('./shell-sandbox');
 const fileTools = require('./file-tools');
+const diagnostics = require('./diagnostics');
 
 module.exports = {
   ...agents,
@@ -49,4 +50,8 @@ module.exports = {
   runEdit: fileTools.runEdit,
   replaceUnique: fileTools.replaceUnique,
   FILE_TOOL_ERRORS: fileTools.ERRORS,
+  runDiagnostics: diagnostics.runDiagnostics,
+  prettyDiagnostic: diagnostics.pretty,
+  reportDiagnosticsFile: diagnostics.reportFile,
+  DIAGNOSTIC_ERRORS: diagnostics.ERRORS,
 };

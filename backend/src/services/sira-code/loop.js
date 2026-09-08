@@ -241,6 +241,7 @@ async function runPrompt(session, text, {
 
         stageEvent(session, 'executing', {
           label: auth.tool === 'read' || auth.tool === 'grep' || auth.tool === 'glob'
+            || auth.tool === 'ls' || auth.tool === 'diagnostics'
             ? 'Analizando archivo'
             : 'Ejecutando código',
           tool: auth.tool,
