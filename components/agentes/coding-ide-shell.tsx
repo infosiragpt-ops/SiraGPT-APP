@@ -16,8 +16,9 @@ import {
   agentesCodingApi,
   type CodingFileEntry,
   type CodingSession,
+  type CodingRepoMapHint,
 } from "@/lib/agentes-coding/api"
-import { buildFileTree, languageFromPath, type FileTreeNode } from "@/lib/agentes-coding/file-tree"
+import { buildFileTree, applyMapHints, languageFromPath, type FileTreeNode } from "@/lib/agentes-coding/file-tree"
 import { cn } from "@/lib/utils"
 
 const MonacoCodeArea = dynamic(() => import("@/components/code/monaco-code-area"), { ssr: false })
@@ -38,8 +39,12 @@ export function CodingIdeShell() {
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState("")
   const [terminalOut, setTerminalOut] = React.useState("")
+  const [mapHints, setMapHints] = React.useState<CodingRepoMapHint[]>([])
 
-  const tree = React.useMemo(() => buildFileTree(files), [files])
+  const tree = React.useMemo(
+    () => applyMapHints(buildFileTree(files), mapHints),
+    [files, mapHints],
+  )
   const dirty = Boolean(activePath && draft !== original)
   const language = languageFromPath(activePath || newPath)
 
@@ -65,6 +70,7 @@ export function CodingIdeShell() {
       setActivePath("")
       setOriginal("")
       setDraft("")
+      setMapHints([])
       await refreshFiles(next.id)
     } catch (err) {
       fail(err)
@@ -85,6 +91,7 @@ export function CodingIdeShell() {
       setOriginal("")
       setDraft("")
       setTerminalOut("")
+      setMapHints([])
     } catch (err) {
       fail(err)
     } finally {
@@ -137,6 +144,20 @@ export function CodingIdeShell() {
       await agentesCodingApi.writeFile(session.id, path, draft && activePath === path ? draft : "")
       await refreshFiles(session.id)
       await openFile(path)
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRepoMap() {
+    if (!session) return
+    setBusy(true)
+    setError("")
+    try {
+      const mapped = await agentesCodingApi.repoMap(session.id, { limit: 16 })
+      setMapHints(mapped.hints)
     } catch (err) {
       fail(err)
     } finally {
@@ -252,7 +273,31 @@ export function CodingIdeShell() {
             >
               Crear
             </button>
+            <button
+              type="button"
+              className="h-8 rounded-md border border-border px-2 text-xs"
+              onClick={handleRepoMap}
+              disabled={!session || busy}
+              data-testid="agentes-coding-repo-map"
+            >
+              Mapa
+            </button>
           </div>
+          {mapHints.length > 0 ? (
+            <ul className="px-2 pb-2" data-testid="agentes-coding-repo-map-hints">
+              {mapHints.filter((hint) => hint.kind === "file").slice(0, 6).map((hint) => (
+                <li key={`${hint.kind}:${hint.path}:${hint.name}`}>
+                  <button
+                    type="button"
+                    className="block w-full truncate px-2 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-muted/60"
+                    onClick={() => openFile(hint.path)}
+                  >
+                    {hint.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {session && files.length === 0 ? (
             <p className="px-3 text-xs text-muted-foreground">Sin archivos. Crea uno para empezar.</p>
           ) : null}

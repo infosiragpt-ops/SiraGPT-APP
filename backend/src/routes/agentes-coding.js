@@ -8,6 +8,8 @@
  *   POST   /api/agentes-coding/sessions               → createSession
  *   POST   /api/agentes-coding/sessions/:id/exec      → exec
  *   GET    /api/agentes-coding/sessions/:id/files     → listFiles
+ *   GET    /api/agentes-coding/sessions/:id/map       → repo-map hints (Phase 3b)
+ *   POST   /api/agentes-coding/sessions/:id/map       → repo-map hints (query body)
  *   POST   /api/agentes-coding/sessions/:id/read      → readFile
  *   PUT    /api/agentes-coding/sessions/:id/files     → writeFile
  *   POST   /api/agentes-coding/sessions/:id/expose    → exposePort (stub)
@@ -25,6 +27,7 @@ const {
   getDefaultSandbox,
   CodingSandboxError,
 } = require('../services/agentes-coding/coding-sandbox');
+const { mapForRequest } = require('../services/agentes-coding/repo-map');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
@@ -107,6 +110,27 @@ function createAgentesCodingRouter(opts = {}) {
       return sendSandboxError(res, err);
     }
   });
+
+  async function handleRepoMap(req, res) {
+    try {
+      const src = { ...(req.query || {}), ...(req.body || {}) };
+      const result = await mapForRequest(getSandbox(), req.params.id, {
+        query: src.query,
+        limit: src.limit,
+        maxFiles: src.maxFiles,
+        path: src.path,
+      }, env);
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  }
+
+  /**
+   * Ranked file/symbol hints (Aider-pattern repo-map). Header-only.
+   */
+  router.get('/sessions/:id/map', authenticateToken, handleRepoMap);
+  router.post('/sessions/:id/map', authenticateToken, handleRepoMap);
 
   /**
    * Read one file (JSON body to avoid path-in-URL traversal).

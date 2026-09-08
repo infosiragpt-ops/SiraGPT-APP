@@ -62,6 +62,10 @@ const CATALOG = Object.freeze({
     status: 400,
     message: 'El contenido del archivo no es válido para el sandbox.',
   },
+  E_MAP_FAILED: {
+    status: 500,
+    message: 'No se pudo construir el mapa del repositorio.',
+  },
 });
 
 class CodingSandboxError extends Error {

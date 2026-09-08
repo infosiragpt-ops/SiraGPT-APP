@@ -62,7 +62,7 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `e2b-dev/infra` | Apache-2.0 | Firecracker microVM orchestration (self-host path) | pattern only (Lenovo is Docker-first; do not vendor the Terraform/Nomad tree) | sandbox provider (later isolation) | tier-s |
 | `google/gvisor` | Apache-2.0 | Kernel-level container isolation (`runsc`) | pattern / ops pin of `runsc` binary — not a source dump | Lenovo runner / future K8s RuntimeClass | tier-s |
 | `firecracker-microvm/firecracker` | Apache-2.0 | MicroVM isolation for hostile code | pattern / ops binary — not a source dump | later isolation (after Docker) | tier-s |
-| `aider-ai/aider` | Apache-2.0 | Repo map + git-diff + lint/test repair loop | **pattern only** (repomap / focused repair). No Python agent dump | harness planner (future) | tier-s |
+| `aider-ai/aider` | Apache-2.0 | Repo map + git-diff + lint/test repair loop | **pattern only** (repomap / focused repair). No Python agent dump. Phase 3b: native Node hints | `backend/src/services/agentes-coding/repo-map/` | already fused (pattern) |
 | `OpenHands/software-agent-sdk` | MIT | Workspace task loop, ACP-style worker | **pattern only**. Do not take the PolyForm enterprise tree | harness / AgentAdapter (future) | tier-s |
 | `All-Hands-AI/OpenHands` | MIT (core) / PolyForm (enterprise) | Full coding-agent product | pattern from MIT core only; **enterprise tree = none** | reference, not control plane | tier-s |
 | `cline/cline` | Apache-2.0 | Human-in-the-loop permission UX (ask / once / always / reject) | **HITL patterns only**. Not the VS Code extension, not the desktop UI | permission-resume / `/agentes` confirm card (future) | tier-s |
@@ -80,7 +80,7 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `kata-containers/kata-containers` | Apache-2.0 | Alternate microVM RuntimeClass | pattern | later K8s isolation | next |
 | `google/nsjail` | Apache-2.0 | Process jail for untrusted commands | pattern | harness exec gate (future) | next |
 | `microsoft/monaco-editor` | MIT | In-browser code editor | reuse existing `@monaco-editor/react` npm (already in package.json) on the flag-gated `/agentes` IDE | `/agentes` web IDE (Phase 3a) | next |
-| `tree-sitter/tree-sitter` | MIT | Syntax-aware repo map / edits | pattern or official grammar packages — not a monorepo dump | harness repo-map (future) | next |
+| `tree-sitter/tree-sitter` | MIT | Syntax-aware repo map / edits | optional `parseTags` hook only — not a monorepo dump, not an npm dep in Phase 3b | `agentes-coding/repo-map` (regex default) | next |
 | `BurntSushi/ripgrep` | MIT / Unlicense | Fast workspace search | pattern (SiraCode already has a jailed walker). Binary sidecar only if a later PR proves need | `sira-code/search.js` (already patterned) | next |
 | `modelcontextprotocol/typescript-sdk` | MIT | Official MCP TypeScript SDK | code via npm if a later PR needs protocol types | existing `backend/src/services/agent-harness/mcp-client.js` | next |
 | `modelcontextprotocol/python-sdk` | MIT | Official MCP Python SDK | none in this Node stack (TS SDK wins) | — | next |

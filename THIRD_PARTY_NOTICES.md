@@ -11,6 +11,13 @@ Attributions for third-party ARCHITECTURE adapted into this codebase.
   Kubernetes operator was vendored. Daytona (AGPL) is not used.
   See `docs/agentes-coding-sandbox.md` and `docs/agentes-arquitectura.md`.
 
+- **Aider** (https://github.com/Aider-AI/aider, Apache-2.0) — Phase 3b
+  `repo-map` (`backend/src/services/agentes-coding/repo-map/`) is a
+  native CommonJS rewrite of the RepoMap *idea* (ranked file/symbol
+  hints from a definition/reference graph, PageRank-style). No Python
+  agent, no tree-sitter dump, no vendored Aider tree. See
+  `docs/agentes-coding-repomap.md` and `docs/oss-catalog.md`.
+
 - **Monaco Editor** (`monaco-editor` / `@monaco-editor/react`, MIT) — Phase 3a
   reuses the existing npm wrapper already in `package.json` for the
   flag-gated `/agentes` IDE (`components/agentes/coding-ide-shell.tsx`,

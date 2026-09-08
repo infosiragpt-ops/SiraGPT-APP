@@ -137,7 +137,10 @@ narrow control API:
 - Reuse SiraCode contracts where they already exist (jailed `read` /
   `write` / `edit` / `multiedit`, grep/glob, `diagnostics`, `question`,
   sandboxed `shell` with Planificar read-only).
-- Add a repo-map **pattern** from Aider (not the Python agent).
+- Repo-map **pattern** from Aider (not the Python agent) — **Phase 3b
+  landed**: `backend/src/services/agentes-coding/repo-map/` +
+  `GET/POST /api/agentes-coding/sessions/:id/map`. Header-only ranked
+  `{name,path,score}` hints. See [`docs/agentes-coding-repomap.md`](./agentes-coding-repomap.md).
 - Optional OpenHands SDK **patterns** for plan / apply / verify events.
 - Official MCP TypeScript SDK only if the existing
   `agent-harness/mcp-client.js` needs types — no community MCP dump.
@@ -230,7 +233,7 @@ Do not set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 
 1. OpenSandbox or E2B Apache adapter + Docker service on Lenovo (Phase 2a memory + docker DEV landed)
 2. TypeScript harness in the sandbox, wired to SiraCode contracts
-3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub)
+3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub). **Phase 3b landed**: Aider-pattern repo-map hints (flag-gated `/map`, header-only)
 4. K8s + gVisor/Firecracker when Docker isolation is proven
 5. e2e “todo app” golden on the sandbox path
 
