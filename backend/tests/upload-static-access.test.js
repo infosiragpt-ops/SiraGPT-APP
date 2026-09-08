@@ -15,6 +15,7 @@ const {
   createUploadStaticAccessGuard,
   createUploadR2Fallback,
   contentTypeForUploadPath,
+  uploadAttachmentDisposition,
   normaliseUploadPath,
   classifyUploadPath,
   mintUploadMediaToken,
@@ -358,6 +359,36 @@ describe('upload R2 fallback streams same-origin bytes', () => {
     assert.equal(Buffer.from(res.body).toString('utf8'), bytes.toString('utf8'));
     assert.equal(storage.calls.signedUrl, 0);
     assert.equal(storage.calls.readStream, 1);
+  });
+
+  test('forces executables and HTML-like uploads to download instead of rendering inline', async () => {
+    const storage = fakeStorage({
+      objects: new Map([
+        ['r2:uploads/user-a/landing.html', Buffer.from('<script>alert(1)</script>')],
+        ['r2:uploads/user-a/deploy.sh', Buffer.from('#!/bin/sh\necho hi')],
+        ['r2:uploads/user-a/contrato.pdf', Buffer.from('%PDF-1.4 inline-ok')],
+      ]),
+      contentType: 'application/octet-stream',
+    });
+    const app = buildApp(storage);
+
+    const html = await getBinary(app, '/uploads/user-a/landing.html', { Authorization: auth.authHeader });
+    assert.equal(html.status, 200);
+    assert.match(html.headers['content-disposition'] || '', /^attachment; filename="landing\.html"/);
+
+    const script = await getBinary(app, '/uploads/user-a/deploy.sh', { Authorization: auth.authHeader });
+    assert.equal(script.status, 200);
+    assert.match(script.headers['content-disposition'] || '', /^attachment; filename="deploy\.sh"/);
+
+    const pdf = await getBinary(app, '/uploads/user-a/contrato.pdf', { Authorization: auth.authHeader });
+    assert.equal(pdf.status, 200);
+    assert.equal(pdf.headers['content-disposition'], undefined, 'documents keep rendering inline for previews');
+    assert.equal(pdf.headers['content-type'], 'application/pdf');
+
+    assert.equal(
+      uploadAttachmentDisposition('user-a/informe final.html'),
+      'attachment; filename="informe final.html"; filename*=UTF-8\'\'informe%20final.html',
+    );
   });
 
   test('streams an offloaded DOCX for the same chat preview path', async () => {

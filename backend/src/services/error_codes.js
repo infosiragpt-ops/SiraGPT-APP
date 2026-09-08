@@ -337,6 +337,9 @@ const CODES = Object.freeze({
   GLOB_HIDDEN: 'glob_hidden',
   SK_REDACT: 'sk_redact',
   COMPUTER_NO_SESSION: 'computer_no_session',
+  ISOLATION_REQUIRED: 'isolation_required',
+  COMPUTER_ACTION_ABORTED: 'computer_action_aborted',
+  COMPUTER_BUTTON_INVALID: 'computer_button_invalid',
   SUBAGENT_PARENT_CANCELLED: 'subagent_parent_cancelled',
   TOOL_ID_REQUIRED: 'tool_id_required',
   LEGAL_UNAVAILABLE: 'legal_unavailable',
@@ -401,6 +404,11 @@ const CODES = Object.freeze({
   SESSION_QUEUE_GAP: 'session_queue_gap',
   CREDIT_ERROR_SETTLE: 'credit_error_settle',
   CREDIT_PRE_TOKEN: 'credit_pre_token',
+  CREDIT_LEDGER_SETTLE: 'credit_ledger_settle',
+  SSE_CURSOR_PERSIST: 'sse_cursor_persist',
+  SESSION_CKPT_PERSIST: 'session_ckpt_persist',
+  SESSION_CKPT_HYDRATE: 'session_ckpt_hydrate',
+  CREDIT_LEDGER_COMPLETE: 'credit_ledger_complete',
 });
 
 function isRetryable(code) {
@@ -469,7 +477,9 @@ function isRetryable(code) {
     || c === 'sse_replay_resume'
     || c === 'session_writer_busy'
     || c === 'session_queue_gap'
-    || c === 'ckpt_bytes_rollback';
+    || c === 'ckpt_bytes_rollback'
+    || c === 'ttfb_abort'
+    || c === 'sse_id_backwards';
 }
 
 function publicError(code, extra) {

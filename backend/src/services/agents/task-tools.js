@@ -181,7 +181,7 @@ function safeFolderCode(folderCode) {
   }
 }
 
-function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category, folderCode }) {
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category, folderCode, brandLabel, kind }) {
   try {
     const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
     const policy = requireDurableArtifactStorage();
@@ -228,6 +228,8 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
       sizeBytes: buf.length,
       validation: validation || null,
       category: category || null,
+      brandLabel: brandLabel || null,
+      kind: kind || null,
       folderCode: safeFolder || null,
       storedRelPath,
       storageRef,
@@ -255,6 +257,9 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     folderCode: safeFolder || null,
     storedRelPath,
     storageRef,
+    category: category || null,
+    brandLabel: brandLabel || null,
+    kind: kind || null,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
   };
 }
@@ -1961,6 +1966,23 @@ function buildTaskTools(options = {}) {
     ...visualMediaTools,
   ];
 
+  const computerEnv = options.env || process.env;
+  try {
+    const chatComputer = require('../computer/chat-computer-tools');
+    if (options.includeComputer !== false && chatComputer.shouldOfferComputerTools(computerEnv)) {
+      const computerTools = chatComputer.buildChatComputerTools({
+        userId: options.skillContext && options.skillContext.userId,
+        conversationId: options.skillContext && options.skillContext.chatId,
+        env: computerEnv,
+      });
+      if (Array.isArray(computerTools) && computerTools.length) tools.push(...computerTools);
+    }
+  } catch (computerErr) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[task-tools] computer tools unavailable:', computerErr && computerErr.message);
+    }
+  }
+
   if (options.includeSkills !== false) {
     try {
       const skillRunner = require('./skill-runner');
@@ -2026,7 +2048,7 @@ const LIBRARY_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 
 const LIBRARY_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v']);
 const LIBRARY_WEBAPP_EXTS = new Set(['html', 'htm']);
 const LIBRARY_MOBILE_EXTS = new Set(['apk', 'ipa', 'aab']);
-const LIBRARY_CATEGORIES = ['image', 'video', 'audio', 'music', 'webapp', 'mobileapp'];
+const LIBRARY_CATEGORIES = ['image', 'video', 'audio', 'music', 'webapp', 'mobileapp', 'document'];
 
 // Best-effort: classify an artifact into a library media category, or null
 // when it is not a media artifact (e.g. docx/pdf/csv/json/code).
@@ -2097,6 +2119,8 @@ function listArtifactsByOwner(ownerUserId, { categories, max = 5000 } = {}) {
       sizeBytes: meta.sizeBytes || 0,
       prompt: meta.filename || category,
       source: 'artifact',
+      brand_label: meta.brandLabel || null,
+      kind: meta.kind || null,
     });
   }
   items.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));

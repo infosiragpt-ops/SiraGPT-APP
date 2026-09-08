@@ -30,7 +30,7 @@ describe("chat media composer configuration", () => {
   })
 
   it("keeps working voice defaults and avoids forcing a video engine", () => {
-    assert.deepEqual(VOICE_MODEL_OPTIONS, ["Gemini 2.5 Flash TTS", "ElevenLabs"])
+    assert.deepEqual(VOICE_MODEL_OPTIONS, ["Gemini 2.5 Flash TTS", "ElevenLabs", "Sira Voz"])
     assert.equal(VOICE_COMPOSER_PLACEHOLDER, "Escribe el texto que quieres convertir en voz")
     assert.equal(DEFAULT_VIDEO_MODEL, "")
   })

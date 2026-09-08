@@ -40,7 +40,11 @@ test("generated Office previews use the shared pdf.js renderer instead of a nati
     /import \{[^}]*PdfRenderer[^}]*\} from "@\/components\/viewers\/UnifiedDocumentViewer"/,
     "the generated preview must not pull the full document viewer into the eager chat bundle",
   )
-  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} \/>/)
+  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} toolbarContainer=\{toolbarContainer\} \/>/)
+  assert.match(source, /state\.kind === "pdf" \? \{ name: filename, url: previewUrl \}/,
+    "direct PDFs must share the real page/zoom renderer with converted Office files")
+  assert.doesNotMatch(source, /state\.kind === "pdf" && \(\s*<iframe/,
+    "a native PDF iframe bypasses our page count and authenticated byte loading")
   assert.doesNotMatch(
     source,
     /state\.kind === "pdfBlob"[\s\S]{0,180}<iframe/,

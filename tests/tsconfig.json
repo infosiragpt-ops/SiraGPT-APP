@@ -9,7 +9,11 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
   "include": [
     "../tests/**/*.test.ts",
@@ -21,16 +25,30 @@
     "../lib/auth/auth-guard-rules.ts",
     "../lib/next-api-cors.ts",
     "../lib/app-wrapper-routes.ts",
+    "../lib/agents-home-path.ts",
+    "../lib/gpts-apps-connect.ts",
+    "../lib/apps-mentions.ts",
     "../lib/long-paste.ts",
     "../lib/composer-layout.ts",
     "../lib/chat/brand-label.ts",
+    "../lib/chat/catalog-model.ts",
+    "../lib/chat/reply-badge-model.ts",
+    "../lib/generate-stream-complete.ts",
+    "../lib/chat/model-preference.ts",
     "../lib/chat/code-block-utils.ts",
     "../lib/chat/ocr-preprocess.ts",
+    "../lib/computer-login-handoff.ts",
+    "../lib/chat/composer-files.ts",
+    "../lib/chat/media-composer-config.ts",
+    "../lib/chat/media-mode-chips.ts",
+    "../lib/chat/media-preview-players.ts",
     "../lib/message-preservation.ts",
     "../lib/attachment-url.ts",
     "../lib/attachment-ingest.ts",
     "../lib/search-brain-ui.ts",
     "../lib/file-processing-vocab.ts",
+    "../lib/file-processing-status-client.ts",
+    "../lib/api-base-url.ts",
     "../lib/document-preview-gate.ts",
     "../lib/document-viewer-attachment.ts",
     "../lib/download-utils.ts",
@@ -49,7 +67,12 @@
     "../lib/notifications/push.ts",
     "../lib/integrations/verify-webhook.ts",
     "../lib/format-schedule-es-pe.ts",
-    "../lib/thinking-loaders.ts"
+    "../lib/thinking-loaders.ts",
+    "../lib/sidebar-recent-chats-filters.ts",
+    "../lib/sidebar-chat-folders.ts",
+    "../lib/project-scheduled-tasks.ts",
+    "../lib/gpts-app-logos.ts",
+    "../lib/gpts-apps-catalog.ts"
   ],
   "exclude": [
     "../tests/lib"

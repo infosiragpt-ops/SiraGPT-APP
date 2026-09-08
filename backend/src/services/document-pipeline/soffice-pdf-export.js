@@ -7,8 +7,10 @@
  * (pgSz/pgMar, slide size). The generic `--convert-to pdf` path can fall
  * through to a web-layout export that looks "descuadrado" in the viewer.
  *
- * Isolated UserInstallation avoids the "another soffice is running" lock
- * that made concurrent preview/render calls fail and 409.
+ * Concurrency isolation comes from a per-invocation HOME (the profile and
+ * its lockfile live under it) — see sofficeSpawnEnv. LibreOffice 25.x with
+ * `-env:UserInstallation=` on a fresh dir exits 0 claiming success but
+ * writes NO output; a per-run HOME converts reliably.
  */
 
 const path = require('node:path');
@@ -50,7 +52,6 @@ function buildSofficeConvertArgs({ sourcePath, outDir, profileDir } = {}) {
     throw new Error('sourcePath, outDir and profileDir are required');
   }
   return [
-    `-env:UserInstallation=${fileUri(profileDir)}`,
     '--headless',
     '--norestore',
     '--nolockcheck',
@@ -68,8 +69,23 @@ function isNativePdfFilename(filename = '') {
   return extOf(filename) === '.pdf';
 }
 
+/**
+ * spawn/execFile env for one isolated conversion: LibreOffice keeps its
+ * profile (and the "another instance" lockfile) under this HOME.
+ * @param {string} profileDir
+ */
+function sofficeSpawnEnv(profileDir) {
+  return {
+    ...process.env,
+    HOME: path.resolve(String(profileDir || '')),
+    XDG_CONFIG_HOME: path.join(path.resolve(String(profileDir || '')), '.config'),
+    XDG_CACHE_HOME: path.join(path.resolve(String(profileDir || '')), '.cache'),
+  };
+}
+
 module.exports = {
   pdfExportFilterFor,
+  sofficeSpawnEnv,
   buildSofficeConvertArgs,
   isNativePdfFilename,
   fileUri,

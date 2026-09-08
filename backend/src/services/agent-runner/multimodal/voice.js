@@ -3,9 +3,9 @@
 /**
  * F7 — Voice tools for the AgentRunner loop.
  *
- *   transcribe_audio → Whisper STT. Reuses the repo's existing Whisper path
- *     (services/audio-transcriber, OpenAI-compatible). Honest failure when
- *     no provider is configured — never a fabricated transcript.
+ *   transcribe_audio → Whisper STT. Reuses audio-transcriber (local Whisper,
+ *     optional OpenAI). Honest failure when neither path works — never a
+ *     fabricated transcript and never a leaked API key.
  *   speak → TTS. Reuses the ElevenLabs helper when configured, falls back
  *     to OpenAI speech, and fails honestly with neither. The audio lands in
  *     /workspace/outputs so it becomes a downloadable artifact.
@@ -25,6 +25,8 @@ const AUDIO_EXT_MIME = {
   mp3: 'audio/mpeg',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/opus',
   webm: 'audio/webm',
   m4a: 'audio/mp4',
   mp4: 'audio/mp4',
@@ -63,10 +65,7 @@ function makeTranscribeAudioExecutor({ sandbox, openaiClient = null, env = proce
     const rel = String(args.path || '').trim();
     if (!rel) return 'ERROR: transcribe_audio requiere `path` (audio relativo a /workspace).';
     const mime = audioMimeFor(rel);
-    if (!mime) return `ERROR: "${rel}" no es un formato de audio soportado (mp3/wav/ogg/webm/m4a/mp4/mov).`;
-    if (!openaiClient && !String(env.OPENAI_API_KEY || '').trim()) {
-      return 'ERROR: transcripción no disponible: falta OPENAI_API_KEY (Whisper). Configura la clave o adjunta el texto.';
-    }
+    if (!mime) return `ERROR: "${rel}" no es un formato de audio soportado (mp3/wav/ogg/opus/webm/m4a/mp4/mov).`;
     let buffer;
     try {
       buffer = await sandbox.readFile(rel);
@@ -91,7 +90,7 @@ function makeTranscribeAudioExecutor({ sandbox, openaiClient = null, env = proce
       throwIfAborted(signal);
       if (!result || result.method === 'placeholder') {
         const reason = result?.reasonCode || 'provider_error';
-        return `ERROR: la transcripción falló (${reason}). No voy a inventar el contenido del audio.`;
+        return `ERROR: la transcripción falló (${reason}). Transcripción no disponible.`;
       }
       return wrapTranscript(result.transcript || result.text || '', {
         archivo: path.basename(rel),
@@ -185,11 +184,11 @@ const VOICE_TOOL_DEFINITIONS = [
     function: {
       name: 'transcribe_audio',
       description:
-        'Transcribe un archivo de audio/video del workspace con Whisper (STT). Devuelve la transcripción como datos citados. Si no hay proveedor configurado falla honestamente.',
+        'Transcribe un archivo de audio/video del workspace con Whisper local o, si hay clave válida, OpenAI Whisper. Devuelve la transcripción como datos citados.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Ruta del audio relativa a /workspace (mp3/wav/ogg/webm/m4a/mp4/mov).' },
+          path: { type: 'string', description: 'Ruta del audio relativa a /workspace (mp3/wav/ogg/opus/webm/m4a/mp4/mov).' },
           language: { type: 'string', description: 'Código de idioma opcional, p. ej. "es".' },
         },
         required: ['path'],

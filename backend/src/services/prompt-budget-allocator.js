@@ -43,6 +43,9 @@ const TIER_BY_KIND = Object.freeze({
   'custom-gpt': 0,
   'conversation-understanding': 0,
   'universal-contract': 0,
+  // Rolling context summary (conversation-compactor): dropping it forgets
+  // the whole older half of the thread.
+  'context-summary': 0,
 
   // Demoted from tier-0 → tier-1 so the allocator actually has a lever when the
   // protected blocks alone blow the budget (was producing ~40k-token prompts

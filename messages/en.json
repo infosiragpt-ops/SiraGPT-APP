@@ -1,6 +1,6 @@
 {
   "sidebar": {
-    "newChat": "New chat",
+    "newChat": "New agent",
     "searchChats": "Search chats",
     "library": "Library",
     "gpts": "GPTs",
@@ -43,13 +43,14 @@
       "edited": "Last edited",
       "created": "Created date"
     },
-    "createTitle": "Create a company",
+    "createTitle": "Create a project",
     "whatWorkingOn": "What are you working on?",
-    "namePlaceholder": "Name your company",
+    "namePlaceholder": "Project name",
     "whatTryingAchieve": "What are you trying to achieve?",
-    "descriptionPlaceholder": "Describe your company, goals, topic, etc.",
+    "descriptionPlaceholder": "Describe your project, goals, topic, etc.",
     "cancel": "Cancel",
-    "create": "Create company",
+    "create": "Create project",
+    "useFolder": "Use a folder",
     "creating": "Creating…",
     "createFailed": "Failed to create company",
     "listFailed": "Failed to load companies",
@@ -74,7 +75,30 @@
     "onlyYou": "Only you",
     "memoryDesc": "Company memory will show here after a few chats.",
     "instructions": "Instructions",
-    "instructionsDesc": "Add instructions to personalise Claude's responses in this company.",
+    "instructionsDesc": "Add instructions to personalize responses.",
+    "instructionsSetupTitle": "Set project instructions",
+    "instructionsSetupDesc": "These instructions apply to every conversation in this project, along with your style.",
+    "knowledgeHint": "Sira uses the same knowledge every time you chat in this project.",
+    "context": "Context",
+    "scheduled": "Scheduled",
+    "scheduledDesc": "Set recurring tasks for this project.",
+    "scheduledCreate": "Create scheduled task",
+    "scheduledName": "Name",
+    "scheduledInstructions": "Instructions",
+    "scheduledFrequency": "Frequency",
+    "scheduledPermissions": "Permissions",
+    "scheduledManual": "Manual",
+    "scheduledDaily": "Daily",
+    "scheduledWeekly": "Weekly",
+    "scheduledApproveManual": "Approve manually",
+    "scheduledRequireComputer": "Require this computer",
+    "scheduledRequireComputerHint": "Runs only while this computer is on.",
+    "uploadFromDevice": "Upload from device",
+    "addTextContent": "Add text content",
+    "addTextTitle": "Add text content",
+    "addTextPlaceholder": "Paste text this project should consult…",
+    "cowork": "Cowork",
+    "chatMode": "Chat",
     "instructionsPlaceholder": "e.g. Always cite sources. Write in formal English.",
     "instructionsSaved": "Instructions saved",
     "saveFailed": "Save failed",
@@ -435,7 +459,7 @@
     "feedbackBad": "Unhelpful response"
   },
   "composer": {
-    "placeholderDefault": "Ask Sira GPT",
+    "placeholderDefault": "Type a message…",
     "placeholderImage": "Describe the image you want to create",
     "placeholderVideo": "Describe the video you want to create",
     "placeholderWebSearch": "Search the web",
@@ -645,7 +669,48 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Agent computer",
+        "status": {
+          "live": "Live",
+          "starting": "Thinking…",
+          "error": "Error",
+          "idle": "Waiting"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
+        },
+        "routines": {
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+        }
+      }
     }
   },
   "meta": {
@@ -654,13 +719,13 @@
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
   },
   "chatSearch": {
-    "placeholder": "Search your chats…",
+    "placeholder": "Search chats and projects",
     "noResults": "No results",
-    "noResultsFor": "We couldn't find chats matching “{query}”",
+    "noResultsFor": "We couldn't find chats or projects matching “{query}”",
     "serverFallback": "Couldn't reach server search; showing local title matches.",
-    "emptyHistory": "You have no chats yet",
-    "emptyHistoryHint": "Start a conversation and it will show up here",
-    "resultCountOne": "{count} chat",
-    "resultCountMany": "{count} chats"
+    "emptyHistory": "You have no chats or projects yet",
+    "emptyHistoryHint": "Start a conversation or create a project to see it here",
+    "resultCountOne": "{count} result",
+    "resultCountMany": "{count} results"
   }
 }

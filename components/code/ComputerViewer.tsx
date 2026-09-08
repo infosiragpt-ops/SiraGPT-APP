@@ -13,6 +13,28 @@ export type ComputerViewerProps = {
   onStatusChange?: (status: ComputerViewerStatus) => void
 }
 
+/** Hide default vnc.html chrome when the iframe is same-origin. */
+export const NOVNC_CHROME_HIDE_CSS = [
+  "#noVNC_control_bar_anchor,",
+  "#noVNC_control_bar,",
+  "#noVNC_control_bar_handle,",
+  "#noVNC_status,",
+  "#noVNC_hint_anchor,",
+  ".noVNC_control_bar { display: none !important; }",
+  "#noVNC_container, #noVNC_container canvas { width: 100% !important; height: 100% !important; object-fit: contain; }",
+  "html, body, #noVNC_container { background: #1b1b1d !important; margin: 0 !important; }",
+].join(" ")
+
+function hideNovncIframeChrome(frame: HTMLIFrameElement | null) {
+  const doc = frame?.contentDocument
+  if (!doc?.head) return
+  if (doc.getElementById("sira-hide-novnc-chrome")) return
+  const style = doc.createElement("style")
+  style.id = "sira-hide-novnc-chrome"
+  style.textContent = NOVNC_CHROME_HIDE_CSS
+  doc.head.appendChild(style)
+}
+
 /**
  * Human viewer: same-origin noVNC (vnc.html). Real mouse/keyboard.
  * PNG screenshots stay in the agent control loop — they are not this UI.
@@ -68,13 +90,17 @@ export function ComputerViewer({
       {url ? (
         <iframe
           src={url}
-          title="noVNC desktop"
+          title="SiraGPT desktop"
           className="absolute inset-0 h-full w-full min-h-full min-w-full border-0 bg-[#1b1b1d] object-cover"
           style={{ pointerEvents: "auto", width: "100%", height: "100%", background: "#1b1b1d" }}
           allow="clipboard-read; clipboard-write; fullscreen; autoplay; pointer-lock"
           data-testid="agent-computer-novnc-frame"
           data-novnc-src="vnc.html"
-          onLoad={() => updateStatus("connected")}
+          data-novnc-chrome="hidden"
+          onLoad={(event) => {
+            hideNovncIframeChrome(event.currentTarget)
+            updateStatus("connected")
+          }}
           onError={() => updateStatus("error")}
         />
       ) : null}

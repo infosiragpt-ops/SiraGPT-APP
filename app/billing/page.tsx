@@ -32,7 +32,7 @@ function BillingContent() {
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <Link href="/chat">
+            <Link href="/agentes">
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Volver al chat

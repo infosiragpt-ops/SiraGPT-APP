@@ -330,11 +330,8 @@ function makePlainTextOpenAI(prose) {
   };
 }
 
-test('react-agent: last-step finalize-guard rejection keeps the model answer instead of generic degraded text', async () => {
-  // The model produces a real answer on every finalize; the guard always
-  // rejects it. With maxSteps=2 (below MAX_CONSEC_FINALIZE_REJECTIONS=3) the
-  // breaker never trips, so the run ends on the forced last-step finalize with
-  // no terminator firing. The rescue must ship the model's real answer.
+test('react-agent: last-step rejection returns an honest incomplete result, not the rejected draft', async () => {
+  // Exhausting the final step is not evidence that the rejected draft passed.
   const REAL = 'La respuesta real que el modelo produjo.';
   const openai = makeAlwaysFinalizeOpenAI(REAL);
 
@@ -346,15 +343,13 @@ test('react-agent: last-step finalize-guard rejection keeps the model answer ins
     finalizeGuard: () => ({ ok: false, message: 'blocked by policy' }),
   });
 
-  assert.match(String(result.finalAnswer || ''), /La respuesta real que el modelo produjo/);
-  assert.doesNotMatch(String(result.finalAnswer || ''), /No logr[eé] cerrar/i);
-  assert.equal(result.stoppedReason, 'finalized_last_step_guard_override');
+  assert.notEqual(result.finalAnswer, REAL);
+  assert.match(result.finalAnswer, /No pude verificar/);
+  assert.equal(result.stoppedReason, 'verification_failed:step_budget');
 });
 
-test('react-agent: plain-text finalize-guard rejections trip the breaker and accept the prose answer', async () => {
-  // A weak model keeps answering in prose; the guard always rejects. Without
-  // the breaker this spins to the full step budget. It must stop after
-  // MAX_CONSEC_FINALIZE_REJECTIONS (3) with the model's prose as the answer.
+test('react-agent: plain-text rejections stop boundedly without accepting the prose', async () => {
+  // Preserve the three-attempt latency bound without claiming success.
   const PROSE = 'Aquí está mi respuesta en prosa.';
   const openai = makePlainTextOpenAI(PROSE);
 
@@ -367,15 +362,12 @@ test('react-agent: plain-text finalize-guard rejections trip the breaker and acc
   });
 
   assert.equal(result.steps.length, 3, 'breaker stops the run after 3 plain-text rejections');
-  assert.match(String(result.stoppedReason), /finalized_guard_breaker/);
-  assert.equal(result.finalAnswer, PROSE);
+  assert.match(String(result.stoppedReason), /^verification_failed:/);
+  assert.notEqual(result.finalAnswer, PROSE);
+  assert.match(result.finalAnswer, /No pude verificar/);
 });
 
-test('react-agent: finalize breaker preserves the finalized_guard_breaker stoppedReason (not clobbered to finalized)', async () => {
-  // The model calls finalize with a real answer every step; the guard rejects
-  // 3 consecutive finalizes → the breaker trips, leaves the observation
-  // error-free so the terminator fires, and the reason must survive as
-  // finalized_guard_breaker (not overwritten to a clean 'finalized').
+test('react-agent: finalize breaker preserves a failed observation and non-success reason', async () => {
   const REAL = 'Respuesta aceptada por el breaker.';
   const openai = makeAlwaysFinalizeOpenAI(REAL);
 
@@ -387,8 +379,10 @@ test('react-agent: finalize breaker preserves the finalized_guard_breaker stoppe
     finalizeGuard: () => ({ ok: false, message: 'blocked by policy' }),
   });
 
-  assert.match(String(result.stoppedReason), /^finalized_guard_breaker:/);
-  assert.equal(result.finalAnswer, REAL);
+  assert.match(String(result.stoppedReason), /^verification_failed:/);
+  assert.equal(result.steps.length, 3);
+  assert.equal(result.steps.at(-1).actions[0].observation.error, 'finalize_guard_failed');
+  assert.notEqual(result.finalAnswer, REAL);
 });
 
 test('react-agent: slow provider trend forces finalize before the runtime budget blows mid-step', async () => {

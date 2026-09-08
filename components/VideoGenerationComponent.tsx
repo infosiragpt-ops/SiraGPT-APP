@@ -35,6 +35,7 @@ import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ChatVideoPlayer } from "@/components/chat/media-preview-players"
 interface VideoOperation {
   operationId: string;
   filename: string;
@@ -552,59 +553,13 @@ export default function VideoGenerationComponent() {
           <CardContent className="space-y-4">
 
 
-            {/* Video Player */}
-            <div className="relative bg-black rounded-lg overflow-hidden flex items-center justify-center">
-              <video
-                ref={videoRef}
-                src={`${apiClient.apiBaseURL}${generatedVideo.video_url}`}
-                className="w-full h-auto max-h-[70vh] object-contain"
-                poster=""
-                preload="metadata"
-                style={{
-                  aspectRatio: generatedVideo.aspect_ratio === '16:9' ? '16/9' :
-                    generatedVideo.aspect_ratio === '9:16' ? '9/16' : '1/1'
-                }}
-              />
-              {/* Video Controls Overlay */}
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-                <div className="flex items-center gap-4">
-                  <Button
-                    onClick={togglePlayPause}
-                    variant="ghost"
-                    size="sm"
-                    className="text-white hover:bg-white/20"
-                  >
-                    {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                  </Button>
-
-                  <div className="flex-1 flex items-center gap-2">
-                    <span className="text-xs text-white">
-                      {formatTime(currentTime)}
-                    </span>
-                    <div className="flex-1 bg-white/20 rounded-full h-1">
-                      <div
-                        className="bg-white dark:bg-zinc-300 h-1 rounded-full transition-all"
-                        style={{
-                          width: totalDuration ? `${(currentTime / totalDuration) * 100}%` : '0%'
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs text-white">
-                      {formatTime(totalDuration)}
-                    </span>
-                  </div>
-
-                  <Button
-                    onClick={toggleFullscreen}
-                    variant="ghost"
-                    size="sm"
-                    className="text-white hover:bg-white/20"
-                  >
-                    <Maximize2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
+            <ChatVideoPlayer
+              src={`${apiClient.apiBaseURL}${generatedVideo.video_url}`}
+              title={generatedVideo.prompt || "video"}
+              aspect={generatedVideo.aspect_ratio}
+              variant="generated"
+              className="max-w-none"
+            />
 
             {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-3">

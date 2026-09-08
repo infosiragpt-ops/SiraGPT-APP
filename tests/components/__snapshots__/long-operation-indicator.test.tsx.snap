@@ -20,76 +20,72 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
       class="flex shrink-0 items-center justify-center"
       style="width: 20px; height: 20px;"
     >
-      <svg
+      <span
         aria-hidden="true"
         class="pointer-events-none select-none"
         data-loader-src="/loaders/pensando.svg"
         data-pensando-bars="1"
-        enable-background="new 0 0 0 0"
-        focusable="false"
-        height="20"
-        id="L9"
-        version="1.1"
-        viewBox="10 40 45 50"
-        width="20"
-        x="0px"
-        xml:space="preserve"
-        xmlns="http://www.w3.org/2000/svg"
-        xmlns:xlink="http://www.w3.org/1999/xlink"
-        y="0px"
+        style="display: inline-flex; line-height: 0;"
       >
-        <rect
-          fill="#38BDF8"
-          height="10"
-          width="4"
-          x="20"
-          y="50"
+        <div
+          aria-label=""
+          aria-live="polite"
+          class="dmx-root dmx-matrix-3 dmx-dot-shape-circle"
+          role="status"
+          style="width: 11px; height: 11px; --dmx-speed: 0.5714285714285714; --dmx-dot-size: 3px; --dmx-halo-level: 0; --dmx-dot-fill: #38BDF8; color: rgb(56, 189, 248); --dmx-opacity-base: 0.06;"
         >
-          <animatetransform
-            attributeName="transform"
-            attributeType="xml"
-            begin="0"
-            dur="0.6s"
-            repeatCount="indefinite"
-            type="translate"
-            values="0 0; 0 20; 0 0"
-          />
-        </rect>
-        <rect
-          fill="#38BDF8"
-          height="10"
-          width="4"
-          x="30"
-          y="50"
-        >
-          <animatetransform
-            attributeName="transform"
-            attributeType="xml"
-            begin="0.2s"
-            dur="0.6s"
-            repeatCount="indefinite"
-            type="translate"
-            values="0 0; 0 20; 0 0"
-          />
-        </rect>
-        <rect
-          fill="#38BDF8"
-          height="10"
-          width="4"
-          x="40"
-          y="50"
-        >
-          <animatetransform
-            attributeName="transform"
-            attributeType="xml"
-            begin="0.4s"
-            dur="0.6s"
-            repeatCount="indefinite"
-            type="translate"
-            values="0 0; 0 20; 0 0"
-          />
-        </rect>
-      </svg>
+          <div
+            class="dmx-grid"
+            style="gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr));"
+          >
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 0; --dmx-x: -4px; --dmx-y: -4px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 0; --dmx-col: 1; --dmx-x: 0px; --dmx-y: -4px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 2; --dmx-x: 4px; --dmx-y: -4px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 0; --dmx-row: 1; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; --dmx-ripple-ring: 0; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 4px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 4px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 4px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+          </div>
+        </div>
+      </span>
     </span>
   </div>
   <div
@@ -130,76 +126,72 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
       class="flex shrink-0 items-center justify-center"
       style="width: 20px; height: 20px;"
     >
-      <svg
+      <span
         aria-hidden="true"
         class="pointer-events-none select-none"
         data-loader-src="/loaders/pensando.svg"
         data-pensando-bars="1"
-        enable-background="new 0 0 0 0"
-        focusable="false"
-        height="20"
-        id="L9"
-        version="1.1"
-        viewBox="10 40 45 50"
-        width="20"
-        x="0px"
-        xml:space="preserve"
-        xmlns="http://www.w3.org/2000/svg"
-        xmlns:xlink="http://www.w3.org/1999/xlink"
-        y="0px"
+        style="display: inline-flex; line-height: 0;"
       >
-        <rect
-          fill="#38BDF8"
-          height="10"
-          width="4"
-          x="20"
-          y="50"
+        <div
+          aria-label=""
+          aria-live="polite"
+          class="dmx-root dmx-matrix-3 dmx-dot-shape-circle"
+          role="status"
+          style="width: 11px; height: 11px; --dmx-speed: 0.5714285714285714; --dmx-dot-size: 3px; --dmx-halo-level: 0; --dmx-dot-fill: #38BDF8; color: rgb(56, 189, 248); --dmx-opacity-base: 0.06;"
         >
-          <animatetransform
-            attributeName="transform"
-            attributeType="xml"
-            begin="0"
-            dur="0.6s"
-            repeatCount="indefinite"
-            type="translate"
-            values="0 0; 0 20; 0 0"
-          />
-        </rect>
-        <rect
-          fill="#38BDF8"
-          height="10"
-          width="4"
-          x="30"
-          y="50"
-        >
-          <animatetransform
-            attributeName="transform"
-            attributeType="xml"
-            begin="0.2s"
-            dur="0.6s"
-            repeatCount="indefinite"
-            type="translate"
-            values="0 0; 0 20; 0 0"
-          />
-        </rect>
-        <rect
-          fill="#38BDF8"
-          height="10"
-          width="4"
-          x="40"
-          y="50"
-        >
-          <animatetransform
-            attributeName="transform"
-            attributeType="xml"
-            begin="0.4s"
-            dur="0.6s"
-            repeatCount="indefinite"
-            type="translate"
-            values="0 0; 0 20; 0 0"
-          />
-        </rect>
-      </svg>
+          <div
+            class="dmx-grid"
+            style="gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr));"
+          >
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 0; --dmx-x: -4px; --dmx-y: -4px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 0; --dmx-col: 1; --dmx-x: 0px; --dmx-y: -4px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 2; --dmx-x: 4px; --dmx-y: -4px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 0; --dmx-row: 1; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; --dmx-ripple-ring: 0; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 4px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 4px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            />
+            <span
+              aria-hidden="true"
+              class="dmx-dot dmx-ripple-echo-3"
+              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 4px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            />
+          </div>
+        </div>
+      </span>
     </span>
   </div>
   <div

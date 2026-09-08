@@ -9,6 +9,14 @@ const WORKFLOW = fs.readFileSync(
   path.resolve(__dirname, '..', '..', '.github', 'workflows', 'deploy.yml'),
   'utf8',
 );
+const PUBLISHER = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', 'deploy', 'iliagpt', 'publish-reviewed.sh'),
+  'utf8',
+);
+const RUNTIME_CANARY = fs.readFileSync(
+  path.resolve(__dirname, '..', 'scripts', 'code-runtime-canary.js'),
+  'utf8',
+);
 const COMPOSE = fs.readFileSync(
   path.resolve(__dirname, '..', '..', 'docker-compose.prod.yml'),
   'utf8',
@@ -27,23 +35,25 @@ const GVISOR_SMOKE = fs.readFileSync(
 );
 
 function position(fragment) {
-  const index = WORKFLOW.indexOf(fragment);
-  assert.notEqual(index, -1, `missing deploy workflow fragment: ${fragment}`);
+  const index = PUBLISHER.indexOf(fragment);
+  assert.notEqual(index, -1, `missing reviewed publisher fragment: ${fragment}`);
   return index;
 }
 
 function positionAfter(fragment, after) {
-  const index = WORKFLOW.indexOf(fragment, after);
-  assert.notEqual(index, -1, `missing deploy workflow fragment after offset ${after}: ${fragment}`);
+  const index = PUBLISHER.indexOf(fragment, after);
+  assert.notEqual(index, -1, `missing reviewed publisher fragment after offset ${after}: ${fragment}`);
   return index;
 }
 
 test('production deploy preserves and restores the exact runner image', () => {
-  assert.match(WORKFLOW, /runner_image="\$\(docker inspect --format '\{\{\.Image\}\}' "\$\{runner_container\}"\)"/);
-  assert.match(WORKFLOW, /docker tag "\$\{runner_image\}" "\$\{ROLLBACK_RUNNER_IMAGE\}"/);
-  assert.match(WORKFLOW, /docker image inspect "\$\{ROLLBACK_RUNNER_IMAGE\}"/);
-  assert.match(WORKFLOW, /docker tag "\$\{ROLLBACK_RUNNER_IMAGE\}" siragpt-runner:latest/);
-  assert.match(WORKFLOW, /siragpt-runner:rollback-\*/);
+  assert.match(PUBLISHER, /for service in runner backend frontend; do[\s\S]*image=\$\(docker inspect --format '\{\{\.Image\}\}' "\$id"\)/);
+  assert.match(PUBLISHER, /\[\[ \$image =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
+  assert.match(PUBLISHER, /tag="iliagpt-\$service:rollback-\$\{BACKUP##\*\/\}"/);
+  assert.match(PUBLISHER, /docker image tag "\$image" "\$tag"/);
+  assert.match(PUBLISHER, /image: %s\\n    pull_policy: never\\n/);
+  assert.match(PUBLISHER, /-f "\$BACKUP\/rollback\.yaml" up -d --no-deps --no-build --pull never runner frontend/);
+  assert.doesNotMatch(PUBLISHER, /docker (?:rmi|image prune|system prune)|cleanup_old_rollback_images/);
 });
 
 test('runner mounts the integrated control-plane modules required by code-runner.js', () => {
@@ -85,45 +95,42 @@ test('production keeps run concurrency and fleet QA disabled by default', () => 
 });
 
 test('runner rollout is healthy before the backend is replaced', () => {
-  const buildRunner = position('${COMPOSE} build runner');
-  const recreateRunner = positionAfter('${COMPOSE} up -d --no-deps --force-recreate runner', buildRunner);
-  const waitRunner = WORKFLOW.indexOf('            wait_runner\n', recreateRunner);
-  const startBackend = WORKFLOW.indexOf(
-    '${COMPOSE} up -d --no-deps --force-recreate backend frontend',
-    recreateRunner,
-  );
-
+  const buildRunner = position('"${COMPOSE[@]}" build runner backend frontend');
+  const recreateRunner = positionAfter('"${COMPOSE[@]}" up -d --no-deps --no-build --pull never runner frontend', buildRunner);
+  const waitRunner = positionAfter('wait_services runner frontend || die', recreateRunner);
+  const startBackend = positionAfter('"${COMPOSE[@]}" up -d --no-deps --no-build --pull never backend', waitRunner);
   assert.ok(recreateRunner > buildRunner, 'runner must be built before it is recreated');
   assert.ok(waitRunner > recreateRunner, 'runner health must be awaited after recreation');
   assert.ok(startBackend > waitRunner, 'backend must not be replaced before runner health passes');
-  assert.match(WORKFLOW, /health="\$\(docker inspect[\s\S]*\.State\.Health[\s\S]*health\}" == "healthy"/);
+  assert.match(PUBLISHER, /wait_services\(\) \{[\s\S]*attempt<24[\s\S]*healthy "\$@"[\s\S]*\n  return 1\n\}/);
+  assert.match(PUBLISHER, /docker inspect --format '[^\n]*\.State\.Health[^\n]*' "\$id"\) == 'running healthy'/);
 });
 
-test('the rollout fails closed on the real /code build, browser, and second-run canary', () => {
-  const buildRunner = position('${COMPOSE} build runner');
-  const recreateBackend = positionAfter('${COMPOSE} up -d --no-deps --force-recreate backend frontend', buildRunner);
-  const ready = positionAfter('            wait_ready\n', recreateBackend);
-  const version = positionAfter('            wait_version "${TARGET_SHA}" "${SIRAGPT_VERSION}"', ready);
-  const canary = positionAfter('            run_code_runtime_canary\n', version);
-  const cleanup = positionAfter('            cleanup_old_rollback_images', canary);
-
-  assert.match(WORKFLOW, /node scripts\/code-runtime-canary\.js/);
-  assert.ok(canary > version, 'runtime canary must run only after the exact release is healthy and versioned');
-  assert.ok(cleanup > canary, 'rollback images must remain available until the runtime canary passes');
+test('Lenovo readiness retains rollback images and reusable runtime canary without claiming legacy VPS canary execution', () => {
+  // Reviewed scope: Lenovo's publisher never used the retired VPS /code canary
+  // wiring. Application acceptance remains a separate manual release gate;
+  // readiness/SHA are not represented as a successful build/browser canary.
+  const activate = position('"${COMPOSE[@]}" up -d --no-deps --no-build --pull never backend');
+  const ready = positionAfter('wait_release "$TARGET" || die', activate);
+  const journal = positionAfter('>> "$DEPLOY/releases.log"', ready);
+  assert.ok(journal > ready, 'success journal must follow healthy, exact-SHA release verification');
+  assert.doesNotMatch(PUBLISHER, /cleanup_old_rollback_images|docker (?:rmi|image prune|system prune)/);
+  assert.match(WORKFLOW, /node scripts\/verify-lenovo-release\.cjs "\$TARGET_SHA"/);
+  assert.doesNotMatch(WORKFLOW, /run_code_runtime_canary/);
+  assert.match(RUNTIME_CANARY, /require\('\.\.\/src\/services\/codex\/runtime-canary'\)/);
+  assert.match(RUNTIME_CANARY, /await runRuntimeCanary\(\{/);
+  assert.match(RUNTIME_CANARY, /process\.exitCode = 1/);
 });
 
 test('rollback restores and verifies the runner before restoring the API', () => {
-  const rollbackStart = position('            rollback() {');
-  const rollbackEnd = position('            echo "[deploy-workflow] Remote disk before deploy"');
-  const rollback = WORKFLOW.slice(rollbackStart, rollbackEnd);
-
-  const restoreImages = rollback.indexOf('restore_rollback_images');
-  const recreateRunner = rollback.indexOf('${COMPOSE} up -d --no-deps --force-recreate runner');
-  const waitRunner = rollback.indexOf('wait_runner');
-  const recreateApi = rollback.indexOf('${COMPOSE} up -d --no-deps --force-recreate backend frontend');
-
-  assert.ok(restoreImages >= 0, 'rollback must restore tagged images');
-  assert.ok(recreateRunner > restoreImages, 'rollback must recreate the restored runner image');
+  const rollback = PUBLISHER.slice(position('finish() {'), position('trap finish EXIT'));
+  const restoreMetadata = rollback.indexOf('write_release_keys "$BACKUP/release.keys"');
+  const recreateRunner = rollback.indexOf('"${COMPOSE[@]}" -f "$BACKUP/rollback.yaml" up -d --no-deps --no-build --pull never runner frontend');
+  const waitRunner = rollback.indexOf('wait_services runner frontend', recreateRunner);
+  const recreateApi = rollback.indexOf('"${COMPOSE[@]}" -f "$BACKUP/rollback.yaml" up -d --no-deps --no-build --pull never backend');
+  assert.ok(restoreMetadata >= 0 && recreateRunner > restoreMetadata, 'rollback must restore metadata before using pinned images');
   assert.ok(waitRunner > recreateRunner, 'rollback must verify runner health');
   assert.ok(recreateApi > waitRunner, 'rollback must restore API only after runner health passes');
+  assert.match(rollback, /wait_services runner frontend[\s\S]*then[\s\S]*--pull never backend/);
+  assert.match(rollback, /wait_release "\$PREVIOUS"/);
 });
