@@ -33,9 +33,16 @@
 const { calculateCost } = require('./observability/llm-cost');
 const { createHash } = require('node:crypto');
 const { normalizeToolCalls, collectToolCallIds } = require('./agents/tool-call-normalizer');
+const {
+  attachToolFailureCircuit,
+  circuitSessionKeyOf,
+  presentCircuitDenial,
+} = require('./agents/tool-failure-circuit');
 // engine-3h59 fingerprint cut lives in agent-runner/loop.js. This chat
 // loop already stops repeats via dupCallCache + EXHAUSTED_REPOLL_LIMIT
 // (identical args) and the 5× unavailable breaker (hard failures).
+// Session/tool consecutive-failure circuit (fail closed, Spanish labels)
+// is a native rewrite of OpenClaw loop-detection ideas — not a dump.
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
@@ -438,6 +445,13 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   // unknown call must not burn a tool-call slot the model could still use
   // with corrected arguments on the next turn.
   if (ctx && name !== 'finalize') {
+    if (ctx.toolFailureCircuit) {
+      const gate = ctx.toolFailureCircuit.authorize(circuitSessionKeyOf(ctx), name);
+      if (!gate.allowed) {
+        const denial = presentCircuitDenial(gate);
+        return { error: denial.message, code: denial.code, circuitDenied: true, circuit: denial.circuit };
+      }
+    }
     const usage = ctx.toolUsageMap || Object.create(null);
     const budget = ctx.checkToolBudget?.(name, usage);
     if (budget && budget.ok === false) {
@@ -900,6 +914,8 @@ async function run(openai, opts) {
 
   if (!query) throw new Error('react-agent: query is required');
   if (!Array.isArray(tools)) throw new Error('react-agent: tools must be an array');
+
+  attachToolFailureCircuit(ctx);
 
   let activeOpenai = openai;
   let activeModel = model;
@@ -1647,6 +1663,26 @@ async function run(openai, opts) {
       // promise — await it here, where the result is actually needed.
       if (dispatch && dispatch.__pending) dispatch = await dispatch.__pending;
 
+      if (dispatch && dispatch.circuitDenied) {
+        if (dispatch.circuit && dispatch.circuit.scope === 'session' && !forceFinalize) {
+          forceFinalize = true;
+          stoppedReason = 'tool_circuit_open';
+        }
+        const observation = {
+          error: 'tool_circuit_open',
+          code: dispatch.code,
+          tool: toolName,
+          message: dispatch.error,
+        };
+        stepRecord.actions.push({ tool: toolName, args: call.function?.arguments || '', observation });
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: formatObservation(observation),
+        });
+        continue;
+      }
+
       // A3: one-shot fallback to a compatible alternative tool on a hard error
       // (not abort/finalize). If the alternative succeeds, we use its result and
       // the failure is never counted. Same args; the alternative's own arg
@@ -1688,6 +1724,26 @@ async function run(openai, opts) {
       // Track consecutive tool errors per tool to prevent infinite loops.
       // Transient blips weigh a fraction so a flaky upstream isn't retired as
       // fast as a deterministically broken tool (see classifyToolError).
+      if (toolName !== 'finalize' && ctx?.toolFailureCircuit) {
+        const rec = ctx.toolFailureCircuit.record(circuitSessionKeyOf(ctx), toolName, {
+          ok: !toolFailed,
+          transient: toolFailed && classifyToolError(dispatch.error || dispatch.result) === 'transient',
+          argsKey: dupSig || call.function?.arguments,
+          unknownTool: Boolean(dispatch.error && String(dispatch.error).startsWith('unknown_tool')),
+        });
+        if (rec.opened && rec.scope === 'session') {
+          forceFinalize = true;
+          stoppedReason = 'tool_circuit_open';
+          observation = {
+            error: 'tool_circuit_open',
+            code: rec.code,
+            tool: toolName,
+            message: rec.label,
+            detector: rec.detector || undefined,
+          };
+        }
+      }
+
       if (toolFailed) {
         const errWeight = classifyToolError(dispatch.error || dispatch.result) === 'transient' ? TRANSIENT_TOOL_ERROR_WEIGHT : 1;
         const errCount = (toolErrorBudget.get(toolName) || 0) + errWeight;
@@ -1804,7 +1860,7 @@ async function run(openai, opts) {
 
       if (toolName === 'finalize' && !toolFailed && !observation.error) {
         finalAnswer = dispatch.result?.answer || '';
-        stoppedReason = 'finalized';
+        if (stoppedReason !== 'tool_circuit_open') stoppedReason = 'finalized';
         finalized = true;
         break;
       }
@@ -1882,6 +1938,7 @@ module.exports = {
   unwrapFinalAnswerEnvelope,
   // Tool-error classification for the weighted per-run error budget.
   classifyToolError,
+  dispatchTool,
   // ACI observation formatting (SWE-agent) — exported for tests.
   formatObservation,
   elideStaleObservations,

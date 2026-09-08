@@ -63,6 +63,14 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   the lease is held, and an honest single-process Map if Redis is down.
   Not a dump of `cron/active-jobs.ts` or `cron/service/ops.ts`. Snapshot
   SHA `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
+  The session/tool-budget circuit breaker in
+  `backend/src/services/agents/tool-failure-circuit.js` (wired into
+  `react-agent.js` and `agent-task-runner.js`) is a native CommonJS
+  rewrite of OpenClaw loop-detection ideas: consecutive tool failures,
+  generic repeat, ping-pong, unknown-tool streak, then a fail-closed
+  session circuit with Spanish labels (`E_TIMEOUT`). Not a dump of
+  `agents/tool-loop-detection.ts`. Snapshot SHA
+  `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
   Honest multichannel delivery receipts in
   `backend/src/orchestration/multichannel/delivery-receipt.js` (wired
   through `openclaw-adapter.js`, `orchestration-context.js`,

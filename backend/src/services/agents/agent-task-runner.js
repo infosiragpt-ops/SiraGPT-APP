@@ -3183,6 +3183,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     const { createAuthorizationGate } = require('./tool-authorization-gate');
     const toolManifest = require('./tool-manifest');
+    const { attachToolFailureCircuit } = require('./tool-failure-circuit');
     const toolGate = createAuthorizationGate();
     const toolUsageMap = {};
     const toolCtx = {
@@ -3230,6 +3231,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         emit(payloadEvent);
       },
     };
+    attachToolFailureCircuit(toolCtx, { sessionKey: taskId });
 
     // Chat-only requests against an attachment have no artifact to
     // produce — the agent only needs to read the file, reason, and
