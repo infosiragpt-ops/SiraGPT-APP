@@ -119,6 +119,11 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   skill-load-into-context plus scan-before-inject (same MEMORY/USER
   pattern already live). Optional SKILL.md bodies stay reference data
   (AGENTS.md §17); they are never treated as system instructions.
+  The memory write guard in
+  `backend/src/services/agents/memory-write-guard.js` adapts the Hermes
+  MEMORY.md / USER.md character-limit contract (tools/memory_tool.py)
+  plus a per-user write rate-limit. Errors are Spanish with §16 codes
+  (`E_PARAMS` / `E_QUOTA`). No Python memory tool was copied.
 
   The owner checks in `backend/src/routes/hermes.js`,
   `backend/src/services/agents/cron/hermes-cron-bridge.js` and
