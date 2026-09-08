@@ -30,7 +30,7 @@ describe("AGENTES_CODING_V2 Phase 3a IDE shell", () => {
     assert.doesNotMatch(page, /\/code/)
     assert.match(gate, /useAgentesCodingHealth/)
     assert.match(gate, /if \(!enabled\) return null/)
-    assert.doesNotMatch(gate, /enabled:\s*true/)
+    assert.doesNotMatch(gate, /enabled\s*[:=]\s*true/)
     assert.doesNotMatch(health, /useState\(true\)/)
     assert.match(health, /useState\(false\)/)
     assert.match(api, /enabled === true/)

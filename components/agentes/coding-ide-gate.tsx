@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Mounts the /agentes coding IDE only when GET /health says enabled:true.
+ * Mounts the /agentes coding IDE only when GET /health reports enabled.
  * Flag off ⇒ render nothing (same first paint as today's /agentes).
  */
 
