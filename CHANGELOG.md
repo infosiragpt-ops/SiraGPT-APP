@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode jailed `read` / `write` / `edit` now match the OpenCode
+  file-tool contract (1-indexed offset, unique `old_str`, size caps,
+  binary reject, symlink-aware path jail, Spanish errors). Planificar
+  stays read-only; Construir writes go through permission-resume when
+  the composer asks. Native CommonJS — not a dump of `read.ts` /
+  `write.ts` / `edit.ts`. No OpenRouter.
+
 - SiraCode grep/glob now walk the session workspace jail with the
   OpenCode search contract (`pattern`, `path`, `include`, `limit`),
   size/timeout caps, Spanish errors, and blocked path escape. Native

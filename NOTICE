@@ -28,6 +28,11 @@ Workspace grep/glob are a native rewrite of the OpenCode search
 contract (pattern, path, include, limit, bounded line previews).
 They walk the session jail in CommonJS — no ripgrep binary, no
 Effect LocationSearch, no vendor dump.
+Jailed read / write / edit are a native rewrite of the OpenCode
+file-tool contract (path, offset, limit, unique old_str → new_str,
+size caps, binary reject, workspace jail). They do not copy
+read.ts / write.ts / edit.ts, the Effect runtime, LSP warmup, or
+the Snapshot git-diff.
 
 SiraGPT and SiraCode are not affiliated with, endorsed by, or
 sponsored by OpenCode or Anomaly.
