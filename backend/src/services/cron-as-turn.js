@@ -234,7 +234,7 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
 
     try {
       const result = await Promise.race([runPromise, timeoutPromise]);
-      return result;
+      return await attachOptionalChannelReceipt(result, job, gatewayOrRunner);
     } catch (err) {
       // The dispatcher has already settled. Waiting for evidence must not
       // let its old deadline abort a later run occupying the same session.
@@ -243,14 +243,14 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
       const code = stableFailureCode(err?.code, 'cron_error');
       const reason = code.includes('timeout') ? 'cron_timeout' : (code || 'cron_error');
       const deadLettered = await pushCronDeadLetter(gatewayOrRunner, args.sessionKey, reason, { jobId: id, userId: args.userId });
-      return {
+      return await attachOptionalChannelReceipt({
         ok: false,
         error: reason,
         code: reason,
         sessionKey: args.sessionKey,
         jobId: id,
         deadLettered,
-      };
+      }, job, gatewayOrRunner);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -258,6 +258,20 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
     if (inFlight.get(key) === activeTick) inFlight.delete(key);
     stopRenew();
     await releaseJobOverlap(claim);
+  }
+}
+
+async function attachOptionalChannelReceipt(result, job, gatewayOrRunner) {
+  if (!job || !job.channel) return result;
+  try {
+    const { attachCronDeliveryReceipt } = require('../orchestration/multichannel/openclaw-adapter');
+    return await attachCronDeliveryReceipt(result, job, {
+      transport: job.transport || (gatewayOrRunner && gatewayOrRunner.deliverChannel),
+      fetchImpl: job.fetchImpl || (gatewayOrRunner && gatewayOrRunner.fetchImpl),
+      env: job.env,
+    });
+  } catch (_) {
+    return result;
   }
 }
 
