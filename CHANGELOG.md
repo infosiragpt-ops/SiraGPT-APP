@@ -8,12 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
-- Phase 1 of Coding Agents (`AGENTES_CODING_V2`): OSS catalog and
-  `/agentes` target architecture (multi-tenant remote sandbox, no
-  `/code` revival, no OpenRouter in UI), plus an off-by-default flag
-  helper and `GET /api/agentes-coding/health`. Default `/agentes` UX
-  is unchanged. See `docs/oss-catalog.md` and
-  `docs/agentes-arquitectura.md`.
+- Phase 1 of Coding Agents (`AGENTES_CODING_V2`): OSS catalog (Tier S
+  from a 176-repo pass: OpenSandbox, E2B, gVisor, Firecracker, Aider,
+  OpenHands, Cline HITL-only, SWE-agent/SWE-bench, mem0, xterm.js,
+  Playwright MCP, Goose) plus `/agentes` architecture, license gate,
+  and an off-by-default flag helper (`GET /api/agentes-coding/health`).
+  Default `/agentes` UX is unchanged. No monorepo dump.
 
 - SiraCode native `multiedit` applies a jailed batch of unique
   `old_str` → `new_str` replacements atomically (nothing is written

@@ -7,7 +7,8 @@ and not a revival of `/code`.
 
 Canonical UI: **`/agentes`**. Planes: CONVERSAR / PLANIFICAR / CONSTRUIR
 (`AGENTS.md`). Catalog of permitted sources:
-[`docs/oss-catalog.md`](./oss-catalog.md).
+[`docs/oss-catalog.md`](./oss-catalog.md) (Tier S from a 176-repo
+research pass — pattern first, no dump).
 
 Out of scope for this PR: Monaco IDE, OpenSandbox deploy, wholesale vendor
 trees, e2e todo-app. Those are later PRs behind the same flag.
@@ -102,11 +103,13 @@ container. Not `CODE_HOST_RUNNER`. The current shared Bun `/code` runner
 is a canary, not a multi-tenant security boundary
 (`docs/code-platform-architecture.md`).
 
-**Preferred Apache path:** [OpenSandbox](https://github.com/alibaba/OpenSandbox)
+**Preferred Apache path (Tier S):**
+[OpenSandbox](https://github.com/opensandbox-group/OpenSandbox)
 lifecycle API (create / exec / files / pause) **or** the
 [E2B](https://github.com/e2b-dev/E2B) Apache-2.0 SDK + optional
-`e2b-dev/infra` Firecracker ideas. Take **patterns** first; pin a client
-library only in a later §25 PR.
+`e2b-dev/infra` Firecracker / gVisor ideas. Take **patterns** first; pin a
+client library only in a later §25 PR. See `docs/oss-catalog.md` Tier S
+for Aider, OpenHands, Cline HITL-only, Goose, mem0, Playwright MCP.
 
 **Later:** Kubernetes with gVisor (`runsc`) or Firecracker/Kata as the
 RuntimeClass. Host rollout of `runsc` on the Lenovo origin still needs
