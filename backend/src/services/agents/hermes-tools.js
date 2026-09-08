@@ -109,7 +109,7 @@ const hermesMemoryTool = {
     properties: {
       action: {
         type: 'string',
-        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge', 'compact', 'retrieve', 'export', 'import'],
+        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge', 'compact', 'retrieve', 'export', 'import', 'pin', 'unpin', 'resolve'],
       },
       target: { type: 'string', enum: ['memory', 'user'], description: 'Curated store for add/replace/remove/read.' },
       content: { type: 'string', description: 'New entry text for add/replace.' },
@@ -119,6 +119,8 @@ const hermesMemoryTool = {
       entryId: { type: 'string' },
       snapshot: { type: 'object', description: 'Portable profile+notes snapshot for action=import.' },
       mode: { type: 'string', enum: ['replace', 'merge'], description: 'Import mode. Default replace.' },
+      pinned: { type: 'boolean', description: 'When adding to target=user, mark the profile fact as pinned.' },
+      dryRun: { type: 'boolean', description: 'For action=resolve, report conflicts without writing.' },
     },
   },
   async execute(args, ctx = {}) {
@@ -127,7 +129,11 @@ const hermesMemoryTool = {
 
     switch (args.action) {
       case 'add':
-        return memoryBridge.curatedAdd(userId, { target: args.target, content: args.content || args.fact });
+        return memoryBridge.curatedAdd(userId, {
+          target: args.target,
+          content: args.content || args.fact,
+          pinned: args.pinned === true,
+        });
       case 'replace':
         return memoryBridge.curatedReplace(userId, {
           target: args.target,
@@ -161,6 +167,12 @@ const hermesMemoryTool = {
         return memoryBridge.exportSnapshot(userId);
       case 'import':
         return memoryBridge.importSnapshot(userId, args.snapshot, { mode: args.mode });
+      case 'pin':
+        return memoryBridge.curatedPin(userId, { old_text: args.old_text || args.query || args.content });
+      case 'unpin':
+        return memoryBridge.curatedUnpin(userId, { old_text: args.old_text || args.query || args.content });
+      case 'resolve':
+        return memoryBridge.resolveConflicts(userId, { dryRun: args.dryRun === true, chatId: ctx.chatId });
       default:
         return { ok: false, error: 'invalid action' };
     }

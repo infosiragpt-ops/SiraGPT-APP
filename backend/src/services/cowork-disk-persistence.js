@@ -75,6 +75,32 @@ function normalizePersistedNote(note) {
   };
 }
 
+function normalizeCuratedMetaRow(row) {
+  if (!row || typeof row !== 'object') {
+    return { pinned: false, createdAt: 0, updatedAt: 0 };
+  }
+  return {
+    pinned: row.pinned === true,
+    createdAt: Number(row.createdAt) || 0,
+    updatedAt: Number(row.updatedAt) || Number(row.createdAt) || 0,
+  };
+}
+
+function normalizeCuratedMeta(meta) {
+  const src = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  const out = { memory: {}, user: {} };
+  for (const target of ['memory', 'user']) {
+    const bucket = src[target] && typeof src[target] === 'object' && !Array.isArray(src[target])
+      ? src[target]
+      : {};
+    for (const [text, row] of Object.entries(bucket)) {
+      if (!text) continue;
+      out[target][String(text)] = normalizeCuratedMetaRow(row);
+    }
+  }
+  return out;
+}
+
 function loadCuratedMemory(userId) {
   const row = loadJson(userPath('curated-memory', userId), { memory: [], user: [], notes: [] });
   return {
@@ -83,6 +109,7 @@ function loadCuratedMemory(userId) {
     notes: Array.isArray(row.notes)
       ? row.notes.map(normalizePersistedNote).filter(Boolean)
       : [],
+    meta: normalizeCuratedMeta(row.meta),
     updatedAt: Number(row.updatedAt) || 0,
   };
 }
@@ -96,6 +123,7 @@ function saveCuratedMemory(userId, stores) {
     notes: Array.isArray(stores?.notes)
       ? stores.notes.map(normalizePersistedNote).filter(Boolean)
       : [],
+    meta: normalizeCuratedMeta(stores?.meta),
   });
 }
 
