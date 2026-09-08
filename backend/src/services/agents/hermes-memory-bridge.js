@@ -174,8 +174,9 @@ function listEntries(userId) {
 
 function status(userId = null) {
   const base = {
-    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction', 'hermes-memory-portability'],
+    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction', 'hermes-memory-portability', 'hermes-memory-conflict'],
     portability: memoryPortability.status(),
+    conflict: require('./hermes-memory-conflict').status(),
     promotionThreshold: Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10),
     curated: curatedMemory.status(userId),
     compaction: sessionCompaction.status(userId),
@@ -199,6 +200,10 @@ module.exports = {
   curatedReplace: curatedMemory.replace,
   curatedRemove: curatedMemory.remove,
   curatedRead: curatedMemory.read,
+  curatedPin: curatedMemory.pin,
+  curatedUnpin: curatedMemory.unpin,
+  listFacts: curatedMemory.listFacts,
+  resolveConflicts: curatedMemory.resolveConflicts,
   searchSessions,
   retrieveRanked,
   compactSession,

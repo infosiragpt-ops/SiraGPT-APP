@@ -84,6 +84,31 @@ const COMMAND_HANDLERS = Object.freeze({
         }),
       };
     }
+    if (action === 'resolve') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.resolveConflicts(ctx.userId, {
+          dryRun: ctx.dryRun === true,
+          sessionUserId: ctx.sessionUserId,
+          chatId: ctx.chatId,
+        }),
+      };
+    }
+    if (action === 'pin') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.curatedPin(ctx.userId, { old_text: ctx.old_text || ctx.query }),
+      };
+    }
+    if (action === 'unpin') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.curatedUnpin(ctx.userId, { old_text: ctx.old_text || ctx.query }),
+      };
+    }
     return {
       command: 'memory',
       status: memoryBridge.status(ctx.userId),

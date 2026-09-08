@@ -58,8 +58,75 @@ function sessionKey(userId, chatId) {
   return `${userId}::${chatId ? String(chatId).slice(0, 80) : '_default'}`;
 }
 
+function emptyMeta() {
+  return { memory: {}, user: {} };
+}
+
 function emptyStores() {
-  return { memory: [], user: [], notes: [] };
+  return { memory: [], user: [], notes: [], meta: emptyMeta() };
+}
+
+function normalizeMetaRow(row) {
+  if (!row || typeof row !== 'object') {
+    return { pinned: false, createdAt: 0, updatedAt: 0 };
+  }
+  return {
+    pinned: row.pinned === true,
+    createdAt: Number(row.createdAt) || 0,
+    updatedAt: Number(row.updatedAt) || Number(row.createdAt) || 0,
+  };
+}
+
+function normalizeMeta(meta) {
+  const src = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  const out = emptyMeta();
+  for (const target of ['memory', 'user']) {
+    const bucket = src[target] && typeof src[target] === 'object' && !Array.isArray(src[target])
+      ? src[target]
+      : {};
+    for (const [text, row] of Object.entries(bucket)) {
+      if (!text) continue;
+      out[target][text] = normalizeMetaRow(row);
+    }
+  }
+  return out;
+}
+
+function ensureMeta(stores) {
+  if (!stores.meta || typeof stores.meta !== 'object' || Array.isArray(stores.meta)) {
+    stores.meta = emptyMeta();
+  }
+  if (!stores.meta.memory || typeof stores.meta.memory !== 'object') stores.meta.memory = {};
+  if (!stores.meta.user || typeof stores.meta.user !== 'object') stores.meta.user = {};
+  return stores.meta;
+}
+
+function stampMeta(stores, target, text, opts = {}) {
+  const meta = ensureMeta(stores);
+  const bucket = target === 'user' ? meta.user : meta.memory;
+  const prev = bucket[text] || {};
+  const now = Number(opts.now) || Date.now();
+  bucket[text] = {
+    pinned: opts.pinned === true || (opts.pinned !== false && prev.pinned === true),
+    createdAt: Number(opts.createdAt) || Number(prev.createdAt) || now,
+    updatedAt: Number(opts.updatedAt) || now,
+  };
+  return bucket[text];
+}
+
+function forgetMeta(stores, target, text) {
+  const meta = ensureMeta(stores);
+  const bucket = target === 'user' ? meta.user : meta.memory;
+  delete bucket[text];
+}
+
+function pruneMeta(stores, target, entries) {
+  const meta = ensureMeta(stores);
+  const bucket = target === 'user' ? meta.user : meta.memory;
+  const keep = new Set(entries);
+  for (const text of Object.keys(bucket)) {
+    if (!keep.has(text)) delete bucket[text];
+  }
 }
 
 function storesFor(userId) {
@@ -72,6 +139,7 @@ function storesFor(userId) {
     liveByUser.set(id, stores);
   }
   if (!Array.isArray(stores.notes)) stores.notes = [];
+  ensureMeta(stores);
   return stores;
 }
 
@@ -84,6 +152,7 @@ function hydrateUser(userId) {
       memory: dedupe(saved.memory),
       user: dedupe(saved.user),
       notes: Array.isArray(saved.notes) ? saved.notes.filter(Boolean) : [],
+      meta: normalizeMeta(saved.meta),
     });
   } catch {
     liveByUser.set(userId, emptyStores());
@@ -95,6 +164,7 @@ function persistUser(userId) {
   if (!id) return;
   const stores = liveByUser.get(id) || emptyStores();
   if (!Array.isArray(stores.notes)) stores.notes = [];
+  ensureMeta(stores);
   try {
     diskPersistence.saveCuratedMemory(id, stores);
   } catch {
@@ -217,6 +287,7 @@ function rewriteTarget(userId, target, entries) {
   const next = dedupe(entries);
   if (resolved === 'user') stores.user = next;
   else stores.memory = next;
+  pruneMeta(stores, resolved, next);
   persistUser(id);
   return { ok: true, success: true, ...usagePayload(stores, resolved) };
 }
@@ -248,7 +319,7 @@ function successResponse(userId, target, message) {
   };
 }
 
-function add(userId, { target = 'memory', content, now, maxWrites, windowMs, rateLimit } = {}) {
+function add(userId, { target = 'memory', content, now, maxWrites, windowMs, rateLimit, pinned } = {}) {
   const id = normalizeUserId(userId);
   if (!id) return { ok: false, success: false, error: 'userId required' };
   const resolved = resolveTarget(target);
@@ -288,6 +359,7 @@ function add(userId, { target = 'memory', content, now, maxWrites, windowMs, rat
             if (!rate.ok) return rate;
           }
           storesFor(id).memory = retry;
+          stampMeta(storesFor(id), resolved, text, { now, pinned: false });
           persistUser(id);
           return successResponse(id, resolved, 'Entry added.');
         }
@@ -321,6 +393,7 @@ function add(userId, { target = 'memory', content, now, maxWrites, windowMs, rat
 
   if (resolved === 'user') stores.user = next;
   else stores.memory = next;
+  stampMeta(stores, resolved, text, { now, pinned: pinned === true && resolved === 'user' });
   persistUser(id);
   return successResponse(id, resolved, 'Entry added.');
 }
@@ -376,8 +449,16 @@ function replace(userId, { target = 'memory', old_text, oldText, content, now, m
     if (!rate.ok) return rate;
   }
 
+  const previous = match.entry;
   if (resolved === 'user') stores.user = test;
   else stores.memory = test;
+  const prevMeta = (ensureMeta(stores)[resolved] || {})[previous];
+  forgetMeta(stores, resolved, previous);
+  stampMeta(stores, resolved, nextText, {
+    now,
+    pinned: prevMeta ? prevMeta.pinned === true && resolved === 'user' : false,
+    createdAt: prevMeta ? prevMeta.createdAt : undefined,
+  });
   persistUser(id);
   return successResponse(id, resolved, 'Entry replaced.');
 }
@@ -396,6 +477,7 @@ function remove(userId, { target = 'memory', old_text, oldText } = {}) {
   const next = entries.filter((_, index) => index !== match.index);
   if (resolved === 'user') stores.user = next;
   else stores.memory = next;
+  forgetMeta(stores, resolved, match.entry);
   persistUser(id);
   return successResponse(id, resolved, 'Entry removed.');
 }
@@ -475,11 +557,17 @@ function learnFromEntry(entry) {
   if (!shouldLearnFromEntry(entry)) {
     return { ok: false, skipped: true, reason: 'not_learnable' };
   }
-  return add(entry.userId, {
+  const added = add(entry.userId, {
     target: inferTarget(entry),
     content: String(entry.fact).trim(),
     rateLimit: false,
+    now: entry.updatedAt || entry.createdAt,
+    pinned: entry.pinned === true,
   });
+  if (added.ok) {
+    resolveConflicts(entry.userId, { deposit: false, now: entry.updatedAt || entry.createdAt });
+  }
+  return added;
 }
 
 function learnFromFacts(userId, facts) {
@@ -491,7 +579,12 @@ function learnFromFacts(userId, facts) {
       target: inferTarget({ fact: text, category: fact?.category }),
       content: String(text).trim(),
       rateLimit: false,
+      now: fact?.updatedAt || fact?.createdAt,
+      pinned: fact?.pinned === true,
     }));
+  }
+  if (results.some((row) => row && row.ok)) {
+    resolveConflicts(userId, { deposit: false });
   }
   return results;
 }
@@ -524,8 +617,166 @@ function forgetMatching(userId, query) {
     return true;
   });
   stores.notes = nextNotes;
-  if (removed) persistUser(id);
+  if (removed) {
+    pruneMeta(stores, 'user', stores.user);
+    pruneMeta(stores, 'memory', stores.memory);
+    persistUser(id);
+  }
   return { removed };
+}
+
+function listFacts(userId) {
+  const id = normalizeUserId(userId);
+  if (!id) return [];
+  const stores = storesFor(id);
+  const facts = [];
+  for (const target of ['user', 'memory']) {
+    const bucket = ensureMeta(stores)[target] || {};
+    for (const text of entriesFor(stores, target)) {
+      const row = normalizeMetaRow(bucket[text]);
+      facts.push({
+        store: target,
+        text,
+        pinned: target === 'user' && row.pinned === true,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      });
+    }
+  }
+  return facts;
+}
+
+function pin(userId, { old_text, oldText, now, target = 'user' } = {}) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, success: false, error: 'userId required' };
+  const resolved = resolveTarget(target);
+  if (resolved !== 'user') {
+    return {
+      ok: false,
+      success: false,
+      code: 'E_PARAMS',
+      error: require('./hermes-memory-conflict').spanishMessage('pin_user_only'),
+    };
+  }
+  const stores = storesFor(id);
+  const match = findUniqueMatch(stores.user, old_text || oldText);
+  if (match.error) {
+    const conflict = require('./hermes-memory-conflict');
+    const needle = String(old_text || oldText || '').trim();
+    return {
+      ok: false,
+      success: false,
+      code: 'E_PARAMS',
+      error: match.error.includes('Multiple')
+        ? conflict.spanishMessage('pin_ambiguous', { needle })
+        : conflict.spanishMessage('pin_not_found', { needle }),
+      matches: match.matches,
+    };
+  }
+  const prev = normalizeMetaRow((ensureMeta(stores).user || {})[match.entry]);
+  const already = prev.pinned === true;
+  stampMeta(stores, 'user', match.entry, {
+    now,
+    pinned: true,
+    createdAt: prev.createdAt || undefined,
+  });
+  persistUser(id);
+  const conflict = require('./hermes-memory-conflict');
+  return {
+    ok: true,
+    success: true,
+    pinned: true,
+    text: match.entry,
+    alreadyPinned: already,
+    message: already
+      ? conflict.spanishMessage('already_pinned')
+      : conflict.spanishMessage('pinned_ok', { text: match.entry }),
+    ...usagePayload(stores, 'user'),
+  };
+}
+
+function unpin(userId, { old_text, oldText, now, target = 'user' } = {}) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, success: false, error: 'userId required' };
+  const resolved = resolveTarget(target);
+  if (resolved !== 'user') {
+    return {
+      ok: false,
+      success: false,
+      code: 'E_PARAMS',
+      error: require('./hermes-memory-conflict').spanishMessage('pin_user_only'),
+    };
+  }
+  const stores = storesFor(id);
+  const match = findUniqueMatch(stores.user, old_text || oldText);
+  if (match.error) {
+    const conflict = require('./hermes-memory-conflict');
+    const needle = String(old_text || oldText || '').trim();
+    return {
+      ok: false,
+      success: false,
+      code: 'E_PARAMS',
+      error: match.error.includes('Multiple')
+        ? conflict.spanishMessage('pin_ambiguous', { needle })
+        : conflict.spanishMessage('pin_not_found', { needle }),
+      matches: match.matches,
+    };
+  }
+  const prev = normalizeMetaRow((ensureMeta(stores).user || {})[match.entry]);
+  const wasPinned = prev.pinned === true;
+  const meta = ensureMeta(stores);
+  meta.user[match.entry] = {
+    pinned: false,
+    createdAt: prev.createdAt || nowMsSafe(now),
+    updatedAt: nowMsSafe(now),
+  };
+  persistUser(id);
+  const conflict = require('./hermes-memory-conflict');
+  return {
+    ok: true,
+    success: true,
+    pinned: false,
+    text: match.entry,
+    alreadyUnpinned: !wasPinned,
+    message: wasPinned
+      ? conflict.spanishMessage('unpinned_ok', { text: match.entry })
+      : conflict.spanishMessage('already_unpinned'),
+    ...usagePayload(stores, 'user'),
+  };
+}
+
+function nowMsSafe(now) {
+  const n = Number(now);
+  return Number.isFinite(n) && n > 0 ? n : Date.now();
+}
+
+function dropFacts(userId, removals) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, removed: 0 };
+  const stores = storesFor(id);
+  const dropByTarget = { user: new Set(), memory: new Set() };
+  for (const row of Array.isArray(removals) ? removals : []) {
+    const target = row.store === 'user' ? 'user' : 'memory';
+    const text = String(row.text || '').trim();
+    if (text) dropByTarget[target].add(text);
+  }
+  let removed = 0;
+  for (const target of ['user', 'memory']) {
+    if (!dropByTarget[target].size) continue;
+    const entries = entriesFor(stores, target);
+    const next = entries.filter((entry) => !dropByTarget[target].has(entry));
+    if (next.length === entries.length) continue;
+    removed += entries.length - next.length;
+    if (target === 'user') stores.user = next;
+    else stores.memory = next;
+    pruneMeta(stores, target, next);
+  }
+  if (removed) persistUser(id);
+  return { ok: true, removed };
+}
+
+function resolveConflicts(userId, opts = {}) {
+  return require('./hermes-memory-conflict').resolveConflicts(userId, { ...opts, curated: module.exports });
 }
 
 function invalidateSnapshots(userId) {
@@ -597,4 +848,9 @@ module.exports = {
   status,
   scanMemoryContent,
   resetForTests,
+  listFacts,
+  pin,
+  unpin,
+  dropFacts,
+  resolveConflicts,
 };
