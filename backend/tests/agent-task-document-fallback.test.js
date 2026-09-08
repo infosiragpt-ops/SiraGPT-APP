@@ -660,7 +660,9 @@ test('runAgentTaskJob never turns an unrecovered model error into a Word artifac
     });
 
     const snapshot = taskStore.getTaskSnapshotForUser('task-model-error-artifact-guard-1', 'user-model-error-artifact-guard-1');
-    assert.equal(result.status, 'completed');
+    assert.equal(result.status, 'failed');
+    assert.equal(snapshot.status, 'failed');
+    assert.equal(snapshot.terminalMetricStatus, 'error');
     assert.equal(result.artifacts, 0);
     assert.equal(persistedArtifacts, 0);
     assert.equal(snapshot.documentPolicy.autoGenerate, false);

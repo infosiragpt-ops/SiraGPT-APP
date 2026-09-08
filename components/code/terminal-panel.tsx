@@ -324,6 +324,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
           const res = await codexApi.execInProject(projectId, cmd, dept.runId)
           const body = `${res.stdout || ""}${res.stderr ? (res.stdout ? "\n" : "") + res.stderr : ""}`.replace(/\s+$/, "")
           if (body) print(body, res.ok === false ? "err" : "out")
+          if (res.timedOut) print("⏱ el comando excedió el tiempo límite", "err")
           if (!res.ok && typeof res.exitCode === "number" && res.exitCode !== 0) {
             print(`exit code ${res.exitCode}`, "err")
           }

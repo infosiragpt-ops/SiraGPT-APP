@@ -302,9 +302,12 @@ describe("mergeMessagesPreservingUserContent - assistant content / orphan preser
       { id: "a1", role: "ASSISTANT", content: "Listo", files: [{ id: "art_1" }] },
     ]
     const merged = mergeMessagesPreservingUserContent(incoming, local)
-    assert.deepEqual(merged[1].files, [
-      { id: "art_1", name: "chart.png", url: "/blob/x", mimeType: "image/png" },
-    ])
+    const files = (merged[1] as { files?: Array<Record<string, unknown>> }).files || []
+    assert.equal(files.length, 1)
+    assert.equal(files[0].id, "art_1")
+    assert.equal(files[0].name, "chart.png")
+    assert.equal(files[0].url, "/blob/x")
+    assert.equal(files[0].mimeType, "image/png")
   })
 
   it("Pass 3 - re-appends local orphan assistant tail the server hasn't persisted yet", () => {
@@ -352,5 +355,48 @@ describe("mergeMessagesPreservingUserContent - assistant content / orphan preser
     const merged = mergeMessagesPreservingUserContent(incoming, local)
     // The empty stub is NOT worth preserving — next refresh will surface real content.
     assert.equal(merged.length, 2)
+  })
+})
+
+describe("preserveOrphanAssistantMessages - keeps the live stream placeholder", () => {
+  const userTurn = {
+    id: "msg-user-2",
+    role: "USER",
+    content: "hola",
+    metadata: JSON.stringify({ idempotencyKey: "turn-2" }),
+  }
+  const placeholder = {
+    id: "msg-ai-chat-2",
+    role: "ASSISTANT",
+    content: "",
+    metadata: JSON.stringify({ idempotencyKey: "turn-2" }),
+  }
+  const seed = [
+    { id: "msg-user-1", role: "USER", content: "primer mensaje" },
+    { id: "asst_1", role: "ASSISTANT", content: "Primera respuesta." },
+  ]
+
+  it("keeps an empty placeholder while the server has no assistant row for that turn", () => {
+    const merged = mergeMessagesPreservingUserContent([...seed, userTurn], [...seed, userTurn, placeholder])
+    assert.ok(
+      merged.some((m) => (m as any).id === "msg-ai-chat-2"),
+      "the streaming placeholder must survive a refresh that races the first token",
+    )
+  })
+
+  it("drops the empty placeholder once the server persisted the same turn", () => {
+    const persisted = {
+      id: "asst_2",
+      role: "ASSISTANT",
+      content: "Hola, Luis. ¿En qué te ayudo hoy?",
+      metadata: JSON.stringify({ idempotencyKey: "turn-2" }),
+    }
+    const merged = mergeMessagesPreservingUserContent(
+      [...seed, userTurn, persisted],
+      [...seed, userTurn, placeholder],
+    )
+    const assistants = merged.filter((m) => String(m.role).toUpperCase() === "ASSISTANT")
+    assert.equal(assistants.length, 2)
+    assert.ok(!merged.some((m) => (m as any).id === "msg-ai-chat-2"))
   })
 })

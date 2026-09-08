@@ -79,6 +79,34 @@ const MODEL_CONTEXT_LIMITS = {
   'z-ai/glm-5.1': 200000,
   // Moonshot / Kimi (OpenRouter slug)
   'moonshotai/kimi-k2.6': 262144,
+  // Live catalog 2026-09 (siragpt.com). Missing entries resolved to the 8k
+  // default and the route fit dropped the WHOLE thread on every turn.
+  'muse-spark-1.2-contributor': 1000000,
+  'muse-spark-1.2': 1000000,
+  'muse-spark-1.1': 1000000,
+  'meta/muse-spark-1.2': 1000000,
+  'grok-4.5': 256000,
+  'grok-4.6': 500000,
+  'grok-4.3': 256000,
+  'x-ai/grok-4.5': 256000,
+  'x-ai/grok-4.6': 500000,
+  'gemini-3.5-flash': 1048576,
+  'gemini-3.5-flash-lite': 1048576,
+  'gemini-3.6-flash': 1048576,
+  'gemini-3.7-flash': 1048576,
+  'gemini-3-flash-preview': 1048576,
+  'gemini-3.1-pro-preview': 1048576,
+  'claude-sonnet-5': 1000000,
+  'claude-opus-5': 1000000,
+  'claude-fable-5': 1000000,
+  'claude-haiku-5': 1000000,
+  'anthropic/claude-sonnet-5': 1000000,
+  'anthropic/claude-opus-5': 1000000,
+  'siragpt-1.0': 131072,
+  'openai/gpt-oss-120b': 131072,
+  'openai/gpt-oss-20b': 131072,
+  'gpt-oss-120b': 131072,
+  'gpt-oss-20b': 131072,
 };
 
 const MODEL_COMPLETION_LIMITS = {
@@ -128,10 +156,69 @@ const MODEL_COMPLETION_LIMITS = {
   'x-ai/grok-4.20': 32768,
   'z-ai/glm-5.1': 32768,
   'moonshotai/kimi-k2.6': 65536,
+  'muse-spark-1.2-contributor': 65536,
+  'muse-spark-1.2': 65536,
+  'muse-spark-1.1': 65536,
+  'meta/muse-spark-1.2': 65536,
+  'grok-4.5': 32768,
+  'grok-4.6': 32768,
+  'grok-4.3': 32768,
+  'x-ai/grok-4.5': 32768,
+  'x-ai/grok-4.6': 32768,
+  'gemini-3.5-flash': 65536,
+  'gemini-3.5-flash-lite': 65536,
+  'gemini-3.6-flash': 65536,
+  'gemini-3.7-flash': 65536,
+  'gemini-3-flash-preview': 65536,
+  'gemini-3.1-pro-preview': 65536,
+  'claude-sonnet-5': 64000,
+  'claude-opus-5': 64000,
+  'claude-fable-5': 64000,
+  'claude-haiku-5': 64000,
+  'anthropic/claude-sonnet-5': 64000,
+  'anthropic/claude-opus-5': 64000,
+  'siragpt-1.0': 32768,
+  'openai/gpt-oss-120b': 32768,
+  'openai/gpt-oss-20b': 32768,
+  'gpt-oss-120b': 32768,
+  'gpt-oss-20b': 32768,
 };
 
-const DEFAULT_CONTEXT_LIMIT = 8192;
+// Unknown models: every hosted model of the 2025-26 catalog has at least
+// 32k of context; assuming 8k made the route fit discard the entire
+// conversation behind a ~12k-token system prompt. Local minis (sira-mini /
+// moondream / gemma4) keep the conservative 8k below.
+const DEFAULT_CONTEXT_LIMIT = 32768;
 const DEFAULT_COMPLETION_LIMIT = 4096;
+const LOCAL_MINI_CONTEXT_LIMIT = 8192;
+
+// Family heuristics for ids not listed verbatim (catalog rows are edited by
+// admins, e.g. "grok-4.7" or "gemini-3.8-flash"). Ordered: first match wins.
+const CONTEXT_FAMILY_RULES = [
+  [/sira[-_ ]?mini|siragpt[-_ ]?mini|moondream|gemma4|gemma\s*4\b/i, LOCAL_MINI_CONTEXT_LIMIT, 4096],
+  [/muse[-_ ]?spark|muse[-_ ]?image|llama-4/i, 1000000, 65536],
+  [/grok-?(4|5)/i, 256000, 32768],
+  [/gemini-?(2\.5|3)/i, 1048576, 65536],
+  [/gemini/i, 1000000, 8192],
+  [/claude-?(sonnet|opus|haiku|fable)-?5/i, 1000000, 64000],
+  [/claude/i, 200000, 32000],
+  [/gpt-?5/i, 400000, 128000],
+  [/gpt-?4\.1/i, 1000000, 32768],
+  [/gpt-?4/i, 128000, 16384],
+  [/kimi|moonshot/i, 262144, 65536],
+  [/glm-?5|z-ai\//i, 200000, 32768],
+  [/qwen3|qwen-3/i, 262144, 32768],
+  [/deepseek/i, 128000, 32768],
+  [/gpt-?oss|siragpt-1\.0/i, 131072, 32768],
+];
+
+function familyLimits(model) {
+  const m = String(model || '');
+  for (const [re, context, completion] of CONTEXT_FAMILY_RULES) {
+    if (re.test(m)) return { context, completion };
+  }
+  return null;
+}
 const SAFETY_RATIO = 0.8;
 const KEEP_HEAD = 1;   // first message (usually system)
 // KEEP_TAIL used to be a flat 5 for every model. That's correct for an
@@ -186,6 +273,8 @@ function getContextLimit(model) {
   for (const [key, value] of Object.entries(MODEL_CONTEXT_LIMITS)) {
     if (model.includes(key) || key.includes(model)) return value;
   }
+  const family = familyLimits(model);
+  if (family) return family.context;
   return DEFAULT_CONTEXT_LIMIT;
 }
 
@@ -208,6 +297,8 @@ function getCompletionLimit(model) {
   for (const [key, value] of Object.entries(MODEL_COMPLETION_LIMITS)) {
     if (model.includes(key) || key.includes(model)) return value;
   }
+  const family = familyLimits(model);
+  if (family) return family.completion;
   return DEFAULT_COMPLETION_LIMIT;
 }
 

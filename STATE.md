@@ -1,6 +1,6 @@
 # STATE — Estado del programa Frontier Agent
 
-- **Última actualización:** 2026-08-14
+- **Última actualización:** 2026-08-28
 - **Owner:** SiraGPT / Luis Carrera
 - **Repo:** `infosiragpt-ops/SiraGPT-APP`
 
@@ -8,8 +8,46 @@
 
 ## Fase activa
 
+**F7 — SiraComputer (multimodal + desktop VM).**
+Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+**F7.3:** **COMPLETED** — gate §22.3 verde en CI (`Desktop · F7.3
+CU-loop + SiraAction`, run 33215826539) y «CI · required checks
+passed». `computer` tool + Anthropic/OpenAI/Gemini → SiraAction +
+CU-loop (vision, grounding, `verifyGoal`, budgets 40 / 5 min / 3
+handoffs, AbortSignal). `executeComputer` habla con DCP vía
+`DesktopSessionManager` (reusa lease del chat; kill switch
+`SIRAGPT_DESKTOP_ENABLED` fail-closed). `request_handoff` es solo una
+acción que devuelve `HANDOFF_REQUESTED` (FSM/UI = F7.4). Tests
+`backend/tests/desktop-f7-cu-loop.test.js`: 16 pass / 0 fail, sin
+Docker / sin E2B. **No se inicia F7.4.**
+
+**F7.2:** **merged** — PR #488 / `b43f3aeb` (DCP completo + WS proxy
+autenticado + DesktopScreen). Este PR no reabre F7.2 ni declara su CI
+verde; esa verificación queda en el merge de #488.
+
+**F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
+(`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
+26 pass, 0 fail; integración E2B y docker F7.0 se omiten honestamente).
+`E2BDesktopProvider` deja de ser el stub 501: require aislado de `@e2b/desktop`,
+cliente inyectable, fail-closed sin `E2B_API_KEY` (español honesto, sin red).
+`DesktopSessionManager` en memoria: acquire p50 < 800 ms con pool caliente,
+release/heartbeat/status, pool MIN=2 / MAX=20, reaper TTL 15 min, kill switch
+`SIRAGPT_DESKTOP_ENABLED`. Ruta `/api/desktop/*` (no habla con el orquestador
+#484). Panel: «Preparando escritorio…» + first-frame; nunca el error genérico
+cuando pool>0. **No se inicia F7.2 en este PR.**
+
+**F7.0:** **COMPLETED** — gate §22.1 verde en CI (`Desktop · F7.0 sira-desktop
+provision`, run 33201966689). `docker build` de `sira-desktop` + contenedor +
+`GET :9000/health` `{status:"ok",display:":0"}` + screenshot PNG. Interfaz
+`DesktopProvider` + LocalGvisor stub + imagen `infra/desktop`. El
+orquestador live de #484 se conservó.
+
+---
+
+## Fase anterior (cerrada)
+
 **F5 — Sandbox hardening (gVisor, fail-closed, límites duros).**
-Estado: **COMPLETED (pendiente de merge/deploy — este PR)** — el driver
+Estado: **COMPLETED** — el driver
 docker del sandbox del doc-agent (`backend/src/services/doc-agent/sandbox.js`)
 sube de un contenedor Docker plano a aislamiento de producción: runtime
 gVisor (`--runtime runsc`) cuando el daemon lo tiene registrado, con
@@ -290,17 +328,17 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- Nada fuera de F5. F6+ NO se inicia (Playwright/web_search, computer-use,
-  voz, memoria/MCP, evals, LoRA, SSO, MinIO, Drizzle quedan secuenciados en
-  `ROADMAP.md`).
+- **F7** (fase): F7.3 COMPLETED (CI `desktop-f73` + required checks).
+- **F7.4 no iniciada.** Nada de F7.4–F7.8 (`handoff-fsm.js`,
+  `network-policy.js`, Prisma `DesktopSession`, LocalGvisor `runsc`).
 
 ## Pendiente
 
-- **F6 en adelante**, según `ROADMAP.md`: search/browser → multimodal →
-  memoria/skills/MCP → evals/optimizer → flywheel (router aprendido +
-  LoRA/vLLM) → enterprise (SSO/SCIM/Stripe/marketplace) → plataforma y
-  superficies (MinIO/OTel/canary, voz/cron/email/CLI/PWA, i18n, migración
-  Prisma→Drizzle).
+- **F7.4** (siguiente): handoff FSM (pause / yield / resume) — spec §21.
+  No iniciar en este PR.
+- **F7.5–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
+  flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
   `/etc/docker/daemon.json` (https://gvisor.dev/docs/user_guide/install/);
   hasta entonces, `SIRAGPT_SANDBOX_RUNTIME=runc` explícito mantiene el
@@ -311,10 +349,9 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 ## Cómo retoma una sesión futura
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
-2. Leer `ROADMAP.md` para el alcance y el gate de la fase activa.
-3. Implementar SOLO la fase activa. No adelantar fases. No reabrir la base obligatoria.
-4. Al cerrar: tests + evals verdes, commit propio, actualizar `STATE.md`
-   (fase cerrada → siguiente fase activa) en el mismo PR.
+2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.4). No adelantar F7.4+.
+4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas
 

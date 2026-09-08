@@ -8,7 +8,7 @@
  * Mounts a single global keydown listener on `window` that handles:
  *   · "?"               → open shortcuts help modal
  *   · Cmd/Ctrl+K        → open command palette (cmdk)
- *   · Cmd/Ctrl+N        → new chat (router.push("/"))
+   *   · Cmd/Ctrl+N        → new chat (router.push("/agentes"))
  *   · Cmd/Ctrl+/        → toggle theme (light ↔ dark)
  *   · Esc               → close any open shortcut UI we own
  *
@@ -55,7 +55,6 @@ import {
   MessageSquarePlus,
   Image as ImageIcon,
   Video,
-  Code2,
   Folder,
   Settings,
   CreditCard,
@@ -72,7 +71,7 @@ const SHORTCUTS: Array<{ section: string; items: Shortcut[] }> = [
     section: "Navegación",
     items: [
       { combo: "Cmd/Ctrl + K", description: "Abrir paleta de comandos" },
-      { combo: "Cmd/Ctrl + N", description: "Nuevo chat" },
+      { combo: "Cmd/Ctrl + N", description: "Nuevo agente" },
       { combo: "Cmd/Ctrl + B", description: "Mostrar u ocultar la barra lateral" },
     ],
   },
@@ -141,7 +140,7 @@ export function KeyboardShortcutsProvider() {
 
   const newChat = React.useCallback(() => {
     // Same destination the sidebar "Nuevo chat" button uses.
-    router.push("/")
+    router.push("/agentes")
   }, [router])
 
   React.useEffect(() => {
@@ -208,7 +207,7 @@ export function KeyboardShortcutsProvider() {
               }}
             >
               <MessageSquarePlus className="mr-2 h-4 w-4" />
-              <span>Nuevo chat</span>
+              <span>Nuevo agente</span>
               <span className="ml-auto text-xs text-muted-foreground">Cmd/Ctrl+N</span>
             </CommandItem>
             <CommandItem
@@ -242,17 +241,13 @@ export function KeyboardShortcutsProvider() {
               <Home className="mr-2 h-4 w-4" />
               <span>Inicio</span>
             </CommandItem>
-            <CommandItem onSelect={() => go("/chat")}>
+            <CommandItem onSelect={() => go("/agentes")}>
               <MessageSquarePlus className="mr-2 h-4 w-4" />
               <span>Chat</span>
             </CommandItem>
             <CommandItem onSelect={() => go("/library")}>
               <Folder className="mr-2 h-4 w-4" />
               <span>Biblioteca</span>
-            </CommandItem>
-            <CommandItem onSelect={() => go("/code")}>
-              <Code2 className="mr-2 h-4 w-4" />
-              <span>Codex</span>
             </CommandItem>
             <CommandItem onSelect={() => go("/gpts")}>
               <ImageIcon className="mr-2 h-4 w-4" />

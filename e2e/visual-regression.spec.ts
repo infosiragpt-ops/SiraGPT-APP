@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const KEY_ROUTES = [
   { name: 'Home', path: '/' },
-  { name: 'Chat', path: '/chat' },
+  { name: 'Chat', path: '/agentes' },
   { name: 'Settings', path: '/settings' },
   { name: 'Projects', path: '/projects' },
   { name: 'Auth', path: '/auth' },

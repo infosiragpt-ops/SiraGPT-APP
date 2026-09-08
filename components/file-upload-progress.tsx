@@ -5,9 +5,9 @@ import { AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useFileProcessingStatus, type FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import {
+  describeComposerChipProgress,
   describeStage,
   shouldFireReadyTransition,
-  stageProgressPercent,
   type FileProcessingStage,
 } from "@/lib/file-processing-vocab"
 
@@ -99,18 +99,16 @@ export function FileUploadProgress({
   }
 
   // Combined, monotonic progress: upload owns 0..50, processing owns
-  // 50..100. The handoff (upload done → first poll pending) holds at 50
-  // so the single bar only ever moves forward.
-  let pct: number
-  if (uploading) {
-    pct = Math.min(50, (Math.max(0, uploadProgress) / 100) * 50)
-  } else if (status.pending || !status.stage) {
-    pct = 50
-  } else {
-    pct = 50 + (stageProgressPercent(status.stage) / 100) * 50
-  }
-
-  const label = uploading ? "Subiendo" : describeStage(status.stage, status.error).label
+  // 50..100. The visible label must name the phase — a naked bar at
+  // ~80% (extracting/chunking) used to look like a stuck HTTP upload.
+  const chip = describeComposerChipProgress({
+    uploading,
+    uploadProgress,
+    stage: uploading ? null : (status.pending ? null : status.stage),
+    error: status.error,
+  })
+  const pct = chip.barPercent
+  const label = chip.label
 
   return (
     <span
@@ -122,6 +120,9 @@ export function FileUploadProgress({
       aria-valuemax={100}
       aria-valuenow={Math.round(pct)}
     >
+      <span className="mb-0.5 block truncate text-[10.5px] leading-tight text-muted-foreground">
+        {label}
+      </span>
       <span className="block h-[3px] w-full overflow-hidden rounded-full bg-zinc-200/70 dark:bg-white/10">
         <span
           className="block h-full rounded-full bg-zinc-900/70 transition-[width] duration-500 ease-out dark:bg-white/70"

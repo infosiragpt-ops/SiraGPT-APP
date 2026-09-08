@@ -223,7 +223,7 @@ const MediaLibrary: React.FC = () => {
     // originating chat (rare) fall back to the in-place preview modal.
     const handleItemClick = (item: MediaItem) => {
         if (item.chatId) {
-            router.push(`/chat?id=${encodeURIComponent(item.chatId)}`);
+            router.push(`/agentes?id=${encodeURIComponent(item.chatId)}`);
             return;
         }
         openMediaModal(item);

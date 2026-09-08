@@ -10,7 +10,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ─── Stage 1: Build ──────────────────────────────────────────
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat
@@ -18,10 +18,14 @@ RUN apk add --no-cache libc6-compat
 # The frontend uses the bundled CPU/WASM runtime. Avoid downloading the
 # optional Linux CUDA provider from NuGet during a CPU-only image build.
 ENV ONNXRUNTIME_NODE_INSTALL=skip
+# Browser execution belongs to the backend's Alpine Chromium runtime.
+# Do not download incompatible/unneeded browser binaries during the web build.
+ENV PUPPETEER_SKIP_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Install deps separately for layer caching
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package-lock.json ./backend/
+COPY backend/scripts/image-size-security-patch.cjs ./backend/scripts/
 RUN for attempt in 1 2 3; do \
       npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund && break; \
       status=$?; \
@@ -51,6 +55,7 @@ ARG NEXT_PUBLIC_SENTRY_RELEASE=
 ARG NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=0
 ARG NEXT_PUBLIC_SENTRY_REPLAY_SESSION_SAMPLE_RATE=0
 ARG NEXT_PUBLIC_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE=0
+ARG NEXT_PUBLIC_AGENT_COMPUTER=1
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_PUBLIC_APP_NAME=${NEXT_PUBLIC_APP_NAME}
 ENV NEXT_PUBLIC_APP_DESCRIPTION=${NEXT_PUBLIC_APP_DESCRIPTION}
@@ -63,6 +68,7 @@ ENV NEXT_PUBLIC_SENTRY_RELEASE=${NEXT_PUBLIC_SENTRY_RELEASE}
 ENV NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE}
 ENV NEXT_PUBLIC_SENTRY_REPLAY_SESSION_SAMPLE_RATE=${NEXT_PUBLIC_SENTRY_REPLAY_SESSION_SAMPLE_RATE}
 ENV NEXT_PUBLIC_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE=${NEXT_PUBLIC_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE}
+ENV NEXT_PUBLIC_AGENT_COMPUTER=${NEXT_PUBLIC_AGENT_COMPUTER}
 
 # Build with standalone output
 ENV DOCKER_BUILD=true
@@ -78,7 +84,7 @@ RUN npm run build
 # on the production BuildKit runner.
 
 # ─── Stage 2: Production runner ─────────────────────────────
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 RUN apk add --no-cache wget

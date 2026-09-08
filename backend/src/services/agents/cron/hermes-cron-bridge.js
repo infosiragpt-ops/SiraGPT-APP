@@ -53,9 +53,13 @@ function toHermesJob(job) {
   };
 }
 
+function hasOwner(userId) {
+  return typeof userId === 'string' && userId.trim().length > 0;
+}
+
 function createJob(opts = {}) {
   const userId = opts.userId;
-  if (!userId) throw new Error('createJob: userId required');
+  if (!hasOwner(userId)) throw new Error('createJob: userId required');
 
   const schedule = normalizeSchedule(opts.schedule || opts.cron);
   const job = scheduler.createCronJob({
@@ -73,27 +77,36 @@ function createJob(opts = {}) {
   return toHermesJob(scheduler.getJob(job.id));
 }
 
-function getJob(jobId) {
-  return toHermesJob(scheduler.getJob(jobId));
+function getJob(jobId, userId) {
+  if (!hasOwner(userId)) return null;
+  const job = scheduler.getJob(jobId);
+  return job?.userId === userId ? toHermesJob(job) : null;
 }
 
 function listJobs(opts = {}) {
+  if (!hasOwner(opts.userId)) return [];
   return scheduler.listJobs(opts).map(toHermesJob);
 }
 
-function removeJob(jobId, userId = null) {
+function removeJob(jobId, userId) {
+  if (!getJob(jobId, userId)) return { ok: false, reason: 'not found' };
   return scheduler.cancelJob({ jobId, userId });
 }
 
-function pauseJob(jobId, userId = null) {
+function pauseJob(jobId, userId) {
+  if (!getJob(jobId, userId)) return { ok: false, reason: 'not found' };
   return scheduler.setJobEnabled({ jobId, userId, enabled: false });
 }
 
-function resumeJob(jobId, userId = null) {
+function resumeJob(jobId, userId) {
+  if (!getJob(jobId, userId)) return { ok: false, reason: 'not found' };
   return scheduler.setJobEnabled({ jobId, userId, enabled: true });
 }
 
 async function triggerJob(jobId, opts = {}) {
+  // Missing identity must never imply the stored owner (even for a caller
+  // claiming an internal source). Only tick supplies its persisted owner.
+  if (!getJob(jobId, opts.userId)) return { ok: false, reason: 'not found' };
   return scheduler.fireJob(jobId, { source: opts.source || 'hermes:manual', payload: opts.payload || null });
 }
 
@@ -102,7 +115,7 @@ async function tick() {
   const results = [];
   for (const job of jobs) {
     if (job.status === 'running') continue;
-    results.push({ id: job.id, ...(await triggerJob(job.id, { source: 'hermes:tick' })) });
+    results.push({ id: job.id, ...(await triggerJob(job.id, { userId: job.userId, source: 'hermes:tick' })) });
   }
   return { ticked: results.length, results };
 }

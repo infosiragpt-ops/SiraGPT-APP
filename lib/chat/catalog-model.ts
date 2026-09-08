@@ -11,31 +11,64 @@ function bareModelName(name?: string): string {
   return raw.includes("/") ? raw.split("/").pop() || raw : raw
 }
 
-function isAllowedProvider(provider?: string): boolean {
-  const p = String(provider || "").trim().toLowerCase()
-  if (!p) return true
-  if (/openrouter|openai|gemini|anthropic|cerebras|groq/.test(p)) return false
-  return p === "deepseek"
+function sameModel(a?: string, b?: string): boolean {
+  const left = String(a || "").trim().toLowerCase()
+  const right = String(b || "").trim().toLowerCase()
+  if (!left || !right) return false
+  if (left === right) return true
+  return bareModelName(left) === bareModelName(right)
 }
 
-function isAllowedGenerationModel(name?: string, provider?: string): boolean {
-  const bare = bareModelName(name)
-  if (!(bare === FLASH || bare === PRO)) return false
-  return isAllowedProvider(provider)
+function looksLikeLocalCustomModel(name?: string): boolean {
+  const raw = String(name || "").trim().toLowerCase()
+  if (!raw) return false
+  return /\bmoondream\b/.test(raw)
+    || /^gemma4(?::|$)/.test(raw)
+    || raw.includes("ollama")
+    || raw.includes("huggingface")
+    || raw.includes("sira-gpt-mini")
+    || raw.includes("sira-mini")
+    || raw === "siragpt mini"
+    || raw === "sira mini"
 }
 
-function normalizeGenerationModel(name?: string): string {
-  return bareModelName(name) === PRO ? PRO : FLASH
+const LEFTOVER_MIXER_RE = /^(openrouter|deepseek|kimi)$/i
+
+function inferFamilyProvider(name?: string): string {
+  const m = String(name || "").trim().toLowerCase()
+  if (!m) return ""
+  if (/\bgrok\b/.test(m) || m.includes("x-ai/") || m.includes("xai/")) return "xAI"
+  if (m.includes("claude") || m.startsWith("anthropic/")) return "Anthropic"
+  if (m.includes("gemini") || m.includes("imagen")) return "Gemini"
+  if (m.includes("kimi") || m.includes("moonshot")) return "Kimi"
+  if (m.startsWith("muse-") || m.startsWith("llama-4")) return "Meta"
+  if (looksLikeLocalCustomModel(name)) return "Custom"
+  if (/deepseek-v4/.test(m)) return "DeepSeek"
+  if ((m.startsWith("openai/") && !m.includes("gpt-oss")) || /^(gpt-[45]|o1\b|o3\b|o4-)/.test(m)) {
+    return "OpenAI"
+  }
+  return ""
 }
 
-function safeProvider(provider?: string, fallback = "DeepSeek"): string {
-  const raw = String(provider || "").trim()
-  if (raw && isAllowedProvider(raw)) return raw
-  const fb = String(fallback || "").trim()
-  if (fb && isAllowedProvider(fb)) return fb
-  return "DeepSeek"
+function pickProvider(model: CatalogModelLike | undefined, fallback = "", wantedName = ""): string {
+  const fromModel = String(model?.provider || "").trim()
+  const inferred = inferFamilyProvider(model?.name || wantedName)
+  if (inferred && (!fromModel || LEFTOVER_MIXER_RE.test(fromModel))) return inferred
+  if (fromModel) return fromModel
+  if (looksLikeLocalCustomModel(model?.name || wantedName)) return "Custom"
+  const raw = String(fallback || "").trim()
+  if (inferred && LEFTOVER_MIXER_RE.test(raw)) return inferred
+  return raw || inferred || "DeepSeek"
 }
 
+/**
+ * Resolve the model that will actually be sent.
+ *
+ * The user's picker choice always wins. A non-empty selection is never
+ * rewritten to Flash / catalog[0] / cheapest — if that id cannot run,
+ * generate must error on that model instead of silently swapping.
+ * Empty catalog snapshots (the generate client path) keep the requested id.
+ */
 export function resolveCatalogModel(
   selectedModel: string,
   availableModels: CatalogModelLike[] = [],
@@ -44,33 +77,115 @@ export function resolveCatalogModel(
   const models = Array.isArray(availableModels)
     ? availableModels.filter((model) => model && typeof model.name === "string" && model.name.trim())
     : []
-  const allowed = models.filter((model) => isAllowedGenerationModel(model.name, model.provider))
+  const wanted = String(selectedModel || "").trim()
 
-  if (isAllowedGenerationModel(selectedModel)) {
-    const wanted = normalizeGenerationModel(selectedModel)
-    const match = allowed.find((model) => normalizeGenerationModel(model.name) === wanted)
+  if (wanted) {
+    const match = models.find((model) => sameModel(model.name, wanted))
     if (match?.name) {
-      return { name: wanted, provider: safeProvider(match.provider, fallbackProvider), replaced: false }
+      return {
+        name: match.name,
+        provider: pickProvider(match, fallbackProvider, wanted),
+        replaced: false,
+      }
     }
-    return { name: wanted, provider: safeProvider(fallbackProvider), replaced: false }
+    return {
+      name: wanted,
+      provider: pickProvider(undefined, fallbackProvider, wanted),
+      replaced: false,
+    }
   }
 
-  const flash = allowed.find((model) => normalizeGenerationModel(model.name) === FLASH)
-  const pro = allowed.find((model) => normalizeGenerationModel(model.name) === PRO)
-  const fallback = flash || pro
+  const fallback = models[0]
   if (fallback?.name) {
     return {
-      name: normalizeGenerationModel(fallback.name),
-      provider: safeProvider(fallback.provider, fallbackProvider),
+      name: fallback.name,
+      provider: pickProvider(fallback, fallbackProvider),
       replaced: true,
     }
   }
 
-  return { name: FLASH, provider: safeProvider(fallbackProvider), replaced: true }
+  return {
+    name: FLASH,
+    provider: pickProvider(undefined, fallbackProvider),
+    replaced: true,
+  }
 }
 
-export type GenerateRequestModel = "deepseek-v4-flash" | "deepseek-v4-pro"
+export type PreferredModelOptions = {
+  current?: string
+  pinned?: string
+  last?: string
+}
+
+export function isActiveCatalogSelection(
+  selectedModel: string,
+  availableModels: CatalogModelLike[] = [],
+): boolean {
+  const wanted = String(selectedModel || "").trim()
+  if (!wanted || !Array.isArray(availableModels)) return false
+  return availableModels.some((model) => (
+    model && typeof model.name === "string" && sameModel(model.name, wanted)
+  ))
+}
+
+/**
+ * Pick the catalog row to show on a new / reloaded chat.
+ * Current selection wins only while it is still present in the active
+ * catalog, then the pinned default, then last pick, then [0]. Persisted rows
+ * that disappeared from the catalog are inactive (or no longer eligible) and
+ * must never remain selected in the UI.
+ */
+export function pickPreferredCatalogModel(
+  availableModels: CatalogModelLike[] = [],
+  opts: PreferredModelOptions = {},
+): { name: string; provider: string } | null {
+  const models = Array.isArray(availableModels)
+    ? availableModels.filter((model) => model && typeof model.name === "string" && model.name.trim())
+    : []
+  const find = (wanted?: string) => {
+    const id = String(wanted || "").trim()
+    if (!id) return undefined
+    return models.find((model) => sameModel(model.name, id))
+  }
+
+  const current = String(opts.current || "").trim()
+  if (current) {
+    const match = find(current)
+    if (match?.name) return { name: match.name, provider: pickProvider(match, "", current) }
+  }
+
+  const pinned = find(opts.pinned)
+  if (pinned?.name) return { name: pinned.name, provider: pickProvider(pinned) }
+
+  const last = find(opts.last)
+  if (last?.name) return { name: last.name, provider: pickProvider(last) }
+
+  const first = models[0]
+  if (first?.name) return { name: first.name, provider: pickProvider(first) }
+  return null
+}
+
+export type GenerateRequestModel = string
 
 export function assertGenerateRequestModel(model?: string): GenerateRequestModel {
-  return bareModelName(model) === PRO ? PRO : FLASH
+  const wanted = String(model || "").trim()
+  if (!wanted) return FLASH
+  const bare = bareModelName(wanted)
+  if (bare === PRO) return PRO
+  if (bare === FLASH) return FLASH
+  return wanted
+}
+
+/**
+ * Pin the composer picker id onto any generate payload (text / image /
+ * video / audio). Leftover mixer labels (Kimi, OpenRouter, DeepSeek)
+ * cannot steal a first-party Grok / Claude / Gemini / OpenAI pick.
+ */
+export function pinGenerateRequest<T extends { model?: string; provider?: string }>(data: T): T {
+  const locked = resolveCatalogModel(String(data.model || ""), [], String(data.provider || ""))
+  return {
+    ...data,
+    model: locked.name,
+    provider: locked.provider,
+  }
 }
