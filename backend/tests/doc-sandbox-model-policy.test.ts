@@ -21,19 +21,29 @@ test('requires an exact configured model and the active first-party text publica
   assert.deepEqual(calls, [{ where: { name: 'chosen-sonnet' }, select: { name: true, isActive: true, type: true, provider: true } }]);
   assert.deepEqual(eligibility, [['chosen-sonnet', 'PRO']]);
 });
+test('any active catalog TEXT model admits on the mechanical engine path', async () => {
+  const muse = { name: 'muse-spark-1.3-contributor', isActive: true, type: 'TEXT', provider: 'Meta' };
+  const calls: unknown[] = [];
+  const policy = createDocumentModelPolicy(models, db(muse, calls), () => true);
+  assert.equal(await policy('muse-spark-1.3-contributor', 'PRO'), 'mechanical');
+  assert.deepEqual(calls, [{ where: { name: 'muse-spark-1.3-contributor' }, select: { name: true, isActive: true, type: true, provider: true } }]);
+});
 test('no alias, trimming, family inference or fallback can alter a selected model', async () => {
   const calls: unknown[] = [];
   const policy = createDocumentModelPolicy(models, db(active, calls), () => true);
-  for (const name of ['', ' chosen-sonnet', 'chosen-sonnet ', 'anthropic/chosen-sonnet', 'CHOSEN-SONNET', 'another-provider']) {
+  for (const name of ['', ' chosen-sonnet', 'chosen-sonnet ']) {
     assert.equal(await policy(name, 'PRO'), null);
   }
   assert.equal(calls.length, 0);
+  for (const name of ['CHOSEN-SONNET', 'anthropic/chosen-sonnet']) {
+    assert.equal(await policy(name, 'PRO'), null);
+  }
 });
-test('inactive, absent, non-text and routed-provider rows fail closed', async () => {
-  for (const row of [null, { ...active, isActive: false }, { ...active, type: 'IMAGE' },
-    { ...active, provider: 'OpenRouter' }, { ...active, name: 'different' }]) {
+test('inactive, absent and non-text rows fail closed; provider is not an allowlist', async () => {
+  for (const row of [null, { ...active, isActive: false }, { ...active, type: 'IMAGE' }, { ...active, name: 'different' }]) {
     assert.equal(await createDocumentModelPolicy(models, db(row), () => true)('chosen-sonnet', 'PRO'), null);
   }
+  assert.equal(await createDocumentModelPolicy(models, db({ ...active, provider: 'OpenRouter' }), () => true)('chosen-sonnet', 'PRO'), 'mechanical');
 });
 test('plan denial never downgrades to mechanical or a cheaper provider', async () => {
   const academic = { ...active, name: 'chosen-opus' };

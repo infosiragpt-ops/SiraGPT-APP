@@ -113,6 +113,51 @@ async function createWorkspace(sessionId) {
       await walk(jailPath(root, relDir), 0);
       return files;
     },
+    async listDir(relDir = '.', { maxEntries = 200 } = {}) {
+      const abs = jailPath(root, relDir);
+      const stat = await fs.stat(abs);
+      if (!stat.isDirectory()) {
+        const err = new Error('no es un directorio');
+        err.code = 'not_a_directory';
+        throw err;
+      }
+      const entries = await fs.readdir(abs, { withFileTypes: true });
+      const out = [];
+      for (const entry of entries) {
+        if (out.length >= maxEntries) break;
+        if (!entry.name || entry.name.startsWith('.')) continue;
+        if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
+        const child = path.join(abs, entry.name);
+        let size = 0;
+        let isDir = entry.isDirectory();
+        try {
+          const st = await fs.stat(child);
+          size = st.isDirectory() ? 0 : st.size;
+          isDir = st.isDirectory();
+        } catch {
+          continue;
+        }
+        out.push({
+          path: path.relative(root, child).replace(/\\/g, '/') || entry.name,
+          name: entry.name,
+          isDir,
+          size,
+        });
+      }
+      out.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
+      return out;
+    },
+    async removeFile(relPath) {
+      const abs = jailPath(root, relPath);
+      const stat = await fs.stat(abs);
+      if (!stat.isFile()) {
+        const err = new Error('no es un archivo');
+        err.code = 'not_a_file';
+        throw err;
+      }
+      await fs.unlink(abs);
+      return path.relative(root, abs).replace(/\\/g, '/') || path.basename(abs);
+    },
     async destroy() {
       await fs.rm(root, { recursive: true, force: true }).catch(() => {});
     },
@@ -136,27 +181,43 @@ function stripEnv() {
   }
 }
 
-function execInWorkspace(root, command, { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = {}) {
+function execInWorkspace(root, command, { timeoutMs = DEFAULT_TIMEOUT_MS, signal, allowNetwork = false } = {}) {
   const cwd = path.resolve(root);
   if (!fsSync.existsSync(cwd)) {
     return Promise.resolve({
       stdout: '',
-      stderr: 'workspace missing',
+      stderr: 'falta el workspace',
       exitCode: 1,
       timedOut: false,
       aborted: false,
+      truncated: false,
     });
+  }
+  const env = {
+    ...stripEnv(),
+    http_proxy: '',
+    https_proxy: '',
+    HTTP_PROXY: '',
+    HTTPS_PROXY: '',
+    ALL_PROXY: '',
+    all_proxy: '',
+    no_proxy: '*',
+    NO_PROXY: '*',
+  };
+  if (!allowNetwork) {
+    env.SIRAGPT_SHELL_NET = 'off';
   }
   return new Promise((resolve) => {
     const child = spawn('/bin/bash', ['-lc', String(command || '')], {
       cwd,
-      env: stripEnv(),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = Buffer.alloc(0);
     let stderr = Buffer.alloc(0);
     let timedOut = false;
     let aborted = false;
+    let truncated = false;
     const timer = setTimeout(() => {
       timedOut = true;
       try { child.kill('SIGKILL'); } catch { /* already gone */ }
@@ -173,7 +234,11 @@ function execInWorkspace(root, command, { timeoutMs = DEFAULT_TIMEOUT_MS, signal
 
     const push = (target, chunk) => {
       const next = Buffer.concat([target, chunk]);
-      return next.length > MAX_OUTPUT_BYTES ? next.subarray(0, MAX_OUTPUT_BYTES) : next;
+      if (next.length > MAX_OUTPUT_BYTES) {
+        truncated = true;
+        return next.subarray(0, MAX_OUTPUT_BYTES);
+      }
+      return next;
     };
     child.stdout.on('data', (chunk) => { stdout = push(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = push(stderr, chunk); });
@@ -181,10 +246,11 @@ function execInWorkspace(root, command, { timeoutMs = DEFAULT_TIMEOUT_MS, signal
       clearTimeout(timer);
       resolve({
         stdout: stdout.toString('utf8'),
-        stderr: err.message || 'spawn error',
+        stderr: err.message || 'error al lanzar el comando',
         exitCode: 1,
         timedOut,
         aborted,
+        truncated,
       });
     });
     child.on('close', (code) => {
@@ -196,6 +262,7 @@ function execInWorkspace(root, command, { timeoutMs = DEFAULT_TIMEOUT_MS, signal
         exitCode: Number.isFinite(code) ? code : 1,
         timedOut,
         aborted,
+        truncated,
       });
     });
   });
@@ -204,6 +271,7 @@ function execInWorkspace(root, command, { timeoutMs = DEFAULT_TIMEOUT_MS, signal
 module.exports = {
   SKIP_DIRS,
   MAX_FILE_BYTES,
+  MAX_OUTPUT_BYTES,
   workspaceRootFor,
   jailPath,
   createWorkspace,

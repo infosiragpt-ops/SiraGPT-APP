@@ -16,6 +16,7 @@ import { shouldPollPersistedTurnOnStreamClose } from "./generate-stream-complete
 import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
+import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
@@ -1550,6 +1551,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               return { ...prev, messages: msgs };
             });
           }
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
+        } else if ((intent === 'doc' || intent === 'ppt') && looksLikeExplicitDocumentEdit(content)) {
+          // Verified edits must go through F1 /api/docs/jobs. Never recreate
+          // the file on the legacy /api/doc/generate path.
+          const blocked = {
+            id: aiMessagePlaceholder.id,
+            role: 'ASSISTANT' as const,
+            content: 'Adjunta o exporta el documento original para aplicar la edición verificada. No se usó el editor anterior.',
+            files: [],
+          };
+          setCurrentChat((prev) => {
+            if (!prev) return prev;
+            const msgs = prev.messages.map((m: any) =>
+              m.id === aiMessagePlaceholder.id ? blocked : m
+            );
+            return { ...prev, messages: msgs };
+          });
           abortControllerRef.current = null;
           setIsLoading(false);
           setIsStreaming(false);

@@ -6,8 +6,105 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Added
+
+- Hermes fusion: memory writes now fail closed on a per-fact size cap
+  (2000 chars) and a per-user write rate-limit, with Spanish `E_PARAMS`
+  / `E_QUOTA` errors. Native rewrite of the Hermes MEMORY.md / USER.md
+  character-limit contract; chat-side fact extractors keep size-only
+  (no rate starve). No upstream Python.
+
+- `/agentes` task cancel is idempotent after an SSE drop: a reconnect
+  mid-run (or a second Stop) returns `already` + `E_CANCELLED` and does
+  not abort twice or append another cancel event. Completed/error
+  snapshots keep their real status. Native rewrite of OpenClaw
+  already-aborted / idempotent run-handle clear; no vendored runtime.
+
+- SiraCode exposes `GET /api/opencode/session/:id/summary` so `/agentes`
+  can reconnect with a bounded transcript snapshot (`lastEventId`,
+  Spanish `lastStage`, redacted message previews, tool count) instead
+  of replaying the full SSE log. Inspired by OpenCode `SessionSummary`;
+  independent local rewrite, no Effect runtime and no git-diff spill.
+
+- SiraCode truncates bulky tool results (líneas + bytes) and compacts
+  older tool messages in long turns, with a single Spanish stage
+  `Compactando contexto`. Inspired by OpenCode `Truncate.output` and
+  `SessionCompaction.prune`; independent local rewrite, no LLM spill
+  file and no Effect runtime.
+
+- Hermes fusion: optional-skill previews are sandboxed as data
+  (`<<<SKILL_REFERENCE>>>`) and each `runSkill` emits a content-free
+  `skill_run` audit line (id / ok / duration / errorCode only — no args,
+  result, or prompt). Native rewrite of Hermes skill-load +
+  scan-before-inject; no upstream Python.
+
+- SiraCode sessions now take a title from the first real user message
+  (`Nueva sesión` until then). Trivial greetings do not lock the label;
+  a caller-supplied title is kept. Inspired by OpenCode
+  `SessionPrompt.ensureTitle`; independent local rewrite, no LLM.
+
+- SiraCode `applyUnique` keeps `$&` / `$$` / `` $` `` / `$'` literal and
+  rejects overlapping hunks (`aaa` + `aa`) instead of a partial replace.
+
+- SiraCode permission resume: allowing an `ask` tool (Planificar bash or
+  composer Protegido writes) now runs it in the session workspace instead
+  of only recording the decision. `always` remembers the grant for the
+  rest of the session; `deny` stays closed. Reconnect can `GET` the
+  session to see pending cards. Inspired by OpenCode once/always/reject;
+  independent rewrite, no vendor tree.
+
+- SiraCode plan→act handoff: switching Planificar → Construir keeps the
+  approved plan on the session, emits the existing `Plan listo` stage, and
+  injects it into the next Construir turn so the loop executes instead of
+  re-planning. Hitting the step budget now stops as `Presupuesto agotado`
+  (not a silent `Listo`). One retry on transient LLM errors. Inspired by
+  OpenCode session reminders; independent rewrite, no vendor tree.
+
 ### Fixed
 
+- `/agentes` task failures no longer collapse 503, cancel and timeout
+  into one generic banner. `presentTaskError` maps classified reasons to
+  AGENTS.md §16 codes (`E_PROVIDER` / `E_CANCELLED` / `E_TIMEOUT`) and
+  distinct Spanish labels on the terminal SSE event. Native rewrite of
+  OpenClaw's `errorKind` → `stopReason` contract; no vendored runtime.
+
+- Sira Voz `POST /voices/clone` deletes the multer temp sample before
+  flushing 201 so a loaded CI shard cannot observe the file after the
+  response (race between `res.json` and `finally`).
+
+- Hermes runtime endpoints require canonical authentication. Scheduled jobs,
+  CLI cron queries and cron tools use only the authenticated owner; absent and
+  foreign jobs are indistinguishable, and missing identity cannot inherit a
+  stored job's privileges. Static capability maps remain public.
+
+- Backend image rebuilds no longer depend on HuggingFace for
+  `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
+  seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies
+  `file://` / absolute `WHISPER_MODEL_URL` locally. Dockerfile
+  `BUNDLE_WHISPER_MODEL=1` copies a context `ggml-base.bin` (Lenovo cached
+  bin) so 429 during install is skipped.
+
+- `BUNDLE_WHISPER_MODEL` is a global Dockerfile ARG (before the first
+  `FROM`) so `FROM whisper-seed-${BUNDLE_WHISPER_MODEL}` parses as
+  `whisper-seed-0` / `whisper-seed-1` instead of the invalid `whisper-seed-`.
+
+- Production Alpine runner installs `bash` and probes `/bin/bash` as
+  `appuser` (`BASH_VERSION` + `set -euo pipefail`) so SiraCode Planificar
+  permission-resume does not `spawn /bin/bash ENOENT`. Whisper installer
+  stays POSIX `sh`. No silent `sh` fallback.
+
+- `/agentes` agent tasks no longer stay in "Pensando…" after a worker dies
+  while the API process stays up. Live runners pulse a snapshot heartbeat;
+  a runtime watchdog (OpenClaw-style no-output stall) marks stale
+  `running`/`queued` snapshots `error` with `worker_stalled` so SSE/poll
+  close instead of hanging. Boot recovery is unchanged. Disable with
+  `AGENT_TASK_RUNTIME_WATCHDOG_DISABLED=1`.
+- After an SSE drop on `/agentes`, the live job resumes from the durable
+  event log (`GET /api/agent/task/:id/events?after=` + `Last-Event-ID`)
+  instead of failing the chat. Resume keeps polling while the #579
+  snapshot heartbeat is fresh; a `worker_stalled` reap surfaces a clear
+  terminal error. Transient event-poll 5xx retries. Inspired by OpenClaw
+  `agent.wait` / recoverable transport-close (MIT); SiraGPT-owned rewrite.
 - Rejected final answers now stop as unverified rather than becoming successful
   after repeated rejection or on the last step. Judge timeouts, invalid verdicts
   and cancellation fail closed; bounded reviews are tied to draft and evidence.

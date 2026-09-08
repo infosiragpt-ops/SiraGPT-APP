@@ -59,6 +59,24 @@ function saveMemoryDocument(userId, doc) {
   });
 }
 
+function loadCuratedMemory(userId) {
+  const row = loadJson(userPath('curated-memory', userId), { memory: [], user: [] });
+  return {
+    memory: Array.isArray(row.memory) ? row.memory.map(String) : [],
+    user: Array.isArray(row.user) ? row.user.map(String) : [],
+    updatedAt: Number(row.updatedAt) || 0,
+  };
+}
+
+function saveCuratedMemory(userId, stores) {
+  saveJson(userPath('curated-memory', userId), {
+    userId: String(userId),
+    updatedAt: Date.now(),
+    memory: Array.isArray(stores?.memory) ? stores.memory.map(String) : [],
+    user: Array.isArray(stores?.user) ? stores.user.map(String) : [],
+  });
+}
+
 function loadSessions(userId) {
   const row = loadJson(userPath('sessions', userId), { sessions: [] });
   return Array.isArray(row.sessions) ? row.sessions : [];
@@ -72,12 +90,51 @@ function saveSessions(userId, sessions) {
   });
 }
 
+function emptyCuratorState() {
+  return { lastRunAt: 0, skills: {}, pinned: [] };
+}
+
+function loadSkillCurator(userId) {
+  const row = loadJson(userPath('skill-curator', userId), emptyCuratorState());
+  const skills = row.skills && typeof row.skills === 'object' && !Array.isArray(row.skills)
+    ? row.skills
+    : {};
+  return {
+    lastRunAt: Number(row.lastRunAt) || 0,
+    skills,
+    pinned: Array.isArray(row.pinned) ? row.pinned.map(String) : [],
+    updatedAt: Number(row.updatedAt) || 0,
+  };
+}
+
+function saveSkillCurator(userId, state) {
+  saveJson(userPath('skill-curator', userId), {
+    userId: String(userId),
+    updatedAt: Date.now(),
+    lastRunAt: Number(state?.lastRunAt) || 0,
+    skills: state?.skills && typeof state.skills === 'object' && !Array.isArray(state.skills)
+      ? state.skills
+      : {},
+    pinned: Array.isArray(state?.pinned) ? state.pinned.map(String) : [],
+  });
+}
+
+function clearSkillCurator(userId) {
+  const filePath = userPath('skill-curator', userId);
+  try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+}
+
 module.exports = {
   STORE_ROOT,
   loadMemoryEntries,
   saveMemoryEntries,
   loadMemoryDocument,
   saveMemoryDocument,
+  loadCuratedMemory,
+  saveCuratedMemory,
   loadSessions,
   saveSessions,
+  loadSkillCurator,
+  saveSkillCurator,
+  clearSkillCurator,
 };

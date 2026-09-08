@@ -2,21 +2,24 @@
 
 /**
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
+ * Also ls (directory listing) and apply_patch (unique hunks).
  *
- * File tools stay inside the session workspace. bash runs through
- * execInWorkspace (scrubbed env + cwd jail). Never execs on the repo
- * root or the raw host tree.
+ * File tools stay inside the session workspace. bash/shell runs through
+ * the native allowlist (shell-sandbox) then execInWorkspace (scrubbed
+ * env + cwd jail). Never execs on the repo root or the raw host tree.
  */
 
 const path = require('path');
 const { authorizeTool } = require('./permissions');
 const { execInWorkspace } = require('./workspace');
-
-const MAX_RESULT = 30_000;
+const { applyPatchToWorkspace } = require('./apply-patch');
+const { truncateToolResult } = require('./tool-result');
+const { runWebFetch } = require('./webfetch');
+const { runTodo } = require('./todos');
+const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox');
 
 function cap(text) {
-  const str = String(text == null ? '' : text);
-  return str.length > MAX_RESULT ? `${str.slice(0, MAX_RESULT)}\n…[result truncated]` : str;
+  return truncateToolResult(text).content;
 }
 
 function toolError(code, message) {
@@ -83,20 +86,32 @@ async function runEdit(workspace, args) {
 
 async function runBash(workspace, args, ctx = {}) {
   const command = String(args.command || args.cmd || '').trim();
-  if (!command) return toolError('validation', 'command is required');
+  if (!command) return toolError('validation', SHELL_ERRORS.validation);
+  const agentId = (ctx.session && ctx.session.agentId) || ctx.agentId || 'construir';
+  const gate = authorizeShellCommand(command, {
+    workspaceRoot: workspace && workspace.root,
+    agentId,
+    allowNetwork: args.allowNetwork === true || args.network === true,
+    timeoutMs: args.timeoutMs != null ? args.timeoutMs : args.timeout,
+  });
+  if (!gate.ok) return toolError(gate.code || 'command_denied', gate.error);
   const result = await execInWorkspace(workspace.root, command, {
-    timeoutMs: Number(args.timeoutMs) || 30_000,
+    timeoutMs: gate.timeoutMs,
     signal: ctx.signal,
+    allowNetwork: gate.allowNetwork,
   });
   const parts = [];
   if (result.stdout) parts.push(result.stdout);
   if (result.stderr) parts.push(`[stderr] ${result.stderr}`);
-  parts.push(result.timedOut ? `[exit ${result.exitCode} — TIMED OUT]` : `[exit ${result.exitCode}]`);
+  if (result.truncated) parts.push('[salida recortada por límite de tamaño]');
+  parts.push(result.timedOut
+    ? `[exit ${result.exitCode} — ${SHELL_ERRORS.timeout}]`
+    : `[exit ${result.exitCode}]`);
   const content = cap(parts.join('\n'));
   if (result.aborted) return toolError('aborted', `comando cancelado\n${content}`);
-  if (result.timedOut) return toolError('timeout', content);
+  if (result.timedOut) return toolError('timeout', `${SHELL_ERRORS.timeout}\n${content}`);
   if (Number(result.exitCode) !== 0) return { ok: false, code: 'bash_failed', error: content, content: `ERROR: ${content}` };
-  return toolOk(content);
+  return toolOk(content, { className: gate.className, truncated: Boolean(result.truncated) });
 }
 
 async function runGrep(workspace, args) {
@@ -130,19 +145,57 @@ async function runGlob(workspace, args) {
   return toolOk(matched.length ? matched.join('\n') : '(no matches)');
 }
 
+async function runLs(workspace, args) {
+  const rel = String(args.path || args.dir || '.').trim() || '.';
+  try {
+    const entries = await workspace.listDir(rel);
+    if (!entries.length) return toolOk('(empty)');
+    const lines = entries.map((entry) => (
+      entry.isDir ? `${entry.path}/` : `${entry.path}\t${entry.size}`
+    ));
+    return toolOk(lines.join('\n'), { entries });
+  } catch (err) {
+    return toolError(err.code || 'ls_failed', err.message || 'ls failed');
+  }
+}
+
+async function runApplyPatch(workspace, args) {
+  const patch = String(args.patch || args.diff || args.input || '').trim();
+  if (!patch) return toolError('validation', 'patch is required');
+  try {
+    return await applyPatchToWorkspace(workspace, patch);
+  } catch (err) {
+    return toolError(err.code || 'patch_failed', err.message || 'apply_patch failed');
+  }
+}
+
+async function runWebFetchTool(_workspace, args, ctx = {}) {
+  return runWebFetch(args || {}, { fetch: ctx.fetch, skipDns: ctx.skipDns });
+}
+
+function runTodoTool(_workspace, args, ctx = {}) {
+  return runTodo(ctx.session, args || {});
+}
+
 const EXECUTORS = {
   read: runRead,
   write: runWrite,
   edit: runEdit,
   bash: runBash,
+  shell: runBash,
   grep: runGrep,
   glob: runGlob,
+  ls: runLs,
+  apply_patch: runApplyPatch,
+  webfetch: runWebFetchTool,
+  todo: runTodoTool,
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
   const auth = authorizeTool(session.agentId, toolName, {
     permission: session.permission || ctx.permission,
     approved: ctx.approved === true,
+    grants: session.permissionGrants,
   });
   if (auth.denied) {
     const detail = auth.reason === 'composer_read_only'
@@ -157,14 +210,14 @@ async function executeTool(session, toolName, args = {}, ctx = {}) {
     return {
       ok: false,
       code: 'permission_required',
-      error: `bash necesita permiso en modo ${session.agentId}`,
+      error: `${auth.tool} necesita permiso en modo ${session.agentId}`,
       content: `ERROR: permiso requerido para ${auth.tool}`,
       permission: auth,
     };
   }
   const exec = EXECUTORS[auth.tool];
   if (!exec) return toolError('unknown_tool', `herramienta desconocida: ${auth.tool}`);
-  const result = await exec(session.workspace, args || {}, ctx);
+  const result = await exec(session.workspace, args || {}, { ...ctx, session });
   return { ...result, permission: auth };
 }
 
@@ -220,11 +273,13 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'bash',
-      description: 'Ejecuta un comando bash dentro del workspace aislado. Sin red, env limpio.',
+      description: 'Ejecuta un comando allowlisted en el sandbox del workspace (alias: shell). Sin red salvo allowNetwork. Planificar: solo lectura. No lo uses para leer o editar archivos; usa read, write, ls o apply_patch.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string' },
+          timeoutMs: { type: 'integer' },
+          allowNetwork: { type: 'boolean' },
         },
         required: ['command'],
       },
@@ -256,6 +311,61 @@ const TOOL_DEFINITIONS = [
           pattern: { type: 'string' },
         },
         required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ls',
+      description: 'Lista el directorio del workspace (nombres y tamaño). No lee el contenido.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description: 'Aplica un parche Begin/End Patch con hunks únicos (Add/Update/Delete File).',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string' },
+        },
+        required: ['patch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'webfetch',
+      description: 'Descarga una URL https pública (markdown/text/html). No escribe archivos.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          format: { type: 'string' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'todo',
+      description: 'Crea o actualiza la lista de tareas de la sesión (un in_progress).',
+      parameters: {
+        type: 'object',
+        properties: {
+          todos: { type: 'array' },
+        },
       },
     },
   },

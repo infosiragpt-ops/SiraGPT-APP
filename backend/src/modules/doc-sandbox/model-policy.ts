@@ -15,8 +15,7 @@ export function configuredDocumentModelTier(models: Readonly<Record<DocumentMode
 }
 /** Publication facts are evaluated separately from the catalog read and plan entitlement. */
 export function isPublishedDocumentModel(row: DocumentCatalogPublication | null, requestedModel: string): boolean {
-  return row !== null && row.name === requestedModel && row.isActive === true && row.type === 'TEXT' &&
-    row.provider.trim().toLowerCase() === 'anthropic';
+  return row !== null && row.name === requestedModel && row.isActive === true && row.type === 'TEXT';
 }
 
 /** Same authoritative AiModel publication table as /api/ai/models; never infer aliases or activate a row. */
@@ -26,13 +25,17 @@ export function createDocumentModelPolicy(
   isModelPlanEligible: (modelName: string, userPlan: string) => boolean,
 ): DocumentModelPolicy {
   return async (requestedModel, userPlan) => {
-    const tier = configuredDocumentModelTier(models, requestedModel);
-    if (tier === null) return null;
+    if (!requestedModel || requestedModel !== requestedModel.trim() || requestedModel.length > 200) return null;
+    const matching = (['mechanical', 'academic'] as const).filter((tier) => models[tier].id === requestedModel);
+    if (matching.length > 1) return null;
+    const configured = matching.length === 1 ? matching[0]! : null;
     try {
       const row = await prisma.aiModel.findUnique({ where: { name: requestedModel },
         select: { name: true, isActive: true, type: true, provider: true } });
       if (!isPublishedDocumentModel(row, requestedModel) || !isModelPlanEligible(requestedModel, userPlan)) return null;
-      return tier;
+      // Unlisted picker models use the mechanical engine path. Identity is
+      // recorded on the job; it must not refuse verified admission.
+      return configured ?? 'mechanical';
     } catch (cause) {
       // A catalog outage is not evidence that this model is available.
       throw new DocSandboxError('E_NOT_READY', 503, { cause });

@@ -8,10 +8,12 @@
  *
  *   GET  /api/opencode/health
  *   POST /api/opencode/session
+ *   GET  /api/opencode/session/:id
+ *   GET  /api/opencode/session/:id/summary
  *   POST /api/opencode/session/:id/prompt
  *   POST /api/opencode/session/:id/agent
  *   POST /api/opencode/session/:id/abort
- *   POST /api/opencode/session/:id/permission
+ *   POST /api/opencode/session/:id/permission  (allow | always | deny → execute)
  *   GET  /api/opencode/file
  *   GET  /api/opencode/files
  *   GET  /api/opencode/events
@@ -100,6 +102,22 @@ router.post(
   },
 );
 
+router.get('/session/:id', authenticateToken, (req, res) => {
+  try {
+    return res.json({ session: siraCode.get(req.params.id, userIdOf(req)) });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+router.get('/session/:id/summary', authenticateToken, (req, res) => {
+  try {
+    return res.json({ summary: siraCode.summarize(req.params.id, userIdOf(req)) });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
 router.post(
   '/session/:id/agent',
   authenticateToken,
@@ -132,15 +150,23 @@ router.post(
   authenticateToken,
   [
     body('permissionId').isString().trim().notEmpty(),
-    body('decision').isIn(['allow', 'deny']),
+    body('decision').isIn([
+      'allow',
+      'deny',
+      'always',
+      'once',
+      'reject',
+      'always_allow',
+      'always_allow_in_chat',
+    ]),
   ],
-  (req, res) => {
+  async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
     try {
-      const result = siraCode.resolvePermission(
+      const result = await siraCode.resolvePermission(
         req.params.id,
         req.body.permissionId,
         req.body.decision,

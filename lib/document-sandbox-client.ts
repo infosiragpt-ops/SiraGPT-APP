@@ -66,9 +66,8 @@ export function documentAttachment(value: unknown): DocumentAttachment | null {
   return { name, id: typeof id === "string" ? id : "", localFile }
 }
 
-/** Explicit requests, including polite Spanish forms. This never interprets quoted instructions as authority. */
-export function isExplicitDocumentEdit(prompt: string, attachments: readonly unknown[]): boolean {
-  if (!attachments.some(documentAttachment)) return false
+/** Language-only explicit-edit detector. Attachments are resolved by the admission helper. */
+export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
   const text = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
   if (/^no (?:cambies|cambiar|modifiques) nada\b/.test(text)) return true
   let command = text.replace(/^[¿¡]\s*/, "").replace(/[?!]+$/, "").trim()
@@ -86,6 +85,12 @@ export function isExplicitDocumentEdit(prompt: string, attachments: readonly unk
   if (/^(?:de tema|(?:el|mi|tu) (?:modelo|proveedor|permiso|plan|cuenta)|tu (?:respuesta|forma de responder))\b/.test(target)) return false
   if (polite && /^(?:(?:mi|mis|un|una|unos|unas|el|la|los|las|este|esta|estos|estas)\s+)?(?:documentos?|archivos?|word|pdf|docx|excel|pptx)(?:\s+adjunt[oa]s?)?$/.test(target)) return false
   return target.length > 0
+}
+
+/** Explicit requests, including polite Spanish forms. This never interprets quoted instructions as authority. */
+export function isExplicitDocumentEdit(prompt: string, attachments: readonly unknown[]): boolean {
+  if (!attachments.some(documentAttachment)) return false
+  return looksLikeExplicitDocumentEdit(prompt)
 }
 
 export function parseDocumentJobPointer(metadata: unknown): DocumentJobPointer | null {
@@ -215,7 +220,10 @@ export function createDocumentSandboxClient(options: ClientOptions = {}) {
     if (composerBlocksTools(permission)) throw new DocumentSandboxClientError("E_PLAN_GATE")
     const caps = await capabilities(model, signal)
     if (!caps.enabled || !caps.ready) throw new DocumentSandboxClientError("E_NOT_READY")
-    if (!caps.supported || !caps.modelTier || !model) throw new DocumentSandboxClientError("E_MODEL")
+    if (!model) throw new DocumentSandboxClientError("E_MODEL")
+    // Any picker TEXT model must admit. The server maps an unknown catalog
+    // identity to the mechanical engine path; do not refuse on modelTier.
+    const modelTier = caps.modelTier === "academic" ? "academic" : "mechanical"
     const files = attachments.map(documentAttachment)
     if (!caps.modes.includes("preserve") || !files.length || files.length > caps.limits.maxFiles || files.some((file) => !file)) {
       throw new DocumentSandboxClientError("E_FORMAT")
@@ -223,7 +231,7 @@ export function createDocumentSandboxClient(options: ClientOptions = {}) {
     if (files.some((file) => !caps.formats.includes(file!.name.split(".").pop()!.toLowerCase())) ||
       (files.length > 1 && files.some((file) => !/\.pdf$/i.test(file!.name)))) throw new DocumentSandboxClientError("E_FORMAT")
     const form = new FormData()
-    form.set("instructions", prompt); form.set("mode", "preserve"); form.set("modelTier", caps.modelTier); form.set("requestedModel", model)
+    form.set("instructions", prompt); form.set("mode", "preserve"); form.set("modelTier", modelTier); form.set("requestedModel", model)
     form.set("permission", permission)
     let total = 0
     for (const file of files) {

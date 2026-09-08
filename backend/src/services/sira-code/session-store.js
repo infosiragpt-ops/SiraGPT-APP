@@ -10,6 +10,8 @@
 const crypto = require('crypto');
 const { DEFAULT_AGENT_ID, resolveAgentId, getAgent } = require('./agents');
 const { createWorkspace } = require('./workspace');
+const { publicPlan } = require('./plan-handoff');
+const { DEFAULT_TITLE, isDefaultTitle } = require('./session-title');
 
 const sessions = new Map();
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
@@ -24,11 +26,18 @@ function publicSession(session) {
     id: session.id,
     agent: agent.id,
     agentLabel: agent.label,
+    title: session.title || DEFAULT_TITLE,
     userId: session.userId,
     status: session.status,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
+    plan: publicPlan(session.plan),
+    pendingPermissions: [...(session.pendingPermissions || [])].map(([permissionId, pending]) => ({
+      permissionId,
+      tool: pending.tool,
+      label: 'Esperando permiso',
+    })),
   };
 }
 
@@ -42,12 +51,13 @@ async function createSession({
   const agentId = resolveAgentId(agent, { allowInternal: false });
   const workspace = await createWorkspace(id);
   const now = Date.now();
+  const rawTitle = String(title || '').trim();
   const session = {
     id,
     userId: String(userId || ''),
     agentId,
     model: String(model || ''),
-    title: String(title || '').slice(0, 200),
+    title: rawTitle && !isDefaultTitle(rawTitle) ? rawTitle.slice(0, 200) : DEFAULT_TITLE,
     status: 'idle',
     createdAt: now,
     updatedAt: now,
@@ -57,7 +67,9 @@ async function createSession({
     workspace,
     abort: null,
     pendingPermissions: new Map(),
+    permissionGrants: new Set(),
     permission: 'default',
+    plan: null,
   };
   sessions.set(id, session);
   return session;

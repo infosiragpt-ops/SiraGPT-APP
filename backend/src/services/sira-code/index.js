@@ -16,6 +16,13 @@ const events = require('./events');
 const store = require('./session-store');
 const loop = require('./loop');
 const engine = require('./engine');
+const planHandoff = require('./plan-handoff');
+const permissionResume = require('./permission-resume');
+const sessionTitle = require('./session-title');
+const toolResult = require('./tool-result');
+const sessionSummary = require('./session-summary');
+const toolRounds = require('./tool-rounds');
+const shellSandbox = require('./shell-sandbox');
 
 module.exports = {
   ...agents,
@@ -27,4 +34,11 @@ module.exports = {
   ...store,
   ...loop,
   ...engine,
+  ...planHandoff,
+  ...permissionResume,
+  ...sessionTitle,
+  ...toolResult,
+  ...sessionSummary,
+  ...toolRounds,
+  ...shellSandbox,
 };

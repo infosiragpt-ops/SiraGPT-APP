@@ -36,7 +36,7 @@ De mayor a menor. El de arriba gana. Conflicto = el de arriba.
 | 2 | **AGENTS.md scoped** del subtree que se toca | Control UI, i18n, vendor local |
 | 3 | **Este AGENTS.md raíz** | Planos, enrutador, jobs, marca, git, prod, F7.4 |
 | 4 | **`.agents/` y skills** | Workflows, checklists, comandos |
-| 5 | **Upstream** (`ui/upstream/openclaw`, `src/upstream/openclaw`, `vendor/opencode`, Hermes) | Referencia. No política de producto |
+| 5 | **Upstream** (`ui/upstream/openclaw`, `src/upstream/openclaw`, `vendor/opencode`, Hermes) | Referencia por defecto; fusión permitida solo bajo §25 |
 | 6 | **Criterio del agente** | Solo si 1–5 no cubren. Conservador |
 
 DEBE: antes de tocar un subtree, leer el `AGENTS.md` scoped más cercano.
@@ -606,6 +606,7 @@ Un cambio (código o docs) está done cuando **todas** aplican:
 | 8 | No F7 / #492 salvo pedido explícito |
 | 9 | C1/C2/C3 no “resueltas” por el agente |
 | 10 | Si es política: **solo** archivos de política. Cero router/jobs/SSE/golden |
+| 11 | Si fusiona open-source: §25 cumplido (licencia permitida, SHA+LICENSE, NOTICE, tests) |
 
 Este PR (v2 docs): 1, 3, 5, 7, 8, 9, 10. 2/4/6 no aplican — no hay runtime nuevo.
 
@@ -697,6 +698,45 @@ ABIERTAS. El agente **NO DEBE** resolverlas ni “cerrarlas” en un PR.
 | **C3** | Voz = dos significados | Modo de voz (STT) vs `gen.voice` (job). Mismo chip, dos verbos | No unificar IDs. No renombrar el chip |
 
 Hasta que Luis escriba la decisión: DEBE el resto de este archivo. DEBERÍA no invertir en código que asuma C1/C2/C3.
+
+---
+
+## 25. Fusión de código abierto
+
+Copiar y fusionar código de repositorios open-source en SiraGPT-APP está **permitido** solo bajo este procedimiento. Sin §25 cumplido, upstream sigue siendo solo referencia.
+
+### 25.1 Licencias: qué se puede fusionar
+
+| Clase | Ejemplos | Regla |
+|---|---|---|
+| **Permisiva** | MIT, Apache-2.0, BSD-2/3-Clause, ISC | PUEDE fusionarse con atribución (§25.3) |
+| **Copyleft / network-copyleft** | GPL, AGPL, LGPL, SSPL, Commons Clause | **NO DEBE** integrarse al runtime sin decisión escrita de Luis (riesgo de contaminación de licencia). Solo referencia |
+| **Sin licencia o desconocida** | repos sin archivo LICENSE | **NO DEBE** copiarse. Solo ideas reescritas desde cero |
+
+DEBE: verificar el archivo `LICENSE` del repo origen **antes** de copiar.
+NO DEBE: cambiar la licencia de un archivo fusionado ni quitar avisos de copyright.
+
+### 25.2 Prohibido fusionar aunque la licencia lo permita
+
+- Credenciales, tokens, cookies, hostnames privados, IDs de Discord/Slack, datos de usuarios.
+- Telemetría, call-home o cualquier exfiltración no revisada.
+- Binarios sin fuente reproducible.
+- Código que exija desactivar tests, gates de CI, UI-lock o el leak-gate F7.4.
+- Fugas de marca (§12): lo fusionado no expone vendor ni `model_id` en la UI.
+
+### 25.3 Procedimiento por fusión (un PR = una fusión)
+
+1. **Snapshot**: copia del origen en `.agents/<origen>-upstream` con commit SHA + `LICENSE` (ya existe para openclaw, hermes y `vendor/opencode`; reusar).
+2. **Adaptar, no pegar**: reescribir a arquitectura nativa SiraGPT (paths, endpoints, scripts, CI de este repo). Pegado literal solo si el módulo es autocontenido, permisivo y sin dependencias exóticas; el PR lo justifica.
+3. **Atribución**: entrada en `THIRD_PARTY_NOTICES.md` (y `NOTICE` si la licencia lo exige) con repo, commit y archivos tocados.
+4. **Seguridad**: `secret-safety` + secret-scanner sobre el diff; cero secretos.
+5. **Tests**: tests nuevos del comportamiento fusionado, en verde. No se desactivan tests para land.
+6. **Skills**: si un skill (`openclaw-import-audit`, `hermes-import-audit`) contradice la fusión, este AGENTS.md gana (§0.2); el PR nombra el skill relajado y el motivo.
+7. **PR a `production-main`**. CI verde. Mergea Luis (§21).
+
+### 25.4 Lo que §25 no revoca
+
+§1 (una sola UI `/agentes`), §12 (marca/secretos), §17 (seguridad), §20 (prod Lenovo+Cloudflare, sin publish por el agente), §21 (git/PRs) y §22 (DoD + check 11) siguen mandando. Conflicto = esos ganan.
 
 ---
 

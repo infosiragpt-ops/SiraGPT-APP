@@ -323,3 +323,129 @@ describe('orchestrator http server health', () => {
     }
   });
 });
+
+describe('always-on computer: boot reconciliation', () => {
+  function fakeRuntime(rows) {
+    const ipOf = (name) => `172.20.0.${10 + rows.findIndex((r) => r.name === name)}`;
+    return {
+      async listComputers() {
+        return rows.map(({ name, running }) => ({ name, running }));
+      },
+      async inspectContainer(name) {
+        return {
+          Name: `/${name}`,
+          State: { Running: true },
+          NetworkSettings: { Networks: { 'iliagpt-app': { IPAddress: ipOf(name) } } },
+        };
+      },
+      containerIp(info) {
+        const nets = (info && info.NetworkSettings && info.NetworkSettings.Networks) || {};
+        for (const net of Object.values(nets)) {
+          if (net && net.IPAddress) return net.IPAddress;
+        }
+        return null;
+      },
+      async ensureContainer() {
+        throw new Error('must not create during reconcile');
+      },
+    };
+  }
+
+  test('reconcile re-registers running desktops, skips stopped and foreign containers', async () => {
+    const orch = createOrchestrator({
+      driver: 'docker',
+      env: { PORT: '0' },
+      runtime: fakeRuntime([
+        { name: 'sira-ac-user-luis_c_chatA', running: true },
+        { name: 'sira-ac-user-luis_c_chatB', running: false },
+        { name: 'iliagpt-backend', running: true },
+      ]),
+    });
+    const result = await orch.reconcileContainers();
+    assert.equal(result.reconciled, 1);
+    assert.equal(orch.store.size(), 1);
+    const row = orch.store.getById('ac_luis_c_chatA');
+    assert.ok(row, 'running desktop must be re-registered by session id');
+    assert.equal(row.container, 'sira-ac-user-luis_c_chatA');
+    assert.equal(row.host, '172.20.0.10');
+    assert.equal(row.reused, true);
+    assert.equal(orch.store.getById('ac_luis_c_chatB'), null);
+  });
+
+  test('reconcile is idempotent and never throws when docker is unreachable', async () => {
+    const orch = createOrchestrator({
+      driver: 'docker',
+      env: { PORT: '0' },
+      runtime: fakeRuntime([{ name: 'sira-ac-user-luis_c_chatA', running: true }]),
+    });
+    assert.equal((await orch.reconcileContainers()).reconciled, 1);
+    assert.equal((await orch.reconcileContainers()).reconciled, 0);
+    assert.equal(orch.store.size(), 1);
+
+    const dead = createOrchestrator({
+      driver: 'docker',
+      env: { PORT: '0' },
+      runtime: {
+        async listComputers() { throw new Error('socket gone'); },
+      },
+    });
+    assert.equal((await dead.reconcileContainers()).reconciled, 0);
+  });
+
+  test('a reconciled session is served back with the same id (liveness rechecked, not recreated)', async () => {
+    let ensured = 0;
+    const orch = createOrchestrator({
+      driver: 'docker',
+      env: { PORT: '0' },
+      runtime: {
+        ...fakeRuntime([{ name: 'sira-ac-user-luis_c_chatA', running: true }]),
+        async ensureContainer() {
+          ensured += 1;
+          return { info: {}, reused: true, created: false };
+        },
+      },
+    });
+    await orch.reconcileContainers();
+    const srv = await listen(orch);
+    try {
+      const res = await postSession(srv.url, 'luis_c_chatA');
+      assert.ok(res.res.status === 200 || res.res.status === 201);
+      assert.equal(res.body.sessionId, 'ac_luis_c_chatA');
+      assert.equal(res.body.reused, true);
+      assert.equal(ensured, 1, 'container liveness is rechecked on serve');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('always-on computer: desktop listing', () => {
+  test('listComputers returns only sira-ac-user-* names with running flags', async () => {
+    const { createDockerRuntime } = require('../../services/computer-orchestrator/docker-runtime');
+    const runtime = createDockerRuntime({
+      requestImpl: async (method, path) => {
+        assert.match(path, /label/);
+        return {
+          status: 200,
+          data: [
+            { Names: ['/sira-ac-user-luis_c_a'], State: 'running' },
+            { Names: ['/sira-ac-user-luis_c_b'], State: 'exited' },
+          ],
+        };
+      },
+    });
+    const rows = await runtime.listComputers();
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].name, 'sira-ac-user-luis_c_a');
+    assert.equal(rows[0].running, true);
+    assert.equal(rows[1].running, false);
+  });
+
+  test('listComputers never throws when the socket is gone', async () => {
+    const { createDockerRuntime } = require('../../services/computer-orchestrator/docker-runtime');
+    const runtime = createDockerRuntime({
+      requestImpl: async () => { throw new Error('no socket'); },
+    });
+    assert.deepEqual(await runtime.listComputers(), []);
+  });
+});

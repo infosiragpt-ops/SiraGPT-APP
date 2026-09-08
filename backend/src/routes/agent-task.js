@@ -17,7 +17,7 @@
  *     { type: "file_artifact", id, filename, mime, sizeBytes, downloadUrl }
  *     { type: "final_text",   markdown }
  *     { type: "done",         stoppedReason, stats }
- *     { type: "error",        message }
+ *     { type: "error",        message, code?, reason? }
  *
  * GET /api/agent/artifact/:id
  *   Serves a previously-created artifact as an attachment download.
@@ -93,6 +93,16 @@ const {
   requireRedisUrl,
 } = require('../services/agents/agent-task-queue');
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
+const {
+  resolveEventCursor,
+  resolveTaskLastError,
+  buildTaskEventsResumePayload,
+} = require('../services/agents/agent-task-event-resume');
+const {
+  claimTaskCancel,
+  buildCancelAck,
+} = require('../services/agents/agent-task-cancel');
+const { toAgentTaskErrorEvent } = require('../utils/task-error-classifier');
 const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 const {
@@ -736,12 +746,9 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
   if (!task) return res.status(404).json({ error: 'task not found' });
 
   const allEvents = task.events || [];
-  const afterRaw = String(req.query.after || '0');
-  const numericAfter = Number.parseInt(afterRaw, 10);
-  const after = Number.isFinite(numericAfter)
-    ? numericAfter
-    : (allEvents.find((event) => String(event.id) === afterRaw)?.seq || 0);
-  const events = allEvents.filter((event) => (Number(event.seq) || 0) > after);
+  const lastEventId = (req.get && (req.get('Last-Event-ID') || req.get('last-event-id'))) || '';
+  const after = resolveEventCursor(req.query.after, lastEventId, allEvents);
+  const resume = buildTaskEventsResumePayload(task, { after });
   res.json({
     ok: true,
     taskId: task.taskId,
@@ -749,9 +756,14 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     queue: task.queueName || getQueueName(),
     traceId: task.traceId || null,
     documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
-    events,
+    events: resume.events,
     streamState: task.streamState || null,
     artifacts: task.artifacts || task.streamState?.artifacts || [],
+    lastEventSeq: resume.lastEventSeq,
+    updatedAt: resume.updatedAt,
+    lastEventAt: resume.lastEventAt,
+    alive: resume.alive,
+    lastError: resume.lastError,
   });
 });
 
@@ -808,37 +820,55 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   if (!task) {
     const snapshot = taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
     if (!snapshot) return res.status(404).json({ error: 'task not found' });
+    const decision = claimTaskCancel(snapshot);
+    persistCancelRequest(snapshot);
+    if (!decision.apply) {
+      return res.json({
+        ...buildCancelAck(snapshot, decision),
+        queueCancel: null,
+        runningCancel: { cancelled: decision.already && decision.reason !== 'already_terminal', already: decision.already, reason: decision.reason, state: decision.status },
+      });
+    }
     let queueCancel = null;
     try { queueCancel = await cancelQueuedTask(snapshot.jobId || snapshot.taskId); } catch { /* redis unavailable */ }
     const runningCancel = await cancelRunningTask(snapshot.taskId, req.user?.id);
-    if (['queued', 'running'].includes(snapshot.status)) {
-      let streamState = {
-        ...(snapshot.streamState || initialAgentState()),
-        done: true,
-        error: 'Tarea cancelada por el usuario.',
-      };
-      streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
-      const writtenCancel = taskStore.appendTaskEvent(snapshot, { type: 'error', message: 'Tarea cancelada por el usuario.' }, streamState, { eventLimit: TASK_EVENT_LIMIT });
-      await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || { type: 'error', message: 'Tarea cancelada por el usuario.' });
-      taskStore.markTaskStatus(snapshot, 'cancelled', {
-        streamState,
-      });
-      await agentTaskPersistence.upsertAgentTask({ ...snapshot, status: 'cancelled', state: streamState });
-    }
-    return res.json({ ok: true, taskId: snapshot.taskId, status: 'cancelled', queueCancel, runningCancel });
+    let streamState = {
+      ...(snapshot.streamState || initialAgentState()),
+      done: true,
+      error: 'Tarea cancelada por el usuario.',
+      errorCode: 'E_CANCELLED',
+    };
+    streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
+    const cancelEvent = { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' };
+    const writtenCancel = taskStore.appendTaskEvent(snapshot, cancelEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || cancelEvent);
+    taskStore.markTaskStatus(snapshot, 'cancelled', {
+      streamState,
+    });
+    await agentTaskPersistence.upsertAgentTask({ ...snapshot, status: 'cancelled', state: streamState });
+    return res.json({
+      ...buildCancelAck(snapshot, decision),
+      status: 'cancelled',
+      queueCancel,
+      runningCancel,
+    });
   }
-  if (task.status !== 'running') {
-    return res.json({ ok: true, taskId: task.taskId, status: task.status });
+
+  const liveDecision = claimTaskCancel(task);
+  persistCancelRequest(task);
+  if (!liveDecision.apply) {
+    return res.json(buildCancelAck(task, liveDecision));
   }
 
   task.status = 'cancelled';
   task.cancelledAt = new Date().toISOString();
   task.updatedAt = task.cancelledAt;
-  task.controller.abort();
-  appendTaskEvent(task, { type: 'error', message: 'Tarea detenida por el usuario.' }, {
+  task.controller?.abort?.();
+  appendTaskEvent(task, { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea detenida por el usuario.' }, {
     ...task.streamState,
     done: true,
     error: 'Tarea detenida por el usuario.',
+    errorCode: 'E_CANCELLED',
   });
   taskStore.markTaskStatus(task, 'cancelled', { streamState: task.streamState });
   if (task.durableExecution?.graphId) {
@@ -852,7 +882,7 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   }
   metrics.counter('agent_task_cancellations_total', { reason: 'user' });
 
-  res.json({ ok: true, taskId: task.taskId, status: task.status });
+  res.json(buildCancelAck(task, liveDecision));
 });
 
 // ─── POST /api/agent/task/:taskId/retry ────────────────────────────────
@@ -903,6 +933,12 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
     };
     streamState = reduceAgentState(streamState, retryEvent);
     const retryWritten = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, retryEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    // The durable retry is now queued. Retire only the previous terminal
+    // record before awaiting mirrors, so Stop reaches the new queued job even
+    // if a persistence mirror fails. Preserve a worker that already started.
+    if (ACTIVE_AGENT_TASKS.get(snapshot.taskId) === snapshot) {
+      ACTIVE_AGENT_TASKS.delete(snapshot.taskId);
+    }
     await agentTaskPersistence.appendAgentTaskEvent(retryWritten || snapshot, retryWritten?.events?.[retryWritten.events.length - 1] || retryEvent);
     const queueEvent = { type: 'queue_status', taskId: snapshot.taskId, status: 'queued', queue: getQueueName(), jobId: String(job.id), position: null };
     streamState = reduceAgentState(streamState, queueEvent);
@@ -913,7 +949,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       streamState,
     });
     await agentTaskPersistence.upsertAgentTask({
-      ...snapshot,
+      ...queued,
       userId: req.user?.id,
       status: 'queued',
       jobId: String(job.id),
@@ -1988,7 +2024,7 @@ function runAgentJobInProcess(payload, userId) {
         updateProgress: async () => {},
       });
     } catch (err) {
-      failTaskTerminal(payload.taskId, userId, err?.message || 'agent task failed');
+      failTaskTerminal(payload.taskId, userId, err || 'agent task failed');
     }
   });
 }
@@ -2476,12 +2512,12 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     } catch (err) {
       const latest = taskStore.getTaskSnapshotForUser(taskId, req.user?.id) || snapshot;
       if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return;
-      const errorEvent = { type: 'error', message: err?.message || 'agent task failed' };
+      const errorEvent = toAgentTaskErrorEvent(err || 'agent task failed');
       const state = reduceAgentState(latest.streamState || streamState, errorEvent);
       appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
       taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'error', {
         streamState: state,
-        stats: { error: errorEvent.message },
+        stats: { error: errorEvent.message, code: errorEvent.code },
       });
     }
   });
@@ -2505,12 +2541,12 @@ function failTaskTerminal(taskId, userId, message) {
       || taskStore.getTaskSnapshotForUser(taskId, undefined);
     if (!latest) return false;
     if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return false;
-    const errorEvent = { type: 'error', message: String(message || 'La tarea agéntica falló.') };
+    const errorEvent = toAgentTaskErrorEvent(message || 'La tarea agéntica falló.');
     const state = reduceAgentState(latest.streamState || initialAgentState(), errorEvent);
     appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
     taskStore.markTaskStatus({ ...latest, userId: latest.userId || userId }, 'error', {
       streamState: state,
-      stats: { error: errorEvent.message },
+      stats: { error: errorEvent.message, code: errorEvent.code },
     });
     return true;
   } catch (_) {
@@ -2964,6 +3000,7 @@ function createTaskRecord({
     fileIds: existingSnapshot?.fileIds || [],
     createdAt: now,
     updatedAt: now,
+    lastEventAt: now,
     streamState: streamState || existingSnapshot?.streamState || initialAgentState(),
     executionProfile,
     intentAlignmentProfile,
@@ -3002,6 +3039,17 @@ function getTaskForUser(taskId, userId) {
   const task = ACTIVE_AGENT_TASKS.get(cleanId);
   if (!task || String(task.userId) !== String(userId || '')) return null;
   return task;
+}
+
+function persistCancelRequest(task) {
+  if (!task?.taskId || !task?.userId || !task.cancelRequestedAt) return;
+  try {
+    taskStore.updateTaskSnapshot(task.taskId, task.userId, {
+      cancelRequestedAt: task.cancelRequestedAt,
+    });
+  } catch {
+    // Latch is best-effort; the in-process claim still holds for this turn.
+  }
 }
 
 function appendTaskEvent(task, event, streamState) {
@@ -3060,6 +3108,7 @@ function formatTaskPayload(task) {
     documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    lastEventAt: task.lastEventAt || task.streamState?.lastEventAt || task.updatedAt || null,
     completedAt: task.completedAt || null,
     cancelledAt: task.cancelledAt || null,
     failedAt: task.failedAt || null,
@@ -3358,7 +3407,12 @@ function reduceAgentState(state, evt) {
       return { ...state, done: true, stoppedReason: evt.stoppedReason };
     case 'error':
     case 'run.failed':
-      return { ...state, done: true, error: evt.message };
+      return {
+        ...state,
+        done: true,
+        error: evt.message,
+        ...(evt.code ? { errorCode: evt.code } : {}),
+      };
     case 'heartbeat':
       return { ...state, lastEventAt: evt.ts || new Date().toISOString(), heartbeatAt: evt.ts || new Date().toISOString() };
     default:
@@ -3389,6 +3443,7 @@ function toSerializableAgentState(state = {}) {
     finalText: state.finalText || '',
     done: Boolean(state.done),
     error: state.error || undefined,
+    ...(state.errorCode ? { errorCode: state.errorCode } : {}),
     stoppedReason: state.stoppedReason || undefined,
     checkpoints: (state.checkpoints || []).map((checkpoint) => ({
       id: checkpoint.id,
@@ -3437,6 +3492,7 @@ router.INTERNAL = {
   TASK_EVENT_LIMIT,
   appendTaskEvent,
   buildAgentSystemPrompt,
+  buildTaskEventsResumePayload,
   createTaskRecord,
   extractProfessionalContract,
   failTaskTerminal,
@@ -3448,6 +3504,8 @@ router.INTERNAL = {
   normalizeDisplayGoal,
   normalizeSystemContract,
   reduceAgentState,
+  resolveEventCursor,
+  resolveTaskLastError,
   safeJsonStringify,
   resolveQueuedStreamTimeoutMs,
   shouldResumeGeneratedArtifactForDocumentFollowup,
