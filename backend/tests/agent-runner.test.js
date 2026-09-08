@@ -21,6 +21,7 @@ const {
 } = require('../src/services/agent-runner');
 const { persistOutputs, resolveTurnFiles } = require('../src/services/agent-runner/artifacts');
 const {
+  EDIT_TOOLS,
   needsVerification,
   verificationNudge,
   MAX_VERIFICATION_RETRIES,
@@ -338,6 +339,44 @@ test('runAgentLoop caps at 25 iterations', async () => {
   );
   assert.ok(result.iterations <= 25, result.iterations);
   assert.ok(result.iterations >= 1, result.iterations);
+});
+
+test('runAgentLoop never says Listo when the step budget runs out mid-deck', async () => {
+  const events = [];
+  const client = scriptedClient(
+    Array.from({ length: 10 }, () => ({
+      toolCalls: [{ name: 'add_slide', args: { path: 'outputs/deck.pptx', title: 'x' } }],
+    })),
+  );
+  const result = await runAgentLoop({
+    client,
+    model: 'x',
+    messages: [{ role: 'user', content: 'hazme un deck de 30 laminas' }],
+    tools: TOOL_DEFINITIONS,
+    executors: { async add_slide() { return '{"ok":true}'; } },
+    maxIterations: 4,
+    onEvent: (ev) => events.push(ev),
+  });
+  assert.equal(result.stoppedReason, 'max_iterations');
+  const final = events.find((ev) => ev.type === 'final');
+  assert.equal(final.label, 'Incompleto');
+  assert.equal(final.verified, false);
+  assert.match(final.text, /incompleto/i);
+  assert.notEqual(final.text, 'Listo');
+});
+
+test('EDIT_TOOLS gate covers every deck/file mutating tool', async () => {
+  for (const tool of [
+    'add_slide', 'append_text_slide', 'create_pptx', 'delete_slide',
+    'patch_file', 'apply_patch', 'set_cell', 'set_slide_background',
+    'create_presentation', 'write_file', 'edit_file', 'str_replace',
+    'execute_python', 'execute_bash', 'bash',
+  ]) {
+    assert.equal(EDIT_TOOLS.has(tool), true, `EDIT_TOOLS missing ${tool}`);
+  }
+  const n = needsVerification([{ tool: 'add_slide', ok: true }]);
+  assert.equal(n.needed, true);
+  assert.equal(n.reason, 'missing_preview');
 });
 
 test('makeToolExecutors execute_python execute_bash render_preview set_slide_background', async () => {
