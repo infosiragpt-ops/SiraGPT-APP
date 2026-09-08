@@ -37,6 +37,9 @@ function hasCancelEvent(task) {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const evt = events[i];
     if (!evt) continue;
+    // A manual retry starts a new attempt while retaining the replay history.
+    // Stop markers before that boundary belong to the completed attempt.
+    if (evt.type === 'repair_attempt' && evt.status === 'queued') return false;
     if (evt.code === CANCEL_CODE) return true;
     if (evt.reason === 'aborted' && (evt.type === 'error' || evt.type === 'run.failed')) return true;
   }

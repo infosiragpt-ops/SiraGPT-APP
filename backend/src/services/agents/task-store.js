@@ -259,7 +259,12 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   const next = {
     ...existing,
     status,
-    ...(explicitRetry ? { jobId: String(snapshotLike.jobId), queueName: snapshotLike.queueName || existing.queueName } : {}),
+    ...(explicitRetry ? {
+      jobId: String(snapshotLike.jobId),
+      queueName: snapshotLike.queueName || existing.queueName,
+      cancelledAt: null,
+      cancelRequestedAt: null,
+    } : {}),
     assistantMessageId: snapshotLike.assistantMessageId || existing.assistantMessageId || null,
     streamState: nextState,
     events,
