@@ -15,7 +15,8 @@
 const fs = require('fs');
 const path = require('path');
 const { createSandbox } = require('../doc-agent/sandbox');
-const { isValidOoxml, createOpenRouterClient, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
+const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
+const { resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
@@ -32,6 +33,9 @@ const {
 } = require('./queue');
 
 const MAX_OUTPUT_RETRIES = 3;
+const { trySurgicalPresentationFollowup } = require('./surgical-followup');
+const { isScopedSlideMutation, parsePresentationTitleEdit } = require('../document-editing/presentation-title-intent');
+const { verifyContentChanged, verifySlideTitleEdit, assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
 
 /* ── F8 — memoria híbrida + skills + cliente MCP (hooks) ────────────────────
  * Los módulos viven en ./memory, ./skills y ./mcp; este helper solo ORQUESTA:
@@ -164,13 +168,30 @@ function defaultModel() {
     || DEFAULT_MODEL;
 }
 
-/** Refuse to call OpenRouter with CI dummy keys (tests fall through). */
+/**
+ * Only the model explicitly pinned by the operator (env) is forced to the
+ * front of the provider ladder; the doc-agent DEFAULT_MODEL is an OpenRouter
+ * slug and must NOT pin OpenRouter first (its exhausted balance / data-policy
+ * 404s killed every "crea un word/ppt" turn in production).
+ */
+function explicitRunnerModel(env = process.env) {
+  return env.SIRAGPT_AGENT_RUNNER_MODEL || env.SIRAGPT_DOC_AGENT_MODEL || env.OPENROUTER_MODEL || null;
+}
+
+/** Production LLM for the runner: provider ladder with per-call failover. */
+function createRunnerLlmClient({ onEvent } = {}) {
+  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() }), {
+    onFailover: (info) => {
+      try { console.warn('[agent-runner] llm failover:', info.from, '→', info.to, info.status || '', info.message); } catch (_) { /* ignore */ }
+      if (typeof onEvent === 'function') { try { onEvent({ type: 'llm_failover', ...info }); } catch (_) { /* ignore */ } }
+    },
+  });
+}
+
+/** A run needs at least one configured provider (CI dummy keys do not count). */
 function canCallLlm({ client } = {}) {
   if (client) return true;
-  const key = String(process.env.OPENROUTER_API_KEY || '').trim();
-  if (!key) return false;
-  if (/dummy|not-used|ci-dummy|test-key/i.test(key)) return false;
-  return true;
+  return resolveDocAgentCandidates({ model: explicitRunnerModel() }).length > 0;
 }
 
 function sanitizeUploadName(name, index) {
@@ -179,7 +200,22 @@ function sanitizeUploadName(name, index) {
   return clean || `file-${index + 1}`;
 }
 
-async function collectValidOutputs(sandbox, onEvent = () => {}) {
+function resolveOutputEditSource(name, sources) {
+  const basename = (value) => String(value || '').split(/[\\/]/).pop().toLowerCase();
+  const outputName = basename(name);
+  const exact = sources.filter((file) => basename(file.name) === outputName);
+  if (exact.length === 1) return exact[0];
+  const editedBase = outputName.replace(/(?:[_ -](?:editado|edited|corregido|actualizado|titulo_actualizado))+(?=\.[^.]+$)/, '');
+  const named = sources.filter((file) => basename(file.name) === editedBase);
+  if (named.length === 1) return named[0];
+  // Duplicate names must not silently select an older reattached version.
+  const relevant = exact.length ? exact : sources;
+  const prior = relevant.filter((file) => file.isPriorArtifact);
+  if (prior.length === 1) return prior[0];
+  return relevant.length === 1 ? relevant[0] : null;
+}
+
+async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}) {
   const outputs = await sandbox.collectOutputs();
   for (const out of outputs) {
     const ext = String(out.name).split('.').pop().toLowerCase();
@@ -187,10 +223,42 @@ async function collectValidOutputs(sandbox, onEvent = () => {}) {
       out.valid = false;
       onEvent({ type: 'output_invalid', name: out.name, reason: 'empty_file' });
     } else if (['docx', 'xlsx', 'pptx'].includes(ext)) {
-      out.valid = isValidOoxml(out.buffer);
-      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: 'ooxml_structure' });
+      try {
+        assertBoundedOfficePackage(out.buffer);
+        out.valid = isValidOoxml(out.buffer);
+        if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: 'ooxml_structure' });
+      } catch (error) {
+        out.valid = false;
+        const reason = error?.code === 'OFFICE_PACKAGE_LIMIT_EXCEEDED' ? 'office_package_limit_exceeded' : 'office_package_invalid';
+        out.validation = { ok: false, passed: false, reason, engine: 'office_package_preflight' };
+        onEvent({ type: 'output_invalid', name: out.name, reason });
+      }
     } else {
       out.valid = true;
+    }
+  }
+  for (const out of outputs) {
+    const ext = String(out.name || '').split('.').pop().toLowerCase();
+    const sources = (editContext.files || []).filter((file) => String(file.name || '').toLowerCase().endsWith(`.${ext}`));
+    const source = resolveOutputEditSource(out.name, sources);
+    if (out.valid && sources.length && editContext.isEdit) {
+      let proof = source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: 'source_ambiguous' };
+      if (proof.passed && ext === 'pptx') {
+        try {
+          assertBoundedOfficePackage(source.buffer);
+          const adapter = require('../document-editing/pptx-adapter');
+          const before = adapter.listPptxSlides(source.buffer);
+          const edit = parsePresentationTitleEdit(editContext.instruction, { slides: before });
+          if (edit?.slideNumber) proof = verifySlideTitleEdit(source.buffer, out.buffer, edit);
+          else if (isScopedSlideMutation(editContext.instruction) && before.length !== adapter.listPptxSlides(out.buffer).length)
+            proof = { passed: false, reason: 'unrequested_slide_count_change' };
+        } catch {
+          proof = { passed: false, reason: 'office_source_invalid' };
+        }
+      }
+      out.valid = proof.passed;
+      out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_edit_delta' };
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
     }
   }
   outputs.sort((a, b) => Number(b.valid !== false) - Number(a.valid !== false));
@@ -253,6 +321,14 @@ async function runAgentRunner({
   let f7 = null; // F7 (multimodal) extras — cleaned up in finally
   try {
     throwIfAborted(abortScope.signal);
+    const surgical = CREATE_DOC_RE.test(task) ? null : trySurgicalPresentationFollowup({ instruction: task, files });
+    if (surgical) return surgical;
+    // This is an output-integrity gate, not the document-routing classifier:
+    // same-format artifacts returned from an existing-file turn must contain
+    // a real change unless the user explicitly asked to generate a new file.
+    // Keep the generic document pipeline out of AgentRunner's dependency path.
+    const editContext = { files, instruction: task,
+      isEdit: files.some((file) => Buffer.isBuffer(file?.buffer)) && !CREATE_DOC_RE.test(task) };
     sandbox = await createSandbox({
       driver,
       signal: abortScope.signal,
@@ -354,7 +430,7 @@ async function runAgentRunner({
       }
     }
 
-    let outputs = await collectValidOutputs(sandbox, onEvent);
+    let outputs = await collectValidOutputs(sandbox, onEvent, editContext);
     if (fastPathUsed && outputs.filter((o) => o.valid !== false).length > 0) {
       const previewTarget = outputs.find((o) => o.valid !== false);
       onEvent({ type: 'tool_call', tool: 'render_preview', label: 'Verificando resultado', preview: previewTarget.name });
@@ -382,7 +458,7 @@ async function runAgentRunner({
       };
     }
 
-    if (!llm) llm = createOpenRouterClient();
+    if (!llm) llm = createRunnerLlmClient({ onEvent });
 
     // ── F7 (multimodal) hook ─────────────────────────────────────────────
     // Vision / voice / bounded computer-use extras. Kill switches:
@@ -429,7 +505,7 @@ async function runAgentRunner({
       signal: abortScope.signal,
     });
     throwIfAborted(abortScope.signal);
-    outputs = await collectValidOutputs(sandbox, onEvent);
+    outputs = await collectValidOutputs(sandbox, onEvent, editContext);
 
     let outputAttempt = 1;
     while (
@@ -467,7 +543,7 @@ async function runAgentRunner({
         signal: abortScope.signal,
       });
       throwIfAborted(abortScope.signal);
-      outputs = await collectValidOutputs(sandbox, onEvent);
+      outputs = await collectValidOutputs(sandbox, onEvent, editContext);
     }
 
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
@@ -516,6 +592,7 @@ async function runAgentRunnerForChat({
   onEvent = () => {},
   driver,
   maxIterations,
+  saveArtifact,
 } = {}) {
   let loaded = attachedFiles;
   if ((!loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
@@ -526,6 +603,7 @@ async function runAgentRunnerForChat({
     userId,
     chatId,
     attachedFiles: loaded,
+    instruction,
   });
   const run = await runAgentRunner({
     files: resolved.files,
@@ -543,20 +621,25 @@ async function runAgentRunnerForChat({
     prisma,
   });
   const valid = (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);
-  const artifacts = await persistOutputs({
+  const persisted = await persistOutputs({
     outputs: valid,
     userId,
     chatId,
     prisma,
     onEvent,
+    saveArtifact,
   });
-  const summary = String(run.finalText || '').trim()
-    || (artifacts.length
-      ? `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`
-      : 'No pude generar el archivo. Intenta de nuevo con más detalle.');
+  const artifacts = persisted.filter((artifact) => artifact?.id && artifact?.downloadUrl && !artifact.error);
+  const persistenceFailed = valid.length > 0 && !artifacts.length;
+  const rejectedEdit = !valid.length && (run.outputs || []).some((output) => output.validation?.passed === false);
+  const summary = persistenceFailed ? 'La edición no pudo guardarse como archivo descargable. No entregué un resultado; vuelve a intentarlo.'
+    : rejectedEdit ? 'No pude verificar el cambio solicitado en el documento original. No entregué una copia sin cambios ni una edición incorrecta.'
+    : artifacts.length ? (String(run.finalText || '').trim() || `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`)
+      : run.stoppedReason === 'edit_not_applied' ? String(run.finalText || 'No se aplicó la edición.')
+        : 'No pude producir un archivo verificado. No entregué un resultado sin comprobar.';
   // A loop that "finished" without a deliverable is a no_output failure for
   // the caller — 'final'/'fast_path' only describe HOW the loop stopped.
-  let failReason = run.stoppedReason || 'no_output';
+  let failReason = persistenceFailed ? 'artifact_persistence_failed' : run.stoppedReason || 'no_output';
   if (failReason === 'final' || failReason === 'fast_path') failReason = 'no_output';
   return {
     ok: artifacts.length > 0,
@@ -611,7 +694,8 @@ async function executeAgentRunnerTurn(params = {}) {
     || (Array.isArray(params.attachedFiles) && params.attachedFiles.length > 0);
   const colorFastPath = Boolean(inferColorFromText(instruction))
     && (STYLE_EDIT_RE.test(instruction) || hasTurnFiles);
-  if (!colorFastPath && !canCallLlm(params) && !params.client) {
+  const titleFastPath = isScopedSlideMutation(instruction) || Boolean(parsePresentationTitleEdit(instruction));
+  if (!titleFastPath && !colorFastPath && !canCallLlm(params) && !params.client) {
     return {
       ok: false,
       skipped: true,
@@ -839,6 +923,9 @@ function orchestratorEnabled(env) {
 
 module.exports = {
   shouldRunAgentRunner,
+  createRunnerLlmClient,
+  explicitRunnerModel,
+  canCallLlm,
   isRunnerOnlyDocumentTurn,
   shouldOrchestrate,
   steerAgentOrchestratorRun,
@@ -863,4 +950,5 @@ module.exports = {
   DOC_NOUN_RE,
   STYLE_EDIT_RE,
   hasConversationArtifacts,
+  collectValidOutputs,
 };

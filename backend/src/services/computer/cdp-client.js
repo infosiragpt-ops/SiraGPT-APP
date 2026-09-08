@@ -11,6 +11,8 @@
  * is the production path.
  */
 
+const loginHandoff = require('./login-handoff');
+
 function loadPlaywright() {
   try { return require('playwright-core'); } catch (_) { /* fall through */ }
   try { return require('playwright'); } catch (_) { return null; }
@@ -23,7 +25,10 @@ function flattenA11y(node, lines = [], depth = 0) {
   const rawName = node.name && (typeof node.name === 'object' ? node.name.value : node.name);
   const rawValue = node.value && (typeof node.value === 'object' ? node.value.value : node.value);
   const name = rawName ? ` "${String(rawName).slice(0, 120)}"` : '';
-  const value = rawValue ? ` = ${String(rawValue).slice(0, 80)}` : '';
+  const secret = loginHandoff.isSecretField({
+    name: rawName, type: node.inputType || node.type, role, label: rawName, value: rawValue, autocomplete: node.autocomplete,
+  }, { inLoginForm: true });
+  const value = rawValue ? ` = ${secret ? loginHandoff.REDACTED : String(rawValue).slice(0, 80)}` : '';
   lines.push(`${indent}${role}${name}${value}`);
   for (const child of node.children || []) flattenA11y(child, lines, depth + 1);
   return lines;
@@ -46,7 +51,10 @@ function flattenAxNodes(nodes) {
     const name = n.name && (n.name.value || n.name);
     const value = n.value && (n.value.value || n.value);
     const nameBit = name ? ` "${String(name).slice(0, 120)}"` : '';
-    const valueBit = value ? ` = ${String(value).slice(0, 80)}` : '';
+    const secret = loginHandoff.isSecretField({
+      name, type: n.inputType || n.type, role, label: name, value, autocomplete: n.autocomplete,
+    }, { inLoginForm: true });
+    const valueBit = value ? ` = ${secret ? loginHandoff.REDACTED : String(value).slice(0, 80)}` : '';
     lines.push(`${indent}${role}${nameBit}${valueBit}`);
     for (const id of n.childIds || []) walk(byId.get(String(id)), depth + 1);
   };
@@ -247,6 +255,47 @@ function snapshotViaDocker(containerName, { timeoutMs = 20000 } = {}) {
   });
 }
 
+async function peekPageContext(cdpUrl, { timeoutMs = 4000 } = {}) {
+  const base = String(cdpUrl || '').replace(/\/$/, '');
+  if (!base) return { url: null, title: '', text: '' };
+  try {
+    const listed = await fetchJson(base + '/json', timeoutMs);
+    const pages = Array.isArray(listed) ? listed : [];
+    const page = pages.find((p) => p && p.type === 'page' && p.url) || pages.find((p) => p && p.url) || pages[0] || {};
+    const url = page.url || null;
+    const title = page.title || '';
+    return {
+      url,
+      title,
+      text: url || title ? `url: ${url || ''}\ntitle: ${title}` : '',
+    };
+  } catch (_) {
+    return { url: null, title: '', text: '' };
+  }
+}
+
+function peekViaDocker(containerName, { timeoutMs = 8000 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!containerName) return reject(new Error('container_missing'));
+    const child = spawn(
+      'docker',
+      ['exec', '-u', 'compuser', String(containerName), 'node', '-e',
+        "const http=require('http');http.get({host:'127.0.0.1',port:9222,path:'/json'},r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>{try{const p=JSON.parse(b);const page=(Array.isArray(p)?p:[]).find(x=>x&&x.type==='page'&&x.url)||(Array.isArray(p)?p[0]:{})||{};process.stdout.write(JSON.stringify({url:page.url||null,title:page.title||'',text:'url: '+(page.url||'')+'\\ntitle: '+(page.title||'')}))}catch(e){process.exit(2)}})}).on('error',()=>process.exit(1))"],
+      { timeout: timeoutMs },
+    );
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(err || out || ('cdp_peek_' + code)));
+      try { resolve(JSON.parse(out)); }
+      catch (parseErr) { reject(parseErr); }
+    });
+  });
+}
+
 module.exports = {
   loadPlaywright,
   flattenA11y,
@@ -255,4 +304,6 @@ module.exports = {
   snapshotViaRawCdp,
   snapshotViaDocker,
   snapshotAccessibility,
+  peekPageContext,
+  peekViaDocker,
 };

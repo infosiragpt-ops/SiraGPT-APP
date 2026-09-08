@@ -35,10 +35,28 @@ describe('failTaskTerminal', () => {
 
     const snap = taskStore.getTaskSnapshotForUser('ft-queued', 'u1');
     assert.equal(snap.status, 'error');
-    assert.ok(
-      (snap.events || []).some((e) => e.type === 'error' && /upstream model timeout/.test(e.message || '')),
-      'expected a terminal error event carrying the failure reason',
-    );
+    const errorEvent = (snap.events || []).find((e) => e.type === 'error');
+    assert.ok(errorEvent, 'expected a terminal error event');
+    assert.equal(errorEvent.code, 'E_TIMEOUT');
+    assert.match(errorEvent.message || '', /tiempo de espera/);
+    assert.doesNotMatch(errorEvent.message || '', /upstream model timeout/);
+  });
+
+  test('writes distinct codes for 503 vs cancel vs timeout', () => {
+    for (const [taskId, input, code, needle] of [
+      ['ft-503', Object.assign(new Error('maintenance'), { statusCode: 503 }), 'E_PROVIDER', /no está disponible/],
+      ['ft-cancel', Object.assign(new Error('cancelled by user'), { name: 'AbortError' }), 'E_CANCELLED', /se detuvo/],
+      ['ft-timeout', Object.assign(new Error('gateway timeout'), { statusCode: 504 }), 'E_TIMEOUT', /tiempo de espera/],
+    ]) {
+      taskStore.writeTaskSnapshot({
+        taskId, userId: 'u1', displayGoal: 'x',
+        status: 'running', streamState: baseState(), events: [],
+      });
+      assert.equal(INTERNAL.failTaskTerminal(taskId, 'u1', input), true);
+      const event = (taskStore.getTaskSnapshotForUser(taskId, 'u1').events || []).find((e) => e.type === 'error');
+      assert.equal(event.code, code, taskId);
+      assert.match(event.message || '', needle, taskId);
+    }
   });
 
   test('is idempotent — no-op when the task already reached a terminal state', () => {

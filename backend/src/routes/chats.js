@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
 const prisma = require('../config/database');
+const conversationCompactor = require('../services/conversation-compactor');
 const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
@@ -14,6 +15,8 @@ const feedbackLedger = require('../services/agents/feedback-ledger');
 const rag = require('../services/rag-service');
 const chatExport = require('../services/chat-export');
 const triggers = require('../services/trigger-registry');
+const apps = require('../services/apps');
+const appPins = require('../services/apps/pins');
 const {
   MESSAGE_IDEMPOTENCY_HASH_FIELD,
   buildMessageIdempotencyScopeKey,
@@ -303,9 +306,21 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
       })
     ]);
 
-    // Serialize BigInt fields before sending response
+    // Serialize BigInt fields before sending response.
+    // The single preview message is trimmed to what a list row can show:
+    // agent reasoning blobs (agent-task-state JSON) and file snapshots ran
+    // to tens of KB per chat and were shipped 20x per page for nothing.
     const serializedChats = chats.map((chat) => {
       const row = serializeChat(chat);
+      if (Array.isArray(row.messages)) {
+        row.messages = row.messages.map((m) => ({
+          id: m.id,
+          chatId: m.chatId,
+          role: m.role,
+          timestamp: m.timestamp,
+          content: String(m.content || '').slice(0, 240),
+        }));
+      }
       const activeTasks = taskStore.listActiveTasksForChat(chat.id, req.user.id, { limit: 1 });
       row.activeTask = activeTasks[0] ? {
         taskId: activeTasks[0].taskId,
@@ -813,6 +828,100 @@ router.put('/:id', [
   }
 });
 
+// Persistent app pins — read the effective pins of a conversation.
+// Pins are per-conversation; connections live in app_connections.
+router.get('/:id/pins', authenticateToken, async (req, res) => {
+  try {
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      select: { pinnedAppIds: true, pinRevision: true },
+    });
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found', code: 'CHAT_NOT_FOUND' });
+    }
+    const pins = appPins.publicPins(chat);
+    res.setHeader('ETag', `"pins-${pins.revision}"`);
+    return res.json(pins);
+  } catch (error) {
+    console.error('Get chat pins error:', error);
+    return res.status(500).json({ error: 'Failed to load chat pins' });
+  }
+});
+
+// Persistent app pins — replace the pin list. Server-side validation is
+// the source of truth: unknown apps, unavailable apps and apps without an
+// active connection are rejected with the failing app's code. Unpinning
+// never disconnects the underlying OAuth connection.
+// Concurrency (spec v2 §6.5): If-Match "pins-<revision>" is required for
+// writes; a stale revision returns 412 PIN_SET_STALE with the canonical
+// state so the client can rebase once and retry.
+router.put('/:id/pins', authenticateToken, async (req, res) => {
+  try {
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      select: { id: true, pinnedAppIds: true, pinRevision: true },
+    });
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found', code: 'CHAT_NOT_FOUND' });
+    }
+    const current = appPins.publicPins(chat);
+    const ifMatch = req.headers['if-match'];
+    if (!ifMatch) {
+      return res.status(428).json({
+        error: 'Se requiere If-Match para actualizar los pins.',
+        code: 'PRECONDITION_REQUIRED',
+        details: { effectiveRevision: current.revision, effectivePinnedAppIds: current.pinnedAppIds },
+      });
+    }
+    const match = String(ifMatch).match(/"pins-(\d+)"/);
+    const expectedRevision = match ? Number(match[1]) : null;
+    if (expectedRevision === null || !Number.isFinite(expectedRevision)) {
+      return res.status(428).json({
+        error: 'If-Match inválido.',
+        code: 'PRECONDITION_REQUIRED',
+        details: { effectiveRevision: current.revision, effectivePinnedAppIds: current.pinnedAppIds },
+      });
+    }
+    if (expectedRevision !== current.revision) {
+      return res.status(412).json({
+        error: 'El conjunto de apps cambió en otro dispositivo.',
+        code: appPins.PIN_ERRORS.PIN_SET_STALE,
+        details: { effectiveRevision: current.revision, effectivePinnedAppIds: current.pinnedAppIds },
+      });
+    }
+    const result = await appPins.validatePins(prisma, req.user.id, req.body?.pinnedAppIds);
+    if (!result.ok) {
+      const first = result.errors[0];
+      return res.status(first.code === appPins.PIN_ERRORS.PIN_LIMIT ? 422 : 409).json({
+        error: first.message,
+        code: first.code,
+        appId: first.appId,
+        errors: result.errors,
+      });
+    }
+    const isNoOp = result.pins.length === current.pinnedAppIds.length
+      && result.pins.every((id, index) => id === current.pinnedAppIds[index]);
+    const next = {
+      pinnedAppIds: result.pins,
+      pinRevision: isNoOp ? current.revision : current.revision + 1,
+      updatedAt: new Date(),
+    };
+    await prisma.chat.update({
+      where: { id: req.params.id },
+      data: next,
+    });
+    const saved = appPins.publicPins(next);
+    res.setHeader('ETag', `"pins-${saved.revision}"`);
+    return res.json(saved);
+  } catch (error) {
+    if (error instanceof Error && error.code === appPins.PIN_ERRORS.PIN_LIMIT) {
+      return res.status(422).json({ error: error.message, code: error.code });
+    }
+    console.error('Put chat pins error:', error);
+    return res.status(500).json({ error: 'Failed to save chat pins' });
+  }
+});
+
 // Delete chat
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
@@ -870,7 +979,9 @@ router.post('/:id/messages', [
     .optional()
     .custom(isValidMessageMetadata)
     .withMessage('Metadata must be a plain object or a JSON string containing a plain object'),
-  body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: MAX_IDEMPOTENCY_KEY_CHARS })
+  body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: MAX_IDEMPOTENCY_KEY_CHARS }),
+  body('pinnedAppIds').optional().isArray().withMessage('pinnedAppIds must be an array'),
+  body('pinnedAppIds.*').optional().isString().trim().isLength({ min: 1, max: 64 })
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -950,6 +1061,24 @@ router.post('/:id/messages', [
           }),
         ];
 
+        // First-party app pins: the first USER turn of a draft migrates the
+        // client-side pin list into the conversation (draft -> conversation
+        // migration). Invalid pins are dropped silently — the client syncs
+        // back from the response's pinnedAppIds. Draft migration starts at
+        // revision 1 (the draft never had a server revision).
+        const rawPins = req.body?.pinnedAppIds;
+        if (Array.isArray(rawPins)) {
+          const pinResult = await appPins.validatePins(prisma, req.user.id, rawPins);
+          const effectivePins = pinResult.pins;
+          writes.push(
+            prisma.chat.update({
+              where: { id: req.params.id },
+              data: { pinnedAppIds: effectivePins, pinRevision: 1 },
+            })
+          );
+          req._effectivePinnedAppIds = effectivePins;
+        }
+
         if (role === 'ASSISTANT' && tokens) {
           writes.push(
             prisma.apiUsage.create({
@@ -988,7 +1117,12 @@ router.post('/:id/messages', [
 
     const message = result.message;
 
-    res.status(201).json({ message });
+    res.status(201).json({
+      message,
+      ...(req._effectivePinnedAppIds
+        ? { pinnedAppIds: req._effectivePinnedAppIds }
+        : {}),
+    });
 
     // Trigger chat.message_sent — debounced 1s per chat in the registry
     // so a rapid stream of partial saves doesn't spam subscribers.
@@ -1234,12 +1368,15 @@ router.delete('/:id/messages', authenticateToken, async (req, res) => {
       where: { chatId: req.params.id }
     });
 
-    // Update chat
+    // Update chat (and drop the rolling context summary — nothing left to cover)
     await prisma.chat.update({
       where: { id: req.params.id },
       data: {
         title: 'New Chat',
-        updatedAt: new Date()
+        updatedAt: new Date(),
+        contextSummary: null,
+        contextSummaryUntil: null,
+        contextSummaryMeta: null,
       }
     });
 
@@ -1362,6 +1499,8 @@ router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (re
         id: messageId,
       },
       select: {
+        chatId: true,
+        timestamp: true,
         chat: {
           select: {
             userId: true,
@@ -1386,6 +1525,9 @@ router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (re
         id: messageId,
       },
     });
+    // A summary that covered this message would describe a reality that no
+    // longer exists — drop it so the next turn rebuilds from the live rows.
+    await conversationCompactor.invalidateSummaryIfCovered({ prisma, chatId: message.chatId, timestamp: message.timestamp });
 
     res.json({ message: 'Message cleared successfully' });
 
@@ -1549,6 +1691,9 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
         where: { id: messageId },
         data: { content: content.trim() }
       });
+
+      // Paso 3b: invalidar el resumen de contexto si cubría este mensaje
+      await conversationCompactor.invalidateSummaryIfCovered({ prisma: tx, chatId: messageToEdit.chatId, timestamp: messageToEdit.timestamp });
 
       // Paso 4: Actualizar también el timestamp 'updatedAt' del chat
       await tx.chat.update({

@@ -25,12 +25,16 @@ export interface PendingAIRequestEnvelope {
   provider: string
   model: string
   reasoningEffort?: string
+  permission?: string
   regenerate?: boolean
   regenerationAttempt?: number
   disableAgentic?: boolean
   enableWebGrounding?: boolean
   webGroundingQuery?: string
   webSearchMode?: string
+  mentionedApps?: string[]
+  /** Persistent app pins — replayed on every turn of the conversation. */
+  pinnedAppIds?: string[]
 }
 
 export interface PendingGeneratePayload extends PendingAIRequestEnvelope {

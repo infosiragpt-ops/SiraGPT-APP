@@ -4,7 +4,7 @@ export type ImageQuality = "512px" | "1K" | "2K" | "4K"
 export type VideoResolution = "480p" | "720p" | "1080p"
 export type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
 export type VideoDuration = number
-export type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
+export type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs" | "Sira Voz"
 export type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
 export type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
 export type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
@@ -45,7 +45,7 @@ export const VIDEO_ASPECT_RATIO_OPTIONS: ReadonlyArray<MediaAspectRatioOption<Vi
 ]
 export const VIDEO_DURATION_OPTIONS: readonly VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
 export const VIDEO_DURATION_PINNED_OPTIONS: readonly VideoDuration[] = [8, 15, 30]
-export const VOICE_MODEL_OPTIONS: readonly VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
+export const VOICE_MODEL_OPTIONS: readonly VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs", "Sira Voz"]
 export const VOICE_LANGUAGE_OPTIONS: readonly VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
 export const VOICE_ACCENT_OPTIONS: readonly VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
 export const VOICE_EFFECT_OPTIONS: readonly VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
@@ -152,4 +152,113 @@ export function filterMediaModels<T extends { name?: string; provider?: string; 
   models: T[] | null | undefined,
 ): T[] {
   return (Array.isArray(models) ? models : []).filter((model) => !isForbiddenMediaTextModel(model?.name, model?.provider))
+}
+
+/**
+ * Voice composer settings persisted per browser (same pattern as the effort
+ * picker's `sira:composer:effort`): language/accent/effect/stability and the
+ * provider model survive reloads. Values are validated on read — a stale or
+ * foreign entry falls back to the default. The model name itself is dynamic
+ * (live catalog), so it is only re-validated against the catalog on open.
+ */
+export const VOICE_SETTINGS_STORAGE_KEYS = {
+  model: "sira:composer:voice:model",
+  language: "sira:composer:voice:language",
+  accent: "sira:composer:voice:accent",
+  stability: "sira:composer:voice:stability",
+  effect: "sira:composer:voice:effect",
+} as const
+
+export type VoiceSettingKey = keyof typeof VOICE_SETTINGS_STORAGE_KEYS
+
+const VOICE_SETTING_DEFAULTS: Record<VoiceSettingKey, string | number> = {
+  model: "",
+  language: "Spanish",
+  accent: "Latino",
+  stability: 100,
+  effect: "Studio Clean",
+}
+
+function readVoiceStorage(key: string): string | null {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function validatedVoiceSetting(key: VoiceSettingKey, raw: string | null): string | number {
+  const fallback = VOICE_SETTING_DEFAULTS[key]
+  if (raw == null || raw === "") return fallback
+  if (key === "stability") {
+    const n = Number.parseInt(raw, 10)
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback
+  }
+  if (key === "language") return (VOICE_LANGUAGE_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  if (key === "accent") return (VOICE_ACCENT_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  if (key === "effect") return (VOICE_EFFECT_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  return raw
+}
+
+export function readStoredVoiceSetting(key: VoiceSettingKey, fallback: string | number): string | number {
+  const stored = readVoiceStorage(VOICE_SETTINGS_STORAGE_KEYS[key])
+  if (stored == null || stored === "") return fallback
+  return validatedVoiceSetting(key, stored)
+}
+
+export function writeStoredVoiceSettings(patch: Partial<Record<VoiceSettingKey, string | number>>): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return
+    for (const [key, value] of Object.entries(patch)) {
+      if (!(key in VOICE_SETTINGS_STORAGE_KEYS)) continue
+      window.localStorage.setItem(
+        VOICE_SETTINGS_STORAGE_KEYS[key as VoiceSettingKey],
+        String(value ?? ""),
+      )
+    }
+  } catch {
+    /* private mode / quota — settings simply don't persist */
+  }
+}
+
+// ── Sira Voz (VoiceStudio, open source, 100 % local, free) ──────────────────
+// The Voz picker lists the Admin-active AUDIO rows by their catalog `name`;
+// the local studio row is `sira-voz` (displayName "Sira Voz"). Matching by
+// pattern keeps the chip working if the row is ever renamed in Admin.
+export const SIRA_VOZ_MODEL_RE = /sira[-_\s]?voz|voice[-_\s]?studio|omnivoice/i
+
+export function isSiraVozModel(value: unknown): boolean {
+  return SIRA_VOZ_MODEL_RE.test(String(value ?? ""))
+}
+
+export const SIRA_VOZ_LABEL = "Sira Voz"
+export const SIRA_VOZ_TAGLINE = "Clona voces, dobla vídeos, transcribe y crea audiolibros. 100 % local y gratis."
+
+/** The user's cloned voice chosen for Sira Voz (persisted per browser). */
+export const VOICE_STUDIO_STORAGE_KEYS = {
+  voiceId: "sira:composer:voice:studio-voice-id",
+  voiceName: "sira:composer:voice:studio-voice-name",
+} as const
+
+export function readStoredVoiceStudioVoice(): { id: string; name: string } {
+  const id = readVoiceStorage(VOICE_STUDIO_STORAGE_KEYS.voiceId) || ""
+  const name = readVoiceStorage(VOICE_STUDIO_STORAGE_KEYS.voiceName) || ""
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) return { id: "", name: "" }
+  return { id, name: name.slice(0, 80) }
+}
+
+export function writeStoredVoiceStudioVoice(voice: { id: string; name: string } | null): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return
+    if (!voice || !voice.id) {
+      window.localStorage.removeItem(VOICE_STUDIO_STORAGE_KEYS.voiceId)
+      window.localStorage.removeItem(VOICE_STUDIO_STORAGE_KEYS.voiceName)
+      return
+    }
+    window.localStorage.setItem(VOICE_STUDIO_STORAGE_KEYS.voiceId, String(voice.id))
+    window.localStorage.setItem(VOICE_STUDIO_STORAGE_KEYS.voiceName, String(voice.name || "").slice(0, 80))
+  } catch {
+    /* private mode / quota — the pick simply does not persist */
+  }
 }

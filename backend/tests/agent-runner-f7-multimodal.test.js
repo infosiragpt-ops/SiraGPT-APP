@@ -320,7 +320,7 @@ test('F7(c): transcribe_audio reuses the Whisper path with a mocked client and w
   }
 });
 
-test('F7(c): transcribe_audio fails honestly with no API key — never a fabricated transcript', async () => {
+test('F7(c): transcribe_audio fails honestly when local whisper is unavailable — never leaks keys', async () => {
   await withEnv({ ...ENV_ON, OPENAI_API_KEY: null }, async () => {
     const sandbox = await createSandbox({ driver: 'local' });
     try {
@@ -328,7 +328,8 @@ test('F7(c): transcribe_audio fails honestly with no API key — never a fabrica
       const extras = multimodal.prepareF7Extras({ env: process.env, sandbox });
       const result = await extras.executors.transcribe_audio({ path: 'uploads/nota.mp3' }, {});
       assert.ok(String(result).startsWith('ERROR:'));
-      assert.ok(result.includes('OPENAI_API_KEY'));
+      assert.ok(!result.includes('OPENAI_API_KEY'));
+      assert.ok(!/sk-proj|sk-[A-Za-z0-9]{8,}/.test(result));
       await extras.cleanup();
     } finally {
       await sandbox.destroy();

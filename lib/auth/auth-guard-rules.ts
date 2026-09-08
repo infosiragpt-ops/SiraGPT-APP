@@ -11,9 +11,9 @@ export type GuardOptions = {
 export function getAuthRedirect(
   user: GuardUser,
   { requireAdmin = false, requireSuperAdmin = false }: GuardOptions = {}
-): "/auth/login" | "/chat" | null {
+): "/auth/login" | "/" | null {
   if (!user) return "/auth/login"
-  if (requireSuperAdmin && !user.isSuperAdmin) return "/chat"
-  if (requireAdmin && !user.isAdmin && !user.isSuperAdmin) return "/chat"
+  if (requireSuperAdmin && !user.isSuperAdmin) return "/"
+  if (requireAdmin && !user.isAdmin && !user.isSuperAdmin) return "/"
   return null
 }
