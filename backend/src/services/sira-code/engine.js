@@ -14,6 +14,7 @@ const { executeTool } = require('./tools');
 const { formatSse, subscribe, replay, appendEvent, stageEvent } = require('./events');
 const {
   createSession,
+  getSession,
   requireOwnedSession,
   switchAgent: switchStoredAgent,
   abortSession,
@@ -141,20 +142,34 @@ async function resolvePermission(id, permissionId, decision, userId) {
 }
 
 function streamEvents(res, { sessionId, userId, lastEventId } = {}) {
-  let session = null;
+  const uid = String(userId || '');
+  if (!uid.trim()) {
+    const err = new Error('autenticación requerida');
+    err.code = 'authentication_required';
+    err.status = 401;
+    throw err;
+  }
+
+  function emitOwnedEvent(event) {
+    if (sessionId && event.sessionId !== sessionId) return;
+    const owner = getSession(event.sessionId);
+    if (!owner || String(owner.userId || '') !== uid) return;
+    res.write(formatSse(event));
+  }
+
   if (sessionId) {
-    session = requireOwnedSession(sessionId, userId);
+    const session = requireOwnedSession(sessionId, uid);
+    if (String(session.userId || '') !== uid) {
+      const err = new Error('sesión no encontrada');
+      err.code = 'session_not_found';
+      err.status = 404;
+      throw err;
+    }
     for (const event of replay(session, { afterId: lastEventId })) {
-      res.write(formatSse(event));
+      emitOwnedEvent(event);
     }
   }
-  return subscribe((event) => {
-    if (userId && session && session.userId && event.sessionId === session.id && session.userId !== String(userId)) {
-      return;
-    }
-    if (sessionId && event.sessionId !== sessionId) return;
-    res.write(formatSse(event));
-  }, { sessionId });
+  return subscribe(emitOwnedEvent, { sessionId });
 }
 
 function agentCanWrite(agentId) {
