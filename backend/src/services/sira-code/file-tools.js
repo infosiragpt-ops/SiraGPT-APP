@@ -64,7 +64,7 @@ function toolOk(content, extra = {}) {
 }
 
 function pickPath(args) {
-  return String((args && (args.path || args.filePath || args.filename)) || '').trim();
+  return String((args && (args.path || args.filePath || args.file_path || args.filename)) || '').trim();
 }
 
 function pickContent(args) {
