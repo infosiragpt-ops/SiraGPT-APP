@@ -92,13 +92,33 @@ test('_shouldApplyVisionFallback returns false when explicitly disabled (=0)', a
   });
 });
 
-test('_shouldApplyVisionFallback returns false without any OpenAI key/client', async () => {
-  await withEnv({ SIRAGPT_VISION_FALLBACK_ENABLED: '1', OPENAI_API_KEY: undefined }, () => {
+const NO_VISION_KEYS = {
+  OPENAI_API_KEY: undefined,
+  GEMINI_API_KEY: undefined,
+  XAI_API_KEY: undefined,
+  OPENROUTER_API_KEY: undefined,
+  MODEL_API_KEY: undefined,
+  META_API_KEY: undefined,
+  LLAMA_API_KEY: undefined,
+};
+
+test('_shouldApplyVisionFallback returns false without any vision runtime key/client', async () => {
+  await withEnv({ SIRAGPT_VISION_FALLBACK_ENABLED: '1', ...NO_VISION_KEYS }, () => {
     const out = fileProcessor._shouldApplyVisionFallback(
       { text: 'short', ocr: { confidence: 0.1 } },
       {},
     );
     assert.equal(out, false);
+  });
+});
+
+test('_shouldApplyVisionFallback no longer requires the OpenAI key — Gemini alone qualifies', async () => {
+  await withEnv({ SIRAGPT_VISION_FALLBACK_ENABLED: '1', ...NO_VISION_KEYS, GEMINI_API_KEY: 'g-test' }, () => {
+    const out = fileProcessor._shouldApplyVisionFallback(
+      { text: 'short', ocr: { confidence: 0.1 } },
+      {},
+    );
+    assert.equal(out, true);
   });
 });
 

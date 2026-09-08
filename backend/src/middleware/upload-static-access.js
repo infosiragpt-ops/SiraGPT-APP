@@ -6,6 +6,7 @@ const {
 } = require('../services/auth/session-token-persistence');
 const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const { DEV_FALLBACK, resolveAllowedOrigins } = require('./cors-policy');
+const { shouldForceDownload } = require('../services/upload-security-policy');
 
 const UPLOAD_CONTENT_TYPES = {
   '.pdf': 'application/pdf',
@@ -31,6 +32,17 @@ const UPLOAD_CONTENT_TYPES = {
   '.csv': 'text/csv; charset=utf-8',
   '.json': 'application/json',
 };
+
+/**
+ * `Content-Disposition: attachment` value for uploads that must never render
+ * inline (executables, scripts, HTML/SVG/XML). RFC 5987 filename* keeps
+ * non-ASCII names intact; the plain filename is an ASCII fallback.
+ */
+function uploadAttachmentDisposition(filePath) {
+  const base = path.basename(String(filePath || '')) || 'download';
+  const ascii = base.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+}
 
 function contentTypeForUploadPath(relativePath, objectType) {
   const ext = path.extname(String(relativePath || '')).toLowerCase();
@@ -391,6 +403,9 @@ function createUploadR2Fallback({
 
       applyUploadPreviewCors(req, res, { resolveOrigins, env });
       res.setHeader('Content-Type', contentTypeForUploadPath(relativePath, contentType));
+      if (shouldForceDownload({ filename: relativePath, mimeType: contentType })) {
+        res.setHeader('Content-Disposition', uploadAttachmentDisposition(relativePath));
+      }
       res.setHeader('Cache-Control', 'private, max-age=60');
       res.setHeader(
         'Access-Control-Expose-Headers',
@@ -430,6 +445,7 @@ module.exports = {
   resolveUploadPreviewOrigins,
   classifyUploadPath,
   contentTypeForUploadPath,
+  uploadAttachmentDisposition,
   createUploadMediaTokenHandler,
   createUploadStaticAccessGuard,
   createUploadR2Fallback,

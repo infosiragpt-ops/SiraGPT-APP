@@ -8,6 +8,7 @@ const {
 const { runAgentTaskJob } = require('./agent-task-runner');
 const { classifyTaskError } = require('../../utils/task-error-classifier');
 const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
+const { claimTaskCancel, isCancelAck } = require('./agent-task-cancel');
 
 // Worker tuning defaults. BullMQ's own defaults (30s lock, 30s stall check,
 // max 1 stall) are too aggressive for our long-running agent jobs that can
@@ -127,10 +128,7 @@ function startAgentTaskWorker() {
         const { INTERNAL } = require('../../routes/agent-task');
         const taskId = job.data && job.data.taskId;
         const userId = job.data && job.data.user && job.data.user.id;
-        const message = (classification && classification.userMessage)
-          || err.message
-          || 'La tarea agéntica falló de forma permanente.';
-        INTERNAL.failTaskTerminal(taskId, userId, message);
+        INTERNAL.failTaskTerminal(taskId, userId, err);
       } catch (terminalErr) {
         console.warn('[agent-task-worker] failed to write terminal error event:', terminalErr?.message || terminalErr);
       }
@@ -164,12 +162,20 @@ async function cancelRunningTask(taskId, userId) {
   try {
     const { INTERNAL } = require('../../routes/agent-task');
     const task = INTERNAL.getTaskForUser(taskId, userId);
-    if (!task || task.status !== 'running') return { cancelled: false, reason: 'not_running' };
+    const decision = claimTaskCancel(task);
+    if (!decision.apply) {
+      return {
+        cancelled: isCancelAck(decision),
+        already: decision.already,
+        reason: decision.reason,
+        state: decision.status || (task && task.status) || null,
+      };
+    }
     task.status = 'cancelled';
     task.cancelledAt = new Date().toISOString();
     task.updatedAt = task.cancelledAt;
     task.controller?.abort?.();
-    return { cancelled: true, state: 'running' };
+    return { cancelled: true, already: false, reason: 'apply', state: 'running' };
   } catch (err) {
     return { cancelled: false, reason: err.message };
   }

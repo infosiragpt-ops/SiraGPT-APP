@@ -24,6 +24,11 @@
  *   gate.authorize(toolName, authCtx) -> { ok: true } | { ok: false, reason }
  */
 
+const {
+  authorizeComposerTool,
+  resolveComposerPermission,
+} = require('../composer-permission');
+
 const HIGH_RISK_TOOLS = new Set([
   'host_bash',
   'host_file',
@@ -63,10 +68,20 @@ function createChatToolGate(opts = {}) {
   const env = opts.env || process.env;
   const onAudit = typeof opts.onAudit === 'function' ? opts.onAudit : null;
   const policy = resolvePolicy(env);
+  const gatePermission = opts.permission != null
+    ? opts.permission
+    : resolveComposerPermission(opts);
 
   function authorize(toolName, authCtx = {}) {
     if (typeof toolName !== 'string' || !toolName) {
       return { ok: false, reason: 'invalid_tool_name' };
+    }
+    const permission = authCtx.permission != null
+      ? authCtx.permission
+      : (authCtx.toolPermission != null ? authCtx.toolPermission : gatePermission);
+    const composer = authorizeComposerTool(permission, toolName, authCtx);
+    if (composer.denied || composer.needsPermission) {
+      return { ok: false, reason: composer.reason || 'composer_permission_denied' };
     }
     // Low-risk tools: allow without ceremony.
     if (!isHighRiskTool(toolName)) {

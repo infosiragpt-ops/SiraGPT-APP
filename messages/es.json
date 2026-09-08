@@ -1,6 +1,6 @@
 {
   "sidebar": {
-    "newChat": "Nuevo chat",
+    "newChat": "Nuevo agente",
     "searchChats": "Buscar chats",
     "library": "Biblioteca",
     "gpts": "GPTs",
@@ -43,13 +43,14 @@
       "edited": "Última edición",
       "created": "Fecha de creación"
     },
-    "createTitle": "Crear una empresa",
+    "createTitle": "Crear un proyecto",
     "whatWorkingOn": "¿En qué está trabajando?",
-    "namePlaceholder": "Nombre de su empresa",
+    "namePlaceholder": "Nombre del proyecto",
     "whatTryingAchieve": "¿Qué intenta lograr?",
-    "descriptionPlaceholder": "Describa su empresa, objetivos, tema, etc…",
+    "descriptionPlaceholder": "Describa su proyecto, objetivos, tema, etc…",
     "cancel": "Cancelar",
-    "create": "Crear empresa",
+    "create": "Crear proyecto",
+    "useFolder": "Usar una carpeta",
     "creating": "Creando…",
     "createFailed": "No se pudo crear la empresa",
     "listFailed": "No se pudieron cargar las empresas",
@@ -66,7 +67,7 @@
     "deleted": "Empresa eliminada",
     "deleteFailed": "No se pudo eliminar la empresa",
     "launchFailed": "No se pudo iniciar el chat",
-    "composerPlaceholder": "¿Cómo puedo ayudarle hoy?",
+    "composerPlaceholder": "¿Cómo puedo ayudarte hoy?",
     "send": "Enviar",
     "startConversation": "Inicia una conversación para mantener las charlas organizadas y reutilizar el conocimiento de la empresa.",
     "chatsInProject": "Chats en esta empresa",
@@ -74,7 +75,30 @@
     "onlyYou": "Solo tú",
     "memoryDesc": "La memoria de la empresa se mostrará aquí después de algunos chats.",
     "instructions": "Instrucciones",
-    "instructionsDesc": "Agregar instrucciones para personalizar las respuestas de Claude.",
+    "instructionsDesc": "Agregar instrucciones para personalizar las respuestas.",
+    "instructionsSetupTitle": "Establecer instrucciones del proyecto",
+    "instructionsSetupDesc": "Estas instrucciones se usan en todas las conversaciones de este proyecto, junto con tu estilo.",
+    "knowledgeHint": "Sira usa el mismo conocimiento cada vez que hablas en este proyecto.",
+    "context": "Contexto",
+    "scheduled": "Programado",
+    "scheduledDesc": "Configura tareas recurrentes para este proyecto.",
+    "scheduledCreate": "Crear tarea programada",
+    "scheduledName": "Nombre",
+    "scheduledInstructions": "Instrucciones",
+    "scheduledFrequency": "Frecuencia",
+    "scheduledPermissions": "Permisos",
+    "scheduledManual": "Manual",
+    "scheduledDaily": "Diaria",
+    "scheduledWeekly": "Semanal",
+    "scheduledApproveManual": "Aprobar manualmente",
+    "scheduledRequireComputer": "Requerir esta computadora",
+    "scheduledRequireComputerHint": "Solo se ejecuta mientras tu computadora está activa.",
+    "uploadFromDevice": "Subir desde dispositivo",
+    "addTextContent": "Agregar contenido de texto",
+    "addTextTitle": "Agregar contenido de texto",
+    "addTextPlaceholder": "Pega el texto que este proyecto debe consultar…",
+    "cowork": "Cowork",
+    "chatMode": "Chat",
     "instructionsPlaceholder": "ej. Siempre cita fuentes. Responde en español formal.",
     "instructionsSaved": "Instrucciones guardadas",
     "saveFailed": "No se pudo guardar",
@@ -435,7 +459,7 @@
     "feedbackBad": "Respuesta poco útil"
   },
   "composer": {
-    "placeholderDefault": "Pregúntale a Sira GPT",
+    "placeholderDefault": "Escribe un mensaje…",
     "placeholderImage": "Describe la imagen que quieres crear",
     "placeholderVideo": "Describe el video que quieres crear",
     "placeholderWebSearch": "Busca en la web",
@@ -635,7 +659,7 @@
       "emptyDescribe": "Describe qué quieres construir para proponer un plan.",
       "emptySelect": "Crea o selecciona un proyecto para empezar.",
       "filesHint": "El árbol de archivos del workspace se abre desde el editor de /code.",
-      "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
+      "webUnavailable": "El preview aún no está disponible. Ábrelo desde un checkpoint.",
       "openInTab": "Abrir en pestaña nueva",
       "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
       "defaultProjectName": "Proyecto {n}",
@@ -645,7 +669,48 @@
       "disabledTitle": "APPS aún no está activo",
       "disabledBody": "El motor Codex V2 está apagado en este entorno. Activa CODEX_AGENT_V2 para construir apps con chat, runs y preview real.",
       "forbiddenTitle": "Acceso restringido",
-      "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
+      "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist.",
+      "agentComputer": {
+        "title": "Computadora del agente",
+        "status": {
+          "live": "En vivo",
+          "starting": "Pensando…",
+          "error": "Error",
+          "idle": "En espera"
+        },
+        "dock": {
+          "browser": "Navegador",
+          "files": "Archivos",
+          "terminal": "Terminal",
+          "desktop": "Escritorio",
+          "openLabel": "Abrir {app}",
+          "focusedBrowser": "Chrome enfocado en la computadora del agente",
+          "focusedOther": "{app} enfocado",
+          "unavailable": "La computadora del agente no está disponible aquí"
+        },
+        "routines": {
+          "toggle": "Rutinas",
+          "active": "activa",
+          "mejoraConstanteName": "Mejora constante chat y code",
+          "mejoraConstanteSchedule": "cada 3 h",
+          "mejoraConstanteNext": "en curso",
+          "avisarTiendasName": "Avisar tiendas iPhone/Android",
+          "avisarTiendasSchedule": "9:32 / 15:32 días laborables",
+          "avisarTiendasNext": "programada"
+        },
+        "loginHandoff": {
+          "title": "Inicia sesión en el equipo",
+          "instruction": "Inicia sesión en este sitio",
+          "neverSees": "SiraGPT no ve tu contraseña",
+          "ready": "Listo",
+          "captchaTitle": "Completa el captcha en el equipo",
+          "captchaInstruction": "Hay un captcha. Tómalo tú.",
+          "otpTitle": "Completa la verificación en el equipo",
+          "otpInstruction": "Ingresa el código 2FA en esta computadora",
+          "paymentTitle": "Completa el pago en el equipo",
+          "paymentInstruction": "Paga en esta computadora. SiraGPT no ve tus datos."
+        }
+      }
     }
   },
   "meta": {
@@ -654,13 +719,13 @@
     "description": "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar."
   },
   "chatSearch": {
-    "placeholder": "Buscar en tus chats…",
+    "placeholder": "Buscar chats y proyectos",
     "noResults": "Sin resultados",
-    "noResultsFor": "No encontramos chats para «{query}»",
+    "noResultsFor": "No encontramos chats ni proyectos para «{query}»",
     "serverFallback": "No se pudo buscar en el servidor; mostramos coincidencias de títulos locales.",
-    "emptyHistory": "Aún no tienes chats",
-    "emptyHistoryHint": "Empieza una conversación para verla aquí",
-    "resultCountOne": "{count} chat",
-    "resultCountMany": "{count} chats"
+    "emptyHistory": "Aún no tienes chats ni proyectos",
+    "emptyHistoryHint": "Empieza una conversación o crea un proyecto para verlos aquí",
+    "resultCountOne": "{count} resultado",
+    "resultCountMany": "{count} resultados"
   }
 }

@@ -57,7 +57,7 @@ export default function SharedMessagePage() {
                     // Small delay to ensure toast is shown before redirect
                     setTimeout(() => {
                         devLog('Redirecting to /chat...');
-                        router.push('/chat');
+                        router.push('/agentes');
                         localStorage.setItem('currentChatId', String(response.chatId));
                     }, 500);
                 } else {
@@ -100,7 +100,7 @@ export default function SharedMessagePage() {
                 <div className="text-center space-y-4">
                     <p className="text-red-500 text-lg">Error: {error}</p>
                     <button
-                        onClick={() => router.push('/chat')}
+                        onClick={() => router.push('/agentes')}
                         className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90"
                     >
                         Go to Chat

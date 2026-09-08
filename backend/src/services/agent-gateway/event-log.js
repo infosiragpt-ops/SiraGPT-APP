@@ -6,12 +6,15 @@
  * OpenClaw idea rewritten: events are sequenced and resumable. No source copied.
  */
 
+const { authorizeEventReplay } = require('../agents/session-isolation');
+
 const DEFAULT_MAX = 200;
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 
 function createEventLog({ max = DEFAULT_MAX, ttlMs = DEFAULT_TTL_MS } = {}) {
   const rings = new Map(); // sessionKey -> frames[]
   const hashes = new Map(); // sessionKey -> Map(hash -> at)
+  const owners = new Map(); // sessionKey -> ownerUserId
   const sweepState = { lastSweepAt: 0 };
   const watermarks = new Map();
   // 3H16: per-session seq (strict event order on the single gateway).
@@ -24,9 +27,22 @@ function createEventLog({ max = DEFAULT_MAX, ttlMs = DEFAULT_TTL_MS } = {}) {
     return list;
   }
 
-  function remember(sessionKey, frame) {
+  function ownerOf(sessionKey) {
+    return owners.get(String(sessionKey || '')) || '';
+  }
+
+  function stampOwner(sessionKey, ownerUserId) {
+    const key = String(sessionKey || '');
+    const owner = String(ownerUserId || '').trim();
+    if (!key || !owner) return '';
+    owners.set(key, owner);
+    return owner;
+  }
+
+  function remember(sessionKey, frame, meta = {}) {
     const key = String(sessionKey || '');
     if (!key || !frame) return 0;
+    stampOwner(key, meta && meta.ownerUserId);
     const list = prune(rings.get(key) || [], Date.now());
     const lastSeq = list.length ? Number(list[list.length - 1].seq) || 0 : 0;
     let seq;
@@ -75,8 +91,16 @@ function createEventLog({ max = DEFAULT_MAX, ttlMs = DEFAULT_TTL_MS } = {}) {
     return list.length;
   }
 
-  function replayFrom(sessionKey, lastId) {
+  function replayFrom(sessionKey, lastId, meta = {}) {
     const key = String(sessionKey || '');
+    if (meta.actorUserId != null || meta.requireOwner) {
+      const auth = authorizeEventReplay({
+        ownerUserId: meta.ownerUserId || ownerOf(key),
+        actorUserId: meta.actorUserId,
+        sessionKnown: rings.has(key) || Boolean(ownerOf(key) || meta.ownerUserId),
+      });
+      if (!auth.allowed) return [];
+    }
     const n = Number(lastId) || 0;
     const list = prune(rings.get(key) || [], Date.now());
     rings.set(key, list);
@@ -134,9 +158,11 @@ function createEventLog({ max = DEFAULT_MAX, ttlMs = DEFAULT_TTL_MS } = {}) {
     if (sessionKey == null) {
       rings.clear();
       hashes.clear();
+      owners.clear();
     } else {
       rings.delete(String(sessionKey));
       hashes.delete(String(sessionKey));
+      owners.delete(String(sessionKey));
     }
   }
 
@@ -187,7 +213,7 @@ function createEventLog({ max = DEFAULT_MAX, ttlMs = DEFAULT_TTL_MS } = {}) {
     }
   }
 
-  return { remember, replayFrom, replayFromDurable, lastSeq, watermark, size, clear, pruneHashes, attachStream, beatStream, reapOrphans, hydrate };
+  return { remember, replayFrom, replayFromDurable, lastSeq, watermark, size, clear, pruneHashes, attachStream, beatStream, reapOrphans, hydrate, ownerOf, stampOwner };
 }
 
 module.exports = { createEventLog, DEFAULT_MAX, DEFAULT_TTL_MS };

@@ -51,6 +51,8 @@ const ALWAYS_KEEP = new Set([
   'constraints',
   // Response posture (clarify / abstain / caveat) is load-bearing.
   'response-posture',
+  // Rolling context summary of the folded older turns — the thread's memory.
+  'context-summary',
 ]);
 
 // The "attribution theater" + heavy policy blocks: valuable on hard/ambiguous

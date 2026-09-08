@@ -8,12 +8,19 @@ import "katex/dist/katex.min.css"
 import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
-import { apiClient } from "./api"
+import { apiClient, type AIUsagePayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
-import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
+import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
+import { appendActivity, finalizeActivity, type ActivityStep } from "./chat/activity-log"
+import { shouldPollPersistedTurnOnStreamClose } from "./generate-stream-complete"
+import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
+import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
-import { collectMessageFileIds } from "./chat/composer-files"
-import { resolveCatalogModel } from "./chat/catalog-model"
+import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
+import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
+import { isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { composerGenerateFlags } from "./chat/composer-session"
+import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
@@ -37,6 +44,7 @@ import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
 import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
 import { awaitCancellableChatStep } from "./chat/turn-cancellation"
+import { mentionPayloadForGenerate } from "./apps-mentions"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -75,8 +83,14 @@ const normalizeChatError = (raw: string): string => {
   if (/auth|api.?key|401|403|invalid.*key/i.test(raw)) {
     return "Error de configuración del servicio. Por favor contacta al administrador."
   }
+  if (/ECONNREFUSED|ENOTFOUND|model.?not found|unknown model|does not exist/i.test(raw)) {
+    return "No se pudo usar el modelo seleccionado. No se cambió a otro modelo. Revisa la conexión o elige otro modelo."
+  }
   if (/timeout|timed.?out|ETIMEDOUT/i.test(raw)) {
     return "La solicitud tardó demasiado. Intenta de nuevo."
+  }
+  if (/conexión no disponible|connection_unavailable/i.test(raw)) {
+    return "Conexión no disponible"
   }
   if (/failed to fetch|network|ECONN|ETIMEDOUT|ENOTFOUND/i.test(raw)) {
     return "No se pudo conectar con el modelo. Verifica tu conexión e intenta de nuevo."
@@ -108,44 +122,9 @@ const resolveAttachmentId = (file: any): string | null => {
 
 const normalizeMessageAttachment = (file: any) => {
   if (!file || typeof file === 'string') return file;
-  const name = file.originalName || file.name || file.filename || 'archivo';
-  const mimeType = file.mimeType || file.type || file.contentType || null;
-  const longPasteMeta =
-    file.longPasteMeta ||
-    file.longPasteMetadata ||
-    file.__siraLongPaste ||
-    file.file?.__siraLongPaste ||
-    null;
-  const longPasteTitle = file.longPasteTitle || longPasteMeta?.title || null;
-  return {
-    id: resolveAttachmentId(file),
-    name: longPasteTitle || name,
-    originalName: longPasteTitle || file.originalName || name,
-    filename: file.filename || name,
-    mimeType,
-    type: typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : (file.type || mimeType),
-    size: file.size ?? null,
-    url: file.url || file.imageUrl || null,
-    preview: file.preview || file.objectUrl || null,
-    thumbnailUrl: file.thumbnailUrl || null,
-    path: file.path || null,
-    extractedText: file.extractedText || null,
-    openaiFileId: file.openaiFileId || null,
-    sourceChannel: file.sourceChannel || null,
-    isLongPasteDocument: Boolean(file.isLongPasteDocument || longPasteTitle),
-    longPasteTitle,
-    longPastePreview: file.longPastePreview || longPasteMeta?.preview || null,
-    longPasteMeta: longPasteMeta ? {
-      kind: 'long_paste_document',
-      title: longPasteMeta.title,
-      filename: longPasteMeta.filename,
-      preview: longPasteMeta.preview,
-      originalCharCount: longPasteMeta.originalCharCount,
-      originalWordCount: longPasteMeta.originalWordCount,
-      originalLineCount: longPasteMeta.originalLineCount,
-      createdAt: longPasteMeta.createdAt,
-    } : null,
-  };
+  const [snapshot] = snapshotComposerFilesForMessage([file]);
+  return snapshot || file;
+
 };
 
 const DOCUMENT_CONTEXT_EXT_RE = /\.(?:docx?|pdf|xlsx?|csv|pptx?|txt|md)$/i;
@@ -252,6 +231,12 @@ interface Message {
   reasoningStreaming?: boolean
   reasoningDurationMs?: number | null
   reasoningToolCalls?: Array<{ index: number; name?: string; args?: string }>
+  // Claude-style live activity (backend `stage` frames: leyendo adjuntos,
+  // buscando en la web, analizando la imagen, pensando…). Live only — the
+  // persisted row keeps reasoningDurationMs in metadata instead.
+  activityLog?: ActivityStep[]
+  thinkingStartedAt?: number
+  thinkingEndedAt?: number | null
   // Agent harness (AgentTrace). Live streams accumulate `agentSteps` from the
   // typed tool_call_start / tool_executing / tool_result frames (ordered by
   // blockIndex+seq) until `agent_done` closes `agentRun`; historical messages
@@ -261,6 +246,8 @@ interface Message {
   agentRun?: AgentRunClient | null
   agentPermission?: AgentPermissionClient | null
   agentMetadata?: any
+  generationUsage?: AIUsagePayload & { total: number }
+  model?: { name?: string | null; displayName?: string | null; provider?: string | null } | string
 }
 
 export interface AgentStepClient {
@@ -375,6 +362,56 @@ function createReasoningHandlers(opts: {
       toolCalls.set(payload.index, existing)
       patchMessage({ reasoningToolCalls: Array.from(toolCalls.values()) })
     },
+    onUsage: (payload: AIUsagePayload) => {
+      if (isCancelled()) return
+      patchMessage({
+        generationUsage: {
+          ...payload,
+          total: payload.tokensIn + payload.tokensOut,
+        },
+        ...(payload.model ? { model: payload.model } : {}),
+      })
+    },
+  }
+}
+
+/**
+ * Live activity handlers for the backend `stage` / `activity` SSE frames.
+ * Same functional-setChat discipline as createReasoningHandlers: the steps
+ * live on the placeholder message (`activityLog`) so the thinking timeline
+ * can show "Leyendo el archivo adjunto → Buscando en la web → Pensando".
+ */
+function createActivityHandlers(opts: {
+  setChat: (updater: (prev: any) => any) => void
+  messageId: string
+  isCancelled: () => boolean
+}) {
+  const { setChat, messageId, isCancelled } = opts
+  return {
+    onActivity: (text: string, event?: { type?: string; tool?: string; label?: string }) => {
+      if (isCancelled()) return
+      setChat((prevChat: any) => {
+        if (!prevChat) return prevChat
+        const newMessages = prevChat.messages.map((msg: any) => {
+          if (msg.id !== messageId) return msg
+          const label = String(event?.label || text || '').trim()
+          const activityLog = appendActivity(msg.activityLog, { label, tool: event?.tool, type: event?.type })
+          return { ...msg, activityLog, progressStage: label || msg.progressStage }
+        })
+        return { ...prevChat, messages: newMessages }
+      })
+    },
+  }
+}
+
+/** Nothing is "active" once text paints or the stream closes. */
+function settleActivity(msg: any, endedAt: number = Date.now()) {
+  const activityLog = finalizeActivity(msg?.activityLog)
+  if (activityLog === msg?.activityLog && msg?.thinkingEndedAt) return msg
+  return {
+    ...msg,
+    activityLog,
+    thinkingEndedAt: msg?.thinkingEndedAt || endedAt,
   }
 }
 
@@ -670,6 +707,11 @@ interface AddMessageOptions {
   streamId?: string
   reusePending?: boolean
   requestEnvelope?: PendingAIRequestEnvelope
+  mentionedApps?: string[]
+  /** Persistent app pins — included in the turn payload so the agentic
+      loop loads those apps' tools on every message, not just when the
+      user types an explicit @mention. */
+  pinnedAppIds?: string[]
 }
 interface ChatContextType {
   chats: Chat[]
@@ -677,9 +719,9 @@ interface ChatContextType {
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   createNewChat: (
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
-    initialContent?: string,
-    initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
+    content?: string,
+    files?: any[],
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[] }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
@@ -729,6 +771,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
+  const selectedModelRef = useRef(selectedModel)
+  selectedModelRef.current = selectedModel
   // Composer reasoning-effort picker (Bajo/Medio/Extra/Max), Claude-style.
   // Persisted so the user's choice survives reloads; sent to the backend as
   // `reasoningEffort` and mapped to the compute plan there.
@@ -935,14 +979,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       )
       devLog("modelsResponse", modelsResponse);
 
-      setAvailableModels(modelsResponse.models)
+      const activeModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : []
+      setAvailableModels(activeModels)
 
-      // Set default model
-      if (modelsResponse.models.length > 0 && !selectedModel) {
-        devLog("default model selected:", modelsResponse.models[0]);
-
-        setSelectedModel(modelsResponse.models[0].name)
-        setSelectedProivder(modelsResponse.models[0].provider)
+      const preferred = pickPreferredCatalogModel(activeModels, {
+        current: selectedModelRef.current,
+        pinned: getPinnedModel(),
+        last: getLastModel(),
+      })
+      if (preferred?.name) {
+        devLog("default model selected:", preferred)
+        setSelectedModel(preferred.name)
+        if (preferred.provider) setSelectedProivder(preferred.provider)
+      } else {
+        setSelectedModel("")
+        setSelectedProivder("")
       }
 
       // Load chats
@@ -965,16 +1016,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
         );
 
-        if (modelsResponse.models && modelsResponse.models.length > 0) {
-          setAvailableModels(modelsResponse.models);
-          devLog(`${modelsResponse.models.length} models loaded.`, modelsResponse.models);
-
-          // Select the first model by default.
-          setSelectedModel(modelsResponse.models[0].name);
-          setSelectedProivder(modelsResponse.models[0].provider);
+        const activeModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : [];
+        setAvailableModels(activeModels);
+        const preferred = pickPreferredCatalogModel(activeModels, {
+          current: selectedModelRef.current,
+          pinned: getPinnedModel(),
+          last: getLastModel(),
+        });
+        if (preferred?.name) {
+          setSelectedModel(preferred.name);
+          setSelectedProivder(preferred.provider || "");
+          devLog(`${activeModels.length} models loaded.`, activeModels);
         } else {
-          setAvailableModels([]);
           setSelectedModel("");
+          setSelectedProivder("");
           console.warn(`>>> Is type (${chatType}) ke liye koi models nahi mile.`);
         }
       } catch (e) {
@@ -986,17 +1041,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, [chatType, hasInitialized]);
 
   // Re-fetch the available models on demand (used when the picker opens and
-  // when the tab regains focus) so a model an admin just activated shows up
-  // WITHOUT a full page reload. Updates the list only — never disturbs the
-  // user's current selection. getAIModels sends Cache-Control: no-cache, so
-  // this reads the live DB, not the 5-min server cache.
+  // when the tab regains focus) so admin changes show up WITHOUT a full page
+  // reload. Reconcile the selected row too: a model removed from this active
+  // catalog must disappear from the selector immediately.
   const refreshModels = useCallback(async () => {
     if (!hasInitialized) return;
     try {
       const r = await apiClient.getAIModels(
         chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
       );
-      if (Array.isArray(r?.models)) setAvailableModels(r.models);
+      if (Array.isArray(r?.models)) {
+        const activeModels = r.models;
+        setAvailableModels(activeModels);
+        const preferred = pickPreferredCatalogModel(activeModels, {
+          current: selectedModelRef.current,
+          pinned: getPinnedModel(),
+          last: getLastModel(),
+        });
+        setSelectedModel(preferred?.name || "");
+        setSelectedProivder(preferred?.provider || "");
+      }
     } catch {
       /* best-effort: keep the existing list on a transient failure */
     }
@@ -1185,6 +1249,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !isAuthenticated) return false;
+      if (chatType === 'text' && !isActiveCatalogSelection(selectedModel, availableModels)) {
+        toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+        return false;
+      }
       const displayFiles = Array.isArray(fileIds)
         ? fileIds.filter(Boolean).map(normalizeMessageAttachment)
         : [];
@@ -1201,6 +1269,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Offline/reload retries pass reusePending=true and reuse this exact key
       // instead of replacing the durable draft with a fresh stream identity.
       const catalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
+      const pickerBadge = resolvePickerBadgeSource(catalogModel.name, availableModels, catalogModel.provider);
       if (catalogModel.replaced) {
         setSelectedModel(catalogModel.name);
         if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
@@ -1215,12 +1284,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const requestedStreamId = typeof options?.streamId === 'string' && options.streamId.trim()
         ? options.streamId.trim()
         : safeUUID();
+      const lightweightTurn = isLightweightConversationalPrompt(content)
       const requestEnvelope: PendingAIRequestEnvelope = options?.requestEnvelope
         ? { ...options.requestEnvelope }
         : {
             provider: catalogModel.provider,
             model: catalogModel.name,
             reasoningEffort: selectedEffort,
+            ...composerGenerateFlags(),
+            ...((lightweightTurn || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),
+            ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
+            ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
+              ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }
+              : {}),
           };
       const pendingMessage = options?.reusePending
         ? null
@@ -1287,6 +1363,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: '',
             error: undefined,
             metadata: turnMetadata,
+            model: pickerBadge,
           }
         : {
             id: `msg-ai-${activeChat.id}-${safeUUID()}`,
@@ -1295,6 +1372,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: '',
             timestamp: new Date().toISOString(),
             metadata: turnMetadata,
+            model: pickerBadge,
+            activityLog: [],
+            thinkingStartedAt: Date.now(),
           };
       const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
 
@@ -1471,6 +1551,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               return { ...prev, messages: msgs };
             });
           }
+          abortControllerRef.current = null;
+          setIsLoading(false);
+          setIsStreaming(false);
+          setCurrentStreamId(null);
+
+        } else if ((intent === 'doc' || intent === 'ppt') && looksLikeExplicitDocumentEdit(content)) {
+          // Verified edits must go through F1 /api/docs/jobs. Never recreate
+          // the file on the legacy /api/doc/generate path.
+          const blocked = {
+            id: aiMessagePlaceholder.id,
+            role: 'ASSISTANT' as const,
+            content: 'Adjunta o exporta el documento original para aplicar la edición verificada. No se usó el editor anterior.',
+            files: [],
+          };
+          setCurrentChat((prev) => {
+            if (!prev) return prev;
+            const msgs = prev.messages.map((m: any) =>
+              m.id === aiMessagePlaceholder.id ? blocked : m
+            );
+            return { ...prev, messages: msgs };
+          });
           abortControllerRef.current = null;
           setIsLoading(false);
           setIsStreaming(false);
@@ -1863,10 +1964,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 const authoritative = bg.get(activeChat.id)?.partialContent;
                 const newMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return {
+                    return settleActivity({
                       ...msg,
                       content: authoritative ?? (msg.content + joined),
-                    };
+                    });
                   }
                   return msg;
                 });
@@ -1875,6 +1976,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
           });
           streamBuffersRef.current.set(activeChat.id, fgBuffer);
+
+          const recoverPersistedTurnNow = async () => {
+            const recovered = await pollPersistedAssistantTurn({
+              getChat: (id) => apiClient.getChat(id),
+              chatId: activeChat.id,
+              pending: {
+                idempotencyKey: turnIdempotencyKey,
+                turnKey: turnIdempotencyKey,
+                streamId,
+              },
+              attempts: 4,
+              delayMs: 0,
+              isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+            });
+            if (!recovered?.chat) return false;
+            setCurrentChat((prev) => {
+              if (!prev || prev.id !== activeChat.id) return prev;
+              return mergeChatPreservingUserMessages(recovered.chat, prev);
+            });
+            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+            )));
+            return true;
+          };
 
           // STEP 3: Nayi streaming API call karein
           throwIfTurnCancelled();
@@ -1893,9 +2018,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               // the user sees progress even if they navigated away.
               bg.appendChunk(activeChat.id, chunk);
 
-              // Check if we should stop processing chunks for the
-              // foreground chat view.
-              if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
+              // User Stop still drops foreground tokens. Safari abort after a
+              // completed Mini turn must still paint replayed content.
+              if (pendingStopsRef.current.has(activeChat.id)) {
                 return;
               }
 
@@ -1908,6 +2033,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               fgBuffer.flush();
               fgBuffer.dispose();
               streamBuffersRef.current.delete(activeChat.id);
+              // The stream is over: no activity step stays "active".
+              setCurrentChat((prevChat) => {
+                if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+                return {
+                  ...prevChat,
+                  messages: prevChat.messages.map((msg) => (msg.id === aiMessagePlaceholder.id ? settleActivity(msg) : msg)),
+                };
+              });
               clearThisPendingTurn();
               bg.complete(activeChat.id);
               // Fold final partial into chats list so a background-finished
@@ -1924,6 +2057,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   }),
                 );
               }
+              if (shouldPollPersistedTurnOnStreamClose({
+                deliveredContent: finalPartial,
+                seenDone: true,
+                streamFailed,
+              })) {
+                try { await recoverPersistedTurnNow(); } catch { /* getChat failed; finally still idles */ }
+              }
               if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) {
                 // Do NOT force setIsStreaming(false) — sibling chats may still
                 // stream. markChatIdle in `finally` re-syncs aggregates.
@@ -1935,12 +2075,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 }
                 // Persist ID sync + cache update even for background chats.
                 const syncIds = async (attempt = 1) => {
-                  if (activeStreamingChatIdsRef.current.has(activeChat.id)) return;
                   try {
                     const resp = await apiClient.getChat(activeChat.id);
                     const serverChat = resp.chat;
                     setCurrentChat(prev => {
-                      if (!prev || prev.id !== activeChat.id || activeStreamingChatIdsRef.current.has(activeChat.id)) return prev;
+                      if (!prev || prev.id !== activeChat.id) return prev;
                       return mergeChatPreservingUserMessages(serverChat, prev);
                     });
                     setChats((prev) =>
@@ -2058,13 +2197,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
               }),
+              ...createActivityHandlers({
+                setChat: setCurrentChat,
+                messageId: aiMessagePlaceholder.id,
+                isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+              }),
               ...createAgentTraceHandlers({
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
               }),
               onReplace: (replacement) => {
-                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
+                if (pendingStopsRef.current.has(activeChat.id)) {
                   return;
                 }
                 // Drop any queued tokens — the replacement is authoritative.
@@ -2126,9 +2270,39 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   return { ...prevChat, messages: newMessages };
                 });
               },
+              tryRecoverPersistedTurn: recoverPersistedTurnNow,
             }
           );
           throwIfTurnCancelled();
+        }
+        const userStopped = controller.signal.aborted || pendingStopsRef.current.has(activeChat.id);
+        if (waitsForDefaultStreamTerminal && !terminalSucceeded && !userStopped && !streamFailed) {
+          const recovered = await pollPersistedAssistantTurn({
+            getChat: (id) => apiClient.getChat(id),
+            chatId: activeChat.id,
+            pending: {
+              idempotencyKey: turnIdempotencyKey,
+              turnKey: turnIdempotencyKey,
+              streamId,
+            },
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+          });
+          if (recovered?.chat) {
+            setCurrentChat((prev) => {
+              if (!prev || prev.id !== activeChat.id) return prev;
+              return mergeChatPreservingUserMessages(recovered.chat, prev);
+            });
+            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+            )));
+            terminalSucceeded = true;
+            streamFailed = false;
+            clearThisPendingTurn();
+            bg.complete(activeChat.id);
+            if (currentChatRef.current?.id === activeChat.id) {
+              setCurrentStreamId(null);
+            }
+          }
         }
         // Synchronous intent endpoints are terminal when their awaited call
         // returns. The default SSE branch is terminal only after onClose.
@@ -2140,7 +2314,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error: any) {
         streamFailed = true;
-        if (controller.signal.aborted || error?.name === 'AbortError') {
+        if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
           // Explicit Stop is terminal user intent, not a transport failure.
           // Remove the durable draft so online recovery cannot resurrect a
           // billable operation the user already cancelled.
@@ -2150,6 +2324,35 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setCurrentStreamId(null);
           }
           return true;
+        }
+        if (shouldRecoverPersistedGenerate(error, { signal: controller.signal })) {
+          const recovered = await pollPersistedAssistantTurn({
+            getChat: (id) => apiClient.getChat(id),
+            chatId: activeChat.id,
+            pending: {
+              idempotencyKey: turnIdempotencyKey,
+              turnKey: turnIdempotencyKey,
+              streamId,
+            },
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+          });
+          if (recovered?.chat) {
+            setCurrentChat((prev) => {
+              if (!prev || prev.id !== activeChat.id) return prev;
+              return mergeChatPreservingUserMessages(recovered.chat, prev);
+            });
+            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+            )));
+            terminalSucceeded = true;
+            streamFailed = false;
+            clearThisPendingTurn();
+            bg.complete(activeChat.id);
+            if (currentChatRef.current?.id === activeChat.id) {
+              setCurrentStreamId(null);
+            }
+            return true;
+          }
         }
         console.error("Failed to start AI stream:", error);
 
@@ -2245,7 +2448,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, availableModels, uploadedFiles, markChatStreaming, markChatIdle]
+    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, availableModels, uploadedFiles, chatType, markChatStreaming, markChatIdle]
   );
 
   const retryPendingMessage = useCallback(async (msg: PendingMessage): Promise<PendingRetryResult> => {
@@ -2349,7 +2552,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[] }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !isAuthenticated || !chatModel) return;
@@ -2364,6 +2567,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         idempotencyKey: options?.idempotencyKey,
       });
       const newChat = response.chat;
+      // Migrate draft pins into the new conversation on the very first turn.
+      const draftPins = Array.isArray(options?.pinnedAppIds) ? options.pinnedAppIds.slice(0, 4) : [];
+      if (draftPins.length && newChat?.id) {
+        void apiClient.setChatPins(newChat.id, draftPins).catch(() => undefined)
+      }
       newChat.messages = [];
 
       setChats((prev) => [newChat, ...prev]);
@@ -2377,11 +2585,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             case 'image':
               await handleNewChatWithPlaceholder(newChat, initialContent, '[GENERATING_IMAGE]', uploadedFiles);
 
+              const imageCatalog = resolveCatalogModel(chatModel, availableModels, selectProvider);
               const imageGenerationPayload = {
                 prompt: initialContent,
                 chatId: newChat.id,
-                provider: selectProvider,
-                model: chatModel,
+                provider: imageCatalog.provider,
+                model: imageCatalog.name,
               };
               if (initialFiles && initialFiles.length > 0) {
                 (imageGenerationPayload as any).fileId = resolveAttachmentId(initialFiles[0]);
@@ -2502,6 +2711,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isAuthenticated, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder, selectProvider, uploadedFiles]);
 
+  const applyChatModelSelection = useCallback((chat: { model?: string | null } | null | undefined) => {
+    const name = String(chat?.model || "").trim()
+    const preferred = pickPreferredCatalogModel(availableModels, {
+      current: name,
+      pinned: getPinnedModel(),
+      last: getLastModel(),
+    })
+    setSelectedModel(preferred?.name || "")
+    setSelectedProivder(preferred?.provider || "")
+  }, [availableModels])
+
   const selectChat = useCallback(
     async (chatId: string) => {
       latestSelectedChatIdRef.current = chatId
@@ -2539,6 +2759,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         })
         localStorage.setItem('currentChatId', chatId)
         setUploadedFiles([])
+        applyChatModelSelection(cachedChat)
       }
 
       // If this specific chat is still streaming, keep the optimistic
@@ -2592,6 +2813,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (latestSelectedChatIdRef.current === chatId) {
           localStorage.setItem('currentChatId', chatId)
           setUploadedFiles([])
+          applyChatModelSelection(chat)
         }
 
         // Background completion catch-up: if the last turn is still a lone
@@ -2649,7 +2871,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // bg is read to hydrate a mid-stream chat's partial answer on switch-back.
     // Safe to include: exported consumers call through selectChatRef, so the
     // callback identity churn does not cause extra renders.
-    [bg],
+    [applyChatModelSelection, bg],
   )
 
   const clearCurrentChat = useCallback(async () => {
@@ -2714,6 +2936,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Per-chat guard (NOT the global isLoading aggregate): regenerating in an
     // idle chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
+    if (!isActiveCatalogSelection(selectedModel, availableModels)) {
+      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     let targetAiMessageIndex = -1;
 
@@ -2875,7 +3101,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           provider: regenCatalogModel.provider,
           model: regenCatalogModel.name,
           reasoningEffort: selectedEffort,
+          ...composerGenerateFlags(),
           prompt: originalUserMessage.content,
+          ...mentionPayloadForGenerate(originalUserMessage.content),
           chatId: currentChat.id,
           files: (() => {
             const attached = collectMessageFileIds(originalUserMessage.files);
@@ -3014,13 +3242,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
+          ...createActivityHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+          }),
           ...createAgentTraceHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
           onReplace: (replacement) => {
-            if (controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)) {
+            if (pendingStopsRef.current.has(currentChat.id)) {
               return;
             }
             regenBuffer.dispose();
@@ -3076,6 +3309,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Per-chat guard (NOT the global isLoading aggregate): editing in an idle
     // chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
+    if (!isActiveCatalogSelection(selectedModel, availableModels)) {
+      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
     if (messageIndex === -1) return;
@@ -3268,7 +3505,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           provider: editCatalogModel.provider,
           model: editCatalogModel.name,
           reasoningEffort: selectedEffort,
+          ...composerGenerateFlags(),
           prompt: newContent,
+          ...mentionPayloadForGenerate(newContent),
           chatId: currentChat.id,
           files: (() => {
             const attached = collectMessageFileIds(parsedFiles);
@@ -3402,13 +3641,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
+          ...createActivityHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+          }),
           ...createAgentTraceHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
           onReplace: (replacement) => {
-            if (controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)) {
+            if (pendingStopsRef.current.has(currentChat.id)) {
               return;
             }
             editBuffer.dispose();
@@ -3617,7 +3861,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const duration = options?.duration || 8;
     const resolution = options?.resolution || '720p';
     const audio = options?.audio ?? true;
-    const model = options?.model || selectedModel;
+    const videoCatalog = resolveCatalogModel(options?.model || selectedModel, availableModels, selectProvider);
+    const model = videoCatalog.name;
 
     setIsLoading(true);
     try {
@@ -3750,7 +3995,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Auth transport intentionally omitted — apiClient reads the latest
     // bearer state or browser cookie at call time, so transport changes do
     // not need to recreate this callback.
-  }, [currentChat, user, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
+  }, [currentChat, user, selectedModel, availableModels, selectProvider, uploadedFiles, selectChat, pollVideoStatus]);
 
   const addThesisMessage = useCallback(async (topics: string[], chat?: any) => {
     const activeChat = chat || currentChat;

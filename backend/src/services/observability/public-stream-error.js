@@ -77,6 +77,18 @@ const RULES = [
     message: 'Contabilicé tokens parciales del turno cancelado. No cobré de más.',
   },
   {
+    code: 'ckpt_rollback_timeout',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'ckpt_rollback_timeout',
+    message: 'La escritura expiró. Revertí al checkpoint anterior.',
+  },
+  {
+    code: 'ckpt_skip_unchanged',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'ckpt_skip_unchanged',
+    message: 'Salté el checkpoint: el archivo no cambió.',
+  },
+  {
     code: 'loop_oscillation_cut',
     retryable: false,
     matches: (error) => String(error?.code || '') === 'loop_oscillation_cut',
@@ -111,6 +123,60 @@ const RULES = [
     retryable: false,
     matches: (error) => String(error?.code || '') === 'credit_pre_token',
     message: 'No cobré: el stream se cortó antes del primer token.',
+  },
+  {
+    code: 'write_syntax_revert',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'write_syntax_revert',
+    message: 'La escritura dejó sintaxis inválida. Restauré el original.',
+  },
+  {
+    code: 'write_hash_mismatch',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'write_hash_mismatch',
+    message: 'El hash posterior a la escritura no coincidió. No di el cambio por bueno.',
+  },
+  {
+    code: 'diff_markers',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'diff_markers',
+    message: 'El diff no trae marcadores ---/+++. No lo apliqué.',
+  },
+  {
+    code: 'credit_ledger_settle',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_ledger_settle',
+    message: 'Asenté el ledger de créditos del turno con error. No cobré de más.',
+  },
+  {
+    code: 'queue_wait',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'queue_wait',
+    message: 'La cola de generate esperó más de 60 s. Reintenta en unos segundos.',
+  },
+  {
+    code: 'file_changed',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'file_changed',
+    message: 'El archivo cambió desde la lectura. No apliqué el edit.',
+  },
+  {
+    code: 'sse_id_backwards',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sse_id_backwards',
+    message: 'Last-Event-ID va hacia atrás. Rechacé el cursor.',
+  },
+  {
+    code: 'ttfb_abort',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'ttfb_abort',
+    message: 'El modelo no envió el primer byte a tiempo. Cancelé el turno.',
+  },
+  {
+    code: 'credit_ledger_complete',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_ledger_complete',
+    message: 'Cerré el ledger de créditos con el uso real. No cobré de más.',
   },
 ];
 

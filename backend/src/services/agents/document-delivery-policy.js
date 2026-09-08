@@ -12,6 +12,7 @@ const WORD_OUTPUT_COMMAND_RE = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|ex
 const WORD_SOURCE_TO_OTHER_FORMAT_RE = /\b(?:convierte|convertir|exporta(?:r|me)?|pasa(?:r|me)?|transforma(?:r|me)?)\b[^.?!]{0,140}\b(?:(?:mi|este|ese|el|la|su)\s+)?(?:documento\s+)?(?:word|docx|documento\s+word)\b[^.?!]{0,100}\b(?:a|como|en|formato|formato\s+de)\s+(?:pdf|excel|xlsx|pptx?|power\s*point|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/i;
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
+const DOCUMENT_SYNTHESIS_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir)\b/i;
 const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|exportes?|exportar|prepares?|preparar|descargues?|descargar)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivos?|documentos?|word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|entregables?)|responde(?:r)?\s+(?:solo|solamente)?\s*(?:en\s+)?(?:el\s+)?chat|solo\s+en\s+chat|sin\s+(?:archivos?|documentos?|descarga|entregables?))\b/i;
 // Read/inquiry intents about a previously-shared document. Matches
 // phrases like "cuál es el título del word", "de qué trata el
@@ -208,6 +209,11 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
     || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
     || EXPLICIT_PDF_OUTPUT_RE.test(requestText);
+  // "resume el Word adjunto en el chat" is an explicit chat answer, even
+  // if a source-preserving edit heuristic would otherwise fire.
+  if (/\ben\s+el\s+chat\b/i.test(requestText) && !explicitOutput) {
+    return 'chat_only';
+  }
   if (Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText) && !explicitFileFormat) {
     return 'chat_only';
   }
@@ -225,6 +231,13 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     return 'chat_only';
   }
   if (documentUnderstanding && !explicitOutput) {
+    // Uploaded Office/PDF + "dame un resumen" / "análisis" must produce a
+    // downloadable file. The live failure was a finished task that only
+    // painted the chat summary — the Word card never appeared.
+    // Short questions ("qué dice el PDF") stay in chat.
+    if (Array.isArray(files) && files.length > 0 && DOCUMENT_SYNTHESIS_RE.test(requestText)) {
+      return 'doc_required';
+    }
     return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
   }
   if (Array.isArray(files) && files.length > 0 && !explicitOutput) {
@@ -308,7 +321,13 @@ function buildDocumentDeliveryPolicy({
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
     if (chatOnlyDirective) return 'El usuario pidio responder en chat y no generar archivos.';
     if (sourceMapChat) return 'Solicitud de mapa de fuentes sobre adjuntos; se responde en chat y no se genera archivo.';
-    if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
+    if (
+      DOCUMENT_UNDERSTANDING_RE.test(requestText)
+      && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)
+      && mode !== 'doc_required'
+    ) {
+      return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
+    }
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     // Los motivos de "sugerencia" (documento opcional, no automático) deben
     // quedar confinados a doc_suggested. Si se filtran a doc_required el

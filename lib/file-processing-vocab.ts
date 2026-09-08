@@ -163,6 +163,65 @@ export function describeComposerChipProgress(input: {
   }
 }
 
+export interface ComposerDocumentThumbProgress {
+  label: string | undefined
+  busy: boolean
+  failed: boolean
+}
+
+/**
+ * Label + veil for the PDF/Office page-thumb chip. Must follow the real
+ * processing stage: a hardcoded "preparando índice…" here is what made
+ * CERTIFICADO DE TRABAJO look stuck after HTTP upload already succeeded.
+ */
+export function describeComposerDocumentThumb(input: {
+  uploading: boolean
+  uploadProgress?: number
+  status?: string | null
+  stage?: FileProcessingStage | null
+  error?: string | null
+} = { uploading: false }): ComposerDocumentThumbProgress {
+  if (input.uploading) {
+    return {
+      label: describeComposerChipProgress({
+        uploading: true,
+        uploadProgress: input.uploadProgress,
+      }).label,
+      busy: true,
+      failed: false,
+    }
+  }
+
+  const status = String(input.status || "").toLowerCase()
+  const stage = input.stage || null
+
+  if (status === "failed" || stage === "failed") {
+    return {
+      label: describeStage("failed", input.error).label,
+      busy: false,
+      failed: true,
+    }
+  }
+
+  if (status === "ready" || stage === "ready") {
+    return { label: undefined, busy: false, failed: false }
+  }
+
+  if (status === "processing" || isActiveProcessingStage(stage)) {
+    return {
+      label: describeComposerChipProgress({
+        uploading: false,
+        stage,
+        error: input.error,
+      }).label,
+      busy: true,
+      failed: false,
+    }
+  }
+
+  return { label: undefined, busy: false, failed: false }
+}
+
 export function describeStage(
   stage: FileProcessingStage | null,
   error?: string | null,

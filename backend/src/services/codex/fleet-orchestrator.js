@@ -11,6 +11,13 @@ const { listDepartmentPools } = require('./department-pools');
 const DEFAULT_PLANNER_TASKS = 64;
 // Matches swarm-orchestrator / enterprise-swarm-plan logical capacity (10k).
 const MAX_PLANNER_TASKS = 10_000;
+// How many tasks the LLM planner is asked to emit in ONE JSON reply. It answers
+// within a bounded token budget, so this is a token-budget constant, not a fleet
+// size: ~24 tasks with title + description + acceptance fits comfortably in the
+// 6k reply budget below, while 64 (the old default) and 300 (a large fleet) both
+// truncate mid-JSON and silently degrade the whole run to the generic fallback
+// DAG. padFleetToLogicalCapacity fans this DAG out to the requested agent count.
+const PLANNER_DAG_TASKS = 24;
 const DEFAULT_QA_EVERY = 5;
 
 function boundedInteger(value, fallback, min, max) {
@@ -268,6 +275,15 @@ async function planFleetTasks({
   model = null,
 } = {}) {
   const maxTasks = boundedInteger(desiredTasks, DEFAULT_PLANNER_TASKS, 1, MAX_PLANNER_TASKS);
+  // What we ASK THE PLANNER for is not the fleet size. The planner answers with
+  // one JSON document inside a bounded token budget, so requesting hundreds of
+  // tasks guaranteed a truncated, unparseable reply → `fleet_planner_tasks_
+  // required` → the generic fallback DAG. Observed in production: a 300-agent
+  // fleet planned "investigate competitors / audit CRM" busywork instead of the
+  // objective it was given, and asking for MORE agents made the plan WORSE.
+  // A compact DAG is what the prompt asks for anyway; padFleetToLogicalCapacity
+  // below fans it out to the requested agent count.
+  const plannerTaskTarget = Math.min(maxTasks, PLANNER_DAG_TASKS);
   let rawTasks = explicitTasks;
   let source = explicitTasks ? 'explicit' : 'fallback';
   let plannerError = null;
@@ -288,13 +304,13 @@ async function planFleetTasks({
             role: 'user',
             content: [
               `Objetivo: ${String(objective || '').slice(0, 4_000)}`,
-              `Número objetivo de tareas: ${maxTasks}`,
+              `Número objetivo de tareas: ${plannerTaskTarget}`,
               `Plan empresarial disponible: ${JSON.stringify(companyPlan || {}).slice(0, 18_000)}`,
             ].join('\n'),
           },
         ],
         temperature: 0.2,
-        maxTokens: 4_000,
+        maxTokens: 6_000,
         model,
       });
       const parsed = extractJson(completion?.content || completion?.text);
@@ -307,7 +323,7 @@ async function planFleetTasks({
 
   let normalized;
   try {
-    normalized = normalizePlannerTasks(rawTasks, { maxTasks });
+    normalized = normalizePlannerTasks(rawTasks, { maxTasks: plannerTaskTarget });
   } catch (error) {
     plannerError = plannerError || String(error?.message || error).slice(0, 1_000);
     normalized = fallbackFleetTasks({
