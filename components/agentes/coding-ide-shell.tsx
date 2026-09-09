@@ -8,6 +8,7 @@
 
 import * as React from "react"
 import dynamic from "next/dynamic"
+import { useParams } from "next/navigation"
 
 import { CodingTerminalPane } from "@/components/agentes/coding-terminal-pane"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -18,6 +19,8 @@ import {
   type CodingSession,
   type CodingRepoMapHint,
 } from "@/lib/agentes-coding/api"
+import { projectsCodexApi } from "@/lib/codex/api/projects"
+import type { CodexProject } from "@/lib/codex/api/types"
 import { buildFileTree, applyMapHints, languageFromPath, type FileTreeNode } from "@/lib/agentes-coding/file-tree"
 import { cn } from "@/lib/utils"
 
@@ -40,6 +43,107 @@ export function CodingIdeShell() {
   const [error, setError] = React.useState("")
   const [terminalOut, setTerminalOut] = React.useState("")
   const [mapHints, setMapHints] = React.useState<CodingRepoMapHint[]>([])
+  // Modo proyecto (MVP programación web): un CodexProject durable vinculado
+  // al chat actual. Sin proyecto abierto, el shell conserva su modo sesión.
+  const routeParams = useParams()
+  const chatId = typeof routeParams?.id === "string" ? routeParams.id : ""
+  const [project, setProject] = React.useState<CodexProject | null>(null)
+  const [projects, setProjects] = React.useState<CodexProject[]>([])
+  const [projectName, setProjectName] = React.useState("")
+  const projectId = project?.id || null
+
+  const resetEditor = React.useCallback(() => {
+    setActivePath("")
+    setOriginal("")
+    setDraft("")
+  }, [])
+
+  async function refreshProjectFiles(id: string) {
+    const paths = await projectsCodexApi.listFiles(id)
+    setFiles(paths.map((path) => ({ path })))
+  }
+
+  async function openProject(id: string) {
+    setBusy(true)
+    setError("")
+    try {
+      const [found, paths] = await Promise.all([
+        projectsCodexApi.getProject(id),
+        projectsCodexApi.listFiles(id),
+      ])
+      setProject(found)
+      setFiles(paths.map((path) => ({ path })))
+      resetEditor()
+      setMapHints([])
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function refreshProjects() {
+    try {
+      setProjects(await projectsCodexApi.listProjects())
+    } catch {
+      setProjects([])
+    }
+  }
+
+  // Al entrar a un chat, abre su proyecto vinculado si existe.
+  React.useEffect(() => {
+    let cancelled = false
+    setProject(null)
+    resetEditor()
+    setFiles([])
+    if (!chatId) {
+      void refreshProjects()
+      return
+    }
+    void (async () => {
+      setBusy(true)
+      try {
+        const [bound, all] = await Promise.all([
+          projectsCodexApi.getProjectByChat(chatId).catch((err: unknown) => {
+            if ((err as { status?: unknown })?.status === 404) return null
+            throw err
+          }),
+          projectsCodexApi.listProjects().catch(() => [] as CodexProject[]),
+        ])
+        if (cancelled) return
+        setProjects(all)
+        if (bound) {
+          setProject(bound)
+          await refreshProjectFiles(bound.id)
+        }
+      } catch (err) {
+        if (!cancelled) fail(err)
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [chatId, resetEditor])
+
+  async function handleEnsureProject() {
+    if (!chatId || busy) return
+    setBusy(true)
+    setError("")
+    try {
+      const binding = await projectsCodexApi.ensureProjectForChat(chatId, projectName.trim() || undefined)
+      setProject(binding.project)
+      setProjectName("")
+      await refreshProjects()
+      await refreshProjectFiles(binding.project.id)
+      resetEditor()
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const tree = React.useMemo(
     () => applyMapHints(buildFileTree(files), mapHints),
@@ -59,6 +163,29 @@ export function CodingIdeShell() {
   async function refreshFiles(sessionId: string) {
     const next = await agentesCodingApi.listFiles(sessionId)
     setFiles(next)
+  }
+
+  async function openProjectFile(path: string) {
+    if (!projectId) return
+    setBusy(true)
+    setError("")
+    try {
+      const body = await projectsCodexApi.readFileContent(projectId, path)
+      const content = String(body?.content ?? "")
+      setActivePath(path)
+      setOriginal(content)
+      setDraft(content)
+      setPane("editor")
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function handleOpenFile(path: string) {
+    if (projectId) void openProjectFile(path)
+    else void openFile(path)
   }
 
   async function handleCreateSession() {
@@ -117,13 +244,20 @@ export function CodingIdeShell() {
   }
 
   async function handleSave() {
-    if (!session || !activePath) return
+    if (!activePath) return
     setBusy(true)
     setError("")
     try {
-      await agentesCodingApi.writeFile(session.id, activePath, draft)
-      setOriginal(draft)
-      await refreshFiles(session.id)
+      if (projectId) {
+        await projectsCodexApi.importFiles(projectId, [{ path: activePath, content: draft }])
+        setOriginal(draft)
+        await refreshProjectFiles(projectId)
+      } else {
+        if (!session) return
+        await agentesCodingApi.writeFile(session.id, activePath, draft)
+        setOriginal(draft)
+        await refreshFiles(session.id)
+      }
     } catch (err) {
       fail(err)
     } finally {
@@ -132,7 +266,6 @@ export function CodingIdeShell() {
   }
 
   async function handleCreateFile() {
-    if (!session) return
     const path = newPath.trim().replace(/^\/+/, "")
     if (!path) {
       setError("Indica una ruta de archivo.")
@@ -141,9 +274,16 @@ export function CodingIdeShell() {
     setBusy(true)
     setError("")
     try {
-      await agentesCodingApi.writeFile(session.id, path, draft && activePath === path ? draft : "")
-      await refreshFiles(session.id)
-      await openFile(path)
+      if (projectId) {
+        await projectsCodexApi.importFiles(projectId, [{ path, content: draft && activePath === path ? draft : "" }])
+        await refreshProjectFiles(projectId)
+        await openProjectFile(path)
+      } else {
+        if (!session) return
+        await agentesCodingApi.writeFile(session.id, path, draft && activePath === path ? draft : "")
+        await refreshFiles(session.id)
+        await openFile(path)
+      }
     } catch (err) {
       fail(err)
     } finally {
@@ -206,10 +346,47 @@ export function CodingIdeShell() {
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <h2 className="text-sm font-medium">Editor de código</h2>
         <span className="text-xs text-muted-foreground" data-testid="agentes-coding-session-label">
-          {session ? `Sesión ${session.id}` : "Sin sesión"}
+          {project ? `Proyecto ${project.name}` : session ? `Sesión ${session.id}` : "Sin sesión"}
         </span>
+        <select
+          className="h-8 min-w-0 max-w-40 truncate rounded-md border border-border bg-background px-1 text-xs"
+          value={projectId || ""}
+          onChange={(event) => {
+            const id = event.target.value
+            if (id) void openProject(id)
+          }}
+          disabled={busy}
+          aria-label="Proyecto"
+          data-testid="agentes-coding-project-select"
+        >
+          <option value="">Mis proyectos…</option>
+          {projects.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.name}
+            </option>
+          ))}
+        </select>
+        <input
+          className="h-8 w-28 rounded-md border border-border bg-background px-2 text-xs"
+          value={projectName}
+          onChange={(event) => setProjectName(event.target.value)}
+          placeholder="Nombre app"
+          aria-label="Nombre del proyecto"
+          disabled={busy || !chatId}
+          data-testid="agentes-coding-project-name"
+        />
         {busy ? <ThinkingIndicator size="xs" label="Cargando" /> : null}
         <div className="ml-auto flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            className="h-8 rounded-md border border-border px-2 text-xs"
+            onClick={handleEnsureProject}
+            disabled={busy || !chatId}
+            title={chatId ? "Crear o abrir el proyecto de este chat" : "Abre un chat para vincular un proyecto"}
+            data-testid="agentes-coding-new-project"
+          >
+            Nuevo proyecto
+          </button>
           <button
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
@@ -223,7 +400,7 @@ export function CodingIdeShell() {
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
             onClick={handleSave}
-            disabled={busy || !session || !activePath || !dirty}
+            disabled={busy || (!session && !projectId) || !activePath || !dirty}
             data-testid="agentes-coding-save"
           >
             Guardar
@@ -263,13 +440,13 @@ export function CodingIdeShell() {
               onChange={(event) => setNewPath(event.target.value)}
               placeholder="ruta/archivo.ts"
               aria-label="Ruta del archivo"
-              disabled={!session || busy}
+              disabled={(!session && !projectId) || busy}
             />
             <button
               type="button"
               className="h-8 rounded-md border border-border px-2 text-xs"
               onClick={handleCreateFile}
-              disabled={!session || busy}
+              disabled={(!session && !projectId) || busy}
             >
               Crear
             </button>
@@ -290,7 +467,7 @@ export function CodingIdeShell() {
                   <button
                     type="button"
                     className="block w-full truncate px-2 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-muted/60"
-                    onClick={() => openFile(hint.path)}
+                    onClick={() => handleOpenFile(hint.path)}
                   >
                     {hint.name}
                   </button>
@@ -298,13 +475,13 @@ export function CodingIdeShell() {
               ))}
             </ul>
           ) : null}
-          {session && files.length === 0 ? (
+          {(session || projectId) && files.length === 0 ? (
             <p className="px-3 text-xs text-muted-foreground">Sin archivos. Crea uno para empezar.</p>
           ) : null}
-          {!session ? (
-            <p className="px-3 text-xs text-muted-foreground">Crea una sesión para listar archivos.</p>
+          {!session && !projectId ? (
+            <p className="px-3 text-xs text-muted-foreground">Abre un proyecto o crea una sesión para listar archivos.</p>
           ) : null}
-          <FileTreeList nodes={tree} activePath={activePath} onOpen={openFile} />
+          <FileTreeList nodes={tree} activePath={activePath} onOpen={handleOpenFile} />
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-col">
