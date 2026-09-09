@@ -105,5 +105,5 @@ dumping OpenHands / doc-sandbox processors.
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js
+cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js tests/agentes-coding-harness-todo-smoke.test.js
 ```

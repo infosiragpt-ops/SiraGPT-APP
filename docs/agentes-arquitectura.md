@@ -1,13 +1,14 @@
 # `/agentes` Coding Agents — target architecture
 
-Status: Phase 4e of `AGENTES_CODING_V2` (flag-gated TypeScript harness
+Status: Phase 4f of `AGENTES_CODING_V2` (flag-gated TypeScript harness
 + HITL + durable jobs + production-shaped LLM adapter + durable docker
-workspace volumes). Phase 1 = docs + flag; Phase 2a =
-session adapter; Phase 3a = IDE shell; Phase 3b = repo-map; Phase 3c =
-structural edit; Phase 3d = terminal; Phase 3e = preview; Phase 3f =
-git checkpoints; Phase 3g = export + deploy stubs; Phase 4a = harness;
-Phase 4b = HITL; Phase 4c = durable jobs; Phase 4d = LLM adapter;
-Phase 4e = durable sandbox volumes.
+workspace volumes + API-only todo-app CI smoke). Phase 1 = docs + flag;
+Phase 2a = session adapter; Phase 3a = IDE shell; Phase 3b = repo-map;
+Phase 3c = structural edit; Phase 3d = terminal; Phase 3e = preview;
+Phase 3f = git checkpoints; Phase 3g = export + deploy stubs;
+Phase 4a = harness; Phase 4b = HITL; Phase 4c = durable jobs;
+Phase 4d = LLM adapter; Phase 4e = durable sandbox volumes;
+Phase 4f = todo-app CI smoke (memory + injectable LLM).
 Flag still default **OFF**.
 This document is the engineering contract for a **multi-tenant web** coding
 agent. It is not a local desktop app, not a clone-on-user-machine product,
@@ -19,7 +20,8 @@ Canonical UI: **`/agentes`**. Planes: CONVERSAR / PLANIFICAR / CONSTRUIR
 research pass — pattern first, no dump).
 
 Out of scope for this PR: Monaco IDE, OpenSandbox deploy, wholesale vendor
-trees, e2e todo-app. Those are later PRs behind the same flag.
+trees, browser e2e of a generated app. Those are later PRs behind the
+same flag. Phase 4f landed the API-only todo-app CI smoke.
 
 ## 1. Product contract
 
@@ -138,7 +140,7 @@ Hard rules for every provider:
 TypeScript-first: the product stack is Node + Next, SiraCode is already
 CommonJS/Node, and the MCP TypeScript SDK is MIT.
 
-The harness (**Phase 4a + 4b + 4c + 4d landed**, API-only) sits **inside** the
+The harness (**Phase 4a + 4b + 4c + 4d + 4f landed**, API-only) sits **inside** the
 sandbox and talks back over a narrow control API:
 
 - Reuse SiraCode contracts where they already exist (jailed `read` /
@@ -163,6 +165,10 @@ sandbox and talks back over a narrow control API:
   **Phase 4e landed**: docker/volume workspace files persist on a host
   bind-mount (`AGENTES_CODING_SANDBOX_DATA_DIR`); memory stays
   ephemeral. See [`docs/agentes-coding-sandbox.md`](./agentes-coding-sandbox.md).
+  **Phase 4f landed**: API-only CI smoke — `createSession` (memory) +
+  injectable `llmTurn` writes a tiny todo-app fixture (`package.json` +
+  `src/app.js`) and asserts `status: done`. Optional HITL `allow_once`
+  on `exec`. See [`docs/agentes-coding-todo-smoke.md`](./agentes-coding-todo-smoke.md).
 - Official MCP TypeScript SDK only if the existing
   `agent-harness/mcp-client.js` needs types — no community MCP dump.
 
@@ -254,9 +260,9 @@ Do not set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 ## 11. Later phases
 
 1. OpenSandbox or E2B Apache adapter + Docker service on Lenovo (Phase 2a memory + docker DEV landed)
-2. TypeScript harness in the sandbox, wired to SiraCode contracts — **Phase 4a landed**: API-only harness stub (`POST /sessions/:id/harness/run`, in-process plan/tool/result steps, injectable LLM + sandbox driver, step/token/time caps). **Phase 4b landed**: HITL permission gates (`awaiting_permission` + `allow_once` / `allow_always` / `reject`). **Phase 4c landed**: optional durable jobs (Redis snapshot + BullMQ; memory fallback). **Phase 4d landed**: production-shaped completion adapter (`harness/llm.js`) when no `llmTurn` is injected; body `modelAlias` is `Sira Rápido` / `Sira Pro` only. **Phase 4e landed**: docker/volume workspace files persist on a host bind-mount keyed by session id (`AGENTES_CODING_SANDBOX_DATA_DIR`); memory driver stays ephemeral. See [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md), [`docs/agentes-coding-permissions.md`](./agentes-coding-permissions.md), [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md) and [`docs/agentes-coding-sandbox.md`](./agentes-coding-sandbox.md)
+2. TypeScript harness in the sandbox, wired to SiraCode contracts — **Phase 4a landed**: API-only harness stub (`POST /sessions/:id/harness/run`, in-process plan/tool/result steps, injectable LLM + sandbox driver, step/token/time caps). **Phase 4b landed**: HITL permission gates (`awaiting_permission` + `allow_once` / `allow_always` / `reject`). **Phase 4c landed**: optional durable jobs (Redis snapshot + BullMQ; memory fallback). **Phase 4d landed**: production-shaped completion adapter (`harness/llm.js`) when no `llmTurn` is injected; body `modelAlias` is `Sira Rápido` / `Sira Pro` only. **Phase 4e landed**: docker/volume workspace files persist on a host bind-mount keyed by session id (`AGENTES_CODING_SANDBOX_DATA_DIR`); memory driver stays ephemeral. **Phase 4f landed**: API-only CI smoke through a tiny todo-app fixture (memory `createSession` + scripted `llmTurn` writes `package.json` + `src/app.js`, asserts `done`; optional HITL `allow_once` on `exec`). See [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md), [`docs/agentes-coding-permissions.md`](./agentes-coding-permissions.md), [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md), [`docs/agentes-coding-sandbox.md`](./agentes-coding-sandbox.md) and [`docs/agentes-coding-todo-smoke.md`](./agentes-coding-todo-smoke.md)
 3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub). **Phase 3b landed**: Aider-pattern repo-map hints (flag-gated `/map`, header-only). **Phase 3c landed**: ast-grep-pattern structural edit (flag-gated `/struct-edit`, apply via `writeFile` only). **Phase 3d landed**: API-only terminal channel (SSE+POST / injectable WS PTY stub; UI-lock keeps the HTTP stub). **Phase 3e landed**: API-only `exposePort` preview (signed ephemeral URL + localhost metadata; deny-by-default). **Phase 3f landed**: API-only session git checkpoints (`/sessions/:id/git/*`, injectable runner + in-process store). **Phase 3g landed**: API-only session export (zip/tar.gz, path jail, size caps) + Coolify/Dokploy deploy stub (injectable HTTP, allowlisted base URL, no secrets)
 4. K8s + gVisor/Firecracker when Docker isolation is proven
-5. e2e “todo app” golden on the sandbox path
+5. e2e “todo app” golden on the sandbox path — **Phase 4f landed** the API-only CI smoke (memory + injectable LLM). Browser / Playwright e2e of a generated app is still later
 
 Each remaining item is its own PR to `production-main`.
