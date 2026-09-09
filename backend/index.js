@@ -530,6 +530,10 @@ const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-clean
 // CODEX_AGENT_V2 flag (no-op when off) and deliberately fails boot when the
 // configured implementer adapter is unknown.
 const { startCodexWorker, closeCodexWorker, closeCodexQueue } = require('./src/services/codex/run-queue');
+const {
+    startSharedWorker: startHarnessWorker,
+    closeHarnessWorker,
+} = require('./src/services/agentes-coding/harness/jobs');
 const { startProactiveScheduler, closeProactiveScheduler } = require('./src/services/codex/proactive-queue');
 const {
     startSwarmWorker,
@@ -1617,6 +1621,13 @@ async function startServer() {
     } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
+    // Coding harness jobs (Phase 4c): no-op when AGENTES_CODING_V2 is off
+    // or REDIS_URL is absent. Never starts on production (flag helper).
+    try {
+        startHarnessWorker({ getSandbox: () => require('./src/services/agentes-coding/coding-sandbox').getDefaultSandbox() });
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'agentes_coding_harness_worker_not_started');
+    }
     startSwarmWorker();
     recoverSwarmJobs()
       .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
@@ -1865,6 +1876,7 @@ async function startServer() {
             closeProactiveScheduler(),
             closeDocumentCollectionWorker(),
             closeDocumentCollectionQueue(),
+            closeHarnessWorker(),
         ]);
     }, 5000);
 

@@ -1,4 +1,4 @@
-# Session harness (AGENTES_CODING_V2 Phase 4a + 4b)
+# Session harness (AGENTES_CODING_V2 Phase 4a + 4b + 4c)
 
 TypeScript/Node **tool loop** inside a jailed coding-sandbox session,
 wired to existing SiraCode / agent-harness **contracts**. Default
@@ -13,6 +13,7 @@ Catalog: [`docs/oss-catalog.md`](./oss-catalog.md)
 Apache-2.0 — **HITL patterns only**).
 Sessions: [`docs/agentes-coding-sandbox.md`](./agentes-coding-sandbox.md).
 HITL: [`docs/agentes-coding-permissions.md`](./agentes-coding-permissions.md).
+Jobs: [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md).
 
 ## What landed
 
@@ -29,7 +30,9 @@ HITL: [`docs/agentes-coding-permissions.md`](./agentes-coding-permissions.md).
 on Lenovo. Do not set `AGENTES_CODING_V2=1` on the origin from this PR.
 
 **API-only** (no new `/agentes` chrome; UI-lock unchanged). A real xterm
-pane and durable BullMQ jobs are later PRs.
+pane is a later UI-lock exception. **Phase 4c landed**: optional durable
+jobs (`docs/agentes-coding-jobs.md`) — memory fallback when Redis is
+absent.
 
 ## Pattern fusion
 
@@ -52,8 +55,8 @@ POST (auth) starts a turn on an existing session. The runner:
 1. Emits a `plan` step (`Plan`)
 2. Calls the **injectable** completion (`createAgentesCodingRouter({ harnessLlm })`). Without an inject it uses a local stub that never talks to a model
 3. Executes at most the sandbox quartet: `readFile` / `writeFile` / `exec` / `listFiles`. Paths go through `jailRelPath`
-4. Stores steps in-process on the session (same store pattern as export/deploy)
-5. **Phase 4b:** privileged tools (`exec`, or `write` outside the safe-path allowlist) pause the run as `awaiting_permission` until `allow_once` / `allow_always` / `reject`
+4. Stores steps in-process on the session (same store pattern as export/deploy). **Phase 4c:** when a jobs backend is injected or `REDIS_URL` is on that env, the same row is snapshotted and enqueued
+5. **Phase 4b:** privileged tools (`exec`, or `write` outside the safe-path allowlist) pause the run as `awaiting_permission` until `allow_once` / `allow_always` / `reject`. Pause survives restart via the Phase 4c store
 
 ```json
 {
@@ -86,7 +89,7 @@ the store. HITL wait does not consume the timeout.
 
 Stable codes: `E_FLAG_OFF` `E_PARAMS` `E_PATH_ESCAPE` `E_QUOTA`
 `E_TIMEOUT` `E_CANCELLED` `E_HARNESS_FAILED` `E_HARNESS_NOT_FOUND`
-`E_PERMISSION_DENIED` `E_PERMISSION_NOT_FOUND`
+`E_HARNESS_QUEUE` `E_PERMISSION_DENIED` `E_PERMISSION_NOT_FOUND`
 `E_SESSION_NOT_FOUND` plus the sandbox catalog
 (`docs/agentes-coding-sandbox.md`).
 
@@ -98,12 +101,11 @@ and does not abort the turn. `reject` marks the run `cancelled` with
 ## Out of scope
 
 Enabling the flag on Lenovo, calling a real model from CI, Cline
-webview/extension, xterm UI-lock exception, BullMQ durability,
-Daytona, reviving `/code`, dumping OpenHands/OpenCode/Cline, harness
-chrome on `/agentes`.
+webview/extension, xterm UI-lock exception, Daytona, reviving `/code`,
+dumping OpenHands/OpenCode/Cline, harness chrome on `/agentes`.
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js
+cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js
 ```

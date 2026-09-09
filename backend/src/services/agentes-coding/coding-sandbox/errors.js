@@ -126,6 +126,10 @@ const CATALOG = Object.freeze({
     status: 404,
     message: 'La solicitud de permiso no existe.',
   },
+  E_HARNESS_QUEUE: {
+    status: 503,
+    message: 'No se pudo encolar el turno del harness.',
+  },
 });
 
 class CodingSandboxError extends Error {
