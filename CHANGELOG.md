@@ -6,6 +6,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Fixed
+
+- Chat generation now enforces the existing first-byte deadline even when an
+  SDK ignores cancellation, closes late streams, and keeps Stop distinct from
+  provider timeout. A timed-out request is not automatically duplicated.
+  Reasoning/tool progress is not replayed on retry; tool deltas count as
+  provider progress. Errors use bounded Spanish codes without SDK text, retain
+  partial answers, and close SSE exactly once. No provider, key, UI or timeout
+  configuration changes.
+
 ### Added
 
 - Phase 3f of Coding Agents (`AGENTES_CODING_V2`, default OFF):

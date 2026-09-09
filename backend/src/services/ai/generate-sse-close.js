@@ -43,10 +43,29 @@ function rawWrite(res, frame) {
   }
 }
 
+// Closed vocabulary: no SDK messages, model names, URLs or credentials in SSE.
+function generateStreamFailure(err) {
+  const status = Number(err?.status || err?.statusCode);
+  if (err?.code === 'ETIMEDOUT' || err?.code === 'TIMEOUT' || err?.name === 'TimeoutError' || status === 408) {
+    return { code: 'E_TIMEOUT', message: 'El modelo tardó demasiado en responder. Puedes reintentar; no se cambió el modelo.' };
+  }
+  if (status === 429 || status === 402) {
+    return { code: 'E_QUOTA', message: 'El modelo alcanzó su límite de uso. Espera unos instantes o revisa la conexión en Administración.' };
+  }
+  if (status === 401 || status === 403) {
+    return { code: 'E_PROVIDER', message: 'La conexión del modelo necesita revisión en Administración. No se cambió el modelo.' };
+  }
+  if (status === 400 || status === 422) {
+    return { code: 'E_PARAMS', message: 'El modelo no pudo procesar la solicitud. Reintenta o revisa su configuración en Administración.' };
+  }
+  return { code: 'E_PROVIDER', message: 'El modelo no pudo completar la respuesta. Puedes reintentar; no se cambió el modelo.' };
+}
+
 function writeGenerateSseError(res, {
   message,
   code = 'connection_unavailable',
   recovered = false,
+  deferDone = false,
 } = {}) {
   const text = String(message || CONNECTION_UNAVAILABLE_MESSAGE).trim() || CONNECTION_UNAVAILABLE_MESSAGE;
   const payload = {
@@ -60,7 +79,7 @@ function writeGenerateSseError(res, {
   if (!recovered) {
     rawWrite(res, `data: ${JSON.stringify({ type: 'text_delta', content: text })}\n\n`);
   }
-  rawWrite(res, 'data: [DONE]\n\n');
+  if (!deferDone) rawWrite(res, 'data: [DONE]\n\n');
   return payload;
 }
 
@@ -86,6 +105,7 @@ function closeGenerateSseWithError(res, opts) {
 module.exports = {
   CONNECTION_UNAVAILABLE_MESSAGE,
   publicGenerateErrorMessage,
+  generateStreamFailure,
   isProviderClientError,
   writeGenerateSseError,
   endGenerateSse,

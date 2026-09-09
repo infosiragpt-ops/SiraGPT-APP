@@ -14,9 +14,78 @@ const {
   closeGenerateSseWithError,
   writeGenerateSseError,
   endGenerateSse,
+  generateStreamFailure,
 } = require('../src/services/ai/generate-sse-close');
 const { waitForActiveTurn } = require('../src/services/chat-turn-idempotency');
 const { inferProviderFromModelId, resolveGenerateProvider } = require('../src/services/ai/provider-inference');
+const { getBreaker } = require('../src/services/circuit-breaker');
+const { openGuardedStream, readGuardedStream, firstByteTimeoutError } = require('../src/services/ai/generate-stream-guard');
+
+const turn = (client, res, signal) => ({
+  provider: 'Meta', model: 'muse-spark-1.3-contributor', client, res, signal,
+  messages: [{ role: 'user', content: 'programa un juego de ajedrez' }],
+  userPrompt: 'programa un juego de ajedrez', qualityGuard: false,
+  skipDoneSentinel: true, thinkingLevel: 'high',
+});
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('first-byte timeout is an explicit terminal error even if the SDK ignores abort', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  let calls = 0;
+  const signals = [];
+  const client = { chat: { completions: { create: (_payload, options) => {
+    calls += 1;
+    signals.push(options.signal);
+    return new Promise(() => {});
+  } } } };
+  const res = mockRes();
+  const cancel = new AbortController();
+  let result;
+  const run = service.generateStream(turn(client, res, cancel.signal)).then((value) => { result = value; });
+  try {
+    await flush();
+    t.mock.timers.tick(30_000);
+    await flush();
+    // No retry is safe when the first request has not acknowledged abort:
+    // opening another generation could duplicate work and charges upstream.
+    assert.equal(calls, 1);
+    assert.equal(signals[0].aborted, true);
+    assert.equal(typeof result, 'string', 'deadline must settle without provider cooperation');
+    await run;
+    assert.match(res.chunks.join(''), /"code":"E_TIMEOUT"/);
+    assert.equal(res.writableEnded, true);
+    assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 1);
+    assert.doesNotMatch(result, /Conexión no disponible|Meta|muse|AbortError/);
+  } finally {
+    cancel.abort();
+    t.mock.timers.reset();
+  }
+});
+
+test('reasoning already delivered is not replayed by an automatic retry', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  let calls = 0;
+  const client = { chat: { completions: { create: async () => {
+    calls += 1;
+    return (async function* () {
+      yield { choices: [{ delta: { reasoning_content: 'Plan de prueba' } }] };
+      throw Object.assign(new Error('upstream synthetic failure'), { status: 503 });
+    })();
+  } } } };
+  const res = mockRes();
+  let result;
+  const run = service.generateStream(turn(client, res)).then((value) => { result = value; });
+  await flush();
+  t.mock.timers.tick(5000);
+  await flush();
+  assert.equal(calls, 1, 'never repeat a stream after reasoning/tool progress');
+  assert.equal(typeof result, 'string');
+  await run;
+  assert.match(res.chunks.join(''), /"code":"E_PROVIDER"/);
+  assert.equal(res.writableEnded, true);
+});
 
 function mockRes() {
   const chunks = [];
@@ -170,8 +239,8 @@ test('simulated Meta 400 unknown parameter reasoning closes SSE with Spanish err
   });
 
   const body = res.chunks.join('');
-  assert.equal(out, CONNECTION_UNAVAILABLE_MESSAGE);
-  assert.match(body, /Conexión no disponible/);
+  assert.equal(out, generateStreamFailure(err).message);
+  assert.match(body, /"code":"E_PARAMS"/);
   assert.match(body, /"type":"error"/);
   assert.match(body, /data: \[DONE\]/);
   assert.equal(res.writableEnded, true);
@@ -265,4 +334,218 @@ test('writeGenerateSseError + endGenerateSse produce a complete SSE trailer', ()
   endGenerateSse(res);
   assert.match(res.chunks.join(''), /data: \[DONE\]/);
   assert.equal(res.writableEnded, true);
+});
+
+test('a provider iterator hanging before content is bounded and closed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  let aborted = 0;
+  let returned = 0;
+  const client = { chat: { completions: { create: async () => ({
+    controller: { abort() { aborted++; } },
+    [Symbol.asyncIterator]() { return this; },
+    next() { return new Promise(() => {}); },
+    return() { returned++; return Promise.resolve({ done: true }); },
+  }) } } };
+  const res = mockRes();
+  const run = service.generateStream(turn(client, res));
+  await flush();
+  t.mock.timers.tick(30_000);
+  await flush();
+  assert.match(await run, /tardó demasiado/);
+  assert.equal(aborted, 1);
+  assert.equal(returned, 1);
+  assert.match(res.chunks.join(''), /E_TIMEOUT/);
+});
+
+test('Stop cancels a hanging iterator without reporting a provider timeout', async () => {
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const cancel = new AbortController();
+  let aborted = 0;
+  const client = { chat: { completions: { create: async () => ({
+    controller: { abort() { aborted++; } },
+    [Symbol.asyncIterator]() { return this; },
+    next() { return new Promise(() => {}); },
+  }) } } };
+  const res = mockRes();
+  const run = service.generateStream(turn(client, res, cancel.signal));
+  await flush();
+  cancel.abort();
+  assert.equal(await run, '');
+  assert.equal(aborted, 1);
+  assert.doesNotMatch(res.chunks.join(''), /E_TIMEOUT|E_PROVIDER/);
+});
+
+test('tool argument progress is not mistaken for an empty first-byte timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  let continueStream;
+  let requestSignal;
+  let retryCount;
+  const wait = new Promise((resolve) => { continueStream = resolve; });
+  const client = { chat: { completions: { create: async (_payload, opts) => {
+    requestSignal = opts.signal;
+    retryCount = opts.maxRetries;
+    return (async function* () {
+      yield { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'test_tool', arguments: '{}' } }] } }] };
+      await wait;
+      yield { choices: [{ delta: { content: 'Respuesta de prueba completa.' } }] };
+    })();
+  } } } };
+  const res = mockRes();
+  const run = service.generateStream(turn(client, res));
+  await flush();
+  t.mock.timers.tick(31_000);
+  assert.equal(requestSignal.aborted, false);
+  assert.equal(retryCount, 0, 'only the application may own retries');
+  continueStream();
+  assert.equal(await run, 'Respuesta de prueba completa.');
+  assert.doesNotMatch(res.chunks.join(''), /\"type\":\"error\"/);
+});
+
+test('partial answer leaves DONE to the caller after persistence', async () => {
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  let calls = 0;
+  const client = { chat: { completions: { create: async () => {
+    calls++;
+    return (async function* () {
+      yield { choices: [{ delta: { content: 'Código parcial de prueba.' } }] };
+      throw Object.assign(new Error('synthetic private upstream detail'), { status: 503 });
+    })();
+  } } } };
+  const res = mockRes();
+  const output = await service.generateStream(turn(client, res));
+  assert.ok(output.startsWith('Código parcial de prueba.'));
+  assert.equal(calls, 1);
+  assert.match(res.chunks.join(''), /\"code\":\"E_PROVIDER\"/);
+  assert.doesNotMatch(res.chunks.join(''), /synthetic private upstream detail/);
+  assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 0);
+  assert.equal(res.writableEnded, false, 'caller must still be able to persist and finish');
+  // This is the route-owned terminal step, after its persistence completes.
+  res.write('data: [DONE]\n\n');
+  res.end();
+  assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 1);
+});
+
+test('partial answer without a persistence owner emits exactly one DONE', async () => {
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const client = { chat: { completions: { create: async () => (async function* () {
+    yield { choices: [{ delta: { content: 'Código parcial de prueba.' } }] };
+    throw Object.assign(new Error('synthetic private upstream detail'), { status: 503 });
+  })() } } };
+  const res = mockRes();
+  const output = await service.generateStream({ ...turn(client, res), skipDoneSentinel: false });
+  assert.ok(output.startsWith('Código parcial de prueba.'));
+  assert.match(res.chunks.join(''), /"recovered":true/);
+  assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 1);
+});
+
+test('late SDK arrival after cancellation is disposed without being read', async () => {
+  const c = new AbortController();
+  let resolve;
+  let stopped = 0;
+  const pending = new Promise((r) => { resolve = r; });
+  const opened = openGuardedStream(() => pending, c.signal);
+  await flush();
+  c.abort(firstByteTimeoutError());
+  await assert.rejects(opened, { code: 'ETIMEDOUT' });
+  resolve({ controller: { abort() { stopped++; } } });
+  await flush();
+  assert.equal(stopped, 1);
+});
+
+test('guard rejects pre-cancelled calls and cancellation before dispatch', async () => {
+  for (const before of [true, false]) {
+    const c = new AbortController();
+    let called = false;
+    if (before) c.abort(firstByteTimeoutError());
+    const promise = openGuardedStream(() => { called = true; }, c.signal);
+    if (!before) c.abort(firstByteTimeoutError());
+    await assert.rejects(promise, { code: 'ETIMEDOUT' });
+    assert.equal(called, false);
+  }
+});
+
+test('guard observes open/iterator errors and cleanup failures', async () => {
+  const c = new AbortController();
+  await assert.rejects(openGuardedStream(() => { throw new Error('synthetic'); }, c.signal), /synthetic/);
+  for (const asyncReturn of [false, true]) {
+    const stream = {
+      [Symbol.asyncIterator]() { return this; },
+      next() { return Promise.resolve({ done: true }); },
+      return() {
+        if (asyncReturn) return Promise.reject(new Error('synthetic cleanup'));
+        throw new Error('synthetic cleanup');
+      },
+    };
+    for await (const _ of readGuardedStream(stream, c.signal)) assert.fail('empty');
+  }
+  c.abort(firstByteTimeoutError());
+  const stream = {
+    controller: { abort() { throw new Error('synthetic cleanup'); } },
+    [Symbol.asyncIterator]() { return this; },
+    next() { assert.fail('cancelled'); },
+  };
+  await assert.rejects(async () => { for await (const _ of readGuardedStream(stream, c.signal)) {} }, { code: 'ETIMEDOUT' });
+});
+
+test('failure vocabulary classifies operational causes without SDK data', () => {
+  for (const [err, code] of [
+    [{ code: 'ETIMEDOUT' }, 'E_TIMEOUT'], [{ code: 'TIMEOUT' }, 'E_TIMEOUT'],
+    [{ name: 'TimeoutError' }, 'E_TIMEOUT'], [{ status: 408 }, 'E_TIMEOUT'],
+    [{ status: 429 }, 'E_QUOTA'], [{ statusCode: 402 }, 'E_QUOTA'],
+    [{ status: 401 }, 'E_PROVIDER'], [{ status: 403 }, 'E_PROVIDER'],
+    [{ status: 400 }, 'E_PARAMS'], [{ status: 422 }, 'E_PARAMS'],
+    [{ code: 'EMPTY_COMPLETION' }, 'E_PROVIDER'], [{ status: 503 }, 'E_PROVIDER'],
+    [null, 'E_PROVIDER'], [{}, 'E_PROVIDER'],
+  ]) {
+    const result = generateStreamFailure(err && { ...err, message: 'Bearer TEST_PRIVATE Meta muse-spark' });
+    assert.equal(result.code, code);
+    assert.doesNotMatch(JSON.stringify(result), /Bearer|TEST_PRIVATE|Meta|muse-spark/);
+  }
+});
+
+test('SSE close is safe for missing, closed and failing response transports', () => {
+  for (const res of [null, {}, { writableEnded: true }, { destroyed: true },
+    { write() { throw new Error('closed'); }, end() { throw new Error('closed'); } }]) {
+    assert.doesNotThrow(() => writeGenerateSseError(res));
+    assert.equal(endGenerateSse(res), false);
+  }
+  assert.equal(isProviderClientError(null), false);
+  assert.equal(isProviderClientError('invalid request'), false);
+  assert.equal(isProviderClientError({ response: { status: 503 } }), true);
+  assert.equal(isProviderClientError({ message: 'invalid parameter' }), true);
+  assert.equal(publicGenerateErrorMessage(null), CONNECTION_UNAVAILABLE_MESSAGE);
+  assert.equal(publicGenerateErrorMessage({ code: 'connection_unavailable' }), CONNECTION_UNAVAILABLE_MESSAGE);
+  assert.equal(publicGenerateErrorMessage({ message: 'upstream failed' }), CONNECTION_UNAVAILABLE_MESSAGE);
+  assert.equal(publicGenerateErrorMessage({ message: 'La operación fue cancelada.' }), 'La operación fue cancelada.');
+});
+
+test('SDK-owned AbortError without user Stop is a visible failure, never empty success', async () => {
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const client = { chat: { completions: { create: async () => {
+    throw Object.assign(new Error('synthetic abort'), { name: 'AbortError' });
+  } } } };
+  const res = mockRes();
+  const output = await service.generateStream({ ...turn(client, res), skipDoneSentinel: false });
+  assert.match(output, /no pudo completar/);
+  assert.match(res.chunks.join(''), /"code":"E_PROVIDER"/);
+  assert.equal(res.writableEnded, true);
+  assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 1);
+});
+
+test('cooperative SDK deadline stays a timeout rather than a user cancellation', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const client = { chat: { completions: { create: (_payload, { signal }) =>
+    new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+      reject(Object.assign(new Error('SDK abort'), { name: 'AbortError' }));
+    }, { once: true })),
+  } } };
+  const res = mockRes();
+  const run = service.generateStream(turn(client, res));
+  await flush();
+  t.mock.timers.tick(30_000);
+  assert.match(await run, /tardó demasiado/);
+  assert.match(res.chunks.join(''), /"code":"E_TIMEOUT"/);
 });

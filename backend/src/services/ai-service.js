@@ -60,7 +60,11 @@ const {
     publicGenerateErrorMessage,
     isProviderClientError,
     closeGenerateSseWithError,
+    writeGenerateSseError,
+    generateStreamFailure,
 } = require('./ai/generate-sse-close');
+const { openGuardedStream, readGuardedStream, firstByteTimeoutError } = require('./ai/generate-stream-guard');
+const { createGenerateLogger } = require('./ai/generate-request-observability');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -579,6 +583,8 @@ class AIService {
         model = normalizeModelForProvider(provider, model);
         let fullResponseContent = '';
         let hasStreamedAnyContent = false;
+        let hasStreamedActivity = false;
+        const streamLog = createGenerateLogger();
         const normalizedTemperature = normalizeTemperature(temperature);
 
         // Heartbeat: SSE comment line sent every 15s so intermediaries
@@ -819,15 +825,15 @@ class AIService {
                     // Per-attempt controller: composes the client signal with a
                     // 30s first-byte timer. If the provider hasn't emitted a
                     // single token within FIRST_BYTE_TIMEOUT_MS we abort THIS
-                    // attempt — not the whole turn — so the retry/fallback
-                    // chain can try the next slot.
+                    // attempt and finish the turn. Starting another call
+                    // before upstream acknowledges abort can duplicate charges.
                     const attemptCtrl = new AbortController();
-                    const onParentAbort = () => attemptCtrl.abort(new Error('client aborted'));
+                    const onParentAbort = () => attemptCtrl.abort(Object.assign(new Error('client aborted'), { name: 'AbortError' }));
                     if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
                     let firstByteSeen = false;
                     let timedOut = false;
                     const firstByteTimer = setTimeout(() => {
-                        if (!firstByteSeen) { timedOut = true; attemptCtrl.abort(new Error(`First-byte timeout after ${FIRST_BYTE_TIMEOUT_MS}ms`)); }
+                        if (!firstByteSeen) { timedOut = true; attemptCtrl.abort(firstByteTimeoutError()); }
                     }, FIRST_BYTE_TIMEOUT_MS);
 
                     try {
@@ -842,7 +848,10 @@ class AIService {
                             resetTimeoutMs: 60_000,
                         });
                         const stream = await breaker.execute(() =>
-                            attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal })
+                            openGuardedStream(
+                                () => attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal, maxRetries: 0 }),
+                                attemptCtrl.signal,
+                            )
                         );
 
                         // Per-attempt reasoning state. A retry/fallback restarts
@@ -865,7 +874,7 @@ class AIService {
                             await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'reasoning_done', durationMs })}\n\n`);
                         };
 
-                        for await (const chunk of stream) {
+                        for await (const chunk of readGuardedStream(stream, attemptCtrl.signal)) {
                             // Guard `choices` itself, not just `[0]`: OpenRouter (and others)
                             // legitimately emit usage-only / keep-alive chunks with NO `choices`
                             // array. `chunk.choices[0]` on such a frame throws a non-retryable
@@ -878,6 +887,13 @@ class AIService {
                             // a reasoning model is still in its internal-thinking phase.
                             const reasoningChunk = delta.reasoning_content || delta.reasoning || '';
                             const contentChunk = delta.content || '';
+                            const hasToolProgress = Array.isArray(delta.tool_calls) && delta.tool_calls.some((tc) =>
+                                tc?.id || tc?.function?.name || tc?.function?.arguments);
+                            if (reasoningChunk || hasToolProgress) hasStreamedActivity = true;
+                            if (hasToolProgress && !firstByteSeen) {
+                                firstByteSeen = true;
+                                clearTimeout(firstByteTimer);
+                            }
                             if (reasoningChunk && !firstByteSeen) {
                                 firstByteSeen = true;
                                 clearTimeout(firstByteTimer);
@@ -978,14 +994,20 @@ class AIService {
 
                         return fullResponseContent;
                     } catch (err) {
+                        // Preserve the distinction between our deadline and Stop.
+                        if (timedOut) err = firstByteTimeoutError();
                         lastError = err;
 
-                        // Distinguish OUR first-byte timeout (retriable) from
+                        // Distinguish OUR first-byte timeout (terminal) from
                         // the external client abort (terminal) — both show
                         // up as AbortError from the SDK.
                         const isOurTimeout = timedOut || err.code === 'TIMEOUT';
                         const isClientCancel = !isOurTimeout && signal?.aborted && !isProviderClientError(err);
                         if (isClientCancel) throw err;
+                        streamLog.error('stream.failed', err, { attempt, outcome: 'failed' });
+                        // Never duplicate an unacknowledged upstream abort or
+                        // replay reasoning/tool activity already delivered.
+                        if (isOurTimeout || hasStreamedActivity) throw err;
                         // Empty-completion reset (above) already cleared
                         // hasStreamedAnyContent + fullResponseContent, so
                         // this guard naturally lets EMPTY_COMPLETION fall
@@ -1003,9 +1025,6 @@ class AIService {
 
                         const retryable = isOurTimeout || isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
-                        const classified = classifyProviderError(err);
-                        const reason = isOurTimeout ? 'first-byte timeout' : (classified.error_class || err.status || err.code || err.name || 'unknown');
-                        console.warn(`⚠️ ${currentProvider}:${currentRuntimeModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
 
                         if (!retryable || isLastAttemptForModel) break; // break attempt loop → try next model
 
@@ -1025,19 +1044,23 @@ class AIService {
             const providerHttpError = isProviderClientError(apiError);
             if (
                 apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError'
-                && !providerHttpError
+                && signal?.aborted && !providerHttpError
             ) {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
                 return fullResponseContent;
             }
-            console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
+            streamLog.error('request.failed', apiError, { outcome: 'failed' });
 
             // If we already streamed part of the answer, append a short,
             // in-language note so the user understands why the reply cut off,
             // instead of just getting a silent truncation.
             if (hasStreamedAnyContent) {
-                const note = '\n\n' + getFallbackMessage(language);
+                const failure = generateStreamFailure(apiError);
+                const note = '\n\n' + failure.message;
                 try { res.write(`data: ${JSON.stringify({ content: note })}\n\n`); } catch { /* socket may be gone */ }
+                // Keep the caller's persistence-before-DONE contract. The
+                // partial answer must not disappear on the client's reload.
+                writeGenerateSseError(res, { ...failure, recovered: true, deferDone: true });
                 return fullResponseContent + note;
             }
 
@@ -1047,10 +1070,9 @@ class AIService {
             // SSE body into HTTP 502 (Meta 400 unknown parameter reasoning).
             if (isPinnedUserGenerate(provider, model) || providerHttpError) {
                 const mini = isPinnedLocalGenerate(provider, model);
-                const message = mini
-                    ? SIRA_MINI_UNAVAILABLE_MESSAGE
-                    : publicGenerateErrorMessage(apiError);
-                const error = mini ? 'sira_mini_unavailable' : 'connection_unavailable';
+                const failure = generateStreamFailure(apiError);
+                const message = mini ? SIRA_MINI_UNAVAILABLE_MESSAGE : failure.message;
+                const error = mini ? 'sira_mini_unavailable' : failure.code;
                 closeGenerateSseWithError(res, { message, code: error, recovered: false });
                 return message;
             }
@@ -1071,7 +1093,7 @@ class AIService {
             // set the caller (route handler) writes [DONE] after DB
             // persistence so the client doesn't race a selectChat before
             // the assistant message is committed.
-            if (!skipDoneSentinel) {
+            if (!skipDoneSentinel && !res._siraGenerateSseClosed) {
               try { res.write(`data: [DONE]\n\n`); } catch { /* socket gone */ }
             }
         }
