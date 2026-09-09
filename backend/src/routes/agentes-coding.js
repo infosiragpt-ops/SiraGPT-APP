@@ -33,12 +33,18 @@
  *   POST   /api/agentes-coding/sessions/:id/git/checkpoint
  *   GET    /api/agentes-coding/sessions/:id/git/checkpoints
  *   GET    /api/agentes-coding/sessions/:id/git/checkpoints/:sha
+ *   POST   /api/agentes-coding/sessions/:id/export            → zip/tar.gz (Phase 3g)
+ *   GET    /api/agentes-coding/sessions/:id/export
+ *   GET    /api/agentes-coding/sessions/:id/export/:exportId
+ *   POST   /api/agentes-coding/sessions/:id/deploy            → Coolify/Dokploy stub
+ *   GET    /api/agentes-coding/sessions/:id/deploy
+ *   GET    /api/agentes-coding/sessions/:id/deploy/:deployId
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
  * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
- * only when health.enabled. Phase 3d/3e/3f are API-only (UI-lock). See
- * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md and
- * docs/agentes-coding-git.md.
+ * only when health.enabled. Phase 3d/3e/3f/3g are API-only (UI-lock). See
+ * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md,
+ * docs/agentes-coding-git.md and docs/agentes-coding-export-deploy.md.
  */
 
 const express = require('express');
@@ -63,6 +69,8 @@ const {
 } = require('../services/agentes-coding/terminal');
 const { renderPreviewStub } = require('../services/agentes-coding/preview');
 const sessionGit = require('../services/agentes-coding/git');
+const sessionExport = require('../services/agentes-coding/export');
+const sessionDeploy = require('../services/agentes-coding/deploy');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
@@ -72,6 +80,7 @@ function createAgentesCodingRouter(opts = {}) {
   const authenticate = opts.authenticate || authenticateToken;
   const hub = opts.terminalHub || createTerminalHub({ env, sandbox: getSandbox() });
   const gitRunner = opts.gitRunner || opts.git || null;
+  const deployHttp = opts.deployHttp || opts.httpClient || opts.fetchImpl || null;
 
   const router = express.Router();
 
@@ -509,12 +518,109 @@ function createAgentesCodingRouter(opts = {}) {
   });
 
   /**
+   * Session workspace export (Phase 3g). API-only; UI-lock unchanged.
+   */
+  router.post('/sessions/:id/export', authenticate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await sessionExport.exportForRequest(getSandbox(), req.params.id, {
+        format: body.format,
+        path: body.path,
+        includeBytes: body.includeBytes === true,
+      }, env);
+      return res.status(201).json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/export', authenticate, async (req, res) => {
+    try {
+      const result = await sessionExport.listForRequest(getSandbox(), req.params.id, env);
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/export/:exportId', authenticate, async (req, res) => {
+    try {
+      const download = req.query && (req.query.download === '1' || req.query.download === 'true');
+      const result = await sessionExport.getForRequest(
+        getSandbox(),
+        req.params.id,
+        req.params.exportId,
+        { raw: download === true, includeBytes: false },
+        env,
+      );
+      if (download && result.buffer) {
+        res.writeHead(200, {
+          'Content-Type': result.export.mime || 'application/octet-stream',
+          'Content-Length': String(result.buffer.length),
+          'Content-Disposition': `attachment; filename="${result.export.id}.${result.export.format === 'tar.gz' ? 'tar.gz' : 'zip'}"`,
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+        });
+        res.end(result.buffer);
+        return undefined;
+      }
+      return res.json({ ok: true, export: result.export });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  /**
+   * Deploy stub (Phase 3g). Coolify/Dokploy only via injectable client + allowlist.
+   */
+  router.post('/sessions/:id/deploy', authenticate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await sessionDeploy.deployForRequest(getSandbox(), req.params.id, {
+        provider: body.provider,
+        name: body.name || body.app || body.project,
+        appId: body.appId || body.uuid || body.applicationId,
+        baseUrl: body.baseUrl,
+        live: body.live,
+        timeoutMs: body.timeoutMs,
+      }, env, { httpClient: deployHttp });
+      return res.status(201).json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/deploy', authenticate, async (req, res) => {
+    try {
+      const result = await sessionDeploy.listForRequest(getSandbox(), req.params.id, env);
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/deploy/:deployId', authenticate, async (req, res) => {
+    try {
+      const result = await sessionDeploy.getForRequest(
+        getSandbox(),
+        req.params.id,
+        req.params.deployId,
+        env,
+      );
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  /**
    * Destroy the session and its container.
    */
   router.delete('/sessions/:id', authenticate, async (req, res) => {
     try {
       hub.closeSession(req.params.id);
       sessionGit.forget(getSandbox(), req.params.id);
+      sessionExport.forget(getSandbox(), req.params.id);
+      sessionDeploy.forget(getSandbox(), req.params.id);
       const out = await getSandbox().destroy(req.params.id);
       return res.json(out);
     } catch (err) {
