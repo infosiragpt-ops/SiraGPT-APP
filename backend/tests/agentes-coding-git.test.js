@@ -350,13 +350,16 @@ test('POST /sessions/:id/git/* is 404 when the flag is off', { skip: !express },
       ['GET', '/api/agentes-coding/sessions/csb_x/git/checkpoints'],
     ];
     for (const [method, urlPath] of paths) {
+      const sendBody = method === 'POST';
       const { status, body } = await new Promise((resolve, reject) => {
+        const headers = { connection: 'close' };
+        if (sendBody) headers['Content-Type'] = 'application/json';
         const req = http.request({
           hostname: '127.0.0.1',
           port,
           path: urlPath,
           method,
-          headers: { 'Content-Type': 'application/json' },
+          headers,
         }, (res) => {
           const chunks = [];
           res.on('data', (c) => chunks.push(c));
@@ -366,7 +369,8 @@ test('POST /sessions/:id/git/* is 404 when the flag is off', { skip: !express },
           }));
         });
         req.on('error', reject);
-        req.end('{}');
+        // GET + body can reset the Node HTTP socket (ECONNRESET / hang up).
+        req.end(sendBody ? '{}' : undefined);
       });
       assert.equal(status, 404, `${method} ${urlPath}`);
       assert.equal(body.error, 'not_found');
