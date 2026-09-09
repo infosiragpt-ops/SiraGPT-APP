@@ -7,10 +7,14 @@
  */
 
 const { CONNECTION_UNAVAILABLE_MESSAGE } = require('./provider-inference');
+const { isAcceptanceSpendError } = require('./acceptance-spend-guard');
+
+const ACCEPTANCE_BUDGET_MESSAGE = 'La prueba no puede continuar con el presupuesto acreditado. Revisa la campaña de pruebas.';
 
 const VENDOR_LEAK_RE = /deepseek|openrouter|sk-|Bearer\s|AKIA|BEGIN (RSA|OPENSSH|PRIVATE)/i;
 
 function publicGenerateErrorMessage(err) {
+  if (isAcceptanceSpendError(err)) return ACCEPTANCE_BUDGET_MESSAGE;
   const raw = String((err && (err.message || err.error || err.code)) || '').trim();
   if (!raw) return CONNECTION_UNAVAILABLE_MESSAGE;
   if (VENDOR_LEAK_RE.test(raw)) return CONNECTION_UNAVAILABLE_MESSAGE;
@@ -25,6 +29,7 @@ function publicGenerateErrorMessage(err) {
 
 function isProviderClientError(err) {
   if (!err || typeof err !== 'object') return false;
+  if (isAcceptanceSpendError(err)) return true;
   const status = Number(err.status || err.statusCode || (err.response && err.response.status));
   if (Number.isFinite(status) && status >= 400) return true;
   const msg = String(err.message || err.error || '');
@@ -43,10 +48,32 @@ function rawWrite(res, frame) {
   }
 }
 
+// Closed vocabulary: no SDK messages, model names, URLs or credentials in SSE.
+function generateStreamFailure(err) {
+  // The SDK may wrap a pre-I/O quota refusal as APIConnectionError. Its
+  // trusted cause, not wrapper status/message, determines this terminal copy.
+  if (isAcceptanceSpendError(err)) return { code: 'E_QUOTA', message: ACCEPTANCE_BUDGET_MESSAGE };
+  const status = Number(err?.status || err?.statusCode);
+  if (err?.code === 'ETIMEDOUT' || err?.code === 'TIMEOUT' || err?.name === 'TimeoutError' || status === 408) {
+    return { code: 'E_TIMEOUT', message: 'El modelo tardó demasiado en responder. Puedes reintentar; no se cambió el modelo.' };
+  }
+  if (status === 429 || status === 402) {
+    return { code: 'E_QUOTA', message: 'El modelo alcanzó su límite de uso. Espera unos instantes o revisa la conexión en Administración.' };
+  }
+  if (status === 401 || status === 403) {
+    return { code: 'E_PROVIDER', message: 'La conexión del modelo necesita revisión en Administración. No se cambió el modelo.' };
+  }
+  if (status === 400 || status === 422) {
+    return { code: 'E_PARAMS', message: 'El modelo no pudo procesar la solicitud. Reintenta o revisa su configuración en Administración.' };
+  }
+  return { code: 'E_PROVIDER', message: 'El modelo no pudo completar la respuesta. Puedes reintentar; no se cambió el modelo.' };
+}
+
 function writeGenerateSseError(res, {
   message,
   code = 'connection_unavailable',
   recovered = false,
+  deferDone = false,
 } = {}) {
   const text = String(message || CONNECTION_UNAVAILABLE_MESSAGE).trim() || CONNECTION_UNAVAILABLE_MESSAGE;
   const payload = {
@@ -60,7 +87,7 @@ function writeGenerateSseError(res, {
   if (!recovered) {
     rawWrite(res, `data: ${JSON.stringify({ type: 'text_delta', content: text })}\n\n`);
   }
-  rawWrite(res, 'data: [DONE]\n\n');
+  if (!deferDone) rawWrite(res, 'data: [DONE]\n\n');
   return payload;
 }
 
@@ -86,6 +113,7 @@ function closeGenerateSseWithError(res, opts) {
 module.exports = {
   CONNECTION_UNAVAILABLE_MESSAGE,
   publicGenerateErrorMessage,
+  generateStreamFailure,
   isProviderClientError,
   writeGenerateSseError,
   endGenerateSse,

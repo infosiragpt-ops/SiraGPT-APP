@@ -103,19 +103,46 @@ test('extend returns false if the lock was taken over by another owner', async (
   await b.release();
 });
 
-test('acquire retries with backoff until either success or retry budget is exhausted', async () => {
+test('acquire retries with backoff until either success or retry budget is exhausted', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
   const client = createMemoryLockBackend();
   const lock = createRedlock({ client, retryCount: 3, retryDelayMs: 5, retryJitterMs: 0 });
   const held = await lock.tryAcquire('busy', 1000);
   assert.ok(held);
+  const attemptTimes = [];
+  const tryAcquire = lock.tryAcquire.bind(lock);
+  t.mock.method(lock, 'tryAcquire', (...args) => {
+    attemptTimes.push(Date.now());
+    return tryAcquire(...args);
+  });
+  // Drain the async backend/continuation without advancing the mocked clock.
+  const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
   const start = Date.now();
-  const failed = await lock.acquire('busy', 1000);
-  const elapsed = Date.now() - start;
+  let settled = false;
+  const pending = lock.acquire('busy', 1000).then((result) => {
+    settled = true;
+    return result;
+  });
+  await flushPromises();
+  assert.deepEqual(attemptTimes, [start]);
+  for (let retry = 1; retry <= 3; retry += 1) {
+    t.mock.timers.tick(4);
+    await flushPromises();
+    assert.equal(settled, false, 'acquire must wait the full 5ms before each retry');
+    assert.equal(attemptTimes.length, retry, 'no retry may run before its delay');
+    t.mock.timers.tick(1);
+    await flushPromises();
+    assert.equal(attemptTimes.length, retry + 1);
+  }
+  const failed = await pending;
   assert.equal(failed, null);
-  assert.ok(elapsed >= 15, `expected ≥15ms of backoff across 3 retries, got ${elapsed}ms`);
+  assert.deepEqual(attemptTimes, [start, start + 5, start + 10, start + 15]);
+  assert.equal(Date.now() - start, 15, 'three full 5ms backoffs must elapse');
   await held.release();
   const recovered = await lock.acquire('busy', 1000);
   assert.ok(recovered, 'once the lock is free, retry should succeed');
+  assert.equal(attemptTimes.length, 5, 'a free lock needs only one new attempt');
+  assert.equal(Date.now() - start, 15, 'a successful first attempt needs no backoff');
 });
 
 test('using runs the function once and releases on the happy path', async () => {

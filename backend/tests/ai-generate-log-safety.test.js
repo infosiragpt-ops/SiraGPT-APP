@@ -72,9 +72,15 @@ test('generate route no longer prints known user content and identifiers', () =>
 
 test('generate persistence receives the request-bound observability logger', () => {
   const saveCalls = [...generateRoute.matchAll(/saveChatAndTrackUsage\(/g)];
-  const boundLoggers = generateRoute.match(/\{\s*observabilityLog:\s*generateLog\s*\}/g) || [];
-  assert.equal(saveCalls.length, 3);
+  const loggerPattern = /\{\s*observabilityLog:\s*generateLog(?:\s*,\s*strictAcceptanceFailure:\s*true)?\s*\}/g;
+  const boundLoggers = generateRoute.match(loggerPattern) || [];
+  assert.equal(saveCalls.length, 4);
   assert.equal(boundLoggers.length, saveCalls.length);
+  for (let index = 0; index < saveCalls.length; index += 1) {
+    const callRegion = generateRoute.slice(saveCalls[index].index, saveCalls[index + 1]?.index);
+    assert.match(callRegion, new RegExp(loggerPattern.source), 'each save path must bind the private request logger');
+  }
+  assert.equal(boundLoggers.filter((binding) => binding.includes('strictAcceptanceFailure: true')).length, 1);
 });
 
 test('every generate observability event belongs to the closed catalog', () => {

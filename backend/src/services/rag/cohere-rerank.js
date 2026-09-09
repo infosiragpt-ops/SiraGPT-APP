@@ -38,6 +38,8 @@
  *   cohere_rerank_invalid_response upstream returned an unexpected shape
  */
 
+const { guardedFetch, isAcceptanceSpendError } = require('../ai/acceptance-spend-guard');
+
 const DEFAULT_MODEL = process.env.COHERE_RERANK_MODEL || 'rerank-v3.5';
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.COHERE_RERANK_TIMEOUT_MS, 10) || 15_000;
 const DEFAULT_API_BASE = process.env.COHERE_API_BASE || 'https://api.cohere.com';
@@ -199,8 +201,9 @@ async function rerank({ query, documents, topN, model = DEFAULT_MODEL, options =
 
   let response;
   try {
-    response = await fetchImpl(url, { ...init, signal: controller.signal });
+    response = await guardedFetch(fetchImpl)(url, { ...init, signal: controller.signal });
   } catch (err) {
+    if (isAcceptanceSpendError(err)) throw err;
     const wrapped = new Error(`cohere-rerank network error: ${err && err.message}`);
     wrapped.code = 'cohere_rerank_http_failed';
     wrapped.cause = err;

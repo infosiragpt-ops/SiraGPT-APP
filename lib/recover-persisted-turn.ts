@@ -6,6 +6,47 @@ type RecoverError = {
   code?: string
   status?: number
   statusCode?: number
+  acceptanceFailure?: boolean
+}
+
+const ACCEPTANCE_FAILURE_MESSAGE = 'La prueba no puede continuar con el presupuesto acreditado. Revisa la campaña de pruebas.'
+export type PersistedTurnFailure = {
+  code: 'E_QUOTA'
+  message: string
+  terminal: true
+  retryable: false
+  acceptanceFailure: true
+}
+export type PersistedTurnRecovery = { chat: any; failure?: PersistedTurnFailure }
+
+export function acceptanceTurnFailure(): PersistedTurnFailure {
+  // Closed vocabulary: never expose a stored provider message or internal cause.
+  return { code: 'E_QUOTA', message: ACCEPTANCE_FAILURE_MESSAGE, terminal: true, retryable: false, acceptanceFailure: true }
+}
+
+export function persistedTurnFailureError(_failure: PersistedTurnFailure): Error {
+  return Object.assign(new Error(ACCEPTANCE_FAILURE_MESSAGE), acceptanceTurnFailure())
+}
+
+export function resolvePersistedAssistantTurn(
+  chat: any,
+  pending: Pick<PendingMessage, 'idempotencyKey' | 'turnKey' | 'streamId'>,
+): PersistedTurnRecovery | null {
+  const match = findPendingTurnMatch(chat?.messages, pending)
+  if (!match.hasAssistantReply) return null
+  const assistant = chat.messages[match.assistantIndex]
+  let metadata = assistant.metadata
+  try { if (typeof metadata === 'string') metadata = JSON.parse(metadata) } catch { metadata = null }
+  const storedFailure = metadata?.acceptanceFailure
+  if (storedFailure?.code !== 'E_QUOTA' || storedFailure.status !== 'failed' || storedFailure.terminal !== true) {
+    return { chat }
+  }
+  const failure = acceptanceTurnFailure()
+  return { failure, chat: { ...chat, messages: chat.messages.map((message: any, index: number) => (
+    // ErrorMessage replaces the entire bubble. Keep the partial and the
+    // server's failure notice visible; metadata/background state carry failure.
+    index === match.assistantIndex ? { ...message, error: undefined } : message
+  )) } }
 }
 
 export function isExplicitUserStop(
@@ -20,6 +61,7 @@ export function shouldRecoverPersistedGenerate(
   options: { signal?: AbortSignal | null; userStopped?: boolean } = {},
 ): boolean {
   if (isExplicitUserStop(options.signal, options.userStopped)) return false
+  if (error?.acceptanceFailure === true && error.code === 'E_QUOTA') return false
 
   const status = Number(error?.status ?? error?.statusCode)
   const text = [error?.message, error?.name, error?.code].filter(Boolean).join(" ")
@@ -66,7 +108,7 @@ export async function pollPersistedAssistantTurn(options: {
   delayMs?: number
   sleep?: (ms: number) => Promise<void>
   isCancelled?: () => boolean
-}): Promise<{ chat: any } | null> {
+}): Promise<PersistedTurnRecovery | null> {
   const attempts = Math.max(1, options.attempts ?? 8)
   const delayMs = Math.max(0, options.delayMs ?? 750)
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)))
@@ -82,10 +124,11 @@ export async function pollPersistedAssistantTurn(options: {
     } catch {
       continue
     }
+    if (options.isCancelled?.()) return null
 
     const chat = response?.chat || response
-    const match = findPendingTurnMatch(chat?.messages, options.pending)
-    if (match.hasAssistantReply) return { chat }
+    const recovered = resolvePersistedAssistantTurn(chat, options.pending)
+    if (recovered) return recovered
   }
 
   return null

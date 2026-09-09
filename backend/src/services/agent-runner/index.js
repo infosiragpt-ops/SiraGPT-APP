@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { denyUnbudgetedOperation } = require('../ai/acceptance-spend-guard');
 const { createSandbox } = require('../doc-agent/sandbox');
 const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
 const { resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
@@ -297,6 +298,7 @@ async function runAgentRunner({
   mcpToolLoader = null,
   persistMemory = true,
 } = {}) {
+  denyUnbudgetedOperation();
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
   let llm = client || null;
@@ -594,6 +596,7 @@ async function runAgentRunnerForChat({
   maxIterations,
   saveArtifact,
 } = {}) {
+  denyUnbudgetedOperation();
   let loaded = attachedFiles;
   if ((!loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
     loaded = await loadFilesByIds({ prisma, userId, fileIds });
@@ -685,6 +688,7 @@ function buildAgentRunnerFailureMessage(reason, detail) {
  * falls back to the in-process loop when Redis is down or we are in tests.
  */
 async function executeAgentRunnerTurn(params = {}) {
+  denyUnbudgetedOperation();
   const instruction = String(params.instruction || '');
   // Without an LLM only the PAINT fast-path can deliver: a color plus a style
   // edit ("ponlas rosadas") or an attached/prior pptx to repaint. Creating a

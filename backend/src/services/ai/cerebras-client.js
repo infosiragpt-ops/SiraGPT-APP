@@ -37,6 +37,7 @@ const DEFAULT_BASE_URL = 'https://api.cerebras.ai/v1';
 const DEFAULT_MODEL = 'gpt-oss-120b'; // llama-3.1-8b was retired from Cerebras (404); gpt-oss-120b is current
 const DEFAULT_DISPLAY_NAME = 'Free IA';
 const PROVIDER_NAME = 'Cerebras';
+const { guardedFetch } = require('./acceptance-spend-guard');
 
 let _OpenAICtor = null;
 function loadOpenAI() {
@@ -98,11 +99,11 @@ function isFreeIaConfigured({ env = process.env } = {}) {
   return getCerebrasConfig({ env }).enabled;
 }
 
-function createCerebrasClient({ env = process.env, OpenAICtor } = {}) {
+function createCerebrasClient({ env = process.env, OpenAICtor, fetchImpl = globalThis.fetch } = {}) {
   const cfg = getCerebrasConfig({ env });
   if (!cfg.enabled) return null;
   const Ctor = OpenAICtor || loadOpenAI();
-  return new Ctor({ apiKey: cfg.apiKey, baseURL: cfg.baseURL });
+  return new Ctor({ apiKey: cfg.apiKey, baseURL: cfg.baseURL, fetch: guardedFetch(fetchImpl) });
 }
 
 /**

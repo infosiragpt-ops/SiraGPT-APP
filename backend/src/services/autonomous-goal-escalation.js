@@ -16,6 +16,7 @@
 
 const goalEvents = require('./goal-events');
 const goalQueue = require('./goal-queue');
+const { denyUnbudgetedOperation } = require('./ai/acceptance-spend-guard');
 
 const EXPLICIT_GOAL_COMMAND_RE = /^\s*\/goal\b|\b(?:modo\s+goal|goal\s+mode)\b/i;
 const LONG_RUNNING_RE = /\b(?:meses?|semanas?|d[ií]as?|horas?|sin\s+detenerse|sin\s+parar|no\s+pares?|background|segundo\s+plano|aunque\s+(?:cierre|salga)|persistente|durable|auto.?ejecut|contin[uú]a(?:r)?|long.?running)\b/i;
@@ -107,6 +108,8 @@ async function maybeCreateAutonomousGoalRun({
   if (!prisma || !prisma.goalRun) return { ok: false, created: false, reason: 'persistence_unavailable', decision };
   if (!userId) return { ok: false, created: false, reason: 'missing_user', decision };
 
+  // A queued row can be picked up later even if enqueue itself is rejected.
+  denyUnbudgetedOperation();
   try {
     const created = await prisma.goalRun.create({
       data: {

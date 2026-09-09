@@ -10,7 +10,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo, u
 import { useAuth } from "./auth-context-integrated"
 import { apiClient, type AIUsagePayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
-import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
+import { pollPersistedAssistantTurn, resolvePersistedAssistantTurn, shouldRecoverPersistedGenerate, type PersistedTurnRecovery } from "./recover-persisted-turn"
 import { appendActivity, finalizeActivity, type ActivityStep } from "./chat/activity-log"
 import { shouldPollPersistedTurnOnStreamClose } from "./generate-stream-complete"
 import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
@@ -1377,6 +1377,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             thinkingStartedAt: Date.now(),
           };
       const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
+      const installAssistantPlaceholder = (messages: Message[]) => {
+        if (reuseAssistantPlaceholder) {
+          return messages.map((message) => message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message);
+        }
+        if (skipUserMessage) {
+          // The composer already inserted its empty processing bubble. Replace
+          // that exact turn inside the state updater: activeChat can be an older
+          // snapshot, and adding a second bubble makes dedupe hide live tokens.
+          const turn = findPendingTurnMatch(messages, { idempotencyKey: turnIdempotencyKey });
+          const processing = messages[turn.assistantIndex];
+          if (processing?.chatId === activeChat.id
+            && processing.id.startsWith('msg-assistant-processing-')
+            && typeof processing.content === 'string' && !processing.content.trim()) {
+            return messages.map((message, index) => index === turn.assistantIndex
+              ? { ...aiMessagePlaceholder, files: processing.files ?? aiMessagePlaceholder.files }
+              : message);
+          }
+        }
+        return [...messages, aiMessagePlaceholder];
+      };
 
       // Add AI placeholder to chat
       setCurrentChat(prevChat => {
@@ -1384,11 +1404,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (prevChat.id !== activeChat.id) return prevChat;
         return {
           ...prevChat,
-          messages: reuseAssistantPlaceholder
-            ? prevChat.messages.map((message) => (
-                message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message
-              ))
-            : [...prevChat.messages, aiMessagePlaceholder]
+          messages: installAssistantPlaceholder(prevChat.messages)
         };
       });
       // Mirror the assistant placeholder into the `chats` cache too. When the
@@ -1401,11 +1417,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         c.id === activeChat.id
           ? {
               ...c,
-              messages: reuseAssistantPlaceholder
-                ? (c.messages || []).map((message) => (
-                    message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message
-                  ))
-                : [...(c.messages || []), aiMessagePlaceholder],
+              messages: installAssistantPlaceholder(c.messages || []),
             }
           : c
       ));
@@ -1424,6 +1436,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const cancelled = new Error('Request aborted');
         cancelled.name = 'AbortError';
         throw cancelled;
+      };
+      const adoptRecoveredTurn = (recovered: PersistedTurnRecovery) => {
+        setCurrentChat((prev) => {
+          if (!prev || prev.id !== activeChat.id) return prev;
+          return mergeChatPreservingUserMessages(recovered.chat, prev);
+        });
+        setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+          c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+        )));
+        if (recovered.failure) {
+          streamFailed = true;
+          terminalSucceeded = false;
+          clearThisPendingTurn();
+          bg.fail(activeChat.id, recovered.failure.message);
+          if (currentChatRef.current?.id === activeChat.id) setCurrentStreamId(null);
+          if (abortControllerRef.current === controller) abortControllerRef.current = null;
+        }
       };
       try {
         const intent = intentOverride || await aiService.classifyIntent(content, conversationForRouting);
@@ -1990,15 +2019,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               delayMs: 0,
               isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
             });
-            if (!recovered?.chat) return false;
-            setCurrentChat((prev) => {
-              if (!prev || prev.id !== activeChat.id) return prev;
-              return mergeChatPreservingUserMessages(recovered.chat, prev);
-            });
-            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
-              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
-            )));
-            return true;
+            if (!recovered?.chat) return null;
+            adoptRecoveredTurn(recovered);
+            return recovered;
           };
 
           // STEP 3: Nayi streaming API call karein
@@ -2029,10 +2052,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             async () => {
               // onClose: Jab stream khatam ho jaye
-              terminalSucceeded = true;
               fgBuffer.flush();
               fgBuffer.dispose();
               streamBuffersRef.current.delete(activeChat.id);
+              // A late history poll can still reveal a terminal failure.
+              // Resolve it before declaring success or clearing the draft.
+              const finalPartial = bg.get(activeChat.id)?.partialContent;
+              if (shouldPollPersistedTurnOnStreamClose({
+                deliveredContent: finalPartial,
+                seenDone: true,
+                streamFailed,
+              })) {
+                try { await recoverPersistedTurnNow(); } catch { /* getChat failed; finally still idles */ }
+              }
+              if (streamFailed || controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
+              terminalSucceeded = true;
               // The stream is over: no activity step stays "active".
               setCurrentChat((prevChat) => {
                 if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
@@ -2045,7 +2079,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               bg.complete(activeChat.id);
               // Fold final partial into chats list so a background-finished
               // chat is fully readable when the user re-opens it.
-              const finalPartial = bg.get(activeChat.id)?.partialContent;
               if (finalPartial) {
                 setChats((prev) =>
                   prev.filter((c) => c && c.id).map((c) => {
@@ -2056,13 +2089,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     };
                   }),
                 );
-              }
-              if (shouldPollPersistedTurnOnStreamClose({
-                deliveredContent: finalPartial,
-                seenDone: true,
-                streamFailed,
-              })) {
-                try { await recoverPersistedTurnNow(); } catch { /* getChat failed; finally still idles */ }
               }
               if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) {
                 // Do NOT force setIsStreaming(false) — sibling chats may still
@@ -2100,6 +2126,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             (error) => {
               streamFailed = true;
+              const acceptanceFailure = (error as Error & { acceptanceFailure?: boolean }).acceptanceFailure === true
+                && (error as Error & { code?: string }).code === 'E_QUOTA'
+                && (error as Error & { retryable?: boolean }).retryable === false;
+              if (acceptanceFailure) {
+                clearThisPendingTurn();
+              }
               console.error("Streaming failed:", error);
               // Flush whatever made it through before the error so the
               // partial answer is visible, then dispose.
@@ -2181,7 +2213,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     if (!prevChat) return prevChat;
                     const newMessages = prevChat.messages.map((msg) => {
                       if (msg.id === aiMessagePlaceholder.id) {
-                        return { ...msg, error: normalizeChatError(error.message || "An error occurred.") };
+                        return { ...msg, error: (acceptanceFailure || (error as Error & { preservePartial?: boolean }).preservePartial === true) && msg.content?.trim()
+                          ? undefined : normalizeChatError(error.message || "An error occurred.") };
                       }
                       return msg;
                     });
@@ -2288,13 +2321,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
           });
           if (recovered?.chat) {
-            setCurrentChat((prev) => {
-              if (!prev || prev.id !== activeChat.id) return prev;
-              return mergeChatPreservingUserMessages(recovered.chat, prev);
-            });
-            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
-              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
-            )));
+            adoptRecoveredTurn(recovered);
+            if (recovered.failure) return false;
             terminalSucceeded = true;
             streamFailed = false;
             clearThisPendingTurn();
@@ -2337,13 +2365,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
           });
           if (recovered?.chat) {
-            setCurrentChat((prev) => {
-              if (!prev || prev.id !== activeChat.id) return prev;
-              return mergeChatPreservingUserMessages(recovered.chat, prev);
-            });
-            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
-              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
-            )));
+            adoptRecoveredTurn(recovered);
+            if (recovered.failure) return false;
             terminalSucceeded = true;
             streamFailed = false;
             clearThisPendingTurn();
@@ -2484,7 +2507,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // A completed retry is recognized exclusively by the persisted turn
       // identity on both USER and ASSISTANT rows. Equal prompt text and a
       // nearby timestamp are intentionally irrelevant.
-      if (pendingTurn.hasAssistantReply) return 'success'
+      if (pendingTurn.hasAssistantReply) {
+        const recovered = resolvePersistedAssistantTurn(targetChat, msg)
+        if (recovered?.failure) {
+          setCurrentChat((prev) => prev?.id === msg.chatId
+            ? mergeChatPreservingUserMessages(recovered.chat, prev) : prev)
+          setChats((prev) => prev.filter((chat) => chat && chat.id).map((chat) => (
+            chat.id === msg.chatId ? mergeChatPreservingUserMessages(recovered.chat, chat) : chat
+          )))
+          bg.fail(msg.chatId, recovered.failure.message)
+          clearPendingTurn(msg.chatId, msg.idempotencyKey || msg.turnKey || msg.id, msg.ownerId)
+          // Terminal failure: remove this draft without labelling it success
+          // or giving retryAll permission to generate the same turn again.
+          return 'defer'
+        }
+        return 'success'
+      }
 
       const terminal = await addMessage(
         msg.content,
@@ -2504,7 +2542,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.warn("Pending message retry failed:", error)
       return 'failure'
     }
-  }, [addMessage])
+  }, [addMessage, bg])
 
   const retryPendingMessageRef = useRef(retryPendingMessage)
   useEffect(() => {

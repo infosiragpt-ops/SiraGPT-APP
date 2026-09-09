@@ -41,6 +41,7 @@
  */
 
 const { asyncPool } = require('../../utils/async-pool');
+const { guardedFetch, isAcceptanceSpendError } = require('../ai/acceptance-spend-guard');
 
 const DEFAULT_HF_MODEL = process.env.SIRAGPT_NLI_HF_MODEL || 'cross-encoder/nli-deberta-v3-base';
 const DEFAULT_HF_BASE = process.env.HUGGINGFACE_API_BASE || 'https://api-inference.huggingface.co';
@@ -172,7 +173,7 @@ async function verifyViaHuggingface({ claim, evidence, options }) {
 
   let response;
   try {
-    response = await fetchImpl(`${apiBase}/models/${encodeURIComponent(model)}`, {
+    response = await guardedFetch(fetchImpl)(`${apiBase}/models/${encodeURIComponent(model)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -184,6 +185,7 @@ async function verifyViaHuggingface({ claim, evidence, options }) {
     });
   } catch (err) {
     clearTimeout(timer);
+    if (isAcceptanceSpendError(err)) throw err;
     const wrapped = new Error(`nli-faithfulness HF network error: ${err && err.message}`);
     wrapped.code = 'nli_huggingface_failed';
     wrapped.cause = err;
@@ -251,6 +253,7 @@ async function verifyViaLlm({ claim, evidence, options }) {
       ],
     });
   } catch (err) {
+    if (isAcceptanceSpendError(err)) throw err;
     const wrapped = new Error(`nli-faithfulness LLM call failed: ${err && err.message}`);
     wrapped.code = 'nli_llm_failed';
     wrapped.cause = err;

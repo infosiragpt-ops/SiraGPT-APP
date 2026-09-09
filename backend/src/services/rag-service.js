@@ -42,6 +42,7 @@ const { diverseTripleBeamSearch, flattenBeamsBFS } = require('./diverse-beam-sea
 const gistMemory = require('./gist-memory');
 const { runWithLock } = require('./agents/mutex');
 const ragStore = require('./rag-store');
+const { guardedFetch, isActive, isAcceptanceSpendError } = require('./ai/acceptance-spend-guard');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -129,6 +130,7 @@ function _embedClientOptions() {
     apiKey: process.env.OPENAI_API_KEY,
     timeout: Number.parseInt(process.env.SIRA_EMBED_TIMEOUT_MS || '30000', 10),
     maxRetries: Number.parseInt(process.env.SIRA_EMBED_MAX_RETRIES || '2', 10),
+    fetch: guardedFetch(globalThis.fetch),
   };
 }
 function getOpenAI() {
@@ -174,13 +176,16 @@ async function _embedRaw(texts) {
 }
 
 async function _embedUncached(texts) {
+  // Never join an unscoped in-flight request from a private acceptance turn.
+  if (isActive()) return _embedRaw(texts);
   if (process.env.SIRA_RELIABILITY_WIRINGS === '1' || process.env.SIRA_RELIABILITY_WIRINGS === 'true') {
     try {
       const { getSingleFlight } = require('../cache/single-flight');
       const { argsHash } = require('./agents/speculative-executor');
       const key = `embed:${argsHash(texts)}`;
       return await getSingleFlight().do(key, () => _embedRaw(texts));
-    } catch {
+    } catch (err) {
+      if (isAcceptanceSpendError(err)) throw err;
       return _embedRaw(texts);
     }
   }
