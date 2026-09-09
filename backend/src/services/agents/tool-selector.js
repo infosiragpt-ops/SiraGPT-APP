@@ -42,7 +42,7 @@ const CATEGORY_PATTERNS = Object.freeze({
   web: /^(web_search|read_url|web_extract|deep_search|browser_)/,
   research: /^(scientific_search|github_search|x_search|deep_search|sunat_|github_list_repos|github_create_issue|linkedin_|x_list_mentions|x_publish_post)/,
   rag: /(rag_retrieve|search_docs|search_code|get_symbol|list_files|read_file|docintel|deep_analyze|compare_documents|auto_file|memory_recall)/,
-  code: /(python_exec|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol)/,
+  code: /(python_exec|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol|project_read|project_write|project_exec)/,
   generation: /(create_document|verify_artifact)/,
   media: /(image|video|audio|music|chart|diagram|svg|infograph|dashboard|organigram|mermaid|timeline|kanban|swot|eisenhower|raci|canvas|pyramid|porter|risk_matrix|funnel|radar|journey|okr|empathy|lean|scorecard|ansoff|bcg|moscow|decision_tree|concept_map|mindmap|swimlane|pestel|process_flow|comparison_table|gantt|gauge|waterfall|heatmap|treemap)/i,
   memory: /(memory_recall|session_|active_memory)/,
