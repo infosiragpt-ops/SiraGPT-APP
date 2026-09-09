@@ -7,6 +7,7 @@
 
 const { fail } = require('./errors');
 const { jailRelPath } = require('./path-jail');
+const { resolveExecTimeout } = require('./limits');
 
 function createMemoryDriver() {
   return {
@@ -21,10 +22,10 @@ function createMemoryDriver() {
     async exec(session, command, opts = {}) {
       const cmd = String(command || '').trim();
       if (!cmd) fail('E_PARAMS', 'Falta el comando.');
-      const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : session.limits.timeoutMs;
+      const timeoutMs = resolveExecTimeout(opts.timeoutMs, session.limits);
       if (opts.signal && opts.signal.aborted) fail('E_CANCELLED');
       // Memory driver does not spawn a shell. Tests inject `execImpl` on the
-      // session when they need stdout. Default is an honest no-op.
+      // session when they need stdout. Missing execution must never succeed.
       if (typeof session.execImpl === 'function') {
         const started = Date.now();
         let timer;
@@ -62,14 +63,7 @@ function createMemoryDriver() {
           if (timer) clearTimeout(timer);
         }
       }
-      return {
-        ok: true,
-        exitCode: 0,
-        stdout: '',
-        stderr: 'memory-driver: exec no lanza un shell; usa el driver docker en DEV.',
-        timedOut: false,
-        durationMs: 0,
-      };
+      fail('E_PROVIDER', 'El driver de memoria no ejecuta comandos.');
     },
 
     async readFile(session, relPath) {

@@ -31,7 +31,8 @@ function resolveDriverName(env = process.env, override) {
     .trim()
     .toLowerCase();
   if (raw === 'docker' || raw === 'docker-local' || raw === 'local') return 'docker';
-  return 'memory';
+  if (raw === 'memory') return 'memory';
+  fail('E_PROVIDER', 'Driver de sandbox no reconocido.');
 }
 
 function newSessionId() {
@@ -66,6 +67,7 @@ function createCodingSandbox(opts = {}) {
   }
 
   const sessions = new Map();
+  const pendingSessions = new Set();
   const defaults = resolveLimits({}, env);
   let gcTimer = null;
 
@@ -89,6 +91,17 @@ function createCodingSandbox(opts = {}) {
     return session;
   }
 
+  // Call before any untrusted HTTP/WS operation. Does not renew the lease
+  // or reveal whether another user's session exists.
+  function assertSessionOwner(sessionId, userId) {
+    requireEnabled();
+    const session = sessions.get(String(sessionId || ''));
+    if (typeof userId !== 'string' || !userId.trim() || !session
+      || session.userId !== userId || session.destroyed) fail('E_SESSION_NOT_FOUND');
+    if (now() >= session.expiresAt) fail('E_SESSION_EXPIRED');
+    return publicSession(session);
+  }
+
   async function destroyInternal(session) {
     if (!session || session.destroyed) return false;
     session.destroyed = true;
@@ -101,7 +114,7 @@ function createCodingSandbox(opts = {}) {
 
   async function createSession(input = {}) {
     requireEnabled();
-    if (sessions.size >= defaults.maxSessions) fail('E_QUOTA');
+    if (sessions.size + pendingSessions.size >= defaults.maxSessions) fail('E_QUOTA');
     const limits = resolveLimits({ ...input, ttlMs: input.ttlMs }, env);
     const network = createNetworkPolicy({
       allowlist: input.networkAllowlist || input.allowlist || [],
@@ -110,7 +123,7 @@ function createCodingSandbox(opts = {}) {
       composeNetwork,
     });
     const id = String(input.id || newSessionId());
-    if (sessions.has(id)) fail('E_PARAMS', 'sessionId duplicado.');
+    if (sessions.has(id) || pendingSessions.has(id)) fail('E_PARAMS', 'sessionId duplicado.');
     const createdAt = now();
     const session = {
       id,
@@ -128,8 +141,13 @@ function createCodingSandbox(opts = {}) {
       containerName: null,
       execImpl: typeof input.execImpl === 'function' ? input.execImpl : null,
     };
-    await pickDriver(driverName).createSession(session);
-    sessions.set(id, session);
+    pendingSessions.add(id);
+    try {
+      await pickDriver(driverName).createSession(session);
+      sessions.set(id, session);
+    } finally {
+      pendingSessions.delete(id);
+    }
     return publicSession(session);
   }
 
@@ -253,6 +271,7 @@ function createCodingSandbox(opts = {}) {
   return {
     isEnabled: () => isAgentesCodingV2Enabled(env),
     driverKind: () => driverName,
+    assertSessionOwner,
     createSession,
     exec,
     readFile,

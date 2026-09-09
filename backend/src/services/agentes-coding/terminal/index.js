@@ -40,10 +40,23 @@ function requireEnabled(env = process.env) {
   if (!isAgentesCodingV2Enabled(env)) fail('E_FLAG_OFF');
 }
 
-function defaultWsAuthenticate(request) {
+async function defaultWsAuthenticate(request, opts = {}) {
   const token = readBearerOrToken(request);
   if (!token) return null;
-  return { token: true };
+  const { validateActiveSession } = require('../../active-session-validator');
+  try {
+    const validated = await validateActiveSession({
+      token,
+      request,
+      prismaClient: opts.prismaClient || require('../../../config/database'),
+      jwtSecret: opts.jwtSecret || process.env.JWT_SECRET,
+    });
+    // Pairing/scoped tokens do not grant a coding terminal session.
+    if (validated.decoded?.scope) return null;
+    return { userId: validated.userId };
+  } catch (_) {
+    return null;
+  }
 }
 
 function attachTerminalWebSocket(httpServer, opts = {}) {
@@ -59,11 +72,11 @@ function attachTerminalWebSocket(httpServer, opts = {}) {
   const path = opts.path || WS_PATH;
   const authenticate = typeof opts.authenticate === 'function'
     ? opts.authenticate
-    : defaultWsAuthenticate;
+    : (request) => defaultWsAuthenticate(request, opts);
   const WebSocketServer = opts.WebSocketServer
     || (opts.ws && opts.ws.Server)
     || require('ws').Server;
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
   const detachPath = attachWebSocketPath(httpServer, wss, path);
 
   wss.on('connection', (socket, request) => {
@@ -74,14 +87,28 @@ function attachTerminalWebSocket(httpServer, opts = {}) {
           return;
         }
         const auth = await authenticate(request);
-        if (!auth) {
+        if (typeof auth?.userId !== 'string' || !auth.userId.trim()) {
           if (typeof socket.close === 'function') socket.close(4401, 'unauthorized');
           return;
         }
         const params = queryFromUrl(request && request.url);
         const channelId = params.get('channelId');
-        const channel = hub.get(channelId);
+        const channel = hub.assertOwner(channelId, auth.userId);
         const transport = createWebSocketTransport(socket);
+        const subscribe = transport.onMessage.bind(transport);
+        transport.onMessage = (handler) => subscribe((frame) => {
+          // Recheck authentication and ownership before every new command.
+          void Promise.resolve().then(() => authenticate(request)).then((current) => {
+            if (!isAgentesCodingV2Enabled(env) || current?.userId !== auth.userId) {
+              throw new Error('unauthorized');
+            }
+            hub.assertOwner(channelId, current.userId);
+            handler(frame);
+          }).catch(() => {
+            channel.detach(transport);
+            if (typeof socket.close === 'function') socket.close(4401, 'unauthorized');
+          });
+        });
         channel.attach(transport);
         if (typeof socket.on === 'function') {
           socket.on('close', () => channel.detach(transport));
@@ -91,8 +118,8 @@ function attachTerminalWebSocket(httpServer, opts = {}) {
         try {
           const payload = encodeFrame({
             type: 'error',
-            error: err instanceof CodingSandboxError ? err.code : (err.code || 'E_TERMINAL_FAILED'),
-            message: err.message || 'No se pudo abrir el canal de terminal.',
+            error: err instanceof CodingSandboxError ? err.code : 'E_TERMINAL_FAILED',
+            message: 'No se pudo abrir el canal de terminal.',
           });
           if (typeof socket.send === 'function') socket.send(payload);
           if (typeof socket.close === 'function') socket.close(4400);

@@ -83,13 +83,27 @@ function createAgentesCodingRouter(opts = {}) {
   const sandbox = opts.sandbox || null;
   const getSandbox = () => sandbox || getDefaultSandbox();
   const structRunner = opts.sgRunner || opts.structuralEditRunner || null;
-  const authenticate = opts.authenticate || authenticateToken;
+  const authenticateIdentity = opts.authenticate || authenticateToken;
   const hub = opts.terminalHub || createTerminalHub({ env, sandbox: getSandbox() });
   const gitRunner = opts.gitRunner || opts.git || null;
   const deployHttp = opts.deployHttp || opts.httpClient || opts.fetchImpl || null;
   const harnessLlm = opts.harnessLlm || opts.llmTurn || null;
 
   const router = express.Router();
+
+  function authenticate(req, res, next) {
+    return authenticateIdentity(req, res, () => {
+      if (typeof req.user?.id !== 'string' || !req.user.id.trim()) {
+        return res.status(401).json({ error: 'access_token_required' });
+      }
+      try {
+        if (req.params.id) getSandbox().assertSessionOwner(req.params.id, req.user.id);
+        return next();
+      } catch (err) {
+        return sendSandboxError(res, err);
+      }
+    });
+  }
 
   function enabled() {
     return isAgentesCodingV2Enabled(env);
