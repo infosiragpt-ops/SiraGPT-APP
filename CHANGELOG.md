@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 3g of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  jailed session export (zip / tar.gz, size caps, artifact metadata)
+  and a Coolify/Dokploy deploy stub (`POST|GET
+  /api/agentes-coding/sessions/:id/export`, `…/deploy`). Injectable
+  HTTP client only; deny unless `AGENTES_CODING_DEPLOY_BASE_URLS`.
+  Spanish errors (`E_EXPORT_*`, `E_DEPLOY_*`). API-only — UI-lock
+  unchanged. No Daytona, no `/code`, flag stays off in production. See
+  `docs/agentes-coding-export-deploy.md`.
 - Phase 3f of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   per-session git init / status / diff / commit-checkpoint inside the
   jailed workspace (`POST|GET /api/agentes-coding/sessions/:id/git/*`).
