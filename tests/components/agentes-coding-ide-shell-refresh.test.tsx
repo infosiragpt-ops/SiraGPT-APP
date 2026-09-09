@@ -91,6 +91,14 @@ async function renderWithProject(files: string[] = ["src/a.ts"]) {
   await screen.findByText("a.ts")
 }
 
+// Espera a que el efecto del poll programe su intervalo (el montaje del
+// proyecto es asíncrono; bajo carga el efecto puede ir detrás del primer
+// paint) y ejecuta un tick.
+async function nextPollTick(getCbs: () => Array<() => void>) {
+  await waitFor(() => expect(getCbs().length).toBeGreaterThan(0))
+  await getCbs()[0]()
+}
+
 describe("CodingIdeShell auto-refresh", () => {
   let intervalCbs: Array<() => void> = []
   const realSetInterval = window.setInterval.bind(window)
@@ -115,8 +123,9 @@ describe("CodingIdeShell auto-refresh", () => {
 
   it("programa el poll cada 15s al abrir un proyecto", async () => {
     await renderWithProject()
-    expect(window.setInterval).toHaveBeenCalledWith(expect.any(Function), 15_000)
-    expect(intervalCbs).toHaveLength(1)
+    // El filtro del mock solo captura el intervalo de 15s, así que basta
+    // con esperar a que aparezca (el delay queda garantizado por el filtro).
+    await waitFor(() => expect(intervalCbs).toHaveLength(1))
   })
 
   it("botón Actualizar recarga el árbol y muestra archivos nuevos", async () => {
@@ -131,7 +140,7 @@ describe("CodingIdeShell auto-refresh", () => {
   it("el poll trae archivos nuevos sin tocar el error", async () => {
     await renderWithProject()
     vi.mocked(projectsCodexApi.listFiles).mockResolvedValue(["src/a.ts", "src/b.ts"])
-    await intervalCbs[0]()
+    await nextPollTick(() => intervalCbs)
     await screen.findByText("b.ts")
     expect(screen.queryByRole("alert")).toBeNull()
   })
@@ -151,7 +160,7 @@ describe("CodingIdeShell auto-refresh", () => {
     const editor = (await screen.findByTestId("monaco-stub")) as HTMLTextAreaElement
     expect(editor.value).toBe("v1")
     vi.mocked(projectsCodexApi.readFileContent).mockResolvedValue({ ok: true, path: "src/a.ts", content: "v2-del-agente" } as never)
-    await intervalCbs[0]()
+    await nextPollTick(() => intervalCbs)
     await waitFor(() => {
       expect((screen.getByTestId("monaco-stub") as HTMLTextAreaElement).value).toBe("v2-del-agente")
     })
@@ -165,7 +174,7 @@ describe("CodingIdeShell auto-refresh", () => {
     expect((screen.getByTestId("monaco-stub") as HTMLTextAreaElement).value).toBe("v1+mis-cambios")
     const readsBefore = vi.mocked(projectsCodexApi.readFileContent).mock.calls.length
     vi.mocked(projectsCodexApi.readFileContent).mockResolvedValue({ ok: true, path: "src/a.ts", content: "v2-del-agente" } as never)
-    await intervalCbs[0]()
+    await nextPollTick(() => intervalCbs)
     // Da un ciclo para que un re-read indebido se hiciera visible.
     await Promise.resolve()
     expect((screen.getByTestId("monaco-stub") as HTMLTextAreaElement).value).toBe("v1+mis-cambios")
