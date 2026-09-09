@@ -96,6 +96,8 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `temporalio/sdk-typescript` | MIT | Durable hour-long jobs | pattern / npm — only after Docker sandbox is proven | later orchestration | next |
 | `kubernetes-client/javascript` | Apache-2.0 | K8s sandbox scheduling | code via npm when K8s lands | later control-plane scheduler | next |
 | `moby/moby` (Docker Engine API) | Apache-2.0 | Short-term Lenovo sandbox runtime | ops / API client — not a source dump | Lenovo Docker compose (short-term) | next |
+| `coollabsio/coolify` | Apache-2.0 | Self-host PaaS deploy API (webhook / `/api/v1/deploy`) | **none** — external HTTP API only. Injectable client + allowlisted base URL. No monorepo dump, no secrets in tree. Phase 3g | `backend/src/services/agentes-coding/deploy/` | already fused (external API stub) |
+| `Dokploy/dokploy` | Apache-2.0 (+ enterprise source-available) | Self-host PaaS deploy API (`/api/application.deploy`) | **none** — external HTTP API only. Do not copy `/proprietary`. Injectable client + allowlist. Phase 3g | `backend/src/services/agentes-coding/deploy/` | already fused (external API stub) |
 
 ## Banned (no source copy, no vendor tree, no “inspired dump”)
 

@@ -90,6 +90,26 @@ const CATALOG = Object.freeze({
     status: 404,
     message: 'El punto de control no existe.',
   },
+  E_EXPORT_FAILED: {
+    status: 500,
+    message: 'No se pudo exportar el workspace de la sesión.',
+  },
+  E_EXPORT_NOT_FOUND: {
+    status: 404,
+    message: 'El artefacto de exportación no existe.',
+  },
+  E_DEPLOY_DENIED: {
+    status: 403,
+    message: 'Despliegue denegado: falta allowlist de URL o cliente inyectable.',
+  },
+  E_DEPLOY_FAILED: {
+    status: 502,
+    message: 'El proveedor de despliegue no aceptó la solicitud.',
+  },
+  E_DEPLOY_NOT_FOUND: {
+    status: 404,
+    message: 'La intención de despliegue no existe.',
+  },
 });
 
 class CodingSandboxError extends Error {

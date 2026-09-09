@@ -45,6 +45,8 @@ test('non-health routes are 404 while the flag is off', async () => {
     '/api/agentes-coding/projects',
     '/api/agentes-coding/sessions/csb_x/git/status',
     '/api/agentes-coding/sessions/csb_x/git/checkpoints',
+    '/api/agentes-coding/sessions/csb_x/export',
+    '/api/agentes-coding/sessions/csb_x/deploy',
   ]) {
     const res = await request(app).get(path);
     assert.equal(res.status, 404, path);
