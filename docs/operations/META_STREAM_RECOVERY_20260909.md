@@ -217,3 +217,36 @@ No production campaign file, ledger, environment change or paid inference has
 been created by this work. Direct Meta pricing units still require authenticated
 verification, followed by private configuration accreditation and a real
 authenticated acceptance. Do not report local tests as production readiness.
+
+### First expanded CI run and corrections
+
+[Run 34378793924](https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/34378793924)
+on `eb0edb21fb28a433de190085e17f1bfc6eae08a9` failed and is **not** release
+approval. The required browser gate passed all 22 cases, including the three
+new private recovery cases without retries. Backend shard 1, which includes
+the separate acceptance unit-coverage gate, also passed.
+
+The frontend job exposed two fixture typing errors in the strict, separate
+`tests/tsconfig.json` project. Explicit fixture types and narrowing fix them;
+the test compiler now passes locally with `--noEmit`, and the same 77 frontend
+regressions pass. Root type checking alone did not cover that project. No
+strictness setting or runtime was changed for this correction.
+
+Backend shard 2 encountered an unchanged Redlock test measuring 14 ms of wall
+time against three requested 5 ms waits. Its runtime and test were identical
+to the production base. The correction is confined to that test: verify the
+three scheduled delays and four attempts deterministically, retaining retry
+exhaustion and acquisition after release. Do not lower the timing assertion,
+skip the test or alter the locking runtime to obtain a green run.
+The corrected locking suite passed 20/20, repeated in ten independent local
+Node 24 processes (200/200). In-memory mutations to 4 ms, 6 ms or one fewer
+retry each failed as expected; the runtime files were not changed. Independent
+review found no additional issue in this correction.
+
+The pre-existing job named "Visual regression · pixel-perfect snapshots"
+reported success after `No tests found`, because its command masks failure.
+It supplies **no pixel-comparison proof** and is not claimed as such. This PR
+does not change that job or introduce a baseline. The explicit required
+browser cases and inspected screenshots above are the actual UI evidence.
+An exact-head CI rerun is required after these test-only corrections; no
+auto-merge, merge or deployment was enabled on the failed run.

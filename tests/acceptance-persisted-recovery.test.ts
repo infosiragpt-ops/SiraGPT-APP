@@ -10,7 +10,18 @@ import { dedupeMessages } from '../lib/message-preservation'
 
 const pending = { idempotencyKey: 'synthetic-turn', streamId: 'synthetic-stream' }
 const text = 'Respuesta parcial. La prueba no puede continuar con el presupuesto acreditado.'
-function fixture(metadata: any = { code: 'E_QUOTA', status: 'failed', terminal: true }) {
+type FixtureFailure = { code?: string; status?: string; terminal?: boolean; message?: string }
+type FixtureMetadata = typeof pending & { acceptanceFailure?: FixtureFailure | null }
+type FixtureMessage = {
+  id: string
+  role: 'USER' | 'ASSISTANT'
+  content: string
+  metadata: FixtureMetadata | string
+  error?: string
+}
+type FixtureChat = { id: string; messages: FixtureMessage[] }
+
+function fixture(metadata: FixtureFailure | null = { code: 'E_QUOTA', status: 'failed', terminal: true }): FixtureChat {
   return { id: 'synthetic-chat', messages: [
     { id: 'user', role: 'USER', content: 'responde solo OK', metadata: pending },
     { id: 'assistant', role: 'ASSISTANT', content: text,
@@ -111,15 +122,16 @@ test('only exact failed acceptance metadata is terminal; ordinary/malformed turn
   for (const metadata of [undefined, null, {}, { code: 'E_PROVIDER', status: 'failed', terminal: true },
     { code: 'E_QUOTA', status: 'done', terminal: true }, { code: 'E_QUOTA', status: 'failed' }]) {
     const chat = fixture(metadata)
-    if (metadata === undefined) delete chat.messages[1].metadata.acceptanceFailure
+    const assistantMetadata = chat.messages[1].metadata
+    if (metadata === undefined && typeof assistantMetadata !== 'string') delete assistantMetadata.acceptanceFailure
     const result = await poll(chat)
     assert.equal(result?.failure, undefined)
     assert.equal(result?.chat, chat)
   }
   const chat = fixture()
-  chat.messages[1].metadata = JSON.stringify(chat.messages[1].metadata) as any
+  chat.messages[1].metadata = JSON.stringify(chat.messages[1].metadata)
   assert.equal((await poll(chat))?.failure?.code, 'E_QUOTA')
-  chat.messages[1].metadata = '{broken' as any
+  chat.messages[1].metadata = '{broken'
   assert.equal(await poll(chat), null, 'malformed identity must not match another turn')
 })
 
@@ -225,7 +237,9 @@ test('actual pending replay hydrates failed row, clears draft and never invokes 
   assert.equal(current.messages[1].content, text)
   assert.equal((current.messages[1] as any).error, undefined)
   assert.equal((chats[0].messages[1] as any).error, undefined)
-  assert.equal(current.messages[1].metadata.acceptanceFailure.status, 'failed')
+  const assistantMetadata = current.messages[1].metadata
+  assert.ok(typeof assistantMetadata !== 'string')
+  assert.equal(assistantMetadata.acceptanceFailure?.status, 'failed')
   assert.equal(failures, 1)
   assert.equal(clears, 1)
 })
