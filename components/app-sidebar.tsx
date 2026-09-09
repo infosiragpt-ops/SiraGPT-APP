@@ -40,6 +40,7 @@ import {
   Edit2,
   Check,
   X,
+  Hand,
 } from "lucide-react"
 import {
   Sidebar,
@@ -119,6 +120,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ChatMascot } from "@/components/chat-mascot"
+import {
+  lastAssistantMessage,
+  resolveChatWorkStatus,
+} from "@/lib/chat-work-status"
 import { CreditsBadge } from "@/components/CreditsBadge"
 import NotificationCenter from "./notification-center"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -1951,13 +1956,24 @@ export function AppSidebar() {
                         const isEditing = editingChatId === chat.id
                         const { title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
                         const isTruncated = displayTitle.length > 25
-                        // Per-chat status — compact left rail:
-                        // spinner while generating, blue dot for a
-                        // freshly completed task, red dot for an error.
-                        const streamStatus = bgStreams.get(chat.id)?.status
-                        const isStreaming = streamStatus === "streaming"
-                        const isComplete = streamStatus === "done"
-                        const isFailed = streamStatus === "error"
+                        const stream = bgStreams.get(chat.id)
+                        const snapshot = chat.id === currentChatId ? getCurrentChatSnapshot() : null
+                        const workStatus = resolveChatWorkStatus({
+                          streamStatus: stream?.status,
+                          streamContent: stream?.partialContent,
+                          activeTaskStatus: (chat as { activeTask?: { status?: string } | null }).activeTask?.status,
+                          lastAssistant: lastAssistantMessage(snapshot?.messages || chat.messages),
+                        })
+                        const workTitle =
+                          workStatus === "working"
+                            ? "Trabajo en progreso"
+                            : workStatus === "done"
+                              ? "Tarea terminada"
+                              : workStatus === "needs_reply"
+                                ? "Esperando tu respuesta en el chat"
+                                : workStatus === "error"
+                                  ? "Tarea con error"
+                                  : undefined
 
                         return (
                           <SidebarMenuItem key={chat.id} className="chat-history-item">
@@ -2019,31 +2035,35 @@ export function AppSidebar() {
                                           <div className="flex items-center gap-2.5 min-w-0 flex-1">
                                             <span
                                               data-chat-mascot="1"
-                                              className={cn(
-                                                "relative flex h-5 w-5 shrink-0 items-center justify-center",
-                                                isStreaming && "motion-safe:animate-pulse",
-                                              )}
-                                              title={
-                                                isStreaming
-                                                  ? "Generando..."
-                                                  : isComplete
-                                                    ? "Tarea completada"
-                                                    : isFailed
-                                                      ? "Tarea con error"
-                                                      : undefined
-                                              }
+                                              data-chat-work-status={workStatus}
+                                              className="relative flex h-5 w-5 shrink-0 items-center justify-center"
+                                              title={workTitle}
                                             >
                                               <ChatMascot seed={chat.id} size={16} />
-                                              {isStreaming ? (
-                                                <span className="sr-only">Chat en progreso</span>
-                                              ) : isComplete ? (
+                                              {workStatus === "working" ? (
                                                 <span
-                                                  className="absolute -right-0.5 -bottom-0.5 h-1.5 w-1.5 rounded-full bg-sky-500 shadow-[0_0_0_2px_rgba(14,165,233,0.16)]"
-                                                  aria-label="Tarea completada"
+                                                  className="absolute -right-0.5 -bottom-0.5 flex h-2 w-2"
+                                                  aria-label="Trabajo en progreso"
+                                                >
+                                                  <span className="absolute inline-flex h-full w-full rounded-full bg-zinc-400 motion-safe:animate-ping dark:bg-zinc-300" />
+                                                  <span className="relative inline-flex h-2 w-2 rounded-full bg-zinc-900 ring-1 ring-white dark:bg-white dark:ring-zinc-900" />
+                                                </span>
+                                              ) : workStatus === "done" ? (
+                                                <span
+                                                  className="absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-1 ring-white dark:ring-zinc-900"
+                                                  aria-label="Tarea terminada"
                                                 />
-                                              ) : isFailed ? (
+                                              ) : workStatus === "needs_reply" ? (
                                                 <span
-                                                  className="absolute -right-0.5 -bottom-0.5 h-1.5 w-1.5 rounded-full bg-destructive/85"
+                                                  className="absolute -right-3 bottom-0 flex items-center gap-0.5"
+                                                  aria-label="Esperando tu respuesta en el chat"
+                                                >
+                                                  <span className="h-2 w-2 rounded-full bg-amber-400 ring-1 ring-white dark:ring-zinc-900" />
+                                                  <Hand className="h-3 w-3 text-amber-500" strokeWidth={2.25} />
+                                                </span>
+                                              ) : workStatus === "error" ? (
+                                                <span
+                                                  className="absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full bg-destructive/85 ring-1 ring-white dark:ring-zinc-900"
                                                   aria-label="Tarea con error"
                                                 />
                                               ) : null}
