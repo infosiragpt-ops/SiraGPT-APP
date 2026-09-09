@@ -110,6 +110,14 @@ const CATALOG = Object.freeze({
     status: 404,
     message: 'La intención de despliegue no existe.',
   },
+  E_HARNESS_FAILED: {
+    status: 500,
+    message: 'No se pudo completar el turno del harness.',
+  },
+  E_HARNESS_NOT_FOUND: {
+    status: 404,
+    message: 'La ejecución del harness no existe.',
+  },
 });
 
 class CodingSandboxError extends Error {

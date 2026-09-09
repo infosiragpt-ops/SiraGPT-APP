@@ -8,6 +8,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 4a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  TypeScript/Node harness inside a coding-sandbox session
+  (`POST|GET /api/agentes-coding/sessions/:id/harness*`). Bounded
+  plan → tool → result loop over `readFile`/`writeFile`/`exec`/
+  `listFiles` only. Injectable LLM + sandbox driver; in-process step
+  store; step/token/time caps; Spanish errors (`E_HARNESS_*`,
+  `E_QUOTA`, `E_TIMEOUT`, `E_CANCELLED`). API-only — UI-lock
+  unchanged. Pattern fusion (OpenHands SDK MIT + SiraCode /
+  agent-harness contracts); no vendor dump, no `/code`, flag stays
+  off in production. See `docs/agentes-coding-harness.md`.
 - Phase 3g of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   jailed session export (zip / tar.gz, size caps, artifact metadata)
   and a Coolify/Dokploy deploy stub (`POST|GET
