@@ -16,6 +16,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 4b of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  HITL permission gates on the coding harness (Cline-pattern
+  ask / once / always / reject). Privileged tools (`exec`, or
+  `writeFile` outside a documented safe-path allowlist) pause the
+  run as `awaiting_permission`. `GET|POST
+  /api/agentes-coding/sessions/:id/harness/:runId/permissions*`.
+  Injectable policy; session-scoped `allow_always`; reject →
+  `cancelled` + `E_PERMISSION_DENIED`. API-only — UI-lock unchanged.
+  Pattern fusion only (no Cline dump, no `/agentes` chrome). Flag
+  stays off in production. See `docs/agentes-coding-permissions.md`.
 - Phase 4a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   TypeScript/Node harness inside a coding-sandbox session
   (`POST|GET /api/agentes-coding/sessions/:id/harness*`). Bounded

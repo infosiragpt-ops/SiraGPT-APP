@@ -8,6 +8,8 @@
  *     (plan / apply / result), rewritten to SiraGPT paths.
  *   - SiraCode loop.js: injectable llmTurn, AbortSignal, maxSteps.
  *   - agent-harness event-stream: structured steps + preview cap.
+ *   - Cline HITL (Apache-2.0, Phase 4b): ask / once / always / reject
+ *     as a pause on the in-process run — not a VS Code dump.
  *
  * Literal copy: ~0%. No upstream trees, no host FS, no control DB.
  */
@@ -29,6 +31,15 @@ const {
   finishRun,
   publicRun,
 } = require('./store');
+const {
+  authorizeAction,
+  createPermission,
+  resolvePending,
+  clearPending,
+  grantTool,
+  normalizeDecision,
+  findPending,
+} = require('./permissions');
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_TOKENS = 8_000;
@@ -103,6 +114,13 @@ function recordToolFailure(row, tool, err) {
 
 const CATALOG_FALLBACK = 'No se pudo completar el turno del harness.';
 
+function throwIfAborted(row) {
+  if (row.abort.signal.aborted) {
+    if (row.timedOut) fail('E_TIMEOUT');
+    fail('E_CANCELLED');
+  }
+}
+
 async function callLlm(complete, args, row) {
   try {
     return await complete(args);
@@ -142,24 +160,102 @@ async function dispatchTool(sandbox, sessionId, row, call) {
   }
 }
 
-async function runLoop(sandbox, sessionId, row, llmTurn) {
-  const complete = typeof llmTurn === 'function' ? llmTurn : defaultLlmTurn();
-  const transcript = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: row.prompt },
-  ];
-  addTokens(row, SYSTEM_PROMPT);
-  addTokens(row, row.prompt);
-  appendStep(row, 'plan', { label: 'Plan' });
+function pauseForPermission(row, raw, ctx) {
+  const pending = createPermission(row, ctx.auth);
+  row.status = 'awaiting_permission';
+  row.pause = {
+    transcript: ctx.transcript,
+    assistantText: ctx.assistantText,
+    step: ctx.step,
+    currentCall: ctx.call,
+    remainingCalls: ctx.remainingCalls,
+    llmTurn: ctx.llmTurn,
+    sessionId: ctx.sessionId,
+  };
+  appendStep(row, 'permission_request', {
+    label: 'Esperando permiso',
+    tool: ctx.auth.tool,
+    code: pending.id,
+  });
+  return publicRun(row);
+}
 
-  let assistantText = '';
-  let lastHadTools = false;
+async function applyToolResult(row, transcript, result) {
+  const observation = result.content || result.error || '';
+  addTokens(row, observation);
+  transcript.push({ role: 'tool', content: observation });
+}
 
-  for (let step = 0; step < row.caps.maxSteps; step += 1) {
-    if (row.abort.signal.aborted) {
-      if (row.timedOut) fail('E_TIMEOUT');
-      fail('E_CANCELLED');
+async function runToolBatch(sandbox, sessionId, raw, row, calls, ctx) {
+  for (let i = 0; i < calls.length; i += 1) {
+    throwIfAborted(row);
+    const call = calls[i];
+    const name = call.name || call.tool || '';
+    const args = call.arguments || call.args || {};
+    const auth = authorizeAction(name, args, {
+      raw,
+      policy: row.permissionPolicy,
+      approved: ctx && ctx.approvedCall === call,
+    });
+    if (auth.denied) {
+      fail('E_PERMISSION_DENIED', auth.message);
     }
+    if (auth.needsPermission) {
+      return {
+        paused: true,
+        run: pauseForPermission(row, raw, {
+          auth,
+          transcript: ctx.transcript,
+          assistantText: ctx.assistantText,
+          step: ctx.step,
+          call,
+          remainingCalls: calls.slice(i + 1),
+          llmTurn: ctx.llmTurn,
+          sessionId,
+        }),
+      };
+    }
+    const result = await dispatchTool(sandbox, sessionId, row, call);
+    await applyToolResult(row, ctx.transcript, result);
+  }
+  return { paused: false };
+}
+
+async function runLoop(sandbox, sessionId, raw, row, llmTurn, resume = null) {
+  const complete = typeof llmTurn === 'function' ? llmTurn : defaultLlmTurn();
+  let transcript;
+  let assistantText;
+  let startStep;
+
+  if (resume) {
+    transcript = resume.transcript;
+    assistantText = resume.assistantText;
+    startStep = resume.step + 1;
+    const batch = await runToolBatch(sandbox, sessionId, raw, row, resume.calls, {
+      transcript,
+      assistantText,
+      step: resume.step,
+      llmTurn: complete,
+      approvedCall: resume.approvedCall,
+    });
+    if (batch.paused) return batch.run;
+    transcript.push({ role: 'assistant', content: assistantText || '(herramientas)' });
+  } else {
+    transcript = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: row.prompt },
+    ];
+    addTokens(row, SYSTEM_PROMPT);
+    addTokens(row, row.prompt);
+    appendStep(row, 'plan', { label: 'Plan' });
+    assistantText = '';
+    startStep = 0;
+  }
+
+  let lastHadTools = Boolean(resume);
+
+  for (let step = startStep; step < row.caps.maxSteps; step += 1) {
+    throwIfAborted(row);
 
     const turn = await callLlm(complete, {
       messages: transcript,
@@ -167,10 +263,7 @@ async function runLoop(sandbox, sessionId, row, llmTurn) {
       step,
       signal: row.abort.signal,
     }, row);
-    if (row.abort.signal.aborted) {
-      if (row.timedOut) fail('E_TIMEOUT');
-      fail('E_CANCELLED');
-    }
+    throwIfAborted(row);
 
     const calls = Array.isArray(turn && turn.toolCalls) ? turn.toolCalls : [];
     const textPart = turn && typeof turn.text === 'string' ? turn.text : '';
@@ -187,16 +280,13 @@ async function runLoop(sandbox, sessionId, row, llmTurn) {
       return publicRun(row);
     }
 
-    for (const call of calls) {
-      if (row.abort.signal.aborted) {
-        if (row.timedOut) fail('E_TIMEOUT');
-        fail('E_CANCELLED');
-      }
-      const result = await dispatchTool(sandbox, sessionId, row, call);
-      const observation = result.content || result.error || '';
-      addTokens(row, observation);
-      transcript.push({ role: 'tool', content: observation });
-    }
+    const batch = await runToolBatch(sandbox, sessionId, raw, row, calls, {
+      transcript,
+      assistantText,
+      step,
+      llmTurn: complete,
+    });
+    if (batch.paused) return batch.run;
     transcript.push({ role: 'assistant', content: assistantText || '(herramientas)' });
   }
 
@@ -209,18 +299,19 @@ async function runLoop(sandbox, sessionId, row, llmTurn) {
   return publicRun(row);
 }
 
-async function runHarness(sandbox, sessionId, raw, opts = {}) {
-  const caps = resolveCaps(opts.env || process.env, opts);
-  const prompt = sanitizePrompt(opts.prompt || opts.text || opts.message);
-  const row = createRun(raw, prompt, caps);
+function armTimeout(row) {
   const timer = setTimeout(() => {
     row.timedOut = true;
     try { row.abort.abort(); } catch (_) { /* ignore */ }
-  }, caps.timeoutMs);
+  }, row.caps.timeoutMs);
   if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
 
+async function withRunGuard(row, fn) {
+  const timer = armTimeout(row);
   try {
-    return await runLoop(sandbox, sessionId, row, opts.llmTurn);
+    return await fn();
   } catch (err) {
     if (row.timedOut || (err && err.code === 'E_TIMEOUT')) {
       finishRun(row, 'error', publicError('E_TIMEOUT'));
@@ -248,6 +339,84 @@ async function runHarness(sandbox, sessionId, raw, opts = {}) {
   }
 }
 
+async function runHarness(sandbox, sessionId, raw, opts = {}) {
+  const caps = resolveCaps(opts.env || process.env, opts);
+  const prompt = sanitizePrompt(opts.prompt || opts.text || opts.message);
+  const row = createRun(raw, prompt, caps);
+  row.permissionPolicy = opts.permissionPolicy;
+  return withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, opts.llmTurn));
+}
+
+async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decision) {
+  if (row.status !== 'awaiting_permission' || !row.pause) {
+    fail('E_PARAMS', 'La ejecución no espera un permiso.');
+  }
+  const pending = findPending(row, permissionId);
+  const normalized = normalizeDecision(decision);
+  if (!normalized) fail('E_PARAMS', 'La decisión de permiso no es válida.');
+
+  if (normalized === 'reject') {
+    resolvePending(row, permissionId, 'reject');
+    row.pause = null;
+    appendStep(row, 'permission_resolved', {
+      label: 'Permiso denegado',
+      tool: pending.tool,
+      code: 'E_PERMISSION_DENIED',
+    });
+    finishRun(row, 'cancelled', publicError('E_PERMISSION_DENIED'));
+    return {
+      ok: true,
+      run: publicRun(row),
+      decision: 'reject',
+      remembered: false,
+    };
+  }
+
+  if (normalized === 'allow_always') {
+    grantTool(raw, pending.tool);
+  }
+  resolvePending(row, permissionId, normalized);
+  appendStep(row, 'permission_resolved', {
+    label: 'Permiso concedido',
+    tool: pending.tool,
+  });
+
+  const pause = row.pause;
+  row.pause = null;
+  row.status = 'running';
+  if (row.abort.signal.aborted) {
+    row.abort = new AbortController();
+  }
+
+  const out = await withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, pause.llmTurn, {
+    transcript: pause.transcript,
+    assistantText: pause.assistantText,
+    step: pause.step,
+    calls: [pause.currentCall, ...(pause.remainingCalls || [])],
+    approvedCall: pause.currentCall,
+  }));
+  return {
+    ok: true,
+    run: out,
+    decision: normalized,
+    remembered: normalized === 'allow_always',
+  };
+}
+
+function cancelActiveRun(row) {
+  if (row.status !== 'running' && row.status !== 'awaiting_permission') {
+    fail('E_PARAMS', 'La ejecución ya no está en curso.');
+  }
+  try { row.abort.abort(); } catch (_) { /* ignore */ }
+  clearPending(row);
+  row.pause = null;
+  finishRun(row, 'cancelled', publicError('E_CANCELLED'));
+  if (!row.steps.some((s) => s.kind === 'cancelled')) {
+    appendStep(row, 'cancelled', { label: 'Cancelado', code: 'E_CANCELLED' });
+  }
+  return publicRun(row);
+}
+
 module.exports = {
   DEFAULT_MAX_STEPS,
   DEFAULT_MAX_TOKENS,
@@ -257,4 +426,6 @@ module.exports = {
   estimateTokens,
   defaultLlmTurn,
   runHarness,
+  resumeHarness,
+  cancelActiveRun,
 };

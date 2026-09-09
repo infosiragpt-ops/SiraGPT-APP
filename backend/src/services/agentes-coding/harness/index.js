@@ -4,13 +4,14 @@
  * agentes-coding/harness — TypeScript/Node tool loop inside a session.
  *
  * Flag: AGENTES_CODING_V2 (default OFF). API-only. See
- * docs/agentes-coding-harness.md
+ * docs/agentes-coding-harness.md and docs/agentes-coding-permissions.md
  */
 
 const { isAgentesCodingV2Enabled } = require('../flags');
 const { fail } = require('../coding-sandbox/errors');
-const { runHarness } = require('./runner');
-const { getStore, findRun, publicRun, forget, appendStep, finishRun, publicError } = require('./store');
+const { runHarness, resumeHarness, cancelActiveRun } = require('./runner');
+const { getStore, findRun, publicRun, forget } = require('./store');
+const { listPending, findPending } = require('./permissions');
 
 function requireEnabled(env = process.env) {
   if (!isAgentesCodingV2Enabled(env)) fail('E_FLAG_OFF');
@@ -49,15 +50,21 @@ async function getRun(sandbox, sessionId, runId) {
 async function cancelRun(sandbox, sessionId, runId) {
   const raw = await requireSession(sandbox, sessionId);
   const row = findRun(raw, runId);
-  if (row.status !== 'running') {
-    fail('E_PARAMS', 'La ejecución ya no está en curso.');
-  }
-  try { row.abort.abort(); } catch (_) { /* ignore */ }
-  finishRun(row, 'cancelled', publicError('E_CANCELLED'));
-  if (!row.steps.some((s) => s.kind === 'cancelled')) {
-    appendStep(row, 'cancelled', { label: 'Cancelado', code: 'E_CANCELLED' });
-  }
-  return { ok: true, run: publicRun(row) };
+  return { ok: true, run: cancelActiveRun(row) };
+}
+
+async function listPermissions(sandbox, sessionId, runId) {
+  const raw = await requireSession(sandbox, sessionId);
+  const row = findRun(raw, runId);
+  return { ok: true, permissions: listPending(row) };
+}
+
+async function resolvePermission(sandbox, sessionId, runId, permissionId, decision, opts = {}) {
+  const raw = await requireSession(sandbox, sessionId);
+  const row = findRun(raw, runId);
+  findPending(row, permissionId);
+  if (opts.permissionPolicy) row.permissionPolicy = opts.permissionPolicy;
+  return resumeHarness(sandbox, sessionId, raw, row, permissionId, decision);
 }
 
 async function runForRequest(sandbox, sessionId, opts, env, extras = {}) {
@@ -68,6 +75,7 @@ async function runForRequest(sandbox, sessionId, opts, env, extras = {}) {
       ...opts,
       env,
       llmTurn: extras.llmTurn || extras.complete || (opts && opts.llmTurn),
+      permissionPolicy: extras.permissionPolicy || (opts && opts.permissionPolicy),
     }),
   };
 }
@@ -87,15 +95,29 @@ async function cancelForRequest(sandbox, sessionId, runId, env) {
   return cancelRun(sandbox, sessionId, runId);
 }
 
+async function listPermissionsForRequest(sandbox, sessionId, runId, env) {
+  requireEnabled(env);
+  return listPermissions(sandbox, sessionId, runId);
+}
+
+async function resolveForRequest(sandbox, sessionId, runId, permissionId, decision, env, extras = {}) {
+  requireEnabled(env);
+  return resolvePermission(sandbox, sessionId, runId, permissionId, decision, extras);
+}
+
 module.exports = {
   requireEnabled,
   runSession,
   listRuns,
   getRun,
   cancelRun,
+  listPermissions,
+  resolvePermission,
   forget,
   runForRequest,
   listForRequest,
   getForRequest,
   cancelForRequest,
+  listPermissionsForRequest,
+  resolveForRequest,
 };

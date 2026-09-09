@@ -7,9 +7,11 @@
 
 const crypto = require('node:crypto');
 const { fail, CATALOG } = require('../coding-sandbox/errors');
+const { listPending } = require('./permissions');
 
 const MAX_RUNS = 16;
 const MAX_PROMPT_CHARS = 16_384;
+const ACTIVE_STATUSES = Object.freeze(['running', 'awaiting_permission']);
 
 function getStore(raw) {
   if (!raw.harness) raw.harness = { items: [] };
@@ -31,7 +33,7 @@ function sanitizePrompt(value) {
 
 function createRun(raw, prompt, caps) {
   const store = getStore(raw);
-  if (store.items.some((row) => row.status === 'running')) {
+  if (store.items.some((row) => ACTIVE_STATUSES.includes(row.status))) {
     fail('E_QUOTA', 'Ya hay un turno del harness en curso.');
   }
   const controller = new AbortController();
@@ -48,6 +50,8 @@ function createRun(raw, prompt, caps) {
     caps,
     abort: controller,
     timedOut: false,
+    permissions: [],
+    pause: null,
   };
   store.items.push(row);
   if (store.items.length > MAX_RUNS) store.items.splice(0, store.items.length - MAX_RUNS);
@@ -102,6 +106,7 @@ function publicRun(row) {
     createdAt: row.createdAt,
     finishedAt: row.finishedAt,
     error: row.error,
+    pendingPermissions: listPending(row),
     caps: row.caps ? {
       maxSteps: row.caps.maxSteps,
       maxTokens: row.caps.maxTokens,
@@ -114,12 +119,13 @@ function forget(sandbox, sessionId) {
   const raw = sandbox && typeof sandbox._unsafeGetRaw === 'function'
     ? sandbox._unsafeGetRaw(sessionId)
     : null;
-  if (raw && raw.harness) raw.harness = { items: [] };
+  if (raw && raw.harness) raw.harness = { items: [], grants: new Set() };
 }
 
 module.exports = {
   MAX_RUNS,
   MAX_PROMPT_CHARS,
+  ACTIVE_STATUSES,
   getStore,
   sanitizePrompt,
   createRun,

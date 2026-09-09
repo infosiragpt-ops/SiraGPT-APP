@@ -87,5 +87,5 @@ Phase 4a session harness (API-only plan/tool/result loop):
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js
 ```
