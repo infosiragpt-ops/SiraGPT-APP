@@ -39,12 +39,17 @@
  *   POST   /api/agentes-coding/sessions/:id/deploy            → Coolify/Dokploy stub
  *   GET    /api/agentes-coding/sessions/:id/deploy
  *   GET    /api/agentes-coding/sessions/:id/deploy/:deployId
+ *   POST   /api/agentes-coding/sessions/:id/harness/run       → Phase 4a tool loop
+ *   GET    /api/agentes-coding/sessions/:id/harness
+ *   GET    /api/agentes-coding/sessions/:id/harness/:runId
+ *   POST   /api/agentes-coding/sessions/:id/harness/:runId/cancel
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
  * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
  * only when health.enabled. Phase 3d/3e/3f/3g are API-only (UI-lock). See
  * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md,
- * docs/agentes-coding-git.md and docs/agentes-coding-export-deploy.md.
+ * docs/agentes-coding-git.md, docs/agentes-coding-export-deploy.md and
+ * docs/agentes-coding-harness.md.
  */
 
 const express = require('express');
@@ -71,6 +76,7 @@ const { renderPreviewStub } = require('../services/agentes-coding/preview');
 const sessionGit = require('../services/agentes-coding/git');
 const sessionExport = require('../services/agentes-coding/export');
 const sessionDeploy = require('../services/agentes-coding/deploy');
+const sessionHarness = require('../services/agentes-coding/harness');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
@@ -81,6 +87,7 @@ function createAgentesCodingRouter(opts = {}) {
   const hub = opts.terminalHub || createTerminalHub({ env, sandbox: getSandbox() });
   const gitRunner = opts.gitRunner || opts.git || null;
   const deployHttp = opts.deployHttp || opts.httpClient || opts.fetchImpl || null;
+  const harnessLlm = opts.harnessLlm || opts.llmTurn || null;
 
   const router = express.Router();
 
@@ -613,6 +620,61 @@ function createAgentesCodingRouter(opts = {}) {
   });
 
   /**
+   * Session harness (Phase 4a). API-only; injectable LLM; sandbox jail only.
+   */
+  router.post('/sessions/:id/harness/run', authenticate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await sessionHarness.runForRequest(getSandbox(), req.params.id, {
+        prompt: body.prompt || body.text || body.message,
+        maxSteps: body.maxSteps,
+        maxTokens: body.maxTokens,
+        timeoutMs: body.timeoutMs,
+      }, env, { llmTurn: harnessLlm });
+      return res.status(201).json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/harness', authenticate, async (req, res) => {
+    try {
+      const result = await sessionHarness.listForRequest(getSandbox(), req.params.id, env);
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/harness/:runId', authenticate, async (req, res) => {
+    try {
+      const result = await sessionHarness.getForRequest(
+        getSandbox(),
+        req.params.id,
+        req.params.runId,
+        env,
+      );
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.post('/sessions/:id/harness/:runId/cancel', authenticate, async (req, res) => {
+    try {
+      const result = await sessionHarness.cancelForRequest(
+        getSandbox(),
+        req.params.id,
+        req.params.runId,
+        env,
+      );
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  /**
    * Destroy the session and its container.
    */
   router.delete('/sessions/:id', authenticate, async (req, res) => {
@@ -621,6 +683,7 @@ function createAgentesCodingRouter(opts = {}) {
       sessionGit.forget(getSandbox(), req.params.id);
       sessionExport.forget(getSandbox(), req.params.id);
       sessionDeploy.forget(getSandbox(), req.params.id);
+      sessionHarness.forget(getSandbox(), req.params.id);
       const out = await getSandbox().destroy(req.params.id);
       return res.json(out);
     } catch (err) {
