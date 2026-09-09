@@ -39,7 +39,7 @@
  *   POST   /api/agentes-coding/sessions/:id/deploy            → Coolify/Dokploy stub
  *   GET    /api/agentes-coding/sessions/:id/deploy
  *   GET    /api/agentes-coding/sessions/:id/deploy/:deployId
- *   POST   /api/agentes-coding/sessions/:id/harness/run       → Phase 4a tool loop (+ 4c jobs)
+ *   POST   /api/agentes-coding/sessions/:id/harness/run       → Phase 4a tool loop (+ 4c jobs; Phase 4f CI smoke)
  *   GET    /api/agentes-coding/sessions/:id/harness
  *   GET    /api/agentes-coding/sessions/:id/harness/:runId
  *   POST   /api/agentes-coding/sessions/:id/harness/:runId/cancel
@@ -51,8 +51,8 @@
  * only when health.enabled. Phase 3d/3e/3f/3g are API-only (UI-lock). See
  * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md,
  * docs/agentes-coding-git.md, docs/agentes-coding-export-deploy.md,
- * docs/agentes-coding-harness.md, docs/agentes-coding-permissions.md
- * and docs/agentes-coding-jobs.md.
+ * docs/agentes-coding-harness.md, docs/agentes-coding-permissions.md,
+ * docs/agentes-coding-jobs.md and docs/agentes-coding-todo-smoke.md.
  */
 
 const express = require('express');

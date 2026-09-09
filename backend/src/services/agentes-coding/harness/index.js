@@ -4,8 +4,8 @@
  * agentes-coding/harness — TypeScript/Node tool loop inside a session.
  *
  * Flag: AGENTES_CODING_V2 (default OFF). API-only. See
- * docs/agentes-coding-harness.md, docs/agentes-coding-permissions.md
- * and docs/agentes-coding-jobs.md
+ * docs/agentes-coding-harness.md, docs/agentes-coding-permissions.md,
+ * docs/agentes-coding-jobs.md and docs/agentes-coding-todo-smoke.md
  */
 
 const { isAgentesCodingV2Enabled } = require('../flags');
