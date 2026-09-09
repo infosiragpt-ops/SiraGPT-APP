@@ -544,6 +544,20 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(await aiService.classifyIntent("hazme un PDF de propuesta"), "doc")
   })
 
+  it("keeps documents about software and Word charts on the document path", async () => {
+    for (const [prompt, expected] of [
+      ["crea un informe sobre esta app", "agent_task"],
+      ["crea un manual de usuario para mi software", "doc"],
+      ["crea un Word para documentar mi app", "agent_task"],
+      ["crea un Word con gráficos", "doc"],
+    ]) {
+      // Compound requests retain the existing document-capable agent route.
+      assert.equal(classifyIntentFastPath(prompt), expected, prompt)
+      assert.equal(await aiService.classifyIntent(prompt), expected, prompt)
+      assert.equal(buildIntentAttributionGraph(prompt).inferredIntent, expected, prompt)
+    }
+  })
+
   it("routes explicit SVG creation to the document artifact pipeline", async () => {
     const intent = await aiService.classifyIntent("créame un SVG de una casa moderna")
     assert.equal(intent, "doc")

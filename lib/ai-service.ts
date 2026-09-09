@@ -4,7 +4,7 @@
 import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
 import { isLiveComputerUsePrompt } from "./computer-login-handoff"
-import { isSoftwareBuildRequest } from "./software-build-intent"
+import { isExplicitDocumentRequest, isSoftwareBuildRequest } from "./software-build-intent"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -683,6 +683,7 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.architecturePlan.test(normalized)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(normalized)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(normalized)) return 'math'
+  if (isExplicitDocumentRequest(normalized)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
   if (isSoftwareBuildRequest(normalized)
     || (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized))) {
@@ -1171,6 +1172,7 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.architecturePlan.test(lc)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(lc)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(lc)) return 'math'
+  if (isExplicitDocumentRequest(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (isSoftwareBuildRequest(lc)
     || (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc))) {

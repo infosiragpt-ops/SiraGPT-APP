@@ -48,8 +48,11 @@ function isExplicitDocumentRequest(text) {
   if (OFFICE_FORMAT_RE.test(n) && (CREATE_RE.test(n) || DOCUMENT_NOUN_RE.test(n))) {
     return true;
   }
-  if (CREATE_RE.test(n) && DOCUMENT_NOUN_RE.test(n) && !SOFTWARE_NOUN_RE.test(n)) {
-    return true;
+  if (CREATE_RE.test(n) && DOCUMENT_NOUN_RE.test(n)) {
+    // "un manual para mi software" requests a document; "una app con
+    // manual de ayuda" requests software. A subject is not the deliverable.
+    const softwareIndex = n.search(SOFTWARE_NOUN_RE);
+    return softwareIndex < 0 || n.search(DOCUMENT_NOUN_RE) < softwareIndex;
   }
   return false;
 }

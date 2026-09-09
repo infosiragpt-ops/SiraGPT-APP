@@ -74,6 +74,38 @@ test('semantic router keeps Word sales reports on the document path', () => {
   assert.equal(analysis.contract.required_extension, '.docx');
 });
 
+test('semantic router preserves pre-software-routing document and text contracts', () => {
+  // Exact a133aeba baseline: the unformatted report already returned text
+  // despite the separate delivery policy requiring a document. Preserve
+  // that limitation rather than assert new automatic document routing.
+  for (const [rawUserRequest, intent, extension, finalOutput, outputFormat] of [
+    ['crea un manual de usuario para mi software', 'doc', '.docx', 'docx_file', 'docx'],
+    ['crea un informe sobre esta app', 'text', null, 'chat_answer', 'chat'],
+    ['crea un informe Word sobre React', 'doc', '.docx', 'docx_file', 'docx'],
+    ['crea un Word con gráficos', 'doc', '.docx', 'docx_file', 'docx'],
+  ]) {
+    const analysis = buildSemanticIntentAnalysis({ rawUserRequest });
+    assert.equal(analysis.intent, intent, rawUserRequest);
+    assert.equal(analysis.contract.required_extension, extension, rawUserRequest);
+    assert.equal(analysis.final_output, finalOutput, rawUserRequest);
+    assert.equal(analysis.semantic_profile.output_format, outputFormat, rawUserRequest);
+    assert.notEqual(analysis.final_output, 'web_artifact', rawUserRequest);
+    assert.notEqual(analysis.semantic_profile.output_format, 'web_artifact', rawUserRequest);
+    assert.equal(analysis.routing.domain_signals.webdev, false, rawUserRequest);
+  }
+});
+
+test('explicit document requests override all web build signal sources', () => {
+  for (const rawUserRequest of [
+    'crea un manual de usuario para mi software',
+    'crea un informe sobre esta app',
+    'crea un informe Word sobre React',
+  ]) {
+    const signals = buildDomainSignals(rawUserRequest, { context: { has_web_build: true } });
+    assert.equal(signals.webdev, false, rawUserRequest);
+  }
+});
+
 test('semantic router maps repository delivery requests to CI-watch skill without app scaffolding', () => {
   const analysis = buildSemanticIntentAnalysis({
     rawUserRequest: 'toma github.com/openclaw/openclaw, reescribe la idea sin copiar, no cambies la interfaz, haz commit, sube a main y vigila CI verde',
