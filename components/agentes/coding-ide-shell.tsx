@@ -2,14 +2,15 @@
 
 /**
  * Minimal coding IDE shell on /agentes (AGENTES_CODING_V2).
- * File tree + Monaco + diff + terminal stub. Never mounts unless the
- * health gate already resolved enabled:true.
+ * File tree + Monaco + diff + terminal stub + project preview (Etapa 4 MVP).
+ * Never mounts unless the health gate already resolved enabled:true.
  */
 
 import * as React from "react"
 import dynamic from "next/dynamic"
 import { useParams } from "next/navigation"
 
+import { CodingPreviewPane } from "@/components/agentes/coding-preview-pane"
 import { CodingTerminalPane } from "@/components/agentes/coding-terminal-pane"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
@@ -27,7 +28,7 @@ import { cn } from "@/lib/utils"
 const MonacoCodeArea = dynamic(() => import("@/components/code/monaco-code-area"), { ssr: false })
 const CodingMonacoDiff = dynamic(() => import("@/components/agentes/coding-monaco-diff"), { ssr: false })
 
-type Pane = "editor" | "diff" | "terminal"
+type Pane = "editor" | "diff" | "terminal" | "preview"
 
 export function CodingIdeShell() {
   const [open, setOpen] = React.useState(true)
@@ -489,6 +490,7 @@ export function CodingIdeShell() {
             <PaneTab current={pane} id="editor" onSelect={setPane}>Editor</PaneTab>
             <PaneTab current={pane} id="diff" onSelect={setPane}>Diferencias</PaneTab>
             <PaneTab current={pane} id="terminal" onSelect={setPane}>Terminal</PaneTab>
+            <PaneTab current={pane} id="preview" onSelect={setPane}>Vista previa</PaneTab>
             {pane === "diff" ? (
               <button
                 type="button"
@@ -536,6 +538,9 @@ export function CodingIdeShell() {
                 lastOutput={terminalOut}
                 onExec={handleExec}
               />
+            ) : null}
+            {pane === "preview" ? (
+              <CodingPreviewPane key={projectId || "none"} projectId={projectId} />
             ) : null}
           </div>
         </div>
