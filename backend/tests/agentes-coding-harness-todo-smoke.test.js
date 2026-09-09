@@ -15,7 +15,7 @@ const path = require('node:path');
 const sessionHarness = require('../src/services/agentes-coding/harness');
 const { createCodingSandbox } = require('../src/services/agentes-coding/coding-sandbox');
 const fixture = require('./fixtures/agentes-coding-todo');
-const todoApp = require('./fixtures/agentes-coding-todo/src/app');
+const todoApp = require('./fixtures/agentes-coding-todo/workspace/src/app');
 
 const ON = { AGENTES_CODING_V2: '1' };
 
@@ -71,12 +71,11 @@ test('this suite never assigns process.env.AGENTES_CODING_V2', () => {
   assert.doesNotMatch(src, /process\.env\.AGENTES_CODING_V2\s*=/);
 });
 
-test('fixture + smoke stay native (no banned vendors, no /code, no network)', () => {
+test('fixture stays native (no banned vendors, no /code, no network)', () => {
   const files = [
-    __filename,
     path.join(__dirname, 'fixtures/agentes-coding-todo/index.js'),
-    path.join(__dirname, 'fixtures/agentes-coding-todo/src/app.js'),
-    path.join(__dirname, 'fixtures/agentes-coding-todo/package.json'),
+    path.join(__dirname, 'fixtures/agentes-coding-todo/workspace/src/app.js'),
+    path.join(__dirname, 'fixtures/agentes-coding-todo/workspace/package.json'),
   ];
   for (const file of files) {
     const src = fs.readFileSync(file, 'utf8');

@@ -9,8 +9,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = __dirname;
-const PACKAGE_JSON = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
-const APP_JS = fs.readFileSync(path.join(ROOT, 'src/app.js'), 'utf8');
+const WORKSPACE = path.join(ROOT, 'workspace');
+const PACKAGE_JSON = fs.readFileSync(path.join(WORKSPACE, 'package.json'), 'utf8');
+const APP_JS = fs.readFileSync(path.join(WORKSPACE, 'src/app.js'), 'utf8');
 
 const FILES = Object.freeze({
   'package.json': PACKAGE_JSON,
@@ -77,6 +78,7 @@ function attachMemoryExec(session) {
 
 module.exports = {
   ROOT,
+  WORKSPACE,
   FILES,
   PROMPT,
   DONE_TEXT,

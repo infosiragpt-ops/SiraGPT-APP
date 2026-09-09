@@ -18,7 +18,7 @@ Catalog: [`docs/oss-catalog.md`](./oss-catalog.md)
 
 | Piece | Path |
 |---|---|
-| Fixture | `backend/tests/fixtures/agentes-coding-todo/` (`package.json` + `src/app.js`) |
+| Fixture | `backend/tests/fixtures/agentes-coding-todo/workspace/` (`package.json` + `src/app.js`) |
 | Scripted turns | `backend/tests/fixtures/agentes-coding-todo/index.js` |
 | Smoke | `backend/tests/agentes-coding-harness-todo-smoke.test.js` |
 
