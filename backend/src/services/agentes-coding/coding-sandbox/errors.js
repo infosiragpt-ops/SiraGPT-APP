@@ -38,6 +38,14 @@ const CATALOG = Object.freeze({
     status: 403,
     message: 'Exponer puertos requiere allowlist y el flag activo.',
   },
+  E_PREVIEW_EXPIRED: {
+    status: 410,
+    message: 'La vista previa caducó. Vuelve a exponer el puerto.',
+  },
+  E_PREVIEW_FAILED: {
+    status: 500,
+    message: 'No se pudo publicar la vista previa del sandbox.',
+  },
   E_TIMEOUT: {
     status: 504,
     message: 'El comando superó el tiempo máximo del sandbox.',

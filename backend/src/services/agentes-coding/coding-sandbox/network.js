@@ -10,6 +10,7 @@
  */
 
 const { fail } = require('./errors');
+const { parsePortAllowlist } = require('../preview/ports');
 
 const FORBIDDEN_DOCKER_NETWORKS = new Set(['host', 'bridge']);
 const DEFAULT_COMPOSE_NETWORK = 'siragpt-coding-sandbox';
@@ -31,6 +32,7 @@ function createNetworkPolicy(opts = {}) {
   const allowlist = Array.isArray(opts.allowlist)
     ? opts.allowlist.map(normalizeHost).filter(Boolean)
     : [];
+  const portAllowlist = parsePortAllowlist(opts.portAllowlist || opts.previewPorts);
   const hook = typeof opts.hook === 'function' ? opts.hook : null;
   const composeNetwork = String(opts.composeNetwork || DEFAULT_COMPOSE_NETWORK).trim()
     || DEFAULT_COMPOSE_NETWORK;
@@ -59,7 +61,13 @@ function createNetworkPolicy(opts = {}) {
       }
       if (verdict === false) return { allowed: false, dockerNetwork: null };
     }
-    if (req.action === 'exposePort') return { allowed: false, dockerNetwork: null };
+    if (req.action === 'exposePort') {
+      const n = Number.parseInt(req.port, 10);
+      if (Number.isFinite(n) && portAllowlist.includes(n)) {
+        return { allowed: true, dockerNetwork: null };
+      }
+      return { allowed: false, dockerNetwork: null };
+    }
     if (req.host && allowlist.some((rule) => hostMatches(rule, req.host))) {
       return { allowed: true, dockerNetwork: null };
     }
@@ -79,8 +87,9 @@ function createNetworkPolicy(opts = {}) {
   }
 
   return Object.freeze({
-    mode: allowlist.length > 0 ? 'allowlist' : 'deny',
+    mode: allowlist.length > 0 || portAllowlist.length > 0 ? 'allowlist' : 'deny',
     allowlist: Object.freeze([...allowlist]),
+    portAllowlist: Object.freeze([...portAllowlist]),
     composeNetwork,
     decide,
     allows,

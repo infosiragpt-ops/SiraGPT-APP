@@ -288,11 +288,15 @@ test('exposePort denied by default', async () => {
 test('exposePort allowed by network hook', async () => {
   const sb = sandbox({
     networkHook: ({ action }) => action === 'exposePort',
+    previewSecret: 'test-preview-secret-32b!',
   });
   const session = await sb.createSession();
   const exposed = await sb.exposePort(session.id, 5173);
   assert.equal(exposed.port, 5173);
-  assert.equal(exposed.published, false);
+  assert.equal(exposed.published, true);
+  assert.match(exposed.url, /\/api\/agentes-coding\/sessions\/.+\/preview\//);
+  assert.equal(exposed.host, '127.0.0.1');
+  assert.equal(exposed.hostPort, 5173);
 });
 
 test('max sessions quota', async () => {

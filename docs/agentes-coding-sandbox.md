@@ -21,12 +21,14 @@ that file is not on the branch yet). License / Tier S catalog:
 | Sessions | `/api/agentes-coding/sessions*` — **404** unless the flag is on |
 | Repo-map | `GET|POST /sessions/:id/map` — Phase 3b, see [`docs/agentes-coding-repomap.md`](./agentes-coding-repomap.md) |
 | Terminal | `POST /sessions/:id/terminal*` — Phase 3d PTY stub, see [`docs/agentes-coding-terminal.md`](./agentes-coding-terminal.md) |
+| Preview | `POST /sessions/:id/preview` — Phase 3e signed exposePort, see [`docs/agentes-coding-preview.md`](./agentes-coding-preview.md) |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
 Interface (same on memory + docker drivers):
 
 `createSession` · `exec` · `readFile` · `writeFile` · `listFiles` ·
-`exposePort` (deny-by-default stub) · `destroy`
+`exposePort` (deny-by-default; signed URL + localhost metadata) ·
+`listPorts` · `unexposePort` · `resolvePreview` · `destroy`
 
 ## Drivers
 
@@ -58,6 +60,7 @@ adapter `docker run`s one ephemeral container per session from
 
 Stable codes: `E_FLAG_OFF` `E_PARAMS` `E_SESSION_NOT_FOUND`
 `E_SESSION_EXPIRED` `E_PATH_ESCAPE` `E_NETWORK_DENIED` `E_PORT_DENIED`
+`E_PREVIEW_EXPIRED` `E_PREVIEW_FAILED`
 `E_TIMEOUT` `E_QUOTA` `E_PROVIDER` `E_CANCELLED` (AGENTS.md §16).
 
 ## Out of scope
@@ -69,9 +72,11 @@ Phase 3c structural edit (ast-grep patterns, flag-gated):
 [`docs/agentes-coding-struct-edit.md`](./agentes-coding-struct-edit.md).
 Phase 3d terminal channel (API-only PTY stub):
 [`docs/agentes-coding-terminal.md`](./agentes-coding-terminal.md).
+Phase 3e preview `exposePort` (signed URL stub):
+[`docs/agentes-coding-preview.md`](./agentes-coding-preview.md).
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js
 ```

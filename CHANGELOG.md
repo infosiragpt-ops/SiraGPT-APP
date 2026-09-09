@@ -8,6 +8,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 3e of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  sandbox `exposePort` publishes a signed ephemeral preview URL plus
+  localhost-mapped port metadata for memory/docker DEV drivers
+  (`POST /api/agentes-coding/sessions/:id/preview`, `GET …/ports`,
+  `GET …/preview/:token`). Deny-by-default without a port allowlist
+  or network hook. Spanish errors (`E_PORT_DENIED`, `E_PREVIEW_EXPIRED`,
+  `E_FLAG_OFF`, …). Injectable networking — no real bind in CI. API-only
+  (UI-lock). No Daytona, no `/code`, flag stays off in production. See
+  `docs/agentes-coding-preview.md`.
 - Phase 3d of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   session terminal channel (PTY stub) over SSE+POST and an injectable
   WebSocket attach (`/api/agentes-coding/sessions/:id/terminal*`,
