@@ -27,11 +27,18 @@
  *   GET    /api/agentes-coding/sessions/:id/preview/:token → resolve signed preview
  *   DELETE /api/agentes-coding/sessions/:id/preview/:port  → unexpose
  *   GET|POST|DELETE /api/agentes-coding/sessions/:id/ports[/:port]
+ *   POST   /api/agentes-coding/sessions/:id/git/init         → git init (Phase 3f)
+ *   GET    /api/agentes-coding/sessions/:id/git/status
+ *   GET    /api/agentes-coding/sessions/:id/git/diff
+ *   POST   /api/agentes-coding/sessions/:id/git/checkpoint
+ *   GET    /api/agentes-coding/sessions/:id/git/checkpoints
+ *   GET    /api/agentes-coding/sessions/:id/git/checkpoints/:sha
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
  * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
- * only when health.enabled. Phase 3d/3e are API-only (UI-lock). See
- * docs/agentes-coding-terminal.md and docs/agentes-coding-preview.md.
+ * only when health.enabled. Phase 3d/3e/3f are API-only (UI-lock). See
+ * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md and
+ * docs/agentes-coding-git.md.
  */
 
 const express = require('express');
@@ -55,6 +62,7 @@ const {
   WS_PATH,
 } = require('../services/agentes-coding/terminal');
 const { renderPreviewStub } = require('../services/agentes-coding/preview');
+const sessionGit = require('../services/agentes-coding/git');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
@@ -63,6 +71,7 @@ function createAgentesCodingRouter(opts = {}) {
   const structRunner = opts.sgRunner || opts.structuralEditRunner || null;
   const authenticate = opts.authenticate || authenticateToken;
   const hub = opts.terminalHub || createTerminalHub({ env, sandbox: getSandbox() });
+  const gitRunner = opts.gitRunner || opts.git || null;
 
   const router = express.Router();
 
@@ -417,11 +426,95 @@ function createAgentesCodingRouter(opts = {}) {
   });
 
   /**
+   * Per-session git (Phase 3f). API-only; UI-lock unchanged.
+   */
+  router.post('/sessions/:id/git/init', authenticate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await sessionGit.initForRequest(getSandbox(), req.params.id, {
+        branch: body.branch,
+        runner: gitRunner,
+      }, env, { runner: gitRunner });
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/git/status', authenticate, async (req, res) => {
+    try {
+      const result = await sessionGit.statusForRequest(getSandbox(), req.params.id, {
+        runner: gitRunner,
+      }, env, { runner: gitRunner });
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/git/diff', authenticate, async (req, res) => {
+    try {
+      const src = { ...(req.query || {}), ...(req.body || {}) };
+      const result = await sessionGit.diffForRequest(getSandbox(), req.params.id, {
+        path: src.path,
+        from: src.from,
+        to: src.to,
+        runner: gitRunner,
+      }, env, { runner: gitRunner });
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.post('/sessions/:id/git/checkpoint', authenticate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await sessionGit.checkpointForRequest(getSandbox(), req.params.id, {
+        message: body.message,
+        runner: gitRunner,
+      }, env, { runner: gitRunner });
+      return res.status(201).json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/git/checkpoints', authenticate, async (req, res) => {
+    try {
+      const result = await sessionGit.listForRequest(getSandbox(), req.params.id, {
+        limit: req.query && req.query.limit,
+        runner: gitRunner,
+      }, env, { runner: gitRunner });
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.get('/sessions/:id/git/checkpoints/:sha', authenticate, async (req, res) => {
+    try {
+      const result = await sessionGit.getForRequest(
+        getSandbox(),
+        req.params.id,
+        req.params.sha,
+        { runner: gitRunner },
+        env,
+        { runner: gitRunner },
+      );
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  /**
    * Destroy the session and its container.
    */
   router.delete('/sessions/:id', authenticate, async (req, res) => {
     try {
       hub.closeSession(req.params.id);
+      sessionGit.forget(getSandbox(), req.params.id);
       const out = await getSandbox().destroy(req.params.id);
       return res.json(out);
     } catch (err) {

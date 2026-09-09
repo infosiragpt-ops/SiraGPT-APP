@@ -46,5 +46,5 @@ repos, F7 rewrite, adding `xterm` as a new npm dependency.
 ```bash
 node --test tests/agentes-coding-ide-source.test.ts
 npx vitest run tests/lib/agentes-coding-api.test.ts tests/lib/agentes-coding-file-tree.test.ts tests/components/agentes-coding-ide-gate.test.tsx --pool=threads
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js
 ```

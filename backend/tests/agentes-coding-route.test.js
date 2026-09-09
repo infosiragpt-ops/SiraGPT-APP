@@ -39,7 +39,13 @@ test('health is always 200 and carries the flag value', async () => {
 test('non-health routes are 404 while the flag is off', async () => {
   delete process.env.AGENTES_CODING_V2;
   const app = buildApp();
-  for (const path of ['/api/agentes-coding/sessions', '/api/agentes-coding/sandbox', '/api/agentes-coding/projects']) {
+  for (const path of [
+    '/api/agentes-coding/sessions',
+    '/api/agentes-coding/sandbox',
+    '/api/agentes-coding/projects',
+    '/api/agentes-coding/sessions/csb_x/git/status',
+    '/api/agentes-coding/sessions/csb_x/git/checkpoints',
+  ]) {
     const res = await request(app).get(path);
     assert.equal(res.status, 404, path);
   }

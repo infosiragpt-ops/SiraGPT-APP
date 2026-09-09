@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 3f of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  per-session git init / status / diff / commit-checkpoint inside the
+  jailed workspace (`POST|GET /api/agentes-coding/sessions/:id/git/*`).
+  Injectable argv-only runner (simple-git pattern) plus an in-process
+  store (isomorphic-git pattern). Spanish errors (`E_GIT_FAILED`,
+  `E_CHECKPOINT_NOT_FOUND`). API-only — UI-lock unchanged. No npm dep,
+  no Daytona, no `/code`, flag stays off in production. See
+  `docs/agentes-coding-git.md`.
 - Phase 3e of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   sandbox `exposePort` publishes a signed ephemeral preview URL plus
   localhost-mapped port metadata for memory/docker DEV drivers
