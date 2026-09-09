@@ -63,7 +63,7 @@ const {
     writeGenerateSseError,
     generateStreamFailure,
 } = require('./ai/generate-sse-close');
-const { openGuardedStream, readGuardedStream, firstByteTimeoutError } = require('./ai/generate-stream-guard');
+const { openGuardedStream, readGuardedStream, firstByteTimeoutError, parentStreamAbortError } = require('./ai/generate-stream-guard');
 const { createGenerateLogger } = require('./ai/generate-request-observability');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -820,7 +820,7 @@ class AIService {
                 if (hasStreamedAnyContent) break;
 
                 for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
-                    if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+                    if (signal && signal.aborted) throw parentStreamAbortError(signal);
 
                     // Per-attempt controller: composes the client signal with a
                     // 30s first-byte timer. If the provider hasn't emitted a
@@ -828,7 +828,7 @@ class AIService {
                     // attempt and finish the turn. Starting another call
                     // before upstream acknowledges abort can duplicate charges.
                     const attemptCtrl = new AbortController();
-                    const onParentAbort = () => attemptCtrl.abort(Object.assign(new Error('client aborted'), { name: 'AbortError' }));
+                    const onParentAbort = () => attemptCtrl.abort(parentStreamAbortError(signal));
                     if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
                     let firstByteSeen = false;
                     let timedOut = false;
@@ -995,13 +995,17 @@ class AIService {
                         return fullResponseContent;
                     } catch (err) {
                         // Preserve the distinction between our deadline and Stop.
+                        // A cooperative SDK may replace the route's deadline
+                        // with AbortError, so the parent's reason is authoritative.
+                        const parentDeadline = signal?.aborted && signal.reason?.name === 'TimeoutError';
                         if (timedOut) err = firstByteTimeoutError();
+                        else if (parentDeadline) err = signal.reason;
                         lastError = err;
 
                         // Distinguish OUR first-byte timeout (terminal) from
                         // the external client abort (terminal) — both show
                         // up as AbortError from the SDK.
-                        const isOurTimeout = timedOut || err.code === 'TIMEOUT';
+                        const isOurTimeout = timedOut || parentDeadline || err.code === 'TIMEOUT';
                         const isClientCancel = !isOurTimeout && signal?.aborted && !isProviderClientError(err);
                         if (isClientCancel) throw err;
                         streamLog.error('stream.failed', err, { attempt, outcome: 'failed' });

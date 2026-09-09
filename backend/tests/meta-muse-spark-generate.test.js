@@ -1,9 +1,30 @@
 'use strict';
 
-const { test } = require('node:test');
+const { test, after, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+
+// Pino's default SonicBoom and the service's console diagnostics write to
+// stdout outside node:test's serialized messages. Node 24 can deserialize a
+// mixed output chunk incorrectly, so neither source uses the runner's pipe.
+// Keep the real logger, privacy boundary and JSON serialization; capture only
+// the destination in this isolated test process, before loading the service.
+const capturedConsoleRecords = [];
+for (const level of ['log', 'warn', 'error']) {
+  mock.method(console, level, (...args) => { capturedConsoleRecords.push({ level, args }); });
+}
+const { symbols: pinoSymbols } = require('pino');
+const { logger } = require('../src/middleware/logger');
+const originalLogSink = logger[pinoSymbols.streamSym];
+const capturedLogRecords = [];
+logger[pinoSymbols.streamSym] = {
+  write(line) {
+    capturedLogRecords.push(JSON.parse(String(line)));
+    return true;
+  },
+};
+after(() => { logger[pinoSymbols.streamSym] = originalLogSink; });
 
 const gateway = require('../src/services/ai-product-os/litellm-gateway');
 const service = require('../src/services/ai-service');
@@ -20,6 +41,7 @@ const { waitForActiveTurn } = require('../src/services/chat-turn-idempotency');
 const { inferProviderFromModelId, resolveGenerateProvider } = require('../src/services/ai/provider-inference');
 const { getBreaker } = require('../src/services/circuit-breaker');
 const { openGuardedStream, readGuardedStream, firstByteTimeoutError } = require('../src/services/ai/generate-stream-guard');
+const { abortIfFirstByteOver45s } = require('../src/services/agent-runner/engine-adapter');
 
 const turn = (client, res, signal) => ({
   provider: 'Meta', model: 'muse-spark-1.3-contributor', client, res, signal,
@@ -28,6 +50,118 @@ const turn = (client, res, signal) => ({
   skipDoneSentinel: true, thinkingLevel: 'high',
 });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+function expireRouteFirstByteWatchdog(controller) {
+  const hit = abortIfFirstByteOver45s({ startedAt: 1, now: 45_001, firstByteAt: null });
+  assert.equal(hit.abort, true);
+  // The route wiring test below pins this same timeout reason in production.
+  if (hit.abort) controller.abort(firstByteTimeoutError());
+}
+
+test('generate route labels its 45-second watchdog abort as a timeout, not Stop', () => {
+  const route = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
+  assert.ok(/require\('\.\.\/services\/ai\/generate-stream-guard'\)/.test(route));
+  const watchdog = route.slice(route.indexOf('const adTtfb ='), route.indexOf('/* 3H63 TTFB fail-open */'));
+  assert.match(watchdog, /if \(hit && hit\.abort\)\s*\{\s*controller\.abort\(firstByteTimeoutError\(\)\)/);
+});
+
+test('route deadline after preparation terminates a hanging open before the provider deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const cancel = new AbortController();
+  let calls = 0;
+  let requestSignal;
+  const client = { chat: { completions: { create: (_payload, options) => {
+    calls++;
+    requestSignal = options.signal;
+    return new Promise(() => {});
+  } } } };
+  const res = mockRes();
+  // Twenty seconds of route preparation leaves only 25 s of its 45 s budget.
+  t.mock.timers.tick(20_000);
+  const run = service.generateStream(turn(client, res, cancel.signal));
+  await flush();
+  t.mock.timers.tick(25_000);
+  expireRouteFirstByteWatchdog(cancel);
+  assert.match(await run, /tardó demasiado/);
+  assert.equal(calls, 1, 'the route deadline must not open another billable attempt');
+  assert.equal(requestSignal.reason.code, 'ETIMEDOUT');
+  assert.match(res.chunks.join(''), /"code":"E_TIMEOUT"/);
+  assert.equal(res.writableEnded, true);
+  assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 1);
+});
+
+test('route deadline after reasoning-only activity remains a timeout if the SDK reports AbortError', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const cancel = new AbortController();
+  let calls = 0;
+  const client = { chat: { completions: { create: async (_payload, { signal }) => {
+    calls++;
+    return (async function* () {
+      yield { choices: [{ delta: { reasoning_content: 'Actividad de prueba' } }] };
+      await new Promise((_resolve, reject) => signal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('SDK abort'), { name: 'AbortError' }));
+      }, { once: true }));
+    })();
+  } } } };
+  const res = mockRes();
+  const run = service.generateStream(turn(client, res, cancel.signal));
+  await flush();
+  t.mock.timers.tick(45_000);
+  expireRouteFirstByteWatchdog(cancel);
+  assert.match(await run, /tardó demasiado/);
+  assert.equal(calls, 1, 'reasoning must not be replayed');
+  assert.match(res.chunks.join(''), /reasoning_delta/);
+  assert.match(res.chunks.join(''), /"code":"E_TIMEOUT"/);
+  assert.equal(res.writableEnded, true);
+  assert.equal((res.chunks.join('').match(/data: \[DONE\]/g) || []).length, 1);
+});
+
+test('a parent deadline before dispatch is visible while a genuine pre-dispatch Stop stays cancelled', async () => {
+  for (const deadline of [true, false]) {
+    const cancel = new AbortController();
+    if (deadline) expireRouteFirstByteWatchdog(cancel);
+    else cancel.abort();
+    let calls = 0;
+    const client = { chat: { completions: { create: () => { calls++; assert.fail('already aborted'); } } } };
+    const res = mockRes();
+    const output = await service.generateStream(turn(client, res, cancel.signal));
+    assert.equal(calls, 0);
+    if (deadline) {
+      assert.match(output, /tardó demasiado/);
+      assert.match(res.chunks.join(''), /"code":"E_TIMEOUT"/);
+      assert.equal(res.writableEnded, true);
+    } else {
+      assert.equal(output, '');
+      assert.doesNotMatch(res.chunks.join(''), /E_TIMEOUT|E_PROVIDER|"type":"error"/);
+    }
+  }
+});
+
+test('stream failure telemetry reaches the real Pino sink without SDK or conversation data', async () => {
+  getBreaker('Meta:muse-spark-1.3-contributor').reset();
+  const before = capturedLogRecords.length;
+  const client = { chat: { completions: { create: async () => {
+    throw Object.assign(new Error('PRIVATE_SDK_SENTINEL Bearer TEST_PRIVATE muse-spark'), {
+      status: 400,
+      prompt: 'PRIVATE_PROMPT_SENTINEL',
+      response: { data: 'PRIVATE_RESPONSE_SENTINEL' },
+    });
+  } } } };
+  const res = mockRes();
+  await service.generateStream(turn(client, res));
+  const records = capturedLogRecords.slice(before).filter((record) => record.event?.startsWith('ai.generate.'));
+  assert.deepEqual(records.map(({ event, errorName, status }) => ({ event, errorName, status })), [
+    { event: 'ai.generate.stream.failed', errorName: 'error', status: 400 },
+    { event: 'ai.generate.request.failed', errorName: 'error', status: 400 },
+  ]);
+  assert.equal(records[0].attempt, 1);
+  assert.ok(records.every((record) => record.level === 50 && record.outcome === 'failed'));
+  assert.doesNotMatch(JSON.stringify(records), /PRIVATE_|Bearer|muse-spark|programa un juego/);
+  assert.ok(capturedConsoleRecords.some(({ args }) => args.some((arg) => String(arg).includes('Messages count:'))));
+  assert.match(res.chunks.join(''), /"code":"E_PARAMS"/);
+});
 
 test('first-byte timeout is an explicit terminal error even if the SDK ignores abort', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });

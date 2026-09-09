@@ -14,7 +14,8 @@ and improvement cycles follow a sequential number with the date the work landed.
   Reasoning/tool progress is not replayed on retry; tool deltas count as
   provider progress. Errors use bounded Spanish codes without SDK text, retain
   partial answers, and close SSE exactly once. No provider, key, UI or timeout
-  configuration changes.
+  configuration changes. The existing route-level 45-second watchdog now
+  preserves its deadline reason instead of being mistaken for a user Stop.
 
 ### Added
 

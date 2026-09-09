@@ -42,4 +42,11 @@ function firstByteTimeoutError() {
   });
 }
 
-module.exports = { openGuardedStream, readGuardedStream, firstByteTimeoutError };
+function parentStreamAbortError(signal) {
+  // The route's wall-clock watchdog and the user's Stop share a signal.
+  // Preserve our explicit deadline reason; a normal Stop remains AbortError.
+  if (signal?.reason?.name === 'TimeoutError') return signal.reason;
+  return Object.assign(new Error('client aborted'), { name: 'AbortError' });
+}
+
+module.exports = { openGuardedStream, readGuardedStream, firstByteTimeoutError, parentStreamAbortError };

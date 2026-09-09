@@ -8,6 +8,7 @@ const {
   summarizeGenerateRequest,
 } = require('../services/ai/generate-request-observability');
 const generatePersistenceLog = createGenerateLogger();
+const { firstByteTimeoutError } = require('../services/ai/generate-stream-guard');
 
 // Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
 // crash in the middleware module (e.g. prisma model missing in dev) can
@@ -3036,7 +3037,7 @@ router.post(
                 firstByteAt: __firstByteAt,
               });
               if (hit && hit.abort) {
-                controller.abort();
+                controller.abort(firstByteTimeoutError());
                 if (__firstByteWatchdog) {
                   clearInterval(__firstByteWatchdog);
                   __firstByteWatchdog = null;
