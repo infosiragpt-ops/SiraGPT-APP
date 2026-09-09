@@ -31,7 +31,7 @@ const FORMAT_RULES = [
   { format: 'pptx', label: 'PowerPoint presentation', patterns: [/\b(powerpoint|power point|pptx|presentaci[oó]n|diapositivas|slides)\b/i] },
   { format: 'pdf', label: 'PDF document', patterns: [/\b(pdf)\b/i] },
   { format: 'csv', label: 'CSV table', patterns: [/\b(csv)\b/i] },
-  { format: 'html', label: 'HTML artifact', patterns: [/\b(html|web|landing page|sitio web|p[aá]gina web)\b/i] },
+  { format: 'html', label: 'HTML artifact', patterns: [/\b(html|landing page|sitio web|p[aá]gina web|pagina html)\b/i] },
   { format: 'markdown', label: 'Markdown document', patterns: [/\b(markdown|md)\b/i] },
 ];
 

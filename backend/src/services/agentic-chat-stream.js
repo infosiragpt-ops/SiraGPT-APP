@@ -65,6 +65,10 @@
     buildArtifactDeliveryPrompt,
     validateArtifactDelivery,
   } = require('./agents/artifact-delivery-contract');
+  const {
+    isSoftwareBuildRequest,
+    isExplicitDocumentRequest,
+  } = require('./agents/software-build-intent');
 
   const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
   const SENTINEL_FENCE_CLOSE = '\n```';
@@ -806,6 +810,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (!openai) throw new Error('runAgenticChat: openai client is required');
     if (!model)  throw new Error('runAgenticChat: model is required');
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
+    if (toolContext && typeof toolContext === 'object') {
+      toolContext.userQuery = toolContext.userQuery || userQuery;
+      toolContext.goal = toolContext.goal || userQuery;
+    }
+    const softwareBuildTurn = isSoftwareBuildRequest(userQuery) && !isExplicitDocumentRequest(userQuery);
     if (!res) throw new Error('runAgenticChat: res is required');
 
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
@@ -1370,7 +1379,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const pinned = [
           ...mediaIntents.map((intent) => intent && intent.tool),
           ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
-          ...(artifactDeliveryContract.active ? ['create_document', 'verify_artifact'] : []),
+          ...(artifactDeliveryContract.active && !softwareBuildTurn ? ['create_document', 'verify_artifact'] : []),
+          ...(softwareBuildTurn ? ['create_artifact'] : []),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
@@ -1449,6 +1459,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // cannot answer with a preserved PDF annex.
     if (wantsNewDeckDeliverable && availableToolNames.has('create_document') && !initialToolChoice) {
       initialToolChoice = 'create_document';
+    }
+    // Website/app/software asks must produce code, not Document Sandbox Word.
+    if (softwareBuildTurn && Array.isArray(tools)) {
+      tools = tools.filter((t) => !(t && t.name === 'create_document'));
+      for (const name of availableToolNames) {
+        if (name === 'create_document') availableToolNames.delete(name);
+      }
+    }
+    if (softwareBuildTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
+      initialToolChoice = 'create_artifact';
     }
     // A strong specialized-skill intent gets one deterministic first call. The
     // model still selects the concrete id/args and can chain further skills
@@ -1636,7 +1656,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida audio, voz, narración, locución, mp3 o wav, DEBES llamar `generate_speech` con el texto exacto y adjuntar el archivo MP3 descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API, un reproductor en el navegador, o decirle al usuario que pulse reproducir. El entregable es un archivo de audio real.',
-      'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
+      softwareBuildTurn
+        ? 'El usuario pidio SOFTWARE con codigo real (HTML/CSS/JS o una app web), no un documento Word/PDF. Entrega archivos de codigo con `create_artifact` tipo html (pagina autocontenida) o .html/.css/.js. PROHIBIDO create_document con .docx/.xlsx/.pptx/.pdf (E_SOFTWARE_CODE). No menciones verificaciones tecnicas de Word.'
+        : 'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
       require('./computer/login-handoff').POLICY_ES,

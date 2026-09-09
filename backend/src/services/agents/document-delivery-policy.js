@@ -1,5 +1,7 @@
+const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('./software-build-intent');
+
 const WORDISH_RE = /\b(word|docx|informe|tesis|ensayo|monograf[ií]a|reporte|paper|art[ií]culo|marco te[oó]rico|legal|contrato|documento)\b/i;
-const SHEET_RE = /\b(excel|xlsx|spreadsheet|tabla|tabular|kpi|dashboard|f[oó]rmula|c[aá]lculo|presupuesto|base de datos|ventas|costos|margen|filas|columnas)\b/i;
+const SHEET_RE = /\b(excel|xlsx|spreadsheet|tabla|tabular|kpi|dashboard|f[oó]rmula|c[aá]lculo|presupuesto|base de datos|costos|margen|filas|columnas)\b/i;
 const DECK_RE = /\b(ppt|pptx|powerpoint|presentaci[oó]n|slides?|diapositivas?|pitch|defensa|exposici[oó]n|deck)\b/i;
 const PDF_RE = /\b(pdf|certificado|formulario|imprimible|constancia|recibo)\b/i;
 const LONG_DELIVERABLE_RE = /\b(extenso|profesional|completo|detallado|profund[oa]|acad[eé]mic[oa]|investigaci[oó]n|an[aá]lisis|estrategia|plan de negocio|consultor[ií]a|entregable)\b/i;
@@ -203,6 +205,9 @@ function detectComplexity(text, estimatedWords) {
 // would auto-promote conversational turns to doc_required.
 function classifyMode(requestText, estimatedWords, format, files = [], options = {}) {
   if (options.transcriptionOnly || options.chatOnlyDirective) return 'chat_only';
+  if (isSoftwareBuildRequest(requestText) && !isExplicitDocumentRequest(requestText)) {
+    return 'chat_only';
+  }
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
   const explicitFileFormat = EXPLICIT_WORD_OUTPUT_RE.test(requestText)
