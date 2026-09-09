@@ -30,3 +30,18 @@ describe("per-chat pixel mascots", () => {
     assert.match(chat, /<ChatMascot\s+seed=\{currentChat\.id\}/)
   })
 })
+
+describe("per-chat work status dots", () => {
+  it("keeps mascots and overlays B/N pulse, green done, and yellow hand waiting", () => {
+    const sidebar = source("components/app-sidebar.tsx")
+    assert.match(sidebar, /data-chat-work-status=\{workStatus\}/)
+    assert.match(sidebar, /resolveChatWorkStatus/)
+    assert.match(sidebar, /motion-safe:animate-ping/)
+    assert.match(sidebar, /bg-zinc-900/)
+    assert.match(sidebar, /bg-emerald-500/)
+    assert.match(sidebar, /bg-amber-400/)
+    assert.match(sidebar, /<Hand className="h-3 w-3 text-amber-500"/)
+    assert.doesNotMatch(sidebar, /bg-sky-500/)
+    assert.doesNotMatch(sidebar, /isStreaming && "motion-safe:animate-pulse"/)
+  })
+})
