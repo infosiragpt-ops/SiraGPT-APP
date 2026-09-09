@@ -57,8 +57,8 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 
 | GitHub slug | License | Pinned purpose | What we take | Target module | Status |
 |---|---|---|---|---|---|
-| `opensandbox-group/OpenSandbox` (alias `alibaba/OpenSandbox`) | Apache-2.0 | Multi-tenant sandbox lifecycle (create/exec/files/pause) on Docker now, K8s later | pattern (lifecycle API). Optional later: Apache SDK client only — not the whole monorepo | `backend/src/services/agentes-coding/sandbox/` (future) | tier-s |
-| `e2b-dev/E2B` | Apache-2.0 | JS/Python SDK for isolated code sandboxes | pattern + optional Apache SDK (`e2b` npm) when a later PR enables it | sandbox provider adapter (future) | tier-s |
+| `opensandbox-group/OpenSandbox` (alias `alibaba/OpenSandbox`) | Apache-2.0 | Multi-tenant sandbox lifecycle (create/exec/files/pause) + preview/exposePort URL | **pattern** (lifecycle + signed preview stub). Optional later: Apache SDK client only — not the whole monorepo. Phase 3e: `backend/src/services/agentes-coding/preview/` | `backend/src/services/agentes-coding/coding-sandbox/` · `preview/` | already fused (pattern) |
+| `e2b-dev/E2B` | Apache-2.0 | JS/Python SDK for isolated code sandboxes (`sandbox.getHost(port)` preview URL) | **pattern** (signed ephemeral URL + localhost metadata). Optional Apache SDK (`e2b` npm) when a later PR enables it. Phase 3e native stub — no E2B dump | `backend/src/services/agentes-coding/preview/` | already fused (pattern) |
 | `e2b-dev/infra` | Apache-2.0 | Firecracker microVM orchestration (self-host path) | pattern only (Lenovo is Docker-first; do not vendor the Terraform/Nomad tree) | sandbox provider (later isolation) | tier-s |
 | `google/gvisor` | Apache-2.0 | Kernel-level container isolation (`runsc`) | pattern / ops pin of `runsc` binary — not a source dump | Lenovo runner / future K8s RuntimeClass | tier-s |
 | `firecracker-microvm/firecracker` | Apache-2.0 | MicroVM isolation for hostile code | pattern / ops binary — not a source dump | later isolation (after Docker) | tier-s |

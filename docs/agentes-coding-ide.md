@@ -30,7 +30,9 @@ off. First paint of `/agentes` is unchanged while the flag is off.
 - **Diferencias** — Monaco `DiffEditor` (lado a lado / unificado)
 - **Terminal** — WebSocket-ready stub (`data-ws-ready`); `exec` via HTTP.
   Phase 3d adds the session channel API (`docs/agentes-coding-terminal.md`)
-  without replacing this pane (UI-lock).
+  without replacing this pane (UI-lock). Phase 3e preview
+  (`docs/agentes-coding-preview.md`) is also API-only — no iframe pane
+  in this lock.
 
 Spanish labels. No vendor / `model_id` strings.
 
@@ -44,5 +46,5 @@ repos, F7 rewrite, adding `xterm` as a new npm dependency.
 ```bash
 node --test tests/agentes-coding-ide-source.test.ts
 npx vitest run tests/lib/agentes-coding-api.test.ts tests/lib/agentes-coding-file-tree.test.ts tests/components/agentes-coding-ide-gate.test.tsx --pool=threads
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-terminal.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js
 ```

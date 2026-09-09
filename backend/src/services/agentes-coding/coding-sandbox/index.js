@@ -4,7 +4,8 @@
  * coding-sandbox — AGENTES_CODING_V2 Phase 2a session adapter.
  *
  * Interface: createSession, exec, readFile, writeFile, listFiles,
- * exposePort, destroy. Default OFF. Docker/memory drivers are injectable.
+ * exposePort (signed preview URL), listPorts, unexposePort,
+ * resolvePreview, destroy. Default OFF. Docker/memory drivers are injectable.
  *
  * See docs/agentes-coding-sandbox.md and docs/agentes-arquitectura.md.
  */
@@ -16,6 +17,12 @@ const { resolveLimits } = require('./limits');
 const { createNetworkPolicy } = require('./network');
 const { createMemoryDriver } = require('./memory-driver');
 const { createDockerLocalDriver, DEFAULT_IMAGE } = require('./docker-local');
+const {
+  createPreviewBinder,
+  publicExposed,
+  MAX_EXPOSED_PORTS,
+  parseEnvPortAllowlist,
+} = require('../preview');
 
 const DEFAULT_DRIVER = 'memory';
 
@@ -39,6 +46,14 @@ function createCodingSandbox(opts = {}) {
     || DEFAULT_IMAGE;
   const networkHook = opts.networkHook || null;
   const composeNetwork = env.AGENTES_CODING_SANDBOX_NETWORK || undefined;
+  const preview = opts.previewBinder || createPreviewBinder({
+    env,
+    now,
+    secret: opts.previewSecret,
+    mapPort: opts.mapPort,
+    ttlMs: opts.previewTtlMs,
+    publicBase: opts.previewPublicBase,
+  });
 
   const dockerDriver = createDockerLocalDriver({
     docker: opts.docker,
@@ -90,6 +105,7 @@ function createCodingSandbox(opts = {}) {
     const limits = resolveLimits({ ...input, ttlMs: input.ttlMs }, env);
     const network = createNetworkPolicy({
       allowlist: input.networkAllowlist || input.allowlist || [],
+      portAllowlist: input.previewPorts || input.portAllowlist || parseEnvPortAllowlist(env),
       hook: input.networkHook || networkHook,
       composeNetwork,
     });
@@ -134,8 +150,10 @@ function createCodingSandbox(opts = {}) {
       network: {
         mode: session.network.mode,
         allowlist: [...session.network.allowlist],
+        previewPorts: [...(session.network.portAllowlist || [])],
       },
       containerName: session.containerName,
+      exposedPorts: (session.exposedPorts || []).map(publicExposed),
     };
   }
 
@@ -166,9 +184,38 @@ function createCodingSandbox(opts = {}) {
     if (!Number.isFinite(n) || n < 1 || n > 65535) fail('E_PARAMS', 'Puerto inválido.');
     const verdict = session.network.decide({ action: 'exposePort', port: n, host: '127.0.0.1' });
     if (!verdict.allowed) fail('E_PORT_DENIED');
-    const record = { port: n, published: false, url: null };
-    session.exposedPorts.push(record);
-    return record;
+    const existing = session.exposedPorts.findIndex((row) => row.port === n);
+    if (existing < 0 && session.exposedPorts.length >= MAX_EXPOSED_PORTS) fail('E_QUOTA');
+    const record = await preview.bind(session, n);
+    if (existing >= 0) session.exposedPorts.splice(existing, 1, record);
+    else session.exposedPorts.push(record);
+    return publicExposed(record);
+  }
+
+  function listPorts(sessionId) {
+    const session = getLive(sessionId);
+    const t = now();
+    session.exposedPorts = session.exposedPorts.filter((row) => !row.expiresAt || row.expiresAt > t);
+    return session.exposedPorts.map(publicExposed);
+  }
+
+  function unexposePort(sessionId, port) {
+    const session = getLive(sessionId);
+    const n = Number.parseInt(port, 10);
+    if (!Number.isFinite(n) || n < 1 || n > 65535) fail('E_PARAMS', 'Puerto inválido.');
+    const before = session.exposedPorts.length;
+    session.exposedPorts = session.exposedPorts.filter((row) => row.port !== n);
+    if (session.exposedPorts.length === before) fail('E_PORT_DENIED', 'El puerto no está expuesto.');
+    return { ok: true, port: n };
+  }
+
+  function resolvePreview(sessionId, token) {
+    const session = getLive(sessionId);
+    const claims = preview.verify(token, session.id);
+    const record = session.exposedPorts.find((row) => row.port === claims.port && row.token === token);
+    if (!record) fail('E_PORT_DENIED', 'El puerto ya no está expuesto.');
+    if (record.expiresAt && now() >= record.expiresAt) fail('E_PREVIEW_EXPIRED');
+    return publicExposed(record);
   }
 
   async function destroy(sessionId) {
@@ -212,6 +259,9 @@ function createCodingSandbox(opts = {}) {
     writeFile,
     listFiles,
     exposePort,
+    listPorts,
+    unexposePort,
+    resolvePreview,
     destroy,
     sweepExpired,
     stopGc,

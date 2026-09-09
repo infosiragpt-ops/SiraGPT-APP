@@ -21,12 +21,17 @@
  *   DELETE /api/agentes-coding/sessions/:id/terminal/:channelId
  *   POST   /api/agentes-coding/sessions/:id/read      → readFile
  *   PUT    /api/agentes-coding/sessions/:id/files     → writeFile
- *   POST   /api/agentes-coding/sessions/:id/expose    → exposePort (stub)
+ *   POST   /api/agentes-coding/sessions/:id/expose    → exposePort
+ *   POST   /api/agentes-coding/sessions/:id/preview   → exposePort (signed URL)
+ *   GET    /api/agentes-coding/sessions/:id/preview   → list exposed ports
+ *   GET    /api/agentes-coding/sessions/:id/preview/:token → resolve signed preview
+ *   DELETE /api/agentes-coding/sessions/:id/preview/:port  → unexpose
+ *   GET|POST|DELETE /api/agentes-coding/sessions/:id/ports[/:port]
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
  * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
- * only when health.enabled. Phase 3d is API-only (UI-lock). See
- * docs/agentes-coding-terminal.md.
+ * only when health.enabled. Phase 3d/3e are API-only (UI-lock). See
+ * docs/agentes-coding-terminal.md and docs/agentes-coding-preview.md.
  */
 
 const express = require('express');
@@ -49,6 +54,7 @@ const {
   attachTerminalWebSocket,
   WS_PATH,
 } = require('../services/agentes-coding/terminal');
+const { renderPreviewStub } = require('../services/agentes-coding/preview');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
@@ -105,6 +111,7 @@ function createAgentesCodingRouter(opts = {}) {
         userId: req.user && req.user.id ? req.user.id : null,
         ttlMs: body.ttlMs,
         networkAllowlist: body.networkAllowlist,
+        previewPorts: body.previewPorts || body.portAllowlist,
         cpus: body.cpus,
         memory: body.memory,
         pids: body.pids,
@@ -349,12 +356,61 @@ function createAgentesCodingRouter(opts = {}) {
   });
 
   /**
-   * Optional preview-port stub (deny-by-default).
+   * Preview port (deny-by-default). Signed ephemeral URL + localhost metadata.
    */
-  router.post('/sessions/:id/expose', authenticate, async (req, res) => {
+  async function handleExposePort(req, res) {
     try {
       const exposed = await getSandbox().exposePort(req.params.id, req.body && req.body.port);
-      return res.json({ ok: true, exposed });
+      return res.status(201).json({ ok: true, exposed, preview: exposed });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  }
+
+  async function handleListPorts(req, res) {
+    try {
+      const ports = await getSandbox().listPorts(req.params.id);
+      return res.json({ ok: true, ports });
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  }
+
+  async function handleUnexposePort(req, res) {
+    try {
+      const out = await getSandbox().unexposePort(req.params.id, req.params.port);
+      return res.json(out);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  }
+
+  router.post('/sessions/:id/expose', authenticate, handleExposePort);
+  router.post('/sessions/:id/preview', authenticate, handleExposePort);
+  router.get('/sessions/:id/preview', authenticate, handleListPorts);
+  router.get('/sessions/:id/ports', authenticate, handleListPorts);
+  router.post('/sessions/:id/ports', authenticate, handleExposePort);
+  router.delete('/sessions/:id/preview/:port', authenticate, handleUnexposePort);
+  router.delete('/sessions/:id/ports/:port', authenticate, handleUnexposePort);
+
+  /**
+   * Resolve a signed preview token. The token is the credential (iframe-ready).
+   * Flag-off still 404s via the router gate. JSON default; HTML stub on Accept.
+   */
+  router.get('/sessions/:id/preview/:token', async (req, res) => {
+    try {
+      const preview = await getSandbox().resolvePreview(req.params.id, req.params.token);
+      const accept = String(req.headers.accept || '');
+      if (accept.includes('text/html')) {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+        });
+        res.end(renderPreviewStub(preview));
+        return undefined;
+      }
+      return res.json({ ok: true, preview });
     } catch (err) {
       return sendSandboxError(res, err);
     }
