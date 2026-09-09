@@ -42,7 +42,7 @@ async function seeded(files = {
   'README.md': '# demo\n',
 }) {
   const sb = sandbox();
-  const session = await sb.createSession();
+  const session = await sb.createSession({ userId: 'coding-owner' });
   for (const [p, body] of Object.entries(files)) {
     await sb.writeFile(session.id, p, body);
   }
@@ -351,7 +351,7 @@ test('HTTP harness run when flag is on uses injectable LLM', { skip: !express },
   app.use('/api/agentes-coding', createAgentesCodingRouter({
     env: ON,
     sandbox: sb,
-    authenticate: (_req, _res, next) => next(),
+    authenticate: (req, _res, next) => { req.user = { id: 'coding-owner' }; next(); },
     harnessLlm: scriptedLlm([
       { text: 'leo', toolCalls: [{ name: 'read', arguments: { path: 'README.md' } }] },
       { text: 'demo', toolCalls: [] },

@@ -10,7 +10,7 @@
 
 const { spawn } = require('node:child_process');
 const { fail, CodingSandboxError } = require('./errors');
-const { dockerLimitArgs } = require('./limits');
+const { dockerLimitArgs, resolveExecTimeout } = require('./limits');
 const { jailRelPath, workspaceAbs } = require('./path-jail');
 
 const DEFAULT_IMAGE = 'siragpt-coding-sandbox:dev';
@@ -128,7 +128,7 @@ function createDockerLocalDriver(opts = {}) {
       if (!session.containerName) fail('E_PROVIDER', 'La sesión no tiene contenedor.');
       const cmd = String(command || '').trim();
       if (!cmd) fail('E_PARAMS', 'Falta el comando.');
-      const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : session.limits.timeoutMs;
+      const timeoutMs = resolveExecTimeout(opts.timeoutMs, session.limits);
       const cwd = opts.cwd ? jailRelPath(opts.cwd, { forList: true }) : '.';
       const workdir = cwd === '.' ? '/workspace' : workspaceAbs(cwd);
       const args = [

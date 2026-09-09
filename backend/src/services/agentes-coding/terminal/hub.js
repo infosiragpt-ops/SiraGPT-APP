@@ -318,6 +318,11 @@ function createTerminalHub(opts = {}) {
   return {
     open,
     get,
+    assertOwner(channelId, userId) {
+      const channel = get(channelId);
+      getSandbox().assertSessionOwner(channel.sessionId, userId);
+      return channel;
+    },
     close,
     closeSession,
     attach(channelId, transport) {

@@ -6,6 +6,39 @@
  * They are not a production multi-tenant attestation.
  */
 
+const { fail } = require('./errors');
+
+function resourceValue(value, kind, code) {
+  if (typeof value !== 'string' && typeof value !== 'number') fail(code, 'Recurso inválido.');
+  const text = String(value).trim().toLowerCase();
+  const match = kind === 'cpus'
+    ? /^(\d+(?:\.\d+)?)$/.exec(text)
+    : /^(\d+(?:\.\d+)?)([bkmg])?$/.exec(text);
+  if (!match) fail(code, 'Recurso inválido.');
+  const scale = { b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 };
+  const amount = Number(match[1]) * (scale[match[2]] || 1);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > Number.MAX_SAFE_INTEGER) {
+    fail(code, 'Recurso inválido.');
+  }
+  return { text, amount };
+}
+
+function boundedResource(requested, configured, fallback, kind) {
+  const ceiling = resourceValue(configured ?? fallback, kind, 'E_PROVIDER');
+  const value = resourceValue(requested ?? ceiling.text, kind, 'E_PARAMS');
+  if (value.amount > ceiling.amount) fail('E_QUOTA', 'El recurso supera el tope del servidor.');
+  return value.text;
+}
+
+function resolveExecTimeout(value, limits) {
+  if (value == null) return limits.timeoutMs;
+  if ((typeof value !== 'number' && typeof value !== 'string')
+    || !String(value).trim() || !Number.isFinite(Number(value)) || Number(value) < 1) {
+    fail('E_PARAMS', 'Tiempo máximo inválido.');
+  }
+  return Math.min(Math.floor(Number(value)), limits.timeoutMs);
+}
+
 function parsePositiveInt(value, fallback, min, max) {
   const n = Number.parseInt(value, 10);
   if (!Number.isFinite(n)) return fallback;
@@ -13,8 +46,8 @@ function parsePositiveInt(value, fallback, min, max) {
 }
 
 function resolveLimits(input = {}, env = process.env) {
-  const cpus = String(input.cpus || env.AGENTES_CODING_SANDBOX_CPUS || '1').trim() || '1';
-  const memory = String(input.memory || env.AGENTES_CODING_SANDBOX_MEMORY || '512m').trim() || '512m';
+  const cpus = boundedResource(input.cpus, env.AGENTES_CODING_SANDBOX_CPUS, '1', 'cpus');
+  const memory = boundedResource(input.memory, env.AGENTES_CODING_SANDBOX_MEMORY, '512m', 'memory');
   const pids = parsePositiveInt(input.pids || env.AGENTES_CODING_SANDBOX_PIDS, 64, 16, 256);
   const timeoutMs = parsePositiveInt(
     input.timeoutMs || env.AGENTES_CODING_SANDBOX_TIMEOUT_MS,
@@ -64,4 +97,5 @@ module.exports = {
   resolveLimits,
   dockerLimitArgs,
   parsePositiveInt,
+  resolveExecTimeout,
 };

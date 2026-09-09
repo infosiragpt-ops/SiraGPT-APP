@@ -28,7 +28,7 @@ function echoExec() {
 
 async function seeded(execImpl = echoExec()) {
   const sb = sandbox();
-  const session = await sb.createSession({ execImpl });
+  const session = await sb.createSession({ userId: 'terminal-owner', execImpl });
   const hub = term.createTerminalHub({ env: ON, sandbox: sb });
   return { sb, session, hub };
 }
@@ -255,7 +255,7 @@ test('attachTerminalWebSocket refuses when the flag is off', async () => {
     hub,
     env: {},
     WebSocketServer: FakeServer,
-    authenticate: () => ({ ok: true }),
+    authenticate: () => ({ userId: 'terminal-owner' }),
   });
   const upgrade = server.listeners('upgrade')[0];
   upgrade({ url: '/api/agentes-coding/terminal?channelId=trm_x' }, { destroyed: false }, Buffer.alloc(0));
@@ -291,7 +291,7 @@ test('attachTerminalWebSocket binds an existing channel when authenticated', asy
     hub,
     env: ON,
     WebSocketServer: FakeServer,
-    authenticate: () => ({ ok: true }),
+    authenticate: () => ({ userId: 'terminal-owner' }),
   });
   const upgrade = server.listeners('upgrade')[0];
   upgrade(
@@ -364,13 +364,13 @@ test('HTTP open + exec + SSE ready when flag is on (injectable auth)', async () 
     return;
   }
   const sb = sandbox();
-  const session = await sb.createSession({ execImpl: echoExec() });
+  const session = await sb.createSession({ userId: 'terminal-owner', execImpl: echoExec() });
   const app = express();
   app.use(express.json());
   app.use('/api/agentes-coding', createAgentesCodingRouter({
     env: ON,
     sandbox: sb,
-    authenticate: (_req, _res, next) => next(),
+    authenticate: (req, _res, next) => { req.user = { id: 'terminal-owner' }; next(); },
   }));
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));

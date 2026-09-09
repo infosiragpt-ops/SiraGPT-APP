@@ -6,6 +6,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Fixed
+
+- Coding V2 session admission and terminal access now require the owning
+  authenticated user. WebSocket sessions use the persisted-session validator.
+  DEV executors remain unavailable in production, missing execution is an
+  explicit error, and concurrent admissions and requested resources are bounded.
+  This does not certify the unfinished sandbox/preview as production-ready.
+
 ### Added
 
 - Phase 4a of Coding Agents (`AGENTES_CODING_V2`, default OFF):

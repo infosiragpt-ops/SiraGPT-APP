@@ -13,6 +13,9 @@
 const FLAG = 'AGENTES_CODING_V2';
 
 function isAgentesCodingV2Enabled(env = process.env) {
+  // Only DEV adapters exist today. Production requires a reviewed isolated
+  // provider and acceptance; an environment toggle cannot certify either.
+  if (String(env.NODE_ENV || '').trim().toLowerCase() === 'production') return false;
   const v = String(env.AGENTES_CODING_V2 || '').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'on';
 }
