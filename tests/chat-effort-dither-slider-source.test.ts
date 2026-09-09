@@ -42,7 +42,7 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
   it("styles a fully rounded grey→violet rail with a white capsule thumb", () => {
     const section = ruleBody(".effort-section")
     assert.match(section, /--effort-violet: hsl\(26\d /, "the dissolve resolves to violet")
-    assert.match(section, /--effort-rail: hsl\(220 10% 92%\)/, "the rail starts grey")
+    assert.match(section, /--effort-rail: hsl\(260 18% 93%\)/, "the unrevealed rail stays neutral")
 
     const track = ruleBody(".effort-track")
     assert.match(track, /border-radius: 999px;/)
@@ -58,7 +58,7 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
     assert.match(thumb, /border-radius: 999px;/, "capsule")
     assert.match(thumb, /background: #ffffff;/, "white")
     assert.match(thumb, /border: 1px solid hsl\(220 12% 52%\);/, "3:1 border against the white fill and the grey rail (WCAG 1.4.11)")
-    assert.match(thumb, /box-shadow:\s*0 1px 2px hsl\(220 25% 10% \/ 0\.14\),\s*0 3px 8px -2px hsl\(220 25% 10% \/ 0\.2\);/, "soft shadow")
+    assert.match(thumb, /box-shadow:\s*inset 0 1px 0 hsl\(0 0% 100%\),\s*0 0 0 3px hsl\(265 65% 70% \/ 0\.12\),\s*0 1px 2px hsl\(220 25% 10% \/ 0\.14\),\s*0 3px 8px -2px hsl\(220 25% 10% \/ 0\.2\);/, "soft shadow")
     assert.match(thumb, /left: var\(--effort-x\);/)
 
     for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".dark .effort-section {", ".dark .effort-thumb {"]) {
@@ -105,21 +105,23 @@ describe("effort slider — living pixels", () => {
   })
 })
 
-describe("effort slider — constant sheen sweep", () => {
+describe("effort slider — interaction sheen", () => {
   it("mounts a pointer-transparent sheen inside the clipped fill", () => {
     assert.match(effortMenu, /<span className="effort-sheen" aria-hidden \/>/)
   })
 
-  it("sweeps a light band across the fill in a responsive, layout-free loop", () => {
+  it("sweeps light during interaction and stays still at rest", () => {
     assert.match(
       globals,
       /\.effort-sheen \{\s*position: absolute;\s*inset: 0;\s*display: block;\s*border-radius: inherit;\s*pointer-events: none;/,
     )
     assert.match(
       globals,
-      /background-size: 250% 100%;\s*background-repeat: no-repeat;\s*animation: effort-sheen-sweep 3\.2s linear infinite;/,
+      /background-size: 250% 100%;\s*background-repeat: no-repeat;\s*animation: effort-sheen-sweep 5\.6s linear infinite;/,
       "oversized gradient: percentage positions stay responsive at any rail width",
     )
+    assert.match(ruleBody(".effort-sheen"), /animation-play-state: paused;/, "no perpetual motion at rest")
+    assert.match(globals, /:is\(:hover, :focus-visible, \[data-dragging="true"\]\):not\(\[data-disabled="true"\]\)/, "motion requires an enabled interactive state")
     assert.match(
       globals,
       /@keyframes effort-sheen-sweep \{\s*from \{ background-position: 120% 0; \}\s*to \{ background-position: -20% 0; \}\s*\}/,

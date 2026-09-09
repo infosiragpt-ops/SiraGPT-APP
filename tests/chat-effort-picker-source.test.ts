@@ -121,9 +121,16 @@ describe("composer effort picker source contract", () => {
     assert.match(section![1], /data-dragging=\{dragging \? "true" : undefined\}/)
     assert.match(
       globals,
-      /\.effort-track \{[\s\S]{0,520}overflow: hidden/,
-      "neon fill and glow must stay clipped inside the track",
+      /\.effort-track \{[\s\S]{0,700}overflow: visible/,
+      "the outer hit target must leave the thumb and value bubble visible",
     )
+    for (const rail of ["effort-track-line", "effort-track-fill"]) {
+      assert.match(
+        globals,
+        new RegExp(`\\.${rail} \\{[^}]*overflow: hidden`),
+        "the inner rail must clip its decorative fill",
+      )
+    }
     assert.match(effortMenu, /data-effort=\{String\(activeIndex\)\}/)
     assert.match(effortMenu, /className="effort-track-fill"/)
     assert.match(
