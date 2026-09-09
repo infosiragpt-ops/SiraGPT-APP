@@ -8,6 +8,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Cowork file tools now honor the existing composer permission levels.
+  Read-only denies file mutations; protected mode requires explicit approval.
+  This change does not enable the experimental chat-first web project runner.
+
 - Coding V2 session admission and terminal access now require the owning
   authenticated user. WebSocket sessions use the persisted-session validator.
   DEV executors remain unavailable in production, missing execution is an
