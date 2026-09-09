@@ -155,6 +155,10 @@ function shouldRunAgentRunner({
  */
 function isRunnerOnlyDocumentTurn(text) {
   const t = String(text || '');
+  try {
+    const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('../agents/software-build-intent');
+    if (isSoftwareBuildRequest(t) && !isExplicitDocumentRequest(t)) return false;
+  } catch (_) { /* classifier is local */ }
   if (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
   if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;

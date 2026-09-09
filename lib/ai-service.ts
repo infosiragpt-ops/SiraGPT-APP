@@ -4,6 +4,7 @@
 import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
 import { isLiveComputerUsePrompt } from "./computer-login-handoff"
+import { isSoftwareBuildRequest } from "./software-build-intent"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -566,8 +567,8 @@ export const ROUTING_PATTERNS = {
   video: createMediaGenerationPattern(VIDEO_OBJECT_RE_FRAGMENT),
   musicGeneration: createMediaGenerationPattern(MUSIC_OBJECT_RE_FRAGMENT),
   voiceGeneration: createMediaGenerationPattern(VOICE_OBJECT_RE_FRAGMENT),
-  webdev: /\b(website|webpage|pagina web|sitio web|landing page|portfolio|html|css|javascript|react|next\.?js|frontend|web app|tienda online|ecommerce|e-commerce)\b/i,
-  webdevBuildAction: /\b(crea(r|me)?|build|make|design|disena(r|me)?|diseña(r|me)?|desarrolla(r)?|programa(r)?|genera(r)?|haz|construye|implementa(r)?|maqueta(r)?)\b/i,
+  webdev: /\b(website|webpage|pagina web|sitio web|landing page|landing|portfolio|html|css|javascript|react|next\.?js|frontend|web app|tienda online|ecommerce|e-commerce|software|app|(?:una|un|mi)\s+web|web\s+(?:de|para|app))\b/i,
+  webdevBuildAction: /\b(crea(r|me)?|build|make|design|disena(r|me)?|diseña(r|me)?|desarrolla(r)?|programa(r)?|genera(r)?|haz|construye|implementa(r)?|maqueta(r)?|quiero|necesito|arma(r|me)?)\b/i,
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
 }
 
@@ -682,8 +683,12 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.architecturePlan.test(normalized)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(normalized)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(normalized)) return 'math'
-  if (ROUTING_PATTERNS.doc.test(normalized) || OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
+  if (isSoftwareBuildRequest(normalized)
+    || (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized))) {
+    return 'webdev'
+  }
+  if (ROUTING_PATTERNS.doc.test(normalized) || OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return 'doc'
   if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(normalized) || ROUTING_PATTERNS.voiceGeneration.test(normalized)) return 'agent_task'
   // "describe esta imagen / ¿qué ves? / transcribe la foto" is image
@@ -691,7 +696,6 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   // pattern hijack it into the image generator.
   if (ROUTING_PATTERNS.image.test(normalized) && !IMAGE_ANALYSIS_PROMPT_RE.test(normalized)) return 'image'
   if (ROUTING_PATTERNS.figma.test(normalized)) return 'figma'
-  if (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized)) return 'webdev'
   return null
 }
 
@@ -1167,14 +1171,17 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.architecturePlan.test(lc)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(lc)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(lc)) return 'math'
-  if (ROUTING_PATTERNS.doc.test(lc) || OUTPUT_FORMAT_REQUEST_RE.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
+  if (isSoftwareBuildRequest(lc)
+    || (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc))) {
+    return 'webdev'
+  }
+  if (ROUTING_PATTERNS.doc.test(lc) || OUTPUT_FORMAT_REQUEST_RE.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
   // Image ANALYSIS questions ("describe esta imagen") are vision chat, not
   // generation — same gate as signalIntentFromText.
   if (ROUTING_PATTERNS.image.test(lc) && !IMAGE_ANALYSIS_PROMPT_RE.test(lc)) return 'image'
   if (ROUTING_PATTERNS.figma.test(lc)) return 'figma'
-  if (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc)) return 'webdev'
 
   return null
 }
@@ -1227,12 +1234,25 @@ export class AIService {
         const requiredExtension = String(data.contract?.required_extension || '').toLowerCase()
         const outputFormat = String(data.semanticProfile?.output_format || data.finalOutput || '').toLowerCase()
         const requiredTools = Array.isArray(data.contract?.required_tools) ? data.contract.required_tools : []
+        const pipeline = String(data.contract?.pipeline || '')
+        const routed = normalizeRoutingIntent(data.intent)
+        // Code / website builds advertise `.html` on the contract. That is a
+        // code artifact, not a Document Sandbox Word/PDF. Remapping to `doc`
+        // produced Web_de_ventas.docx with "verificaciones técnicas".
+        if (
+          routed === 'webdev'
+          || pipeline === 'CodePipeline'
+          || outputFormat === 'web_artifact'
+          || isSoftwareBuildRequest(prompt)
+        ) {
+          return routed === 'doc' ? 'webdev' : routed
+        }
         const isDownloadableDocument =
-          /\.(docx|xlsx|pptx|pdf|csv|svg|html|md)$/.test(requiredExtension)
-          || /\b(docx|xlsx|pptx|pdf|csv|svg|html|markdown|md)_?(file|document)?\b/.test(outputFormat)
-          || (requiredTools.includes('create_document') && /\.(docx|xlsx|pptx|pdf|csv|svg|html|md)$/.test(requiredExtension))
+          /\.(docx|xlsx|pptx|pdf|csv|svg)$/.test(requiredExtension)
+          || /\b(docx|xlsx|pptx|pdf|csv|svg)_?(file|document)?\b/.test(outputFormat)
+          || (requiredTools.includes('create_document') && /\.(docx|xlsx|pptx|pdf|csv|svg)$/.test(requiredExtension))
         if (isDownloadableDocument) return 'doc'
-        return normalizeRoutingIntent(data.intent)
+        return routed
       }
       return null
     } catch (error: any) {

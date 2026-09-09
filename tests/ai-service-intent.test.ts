@@ -523,6 +523,27 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "webdev")
   })
 
+  it("routes 'créame una web de ventas' to webdev, not Word", async () => {
+    assert.equal(classifyIntentFastPath("créame una web de ventas"), "webdev")
+    assert.equal(await aiService.classifyIntent("créame una web de ventas"), "webdev")
+    assert.equal(classifyIntentFastPath("crea un sitio web"), "webdev")
+    assert.equal(classifyIntentFastPath("hazme una landing"), "webdev")
+    assert.equal(classifyIntentFastPath("desarrolla una app"), "webdev")
+    assert.equal(classifyIntentFastPath("necesito un software de ventas"), "webdev")
+    assert.equal(classifyIntentFastPath("crea un ecommerce"), "webdev")
+  })
+
+  it("does not force coding for sales data or brochure copy", async () => {
+    assert.notEqual(classifyIntentFastPath("datos de ventas"), "webdev")
+    assert.notEqual(classifyIntentFastPath("copy de ventas para el brochure"), "webdev")
+    assert.notEqual(await aiService.classifyIntent("analiza datos de ventas de 2025"), "webdev")
+  })
+
+  it("keeps Word and PDF sales documents on the document path", async () => {
+    assert.equal(await aiService.classifyIntent("rédactame un informe de ventas en Word"), "doc")
+    assert.equal(await aiService.classifyIntent("hazme un PDF de propuesta"), "doc")
+  })
+
   it("routes explicit SVG creation to the document artifact pipeline", async () => {
     const intent = await aiService.classifyIntent("créame un SVG de una casa moderna")
     assert.equal(intent, "doc")

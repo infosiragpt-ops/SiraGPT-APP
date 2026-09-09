@@ -28,6 +28,10 @@ const {
   validateDocument,
 } = require('../document-pipeline/advanced-document-pipeline');
 const documentIntelligence = require('../document-intelligence');
+const {
+  shouldBlockOfficeCreateDocument,
+  softwareCodeBlockMessage,
+} = require('./software-build-intent');
 
 // Resolve the agentic batch lazily so unit tests that don't need
 // search don't pay the module-load cost or need OpenRouter creds.
@@ -628,6 +632,12 @@ const createDocument = {
     }
     ensureArtifactDir();
     const cleanName = sanitizeArtifactFilename(filename);
+    const requestText = String(ctx.userQuery || ctx.goal || ctx.prompt || ctx.query || '').trim();
+    if (shouldBlockOfficeCreateDocument(cleanName, requestText)) {
+      const blocked = softwareCodeBlockMessage();
+      ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: blocked });
+      return { ok: false, error: blocked };
+    }
     // Date.now()+random suffix: two concurrent create_document calls on
     // the same ms timestamp would otherwise collide on tmpOut and one
     // would clobber the other's artifact mid-write.

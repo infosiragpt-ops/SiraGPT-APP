@@ -47,9 +47,31 @@ test('semantic router routes web building to webdev without UI heuristics', () =
   assert.equal(analysis.contract.pipeline, 'CodePipeline');
   assert.equal(analysis.routing.source, 'UniversalTaskContract+ExecutionGraph');
   assert.equal(analysis.structured_intent.intent_primary, 'web_app_build');
+  assert.equal(analysis.final_output, 'web_artifact');
+  assert.equal(analysis.semantic_profile.output_format, 'web_artifact');
   assert.ok(analysis.skill_plan.selected_skills.some((skill) => skill.id === 'app_builder'));
   assert.ok(analysis.product_os_plan.nodes.some((node) => node.id === 'frontend.build'));
   assert.ok(analysis.confidence >= 0.55);
+});
+
+test('semantic router does not advertise html_file for una web de ventas', () => {
+  const analysis = buildSemanticIntentAnalysis({
+    rawUserRequest: 'créame una web de ventas',
+  });
+
+  assert.equal(analysis.intent, 'webdev');
+  assert.equal(analysis.final_output, 'web_artifact');
+  assert.equal(analysis.semantic_profile.output_format, 'web_artifact');
+  assert.notEqual(analysis.final_output, 'html_file');
+});
+
+test('semantic router keeps Word sales reports on the document path', () => {
+  const analysis = buildSemanticIntentAnalysis({
+    rawUserRequest: 'rédactame un informe de ventas en Word',
+  });
+
+  assert.equal(analysis.intent, 'doc');
+  assert.equal(analysis.contract.required_extension, '.docx');
 });
 
 test('semantic router maps repository delivery requests to CI-watch skill without app scaffolding', () => {

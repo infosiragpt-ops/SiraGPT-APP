@@ -1,3 +1,5 @@
+import { isExplicitDocumentRequest, isSoftwareBuildRequest } from './software-build-intent'
+
 export type DocumentChatFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf' | 'svg' | 'csv' | 'html' | 'md'
 export type DocumentChatComplexity = 'simple' | 'standard' | 'high' | 'stress'
 
@@ -48,6 +50,7 @@ function withDocumentEditingPolicy(prompt: string, fileIds: string[]) {
 
 export function detectDocumentChatFormat(prompt: string): DocumentChatFormat {
   const text = normalize(prompt)
+  if (isSoftwareBuildRequest(text) && !isExplicitDocumentRequest(text)) return 'html'
   if (/\b(xlsx?|excel|hoja de calculo|spreadsheet|dashboard)\b/.test(text)) return 'xlsx'
   if (/\b(pptx?|ppt\b|power\s*point|powerpoint|presentacion|diapositivas|slides?)\b/.test(text)) return 'pptx'
   if (/\b(pdf)\b/.test(text)) return 'pdf'
