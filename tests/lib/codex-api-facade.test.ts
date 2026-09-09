@@ -22,6 +22,8 @@ const EXPECTED_METHODS = [
   "createProject",
   "createRepositoryProject",
   "getProject",
+  "getProjectByChat",
+  "ensureProjectForChat",
   "startPreview",
   "previewStatus",
   "stopPreview",

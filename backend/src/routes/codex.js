@@ -475,6 +475,54 @@ router.get('/projects', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Vínculo chat↔proyecto (MVP programación web en /agentes) ───────────────
+// Un chat abre exactamente un CodexProject durable; el chatId vive en
+// `brief` (sin migración). El match filtra por userId primero: un chatId
+// ajeno resuelve null/404, nunca proyecto de otro usuario.
+const projectChatBinding = require('../services/codex/project-chat-binding');
+
+function sendBindingError(res, err) {
+  const status = Number(err?.status) >= 400 && Number(err?.status) < 600 ? err.status : 500;
+  const code = typeof err?.code === 'string' && err.code ? err.code : 'codex_binding_failed';
+  return res.status(status).json({ error: code, message: String(err?.message || err || 'Binding failed.') });
+}
+
+router.get('/projects/by-chat/:chatId', authenticateToken, async (req, res) => {
+  try {
+    const chatId = String(req.params.chatId || '');
+    const project = await projectChatBinding.findProjectForChat({ userId: req.user.id, chatId, db: codexDb });
+    if (!project) return res.status(404).json({ error: 'project_not_found' });
+    return res.json({ project, chatId });
+  } catch (err) {
+    return sendBindingError(res, err);
+  }
+});
+
+router.post(
+  '/projects/by-chat/:chatId',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('name').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 80 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const chatId = String(req.params.chatId || '');
+      const { project, reused } = await projectChatBinding.findOrCreateProjectForChat({
+        userId: req.user.id,
+        chatId,
+        name: req.body.name ?? null,
+        db: codexDb,
+      });
+      return res.status(reused ? 200 : 201).json({ project, reused, chatId });
+    } catch (err) {
+      return sendBindingError(res, err);
+    }
+  },
+);
+
 // ── Clone público desde la web (contratos OpenCode, §25) ────────────────────
 // POST /api/codex/projects/clone { name, repoUrl, branch? } → 201 { project, sourceControl }.
 // Clona CUALQUIER repo público github.com HTTPS sin credenciales en el

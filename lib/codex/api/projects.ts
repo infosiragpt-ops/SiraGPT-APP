@@ -1,7 +1,7 @@
 // Codex project lifecycle, workspace files, export, and preview operations.
 // Kept behind the codexApi facade so existing callers retain one stable import.
 
-import type { CodexProject } from "./types"
+import type { CodexChatBinding, CodexProject } from "./types"
 import { requestCodex as req } from "./core"
 
 export const projectsCodexApi = {
@@ -18,6 +18,15 @@ export const projectsCodexApi = {
       timeoutMs: 180_000,
     }).then((r) => r.project),
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
+  // Vínculo chat↔proyecto (MVP programación web): un chat abre un proyecto
+  // durable. 404 project_not_found ⇒ no hay proyecto vinculado todavía.
+  getProjectByChat: (chatId: string) =>
+    req<{ project: CodexProject; chatId: string }>(`/projects/by-chat/${encodeURIComponent(chatId)}`).then((r) => r.project),
+  ensureProjectForChat: (chatId: string, name?: string) =>
+    req<CodexChatBinding>(`/projects/by-chat/${encodeURIComponent(chatId)}`, {
+      method: "POST",
+      body: JSON.stringify(name ? { name } : {}),
+    }),
   startPreview: (id: string, signal?: AbortSignal) =>
     req<{ devUrl: string; previewUrl?: string; basePath?: string }>(
       `/projects/${id}/preview/start`,
