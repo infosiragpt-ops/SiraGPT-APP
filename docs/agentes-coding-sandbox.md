@@ -24,7 +24,7 @@ that file is not on the branch yet). License / Tier S catalog:
 | Preview | `POST /sessions/:id/preview` — Phase 3e signed exposePort, see [`docs/agentes-coding-preview.md`](./agentes-coding-preview.md) |
 | Git | `/sessions/:id/git/*` — Phase 3f checkpoints, see [`docs/agentes-coding-git.md`](./agentes-coding-git.md) |
 | Export / deploy | `/sessions/:id/export` · `/sessions/:id/deploy` — Phase 3g, see [`docs/agentes-coding-export-deploy.md`](./agentes-coding-export-deploy.md) |
-| Harness | `/sessions/:id/harness*` — Phase 4a–4d tool loop + optional jobs, see [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md) · [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md) |
+| Harness | `/sessions/:id/harness*` — Phase 4a–4d tool loop + optional jobs, see [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md) · [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md). Phase 4f todo-app CI smoke: [`docs/agentes-coding-todo-smoke.md`](./agentes-coding-todo-smoke.md) |
 | Volumes | Phase 4e host bind-mount / disk workspace, see below |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
@@ -114,10 +114,12 @@ Phase 4a session harness (API-only plan/tool/result loop):
 Phase 4c durable jobs (optional BullMQ / memory fallback):
 [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md).
 Phase 4e durable docker/volume workspace files (this page).
+Phase 4f API-only todo-app CI smoke (memory + injectable LLM):
+[`docs/agentes-coding-todo-smoke.md`](./agentes-coding-todo-smoke.md).
 xterm UI-lock exception is still out of scope.
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-sandbox-volume.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-sandbox-volume.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js tests/agentes-coding-harness-todo-smoke.test.js
 ```

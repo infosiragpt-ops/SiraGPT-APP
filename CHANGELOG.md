@@ -16,6 +16,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 4f of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  API-only CI smoke that drives the coding harness through a tiny
+  todo-app fixture in the memory sandbox. Injectable `llmTurn` writes
+  `package.json` + `src/app.js`; asserts files and `status: done`.
+  Optional HITL `allow_once` on `exec`. Offline only — no real model,
+  no Docker, no Daytona, no OpenRouter. Flag stays off in production.
+  See `docs/agentes-coding-todo-smoke.md`.
 - Phase 4e of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   durable coding-sandbox workspace files for the docker driver (and
   optional `volume`/`disk` DEV path). `/workspace` is a host bind-mount

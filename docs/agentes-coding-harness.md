@@ -1,4 +1,4 @@
-# Session harness (AGENTES_CODING_V2 Phase 4a + 4b + 4c + 4d)
+# Session harness (AGENTES_CODING_V2 Phase 4a + 4b + 4c + 4d + 4f)
 
 TypeScript/Node **tool loop** inside a jailed coding-sandbox session,
 wired to existing SiraCode / agent-harness **contracts**. Default
@@ -34,7 +34,9 @@ on Lenovo. Do not set `AGENTES_CODING_V2=1` on the origin from this PR.
 pane is a later UI-lock exception. **Phase 4c landed**: optional durable
 jobs (`docs/agentes-coding-jobs.md`) — memory fallback when Redis is
 absent. **Phase 4d landed**: production-shaped completion adapter
-(`harness/llm.js`) when no `llmTurn` is injected.
+(`harness/llm.js`) when no `llmTurn` is injected. **Phase 4f landed**:
+API-only CI smoke through a tiny todo-app fixture in the memory
+sandbox (`docs/agentes-coding-todo-smoke.md`).
 
 ## Pattern fusion
 
@@ -118,10 +120,11 @@ and does not abort the turn. `reject` marks the run `cancelled` with
 
 Enabling the flag on Lenovo, calling a real model from CI, Cline
 webview/extension, xterm UI-lock exception, Daytona, reviving `/code`,
-dumping OpenHands/OpenCode/Cline, harness chrome on `/agentes`.
+dumping OpenHands/OpenCode/Cline, harness chrome on `/agentes`,
+browser e2e of the generated todo app.
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js
+cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js tests/agentes-coding-harness-todo-smoke.test.js
 ```
