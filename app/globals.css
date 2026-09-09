@@ -1344,7 +1344,7 @@ details[open] > summary .think-chevron,
    A raised white dial marks the exact stop; light animates only during
    interaction. Pointer mapping, four levels and persistence stay unchanged. */
 .effort-section {
-  padding: 0.8rem 1.1rem 0.55rem;
+  padding: 0.55rem 1.1rem 0.3rem;
   border: 0;
   background: transparent;
   /* Single source of slider geometry: the track, thumb, fill, ticks and
@@ -1369,7 +1369,7 @@ details[open] > summary .think-chevron,
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
 }
 
 .effort-title {
@@ -1384,7 +1384,7 @@ details[open] > summary .think-chevron,
    relies on color or density alone (WCAG 1.4.1). */
 .effort-level {
   color: hsl(264 47% 43%);
-  padding: 0.25rem 0.5rem;
+  padding: 0.125rem 0.5rem;
   border: 1px solid hsl(264 62% 65% / 0.14);
   border-radius: 0.5rem;
   background: hsl(264 74% 96%);
