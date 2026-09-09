@@ -44,6 +44,15 @@ describe("document chat request · clean prompt contract", () => {
     }
   })
 
+  it("keeps software builds when a document is only an earlier reference", () => {
+    for (const prompt of [
+      "Usa este manual como referencia y crea una app para reservas",
+      "A partir del informe, crea una app de ventas",
+    ]) {
+      assert.equal(detectDocumentChatFormat(prompt), "html", prompt)
+    }
+  })
+
   it("classifies templates and complexity without UI involvement", () => {
     assert.equal(detectDocumentChatTemplate("tesis APA 7 con referencias"), "academic")
     assert.equal(detectDocumentChatTemplate("contrato legal de servicios"), "legal")

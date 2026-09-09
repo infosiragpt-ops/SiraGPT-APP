@@ -41,10 +41,15 @@ export function isExplicitDocumentRequest(text: string): boolean {
   if (OFFICE_FORMAT_RE.test(n) && (CREATE_RE.test(n) || DOCUMENT_NOUN_RE.test(n))) {
     return true
   }
-  if (CREATE_RE.test(n) && DOCUMENT_NOUN_RE.test(n)) {
-    // Keep requested documents distinct from software with document features.
-    const softwareIndex = n.search(SOFTWARE_NOUN_RE)
-    return softwareIndex < 0 || n.search(DOCUMENT_NOUN_RE) < softwareIndex
+  const creation = CREATE_RE.exec(n)
+  if (creation) {
+    // Ignore source references before the ask, and compare requested objects.
+    const requested = n.slice(creation.index + creation[0].length)
+    const documentIndex = requested.search(DOCUMENT_NOUN_RE)
+    if (documentIndex >= 0) {
+      const softwareIndex = requested.search(SOFTWARE_NOUN_RE)
+      return softwareIndex < 0 || documentIndex < softwareIndex
+    }
   }
   return false
 }

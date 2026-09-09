@@ -49,8 +49,10 @@ Las 45 pruebas nuevas de política se ejecutaron antes del cambio de código:
 Regresión de #664: nuevos casos fallaron antes del parche. Las expectativas
 se contrastaron con módulos de `a133aeba7` evaluados aisladamente, sin red;
 no se atribuyeron a #664 comportamientos anteriores. Tras corregir, pasan
-66 pruebas frontend de intención/solicitud documental y 58 pruebas backend
+67 pruebas frontend de intención/solicitud documental y 59 pruebas backend
 de clasificador, router semántico y política de documentos.
+Incluyen usar un manual/informe como referencia antes de pedir una app:
+la referencia no debe confundirse con el objeto solicitado.
 
 Con regresiones existentes: 61/61 pruebas de política pasan. Cobertura unitaria
 separada del módulo Composer y del gate: 95.32% líneas, 96.10% ramas, 93.75%
@@ -76,6 +78,12 @@ node --max-old-space-size=256 --test --test-timeout=10000 \
 bash scripts/check-secrets.sh backend/src/services/composer-permission.js \
   backend/tests/composer-cowork-permission.test.js \
   backend/tests/composer-cowork-dispatch.test.js CHANGELOG.md \
+  backend/package.json backend/src/services/agents/semantic-intent-router.js \
+  backend/src/services/agents/software-build-intent.js \
+  backend/tests/semantic-intent-router.test.js \
+  backend/tests/software-build-intent.test.js docs/UI_LOCK_HASHES.txt \
+  lib/ai-service.ts lib/software-build-intent.ts \
+  tests/ai-service-intent.test.ts tests/document-chat-request.test.ts \
   docs/qa/2026-09-09-cowork-composer-permissions.md
 bash scripts/verify-ui-lock.sh
 git diff --check

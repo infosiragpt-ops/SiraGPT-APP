@@ -72,6 +72,17 @@ describe('software-build-intent', () => {
     }
   });
 
+  test('a document reference before the build verb is not the requested deliverable', () => {
+    for (const prompt of [
+      'Usa este manual como referencia y crea una app para reservas',
+      'A partir del informe, crea una app de ventas',
+    ]) {
+      assert.equal(isExplicitDocumentRequest(prompt), false, prompt);
+      assert.equal(isSoftwareBuildRequest(prompt), true, prompt);
+      assert.equal(shouldBlockOfficeCreateDocument('entregable.docx', prompt), true, prompt);
+    }
+  });
+
   test('datos / copy de ventas do not force coding', () => {
     assert.equal(isCopyOrDataAsk('datos de ventas'), true);
     assert.equal(isSoftwareBuildRequest('datos de ventas'), false);
