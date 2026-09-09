@@ -32,6 +32,12 @@ describe("document chat request · clean prompt contract", () => {
     assert.equal(detectDocumentChatFormat("crea un CSV válido"), "csv")
   })
 
+  it("does not default a website ask to Word", () => {
+    assert.equal(detectDocumentChatFormat("créame una web de ventas"), "html")
+    assert.equal(detectDocumentChatFormat("crea un sitio web"), "html")
+    assert.equal(detectDocumentChatFormat("rédactame un informe de ventas en Word"), "docx")
+  })
+
   it("classifies templates and complexity without UI involvement", () => {
     assert.equal(detectDocumentChatTemplate("tesis APA 7 con referencias"), "academic")
     assert.equal(detectDocumentChatTemplate("contrato legal de servicios"), "legal")

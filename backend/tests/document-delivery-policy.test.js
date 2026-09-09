@@ -304,6 +304,19 @@ test('DocumentDeliveryPolicy treats source maps over attachments as chat-only un
   assert.equal(wordPolicy.autoGenerate, true);
 });
 
+test('DocumentDeliveryPolicy keeps website/app creation in chat (not Word)', () => {
+  for (const goal of [
+    'créame una web de ventas',
+    'crea un sitio web',
+    'hazme una landing',
+    'desarrolla una app',
+  ]) {
+    const policy = buildDocumentDeliveryPolicy({ goal });
+    assert.equal(policy.mode, 'chat_only', `"${goal}" must not auto-Word`);
+    assert.equal(policy.autoGenerate, false, `"${goal}" must not auto-Word`);
+  }
+});
+
 test('DocumentDeliveryPolicy still promotes explicit generate-in-word requests', () => {
   // Sanity: the inquiry guard must not weaken legitimate generation
   // requests. "Hazme un word sobre X" and "exporta esto a pdf" still

@@ -83,7 +83,7 @@ const LEXICON = Object.freeze({
   ],
   data: [
     "datos", "dataset", "tabla", "tablas", "filas", "columnas", "formula",
-    "formulas", "dashboard", "kpi", "metricas", "ventas", "gastos", "registros",
+    "formulas", "dashboard", "kpi", "metricas", "gastos", "registros",
     "limpia", "limpiar", "procesa", "procesar",
   ],
   code: [

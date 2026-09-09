@@ -8,6 +8,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes` website/app asks (“créame una web de ventas” and Spanish
+  variants) stay on the code plane (`webdev` / HTML-JS artifacts). They
+  no longer remap `.html` contracts into Document Sandbox Word. True
+  Word/PDF asks are unchanged. See `docs/software-vs-document-routing.md`.
 - Coding V2 session admission and terminal access now require the owning
   authenticated user. WebSocket sessions use the persisted-session validator.
   DEV executors remain unavailable in production, missing execution is an
