@@ -44,6 +44,8 @@
  * don't spam the boot log on every cold start.
  */
 
+const { guardedFetch, denyUnbudgetedOperation, isAcceptanceSpendError } = require('./acceptance-spend-guard');
+
 let _OpenAICtor = null;
 function loadOpenAI() {
   if (_OpenAICtor) return _OpenAICtor;
@@ -139,16 +141,16 @@ function createGatewayClient({ env = process.env, fetchImpl } = {}) {
   if (!cfg.enabled) {
     return null;
   }
+  // A proxy POST does not bound its downstream retries or provider spend.
+  denyUnbudgetedOperation();
   const OpenAI = loadOpenAI();
   const opts = {
     apiKey: cfg.key,
     baseURL: cfg.url,
     timeout: cfg.timeoutMs,
     maxRetries: cfg.maxRetries,
+    fetch: guardedFetch(typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch),
   };
-  if (typeof fetchImpl === 'function') {
-    opts.fetch = fetchImpl;
-  }
   return new OpenAI(opts);
 }
 
@@ -217,6 +219,7 @@ async function callWithGatewayOrDirect({
 
 function isGatewayFallbackable(err) {
   if (!err) return false;
+  if (isAcceptanceSpendError(err)) return false;
   const status = Number(err.status || err.statusCode || (err.response && err.response.status));
   if (status === 408 || status === 429) return true;
   if (status >= 500 && status < 600) return true;

@@ -7,10 +7,14 @@
  */
 
 const { CONNECTION_UNAVAILABLE_MESSAGE } = require('./provider-inference');
+const { isAcceptanceSpendError } = require('./acceptance-spend-guard');
+
+const ACCEPTANCE_BUDGET_MESSAGE = 'La prueba no puede continuar con el presupuesto acreditado. Revisa la campaña de pruebas.';
 
 const VENDOR_LEAK_RE = /deepseek|openrouter|sk-|Bearer\s|AKIA|BEGIN (RSA|OPENSSH|PRIVATE)/i;
 
 function publicGenerateErrorMessage(err) {
+  if (isAcceptanceSpendError(err)) return ACCEPTANCE_BUDGET_MESSAGE;
   const raw = String((err && (err.message || err.error || err.code)) || '').trim();
   if (!raw) return CONNECTION_UNAVAILABLE_MESSAGE;
   if (VENDOR_LEAK_RE.test(raw)) return CONNECTION_UNAVAILABLE_MESSAGE;
@@ -25,6 +29,7 @@ function publicGenerateErrorMessage(err) {
 
 function isProviderClientError(err) {
   if (!err || typeof err !== 'object') return false;
+  if (isAcceptanceSpendError(err)) return true;
   const status = Number(err.status || err.statusCode || (err.response && err.response.status));
   if (Number.isFinite(status) && status >= 400) return true;
   const msg = String(err.message || err.error || '');
@@ -45,6 +50,9 @@ function rawWrite(res, frame) {
 
 // Closed vocabulary: no SDK messages, model names, URLs or credentials in SSE.
 function generateStreamFailure(err) {
+  // The SDK may wrap a pre-I/O quota refusal as APIConnectionError. Its
+  // trusted cause, not wrapper status/message, determines this terminal copy.
+  if (isAcceptanceSpendError(err)) return { code: 'E_QUOTA', message: ACCEPTANCE_BUDGET_MESSAGE };
   const status = Number(err?.status || err?.statusCode);
   if (err?.code === 'ETIMEDOUT' || err?.code === 'TIMEOUT' || err?.name === 'TimeoutError' || status === 408) {
     return { code: 'E_TIMEOUT', message: 'El modelo tardó demasiado en responder. Puedes reintentar; no se cambió el modelo.' };

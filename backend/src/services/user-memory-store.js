@@ -9,6 +9,7 @@
  */
 
 const crypto = require('crypto');
+const { guardedFetch } = require('./ai/acceptance-spend-guard');
 
 const EMBED_DIM = 1024;
 const DEFAULT_MODEL = process.env.SIRAGPT_MEMORY_EMBED_MODEL || 'voyage-3-large';
@@ -54,7 +55,7 @@ function vecToLiteral(vector) {
 
 async function postJson(url, headers, body, fetchImpl = globalThis.fetch) {
   if (typeof fetchImpl !== 'function') throw new Error('fetch unavailable');
-  const res = await fetchImpl(url, {
+  const res = await guardedFetch(fetchImpl)(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),

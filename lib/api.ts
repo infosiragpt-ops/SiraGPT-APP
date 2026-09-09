@@ -22,6 +22,7 @@ import {
   shouldRecoverOnKeepalive,
 } from "./generate-stream-complete"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
+import { acceptanceTurnFailure, persistedTurnFailureError, type PersistedTurnRecovery } from "./recover-persisted-turn"
 import {
   attachGenerateHttpError,
   CONNECTION_UNAVAILABLE_MESSAGE,
@@ -760,7 +761,7 @@ type AIStreamOptions = {
   onUsage?: (payload: AIUsagePayload) => void
   // When the model already persisted but this tab painted no tokens
   // ([DONE] / socket close), recover that row immediately.
-  tryRecoverPersistedTurn?: () => Promise<boolean>
+  tryRecoverPersistedTurn?: () => Promise<boolean | PersistedTurnRecovery | null>
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1993,7 +1994,7 @@ class ApiClient {
   async generateAIStream(
     data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[] },
     onData: (chunk: string) => void,
-    onClose: () => void,
+    onClose: () => void | Promise<void>,
     onError: (error: Error) => void,
     signal?: AbortSignal,
     options: AIStreamOptions = {}
@@ -2035,6 +2036,7 @@ class ApiClient {
     const BASE_RECONNECT_DELAY_MS = 1000;
     const MAX_RECONNECT_DELAY_MS = 20000;
     let hasDeliveredAnyContent = false;
+    let acceptanceStream = false;
     let lastError: any = null;
     // A fresh turn never starts from a stored cursor: resuming the PREVIOUS
     // turn's stream on a reconnect replays only its [DONE] and closes this
@@ -2057,7 +2059,25 @@ class ApiClient {
     const deliverStreamError = (error: Error) => {
       if (terminalErrorDelivered || streamFinished) return;
       terminalErrorDelivered = true;
+      if (acceptanceStream && hasDeliveredAnyContent) Object.assign(error, { preservePartial: true });
       onError(error);
+    };
+
+    const recoverPersistedStreamTurn = async () => {
+      const recovered = await options.tryRecoverPersistedTurn?.();
+      if (signal?.aborted) {
+        deliverStreamError(new Error('Request aborted'));
+        return true;
+      }
+      if (!recovered) return false;
+      if (typeof recovered === 'object' && recovered.failure) {
+        try { deliverStreamError(persistedTurnFailureError(recovered.failure)); }
+        catch { /* A terminal failure cannot become a reconnect if its UI callback throws. */ }
+      } else {
+        streamFinished = true;
+        await onClose();
+      }
+      return true;
     };
 
     const computeBackoff = (attempt: number, retryAfterSeconds?: number) => {
@@ -2138,6 +2158,7 @@ class ApiClient {
         // Surface a silent paid→free model fallback (header set by the
         // backend chargeCredits middleware) before we start streaming tokens.
         notifyFreeIaFallback(response);
+        acceptanceStream ||= getResponseHeader(response, 'x-sira-acceptance') === '1';
 
         const responseStreamId = getResponseHeader(response, 'x-stream-id');
         const responseCursor = getResponseHeader(response, 'x-stream-cursor');
@@ -2196,13 +2217,9 @@ class ApiClient {
           }
           if (done) {
             flushBatch();
-            if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+            if ((!hasDeliveredAnyContent || (acceptanceStream && !doneMessageSeen)) && options.tryRecoverPersistedTurn) {
               try {
-                if (await options.tryRecoverPersistedTurn()) {
-                  streamFinished = true;
-                  onClose();
-                  return;
-                }
+                if (await recoverPersistedStreamTurn()) return;
               } catch { /* persist poll failed; fall through */ }
             }
             const emptyAction = decideEmptyGenerateStreamAction({
@@ -2211,9 +2228,9 @@ class ApiClient {
               persistedAssistant: false,
               hasResumeCursor: Boolean(lastEventId),
             });
-            if (emptyAction === "close" || hasDeliveredAnyContent) {
+            if ((emptyAction === "close" || hasDeliveredAnyContent) && (!acceptanceStream || doneMessageSeen)) {
               streamFinished = true;
-              onClose();
+              await onClose();
               return;
             }
             if (!doneMessageSeen && lastEventId && attempt < MAX_CONNECT_ATTEMPTS) {
@@ -2238,11 +2255,11 @@ class ApiClient {
                 break;
               }
               streamFinished = true;
-              onClose();
+              await onClose();
               return;
             }
             streamFinished = true;
-            onClose();
+            await onClose();
             return;
           }
 
@@ -2284,11 +2301,7 @@ class ApiClient {
                 && options.tryRecoverPersistedTurn
               ) {
                 try {
-                  if (await options.tryRecoverPersistedTurn()) {
-                    streamFinished = true;
-                    onClose();
-                    return;
-                  }
+                  if (await recoverPersistedStreamTurn()) return;
                 } catch { /* persist not ready yet; keep reading tokens */ }
               }
               continue;
@@ -2303,11 +2316,7 @@ class ApiClient {
               doneMessageSeen = true;
               if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
                 try {
-                  if (await options.tryRecoverPersistedTurn()) {
-                    streamFinished = true;
-                    onClose();
-                    return;
-                  }
+                  if (await recoverPersistedStreamTurn()) return;
                 } catch { /* persist poll failed; still close — [DONE] is terminal */ }
               }
               const doneAction = decideEmptyGenerateStreamAction({
@@ -2320,7 +2329,7 @@ class ApiClient {
               // budget on a contentless terminator — recover or close now.
               if (doneAction !== "retry" || hasDeliveredAnyContent || !lastEventId) {
                 streamFinished = true;
-                onClose();
+                await onClose();
                 return;
               }
               if (attempt < MAX_CONNECT_ATTEMPTS) {
@@ -2333,7 +2342,7 @@ class ApiClient {
                 break;
               }
               streamFinished = true;
-              onClose();
+              await onClose();
               return;
             }
             try {
@@ -2440,12 +2449,15 @@ class ApiClient {
                   // [DONE]/reader close must not turn fail into complete.
                   flushBatch();
                   const userFacing = String(jsonData.message || jsonData.error || '');
-                  deliverStreamError(new Error(sanitizeStreamError(userFacing)));
+                  deliverStreamError(jsonData.acceptanceFailure === true && jsonData.code === 'E_QUOTA' && jsonData.retryable === false
+                    ? persistedTurnFailureError(acceptanceTurnFailure())
+                    : new Error(sanitizeStreamError(userFacing)));
                   try { await reader.cancel('stream error'); } catch { /* already closed */ }
                   return;
                 }
               }
             } catch (e) {
+              if (terminalErrorDelivered) return;
               console.warn('Failed to parse streaming data:', e);
             }
           }
@@ -2453,6 +2465,7 @@ class ApiClient {
         }
       } catch (error: any) {
         lastError = error;
+        if (terminalErrorDelivered || streamFinished) return;
         clearFlushTimer();
         if (signal?.aborted) {
           deliverStreamError(error);
@@ -2476,13 +2489,9 @@ class ApiClient {
         // already persisted the reply (the run keeps going detached). Ask for
         // it BEFORE spending a reconnect slot — that is what turns minutes of
         // Pensando into about a second.
-        if (isNetworkError && !hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+        if (isNetworkError && (!hasDeliveredAnyContent || acceptanceStream) && options.tryRecoverPersistedTurn) {
           try {
-            if (await options.tryRecoverPersistedTurn()) {
-              streamFinished = true;
-              onClose();
-              return;
-            }
+            if (await recoverPersistedStreamTurn()) return;
           } catch { /* not persisted yet — keep reconnecting */ }
         }
         // Cookie/CSRF transport reconnect: first-byte Failed to fetch
@@ -2514,11 +2523,7 @@ class ApiClient {
     if (lastError) {
       if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
         try {
-          if (await options.tryRecoverPersistedTurn()) {
-            streamFinished = true;
-            onClose();
-            return;
-          }
+          if (await recoverPersistedStreamTurn()) return;
         } catch { /* fall through to the error below */ }
       }
       const msg = lastError?.message || 'Stream failed';

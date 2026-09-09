@@ -19,6 +19,7 @@
 
 const OpenAI = require('openai');
 const prisma = require('../config/database');
+const { guardedFetch } = require('./ai/acceptance-spend-guard');
 
 const MODEL = 'gpt-4o-mini';
 const MAX_FACTS_PER_TURN = 3;
@@ -139,7 +140,7 @@ async function saveFacts({ projectId, sourceChatId, facts }) {
 async function extractAndSave({ projectId, projectName, projectDescription, userMessage, assistantMessage, sourceChatId }) {
   if (!process.env.OPENAI_API_KEY) return;
   try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: guardedFetch(globalThis.fetch) });
     const facts = await extractFacts({
       openai, projectName, projectDescription, userMessage, assistantMessage,
     });

@@ -24,6 +24,7 @@
  */
 
 const KEY_PREFIX = 'enc:v1:';
+const { guardedFetch, isAcceptanceSpendError } = require('./acceptance-spend-guard');
 
 const SIRA_MINI_DISPLAY_NAME = 'SiraGPT Mini';
 const SIRA_MINI_PUBLIC_NAME = 'sira-mini';
@@ -298,13 +299,14 @@ async function createOllamaNativeChat(connection, openaiBody, { fetchImpl, signa
     if (connection && connection.apiKey && connection.authType !== 'None') {
       headers.Authorization = `Bearer ${connection.apiKey}`;
     }
-    response = await fetcher(url, {
+    response = await guardedFetch(fetcher)(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
       signal,
     });
   } catch (err) {
+    if (isAcceptanceSpendError(err)) throw err;
     if (err && err.name === 'AbortError') throw err;
     throw miniUpstreamError(503);
   }
@@ -538,6 +540,7 @@ function createCustomProviderClient(connection, { OpenAI, fetchImpl } = {}) {
   const opts = {
     apiKey: (connection && connection.apiKey) || 'local',
     baseURL: url,
+    fetch: guardedFetch(typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch),
   };
   if (connection && connection.headers) {
     opts.defaultHeaders = connection.headers;

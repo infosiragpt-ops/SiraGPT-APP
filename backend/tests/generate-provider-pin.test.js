@@ -186,6 +186,6 @@ test('duplicate Mini replay emits text_delta and omits raw model_id', () => {
 });
 
 test('createProviderClient uses the streaming Anthropic client, not the non-stream adapter', () => {
-  assert.match(aiRoute, /createAnthropicStreamingClient\(\)/);
+  assert.match(aiRoute, /createAnthropicStreamingClient\(\{ fetchImpl: guardedProviderFetch \}\)/);
   assert.doesNotMatch(aiRoute, /createAnthropicOpenAIAdapter/);
 });

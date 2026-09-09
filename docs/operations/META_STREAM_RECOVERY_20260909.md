@@ -24,12 +24,14 @@ Neither deadline's duration changes. A genuine Stop still cancels silently;
 an expired deadline produces E_TIMEOUT and cannot initiate another attempt.
 
 Return stable Spanish E_TIMEOUT/E_PROVIDER/E_PARAMS/E_QUOTA errors and exactly
-one terminal SSE trailer, preserving partial text and the caller's existing
+one terminal SSE trailer, preserving backend partial text and the caller's existing
 persistence-before-DONE contract for partial answers. Only bounded event/code/status
 fields enter failure telemetry, not SDK messages, credentials or conversation text.
 
-No keys, models, routing defaults, DNS, schema, UI files or production flags change.
-This patch cannot guarantee upstream model availability.
+No keys, selected models, routing defaults, DNS, schema or visual design change.
+An optional, private acceptance policy is off by default; enabling it is a
+separate controlled release action described below. This patch cannot guarantee
+upstream model availability.
 
 ## Reproduction and gates
 
@@ -60,11 +62,13 @@ The focused coverage gate is for these two helpers only, not an application-wide
 coverage claim. Existing test discovery includes the expanded Meta suite.
 No thresholds or acceptance requirements are relaxed.
 
-### Local results
+### Initial transport-only local results
 
 - Focused backend suite: 90 passed, 0 failed, 0 skipped.
 - The two-helper unit coverage gate: 100% lines, 97.06% branches,
-  100% functions (80% minimum retained in every dimension).
+  100% functions (80% minimum retained in every dimension). The final expanded
+  service-unit command also includes `acceptance-stream-quota.test.js`: 37 tests,
+  100% lines, 97.22% branches and 100% functions for these two helpers.
 - Type checking, lint, backend build and Next standalone build passed.
   Next retained the existing noVNC target warning; no frontend file changed.
 - UI-lock check, scoped secret scan and whitespace check passed.
@@ -115,3 +119,101 @@ Do not report this patch as deployed or successful model generation from unit te
   auxiliary calls and uncertain retries), followed by the real affected
   flow. Do not replace this requirement with a catalog GET, synthetic fixture,
   timeout cancellation, an email alert or an assumed low average cost.
+
+### Private acceptance guard — implementation checkpoint
+
+The [private campaign runbook](PRIVATE_META_ACCEPTANCE.md) documents the added
+off-by-default transport budget and strict request admission. Reservations are
+durable before each physical request, including SDK retries. Uncertain results
+are never refunded. Non-accredited providers, modalities, agent queues and
+auxiliary operations fail closed in the one bound chat. This is not a global
+billing system or acceptance for arbitrary autonomous jobs.
+
+Fresh local checks on Node 24.19.0:
+
+- Guard + admission **unit tests only**: 127 passed, zero failed/skipped;
+  100% lines, 99.02% branches, 100% functions for those two modules.
+- Separate local integration tests: 4 passed, zero failed/skipped. They cover
+  actual installed SDK request/retry behavior with a synthetic transport,
+  competing processes, startup failure and an abandoned crash lock.
+- CI has a distinct 80% hard unit gate for those two modules; integration
+  remains separately discoverable. Document-sandbox coverage is unchanged.
+- Type checking, lint, backend build and the final Next standalone frontend
+  build passed after the frontend recovery changes and browser QA. Type/lint
+  ran as separate gates; the existing noVNC target warning remains.
+- Final combined backend regression run (18 files): 286 passed, zero
+  failed/skipped.
+  This total includes local integration and is not a unit coverage metric.
+- Seven failure-lifecycle tests execute the real persistence, normalization
+  and browser error-reader branches with synthetic DB/transport boundaries.
+  They reproduce the previous false-success behavior and verify failed
+  metadata, partial text before terminal error, no premature DONE when storage
+  fails, and honest active/history/resume replays. Helper-only coverage:
+  100% lines, 98.59% branches, 100% functions. Backend build and syntax checks
+  passed again after the lifecycle change.
+- Independent review found that private regeneration used an unaccredited
+  separate recovery lifecycle. Admission now rejects `regenerate: true` and
+  positive regeneration attempts before DB/provider work; ordinary traffic is
+  unchanged. Unit tests cover both rejection and normal new-turn envelopes.
+
+The final independent review also found a frontend polling edge: an assistant
+row marked failed was accepted as success when the SSE was lost. The correction
+changes only runtime logic in `lib/api.ts`, `lib/chat-context-integrated.tsx`
+and `lib/recover-persisted-turn.ts`, not JSX, CSS, composer or layout. Exactly
+those three entries in the existing 810-file UI lock were refreshed; no files
+were removed from the lock. Typecheck passes. The newly introduced hook
+dependency warning was corrected instead of suppressed.
+
+Frontend coverage exercises actual client stream recovery paths, matching the
+persisted turn identity, Stop during polling, partial EOF/network cuts, late
+completion and pending retry cleanup. The private `X-Sira-Acceptance: 1` response
+header limits changed partial-EOF behavior to the admitted campaign; its CORS
+exposure preserves existing headers and does not broaden allowed origins.
+Private failure frames have an explicit boolean discriminator so ordinary
+account quotas retain their existing copy/behavior. Partial content stays
+visible, failed drafts do not regenerate, and background state is not completed.
+This visibility claim is specific to private acceptance failures. The existing
+ordinary `E_PROVIDER` bubble error presentation is not changed or claimed fixed.
+The new local browser regression is part of the required e2e CI command; its
+offline API fixture is not production or model acceptance.
+
+Rendered browser testing also reproduced a real duplicate-placeholder defect:
+the compositor's empty `msg-assistant-processing-*` row hid the streaming
+`msg-ai-*` row of the same turn. Installation now replaces only the empty
+processing row for that exact chat/turn when `skipUserMessage` is true, in both
+visible state and chat cache. Existing partials, other identities and attachments
+are retained; the global deduplicator and visual components are unchanged.
+Two regression tests failed before this fix and pass after it. The final focused
+frontend suite currently has 77 passing tests, zero failed/skipped.
+
+Local rendered-browser regression: **3/3 passed, no retries** (desktop failure,
+mobile failure and desktop success control). It asserts visible partial text
+before releasing the held history request, the correct error/completed state,
+one USER/ASSISTANT pair, cleared pending drafts, and no second generation after
+online/reload. The mobile case opens the actual history menu to inspect its
+terminal badge. Requests use the UI's real serialized envelope with the bound
+model and `disableAgentic: true`; every API/identity is synthetic and all remote
+egress is blocked. No production, provider or paid acceptance is claimed.
+The same three cases also passed against the final compiled Next build served
+by `next start` (3/3, no retries). This repeat exercised the local cross-origin
+API fixture and explicit exposure of `X-Sira-Acceptance`. Desktop, mobile chat
+and the opened mobile history screenshots were visually inspected after
+transitions; no fatal page errors, duplicate bubbles or blank app were observed.
+
+The latest public version observed during this work was
+`99bc9faafc37f4f3fd31abf488444b4ad30df38c` (checked 16:32 UTC; build 15:34 UTC),
+with public readiness healthy. This is **not**
+PR #650. Refresh again before any release because another actor publishes here.
+
+Read-only Lenovo preflight at 16:42 UTC confirmed legitimate `deploy` access,
+a clean checkout at that same live SHA, the existing private environment mode
+`0600`, and no publication lock at that instant. The installed publisher hash
+was `51867ea99dd007429446f5f03198015e5659a4b16330829f908500d6eafef634`, matching
+the reviewed script. No environment values were printed and no service changed.
+These observations must be refreshed before activation; they are not a backup
+or acceptance completion claim.
+
+No production campaign file, ledger, environment change or paid inference has
+been created by this work. Direct Meta pricing units still require authenticated
+verification, followed by private configuration accreditation and a real
+authenticated acceptance. Do not report local tests as production readiness.

@@ -9,6 +9,10 @@ const {
 } = require('../services/ai/generate-request-observability');
 const generatePersistenceLog = createGenerateLogger();
 const { firstByteTimeoutError } = require('../services/ai/generate-stream-guard');
+const acceptanceSpend = require('../services/ai/acceptance-spend-guard');
+const acceptanceLifecycle = require('../services/ai/acceptance-quota-lifecycle');
+const { createAcceptanceChatAdmission } = require('../middleware/acceptance-chat-admission');
+const guardedProviderFetch = acceptanceSpend.guardedFetch((...args) => globalThis.fetch(...args));
 
 // Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
 // crash in the middleware module (e.g. prisma model missing in dev) can
@@ -174,14 +178,14 @@ const siraMetrics = require('../services/sira/metrics');
 // PR-3: coref + lexicón.
 const corefResolver = require('../services/agents/coref-resolver');
 const personalLexicon = require('../services/personal-lexicon');
-const __corefJudge = makeGeminiCorefJudge();
+const __corefJudge = makeGeminiCorefJudge({ fetchImpl: guardedProviderFetch });
 // PR-4: ensemble de judges + short-query expander.
 const { buildEnsembleJudge } = require('../services/agents/triage-ensemble');
 const { expandShortQuery } = require('../services/agents/short-query-expander');
 // Construye un ensemble con los judges disponibles. Cualquier judge sin
 // API key configurada devuelve null y se filtra fuera. Si todos están
 // ausentes, fallback al judge único Gemini (mantiene comportamiento PR-pre-4).
-const __ensembleJudges = [makeGeminiJudge(), makeHaikuJudge(), makeGroqJudge()].filter(Boolean);
+const __ensembleJudges = [makeGeminiJudge({ fetchImpl: guardedProviderFetch }), makeHaikuJudge({ fetchImpl: guardedProviderFetch }), makeGroqJudge({ fetchImpl: guardedProviderFetch })].filter(Boolean);
 const __intentTriageJudge = __ensembleJudges.length > 0
   ? buildEnsembleJudge({ judges: __ensembleJudges, budgetMs: 350 })
   : null;
@@ -226,7 +230,11 @@ const crypto = require('crypto');
 const mime = require('mime-types');
 const sharp = require('sharp');
 
-const { enrichWithWebSearch, getTracer, getMemoryAdapter } = require('../orchestration/gateway-adapter');
+const { enrichWithWebSearch: rawEnrichWithWebSearch, getTracer, getMemoryAdapter } = require('../orchestration/gateway-adapter');
+function enrichWithWebSearch(...args) {
+  acceptanceSpend.denyUnbudgetedOperation();
+  return rawEnrichWithWebSearch(...args);
+}
 
 const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
@@ -326,12 +334,13 @@ function createProviderClient(provider, opts = {}) {
 
   if (provider === "Anthropic") {
     if (!providerConnectionReady('Anthropic')) throwConnectionUnavailable('Anthropic');
-    return createAnthropicStreamingClient();
+    return createAnthropicStreamingClient({ fetchImpl: guardedProviderFetch });
   }
 
   if (provider === "Gemini") {
     if (!providerConnectionReady('Gemini')) throwConnectionUnavailable('Gemini');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY,
       baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
     });
@@ -343,6 +352,7 @@ function createProviderClient(provider, opts = {}) {
     // instead of dead-ending the turn. See services/ai/openrouter-afford-guard.
     const { wrapOpenRouterClient } = require('../services/ai/openrouter-afford-guard');
     return wrapOpenRouterClient(new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: "https://openrouter.ai/api/v1",
     }));
@@ -351,6 +361,7 @@ function createProviderClient(provider, opts = {}) {
   if (provider === "DeepSeek") {
     if (!providerConnectionReady('DeepSeek')) throwConnectionUnavailable('DeepSeek');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
     });
@@ -363,6 +374,7 @@ function createProviderClient(provider, opts = {}) {
   if (provider === "Cerebras") {
     if (!providerConnectionReady('Cerebras')) throwConnectionUnavailable('Cerebras');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.CEREBRAS_API_KEY,
       baseURL: process.env.CEREBRAS_BASE_URL || "https://api.cerebras.ai/v1",
     });
@@ -371,6 +383,7 @@ function createProviderClient(provider, opts = {}) {
   if (provider === "Z.ai" || provider === "ZAI") {
     if (!providerConnectionReady('Z.ai')) throwConnectionUnavailable('Z.ai');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.ZAI_API_KEY,
       baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
     });
@@ -378,12 +391,13 @@ function createProviderClient(provider, opts = {}) {
 
   if (provider === "Kimi" || provider === "Moonshot") {
     if (!providerConnectionReady('Kimi')) throwConnectionUnavailable('Kimi');
-    return createMoonshotClient();
+    return createMoonshotClient({ fetchImpl: guardedProviderFetch });
   }
 
   if (provider === "Groq") {
     if (!providerConnectionReady('Groq')) throwConnectionUnavailable('Groq');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.GROQ_API_KEY,
       baseURL: process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1",
     });
@@ -392,6 +406,7 @@ function createProviderClient(provider, opts = {}) {
   if (provider === "Mistral") {
     if (!providerConnectionReady('Mistral')) throwConnectionUnavailable('Mistral');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.MISTRAL_API_KEY,
       baseURL: process.env.MISTRAL_BASE_URL || "https://api.mistral.ai/v1",
     });
@@ -399,12 +414,13 @@ function createProviderClient(provider, opts = {}) {
 
   if (provider === "xAI" || provider === "XAI" || provider === "Grok") {
     if (!providerConnectionReady('xAI')) throwConnectionUnavailable('xAI');
-    return createXaiClient();
+    return createXaiClient({ fetchImpl: guardedProviderFetch });
   }
 
   if (provider === "Meta" || provider === "Llama") {
     if (!providerConnectionReady('Meta')) throwConnectionUnavailable('Meta');
     return new OpenAI({
+      fetch: guardedProviderFetch,
       apiKey: process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY,
       baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || "https://api.meta.ai/v1",
     });
@@ -413,6 +429,7 @@ function createProviderClient(provider, opts = {}) {
   // Custom / Ollama / HuggingFace already handled at the top via
   // createCustomProviderClient — never fall through to OpenAI.
   return new OpenAI({
+    fetch: guardedProviderFetch,
     apiKey: process.env.OPENAI_API_KEY
   });
 }
@@ -447,6 +464,7 @@ function createProviderClientForRequest(provider, req, opts = {}) {
       if (gw) return { client: gw, via: 'gateway' };
     }
   } catch (_err) {
+    if (acceptanceSpend.isAcceptanceSpendError(_err)) throw _err;
     // Fall through to legacy on any failure — never break the user's chat
     // because the gateway helper crashed.
   }
@@ -527,7 +545,7 @@ async function resolveProviderWithFailover(provider) {
     const registry = getProviderRegistry();
     const resolved = await registry.resolve(provider);
     if (resolved) {
-      const client = new OpenAI({ apiKey: resolved.apiKey, baseURL: resolved.baseURL });
+      const client = new OpenAI({ apiKey: resolved.apiKey, baseURL: resolved.baseURL, fetch: guardedProviderFetch });
       return { client, providerName: resolved.name || provider };
     }
   } catch {
@@ -1448,6 +1466,7 @@ function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
     try { res.setHeader('X-Model-Actual', branded); } catch { /* noop */ }
   }
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  if (acceptanceLifecycle.replayAcceptanceFailure(res, duplicateTurn)) return;
   // text_delta first so a client whose onReplace no-ops (Safari abort) still paints.
   if (content) {
     res.write(`data: ${JSON.stringify({ type: 'text_delta', content })}\n\n`);
@@ -1618,7 +1637,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog } = {}) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, strictAcceptanceFailure = false } = {}) {
   const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
     ? observabilityLog
     : generatePersistenceLog;
@@ -1681,6 +1700,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (!chat) {
           persistenceLog.warn('persistence.chat_missing', { hasChat: true });
+          if (strictAcceptanceFailure) throw new Error('Acceptance failure owner was not verified');
           return { assistantMessage: null };
         }
 
@@ -1748,7 +1768,9 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             // totalTokens) and corrupted per-message analytics/billing.
             tokens: totalTokens,
             files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
-            metadata: metadataPayload,
+            metadata: strictAcceptanceFailure
+              ? { ...metadataPayload, ...acceptanceLifecycle.acceptanceFailureMetadata() }
+              : metadataPayload,
             // Claude-style extended thinking: chain-of-thought text + the raw
             // OpenRouter reasoning_details array (replayed verbatim on later
             // Anthropic tool-call turns). Both null when the model didn't think.
@@ -1770,6 +1792,14 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
               : chat.title
           }
         });
+      }
+
+      if (strictAcceptanceFailure) {
+        if (!assistantMessage?.id) throw new Error('Acceptance failure assistant was not saved');
+        // The private reserve is already permanent. A failed campaign turn is
+        // not a successful application usage/completion or an agent run.
+        persistenceLog.info('persistence.completed', { responseChars: normalizedResponseContent.length, success: false });
+        return { assistantMessage, failed: true };
       }
 
       // Agent harness: persist the run trace now that the assistant row
@@ -1815,6 +1845,9 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         attempt: _attempt + 1,
         maxAttempts: 3,
       });
+      // The failure owner must KNOW whether storage committed before writing
+      // DONE. Never queue a best-effort retry after returning to that owner.
+      if (strictAcceptanceFailure) throw dbError;
       // Un blip transitorio de DB no debe perder el turno. Reintenta la
       // persistencia completa FUERA del lock (setTimeout corre cuando el
       // callback ya soltó withGenerateTurnSaveLock, así no hay deadlock) y
@@ -2054,6 +2087,8 @@ router.post(
   ],
   authenticateToken,
   requireScope('ai:generate'),
+  acceptanceSpend.middleware.bind,
+  createAcceptanceChatAdmission({ prisma }),
   enforceOrgQuotaSafe,
   enforceOrgRateLimitSafe,
   enforceOrgBudgetSafe,
@@ -2150,19 +2185,23 @@ router.post(
       if (!res.writableEnded) {
         clientGone = true;
         generateLog.info('client.detached', { source: 'response_close', hasChat: Boolean(req.body.chatId) });
-        releaseIncompleteActiveGenerateTurn(
-          req._activeGenerateTurn,
-          'generate turn owner socket closed before completion',
-        );
+        if (!acceptanceLifecycle.getAcceptanceFailure(res)) {
+          releaseIncompleteActiveGenerateTurn(
+            req._activeGenerateTurn,
+            'generate turn owner socket closed before completion',
+          );
+        }
       }
     });
     req.on('aborted', () => {
       clientGone = true;
       generateLog.info('client.detached', { source: 'request_abort', hasChat: Boolean(req.body.chatId) });
-      releaseIncompleteActiveGenerateTurn(
-        req._activeGenerateTurn,
-        'generate turn owner aborted before completion',
-      );
+      if (!acceptanceLifecycle.getAcceptanceFailure(res)) {
+        releaseIncompleteActiveGenerateTurn(
+          req._activeGenerateTurn,
+          'generate turn owner aborted before completion',
+        );
+      }
     });
     let __lastClientAt = Date.now();
     let __pendingSseEvent = null;
@@ -2586,7 +2625,7 @@ router.post(
             }
             generateLog.info('idempotency.completed_turn_replayed', {
               hasChat: Boolean(chatId),
-              success: true,
+              success: !acceptanceLifecycle.isFailedAcceptanceTurn(duplicateTurn),
             });
             return streamDuplicateTurnReplay(res, duplicateTurn, model);
           }
@@ -2878,6 +2917,7 @@ router.post(
               activeResume.subscribers.add(res);
               res.once('close', () => activeResume.subscribers.delete(res));
             } else if (record.error) {
+              if (acceptanceLifecycle.replayAcceptanceResumeFailure(res, record.error)) return;
               res.write(`data: ${JSON.stringify({ type: 'error', error: record.error })}\n\n`);
               res.write('event: close\ndata: end\n\n');
               res.end();
@@ -6896,6 +6936,7 @@ router.post(
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
       if (artifactGenerator.isArtifactRequest(prompt)) {
+        acceptanceSpend.denyUnbudgetedOperation();
         try {
           const imageDataUrls = [];
           for (const f of processedFiles) {
@@ -6917,7 +6958,7 @@ router.post(
           }
           // Vision-capable model only when provider is OpenAI; gpt-4o
           // is the reliable default for the visual understanding step.
-          const artifactOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+          const artifactOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: guardedProviderFetch });
           const art = await artifactGenerator.generate({
             openai: artifactOpenai,
             userRequest: prompt,
@@ -7110,6 +7151,7 @@ router.post(
                 }
               } catch (_) { __turnPolicy = null; }
               if (__agenticWillRun) {
+                acceptanceSpend.denyUnbudgetedOperation();
                 // The agentic loop ALWAYS runs on the model the user picked —
                 // no silent substitution of a stronger model underneath. The
                 // chosen provider/model drives every step (plan → tools →
@@ -7287,6 +7329,7 @@ router.post(
                 });
               }
             } catch (agenticErr) {
+              if (acceptanceSpend.isAcceptanceSpendError(agenticErr)) throw agenticErr;
               generateLog.warnError('agentic.loop_failed', agenticErr);
               // Fall through to aiService.generateStream below.
             }
@@ -7331,6 +7374,7 @@ router.post(
               trivialTurn: req._trivialTurn === true,
               toolChoice: req._trivialTurn === true ? 'none' : undefined,
             });
+            if (acceptanceLifecycle.getAcceptanceFailure(res)) return out;
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't
             // surface to the caller.
@@ -7381,6 +7425,22 @@ router.post(
             return out;
           },
         );
+
+        if (acceptanceLifecycle.getAcceptanceFailure(res)) {
+          streamFailureMessage = acceptanceLifecycle.getAcceptanceFailure(res).message;
+          await acceptanceLifecycle.persistAcceptanceFailure({
+            res, cacheHandle,
+            persist: (failedContent) => saveChatAndTrackUsage(
+              userId, canPersist ? chatId : null, prompt, failedContent, 0,
+              actualModel, processedFiles, [], regenerate,
+              { ...(idempotencyKey ? { idempotencyKey } : {}), ...(streamId ? { streamId } : {}),
+                ...(generateIdempotencyRequestHash ? { [MESSAGE_IDEMPOTENCY_HASH_FIELD]: generateIdempotencyRequestHash } : {}) },
+              req.user?.plan || null, __reasoningSink, null, 0,
+              { observabilityLog: generateLog, strictAcceptanceFailure: true },
+            ),
+          });
+          return;
+        }
 
         if (processedFiles.length > 0) {
           try {
@@ -7590,7 +7650,7 @@ router.post(
         // tick so the reply is already ack'd to the client.
         if (userId && !__publicWebReadonly && typeof prompt === 'string' && fullResponseContent) {
           try {
-            const memoryOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+            const memoryOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: guardedProviderFetch });
             longTermMemory.extractFactsAsync({
               openai: memoryOpenAI,
               userId,
@@ -7625,7 +7685,7 @@ router.post(
                     if (apiKey) {
                       try {
                         const Anthropic = require('@anthropic-ai/sdk');
-                        anthropicClient = new Anthropic({ apiKey });
+                        anthropicClient = new Anthropic({ apiKey, fetch: guardedProviderFetch });
                       } catch (_initErr) { /* skip */ }
                     }
                     if (!anthropicClient) return;
@@ -7709,6 +7769,7 @@ router.post(
           }).catch(() => { /* fully swallowed inside the hook */ });
         }
       } catch (apiError) {
+        if (acceptanceLifecycle.getAcceptanceFailure(res)) throw apiError;
         if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
           generateLog.warn('stream.aborted', { outcome: 'aborted' });
@@ -7928,6 +7989,7 @@ router.post(
         const directive = matchCreateDocumentDirective(fullResponseContent);
 
         if (directive) {
+          acceptanceSpend.denyUnbudgetedOperation();
           const { filename } = directive;
           let chatContent = coerceDirectiveContent(directive.content);
 
@@ -8356,6 +8418,11 @@ router.post(
         durationMs: Date.now() - __generateStartedAt,
       });
 
+      if (acceptanceLifecycle.getAcceptanceFailure(res)) {
+        streamFailureMessage = acceptanceLifecycle.getAcceptanceFailure(res).message;
+        return;
+      }
+
       const sanitizedError = sanitizeErrorForUser(error);
       streamFailureMessage = sanitizedError;
 
@@ -8374,6 +8441,43 @@ router.post(
       // open until that owner broadcasts the terminal frame, and it must not
       // mark the shared resume record complete/failed a second time.
       if (streamResumeFollower) return;
+
+      // Private terminal failure path. No post-normalization, post-filters,
+      // success cache/ledger completion, or speculative persistence retries.
+      if (acceptanceLifecycle.getAcceptanceFailure(res)) {
+        streamCompleted = false;
+        streamFailureMessage = acceptanceLifecycle.getAcceptanceFailure(res).message;
+        keepAlive = stopGenerateSseHeartbeat(keepAlive);
+        if (__firstByteWatchdog) clearInterval(__firstByteWatchdog);
+        if (resumeLeaseHeartbeat) clearInterval(resumeLeaseHeartbeat);
+        try {
+          await acceptanceLifecycle.finalizeAcceptanceFailure({
+            res, activeTurn: req._activeGenerateTurn, resumeSession,
+            streamResume, activeResumeStreams,
+          });
+        } finally {
+          if (typeof __fairQueueRelease === 'function') {
+            try { __fairQueueRelease(); } catch { /* release only, no success settlement */ }
+          } else {
+            try {
+              const adapter = require('../services/agent-runner/engine-adapter');
+              adapter.releaseFairGenerateLock?.(req._generateFairSession, req._generateFairProducer);
+            } catch { /* release only */ }
+          }
+          if (__ownsStreamController && streamControllers.get(__streamControllerKey) === controller) {
+            streamControllers.delete(__streamControllerKey);
+          }
+          const failedTurn = req._activeGenerateTurn;
+          if (failedTurn) {
+            const cleanup = setTimeout(() => {
+              if (activeGenerateTurns.get(failedTurn.key) === failedTurn) activeGenerateTurns.delete(failedTurn.key);
+            }, 120_000);
+            cleanup.unref?.();
+          }
+          endGenerateSse(res);
+        }
+        return;
+      }
 
       keepAlive = stopGenerateSseHeartbeat(keepAlive);
       if (__firstByteWatchdog) {

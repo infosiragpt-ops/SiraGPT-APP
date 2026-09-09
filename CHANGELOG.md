@@ -13,12 +13,24 @@ and improvement cycles follow a sequential number with the date the work landed.
   provider timeout. A timed-out request is not automatically duplicated.
   Reasoning/tool progress is not replayed on retry; tool deltas count as
   provider progress. Errors use bounded Spanish codes without SDK text, retain
-  partial answers, and close SSE exactly once. No provider, key, UI or timeout
+  partial answers, and close SSE exactly once. No provider, key, visual or timeout
   configuration changes. The existing route-level 45-second watchdog now
   preserves its deadline reason instead of being mistaken for a user Stop.
+- A private acceptance quota refusal now persists partial text as a failed
+  turn before closing the stream. Normalization and reconnects cannot convert
+  it into a successful answer; storage failure does not emit a persisted-DONE.
+- Chat keeps received text visible when the compositor and stream initially
+  share one turn identity, without duplicating the assistant bubble. Private
+  failed turns stay failed after polling/reload and do not regenerate a draft.
 
 ### Added
 
+- Private, off-by-default acceptance budget guard for one authenticated Meta
+  text chat: durable reservations before each physical provider request,
+  fail-closed input/provider validation and blocked unbudgeted auxiliary work.
+  It does not replace normal account billing or authorize a production test.
+  Separate unit and local integration tests cover retries and crash recovery;
+  see `docs/operations/PRIVATE_META_ACCEPTANCE.md` for release prerequisites.
 - Phase 3g of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   jailed session export (zip / tar.gz, size caps, artifact metadata)
   and a Coolify/Dokploy deploy stub (`POST|GET

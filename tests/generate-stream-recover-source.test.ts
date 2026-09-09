@@ -71,7 +71,7 @@ describe("generate stream persist-then-poll recovery", () => {
     const block = apiSource.slice(start, start + 2600)
     assert.match(
       block,
-      /if \(isNetworkError && !hasDeliveredAnyContent && options\.tryRecoverPersistedTurn\)/,
+      /if \(isNetworkError && \(!hasDeliveredAnyContent \|\| acceptanceStream\) && options\.tryRecoverPersistedTurn\)/,
       "a transport cut with nothing painted must poll the persisted turn before reconnecting",
     )
     assert.doesNotMatch(

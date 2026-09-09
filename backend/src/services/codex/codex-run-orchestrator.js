@@ -7,6 +7,7 @@ const { buildUserIntentAlignmentProfile } = require('../agents/user-intent-align
 const codexRunStore = require('./codex-run-store');
 const streamCache = require('../stream-cache');
 const { cloneProject } = require('../agents/clone-project-tool');
+const { denyUnbudgetedOperation } = require('../ai/acceptance-spend-guard');
 
 const PHASES = ['plan', 'execute', 'verify', 'ship'];
 
@@ -52,6 +53,7 @@ function extractRepoUrl(text) {
 }
 
 function createRunRecord(params = {}) {
+  denyUnbudgetedOperation();
   const runId = params.runId || crypto.randomUUID();
   return codexRunStore.writeRun({
     runId,
@@ -78,6 +80,7 @@ async function touchStreamProgress(userId, chatId, progress) {
 }
 
 async function runCodexPipeline(params = {}, deps = {}) {
+  denyUnbudgetedOperation();
   const {
     runId,
     userId,
@@ -212,6 +215,7 @@ async function runCodexPipeline(params = {}, deps = {}) {
 }
 
 function enqueueCodexRun(params = {}, deps = {}) {
+  denyUnbudgetedOperation();
   const record = createRunRecord(params);
   setImmediate(() => {
     runCodexPipeline({ ...params, runId: record.runId }, deps).catch(() => {});

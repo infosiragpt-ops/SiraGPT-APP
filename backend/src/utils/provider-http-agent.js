@@ -29,6 +29,8 @@
  */
 
 const { Agent, fetch: undiciFetch } = require('undici');
+const { guardedFetch } = require('../services/ai/acceptance-spend-guard');
+const budgetedUndiciFetch = guardedFetch(undiciFetch);
 
 const KEEP_ALIVE_TIMEOUT_MS = Number(process.env.PROVIDER_KEEPALIVE_MS) || 30_000;
 const KEEP_ALIVE_MAX_MS = Number(process.env.PROVIDER_KEEPALIVE_MAX_MS) || 10 * 60_000;
@@ -69,7 +71,7 @@ async function destroySharedAgent() {
  */
 function sharedFetch(input, init = {}) {
   const dispatcher = init.dispatcher || getSharedAgent();
-  return undiciFetch(input, { ...init, dispatcher });
+  return budgetedUndiciFetch(input, { ...init, dispatcher });
 }
 
 module.exports = {
