@@ -1338,13 +1338,11 @@ details[open] > summary .think-chevron,
 }
 
 
-/* ─── Effort — dithered pixel-dissolve slider ─────────────────────────
-   Fully rounded rail. Starts grey, dissolves into violet through a grid of
-   small square pixels whose density + opacity climb to the right (pure SVG
-   `<pattern>` layers masked by horizontal gradients — see
-   components/chat/effort-dither-track.tsx). The dither is anchored to the
-   whole rail and revealed up to the thumb with clip-path, so a higher effort
-   uncovers more violet. White capsule thumb, hairline border, soft shadow. */
+/* ─── Effort — violet glass rail ─────────────────────────────────────
+   A continuous violet fill communicates the selected range. The existing
+   deterministic SVG adds a quiet microtexture, anchored to the full rail.
+   A raised white dial marks the exact stop; light animates only during
+   interaction. Pointer mapping, four levels and persistence stay unchanged. */
 .effort-section {
   padding: 0.8rem 1.1rem 0.55rem;
   border: 0;
@@ -1353,14 +1351,17 @@ details[open] > summary .think-chevron,
      bubble all resolve these by inheritance, so every stop lands on the
      same x in every element. */
   --effort-steps: 3;
-  --effort-rail-h: 1.5rem;
-  --effort-thumb-w: 1.25rem;
-  --effort-thumb-h: 1.3rem;
+  --effort-rail-h: 0.875rem;
+  --effort-thumb-w: 1.5rem;
+  --effort-thumb-h: 1.5rem;
   --effort-pad: 0.3rem;
-  --effort-rail: hsl(220 10% 92%);
-  --effort-fill-base: hsl(220 8% 83%);
+  --effort-rail: hsl(260 18% 93%);
+  --effort-fill-base: hsl(260 78% 88%);
   --effort-violet: hsl(266 84% 60%);
   --effort-accent: hsl(266 84% 60%);
+  --effort-fill-mid: hsl(263 84% 68%);
+  --effort-fill-end: hsl(267 76% 51%);
+  --effort-grip: hsl(260 24% 48%);
 }
 
 .effort-header {
@@ -1382,7 +1383,11 @@ details[open] > summary .think-chevron,
 /* Text readout of the active level (Low … Extra high): the value never
    relies on color or density alone (WCAG 1.4.1). */
 .effort-level {
-  color: hsl(var(--foreground) / 0.78);
+  color: hsl(264 47% 43%);
+  padding: 0.25rem 0.5rem;
+  border: 1px solid hsl(264 62% 65% / 0.14);
+  border-radius: 0.5rem;
+  background: hsl(264 74% 96%);
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: -0.005em;
@@ -1394,7 +1399,7 @@ details[open] > summary .think-chevron,
 .effort-track {
   position: relative;
   display: block;
-  height: 2.25rem;
+  height: 2.75rem;
   margin: 0;
   padding: 0;
   border-radius: 999px;
@@ -1403,7 +1408,9 @@ details[open] > summary .think-chevron,
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
-  overflow: hidden;
+  /* The rail clips its own texture; the dial, focus ring and value bubble
+     need to remain visible outside it. */
+  overflow: visible;
   --effort-index: 0;
   /* Declared HERE on purpose: var(--effort-index) inside this expression
      resolves against the declaring element, and the [data-effort] overrides
@@ -1450,6 +1457,18 @@ details[open] > summary .think-chevron,
   overflow: hidden;
   isolation: isolate;
   background: var(--effort-rail);
+  box-shadow:
+    inset 0 1px 3px hsl(260 30% 24% / 0.1),
+    0 1px 0 hsl(0 0% 100% / 0.85);
+}
+.effort-track-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid hsl(260 30% 40% / 0.1);
+  border-radius: inherit;
+  background: linear-gradient(180deg, hsl(0 0% 100% / 0.24), transparent 55%);
+  pointer-events: none;
 }
 .effort-track-fill {
   position: absolute;
@@ -1458,6 +1477,8 @@ details[open] > summary .think-chevron,
   border-radius: inherit;
   pointer-events: none;
   overflow: hidden;
+  background: linear-gradient(100deg, var(--effort-fill-base), var(--effort-fill-mid) 52%, var(--effort-fill-end));
+  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.3);
   /* Reveal the anchored dither up to the thumb centre. */
   clip-path: inset(0 calc(100% - var(--effort-x)) 0 0);
   transition: clip-path 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -1468,15 +1489,17 @@ details[open] > summary .think-chevron,
   display: block;
   width: 100%;
   height: 100%;
+  opacity: 0.22;
 }
 .effort-dither-base {
-  fill: var(--effort-fill-base);
+  fill: transparent;
 }
 .effort-dither-ink,
 .effort-dither-px {
   fill: var(--effort-violet);
 }
 .effort-dither-px {
+  fill: hsl(0 0% 100% / 0.72);
   shape-rendering: crispEdges;
 }
 /* Living pixels: the sparse layers breathe with a wave that travels left →
@@ -1488,6 +1511,7 @@ details[open] > summary .think-chevron,
   transform-box: fill-box;
   transform-origin: center;
   animation: effort-pixel-wave 2.4s ease-in-out infinite;
+  animation-play-state: paused;
 }
 /* Heartbeat: quick lub at 10%, dub at 30%, then rest. Opacity follows the
    thump so the beat reads even at 3 px. Staggered per-pixel delays (see
@@ -1500,20 +1524,23 @@ details[open] > summary .think-chevron,
   42%  { opacity: 0.7;  transform: scale(1); }
   100% { opacity: 0.85; transform: scale(1); }
 }
-/* Constant motion: a soft light band glides across the revealed region in a
-   loop (left → right, following the dissolve). Pure background-position
-   animation on an oversized gradient — percentages resolve against the fill
-   box, so it stays responsive at any rail width with zero layout cost. */
+/* A quiet light pass on hover, keyboard focus or drag. At rest the control
+   stays still, so it never resembles an indeterminate loading indicator. */
 .effort-sheen {
   position: absolute;
   inset: 0;
   display: block;
   border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(100deg, transparent 43%, hsl(0 0% 100% / 0.45) 50%, transparent 57%);
+  background: linear-gradient(100deg, transparent 43%, hsl(0 0% 100% / 0.2) 50%, transparent 57%);
   background-size: 250% 100%;
   background-repeat: no-repeat;
-  animation: effort-sheen-sweep 3.2s linear infinite;
+  animation: effort-sheen-sweep 5.6s linear infinite;
+  animation-play-state: paused;
+}
+.effort-track:is(:hover, :focus-visible, [data-dragging="true"]):not([data-disabled="true"]) .effort-sheen,
+.effort-track:is(:hover, :focus-visible, [data-dragging="true"]):not([data-disabled="true"]) .effort-dither-twinkle {
+  animation-play-state: running;
 }
 @keyframes effort-sheen-sweep {
   from { background-position: 120% 0; }
@@ -1574,7 +1601,8 @@ details[open] > summary .think-chevron,
   background: transparent;
 }
 
-/* White capsule thumb — hairline border + soft shadow. */
+/* Raised white dial with a fine grip. The outline keeps its original
+   contrast; layered highlights describe depth without a heavy neon glow. */
 .effort-thumb {
   position: absolute;
   top: 50%;
@@ -1589,7 +1617,10 @@ details[open] > summary .think-chevron,
      sits on light grey. */
   border: 1px solid hsl(220 12% 52%);
   background: #ffffff;
+  background-image: linear-gradient(165deg, #ffffff 30%, hsl(260 30% 95%));
   box-shadow:
+    inset 0 1px 0 hsl(0 0% 100%),
+    0 0 0 3px hsl(265 65% 70% / 0.12),
     0 1px 2px hsl(220 25% 10% / 0.14),
     0 3px 8px -2px hsl(220 25% 10% / 0.2);
   pointer-events: none;
@@ -1598,8 +1629,19 @@ details[open] > summary .think-chevron,
     box-shadow 160ms ease,
     transform 160ms ease;
 }
+.effort-thumb::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 7px;
+  border-inline: 1px solid var(--effort-grip);
+  border-radius: 1px;
+  transform: translate(-50%, -50%);
+}
 .effort-track[data-dragging="true"] .effort-thumb {
-  transform: translate(-50%, -50%) scale(1.1);
+  transform: translate(-50%, -50%) scale(1.08);
   box-shadow:
     0 2px 4px hsl(220 25% 10% / 0.2),
     0 6px 14px -4px hsl(220 25% 10% / 0.3);
@@ -1714,10 +1756,26 @@ details[open] > summary .think-chevron,
 
 .dark .effort-section {
   background: transparent;
-  --effort-rail: hsl(0 0% 100% / 0.1);
-  --effort-fill-base: hsl(220 8% 30%);
+  --effort-rail: hsl(260 13% 22%);
+  --effort-fill-base: hsl(261 35% 43%);
   --effort-violet: hsl(268 90% 70%);
   --effort-accent: hsl(268 90% 72%);
+  --effort-fill-mid: hsl(263 72% 63%);
+  --effort-fill-end: hsl(267 86% 72%);
+}
+.dark .effort-level {
+  color: hsl(264 100% 86%);
+  border-color: hsl(264 80% 76% / 0.18);
+  background: hsl(264 50% 60% / 0.14);
+}
+.dark .effort-track-line {
+  box-shadow:
+    inset 0 1px 3px hsl(0 0% 0% / 0.35),
+    0 1px 0 hsl(0 0% 100% / 0.06);
+}
+.dark .effort-track-line::after {
+  border-color: hsl(264 80% 85% / 0.12);
+  background: linear-gradient(180deg, hsl(0 0% 100% / 0.12), transparent 55%);
 }
 .dark .effort-track:focus-visible .effort-thumb {
   box-shadow:
@@ -1737,6 +1795,19 @@ details[open] > summary .think-chevron,
   box-shadow:
     0 1px 2px hsl(0 0% 0% / 0.5),
     0 3px 8px -2px hsl(0 0% 0% / 0.6);
+}
+
+@media (forced-colors: active) {
+  .effort-track-line {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+  .effort-track-fill { background: Highlight; }
+  .effort-section .effort-thumb { border-color: CanvasText; background: ButtonFace; }
+  .effort-thumb::after { border-color: ButtonText; }
+  .effort-dither, .effort-sheen, .effort-track-line::after { display: none; }
+  .effort-section .effort-level { color: CanvasText; border-color: CanvasText; background: Canvas; }
+  .effort-section .effort-track:focus-visible { outline-color: Highlight; }
 }
 
 .model-provider-section {
