@@ -9,8 +9,7 @@
  *   - SiraCode loop.js: injectable llmTurn, AbortSignal, maxSteps.
  *   - agent-harness event-stream: structured steps + preview cap.
  *
- * Literal copy: ~0%. No OpenHands/OpenCode trees, no Daytona, no
- * OpenRouter, no host FS, no control DB.
+ * Literal copy: ~0%. No upstream trees, no host FS, no control DB.
  */
 
 const { fail, CodingSandboxError } = require('../coding-sandbox/errors');
