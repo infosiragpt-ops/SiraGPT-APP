@@ -38,6 +38,10 @@ export function CodingIdeShell() {
   const [sideBySide, setSideBySide] = React.useState(true)
   const [session, setSession] = React.useState<CodingSession | null>(null)
   const [files, setFiles] = React.useState<CodingFileEntry[]>([])
+  // fileVersion sube solo cuando el árbol/contenido del proyecto cambia de
+  // verdad (hot-restart del preview, Etapa 5). Los polls sin cambios no
+  // recargan nada.
+  const [fileVersion, setFileVersion] = React.useState(0)
   const [activePath, setActivePath] = React.useState("")
   const [original, setOriginal] = React.useState("")
   const [draft, setDraft] = React.useState("")
@@ -63,8 +67,13 @@ export function CodingIdeShell() {
 
   async function refreshProjectFiles(id: string) {
     const paths = await projectsCodexApi.listFiles(id)
+    filesSigRef.current = paths.join("\0")
     setFiles(paths.map((path) => ({ path })))
   }
+
+  // Firma del último árbol conocido del proyecto: base para detectar
+  // cambios reales y subir fileVersion (hot-restart del preview).
+  const filesSigRef = React.useRef("")
 
   // Refs para el auto-refresh (el intervalo no debe ver estado obsoleto).
   const busyRef = React.useRef(busy)
@@ -88,6 +97,11 @@ export function CodingIdeShell() {
     try {
       const paths = await projectsCodexApi.listFiles(id)
       if (projectIdRef.current !== id) return
+      const sig = paths.join("\0")
+      if (sig !== filesSigRef.current) {
+        filesSigRef.current = sig
+        setFileVersion((v) => v + 1)
+      }
       setFiles(paths.map((path) => ({ path })))
       const open = activePathRef.current
       if (open && draftRef.current === originalRef.current) {
@@ -97,6 +111,9 @@ export function CodingIdeShell() {
           if (projectIdRef.current === id && activePathRef.current === open && content !== originalRef.current) {
             setOriginal(content)
             setDraft(content)
+            // El agente cambió el contenido sin tocar el árbol: también
+            // cuenta como cambio para el hot-restart del preview.
+            setFileVersion((v) => v + 1)
           }
         } catch {
           // El archivo pudo borrarse; el árbol ya lo refleja.
@@ -147,6 +164,7 @@ export function CodingIdeShell() {
         projectsCodexApi.listFiles(id),
       ])
       setProject(found)
+      filesSigRef.current = paths.join("\0")
       setFiles(paths.map((path) => ({ path })))
       resetEditor()
       setMapHints([])
@@ -170,6 +188,7 @@ export function CodingIdeShell() {
     let cancelled = false
     setProject(null)
     resetEditor()
+    filesSigRef.current = ""
     setFiles([])
     if (!chatId) {
       void refreshProjects()
@@ -626,7 +645,7 @@ export function CodingIdeShell() {
               />
             ) : null}
             {pane === "preview" ? (
-              <CodingPreviewPane key={projectId || "none"} projectId={projectId} />
+              <CodingPreviewPane key={projectId || "none"} projectId={projectId} fileVersion={fileVersion} />
             ) : null}
           </div>
         </div>

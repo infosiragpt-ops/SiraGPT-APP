@@ -6,6 +6,10 @@
  * espera readiness en servidor hasta ~90s), muestra el proxy tokenizado en
  * un iframe y lo detiene al desmontar. Sin abrir-en-pestaña-nueva: el live
  * top-level heredaría el origen SiraGPT (ver preview-pane.tsx).
+ * Hot-restart (Etapa 5 MVP): el IDE le pasa `fileVersion`, que sube cada vez
+ * que el árbol/contenido del proyecto cambia de verdad; si el preview ya está
+ * listo, solo se recarga el iframe (mismo mecanismo que "Recargar"), sin
+ * reiniciar el dev server ni tocar la URL tokenizada.
  */
 
 import * as React from "react"
@@ -28,13 +32,14 @@ function sandboxFor(url: string): string | undefined {
   return "allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
 }
 
-export function CodingPreviewPane({ projectId }: { projectId: string | null }) {
+export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: string | null; fileVersion?: number }) {
   const [phase, setPhase] = React.useState<Phase>("idle")
   const [url, setUrl] = React.useState<string | null>(null)
   const [note, setNote] = React.useState("")
   const [frameKey, setFrameKey] = React.useState(0)
   const startedRef = React.useRef(false)
   const abortRef = React.useRef<AbortController | null>(null)
+  const seenFileVersionRef = React.useRef(fileVersion)
 
   const stop = React.useCallback(async () => {
     abortRef.current?.abort()
@@ -81,6 +86,16 @@ export function CodingPreviewPane({ projectId }: { projectId: string | null }) {
     }, HEARTBEAT_MS)
     return () => window.clearInterval(timer)
   }, [phase, projectId])
+
+  // Hot-restart: si los archivos del proyecto cambiaron (fileVersion del IDE)
+  // y el preview ya está listo, recargar el iframe con la misma URL
+  // tokenizada. No reinicia el dev server: el arranque fresco ya sirve los
+  // archivos nuevos, así que los cambios durante "starting" se ignoran.
+  React.useEffect(() => {
+    if (seenFileVersionRef.current === fileVersion) return
+    seenFileVersionRef.current = fileVersion
+    if (phase === "ready" && url) setFrameKey((k) => k + 1)
+  }, [fileVersion, phase, url])
 
   async function start() {
     if (!projectId || phase === "starting") return
