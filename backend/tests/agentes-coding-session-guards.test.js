@@ -117,7 +117,12 @@ test('HTTP/SSE session actions enforce identity before files, maps, edits and te
     ['POST', '/exec'], ['GET', '/files'], ['POST', '/read'], ['PUT', '/files'],
     ['GET', '/map'], ['POST', '/map'], ['POST', '/struct-edit'], ['POST', '/struct-edit/apply'],
     ['POST', '/terminal'], ['GET', term], ['POST', `${term}/input`], ['POST', `${term}/resize`],
-    ['POST', `${term}/exec`], ['GET', `${term}/stream`], ['DELETE', term], ['POST', '/expose'], ['DELETE', ''],
+    ['POST', `${term}/exec`], ['GET', `${term}/stream`], ['DELETE', term], ['POST', '/expose'],
+    ['POST', '/preview'], ['GET', '/preview'], ['GET', '/ports'],
+    ['POST', '/git/init'], ['GET', '/git/status'], ['GET', '/git/diff'],
+    ['POST', '/git/checkpoint'], ['GET', '/git/checkpoints'],
+    ['POST', '/export'], ['GET', '/export'], ['POST', '/deploy'], ['GET', '/deploy'],
+    ['DELETE', ''],
   ];
   const request = (method, route, user) => fetch(`${base}${route}`, {
     method, headers: { 'Content-Type': 'application/json', ...(user ? { 'x-fixture-user': user } : {}) },

@@ -48,7 +48,7 @@ async function seeded(files = {
   'README.md': '# demo\n',
 }) {
   const sb = sandbox();
-  const session = await sb.createSession();
+  const session = await sb.createSession({ userId: 'coding-owner' });
   for (const [p, body] of Object.entries(files)) {
     await sb.writeFile(session.id, p, body);
   }
@@ -402,7 +402,7 @@ test('HTTP export + deploy stub when flag is on', { skip: !express }, async () =
   app.use('/api/agentes-coding', createAgentesCodingRouter({
     env: ON,
     sandbox: sb,
-    authenticate: (_req, _res, next) => next(),
+    authenticate: (req, _res, next) => { req.user = { id: 'coding-owner' }; next(); },
   }));
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));

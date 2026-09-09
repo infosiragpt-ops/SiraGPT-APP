@@ -301,13 +301,13 @@ test('POST /sessions/:id/preview is 404 when the flag is off', { skip: !express 
 
 test('HTTP expose + list + resolve + HTML stub when flag is on', { skip: !express }, async () => {
   const sb = sandbox();
-  const session = await sb.createSession({ previewPorts: [5173] });
+  const session = await sb.createSession({ userId: 'coding-owner', previewPorts: [5173] });
   const app = express();
   app.use(express.json());
   app.use('/api/agentes-coding', createAgentesCodingRouter({
     env: ON,
     sandbox: sb,
-    authenticate: (_req, _res, next) => next(),
+    authenticate: (req, _res, next) => { req.user = { id: 'coding-owner' }; next(); },
   }));
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
