@@ -54,6 +54,7 @@ function serializeRun(row, extras = {}) {
     grants: Array.isArray(grants) ? grants.map(String) : [],
     pause: serializePause(row.pause),
     cancelRequested: Boolean(row.cancelRequested),
+    modelAlias: row.modelAlias ? String(row.modelAlias) : '',
   };
 }
 
@@ -79,6 +80,7 @@ function hydrateRun(snapshot) {
     timedOut: false,
     cancelRequested: Boolean(snapshot.cancelRequested),
     grants: Array.isArray(snapshot.grants) ? snapshot.grants.map(String) : [],
+    modelAlias: snapshot.modelAlias ? String(snapshot.modelAlias) : '',
   };
 }
 

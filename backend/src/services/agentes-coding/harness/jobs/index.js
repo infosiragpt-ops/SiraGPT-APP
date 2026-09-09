@@ -19,6 +19,7 @@ const {
   ACTIVE_STATUSES,
 } = require('../store');
 const { resolveCaps } = require('../runner');
+const { resolveCodingModel } = require('../llm');
 const { findPending, normalizeDecision } = require('../permissions');
 const { serializeRun, hydrateRun, publicFromSnapshot } = require('./snapshot');
 const { createRunStore, createMemoryRunStore, createRedisRunStore } = require('./store');
@@ -57,7 +58,10 @@ function createJobsBackend(opts = {}) {
   const ctx = {
     sandbox: opts.sandbox || null,
     store,
+    env: opts.env || null,
     llmTurn: opts.llmTurn || null,
+    complete: opts.complete || null,
+    createClient: opts.createClient || null,
     permissionPolicy: opts.permissionPolicy || null,
   };
   return {
@@ -117,12 +121,17 @@ async function startDurable(sandbox, sessionId, raw, opts = {}) {
   }
   const caps = resolveCaps(opts.env || process.env, opts);
   const prompt = sanitizePrompt(opts.prompt || opts.text || opts.message);
+  const resolved = resolveCodingModel(opts.modelAlias, opts.env || process.env);
   const row = createRun(raw, prompt, caps);
   row.sessionId = sessionId;
   row.permissionPolicy = opts.permissionPolicy;
+  row.modelAlias = resolved.alias;
   jobs.bind({
     sandbox,
+    env: opts.env,
     llmTurn: opts.llmTurn,
+    complete: opts.complete,
+    createClient: opts.createClient,
     permissionPolicy: opts.permissionPolicy,
   });
   const snapshot = await persistRow(jobs, raw, row, sessionId);
@@ -187,7 +196,10 @@ async function resolveDurable(sandbox, sessionId, raw, row, permissionId, decisi
   if (!normalized) fail('E_PARAMS', 'La decisión de permiso no es válida.');
   jobs.bind({
     sandbox,
+    env: opts.env,
     llmTurn: opts.llmTurn,
+    complete: opts.complete,
+    createClient: opts.createClient,
     permissionPolicy: opts.permissionPolicy || row.permissionPolicy,
   });
   const snapshot = await persistRow(jobs, raw, row, sessionId);
@@ -265,6 +277,11 @@ function startSharedWorker(opts = {}) {
       redis,
       connection,
       autoDrain: false,
+      env,
+      llmTurn: opts.llmTurn,
+      complete: opts.providerComplete || opts.complete,
+      createClient: opts.createClient,
+      permissionPolicy: opts.permissionPolicy,
     });
   }
   sharedWorker = startHarnessWorker({
@@ -273,12 +290,17 @@ function startSharedWorker(opts = {}) {
     sandbox: opts.sandbox,
     store: sharedJobs.store,
     llmTurn: opts.llmTurn,
+    complete: opts.providerComplete || opts.complete,
+    createClient: opts.createClient,
     permissionPolicy: opts.permissionPolicy,
     processor: opts.processor || ((job) => processHarnessJob(job, {
       ...sharedJobs.ctx,
       sandbox: typeof opts.getSandbox === 'function' ? opts.getSandbox() : (opts.sandbox || sharedJobs.ctx.sandbox),
       store: sharedJobs.store,
+      env: opts.env || sharedJobs.ctx.env || env,
       llmTurn: opts.llmTurn || sharedJobs.ctx.llmTurn,
+      complete: opts.providerComplete || opts.complete || sharedJobs.ctx.complete,
+      createClient: opts.createClient || sharedJobs.ctx.createClient,
       permissionPolicy: opts.permissionPolicy || sharedJobs.ctx.permissionPolicy,
     })),
     queue: opts.queue,

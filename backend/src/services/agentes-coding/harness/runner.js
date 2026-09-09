@@ -40,6 +40,7 @@ const {
   normalizeDecision,
   findPending,
 } = require('./permissions');
+const { resolveHarnessLlmTurn, resolveCodingModel } = require('./llm');
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_TOKENS = 8_000;
@@ -221,8 +222,13 @@ async function runToolBatch(sandbox, sessionId, raw, row, calls, ctx) {
   return { paused: false };
 }
 
-async function runLoop(sandbox, sessionId, raw, row, llmTurn, resume = null) {
-  const complete = typeof llmTurn === 'function' ? llmTurn : defaultLlmTurn();
+async function runLoop(sandbox, sessionId, raw, row, llmTurn, resume = null, llmOpts = {}) {
+  const complete = resolveHarnessLlmTurn({
+    ...llmOpts,
+    llmTurn,
+    env: llmOpts.env,
+    modelAlias: llmOpts.modelAlias || row.modelAlias,
+  });
   let transcript;
   let assistantText;
   let startStep;
@@ -339,13 +345,38 @@ async function withRunGuard(row, fn) {
   }
 }
 
+function attachModelAlias(row, opts = {}) {
+  const resolved = resolveCodingModel(opts.modelAlias || row.modelAlias, opts.env || process.env);
+  row.modelAlias = resolved.alias;
+  return resolved;
+}
+
+function llmOptsFrom(opts = {}, row) {
+  return {
+    env: opts.env,
+    modelAlias: (opts.modelAlias || (row && row.modelAlias)),
+    complete: opts.providerComplete || opts.complete,
+    createClient: opts.createClient,
+  };
+}
+
 async function runHarness(sandbox, sessionId, raw, opts = {}) {
   const caps = resolveCaps(opts.env || process.env, opts);
   const prompt = sanitizePrompt(opts.prompt || opts.text || opts.message);
+  const resolved = resolveCodingModel(opts.modelAlias, opts.env || process.env);
   const row = createRun(raw, prompt, caps);
   row.sessionId = sessionId;
   row.permissionPolicy = opts.permissionPolicy;
-  return withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, opts.llmTurn));
+  row.modelAlias = resolved.alias;
+  return withRunGuard(row, () => runLoop(
+    sandbox,
+    sessionId,
+    raw,
+    row,
+    opts.llmTurn,
+    null,
+    llmOptsFrom(opts, row),
+  ));
 }
 
 async function continueHarness(sandbox, sessionId, raw, row, opts = {}) {
@@ -355,7 +386,16 @@ async function continueHarness(sandbox, sessionId, raw, row, opts = {}) {
   if (row.abort.signal.aborted) {
     row.abort = new AbortController();
   }
-  return withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, opts.llmTurn));
+  if (opts.modelAlias || !row.modelAlias) attachModelAlias(row, opts);
+  return withRunGuard(row, () => runLoop(
+    sandbox,
+    sessionId,
+    raw,
+    row,
+    opts.llmTurn,
+    null,
+    llmOptsFrom(opts, row),
+  ));
 }
 
 async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decision, opts = {}) {
@@ -399,6 +439,7 @@ async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decisio
     row.abort = new AbortController();
   }
 
+  if (opts.modelAlias || !row.modelAlias) attachModelAlias(row, opts);
   const out = await withRunGuard(row, () => runLoop(
     sandbox,
     sessionId,
@@ -412,6 +453,7 @@ async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decisio
       calls: [pause.currentCall, ...(pause.remainingCalls || [])],
       approvedCall: pause.currentCall,
     },
+    llmOptsFrom(opts, row),
   ));
   return {
     ok: true,
@@ -443,6 +485,7 @@ module.exports = {
   resolveCaps,
   estimateTokens,
   defaultLlmTurn,
+  attachModelAlias,
   runHarness,
   continueHarness,
   resumeHarness,

@@ -79,7 +79,7 @@ function mapDockerError(err) {
   const code = err && err.code;
   const msg = String(err && err.message || err || '');
   if (code === 'ENOENT' || /not found|cannot find|no such file/i.test(msg)) {
-    fail('E_PROVIDER');
+    fail('E_PROVIDER', 'Docker no está disponible para el driver local de sandbox.');
   }
   fail('E_PROVIDER', msg.slice(0, 180));
 }

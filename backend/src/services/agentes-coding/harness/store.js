@@ -107,6 +107,7 @@ function publicRun(row) {
     finishedAt: row.finishedAt,
     error: row.error,
     pendingPermissions: listPending(row),
+    modelAlias: row.modelAlias || undefined,
     caps: row.caps ? {
       maxSteps: row.caps.maxSteps,
       maxTokens: row.caps.maxTokens,

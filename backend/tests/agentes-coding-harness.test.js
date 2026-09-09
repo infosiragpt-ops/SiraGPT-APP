@@ -73,7 +73,7 @@ test('this suite never assigns process.env.AGENTES_CODING_V2', () => {
   assert.doesNotMatch(src, /process\.env\.AGENTES_CODING_V2\s*=/);
 });
 
-test('implementation stays a native stub (no banned vendors, no /code, no dump)', () => {
+test('implementation stays native (no banned vendors, no /code, no dump)', () => {
   const root = path.join(__dirname, '../src/services/agentes-coding/harness');
   const files = [];
   const walk = (dir) => {
