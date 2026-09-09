@@ -16,6 +16,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 4d of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  production-shaped completion adapter for the coding harness
+  (`backend/src/services/agentes-coding/harness/llm.js`). Same
+  `llmTurn` contract. Injectable fakes still win in tests (no
+  network). Flag on + no inject → existing native catalog client.
+  Body `modelAlias` (`Sira Rápido` / `Sira Pro`); unknown aliases
+  → `E_PARAMS`. Spanish `E_PROVIDER` / `E_TIMEOUT`; no keys or raw
+  upstream bodies in API JSON. See `docs/agentes-coding-harness.md`.
 - Phase 4c of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   optional durable harness jobs so HITL pauses and long tool loops
   survive process restart. Injectable memory queue/store (CI default);

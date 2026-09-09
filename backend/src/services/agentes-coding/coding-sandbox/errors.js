@@ -48,7 +48,7 @@ const CATALOG = Object.freeze({
   },
   E_TIMEOUT: {
     status: 504,
-    message: 'El comando superó el tiempo máximo del sandbox.',
+    message: 'La operación superó el tiempo máximo.',
   },
   E_QUOTA: {
     status: 429,
@@ -56,7 +56,7 @@ const CATALOG = Object.freeze({
   },
   E_PROVIDER: {
     status: 503,
-    message: 'Docker no está disponible para el driver local de sandbox.',
+    message: 'El proveedor no está disponible.',
   },
   E_CAPACITY: {
     status: 429,
@@ -133,9 +133,11 @@ const CATALOG = Object.freeze({
 });
 
 class CodingSandboxError extends Error {
-  constructor(code, detail) {
+  constructor(code, detail, opts = {}) {
     const entry = CATALOG[code] || CATALOG.E_PARAMS;
-    const message = detail ? `${entry.message} ${detail}`.trim() : entry.message;
+    const message = opts.replace && detail
+      ? String(detail)
+      : (detail ? `${entry.message} ${detail}`.trim() : entry.message);
     super(message);
     this.name = 'CodingSandboxError';
     this.code = CATALOG[code] ? code : 'E_PARAMS';
@@ -147,8 +149,8 @@ class CodingSandboxError extends Error {
   }
 }
 
-function fail(code, detail) {
-  throw new CodingSandboxError(code, detail);
+function fail(code, detail, opts) {
+  throw new CodingSandboxError(code, detail, opts);
 }
 
 module.exports = {

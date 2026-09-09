@@ -639,7 +639,8 @@ function createAgentesCodingRouter(opts = {}) {
   });
 
   /**
-   * Session harness (Phase 4a). API-only; injectable LLM; sandbox jail only.
+   * Session harness (Phase 4a + 4d). API-only; injectable LLM wins;
+   * otherwise the flag-on adapter in harness/llm.js. Sandbox jail only.
    */
   router.post('/sessions/:id/harness/run', authenticate, async (req, res) => {
     try {
@@ -649,6 +650,7 @@ function createAgentesCodingRouter(opts = {}) {
         maxSteps: body.maxSteps,
         maxTokens: body.maxTokens,
         timeoutMs: body.timeoutMs,
+        modelAlias: body.modelAlias || body.alias,
       }, env, { llmTurn: harnessLlm, permissionPolicy: harnessPermissionPolicy, jobs: harnessJobs });
       return res.status(201).json(result);
     } catch (err) {

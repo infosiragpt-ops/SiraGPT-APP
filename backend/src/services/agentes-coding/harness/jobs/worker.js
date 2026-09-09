@@ -84,7 +84,13 @@ async function processHarnessJob(job, ctx = {}) {
         row,
         data.permissionId,
         data.decision,
-        { llmTurn: ctx.llmTurn },
+        {
+          env: ctx.env,
+          llmTurn: ctx.llmTurn,
+          complete: ctx.complete,
+          createClient: ctx.createClient,
+          modelAlias: data.modelAlias || row.modelAlias,
+        },
       );
       await persist(ctx, raw, row, sessionId);
       return out;
@@ -96,7 +102,11 @@ async function processHarnessJob(job, ctx = {}) {
     }
 
     const run = await continueHarness(ctx.sandbox, sessionId, raw, row, {
+      env: ctx.env,
       llmTurn: ctx.llmTurn,
+      complete: ctx.complete,
+      createClient: ctx.createClient,
+      modelAlias: data.modelAlias || row.modelAlias,
     });
     await persist(ctx, raw, row, sessionId);
     return { ok: true, run, action };
@@ -137,7 +147,10 @@ function startHarnessWorker(opts = {}) {
   const processor = opts.processor || (async (job) => processHarnessJob(job, {
     sandbox: typeof opts.getSandbox === 'function' ? opts.getSandbox() : opts.sandbox,
     store: opts.store,
+    env: opts.env,
     llmTurn: opts.llmTurn,
+    complete: opts.complete,
+    createClient: opts.createClient,
     permissionPolicy: opts.permissionPolicy,
   }));
   const worker = new Worker(opts.queueName || QUEUE_NAME, processor, {

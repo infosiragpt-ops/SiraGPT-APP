@@ -114,6 +114,9 @@ async function runForRequest(sandbox, sessionId, opts, env, extras = {}) {
       ...opts,
       env,
       llmTurn: extras.llmTurn || extras.complete || (opts && opts.llmTurn),
+      providerComplete: extras.providerComplete || extras.chatComplete || (opts && opts.providerComplete),
+      createClient: extras.createClient || (opts && opts.createClient),
+      modelAlias: extras.modelAlias || (opts && (opts.modelAlias || opts.alias)),
       permissionPolicy: extras.permissionPolicy || (opts && opts.permissionPolicy),
       jobs,
     }),
@@ -147,6 +150,10 @@ async function resolveForRequest(sandbox, sessionId, runId, permissionId, decisi
   return resolvePermission(sandbox, sessionId, runId, permissionId, decision, {
     permissionPolicy: extras.permissionPolicy,
     llmTurn: extras.llmTurn || extras.complete,
+    providerComplete: extras.providerComplete || extras.chatComplete,
+    createClient: extras.createClient,
+    modelAlias: extras.modelAlias,
+    env,
     jobs: resolveJobs(env, extras) || extras.jobs,
   });
 }

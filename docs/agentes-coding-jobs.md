@@ -57,6 +57,11 @@ or `AbortController`. Permission resolve **re-enqueues** `resume`.
 Reject / cancel persist a terminal snapshot (`E_PERMISSION_DENIED` /
 `E_CANCELLED`).
 
+**Phase 4d:** when the worker has no injectable `llmTurn`, it uses
+`harness/llm.js` (same brand aliases, same Spanish `E_PROVIDER` /
+`E_TIMEOUT`). Tests keep injecting fakes. See
+[`docs/agentes-coding-harness.md`](./agentes-coding-harness.md).
+
 One active run per session still applies (store + in-process). Caps are
 unchanged.
 
@@ -96,5 +101,5 @@ dumping OpenHands / doc-sandbox processors.
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js
+cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js
 ```
