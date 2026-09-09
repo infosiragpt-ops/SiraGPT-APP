@@ -118,6 +118,14 @@ const CATALOG = Object.freeze({
     status: 404,
     message: 'La ejecución del harness no existe.',
   },
+  E_PERMISSION_DENIED: {
+    status: 403,
+    message: 'Permiso denegado: la acción privilegiada no se ejecutó.',
+  },
+  E_PERMISSION_NOT_FOUND: {
+    status: 404,
+    message: 'La solicitud de permiso no existe.',
+  },
 });
 
 class CodingSandboxError extends Error {

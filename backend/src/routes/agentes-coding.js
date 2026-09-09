@@ -43,13 +43,15 @@
  *   GET    /api/agentes-coding/sessions/:id/harness
  *   GET    /api/agentes-coding/sessions/:id/harness/:runId
  *   POST   /api/agentes-coding/sessions/:id/harness/:runId/cancel
+ *   GET    /api/agentes-coding/sessions/:id/harness/:runId/permissions
+ *   POST   /api/agentes-coding/sessions/:id/harness/:runId/permissions/:permissionId/resolve
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
  * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
  * only when health.enabled. Phase 3d/3e/3f/3g are API-only (UI-lock). See
  * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md,
- * docs/agentes-coding-git.md, docs/agentes-coding-export-deploy.md and
- * docs/agentes-coding-harness.md.
+ * docs/agentes-coding-git.md, docs/agentes-coding-export-deploy.md,
+ * docs/agentes-coding-harness.md and docs/agentes-coding-permissions.md.
  */
 
 const express = require('express');
@@ -88,6 +90,7 @@ function createAgentesCodingRouter(opts = {}) {
   const gitRunner = opts.gitRunner || opts.git || null;
   const deployHttp = opts.deployHttp || opts.httpClient || opts.fetchImpl || null;
   const harnessLlm = opts.harnessLlm || opts.llmTurn || null;
+  const harnessPermissionPolicy = opts.harnessPermissionPolicy || opts.permissionPolicy || null;
 
   const router = express.Router();
 
@@ -644,7 +647,7 @@ function createAgentesCodingRouter(opts = {}) {
         maxSteps: body.maxSteps,
         maxTokens: body.maxTokens,
         timeoutMs: body.timeoutMs,
-      }, env, { llmTurn: harnessLlm });
+      }, env, { llmTurn: harnessLlm, permissionPolicy: harnessPermissionPolicy });
       return res.status(201).json(result);
     } catch (err) {
       return sendSandboxError(res, err);
@@ -687,6 +690,46 @@ function createAgentesCodingRouter(opts = {}) {
       return sendSandboxError(res, err);
     }
   });
+
+  /**
+   * HITL permissions (Phase 4b). Cline ask/once/always/reject pattern.
+   * API-only; injectable policy; in-process store.
+   */
+  router.get('/sessions/:id/harness/:runId/permissions', authenticate, async (req, res) => {
+    try {
+      const result = await sessionHarness.listPermissionsForRequest(
+        getSandbox(),
+        req.params.id,
+        req.params.runId,
+        env,
+      );
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  router.post(
+    '/sessions/:id/harness/:runId/permissions/:permissionId/resolve',
+    authenticate,
+    async (req, res) => {
+      try {
+        const body = req.body || {};
+        const result = await sessionHarness.resolveForRequest(
+          getSandbox(),
+          req.params.id,
+          req.params.runId,
+          req.params.permissionId,
+          body.decision || body.reply,
+          env,
+          { permissionPolicy: harnessPermissionPolicy },
+        );
+        return res.json(result);
+      } catch (err) {
+        return sendSandboxError(res, err);
+      }
+    },
+  );
 
   /**
    * Destroy the session and its container.
