@@ -68,6 +68,18 @@ function resolveLimits(input = {}, env = process.env) {
     1,
     8 * 1024 * 1024,
   );
+  const maxVolumeBytes = parsePositiveInt(
+    env.AGENTES_CODING_SANDBOX_MAX_VOLUME_BYTES,
+    256 * 1024 * 1024,
+    1024,
+    1024 * 1024 * 1024,
+  );
+  const maxVolumeFiles = parsePositiveInt(
+    env.AGENTES_CODING_SANDBOX_MAX_VOLUME_FILES,
+    500,
+    1,
+    5_000,
+  );
   return Object.freeze({
     cpus,
     memory,
@@ -76,10 +88,15 @@ function resolveLimits(input = {}, env = process.env) {
     ttlMs,
     maxSessions,
     maxFileBytes,
+    maxVolumeBytes,
+    maxVolumeFiles,
   });
 }
 
-function dockerLimitArgs(limits) {
+function dockerLimitArgs(limits, opts = {}) {
+  const workspace = opts.workspaceBind
+    ? ['-v', `${opts.workspaceBind}:/workspace:rw`]
+    : ['--tmpfs', '/workspace:rw,exec,uid=10001,gid=10001,size=256m'];
   return [
     '--memory', limits.memory,
     '--cpus', limits.cpus,
@@ -87,7 +104,7 @@ function dockerLimitArgs(limits) {
     '--security-opt', 'no-new-privileges',
     '--cap-drop', 'ALL',
     '--read-only',
-    '--tmpfs', '/workspace:rw,exec,uid=10001,gid=10001,size=256m',
+    ...workspace,
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m',
     '--user', '10001:10001',
   ];

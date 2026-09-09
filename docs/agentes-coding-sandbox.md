@@ -24,12 +24,14 @@ that file is not on the branch yet). License / Tier S catalog:
 | Preview | `POST /sessions/:id/preview` — Phase 3e signed exposePort, see [`docs/agentes-coding-preview.md`](./agentes-coding-preview.md) |
 | Git | `/sessions/:id/git/*` — Phase 3f checkpoints, see [`docs/agentes-coding-git.md`](./agentes-coding-git.md) |
 | Export / deploy | `/sessions/:id/export` · `/sessions/:id/deploy` — Phase 3g, see [`docs/agentes-coding-export-deploy.md`](./agentes-coding-export-deploy.md) |
-| Harness | `/sessions/:id/harness*` — Phase 4a–4c tool loop + optional jobs, see [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md) · [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md) |
+| Harness | `/sessions/:id/harness*` — Phase 4a–4d tool loop + optional jobs, see [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md) · [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md) |
+| Volumes | Phase 4e host bind-mount / disk workspace, see below |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
-Interface (same on memory + docker drivers):
+Interface (same on memory + docker + volume drivers):
 
-`createSession` · `exec` · `readFile` · `writeFile` · `listFiles` ·
+`createSession` · `recreateSession` · `exec` · `readFile` · `writeFile` ·
+`listFiles` ·
 `exposePort` (deny-by-default; signed URL + localhost metadata) ·
 `listPorts` · `unexposePort` · `resolvePreview` · `destroy`
 
@@ -37,8 +39,9 @@ Interface (same on memory + docker drivers):
 
 | Driver | When | Isolation |
 |---|---|---|
-| `memory` | default, CI, no Docker | in-process Map, path jail |
-| `docker` | `AGENTES_CODING_SANDBOX_DRIVER=docker` | `docker run` per session |
+| `memory` | default, CI, no Docker | in-process Map, path jail. **Ephemeral** — dies with the process |
+| `docker` | `AGENTES_CODING_SANDBOX_DRIVER=docker` | `docker run` per session. `/workspace` is a **bind-mount** under the data dir (Phase 4e) |
+| `volume` / `disk` | `AGENTES_CODING_SANDBOX_DRIVER=volume` (DEV) | same jailed host dir, no Docker daemon |
 
 Docker DEV argv (Lenovo / F1-style, injectable in tests):
 
@@ -46,8 +49,33 @@ Docker DEV argv (Lenovo / F1-style, injectable in tests):
   (compose network is `internal: true`)
 - `--memory` / `--cpus` / `--pids-limit` stubs
 - `--security-opt no-new-privileges`, `--cap-drop ALL`, `--read-only`
-- tmpfs `/workspace`, user `10001:10001`
+- bind-mount `{AGENTES_CODING_SANDBOX_DATA_DIR}/{sessionId}/workspace:/workspace:rw` (not tmpfs). `/tmp` stays tmpfs
+- user `10001:10001`
 - **no** Docker socket, **no** prod `.env`, **no** control Postgres/Redis
+
+### Phase 4e — durable workspace files
+
+Complements Phase 4c harness job snapshots. Session **file bytes** for
+`docker` / `volume` live on a host directory keyed by session id:
+
+`{AGENTES_CODING_SANDBOX_DATA_DIR}/{sessionId}/workspace` plus `meta.json`.
+
+| Env | Default | Role |
+|---|---|---|
+| `AGENTES_CODING_SANDBOX_DATA_DIR` | `$TMPDIR/siragpt-agentes-coding` | Host root. Bind-mounts must stay inside it. System paths (`/etc`, `/`) are rejected |
+| `AGENTES_CODING_SANDBOX_MAX_VOLUME_BYTES` | `268435456` (256 MiB) | Stub cap on total workspace bytes |
+| `AGENTES_CODING_SANDBOX_MAX_VOLUME_FILES` | `500` | Stub cap on file count |
+
+`createSession` / `getSession` / `recreateSession` after a process restart
+reattach to an existing volume when `meta.json` is still inside TTL.
+`destroy` removes the directory. Memory driver never writes here (CI
+default; no Docker required). Injectable `fs` + `docker` keep unit tests
+offline. Bind-mounts are jailed to the data dir — no privileged socket
+tricks, no named-volume daemon API.
+
+tmp default survives **process** restart, not a host reboot that wipes
+`/tmp`. Point `AGENTES_CODING_SANDBOX_DATA_DIR` at a stable DEV path
+when you need host-reboot durability. Do not set the flag on Lenovo.
 
 ```bash
 # DEV only — does not start on default compose up
@@ -85,9 +113,11 @@ Phase 4a session harness (API-only plan/tool/result loop):
 [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md).
 Phase 4c durable jobs (optional BullMQ / memory fallback):
 [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md).
+Phase 4e durable docker/volume workspace files (this page).
+xterm UI-lock exception is still out of scope.
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-sandbox-volume.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js tests/agentes-coding-harness-llm.test.js
 ```

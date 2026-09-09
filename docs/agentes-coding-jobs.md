@@ -49,7 +49,11 @@ local `env` object without that key. CI default path never opens Redis.
 Authoritative run state is the snapshot (Redis or memory), not BullMQ
 job data. Job payload carries `runId`, `sessionId`, `action`
 (`start` / `resume` / `cancel`) and a snapshot fallback. Session file
-bytes stay in the coding-sandbox jail.
+bytes stay in the coding-sandbox jail. **Phase 4e:** docker / volume
+drivers persist those bytes on a host bind-mount
+(`AGENTES_CODING_SANDBOX_DATA_DIR`) so a process restart can reattach
+the same workspace; the memory driver still dies with the process. See
+[`docs/agentes-coding-sandbox.md`](./agentes-coding-sandbox.md).
 
 On HITL (`awaiting_permission`) the worker persists the pause
 (transcript, current tool call, remaining calls) **without** `llmTurn`

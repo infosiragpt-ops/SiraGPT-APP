@@ -5,9 +5,11 @@
  *
  * Reuses the Lenovo / doc-sandbox argv shape (network none, memory/cpu/pids,
  * no-new-privileges, non-root, no docker.sock) with an injectable `docker.exec`.
+ * Phase 4e bind-mounts `/workspace` from AGENTES_CODING_SANDBOX_DATA_DIR.
  * Not a Kubernetes OpenSandbox deploy. Not F7 / computer-use.
  */
 
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { fail, CodingSandboxError } = require('./errors');
 const { dockerLimitArgs, resolveExecTimeout } = require('./limits');
@@ -53,15 +55,28 @@ function sanitizeName(id) {
   return `sira-csb-${String(id).replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 48)}`;
 }
 
-function buildDockerRunArgs({ name, image, limits, networkArgs }) {
+function buildDockerRunArgs({ name, image, limits, networkArgs, workspaceBind }) {
   return [
     'run', '-d', '--rm',
     '--name', name,
     ...networkArgs,
-    ...dockerLimitArgs(limits),
+    ...dockerLimitArgs(limits, { workspaceBind }),
     image,
     'sleep', 'infinity',
   ];
+}
+
+function assertSafeBindMount(hostPath, dataDir) {
+  if (!hostPath || !dataDir) fail('E_NETWORK_DENIED', 'Falta el bind-mount del workspace.');
+  const abs = path.resolve(String(hostPath));
+  const root = path.resolve(String(dataDir));
+  const rel = path.relative(root, abs);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    fail('E_NETWORK_DENIED', 'El bind-mount sale del data dir.');
+  }
+  if (/docker\.sock|DOCKER_HOST|\/var\/run\/docker/i.test(abs)) {
+    fail('E_NETWORK_DENIED', 'Prohibido montar el socket de Docker.');
+  }
 }
 
 function assertSafeDockerArgs(args) {
@@ -89,6 +104,7 @@ function createDockerLocalDriver(opts = {}) {
     ? opts.docker.exec.bind(opts.docker)
     : defaultDockerExec;
   const image = String(opts.image || DEFAULT_IMAGE).trim() || DEFAULT_IMAGE;
+  const volume = opts.volume || null;
 
   async function callDocker(args, callOpts) {
     assertSafeDockerArgs(args);
@@ -99,32 +115,59 @@ function createDockerLocalDriver(opts = {}) {
     }
   }
 
+  function prepareWorkspace(session) {
+    if (!volume) return undefined;
+    const hostWs = volume.ensure(session);
+    session.volumePath = hostWs;
+    assertSafeBindMount(hostWs, volume.dataDir);
+    return hostWs;
+  }
+
+  async function startContainer(session) {
+    const name = sanitizeName(session.id);
+    const networkArgs = session.network.dockerNetworkArgs();
+    const workspaceBind = prepareWorkspace(session);
+    const args = buildDockerRunArgs({
+      name,
+      image: session.image || image,
+      limits: session.limits,
+      networkArgs,
+      workspaceBind,
+    });
+    assertSafeDockerArgs(args);
+    const run = await callDocker(args, { timeoutMs: 30_000 });
+    if (run.exitCode !== 0) {
+      const errText = (run.stderr || run.stdout || '').trim();
+      if (/already in use|conflict/i.test(errText)) {
+        session.containerName = name;
+        session.dockerRunArgs = args;
+        return session;
+      }
+      fail('E_PROVIDER', errText.slice(0, 180));
+    }
+    session.containerName = name;
+    session.dockerRunArgs = args;
+    return session;
+  }
+
   return {
     kind: 'docker',
     image,
+    volume,
     buildDockerRunArgs,
     assertSafeDockerArgs,
+    assertSafeBindMount,
 
     async createSession(session) {
-      const name = sanitizeName(session.id);
-      const networkArgs = session.network.dockerNetworkArgs();
-      const args = buildDockerRunArgs({
-        name,
-        image: session.image || image,
-        limits: session.limits,
-        networkArgs,
-      });
-      assertSafeDockerArgs(args);
-      const run = await callDocker(args, { timeoutMs: 30_000 });
-      if (run.exitCode !== 0) {
-        fail('E_PROVIDER', (run.stderr || run.stdout || '').trim().slice(0, 180));
-      }
-      session.containerName = name;
-      session.dockerRunArgs = args;
-      return session;
+      return startContainer(session);
+    },
+
+    async ensureContainer(session) {
+      return startContainer(session);
     },
 
     async exec(session, command, opts = {}) {
+      if (!session.containerName) await startContainer(session);
       if (!session.containerName) fail('E_PROVIDER', 'La sesión no tiene contenedor.');
       const cmd = String(command || '').trim();
       if (!cmd) fail('E_PARAMS', 'Falta el comando.');
@@ -167,6 +210,13 @@ function createDockerLocalDriver(opts = {}) {
     },
 
     async readFile(session, relPath) {
+      if (volume) {
+        try {
+          return volume.readFile(session.id, relPath);
+        } catch (err) {
+          if (!err || err.code !== 'E_PARAMS') throw err;
+        }
+      }
       const abs = workspaceAbs(relPath);
       const run = await callDocker(
         ['exec', '-u', '10001:10001', session.containerName, 'sh', '-c', `cat -- ${JSON.stringify(abs)}`],
@@ -181,6 +231,11 @@ function createDockerLocalDriver(opts = {}) {
       const abs = workspaceAbs(rel);
       const buf = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
       if (buf.length > session.limits.maxFileBytes) fail('E_QUOTA', 'El archivo supera el tope.');
+      if (volume) {
+        volume.assertCanWrite(session, rel, buf.length);
+        volume.writeFile(session.id, rel, buf);
+      }
+      if (!session.containerName) return { path: rel, bytes: buf.length };
       const b64 = buf.toString('base64');
       const dir = abs.includes('/') ? abs.slice(0, abs.lastIndexOf('/')) : '/workspace';
       const script = `mkdir -p ${JSON.stringify(dir)} && printf '%s' ${JSON.stringify(b64)} | base64 -d > ${JSON.stringify(abs)}`;
@@ -193,6 +248,7 @@ function createDockerLocalDriver(opts = {}) {
     },
 
     async listFiles(session, relDir = '.') {
+      if (volume) return volume.walkFiles(session.id, relDir);
       const rel = jailRelPath(relDir, { forList: true });
       const abs = rel === '.' ? '/workspace' : workspaceAbs(rel);
       const run = await callDocker(
@@ -205,19 +261,22 @@ function createDockerLocalDriver(opts = {}) {
         const i = line.indexOf(' ');
         const full = i >= 0 ? line.slice(i + 1) : line;
         const size = i >= 0 ? Number(line.slice(0, i)) || 0 : 0;
-        const path = full.replace(/^\/workspace\/?/, '') || full;
-        return { path, size };
+        const listed = full.replace(/^\/workspace\/?/, '') || full;
+        return { path: listed, size };
       });
     },
 
     async destroy(session) {
-      if (!session.containerName) return;
-      try {
-        await execDocker(['rm', '-f', session.containerName], { timeoutMs: 15_000 });
-      } catch (err) {
-        if (/no such container/i.test(String(err && err.message || ''))) return;
-        if (err && err.code === 'ENOENT') return;
+      if (session.containerName) {
+        try {
+          await execDocker(['rm', '-f', session.containerName], { timeoutMs: 15_000 });
+        } catch (err) {
+          if (!/no such container/i.test(String(err && err.message || '')) && err && err.code !== 'ENOENT') {
+            /* still drop the volume */
+          }
+        }
       }
+      if (volume && session && session.id) volume.remove(session.id);
     },
   };
 }
@@ -228,5 +287,6 @@ module.exports = {
   buildDockerRunArgs,
   sanitizeName,
   assertSafeDockerArgs,
+  assertSafeBindMount,
   defaultDockerExec,
 };

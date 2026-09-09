@@ -16,6 +16,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 4e of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  durable coding-sandbox workspace files for the docker driver (and
+  optional `volume`/`disk` DEV path). `/workspace` is a host bind-mount
+  under `AGENTES_CODING_SANDBOX_DATA_DIR` keyed by session id. Path
+  jail intact. `createSession` / `getSession` / `recreateSession`
+  reattach after process restart; `destroy` removes the volume.
+  Memory driver stays ephemeral (CI default, no Docker). Injectable
+  `fs` + `docker`. Volume byte/file caps are stubs. API-only —
+  UI-lock unchanged; xterm pane still needs a Luis exception. See
+  `docs/agentes-coding-sandbox.md`.
 - Phase 4d of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   production-shaped completion adapter for the coding harness
   (`backend/src/services/agentes-coding/harness/llm.js`). Same
