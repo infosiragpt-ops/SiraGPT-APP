@@ -3,6 +3,8 @@
 /**
  * Minimal coding IDE shell on /agentes (AGENTES_CODING_V2).
  * File tree + Monaco + diff + terminal stub + project preview (Etapa 4 MVP).
+ * The tree auto-refreshes (poll + focus + manual) because the chat agent
+ * writes to the project behind the IDE's back (project_write, Etapa 3).
  * Never mounts unless the health gate already resolved enabled:true.
  */
 
@@ -62,6 +64,78 @@ export function CodingIdeShell() {
   async function refreshProjectFiles(id: string) {
     const paths = await projectsCodexApi.listFiles(id)
     setFiles(paths.map((path) => ({ path })))
+  }
+
+  // Refs para el auto-refresh (el intervalo no debe ver estado obsoleto).
+  const busyRef = React.useRef(busy)
+  busyRef.current = busy
+  const activePathRef = React.useRef(activePath)
+  activePathRef.current = activePath
+  const draftRef = React.useRef(draft)
+  draftRef.current = draft
+  const originalRef = React.useRef(original)
+  originalRef.current = original
+  const projectIdRef = React.useRef(projectId)
+  projectIdRef.current = projectId
+
+  // Recarga silenciosa del árbol del proyecto vinculado. Si el archivo
+  // abierto no tiene cambios sin guardar, también recarga su contenido
+  // (el agente pudo modificarlo vía project_write). Con cambios locales
+  // (dirty) nunca se pisa el borrador del usuario.
+  const refreshProjectTree = React.useCallback(async ({ silent }: { silent?: boolean } = {}) => {
+    const id = projectIdRef.current
+    if (!id || busyRef.current) return
+    try {
+      const paths = await projectsCodexApi.listFiles(id)
+      if (projectIdRef.current !== id) return
+      setFiles(paths.map((path) => ({ path })))
+      const open = activePathRef.current
+      if (open && draftRef.current === originalRef.current) {
+        try {
+          const body = await projectsCodexApi.readFileContent(id, open)
+          const content = String(body?.content ?? "")
+          if (projectIdRef.current === id && activePathRef.current === open && content !== originalRef.current) {
+            setOriginal(content)
+            setDraft(content)
+          }
+        } catch {
+          // El archivo pudo borrarse; el árbol ya lo refleja.
+        }
+      }
+    } catch (err) {
+      if (!silent) fail(err)
+    }
+  }, [])
+
+  // Auto-refresh: poll cada 15s + al recuperar el foco. Solo en modo
+  // proyecto (las sesiones efímeras solo las toca este IDE).
+  React.useEffect(() => {
+    if (!projectId) return
+    const timer = window.setInterval(() => void refreshProjectTree({ silent: true }), 15_000)
+    const onFocus = () => void refreshProjectTree({ silent: true })
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void refreshProjectTree({ silent: true })
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [projectId, refreshProjectTree])
+
+  async function handleManualRefresh() {
+    if (busy) return
+    setBusy(true)
+    try {
+      if (projectId) await refreshProjectTree()
+      else if (session) await refreshFiles(session.id)
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function openProject(id: string) {
@@ -433,7 +507,19 @@ export function CodingIdeShell() {
 
       <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)]">
         <aside className="min-h-0 overflow-auto border-r border-border" data-testid="agentes-coding-file-tree">
-          <p className="px-3 py-2 text-xs font-medium">Archivos</p>
+          <div className="flex items-center justify-between px-3 py-2">
+            <p className="text-xs font-medium">Archivos</p>
+            <button
+              type="button"
+              className="h-6 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={() => void handleManualRefresh()}
+              disabled={busy || (!session && !projectId)}
+              title="Recargar el árbol de archivos"
+              data-testid="agentes-coding-refresh-files"
+            >
+              Actualizar
+            </button>
+          </div>
           <div className="flex gap-1 px-2 pb-2">
             <input
               className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs"
