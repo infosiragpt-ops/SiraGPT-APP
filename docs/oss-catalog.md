@@ -88,8 +88,8 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `modelcontextprotocol/specification` | MIT / CC | MCP protocol contract | pattern | MCP client (already present) | next |
 | `microsoft/playwright` | Apache-2.0 | Browser acceptance of generated apps | already in-repo; reuse. Prefer `playwright-mcp` (Tier S) for agent-driven checks | preview / QA gate (future) | next |
 | `prisma/prisma` | Apache-2.0 | Control-plane ORM (already in-repo) | already used | control plane | next |
-| `isomorphic-git/isomorphic-git` | MIT | In-sandbox git without shelling out | code via npm inside the sandbox image (later) | sandbox git (future) | next |
-| `steveukx/git-js` (`simple-git`) | MIT | Node git wrapper | code via npm if isomorphic-git is not enough | sandbox git (future) | next |
+| `isomorphic-git/isomorphic-git` | MIT | In-sandbox git without shelling out | **pattern only** (in-process session store). No npm, no monorepo dump. Phase 3f | `backend/src/services/agentes-coding/git/` | already fused (pattern) |
+| `steveukx/git-js` (`simple-git`) | MIT | Node git wrapper (argv, no shell string) | **pattern only** (injectable argv runner). No npm. Phase 3f | `backend/src/services/agentes-coding/git/` | already fused (pattern) |
 | `microsoft/vscode-languageserver-node` | MIT | LSP client types for diagnostics | pattern / npm types | `sira-code/diagnostics.js` (already patterned) | next |
 | `codemirror/dev` | MIT | Lighter editor alternative to Monaco | pattern / npm if Monaco is too heavy | `/agentes` IDE fallback (later) | next |
 | `yjs/yjs` | MIT | Optional CRDT for multi-tab IDE | pattern only if a later PR needs it | `/agentes` IDE (later) | next |

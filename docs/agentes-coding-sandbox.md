@@ -22,6 +22,7 @@ that file is not on the branch yet). License / Tier S catalog:
 | Repo-map | `GET|POST /sessions/:id/map` — Phase 3b, see [`docs/agentes-coding-repomap.md`](./agentes-coding-repomap.md) |
 | Terminal | `POST /sessions/:id/terminal*` — Phase 3d PTY stub, see [`docs/agentes-coding-terminal.md`](./agentes-coding-terminal.md) |
 | Preview | `POST /sessions/:id/preview` — Phase 3e signed exposePort, see [`docs/agentes-coding-preview.md`](./agentes-coding-preview.md) |
+| Git | `/sessions/:id/git/*` — Phase 3f checkpoints, see [`docs/agentes-coding-git.md`](./agentes-coding-git.md) |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
 Interface (same on memory + docker drivers):

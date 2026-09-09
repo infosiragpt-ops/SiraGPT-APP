@@ -82,6 +82,14 @@ const CATALOG = Object.freeze({
     status: 500,
     message: 'No se pudo abrir el canal de terminal.',
   },
+  E_GIT_FAILED: {
+    status: 500,
+    message: 'No se pudo ejecutar git en el repositorio de la sesión.',
+  },
+  E_CHECKPOINT_NOT_FOUND: {
+    status: 404,
+    message: 'El punto de control no existe.',
+  },
 });
 
 class CodingSandboxError extends Error {
