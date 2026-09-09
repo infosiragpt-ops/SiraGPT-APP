@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Preserve documents whose subject mentions an app/software and explicit Word
+  documents with charts when routing software requests. Restore the existing
+  todo-harness smoke in the backend test command; no feature flags are enabled.
+- Cowork file tools now honor the existing composer permission levels.
+  Read-only denies file mutations; protected mode requires explicit approval.
+  This change does not enable the experimental chat-first web project runner.
 - `/agentes` website/app asks (“créame una web de ventas” and Spanish
   variants) stay on the code plane (`webdev` / HTML-JS artifacts). They
   no longer remap `.html` contracts into Document Sandbox Word. True

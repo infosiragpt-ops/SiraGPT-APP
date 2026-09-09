@@ -46,6 +46,43 @@ describe('software-build-intent', () => {
     }
   });
 
+  test('a requested document remains a document when software is only its subject', () => {
+    for (const prompt of [
+      'crea un manual de usuario para mi software',
+      'crea un informe sobre esta app',
+      'genera un documento sobre una aplicacion web',
+      'crea un informe Word sobre React',
+    ]) {
+      assert.equal(isExplicitDocumentRequest(prompt), true, prompt);
+      assert.equal(isSoftwareBuildRequest(prompt), false, prompt);
+      for (const filename of ['entregable.docx', 'entregable.pdf']) {
+        assert.equal(shouldBlockOfficeCreateDocument(filename, prompt), false, `${prompt}: ${filename}`);
+      }
+    }
+  });
+
+  test('a requested app remains software when documents are only a feature', () => {
+    for (const prompt of [
+      'crea una app para gestionar documentos',
+      'crea un sitio web con manual de ayuda',
+    ]) {
+      assert.equal(isExplicitDocumentRequest(prompt), false, prompt);
+      assert.equal(isSoftwareBuildRequest(prompt), true, prompt);
+      assert.equal(shouldBlockOfficeCreateDocument('entregable.docx', prompt), true, prompt);
+    }
+  });
+
+  test('a document reference before the build verb is not the requested deliverable', () => {
+    for (const prompt of [
+      'Usa este manual como referencia y crea una app para reservas',
+      'A partir del informe, crea una app de ventas',
+    ]) {
+      assert.equal(isExplicitDocumentRequest(prompt), false, prompt);
+      assert.equal(isSoftwareBuildRequest(prompt), true, prompt);
+      assert.equal(shouldBlockOfficeCreateDocument('entregable.docx', prompt), true, prompt);
+    }
+  });
+
   test('datos / copy de ventas do not force coding', () => {
     assert.equal(isCopyOrDataAsk('datos de ventas'), true);
     assert.equal(isSoftwareBuildRequest('datos de ventas'), false);
@@ -67,6 +104,21 @@ describe('software-build-intent', () => {
 });
 
 describe('document policy stay on the code plane', () => {
+  test('document subjects mentioning an app preserve the pre-software-routing delivery policy', () => {
+    // Exact a133aeba baseline: this manual already stayed chat_only in this
+    // policy (although semantic routing recognized .docx). Do not expand
+    // generation here; the report did require a document before #664.
+    for (const [goal, mode, autoGenerate] of [
+      ['crea un manual de usuario para mi software', 'chat_only', false],
+      ['crea un informe sobre esta app', 'doc_required', true],
+    ]) {
+      const policy = buildDocumentDeliveryPolicy({ goal });
+      assert.equal(policy.mode, mode, goal);
+      assert.equal(policy.autoGenerate, autoGenerate, goal);
+      assert.equal(policy.format, 'docx', goal);
+    }
+  });
+
   test('document policy does not auto-Word a website ask', () => {
     const policy = buildDocumentDeliveryPolicy({
       goal: 'créame una web de ventas',

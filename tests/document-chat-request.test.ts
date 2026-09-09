@@ -38,6 +38,21 @@ describe("document chat request · clean prompt contract", () => {
     assert.equal(detectDocumentChatFormat("rédactame un informe de ventas en Word"), "docx")
   })
 
+  it("does not turn documents about software into HTML", () => {
+    for (const prompt of ["crea un informe sobre esta app", "crea un manual de usuario para mi software"]) {
+      assert.equal(detectDocumentChatFormat(prompt), "docx", prompt)
+    }
+  })
+
+  it("keeps software builds when a document is only an earlier reference", () => {
+    for (const prompt of [
+      "Usa este manual como referencia y crea una app para reservas",
+      "A partir del informe, crea una app de ventas",
+    ]) {
+      assert.equal(detectDocumentChatFormat(prompt), "html", prompt)
+    }
+  })
+
   it("classifies templates and complexity without UI involvement", () => {
     assert.equal(detectDocumentChatTemplate("tesis APA 7 con referencias"), "academic")
     assert.equal(detectDocumentChatTemplate("contrato legal de servicios"), "legal")

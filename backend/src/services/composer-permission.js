@@ -18,6 +18,10 @@ const COMPOSER_PERMISSIONS = Object.freeze([
 ]);
 
 const WRITE_TOOLS = new Set([
+  'ws_write',
+  'ws_edit',
+  'ws_move',
+  'ws_delete',
   'write',
   'edit',
   'write_file',

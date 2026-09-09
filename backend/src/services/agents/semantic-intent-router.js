@@ -204,12 +204,12 @@ function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
     figma: matchAny(n, [
       /\b(figma|wireframe|user flow|design system|prototipo navegable|diagrama de producto)\b/i,
     ]),
-    webdev: Boolean(tokenAnalysis?.context?.has_web_build)
+    webdev: !isExplicitDocumentRequest(rawUserRequest) && (Boolean(tokenAnalysis?.context?.has_web_build)
       || isSoftwareBuildRequest(rawUserRequest)
       || matchAny(n, [
       /\b(crea|crear|creame|haz|hazme|genera|desarrolla|programa|construye|implementa|disena|diseña)\b.*\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas|app|software)\b/i,
       /\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas|app|software)\b.*\b(crea|crear|haz|genera|desarrolla|programa|construye|implementa|disena|diseña)\b/i,
-    ]),
+    ])),
     video: matchAny(n, [
       /\b(video|clip|animacion|veo3|veo 3|sora)\b/i,
     ]),
