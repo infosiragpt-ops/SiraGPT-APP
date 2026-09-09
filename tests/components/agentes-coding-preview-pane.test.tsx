@@ -83,4 +83,38 @@ describe("CodingPreviewPane", () => {
     })
     expect(screen.getByTestId("agentes-preview-start")).toBeInTheDocument()
   })
+
+  it("hot-restart: subir fileVersion en ready recarga el iframe sin reiniciar el server", async () => {
+    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({
+      devUrl: "/x/",
+      previewUrl: "/x/",
+      basePath: "/x/",
+    })
+    const { rerender } = render(<CodingPreviewPane projectId="p1" fileVersion={0} />)
+    fireEvent.click(screen.getByTestId("agentes-preview-start"))
+    const first = await screen.findByTestId("agentes-preview-iframe")
+    expect(first).toHaveAttribute("src", "/x/")
+    rerender(<CodingPreviewPane projectId="p1" fileVersion={1} />)
+    await waitFor(() => {
+      expect(screen.getByTestId("agentes-preview-iframe")).not.toBe(first)
+    })
+    expect(screen.getByTestId("agentes-preview-iframe")).toHaveAttribute("src", "/x/")
+    expect(vi.mocked(projectsCodexApi.startPreview)).toHaveBeenCalledTimes(1)
+  })
+
+  it("hot-restart: subir fileVersion antes de ready no arranca solo; el arranque posterior es normal", async () => {
+    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({
+      devUrl: "/x/",
+      previewUrl: "/x/",
+      basePath: "/x/",
+    })
+    const { rerender } = render(<CodingPreviewPane projectId="p1" fileVersion={0} />)
+    rerender(<CodingPreviewPane projectId="p1" fileVersion={1} />)
+    expect(screen.queryByTestId("agentes-preview-iframe")).toBeNull()
+    expect(vi.mocked(projectsCodexApi.startPreview)).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId("agentes-preview-start"))
+    const iframe = await screen.findByTestId("agentes-preview-iframe")
+    expect(iframe).toHaveAttribute("src", "/x/")
+    expect(vi.mocked(projectsCodexApi.startPreview)).toHaveBeenCalledTimes(1)
+  })
 })

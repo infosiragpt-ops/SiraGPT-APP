@@ -23,6 +23,9 @@ vi.mock("@/lib/codex/api/projects", async () => {
       listFiles: vi.fn(),
       readFileContent: vi.fn(),
       importFiles: vi.fn(),
+      startPreview: vi.fn(),
+      previewStatus: vi.fn(),
+      stopPreview: vi.fn(),
     },
   }
 })
@@ -56,6 +59,13 @@ vi.mock("@/components/agentes/coding-monaco-diff", () => ({
   default: () => <div data-testid="diff-stub" />,
 }))
 
+vi.mock("@/lib/codex/use-codex-health", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/codex/use-codex-health")>(
+    "@/lib/codex/use-codex-health",
+  )
+  return { ...actual, ensureCodexPreviewOrigin: vi.fn() }
+})
+
 vi.mock("next/dynamic", () => ({
   default: (loader: () => Promise<unknown>) => {
     function DynamicStub(props: Record<string, unknown>) {
@@ -79,6 +89,7 @@ vi.mock("next/dynamic", () => ({
 }))
 
 import { projectsCodexApi } from "@/lib/codex/api/projects"
+import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 
 const PROJECT = { id: "p1", name: "App" } as never
 
@@ -109,6 +120,10 @@ describe("CodingIdeShell auto-refresh", () => {
     vi.mocked(projectsCodexApi.listProjects).mockReset()
     vi.mocked(projectsCodexApi.listFiles).mockReset()
     vi.mocked(projectsCodexApi.readFileContent).mockReset()
+    vi.mocked(projectsCodexApi.startPreview).mockReset()
+    vi.mocked(projectsCodexApi.previewStatus).mockReset().mockResolvedValue({ running: true } as never)
+    vi.mocked(projectsCodexApi.stopPreview).mockReset().mockResolvedValue({ ok: true } as never)
+    vi.mocked(ensureCodexPreviewOrigin).mockReset().mockResolvedValue(null)
     // Solo capturamos nuestro poll (15s); el polling interno de
     // testing-library y otros temporizadores siguen con el reloj real.
     vi.spyOn(window, "setInterval").mockImplementation(((cb: () => void, ms?: number, ...rest: unknown[]) => {
@@ -179,5 +194,26 @@ describe("CodingIdeShell auto-refresh", () => {
     await Promise.resolve()
     expect((screen.getByTestId("monaco-stub") as HTMLTextAreaElement).value).toBe("v1+mis-cambios")
     expect(vi.mocked(projectsCodexApi.readFileContent).mock.calls.length).toBe(readsBefore)
+  })
+
+  it("el preview hace hot-restart cuando el poll detecta archivos nuevos (sin reiniciar el server)", async () => {
+    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({
+      devUrl: "/x/",
+      previewUrl: "/x/",
+      basePath: "/x/",
+    } as never)
+    await renderWithProject()
+    fireEvent.click(screen.getByTestId("agentes-coding-pane-preview"))
+    fireEvent.click(screen.getByTestId("agentes-preview-start"))
+    const first = await screen.findByTestId("agentes-preview-iframe")
+    expect(first).toHaveAttribute("src", "/x/")
+    vi.mocked(projectsCodexApi.listFiles).mockResolvedValue(["src/a.ts", "src/b.ts"])
+    await nextPollTick(() => intervalCbs)
+    await screen.findByText("b.ts")
+    await waitFor(() => {
+      expect(screen.getByTestId("agentes-preview-iframe")).not.toBe(first)
+    })
+    expect(screen.getByTestId("agentes-preview-iframe")).toHaveAttribute("src", "/x/")
+    expect(vi.mocked(projectsCodexApi.startPreview)).toHaveBeenCalledTimes(1)
   })
 })
