@@ -122,6 +122,7 @@ test('HTTP/SSE session actions enforce identity before files, maps, edits and te
     ['POST', '/git/init'], ['GET', '/git/status'], ['GET', '/git/diff'],
     ['POST', '/git/checkpoint'], ['GET', '/git/checkpoints'],
     ['POST', '/export'], ['GET', '/export'], ['POST', '/deploy'], ['GET', '/deploy'],
+    ['POST', '/harness/run'], ['GET', '/harness'],
     ['DELETE', ''],
   ];
   const request = (method, route, user) => fetch(`${base}${route}`, {
