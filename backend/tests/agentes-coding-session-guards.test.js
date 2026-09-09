@@ -8,12 +8,19 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { createAgentesCodingRouter } = require('../src/routes/agentes-coding');
 const { createCodingSandbox, resolveDriverName } = require('../src/services/agentes-coding/coding-sandbox');
+const { createMapFs } = require('../src/services/agentes-coding/coding-sandbox/volume');
 const { resolveLimits, resolveExecTimeout } = require('../src/services/agentes-coding/coding-sandbox/limits');
 const { isAgentesCodingV2Enabled } = require('../src/services/agentes-coding/flags');
 const terminal = require('../src/services/agentes-coding/terminal');
 
 const ON = { AGENTES_CODING_V2: '1' };
-const make = (opts = {}) => createCodingSandbox({ env: ON, autoGc: false, ...opts });
+const make = (opts = {}) => createCodingSandbox({
+  env: { ...ON, ...(opts.env || {}) },
+  autoGc: false,
+  fs: opts.fs || (opts.driver === 'docker' ? createMapFs() : undefined),
+  dataDir: opts.dataDir || (opts.driver === 'docker' ? '/agentes-coding-data-guards' : undefined),
+  ...opts,
+});
 
 test('production cannot enable the DEV coding runtime through a flag', async () => {
   const env = { NODE_ENV: 'production', AGENTES_CODING_V2: 'true' };

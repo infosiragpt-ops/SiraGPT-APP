@@ -11,6 +11,7 @@ const {
   CodingSandboxError,
   resolveDriverName,
 } = require('../src/services/agentes-coding/coding-sandbox');
+const { createMapFs } = require('../src/services/agentes-coding/coding-sandbox/volume');
 const { createNetworkPolicy, FORBIDDEN_DOCKER_NETWORKS } = require('../src/services/agentes-coding/coding-sandbox/network');
 const { jailRelPath } = require('../src/services/agentes-coding/coding-sandbox/path-jail');
 const { buildDockerRunArgs, assertSafeDockerArgs } = require('../src/services/agentes-coding/coding-sandbox/docker-local');
@@ -30,6 +31,9 @@ try {
 const ON = { AGENTES_CODING_V2: '1' };
 
 function sandbox(extra = {}) {
+  const isolated = extra.driver === 'docker' || extra.driver === 'volume'
+    ? { fs: extra.fs || createMapFs(), dataDir: extra.dataDir || '/agentes-coding-data-test' }
+    : {};
   return createCodingSandbox({
     env: { ...ON, ...(extra.env || {}) },
     autoGc: false,
@@ -38,6 +42,7 @@ function sandbox(extra = {}) {
     docker: extra.docker,
     networkHook: extra.networkHook,
     image: extra.image,
+    ...isolated,
   });
 }
 
@@ -58,6 +63,8 @@ test('resolveDriverName defaults to memory and maps docker aliases', () => {
   assert.equal(resolveDriverName({}), 'memory');
   assert.equal(resolveDriverName({ AGENTES_CODING_SANDBOX_DRIVER: 'docker' }), 'docker');
   assert.equal(resolveDriverName({ AGENTES_CODING_SANDBOX_DRIVER: 'DOCKER-LOCAL' }), 'docker');
+  assert.equal(resolveDriverName({ AGENTES_CODING_SANDBOX_DRIVER: 'volume' }), 'volume');
+  assert.equal(resolveDriverName({ AGENTES_CODING_SANDBOX_DRIVER: 'DISK' }), 'volume');
 });
 
 test('createSession refuses when flag is off', async () => {

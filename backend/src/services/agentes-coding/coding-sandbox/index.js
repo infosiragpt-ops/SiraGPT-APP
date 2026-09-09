@@ -3,9 +3,10 @@
 /**
  * coding-sandbox — AGENTES_CODING_V2 Phase 2a session adapter.
  *
- * Interface: createSession, exec, readFile, writeFile, listFiles,
+ * Interface: createSession, recreateSession, exec, readFile, writeFile, listFiles,
  * exposePort (signed preview URL), listPorts, unexposePort,
- * resolvePreview, destroy. Default OFF. Docker/memory drivers are injectable.
+ * resolvePreview, destroy. Default OFF. Docker/memory/volume drivers are injectable.
+ * Docker + volume persist `/workspace` under AGENTES_CODING_SANDBOX_DATA_DIR (Phase 4e).
  *
  * See docs/agentes-coding-sandbox.md and docs/agentes-arquitectura.md.
  */
@@ -17,6 +18,8 @@ const { resolveLimits } = require('./limits');
 const { createNetworkPolicy } = require('./network');
 const { createMemoryDriver } = require('./memory-driver');
 const { createDockerLocalDriver, DEFAULT_IMAGE } = require('./docker-local');
+const { createVolumeDriver } = require('./volume-driver');
+const { createSessionVolume } = require('./volume');
 const {
   createPreviewBinder,
   publicExposed,
@@ -31,8 +34,13 @@ function resolveDriverName(env = process.env, override) {
     .trim()
     .toLowerCase();
   if (raw === 'docker' || raw === 'docker-local' || raw === 'local') return 'docker';
+  if (raw === 'volume' || raw === 'disk') return 'volume';
   if (raw === 'memory') return 'memory';
   fail('E_PROVIDER', 'Driver de sandbox no reconocido.');
+}
+
+function driverPersistsFiles(name) {
+  return name === 'docker' || name === 'volume';
 }
 
 function newSessionId() {
@@ -56,14 +64,23 @@ function createCodingSandbox(opts = {}) {
     publicBase: opts.previewPublicBase,
   });
 
+  const volume = createSessionVolume({
+    env,
+    fs: opts.fs,
+    dataDir: opts.dataDir,
+  });
   const dockerDriver = createDockerLocalDriver({
     docker: opts.docker,
     image,
+    volume: driverName === 'docker' ? volume : null,
   });
+  const volumeDriver = createVolumeDriver({ volume });
   const memoryDriver = createMemoryDriver();
 
   function pickDriver(name) {
-    return name === 'docker' ? dockerDriver : memoryDriver;
+    if (name === 'docker') return dockerDriver;
+    if (name === 'volume') return volumeDriver;
+    return memoryDriver;
   }
 
   const sessions = new Map();
@@ -75,11 +92,70 @@ function createCodingSandbox(opts = {}) {
     if (!isAgentesCodingV2Enabled(env)) fail('E_FLAG_OFF');
   }
 
+  function persistEnabled() {
+    return driverPersistsFiles(driverName);
+  }
+
+  function hydrateFromMeta(meta) {
+    const limits = resolveLimits({
+      ...meta.limits,
+      ttlMs: meta.limits && meta.limits.ttlMs,
+    }, env);
+    const network = createNetworkPolicy({
+      allowlist: (meta.network && meta.network.allowlist) || [],
+      portAllowlist: (meta.network && meta.network.portAllowlist) || parseEnvPortAllowlist(env),
+      hook: networkHook,
+      composeNetwork,
+    });
+    return {
+      id: meta.id,
+      userId: meta.userId || null,
+      driver: meta.driver || driverName,
+      image: meta.image || image,
+      createdAt: meta.createdAt || now(),
+      lastTouched: meta.lastTouched || meta.createdAt || now(),
+      expiresAt: meta.expiresAt,
+      limits,
+      network,
+      destroyed: false,
+      exposedPorts: [],
+      files: null,
+      containerName: null,
+      volumePath: persistEnabled() ? volume.workspacePath(meta.id) : null,
+      execImpl: null,
+    };
+  }
+
+  function reattachFromVolume(sessionId) {
+    if (!persistEnabled()) return null;
+    const id = String(sessionId || '').trim();
+    if (!id || !volume.exists(id)) return null;
+    const meta = volume.readMeta(id);
+    if (!meta) return null;
+    if (now() >= (Number(meta.expiresAt) || 0)) {
+      try { volume.remove(id); } catch (_) { /* expired leftover */ }
+      return 'expired';
+    }
+    const session = hydrateFromMeta(meta);
+    sessions.set(id, session);
+    return session;
+  }
+
+  function lookupSession(sessionId) {
+    const id = String(sessionId || '').trim();
+    if (!id) return null;
+    const live = sessions.get(id);
+    if (live) return live;
+    const attached = reattachFromVolume(id);
+    return attached === 'expired' ? attached : attached;
+  }
+
   function getLive(sessionId) {
     requireEnabled();
     const id = String(sessionId || '').trim();
     if (!id) fail('E_PARAMS', 'Falta sessionId.');
-    const session = sessions.get(id);
+    const session = lookupSession(id);
+    if (session === 'expired') fail('E_SESSION_EXPIRED');
     if (!session) fail('E_SESSION_NOT_FOUND');
     if (session.destroyed) fail('E_SESSION_DESTROYED');
     if (now() >= session.expiresAt) {
@@ -88,6 +164,9 @@ function createCodingSandbox(opts = {}) {
     }
     session.lastTouched = now();
     session.expiresAt = session.lastTouched + session.limits.ttlMs;
+    if (persistEnabled()) {
+      try { volume.saveMeta(session); } catch (_) { /* best-effort lease */ }
+    }
     return session;
   }
 
@@ -95,7 +174,8 @@ function createCodingSandbox(opts = {}) {
   // or reveal whether another user's session exists.
   function assertSessionOwner(sessionId, userId) {
     requireEnabled();
-    const session = sessions.get(String(sessionId || ''));
+    const session = lookupSession(sessionId);
+    if (session === 'expired') fail('E_SESSION_EXPIRED');
     if (typeof userId !== 'string' || !userId.trim() || !session
       || session.userId !== userId || session.destroyed) fail('E_SESSION_NOT_FOUND');
     if (now() >= session.expiresAt) fail('E_SESSION_EXPIRED');
@@ -112,9 +192,26 @@ function createCodingSandbox(opts = {}) {
     return true;
   }
 
+  function countedSessionIds() {
+    const ids = new Set(sessions.keys());
+    if (persistEnabled()) {
+      for (const id of volume.listIds()) ids.add(id);
+    }
+    return ids;
+  }
+
   async function createSession(input = {}) {
     requireEnabled();
-    if (sessions.size + pendingSessions.size >= defaults.maxSessions) fail('E_QUOTA');
+    const id = String(input.id || newSessionId());
+    if (sessions.has(id) || pendingSessions.has(id)) fail('E_PARAMS', 'sessionId duplicado.');
+    if (persistEnabled() && volume.exists(id)) {
+      const meta = volume.readMeta(id);
+      if (meta && now() < (Number(meta.expiresAt) || 0)) {
+        return recreateSession({ ...input, id });
+      }
+      try { volume.remove(id); } catch (_) { /* stale leftover */ }
+    }
+    if (countedSessionIds().size + pendingSessions.size >= defaults.maxSessions) fail('E_QUOTA');
     const limits = resolveLimits({ ...input, ttlMs: input.ttlMs }, env);
     const network = createNetworkPolicy({
       allowlist: input.networkAllowlist || input.allowlist || [],
@@ -122,8 +219,6 @@ function createCodingSandbox(opts = {}) {
       hook: input.networkHook || networkHook,
       composeNetwork,
     });
-    const id = String(input.id || newSessionId());
-    if (sessions.has(id) || pendingSessions.has(id)) fail('E_PARAMS', 'sessionId duplicado.');
     const createdAt = now();
     const session = {
       id,
@@ -139,15 +234,49 @@ function createCodingSandbox(opts = {}) {
       exposedPorts: [],
       files: null,
       containerName: null,
+      volumePath: null,
       execImpl: typeof input.execImpl === 'function' ? input.execImpl : null,
     };
     pendingSessions.add(id);
     try {
       await pickDriver(driverName).createSession(session);
       sessions.set(id, session);
+    } catch (err) {
+      if (persistEnabled()) {
+        try { volume.remove(id); } catch (_) { /* release quota */ }
+      }
+      throw err;
     } finally {
       pendingSessions.delete(id);
     }
+    return publicSession(session);
+  }
+
+  async function recreateSession(input = {}) {
+    requireEnabled();
+    if (!persistEnabled()) fail('E_SESSION_NOT_FOUND');
+    const id = String(input.id || input.sessionId || '').trim();
+    if (!id) fail('E_PARAMS', 'Falta sessionId.');
+    let session = sessions.get(id);
+    if (!session || session.destroyed) {
+      const attached = reattachFromVolume(id);
+      if (attached === 'expired') fail('E_SESSION_EXPIRED');
+      if (!attached) fail('E_SESSION_NOT_FOUND');
+      session = attached;
+    }
+    if (input.userId && session.userId && session.userId !== input.userId) {
+      fail('E_SESSION_NOT_FOUND');
+    }
+    if (typeof input.execImpl === 'function') session.execImpl = input.execImpl;
+    const driver = pickDriver(session.driver || driverName);
+    if (typeof driver.ensureContainer === 'function') {
+      await driver.ensureContainer(session);
+    } else if (typeof driver.createSession === 'function' && !session.volumePath) {
+      await driver.createSession(session);
+    }
+    session.lastTouched = now();
+    session.expiresAt = session.lastTouched + session.limits.ttlMs;
+    try { volume.saveMeta(session); } catch (_) { /* best-effort */ }
     return publicSession(session);
   }
 
@@ -240,8 +369,18 @@ function createCodingSandbox(opts = {}) {
     requireEnabled();
     const id = String(sessionId || '').trim();
     if (!id) fail('E_PARAMS', 'Falta sessionId.');
-    const session = sessions.get(id);
-    if (!session) fail('E_SESSION_NOT_FOUND');
+    let session = sessions.get(id);
+    if (!session && persistEnabled()) {
+      const attached = reattachFromVolume(id);
+      if (attached && attached !== 'expired') session = attached;
+    }
+    if (!session) {
+      if (persistEnabled() && volume.exists(id)) {
+        volume.remove(id);
+        return { ok: true, id };
+      }
+      fail('E_SESSION_NOT_FOUND');
+    }
     await destroyInternal(session);
     return { ok: true, id };
   }
@@ -249,8 +388,24 @@ function createCodingSandbox(opts = {}) {
   function sweepExpired() {
     const t = now();
     const doomed = [];
+    const seen = new Set();
     for (const session of sessions.values()) {
-      if (session.destroyed || t >= session.expiresAt) doomed.push(session);
+      if (session.destroyed || t >= session.expiresAt) {
+        doomed.push(session);
+        seen.add(session.id);
+      }
+    }
+    if (persistEnabled()) {
+      for (const id of volume.listIds()) {
+        if (seen.has(id) || sessions.has(id)) continue;
+        const meta = volume.readMeta(id);
+        if (!meta || t >= (Number(meta.expiresAt) || 0)) {
+          if (meta) doomed.push(hydrateFromMeta(meta));
+          else {
+            try { volume.remove(id); } catch (_) { /* orphan dir */ }
+          }
+        }
+      }
     }
     return Promise.all(doomed.map((s) => destroyInternal(s)));
   }
@@ -273,6 +428,7 @@ function createCodingSandbox(opts = {}) {
     driverKind: () => driverName,
     assertSessionOwner,
     createSession,
+    recreateSession,
     exec,
     readFile,
     writeFile,
@@ -285,10 +441,14 @@ function createCodingSandbox(opts = {}) {
     sweepExpired,
     stopGc,
     getSession: (id) => {
-      const session = sessions.get(id);
-      return session && !session.destroyed ? publicSession(session) : null;
+      const session = lookupSession(id);
+      if (!session || session === 'expired' || session.destroyed) return null;
+      return publicSession(session);
     },
-    _unsafeGetRaw: (id) => sessions.get(id),
+    _unsafeGetRaw: (id) => {
+      const session = lookupSession(id);
+      return session && session !== 'expired' ? session : undefined;
+    },
   };
 }
 
@@ -311,5 +471,6 @@ module.exports = {
   getDefaultSandbox,
   resetDefaultSandbox,
   resolveDriverName,
+  driverPersistsFiles,
   CodingSandboxError,
 };
