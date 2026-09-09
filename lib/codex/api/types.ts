@@ -1,6 +1,7 @@
 export interface CodexHealth { ok: boolean; enabled: boolean; previewOrigin?: string | null }
 export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
 export interface CodexProject { id: string; name: string; status: string; organizationId?: string | null; workspacePath: string | null; previewUrl: string | null; error: string | null }
+export interface CodexChatBinding { project: CodexProject; reused: boolean; chatId: string }
 export interface CodexCompanyConnectorAssignment {
   id: string
   provider: string
