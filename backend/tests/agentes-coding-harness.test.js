@@ -75,9 +75,17 @@ test('this suite never assigns process.env.AGENTES_CODING_V2', () => {
 
 test('implementation stays a native stub (no banned vendors, no /code, no dump)', () => {
   const root = path.join(__dirname, '../src/services/agentes-coding/harness');
-  for (const file of fs.readdirSync(root)) {
-    if (!file.endsWith('.js')) continue;
-    const src = fs.readFileSync(path.join(root, file), 'utf8');
+  const files = [];
+  const walk = (dir) => {
+    for (const file of fs.readdirSync(dir)) {
+      const full = path.join(dir, file);
+      if (fs.statSync(full).isDirectory()) walk(full);
+      else if (file.endsWith('.js')) files.push(full);
+    }
+  };
+  walk(root);
+  for (const file of files) {
+    const src = fs.readFileSync(file, 'utf8');
     assert.doesNotMatch(src, /daytona|OpenRouter|\/code\/page/i, file);
     assert.doesNotMatch(src, /sk-[A-Za-z0-9]{10,}/, file);
     assert.doesNotMatch(src, /globalThis\.fetch|require\(['"]node-fetch['"]\)/, file);
@@ -86,9 +94,9 @@ test('implementation stays a native stub (no banned vendors, no /code, no dump)'
 });
 
 test('error catalog includes harness codes in Spanish', () => {
-  for (const code of ['E_HARNESS_FAILED', 'E_HARNESS_NOT_FOUND']) {
+  for (const code of ['E_HARNESS_FAILED', 'E_HARNESS_NOT_FOUND', 'E_HARNESS_QUEUE']) {
     assert.ok(CATALOG[code], code);
-    assert.match(CATALOG[code].message, /[áéíóúñÁÉÍÓÚÑ]|harness|turno|ejecución/i);
+    assert.match(CATALOG[code].message, /[áéíóúñÁÉÍÓÚÑ]|harness|turno|ejecución|encol/i);
   }
   assert.match(CATALOG.E_FLAG_OFF.message, /desactiv/i);
   assert.match(CATALOG.E_CANCELLED.message, /cancelad/i);

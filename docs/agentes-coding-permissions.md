@@ -5,7 +5,8 @@ Cline-pattern decisions only: **ask / once / always / reject**. Default
 **OFF**. Canonical UI stays `/agentes`.
 
 This is not a Cline VS Code dump, not a new `/agentes` confirm card,
-not F7 / SiraComputer, and not a durable BullMQ job.
+not F7 / SiraComputer. Durable pause/resume is Phase 4c
+([`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md)).
 
 Architecture: [`docs/agentes-arquitectura.md`](./agentes-arquitectura.md) §6.
 Catalog: [`docs/oss-catalog.md`](./oss-catalog.md) (`cline/cline`
@@ -89,11 +90,10 @@ export/deploy). Destroying the session forgets them.
 ## Out of scope
 
 Enabling the flag on Lenovo, Cline webview/extension, `/agentes`
-confirm chrome, durable BullMQ, real xterm pane, Daytona, reviving
-`/code`.
+confirm chrome, real xterm pane, Daytona, reviving `/code`.
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js
+cd backend && node --test tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js
 ```

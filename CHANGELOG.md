@@ -16,6 +16,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 4c of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  optional durable harness jobs so HITL pauses and long tool loops
+  survive process restart. Injectable memory queue/store (CI default);
+  Redis snapshot + in-repo BullMQ when the flag is on and `REDIS_URL`
+  is present. Same `/harness*` HTTP API. Worker no-ops when the flag
+  is off (Lenovo-safe). Spanish `E_HARNESS_QUEUE`. No Prisma table,
+  no new npm dep, no `/agentes` chrome. See
+  `docs/agentes-coding-jobs.md`.
 - Phase 4b of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   HITL permission gates on the coding harness (Cline-pattern
   ask / once / always / reject). Privileged tools (`exec`, or

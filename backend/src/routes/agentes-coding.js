@@ -39,7 +39,7 @@
  *   POST   /api/agentes-coding/sessions/:id/deploy            → Coolify/Dokploy stub
  *   GET    /api/agentes-coding/sessions/:id/deploy
  *   GET    /api/agentes-coding/sessions/:id/deploy/:deployId
- *   POST   /api/agentes-coding/sessions/:id/harness/run       → Phase 4a tool loop
+ *   POST   /api/agentes-coding/sessions/:id/harness/run       → Phase 4a tool loop (+ 4c jobs)
  *   GET    /api/agentes-coding/sessions/:id/harness
  *   GET    /api/agentes-coding/sessions/:id/harness/:runId
  *   POST   /api/agentes-coding/sessions/:id/harness/:runId/cancel
@@ -51,7 +51,8 @@
  * only when health.enabled. Phase 3d/3e/3f/3g are API-only (UI-lock). See
  * docs/agentes-coding-terminal.md, docs/agentes-coding-preview.md,
  * docs/agentes-coding-git.md, docs/agentes-coding-export-deploy.md,
- * docs/agentes-coding-harness.md and docs/agentes-coding-permissions.md.
+ * docs/agentes-coding-harness.md, docs/agentes-coding-permissions.md
+ * and docs/agentes-coding-jobs.md.
  */
 
 const express = require('express');
@@ -91,6 +92,7 @@ function createAgentesCodingRouter(opts = {}) {
   const deployHttp = opts.deployHttp || opts.httpClient || opts.fetchImpl || null;
   const harnessLlm = opts.harnessLlm || opts.llmTurn || null;
   const harnessPermissionPolicy = opts.harnessPermissionPolicy || opts.permissionPolicy || null;
+  const harnessJobs = opts.harnessJobs || opts.jobs || null;
 
   const router = express.Router();
 
@@ -647,7 +649,7 @@ function createAgentesCodingRouter(opts = {}) {
         maxSteps: body.maxSteps,
         maxTokens: body.maxTokens,
         timeoutMs: body.timeoutMs,
-      }, env, { llmTurn: harnessLlm, permissionPolicy: harnessPermissionPolicy });
+      }, env, { llmTurn: harnessLlm, permissionPolicy: harnessPermissionPolicy, jobs: harnessJobs });
       return res.status(201).json(result);
     } catch (err) {
       return sendSandboxError(res, err);
@@ -656,7 +658,7 @@ function createAgentesCodingRouter(opts = {}) {
 
   router.get('/sessions/:id/harness', authenticate, async (req, res) => {
     try {
-      const result = await sessionHarness.listForRequest(getSandbox(), req.params.id, env);
+      const result = await sessionHarness.listForRequest(getSandbox(), req.params.id, env, { jobs: harnessJobs });
       return res.json(result);
     } catch (err) {
       return sendSandboxError(res, err);
@@ -670,6 +672,7 @@ function createAgentesCodingRouter(opts = {}) {
         req.params.id,
         req.params.runId,
         env,
+        { jobs: harnessJobs },
       );
       return res.json(result);
     } catch (err) {
@@ -684,6 +687,7 @@ function createAgentesCodingRouter(opts = {}) {
         req.params.id,
         req.params.runId,
         env,
+        { jobs: harnessJobs },
       );
       return res.json(result);
     } catch (err) {
@@ -702,6 +706,7 @@ function createAgentesCodingRouter(opts = {}) {
         req.params.id,
         req.params.runId,
         env,
+        { jobs: harnessJobs },
       );
       return res.json(result);
     } catch (err) {
@@ -722,7 +727,7 @@ function createAgentesCodingRouter(opts = {}) {
           req.params.permissionId,
           body.decision || body.reply,
           env,
-          { permissionPolicy: harnessPermissionPolicy },
+          { permissionPolicy: harnessPermissionPolicy, jobs: harnessJobs, llmTurn: harnessLlm },
         );
         return res.json(result);
       } catch (err) {
@@ -740,7 +745,7 @@ function createAgentesCodingRouter(opts = {}) {
       sessionGit.forget(getSandbox(), req.params.id);
       sessionExport.forget(getSandbox(), req.params.id);
       sessionDeploy.forget(getSandbox(), req.params.id);
-      sessionHarness.forget(getSandbox(), req.params.id);
+      await sessionHarness.forgetSession(getSandbox(), req.params.id, harnessJobs);
       const out = await getSandbox().destroy(req.params.id);
       return res.json(out);
     } catch (err) {

@@ -90,9 +90,17 @@ test('this suite never assigns process.env.AGENTES_CODING_V2', () => {
 
 test('implementation is pattern fusion only (no Cline dump, no /code, no VS Code)', () => {
   const root = path.join(__dirname, '../src/services/agentes-coding/harness');
-  for (const file of fs.readdirSync(root)) {
-    if (!file.endsWith('.js')) continue;
-    const src = fs.readFileSync(path.join(root, file), 'utf8');
+  const files = [];
+  const walk = (dir) => {
+    for (const file of fs.readdirSync(dir)) {
+      const full = path.join(dir, file);
+      if (fs.statSync(full).isDirectory()) walk(full);
+      else if (file.endsWith('.js')) files.push(full);
+    }
+  };
+  walk(root);
+  for (const file of files) {
+    const src = fs.readFileSync(file, 'utf8');
     assert.doesNotMatch(src, /daytona|OpenRouter|\/code\/page/i, file);
     assert.doesNotMatch(src, /sk-[A-Za-z0-9]{10,}/, file);
     assert.doesNotMatch(src, /globalThis\.fetch|require\(['"]node-fetch['"]\)/, file);

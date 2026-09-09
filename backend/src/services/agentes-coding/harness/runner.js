@@ -343,11 +343,22 @@ async function runHarness(sandbox, sessionId, raw, opts = {}) {
   const caps = resolveCaps(opts.env || process.env, opts);
   const prompt = sanitizePrompt(opts.prompt || opts.text || opts.message);
   const row = createRun(raw, prompt, caps);
+  row.sessionId = sessionId;
   row.permissionPolicy = opts.permissionPolicy;
   return withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, opts.llmTurn));
 }
 
-async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decision) {
+async function continueHarness(sandbox, sessionId, raw, row, opts = {}) {
+  if (!row || row.status !== 'running') {
+    fail('E_PARAMS', 'La ejecución no está en curso.');
+  }
+  if (row.abort.signal.aborted) {
+    row.abort = new AbortController();
+  }
+  return withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, opts.llmTurn));
+}
+
+async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decision, opts = {}) {
   if (row.status !== 'awaiting_permission' || !row.pause) {
     fail('E_PARAMS', 'La ejecución no espera un permiso.');
   }
@@ -384,17 +395,24 @@ async function resumeHarness(sandbox, sessionId, raw, row, permissionId, decisio
   const pause = row.pause;
   row.pause = null;
   row.status = 'running';
-  if (row.abort.signal.aborted) {
+  if (!row.abort || row.abort.signal.aborted) {
     row.abort = new AbortController();
   }
 
-  const out = await withRunGuard(row, () => runLoop(sandbox, sessionId, raw, row, pause.llmTurn, {
-    transcript: pause.transcript,
-    assistantText: pause.assistantText,
-    step: pause.step,
-    calls: [pause.currentCall, ...(pause.remainingCalls || [])],
-    approvedCall: pause.currentCall,
-  }));
+  const out = await withRunGuard(row, () => runLoop(
+    sandbox,
+    sessionId,
+    raw,
+    row,
+    opts.llmTurn || pause.llmTurn,
+    {
+      transcript: pause.transcript,
+      assistantText: pause.assistantText,
+      step: pause.step,
+      calls: [pause.currentCall, ...(pause.remainingCalls || [])],
+      approvedCall: pause.currentCall,
+    },
+  ));
   return {
     ok: true,
     run: out,
@@ -426,6 +444,7 @@ module.exports = {
   estimateTokens,
   defaultLlmTurn,
   runHarness,
+  continueHarness,
   resumeHarness,
   cancelActiveRun,
 };

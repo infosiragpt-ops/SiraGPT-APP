@@ -24,7 +24,7 @@ that file is not on the branch yet). License / Tier S catalog:
 | Preview | `POST /sessions/:id/preview` — Phase 3e signed exposePort, see [`docs/agentes-coding-preview.md`](./agentes-coding-preview.md) |
 | Git | `/sessions/:id/git/*` — Phase 3f checkpoints, see [`docs/agentes-coding-git.md`](./agentes-coding-git.md) |
 | Export / deploy | `/sessions/:id/export` · `/sessions/:id/deploy` — Phase 3g, see [`docs/agentes-coding-export-deploy.md`](./agentes-coding-export-deploy.md) |
-| Harness | `/sessions/:id/harness*` — Phase 4a tool loop, see [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md) |
+| Harness | `/sessions/:id/harness*` — Phase 4a–4c tool loop + optional jobs, see [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md) · [`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md) |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
 Interface (same on memory + docker drivers):
@@ -83,9 +83,11 @@ Phase 3g export + deploy stubs (zip/tar.gz + Coolify/Dokploy API-only):
 [`docs/agentes-coding-export-deploy.md`](./agentes-coding-export-deploy.md).
 Phase 4a session harness (API-only plan/tool/result loop):
 [`docs/agentes-coding-harness.md`](./agentes-coding-harness.md).
+Phase 4c durable jobs (optional BullMQ / memory fallback):
+[`docs/agentes-coding-jobs.md`](./agentes-coding-jobs.md).
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js tests/agentes-coding-terminal.test.js tests/agentes-coding-preview.test.js tests/agentes-coding-git.test.js tests/agentes-coding-export-deploy.test.js tests/agentes-coding-harness.test.js tests/agentes-coding-harness-permissions.test.js tests/agentes-coding-harness-jobs.test.js
 ```
