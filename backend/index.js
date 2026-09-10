@@ -494,6 +494,7 @@ const codexRunsRoutes = require('./src/routes/codex-runs');
 const codexV2Routes = require('./src/routes/codex');
 const deploymentsRoutes = require('./src/routes/deployments');
 const agentesCodingRoutes = require('./src/routes/agentes-coding');
+const construirMvpRoutes = require('./src/routes/construir-mvp');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
@@ -1361,6 +1362,9 @@ app.use('/api/deployments', deploymentsRoutes);
 // { ok, enabled }; default OFF. Flag off ⇒ every other path is 404. Phase 2a
 // adds the coding-sandbox session adapter; no /agentes UX change (UI-lock).
 app.use('/api/agentes-coding', agentesCodingRoutes);
+// CONSTRUIR coding MVP (flag OFF): scaffold + zip + GitHub OAuth. Does not
+// require AGENTES_CODING_V2. IDE shell stays gated on that flag.
+app.use('/api/construir-mvp', construirMvpRoutes);
 // Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
 // secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
 app.use('/api/telegram', telegramRoutes);

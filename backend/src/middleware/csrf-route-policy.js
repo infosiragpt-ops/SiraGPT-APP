@@ -44,6 +44,7 @@ const EXPENSIVE_GENERATION_MOUNTS = Object.freeze([
   '/api/document-ai',
   '/api/sandbox',
   '/api/agentes-coding',
+  '/api/construir-mvp',
   '/api/orchestration',
   '/api/design',
   '/api/plan',
