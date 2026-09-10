@@ -28,6 +28,7 @@ const fileTools = require('./file-tools');
 const diagnostics = require('./diagnostics');
 const questionTool = require('./question-tool');
 const taskSpawn = require('./task-spawn');
+const isolatedPreview = require('./isolated-preview');
 
 module.exports = {
   ...agents,
@@ -66,4 +67,8 @@ module.exports = {
   runTask: taskSpawn.runTask,
   resolveSubagentType: taskSpawn.resolveSubagentType,
   TASK_SPAWN_ERRORS: taskSpawn.ERRORS,
+  startIsolatedPreview: isolatedPreview.startIsolatedPreview,
+  proveWorkspace: isolatedPreview.proveWorkspace,
+  attachProof: isolatedPreview.attachProof,
+  stopPreview: isolatedPreview.stopPreview,
 };

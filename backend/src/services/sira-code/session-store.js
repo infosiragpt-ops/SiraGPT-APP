@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { DEFAULT_AGENT_ID, resolveAgentId, getAgent } = require('./agents');
 const { createWorkspace } = require('./workspace');
 const { snapshot, restore, safeId } = require('./project-store');
+const { stopPreview, stopAllForTests } = require('./isolated-preview');
 const { publicPlan } = require('./plan-handoff');
 const { DEFAULT_TITLE, isDefaultTitle } = require('./session-title');
 const { describePending } = require('./question-tool');
@@ -144,6 +145,7 @@ function listUserSessions(userId) {
 
 async function destroySession(session) {
   abortSession(session);
+  await stopPreview(session).catch(() => {});
   if (session.chatId && session.userId && session.workspace) {
     await snapshot(session.workspace, session.userId, session.chatId, session.persistEnv).catch(() => {});
   }
@@ -162,6 +164,7 @@ function sweepExpired(now = Date.now(), ttlMs = DEFAULT_TTL_MS) {
 }
 
 function _resetForTests() {
+  stopAllForTests();
   sessions.clear();
 }
 
