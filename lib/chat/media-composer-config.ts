@@ -4,9 +4,32 @@ export type ImageQuality = "512px" | "1K" | "2K" | "4K"
 export type VideoResolution = "480p" | "720p" | "1080p"
 export type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
 export type VideoDuration = number
-export type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs" | "Sira Voz"
-export type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
-export type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
+export type VoiceModel =
+  | "Sira Voz"
+  | "Multilingual V2"
+  | "Eleven V3"
+  | "Flash V2.5"
+  | "Gemini Flash TTS"
+  | "Gemini Pro TTS"
+  | "OpenAI TTS"
+  | "OpenAI TTS HD"
+  | "GPT-4o mini TTS"
+  | "Turbo V2.5"
+  // Legacy labels (pre-catalog UI). Still resolve server-side via
+  // voice-director aliases; kept in the type so stored values compile.
+  | "Gemini 2.5 Flash TTS"
+  | "ElevenLabs"
+export type VoiceLanguage =
+  | "Spanish" | "English" | "Portuguese" | "French" | "German"
+  | "Italian" | "Dutch" | "Polish" | "Russian" | "Ukrainian"
+  | "Turkish" | "Arabic" | "Hindi" | "Japanese" | "Chinese"
+  | "Korean" | "Indonesian" | "Swedish" | "Bulgarian" | "Romanian"
+  | "Czech" | "Greek" | "Finnish" | "Croatian" | "Malay"
+  | "Slovak" | "Danish" | "Tamil" | "Filipino" | "Hungarian"
+  | "Norwegian" | "Vietnamese" | "Hebrew" | "Catalan" | "Bengali"
+  | "Afrikaans" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian"
+  | "Serbian" | "Thai" | "Urdu" | "Swahili"
+export type VoiceAccent = string
 export type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
 export type MusicModel = "ElevenLabs" | "Lyria 3 Pro" | "Mimo Max 02HD"
 export type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orchestral" | "Latin" | "Hip-Hop" | "Jazz"
@@ -45,10 +68,234 @@ export const VIDEO_ASPECT_RATIO_OPTIONS: ReadonlyArray<MediaAspectRatioOption<Vi
 ]
 export const VIDEO_DURATION_OPTIONS: readonly VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
 export const VIDEO_DURATION_PINNED_OPTIONS: readonly VideoDuration[] = [8, 15, 30]
-export const VOICE_MODEL_OPTIONS: readonly VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs", "Sira Voz"]
-export const VOICE_LANGUAGE_OPTIONS: readonly VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
-export const VOICE_ACCENT_OPTIONS: readonly VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
+export const VOICE_MODEL_OPTIONS: readonly VoiceModel[] = [
+  "Sira Voz",
+  "Multilingual V2",
+  "Eleven V3",
+  "Flash V2.5",
+  "Gemini Flash TTS",
+  "Gemini Pro TTS",
+  "OpenAI TTS",
+  "OpenAI TTS HD",
+  "GPT-4o mini TTS",
+  "Turbo V2.5",
+]
+export const VOICE_LANGUAGE_OPTIONS: readonly VoiceLanguage[] = [
+  "Spanish", "English", "Portuguese", "French", "German",
+  "Italian", "Dutch", "Polish", "Russian", "Ukrainian",
+  "Turkish", "Arabic", "Hindi", "Japanese", "Chinese",
+  "Korean", "Indonesian", "Swedish", "Bulgarian", "Romanian",
+  "Czech", "Greek", "Finnish", "Croatian", "Malay",
+  "Slovak", "Danish", "Tamil", "Filipino", "Hungarian",
+  "Norwegian", "Vietnamese", "Hebrew", "Catalan", "Bengali",
+  "Afrikaans", "Armenian", "Assamese", "Azerbaijani", "Belarusian",
+  "Serbian", "Thai", "Urdu", "Swahili",
+]
+// Legacy fallback list — the accent submenu always shows
+// voiceAccentsFor(language) instead.
+export const VOICE_ACCENT_OPTIONS: readonly VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Mexican", "Spain"]
 export const VOICE_EFFECT_OPTIONS: readonly VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
+
+// ── Professional voice catalog (UI mirror of the backend voice-director) ────
+// Engine metadata for the model picker; the backend re-validates and
+// auto-corrects every combination, so the UI can never send an impossible
+// one (e.g. Turbo V2 + Spanish) without the server upgrading it and
+// reporting a warning.
+export type VoiceProvider = "ElevenLabs" | "Google" | "OpenAI" | "Local"
+
+export interface VoiceModelMeta {
+  /** Display label — this exact string is sent as `model` to /ai/generate-speech. */
+  label: string
+  provider: VoiceProvider
+  badge: string
+  languages: string
+  bestFor: string[]
+  description: string
+  iconName: string
+}
+
+export const VOICE_MODEL_CATALOG: VoiceModelMeta[] = [
+  { label: "Sira Voz", provider: "Local", badge: "Local", languages: "Tu voz", bestFor: ["Clonar", "Gratis"], description: "Tus voces clonadas. 100 % local y gratis.", iconName: "Mic" },
+  { label: "Multilingual V2", provider: "ElevenLabs", badge: "Natural", languages: "29 idiomas", bestFor: ["Narración", "Audiolibros"], description: "La voz más natural y consistente.", iconName: "Bot" },
+  { label: "Eleven V3", provider: "ElevenLabs", badge: "Expresivo", languages: "70+ idiomas", bestFor: ["Efectos", "Acentos marcados"], description: "Máxima expresividad con acentos y efectos nativos.", iconName: "Bot" },
+  { label: "Flash V2.5", provider: "ElevenLabs", badge: "Rápido", languages: "32 idiomas", bestFor: ["Tiempo real", "Textos largos"], description: "Ultra-baja latencia; hasta 40.000 caracteres.", iconName: "Bot" },
+  { label: "Gemini Flash TTS", provider: "Google", badge: "Versátil", languages: "100+ idiomas", bestFor: ["Cualquier idioma", "Fallback universal"], description: "Cobertura universal de idiomas.", iconName: "GeminiLogo" },
+  { label: "Gemini Pro TTS", provider: "Google", badge: "Estudio", languages: "100+ idiomas", bestFor: ["Calidad máxima"], description: "Máxima fidelidad en direcciones complejas.", iconName: "GeminiLogo" },
+  { label: "OpenAI TTS", provider: "OpenAI", badge: "Directo", languages: "Multilingüe", bestFor: ["Latencia", "Voces OpenAI"], description: "Síntesis directa de OpenAI (tts-1).", iconName: "Bot" },
+  { label: "OpenAI TTS HD", provider: "OpenAI", badge: "Calidad", languages: "Multilingüe", bestFor: ["Calidad"], description: "Versión HD de OpenAI TTS.", iconName: "Bot" },
+  { label: "GPT-4o mini TTS", provider: "OpenAI", badge: "Dirigible", languages: "Multilingüe", bestFor: ["Dirección por instrucciones"], description: "Acepta instrucciones de estilo y acento.", iconName: "Bot" },
+  { label: "Turbo V2.5", provider: "ElevenLabs", badge: "Legacy", languages: "32 idiomas", bestFor: ["Compatibilidad"], description: "Primera generación; se recomienda Flash V2.5.", iconName: "Bot" },
+]
+
+const ELEVEN_VOICE_LABELS = new Set(
+  VOICE_MODEL_CATALOG.filter((m) => m.provider === "ElevenLabs").map((m) => m.label),
+)
+
+const NON_ELEVEN_VOICE_LABELS = new Set(
+  VOICE_MODEL_CATALOG.filter((m) => m.provider !== "ElevenLabs").map((m) => m.label),
+)
+
+/** Whether the model uses an ElevenLabs voice id (shows the voice catalog disc). */
+export function isElevenVoiceModel(label: string): boolean {
+  // Exact catalog labels first: "Gemini Flash TTS" contains "flash" but is
+  // NOT ElevenLabs.
+  if (NON_ELEVEN_VOICE_LABELS.has(label)) return false
+  if (ELEVEN_VOICE_LABELS.has(label)) return true
+  // Backward compat with pre-catalog labels ("ElevenLabs", "eleven-turbo-v2", …).
+  // NOTE: bare "flash" is intentionally NOT matched — it would false-positive
+  // on "Gemini Flash TTS".
+  return /eleven|turbo|multilingual/i.test(label)
+}
+
+export function voiceModelMeta(label: string): VoiceModelMeta | undefined {
+  return VOICE_MODEL_CATALOG.find((m) => m.label === label)
+}
+
+// ─── Accents per language ───────────────────────────────────────────────────
+const VOICE_ACCENTS_BY_LANGUAGE: Record<string, string[]> = {
+  English: ["US", "British", "Australian", "Canadian", "Indian", "Neutral"],
+  Spanish: ["Latino", "Mexican", "Spain", "Argentino", "Colombiano", "Neutral"],
+  Portuguese: ["Brazilian", "European", "Neutral"],
+  French: ["France", "Quebec", "Belgian", "Neutral"],
+  German: ["Standard", "Austrian", "Swiss", "Neutral"],
+  Italian: ["Standard", "Northern", "Southern", "Neutral"],
+  Dutch: ["Standard", "Flemish", "Neutral"],
+  Arabic: ["Modern Standard", "Egyptian", "Gulf", "Levantine"],
+  Hindi: ["Standard", "Neutral"],
+  Chinese: ["Mandarin Mainland", "Taiwanese", "Neutral"],
+}
+
+const GENERIC_VOICE_ACCENTS = ["Neutral", "Standard", "Formal"]
+
+/** Every accent the UI can produce (used to validate persisted settings). */
+const ALL_KNOWN_VOICE_ACCENTS = new Set<string>([
+  ...VOICE_ACCENT_OPTIONS,
+  "Spanish", // legacy fixed-list member
+  ...Object.values(VOICE_ACCENTS_BY_LANGUAGE).flat(),
+  ...GENERIC_VOICE_ACCENTS,
+])
+
+export function voiceAccentsFor(language: string): string[] {
+  return VOICE_ACCENTS_BY_LANGUAGE[language] || GENERIC_VOICE_ACCENTS
+}
+
+const DEFAULT_VOICE_ACCENT_BY_LANGUAGE: Record<string, string> = {
+  English: "US",
+  Spanish: "Latino",
+  Portuguese: "Brazilian",
+  French: "France",
+  German: "Standard",
+  Italian: "Standard",
+  Dutch: "Standard",
+  Arabic: "Modern Standard",
+  Hindi: "Standard",
+  Chinese: "Mandarin Mainland",
+}
+
+export function defaultVoiceAccentFor(language: string): string {
+  return DEFAULT_VOICE_ACCENT_BY_LANGUAGE[language] || "Neutral"
+}
+
+// ─── Effects ────────────────────────────────────────────────────────────────
+export interface VoiceEffectMeta {
+  name: VoiceEffect
+  description: string
+}
+
+export const VOICE_EFFECT_CATALOG: VoiceEffectMeta[] = [
+  { name: "Studio Clean", description: "Cabina tratada, máxima inteligibilidad." },
+  { name: "Narration", description: "Audiolibro: cadencia estable y cuidada." },
+  { name: "Podcast", description: "Conversacional, energía natural." },
+  { name: "Warm", description: "Íntima y cercana, presencia cálida." },
+  { name: "Cinematic", description: "Tráiler dramático, pausas marcadas." },
+  { name: "None", description: "Voz tal cual, sin dirección." },
+]
+
+// ─── Stability ──────────────────────────────────────────────────────────────
+export function describeVoiceStability(value: number): string {
+  if (!Number.isFinite(value)) return "Equilibrado"
+  if (value < 25) return "Muy expresivo"
+  if (value < 50) return "Expresivo"
+  if (value < 75) return "Equilibrado"
+  if (value < 90) return "Estable"
+  return "Ultra estable"
+}
+
+export const VOICE_STABILITY_PRESETS: Array<{ name: string; value: number; hint: string }> = [
+  { name: "Publicidad", value: 35, hint: "Máxima expresividad." },
+  { name: "Conversación", value: 55, hint: "Natural y dinámica." },
+  { name: "Audiolibro", value: 72, hint: "Consistente en textos largos." },
+  { name: "Narración", value: 80, hint: "Estable y clara." },
+]
+
+// ─── Browser TTS last resort ────────────────────────────────────────────────
+// When NO provider is configured anywhere, the backend answers 503 with
+// `{ fallback: "browser-tts", languageBcp47, rate }` and these helpers speak
+// locally via the Web Speech API — voice works with zero keys.
+const VOICE_BCP47_BY_LANGUAGE: Record<string, string> = {
+  Spanish: "es-ES", English: "en-US", Portuguese: "pt-BR", French: "fr-FR",
+  German: "de-DE", Italian: "it-IT", Dutch: "nl-NL", Polish: "pl-PL",
+  Russian: "ru-RU", Ukrainian: "uk-UA", Turkish: "tr-TR", Arabic: "ar-SA",
+  Hindi: "hi-IN", Japanese: "ja-JP", Chinese: "cmn-CN", Korean: "ko-KR",
+  Indonesian: "id-ID", Swedish: "sv-SE", Bulgarian: "bg-BG", Romanian: "ro-RO",
+  Czech: "cs-CZ", Greek: "el-GR", Finnish: "fi-FI", Croatian: "hr-HR",
+  Malay: "ms-MY", Slovak: "sk-SK", Danish: "da-DK", Tamil: "ta-IN",
+  Filipino: "fil-PH", Hungarian: "hu-HU", Norwegian: "nb-NO", Vietnamese: "vi-VN",
+  Hebrew: "he-IL", Catalan: "ca-ES", Bengali: "bn-BD", Afrikaans: "af-ZA",
+  Armenian: "hy-AM", Assamese: "as-IN", Azerbaijani: "az-AZ", Belarusian: "be-BY",
+  Serbian: "sr-RS", Thai: "th-TH", Urdu: "ur-PK", Swahili: "sw-KE",
+}
+
+export function voiceBcp47For(language: string): string {
+  return VOICE_BCP47_BY_LANGUAGE[language] || "es-ES"
+}
+
+export function browserTtsSupported(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof (window as any).speechSynthesis !== "undefined" &&
+    typeof (window as any).SpeechSynthesisUtterance !== "undefined"
+  )
+}
+
+export function speakWithBrowserVoice(
+  text: string,
+  opts: { bcp47?: string; rate?: number; onEnd?: () => void } = {},
+): () => void {
+  const synth = (window as any).speechSynthesis as SpeechSynthesis
+  synth.cancel()
+  const utterance = new (window as any).SpeechSynthesisUtterance(text) as SpeechSynthesisUtterance
+  const wanted = String(opts.bcp47 || "es-ES").toLowerCase()
+  const prefix = wanted.split("-")[0]
+  let voices: SpeechSynthesisVoice[] = []
+  try {
+    voices = synth.getVoices() || []
+  } catch {
+    voices = []
+  }
+  const match =
+    voices.find((v) => String(v.lang || "").toLowerCase() === wanted) ||
+    voices.find((v) => String(v.lang || "").toLowerCase().startsWith(prefix)) ||
+    voices.find((v) => v.default) ||
+    voices[0]
+  if (match) {
+    utterance.voice = match
+    utterance.lang = match.lang
+  } else {
+    utterance.lang = opts.bcp47 || "es-ES"
+  }
+  const rate = Number(opts.rate)
+  utterance.rate = Number.isFinite(rate) ? Math.min(1.5, Math.max(0.5, rate)) : 1
+  if (opts.onEnd) utterance.onend = opts.onEnd
+  synth.speak(utterance)
+  return () => {
+    try {
+      synth.cancel()
+    } catch {
+      /* already gone */
+    }
+  }
+}
 export const MUSIC_MODEL_OPTIONS: readonly MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Max 02HD"]
 export const MUSIC_STYLE_OPTIONS: readonly MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 export const MUSIC_MOOD_OPTIONS: readonly MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
@@ -196,7 +443,7 @@ function validatedVoiceSetting(key: VoiceSettingKey, raw: string | null): string
     return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback
   }
   if (key === "language") return (VOICE_LANGUAGE_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
-  if (key === "accent") return (VOICE_ACCENT_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  if (key === "accent") return ALL_KNOWN_VOICE_ACCENTS.has(raw) ? raw : fallback
   if (key === "effect") return (VOICE_EFFECT_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
   return raw
 }

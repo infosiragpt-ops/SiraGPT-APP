@@ -106,6 +106,42 @@ npm run dev
 - **Style** (0.0 - 1.0): Adds expressiveness to the voice
 - **Speaker Boost**: Improves audio quality
 
+### Voice Director (`POST /api/ai/generate-speech`)
+
+The chat composer's Voice mode resolves every request through a central
+director (`backend/src/services/ai/voice-director.js`), so language, accent,
+stability and effect behave identically on any speech model:
+
+- **Model catalog (9)**: Eleven V3 (70+ languages, native audio tags) ·
+  Multilingual V2 (29 languages, most natural) · Flash V2.5 (32 languages,
+  ~75 ms, 40k chars) · Gemini Flash/Pro TTS (100+ languages) ·
+  OpenAI TTS / TTS HD / GPT-4o mini TTS (multilingüe; mini acepta
+  instrucciones de estilo) · Turbo V2.5 (legacy). Old labels (`ElevenLabs`,
+  `eleven-turbo-v2`, …) keep resolving via aliases.
+- **Works with ANY configured voice provider**: the route chains planned
+  provider first, then every remaining CONFIGURED provider (ElevenLabs →
+  Gemini → OpenAI). Any single key gives voice; with zero keys the API
+  answers 503 with `{ fallback: "browser-tts", languageBcp47, rate }` and the
+  composer speaks locally via the Web Speech API. Voice never depends on the
+  chat LLM.
+- **PROD POLICY (siragpt.com)**: `OPENAI_TTS_API_BASE` MUST stay at the
+  default direct OpenAI endpoint. Do NOT point it at OpenRouter or any other
+  model gateway — prohibited in production. Env (names only, values live in
+  the prod .env on the Lenovo, never in chat): `OPENAI_TTS_MODEL` (default
+  `tts-1`), `OPENAI_TTS_VOICE` (default `alloy`), `OPENAI_TTS_TIMEOUT_MS`.
+- **Stability slider (0-100)** shapes the full ElevenLabs curve (stability +
+  similarity boost + style), not just the stability knob. Low = expressive,
+  high = consistent. On OpenAI it maps to `speed` (effect sets the base pace,
+  stability tilts ±0.05); on `gpt-4o-mini-tts` it also builds `instructions`
+  with language + accent + effect.
+- **Auto-routing with warnings**: impossible combinations are upgraded, never
+  silently ignored — e.g. Turbo V2 + Spanish → Flash V2.5, or a v3-only
+  language (Bengalí, hebreo, …) → Eleven V3 / Gemini. The response carries a
+  `warnings[]` array and the applied `voice` config, surfaced as toasts.
+- **Accents are per-language** (Spanish → Latino/Mexican/Spain/Argentino/
+  Colombiano/…, English → US/British/Australian/…) with per-language
+  defaults; unknown accents fall back with a warning.
+
 ### Supported Audio Formats
 
 - **Input**: MP3, WAV, M4A, WebM
@@ -184,8 +220,8 @@ The current implementation focuses on TTS and STT. Future updates will include:
 - **Music Generation**: AI-powered music creation
 - **Voice Cloning**: Custom voice training
 - **Real-time Streaming**: Live audio processing
-- **Multi-language Support**: Global language coverage
-- **Advanced Audio Effects**: Sound enhancement features
+- ~~**Multi-language Support**~~: ✅ shipped — 44 languages via the Voice Director
+- ~~**Advanced Audio Effects**~~: ✅ shipped — Studio Clean / Warm / Cinematic / Narration / Podcast per-model effects
 
 ## 🐛 Troubleshooting
 

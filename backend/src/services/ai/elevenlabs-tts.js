@@ -16,6 +16,13 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { throwIfAborted } = require('../../utils/abort-signal');
+const {
+  clampStabilityPct,
+  isKnownVoiceModelId,
+  mapStabilityToElevenSettings,
+  modelById,
+  resolveModelId,
+} = require('./voice-director');
 
 // ElevenLabs "Rachel" multilingual voice — the historical default of the
 // generate_speech agent tool. Always available on the project account and
@@ -62,6 +69,22 @@ function clampVoiceSettings(settings) {
   return out;
 }
 
+// Professional stability mapping: a bare `stability` (0-100 from the UI
+// slider) shapes the FULL ElevenLabs voice-settings curve — not just the
+// `stability` knob — so low values sound expressive and high values sound
+// consistent. Explicit per-key `voiceSettings` always win (spread last).
+function voiceSettingsFromStability(stability, voiceSettings) {
+  const base = mapStabilityToElevenSettings(clampStabilityPct(stability) / 100);
+  const out = { ...base };
+  if (voiceSettings && typeof voiceSettings === 'object') {
+    if (Number.isFinite(voiceSettings.stability)) out.stability = Math.min(1, Math.max(0, voiceSettings.stability));
+    if (Number.isFinite(voiceSettings.similarity_boost)) out.similarity_boost = Math.min(1, Math.max(0, voiceSettings.similarity_boost));
+    if (Number.isFinite(voiceSettings.style)) out.style = Math.min(1, Math.max(0, voiceSettings.style));
+    if (typeof voiceSettings.use_speaker_boost === 'boolean') out.use_speaker_boost = voiceSettings.use_speaker_boost;
+  }
+  return out;
+}
+
 let cachedClient = null;
 function getClient(ElevenLabsClientCtor) {
   if (!isElevenLabsConfigured()) return null;
@@ -84,12 +107,14 @@ function getClient(ElevenLabsClientCtor) {
  * @param {string} opts.text          required narration text
  * @param {string} [opts.voiceId]     ElevenLabs voice id (defaults to Rachel)
  * @param {string} [opts.modelId]     ElevenLabs model id (defaults multilingual)
- * @param {object} [opts.voiceSettings] stability/similarity_boost/style/use_speaker_boost
+ * @param {object} [opts.voiceSettings] stability/similarity_boost/style/use_speaker_boost (per-key override)
+ * @param {number} [opts.stability] 0-100 UI slider; shapes the full settings curve
+ * @param {string} [opts.elevenTagPrefix] Eleven v3 audio-tag prefix from voice-director
  * @param {Function} [opts.ElevenLabsClientCtor] injectable client ctor (tests)
  * @param {AbortSignal} [opts.signal] user/request cancellation signal
  * @returns {Promise<{filename,audioPath,audioUrl,sizeBytes,mime,voiceId,modelId,characters}>}
  */
-async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, ElevenLabsClientCtor, signal } = {}) {
+async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, stability, elevenTagPrefix, ElevenLabsClientCtor, signal } = {}) {
   const narration = String(text || '').trim();
   if (!narration) {
     const err = new Error('Text is required for speech generation');
@@ -104,12 +129,26 @@ async function generateSpeechFile({ text, voiceId, modelId, voiceSettings, Eleve
 
   const client = getClient(ElevenLabsClientCtor);
   const resolvedVoiceId = String(voiceId || '').trim() || DEFAULT_VOICE_ID;
-  const resolvedModelId = String(modelId || '').trim() || DEFAULT_MODEL_ID;
-  const settings = clampVoiceSettings(voiceSettings);
+  // Resolve UI aliases ("ElevenLabs", "eleven-turbo-v2", …) to real model ids.
+  // An explicit id the catalog doesn't know (e.g. a future ElevenLabs model)
+  // passes through untouched so direct service callers never change sound.
+  const requestedModelId = String(modelId || '').trim() || DEFAULT_MODEL_ID;
+  const resolvedModelId = isKnownVoiceModelId(requestedModelId)
+    ? modelById(resolveModelId(requestedModelId)).id
+    : requestedModelId;
+  // Stability slider shapes the full settings curve; explicit voiceSettings
+  // keys override it. When neither is given, keep the historical default so
+  // existing callers (tests, standalone route) sound identical.
+  const settings = (stability !== undefined || voiceSettings)
+    ? voiceSettingsFromStability(stability === undefined ? 50 : stability, voiceSettings)
+    : clampVoiceSettings(voiceSettings);
+  // Eleven v3 audio-tag prefix (e.g. "[Mexican accent] ") — the native way
+  // to steer accent/effect on v3. Empty for every other model.
+  const speakText = `${String(elevenTagPrefix || '')}${narration}`;
   throwIfAborted(signal);
 
   const audioStream = await client.textToSpeech.convert(resolvedVoiceId, {
-    text: narration,
+    text: speakText,
     model_id: resolvedModelId,
     voice_settings: settings,
   }, {

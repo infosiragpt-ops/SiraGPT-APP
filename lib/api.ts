@@ -3705,6 +3705,8 @@ class ApiClient {
     chatId: string | null;
     provider?: string;
     model?: string;
+    voice?: { language: string; accent: string; effect: string; stability: number; stabilityLabel: string };
+    warnings?: string[];
   }> {
     return this.request('/ai/generate-speech', {
       method: 'POST',

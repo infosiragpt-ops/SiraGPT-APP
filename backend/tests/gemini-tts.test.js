@@ -101,8 +101,22 @@ test('buildSpeechPrompt keeps the transcript and professional controls', () => {
   });
   assert.match(prompt, /Spanish/);
   assert.match(prompt, /Mexican/);
-  assert.match(prompt, /Podcast/);
+  assert.match(prompt, /podcast/i);
   assert.match(prompt, /TRANSCRIPT:\nTexto exacto\.$/);
+});
+
+test('buildSpeechPrompt uses director structure with pace and fidelity guard', () => {
+  const prompt = geminiTts.buildSpeechPrompt('Hola.', {
+    language: 'Bengali',
+    accent: 'Neutral',
+    effect: 'Cinematic',
+    stability: 20,
+  });
+  assert.match(prompt, /Director's Notes:/);
+  assert.match(prompt, /Pace:/);
+  assert.match(prompt, /dramatic/i);
+  assert.match(prompt, /exactly as written/);
+  assert.match(prompt, /TRANSCRIPT:\nHola\.$/);
 });
 
 test.after(() => {

@@ -372,8 +372,18 @@ describe("chat video auto-activation source contract", () => {
   })
 
   it("uses the working Gemini TTS provider and sends professional voice controls", () => {
-    assert.match(mediaConfigSource, /export type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs" \| "Sira Voz"/)
-    assert.match(mediaConfigSource, /VOICE_MODEL_OPTIONS: readonly VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs", "Sira Voz"\]/)
+    // Professional voice catalog in media-composer-config (UI mirror of the
+    // backend voice-director): per-language accents, stability presets,
+    // effect descriptions, OpenAI engines + browser-TTS last resort. The
+    // backend re-validates every combination across ElevenLabs + Gemini +
+    // OpenAI (+ Sira Voz local), with announced—not silent—fallbacks.
+    assert.match(mediaConfigSource, /VOICE_MODEL_CATALOG/)
+    assert.match(mediaConfigSource, /label: "OpenAI TTS"/)
+    assert.match(mediaConfigSource, /label: "GPT-4o mini TTS"/)
+    assert.match(mediaConfigSource, /export function voiceAccentsFor/)
+    assert.match(mediaConfigSource, /export function isElevenVoiceModel/)
+    assert.match(mediaConfigSource, /export function browserTtsSupported/)
+    assert.match(mediaConfigSource, /export function speakWithBrowserVoice/)
     assert.match(source, /useState<VoiceModel>\(\(\) => readStoredVoiceSetting\("model", ""\) as VoiceModel\)/)
     assert.match(source, /getAIModels\('VOICE'\)/)
     assert.match(source, /\(model\?\.type === 'VOICE' \|\| model\?\.type === 'AUDIO'\) && model\?\.isActive === true/)
@@ -382,9 +392,13 @@ describe("chat video auto-activation source contract", () => {
       source,
       /generateSpeechMessage\(\{[\s\S]{0,420}model: selectedVoiceModel,[\s\S]{0,260}language: selectedVoiceLanguage,[\s\S]{0,260}accent: selectedVoiceAccent/,
     )
-    assert.match(source, /voiceId: selectedVoiceModel === 'ElevenLabs'/)
+    assert.match(source, /voiceId: isElevenVoiceModel\(selectedVoiceModel\)/)
+    assert.match(source, /resp\?\.warnings/)
+    assert.match(source, /tryBrowserVoiceFallback/)
+    assert.match(source, /speakWithBrowserVoice/)
     assert.match(apiSource, /model\?: string;/)
     assert.match(apiSource, /language\?: string;/)
+    assert.match(apiSource, /warnings\?: string\[\];/)
   })
 
   it("does not clear Video mode on send, in-flight generate, or same-thread chat create", () => {

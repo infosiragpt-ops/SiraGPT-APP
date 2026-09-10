@@ -378,12 +378,18 @@ import {
   MUSIC_STYLE_PROFILES,
   VIDEO_ASPECT_RATIO_OPTIONS,
   VIDEO_RESOLUTION_OPTIONS,
-  VOICE_ACCENT_OPTIONS,
   VOICE_COMPOSER_PLACEHOLDER,
+  VOICE_EFFECT_CATALOG,
   VOICE_EFFECT_OPTIONS,
   VOICE_LANGUAGE_OPTIONS,
+  VOICE_MODEL_CATALOG,
+  VOICE_STABILITY_PRESETS,
+  browserTtsSupported,
+  defaultVoiceAccentFor,
+  describeVoiceStability,
   filterAdminVisibleVideoModels,
   isAdminVisibleVideoModel,
+  isElevenVoiceModel,
   isImageModelEntry,
   isVideoModelEntry,
   providerForMediaModel,
@@ -391,6 +397,10 @@ import {
   writeStoredVoiceSettings,
   isSiraVozModel,
   readStoredVoiceStudioVoice,
+  speakWithBrowserVoice,
+  voiceAccentsFor,
+  voiceBcp47For,
+  voiceModelMeta,
   writeStoredVoiceStudioVoice,
   type ImageAspectRatio,
   type ImageGenerationCount,
@@ -2441,6 +2451,7 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceModel,
   selectedVoiceLanguage,
   setSelectedVoiceLanguage,
+  onVoiceLanguageChange,
   selectedVoiceAccent,
   setSelectedVoiceAccent,
   selectedVoiceStability,
@@ -2534,6 +2545,7 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceModel: (model: VoiceModel) => void;
   selectedVoiceLanguage: VoiceLanguage;
   setSelectedVoiceLanguage: (language: VoiceLanguage) => void;
+  onVoiceLanguageChange: (language: VoiceLanguage) => void;
   selectedVoiceAccent: VoiceAccent;
   setSelectedVoiceAccent: (accent: VoiceAccent) => void;
   selectedVoiceStability: number;
@@ -3241,13 +3253,13 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : isSiraVozModel(name) ? "VoiceStudio" : "Google", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: voiceModelMeta(name)?.provider || (isSiraVozModel(name) ? "VoiceStudio" : null), surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
               configurations). Sits right after the provider selector per the
               requested order: provider → Voice → configurations. */}
-          {selectedVoiceModel === "ElevenLabs" && <button
+          {isElevenVoiceModel(selectedVoiceModel) && <button
             type="button"
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
@@ -3339,7 +3351,7 @@ const ActiveToolsDisplay = ({
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
                       {VOICE_LANGUAGE_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceLanguage(option)}>
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => onVoiceLanguageChange(option)}>
                           <span className="min-w-0 flex-1 truncate">{option}</span>
                           {selectedVoiceLanguage === option && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
@@ -3355,7 +3367,7 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {VOICE_ACCENT_OPTIONS.map(option => (
+                      {voiceAccentsFor(selectedVoiceLanguage).map(option => (
                         <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceAccent(option)}>
                           <span className="min-w-0 flex-1 truncate">{option}</span>
                           {selectedVoiceAccent === option && <Check className="h-3.5 w-3.5" />}
@@ -3371,7 +3383,7 @@ const ActiveToolsDisplay = ({
                       <span className="text-[12px] font-medium leading-none text-zinc-800 dark:text-white/90">Stability</span>
                       <Info className="h-3 w-3 text-zinc-500 dark:text-white/62" />
                     </div>
-                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedVoiceStability}%</span>
+                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedVoiceStability}% · {describeVoiceStability(selectedVoiceStability)}</span>
                   </div>
                   <Slider
                     value={[selectedVoiceStability]}
@@ -3380,7 +3392,26 @@ const ActiveToolsDisplay = ({
                     max={100}
                     step={1}
                     className={VOICE_STABILITY_SLIDER_CLASS}
+                    aria-label={`Estabilidad de voz: ${selectedVoiceStability} por ciento, ${describeVoiceStability(selectedVoiceStability)}. Valores bajos, más expresivo; valores altos, más consistente.`}
                   />
+                  <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Preajustes de estabilidad">
+                    {VOICE_STABILITY_PRESETS.map(preset => (
+                      <button
+                        key={preset.name}
+                        type="button"
+                        title={preset.hint}
+                        onClick={() => setSelectedVoiceStability(preset.value)}
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                          selectedVoiceStability === preset.value
+                            ? "border-zinc-900 bg-zinc-900 text-white dark:border-white dark:bg-white dark:text-zinc-900"
+                            : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-white/15 dark:text-white/70 dark:hover:bg-white/10",
+                        )}
+                      >
+                        {preset.name} {preset.value}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <DropdownMenuSub>
@@ -3390,10 +3421,13 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {VOICE_EFFECT_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceEffect(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedVoiceEffect === option && <Check className="h-3.5 w-3.5" />}
+                      {VOICE_EFFECT_CATALOG.map(meta => (
+                        <DropdownMenuItem key={meta.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceEffect(meta.name)}>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">{meta.name}</span>
+                            <span className="block truncate text-[10.5px] text-zinc-500 dark:text-white/60">{meta.description}</span>
+                          </span>
+                          {selectedVoiceEffect === meta.name && <Check className="h-3.5 w-3.5 shrink-0" />}
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuSubContent>
@@ -5390,8 +5424,18 @@ function ChatInterfaceContent() {
       effect: selectedVoiceEffect,
     })
   }, [selectedVoiceModel, selectedVoiceLanguage, selectedVoiceAccent, selectedVoiceStability, selectedVoiceEffect])
+  // Accent follows language: keep the accent only if it exists for the new
+  // language, otherwise fall back to that language's default accent.
+  // Persistence is handled by the effect above.
+  const handleVoiceLanguageChange = React.useCallback((language: string) => {
+    setSelectedVoiceLanguage(language as VoiceLanguage);
+    const accents = voiceAccentsFor(language);
+    setSelectedVoiceAccent((prev: string) =>
+      accents.includes(prev) ? (prev as VoiceAccent) : (defaultVoiceAccentFor(language) as VoiceAccent),
+    );
+  }, [setSelectedVoiceAccent, setSelectedVoiceLanguage])
   // Specific ElevenLabs voice chosen from the Voice Catalog. It is only sent
-  // when ElevenLabs is selected; Gemini uses its own production voice.
+  // when an ElevenLabs engine is selected; Gemini/OpenAI use their own voices.
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
@@ -12290,6 +12334,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isGeneratingVoice,
     selectedVoiceModel, setSelectedVoiceModel,
     selectedVoiceLanguage, setSelectedVoiceLanguage,
+    onVoiceLanguageChange: handleVoiceLanguageChange,
     selectedVoiceAccent, setSelectedVoiceAccent,
     selectedVoiceStability, setSelectedVoiceStability,
     selectedVoiceEffect, setSelectedVoiceEffect,
@@ -13091,6 +13136,33 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // "service unavailable" answer. Like image/video/music, Voice now uses a
   // dedicated, deterministic backend path that ALWAYS produces the MP3 and
   // persists it as a "Generation N" chat artifact via the same renderer.
+  // Last resort when NO provider is configured anywhere (backend 503 with
+  // fallback:'browser-tts'): speak locally via the Web Speech API so voice
+  // works with zero keys. Returns true when handled.
+  const tryBrowserVoiceFallback = (
+    err: any,
+    narration: string,
+    runningState: any,
+    setBubble: (content: string) => void,
+    controller: AbortController,
+  ): boolean => {
+    const data = err?.errorData;
+    if (!data || data.fallback !== 'browser-tts' || !browserTtsSupported()) return false;
+    const fallbackState = {
+      ...runningState,
+      done: true,
+      steps: (runningState.steps || []).map((s: any) => ({ ...s, label: 'Reproducido en el navegador', status: 'done' })),
+      finalText: '🔊 Sin proveedor de voz configurado: audio reproducido con la voz del navegador (no se guardó archivo).',
+    };
+    setBubble('```agent-task-state\n' + JSON.stringify(fallbackState) + '\n```');
+    const stopSpeaking = speakWithBrowserVoice(narration, {
+      bcp47: data.languageBcp47 || voiceBcp47For(selectedVoiceLanguage),
+      rate: data.rate,
+    });
+    controller.signal.addEventListener('abort', stopSpeaking, { once: true });
+    toast.info('Voz del navegador: configura ElevenLabs, Gemini u OpenAI para audio de alta calidad.');
+    return true;
+  };
   // Files already attached in this chat (chunked uploads included) so the
   // studio can dub/transcribe media above the direct-upload limit.
   const voiceStudioChatFiles = React.useMemo(() => {
@@ -13216,7 +13288,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
+        voiceId: isElevenVoiceModel(selectedVoiceModel) ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -13225,8 +13297,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         throw new Error('El servicio de voz no devolvió audio.');
       }
       toast.success(resp?.model ? `Audio generado con ${resp.model}` : 'Audio generado');
+      for (const warning of resp?.warnings || []) toast.warning(warning);
       if (activeChat?.id) selectChat(activeChat.id);
     } catch (err: any) {
+      if (tryBrowserVoiceFallback(err, narration, runningState, setBubble, controller)) return;
       if (controller.signal.aborted || err?.name === 'AbortError') {
         const cancelledState = {
           ...runningState,
@@ -13329,7 +13403,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
+        voiceId: isElevenVoiceModel(selectedVoiceModel) ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -13338,8 +13412,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         throw new Error('El servicio de voz no devolvió audio.');
       }
       toast.success(resp?.model ? `Audio regenerado con ${resp.model}` : 'Audio regenerado');
+      for (const warning of resp?.warnings || []) toast.warning(warning);
       if (chatId) selectChat(chatId);
     } catch (err: any) {
+      if (tryBrowserVoiceFallback(err, narration, runningState, setBubble, controller)) return;
       if (controller.signal.aborted || err?.name === 'AbortError') {
         const cancelledState = {
           ...runningState,
@@ -13947,11 +14023,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onSelectVoice={handleSelectVoice}
                   modelLabel={selectedVoiceModel}
                   language={selectedVoiceLanguage}
-                  onLanguageChange={(v) => setSelectedVoiceLanguage(v as VoiceLanguage)}
+                  onLanguageChange={(v) => handleVoiceLanguageChange(v as VoiceLanguage)}
                   languageOptions={VOICE_LANGUAGE_OPTIONS}
                   accent={selectedVoiceAccent}
                   onAccentChange={(v) => setSelectedVoiceAccent(v as VoiceAccent)}
-                  accentOptions={VOICE_ACCENT_OPTIONS}
+                  accentOptions={voiceAccentsFor(selectedVoiceLanguage)}
                   effect={selectedVoiceEffect}
                   onEffectChange={(v) => setSelectedVoiceEffect(v as VoiceEffect)}
                   effectOptions={VOICE_EFFECT_OPTIONS}
