@@ -797,6 +797,49 @@ class ModelSyncService {
    * must be the decrypted plaintext key (the route decrypts before calling).
    * Returns the fetch verdict merged with persist counts.
    */
+  /**
+   * Key verdict for music-provider connections (elevenlabs / minimax / suno).
+   * Their playable models ship in the static manifest, so nothing is
+   * imported — this only answers "is the key usable?" for the panel's
+   * Probar button and auto-discovery:
+   * - elevenlabs: real check against GET {base}/models with xi-api-key.
+   * - minimax / suno: no verified lightweight key-check endpoint exists,
+   *   so a present key is accepted without probing (fail-open, documented
+   *   in the `note`). Never throws for missing fetch.
+   */
+  async validateMusicProviderKey(conn = {}) {
+    const zeros = { created: 0, updated: 0, errors: 0, count: 0, models: [] };
+    const apiKey = cleanEnvValue(conn.apiKey || '');
+    if (!apiKey) return { ok: false, status: 0, error: 'missing_api_key', ...zeros };
+    const providerKey = String(conn.providerKey || '').toLowerCase();
+
+    if (providerKey === 'elevenlabs') {
+      const fetchImpl = conn.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+      if (typeof fetchImpl !== 'function') return { ok: false, status: 0, error: 'fetch_unavailable', ...zeros };
+      const base = String(conn.url || 'https://api.elevenlabs.io/v1').replace(/\/+$/, '');
+      const url = /\/models$/.test(base) ? base : `${base}/models`;
+      const res = await fetchImpl(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'xi-api-key': apiKey },
+        signal: AbortSignal.timeout(10000),
+      }).catch((error) => ({ ok: false, status: 0, text: async () => error.message }));
+      if (!res.ok) {
+        let detail = '';
+        try { detail = await res.text(); } catch (_) { /* noop */ }
+        return {
+          ok: false,
+          status: res.status || 0,
+          error: `ElevenLabs API key rejected${res.status ? ` (HTTP ${res.status})` : ''}: ${String(detail).slice(0, 180)}`.trim(),
+          ...zeros,
+        };
+      }
+      return { ok: true, error: null, ...zeros, note: 'key_validated_no_catalog_import' };
+    }
+
+    // minimax / suno: accepted without probing (see note).
+    return { ok: true, error: null, ...zeros, note: 'key_accepted_without_probe' };
+  }
+
   async syncConnectionModels(conn = {}) {
     let catalogMap = {};
     try { catalogMap = require('./admin-connections-bridge').PROVIDER_CATALOG_MAP || {}; } catch (_) { /* noop */ }
@@ -810,6 +853,15 @@ class ModelSyncService {
       catalogProviderLabel = catalogProviderForConnection(providerKey, catalogProviderLabel);
     } catch (_) { /* keep label */ }
     const providerLabel = catalogProviderLabel;
+
+    // Music providers (production-music module): their playable models ship
+    // in the static manifest (model-catalog-manifest.js MUSIC entries), so
+    // there is nothing to import — but the per-connection "Probar" button
+    // and auto-discovery still need a verdict instead of a false-red
+    // "{url}/models" failure (MiniMax / Suno gateways expose no /models).
+    if (providerKey === 'elevenlabs' || providerKey === 'minimax' || providerKey === 'suno') {
+      return this.validateMusicProviderKey(conn);
+    }
 
     if (providerKey === 'fal') {
       const apiKey = cleanEnvValue(conn.apiKey || '');

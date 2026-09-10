@@ -123,6 +123,12 @@ const KNOWN_PROVIDERS = new Set([
   'xai',
   'meta',
   'fal',
+  // Music providers (production-music module): keys feed the music services
+  // through admin-connections-bridge. Without these entries the normaliser
+  // below would demote them to 'custom' and the bridge would ignore them.
+  'elevenlabs',
+  'minimax',
+  'suno',
   'custom',
 ]);
 
@@ -142,6 +148,9 @@ const DEFAULT_PROVIDER_LABELS = {
   xai: 'xAI API',
   meta: 'Meta Model API',
   fal: 'fal.ai Video API',
+  elevenlabs: 'ElevenLabs API (voz + música)',
+  minimax: 'MiniMax API (música)',
+  suno: 'Suno Gateway API (música)',
   custom: 'Custom API',
 };
 
@@ -368,6 +377,7 @@ router.post('/:id/test', async (req, res) => {
       imported: result.created + result.updated,
       created: result.created,
       updated: result.updated,
+      ...(result.note ? { note: result.note } : {}),
       models: (result.models || []).slice(0, 200).map((m) => ({
         id: m.name, name: m.name, displayName: m.displayName, type: m.type, provider: m.provider,
       })),
