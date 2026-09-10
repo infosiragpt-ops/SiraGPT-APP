@@ -119,7 +119,6 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { ChatMascot } from "@/components/chat-mascot"
 import {
   lastAssistantMessage,
   resolveChatWorkStatus,
@@ -1877,16 +1876,6 @@ export function AppSidebar() {
                   <div className="space-y-1 px-2 py-2" aria-busy="true" aria-label="Cargando chats">
                     {[88, 72, 80, 64, 76].map((w, i) => (
                       <div key={i} className="flex h-9 items-center gap-2.5 rounded-lg px-2">
-                        {/* Placeholder circular alineado con el ancla del emoji
-                            (h-5 w-5) para que la transición skeleton → fila real
-                            no desplace el contenido. */}
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-                          {i === 0 ? (
-                            <ThinkingIndicator size="xs" className="text-muted-foreground/70" />
-                          ) : (
-                            <Skeleton className="h-4 w-4 rounded-full" />
-                          )}
-                        </span>
                         <Skeleton className="h-4 rounded-md" style={{ width: `${w}%` }} />
                       </div>
                     ))}
@@ -2032,42 +2021,42 @@ export function AppSidebar() {
                                           "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1",
                                         )}
                                       >
-                                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                                            {workStatus !== "idle" ? (
                                             <span
-                                              data-chat-mascot="1"
                                               data-chat-work-status={workStatus}
-                                              className="relative flex h-5 w-5 shrink-0 items-center justify-center"
+                                              className="flex h-5 shrink-0 items-center justify-center"
                                               title={workTitle}
                                             >
-                                              <ChatMascot seed={chat.id} size={16} />
                                               {workStatus === "working" ? (
                                                 <span
-                                                  className="absolute -right-0.5 -bottom-0.5 flex h-2 w-2"
+                                                  className="relative flex h-2 w-2"
                                                   aria-label="Trabajo en progreso"
                                                 >
                                                   <span className="absolute inline-flex h-full w-full rounded-full bg-zinc-400 motion-safe:animate-ping dark:bg-zinc-300" />
-                                                  <span className="relative inline-flex h-2 w-2 rounded-full bg-zinc-900 ring-1 ring-white dark:bg-white dark:ring-zinc-900" />
+                                                  <span className="relative inline-flex h-2 w-2 rounded-full bg-zinc-900 dark:bg-white" />
                                                 </span>
                                               ) : workStatus === "done" ? (
                                                 <span
-                                                  className="absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-1 ring-white dark:ring-zinc-900"
+                                                  className="h-2 w-2 rounded-full bg-emerald-500"
                                                   aria-label="Tarea terminada"
                                                 />
                                               ) : workStatus === "needs_reply" ? (
                                                 <span
-                                                  className="absolute -right-3 bottom-0 flex items-center gap-0.5"
+                                                  className="flex items-center gap-0.5"
                                                   aria-label="Esperando tu respuesta en el chat"
                                                 >
-                                                  <span className="h-2 w-2 rounded-full bg-amber-400 ring-1 ring-white dark:ring-zinc-900" />
-                                                  <Hand className="h-3 w-3 text-amber-500" strokeWidth={2.25} />
+                                                  <span className="h-2 w-2 rounded-full bg-amber-400" />
+                                                  <Hand className="h-3.5 w-3.5 text-amber-500" strokeWidth={2.25} />
                                                 </span>
                                               ) : workStatus === "error" ? (
                                                 <span
-                                                  className="absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full bg-destructive/85 ring-1 ring-white dark:ring-zinc-900"
+                                                  className="h-2 w-2 rounded-full bg-destructive/85"
                                                   aria-label="Tarea con error"
                                                 />
                                               ) : null}
                                             </span>
+                                            ) : null}
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
                                             </span>
