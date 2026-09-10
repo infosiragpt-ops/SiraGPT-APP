@@ -79,6 +79,7 @@ test('retry policy: the production base toolset opts in only its audited first-p
     'browser_navigate', 'browser_click', 'browser_type', 'browser_scroll',
     'github_create_issue', 'linkedin_publish_post', 'x_publish_post',
     'github_list_repos', 'linkedin_read_profile', 'x_list_mentions', 'x_search',
+    'construir_scaffold', 'github_publish_project',
   ];
   const counts = new Map();
   for (const name of [...safeReads, ...singleAttempt]) {

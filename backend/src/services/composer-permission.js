@@ -127,6 +127,16 @@ function classifiesAsHostEscape(toolName) {
 }
 
 /**
+ * True when `toolName` is a write-side tool that Protegido must route to the
+ * interactive reviewer instead of running directly. Commands (bash/shell)
+ * are NOT writes: Protegido lets them run, Solo lectura still denies them
+ * via authorizeComposerTool.
+ */
+function isProtectedWriteTool(toolName) {
+  return classifiesAsWrite(toolName);
+}
+
+/**
  * Composer-layer verdict. Agent policy still applies when this returns allow
  * on `default`. `full` never adds a reviewer and never remaps to read.
  *
@@ -238,6 +248,7 @@ module.exports = {
   resolveComposerPermission,
   classifiesAsWrite,
   classifiesAsCommand,
+  isProtectedWriteTool,
   authorizeComposerTool,
   composerDeniedResult,
 };

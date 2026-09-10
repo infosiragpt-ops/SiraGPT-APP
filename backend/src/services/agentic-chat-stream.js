@@ -1353,6 +1353,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
           workspaceId: toolContext.workspaceId || null,
           coworkRunId: toolContext.coworkRunId || null,
+          // Protegido reviewer: the event stream pauses write-side tools on
+          // permission_request when this is 'protected'.
+          composerPermission: toolContext.permission
+            || toolContext.toolPermission
+            || toolContext.composerPermission
+            || 'default',
         });
         if (__harness) tools = applyCustomGptCapabilityGates(__harness.tools, customGptCapabilities);
       } catch (harnessErr) {
@@ -1380,7 +1386,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           ...mediaIntents.map((intent) => intent && intent.tool),
           ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
           ...(artifactDeliveryContract.active && !softwareBuildTurn ? ['create_document', 'verify_artifact'] : []),
-          ...(softwareBuildTurn ? ['create_artifact'] : []),
+          ...(softwareBuildTurn ? ['create_artifact', 'construir_scaffold', 'github_publish_project'] : []),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
@@ -1467,7 +1473,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (name === 'create_document') availableToolNames.delete(name);
       }
     }
-    if (softwareBuildTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
+    if (softwareBuildTurn && !initialToolChoice && availableToolNames.has('construir_scaffold')) {
+      initialToolChoice = 'construir_scaffold';
+    } else if (softwareBuildTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
       initialToolChoice = 'create_artifact';
     }
     // A strong specialized-skill intent gets one deterministic first call. The
@@ -1657,7 +1665,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida audio, voz, narración, locución, mp3 o wav, DEBES llamar `generate_speech` con el texto exacto y adjuntar el archivo MP3 descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API, un reproductor en el navegador, o decirle al usuario que pulse reproducir. El entregable es un archivo de audio real.',
       softwareBuildTurn
-        ? 'El usuario pidio SOFTWARE con codigo real (HTML/CSS/JS o una app web), no un documento Word/PDF. Entrega archivos de codigo con `create_artifact` tipo html (pagina autocontenida) o .html/.css/.js. PROHIBIDO create_document con .docx/.xlsx/.pptx/.pdf (E_SOFTWARE_CODE). No menciones verificaciones tecnicas de Word.'
+        ? 'El usuario pidio SOFTWARE con codigo real (HTML/CSS/JS o una app web), no un documento Word/PDF. Usa `construir_scaffold` para entregar un proyecto funcional (HTML previsualizable + zip + base de datos en archivo). Tambien puedes usar `create_artifact` tipo html. Si pide GitHub, usa `github_publish_project` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). PROHIBIDO create_document con .docx/.xlsx/.pptx/.pdf (E_SOFTWARE_CODE). No menciones verificaciones tecnicas de Word. No muestres model_id ni nombres de vendor.'
         : 'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
@@ -1757,6 +1765,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       || 'default';
     const toolGate = createChatToolGate({
       permission: composerPermission,
+      // Protegido writes are allowed through ONLY when the harness reviewer
+      // above is live; it pauses them on permission_request. Without a
+      // harness the gate keeps denying them (fail-closed).
+      deferProtectedAsk: Boolean(__harness),
       onAudit: (info) => { try { onEvent({ type: 'tool_authorized', tool: info.tool }); } catch (_) { /* noop */ } },
     });
 
@@ -2395,6 +2407,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           approved: { type: 'boolean', description: 'Required true to perform the write.' },
         },
         required: ['owner', 'repo', 'title'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.construir_scaffold, {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: 'What to build. Defaults to the user message.' },
+          title: { type: 'string', description: 'Short project title.' },
+          publishGithub: { type: 'boolean', description: 'Also publish if GitHub OAuth is connected.' },
+          repoName: { type: 'string', description: 'GitHub repository name.' },
+          approved: { type: 'boolean', description: 'Required true if publishGithub.' },
+        },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_publish_project, {
+        type: 'object',
+        properties: {
+          repoName: { type: 'string', description: 'Repository name.' },
+          branch: { type: 'string', description: 'Branch to create when the repo already exists.' },
+          description: { type: 'string', description: 'Repository description.' },
+          approved: { type: 'boolean', description: 'Required true to publish.' },
+        },
         additionalProperties: false,
       }),
       adaptAgentTool(agentTools.linkedin_read_profile, {
