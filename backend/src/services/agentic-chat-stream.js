@@ -69,6 +69,7 @@
     isSoftwareBuildRequest,
     isExplicitDocumentRequest,
   } = require('./agents/software-build-intent');
+  const { isGithubPrRequest } = require('./agents/github-pr-intent');
 
   const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
   const SENTINEL_FENCE_CLOSE = '\n```';
@@ -815,6 +816,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       toolContext.goal = toolContext.goal || userQuery;
     }
     const softwareBuildTurn = isSoftwareBuildRequest(userQuery) && !isExplicitDocumentRequest(userQuery);
+    const githubPrTurn = isGithubPrRequest(userQuery);
     if (!res) throw new Error('runAgenticChat: res is required');
 
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
@@ -1386,7 +1388,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           ...mediaIntents.map((intent) => intent && intent.tool),
           ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
           ...(artifactDeliveryContract.active && !softwareBuildTurn ? ['create_document', 'verify_artifact'] : []),
-          ...(softwareBuildTurn ? ['create_artifact', 'construir_scaffold', 'github_publish_project'] : []),
+          ...(softwareBuildTurn && !githubPrTurn ? ['create_artifact', 'construir_scaffold', 'github_publish_project'] : []),
+          ...(githubPrTurn ? [
+            'github_open_repo',
+            'github_repo_list',
+            'github_repo_read',
+            'github_repo_write',
+            'github_repo_exec',
+            'github_open_pull_request',
+          ] : []),
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
@@ -1473,9 +1483,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (name === 'create_document') availableToolNames.delete(name);
       }
     }
-    if (softwareBuildTurn && !initialToolChoice && availableToolNames.has('construir_scaffold')) {
+    if (githubPrTurn && !initialToolChoice && availableToolNames.has('github_open_repo')) {
+      initialToolChoice = 'github_open_repo';
+    } else if (softwareBuildTurn && !githubPrTurn && !initialToolChoice && availableToolNames.has('construir_scaffold')) {
       initialToolChoice = 'construir_scaffold';
-    } else if (softwareBuildTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
+    } else if (softwareBuildTurn && !githubPrTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
       initialToolChoice = 'create_artifact';
     }
     // A strong specialized-skill intent gets one deterministic first call. The
@@ -1651,7 +1663,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
       'Estándar de calidad (nivel experto): en tareas difíciles piensa antes de actuar (descompón el problema, explicita supuestos y casos límite, verifica cada paso); responde con la conclusión primero; distingue lo que SABES de lo que INFIERES de lo que NO SABES y NUNCA inventes datos, cifras, citas, fuentes ni APIs; cuando dudes, verifica con una herramienta en vez de adivinar; admite y corrige tus errores directamente, sin adular.',
       'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',
-      'Cuando detectes que el usuario quiere hacer operaciones de repositorio (clonar, editar, commit, push, PR, deploy, CI), actúa como un coding agent completo:',
+      'Cuando el usuario pide abrir un repo suyo y hacer un PR («abre un PR en owner/repo que…»): usa `github_open_repo` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens), luego `github_repo_list` / `github_repo_read` / `github_repo_write` / `github_repo_exec` en el workspace aislado, y `github_open_pull_request` con approved=true. Devuelve la URL del PR. No uses clone_project ni host_bash para este flujo (evita el .env del host). No empujes a main. No muestres model_id ni nombres de vendor.',
+      'Cuando detectes otras operaciones de repositorio público (clonar, editar, commit, push, deploy, CI) y NO sea el flujo OAuth de arriba, actúa como un coding agent completo:',
       '  1. Clona o localiza el repositorio usando `clone_project` o `host_bash` con git.',
       '  2. Comprende la estructura del proyecto: usa `list_dir` para explorar el árbol, `glob_files` para localizar archivos por patrón (ej. "**/*.ts") y `code_grep` para buscar dónde se define o se usa un símbolo/cadena antes de editar.',
       '  3. Realiza los cambios necesarios editando archivos con `host_file` para cambios de texto y `host_bash` solo para comandos.',
@@ -1664,7 +1677,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida audio, voz, narración, locución, mp3 o wav, DEBES llamar `generate_speech` con el texto exacto y adjuntar el archivo MP3 descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API, un reproductor en el navegador, o decirle al usuario que pulse reproducir. El entregable es un archivo de audio real.',
-      softwareBuildTurn
+      githubPrTurn
+        ? 'El usuario pidio abrir un repositorio GitHub y/o crear un Pull Request. Usa `github_open_repo` con owner/repo (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). Edita en el workspace aislado con `github_repo_write`. Abre el PR con `github_open_pull_request` (approved=true) y devuelve prUrl. PROHIBIDO inventar tokens o model_id. No uses create_document.'
+        : softwareBuildTurn
         ? 'El usuario pidio SOFTWARE con codigo real (HTML/CSS/JS o una app web), no un documento Word/PDF. Usa `construir_scaffold` para entregar un proyecto funcional (HTML previsualizable + zip + base de datos en archivo). Tambien puedes usar `create_artifact` tipo html. Si pide GitHub, usa `github_publish_project` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). PROHIBIDO create_document con .docx/.xlsx/.pptx/.pdf (E_SOFTWARE_CODE). No menciones verificaciones tecnicas de Word. No muestres model_id ni nombres de vendor.'
         : 'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
@@ -2428,6 +2443,65 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           description: { type: 'string', description: 'Repository description.' },
           approved: { type: 'boolean', description: 'Required true to publish.' },
         },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_open_repo, {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'GitHub owner or org.' },
+          repo: { type: 'string', description: 'Repository name, or owner/repo.' },
+          ref: { type: 'string', description: 'Branch to open. Defaults to the repo default branch.' },
+        },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_repo_list, {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative directory inside the isolated workspace.' },
+          workspaceId: { type: 'string', description: 'Workspace from github_open_repo.' },
+        },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_repo_read, {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative file path inside the isolated workspace.' },
+          workspaceId: { type: 'string', description: 'Workspace from github_open_repo.' },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_repo_write, {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative file path inside the isolated workspace.' },
+          content: { type: 'string', description: 'New file contents.' },
+          workspaceId: { type: 'string', description: 'Workspace from github_open_repo.' },
+        },
+        required: ['path', 'content'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_repo_exec, {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Executable name (ls, cat, pwd). No shell metacharacters.' },
+          args: { type: 'array', items: { type: 'string' }, description: 'Arguments. Paths must stay inside the workspace.' },
+          workspaceId: { type: 'string', description: 'Workspace from github_open_repo.' },
+        },
+        required: ['command'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_open_pull_request, {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Pull request title.' },
+          body: { type: 'string', description: 'Pull request body.' },
+          branch: { type: 'string', description: 'Work branch. Never main or master.' },
+          base: { type: 'string', description: 'Base branch. Defaults to the repo default.' },
+          approved: { type: 'boolean', description: 'Required true to open the PR.' },
+          workspaceId: { type: 'string', description: 'Workspace from github_open_repo.' },
+        },
+        required: ['title'],
         additionalProperties: false,
       }),
       adaptAgentTool(agentTools.linkedin_read_profile, {
