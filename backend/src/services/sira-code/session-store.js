@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 const { DEFAULT_AGENT_ID, resolveAgentId, getAgent } = require('./agents');
 const { createWorkspace } = require('./workspace');
+const { snapshot, restore, safeId } = require('./project-store');
 const { publicPlan } = require('./plan-handoff');
 const { DEFAULT_TITLE, isDefaultTitle } = require('./session-title');
 const { describePending } = require('./question-tool');
@@ -34,6 +35,7 @@ function publicSession(session) {
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
     plan: publicPlan(session.plan),
+    chatId: session.chatId || null,
     pendingPermissions: [...(session.pendingPermissions || [])].map(([permissionId, pending]) => (
       describePending(permissionId, pending)
     )),
@@ -45,18 +47,24 @@ async function createSession({
   agent = DEFAULT_AGENT_ID,
   model = '',
   title = '',
+  chatId = '',
+  projectId = '',
+  persistEnv = process.env,
 } = {}) {
   const id = newId('sc');
   const agentId = resolveAgentId(agent, { allowInternal: false });
   const workspace = await createWorkspace(id);
   const now = Date.now();
   const rawTitle = String(title || '').trim();
+  const projectKey = safeId(chatId || projectId);
   const session = {
     id,
     userId: String(userId || ''),
     agentId,
     model: String(model || ''),
     title: rawTitle && !isDefaultTitle(rawTitle) ? rawTitle.slice(0, 200) : DEFAULT_TITLE,
+    chatId: projectKey || null,
+    persistEnv,
     status: 'idle',
     createdAt: now,
     updatedAt: now,
@@ -70,6 +78,9 @@ async function createSession({
     permission: 'default',
     plan: null,
   };
+  if (projectKey && session.userId) {
+    await restore(workspace, session.userId, projectKey, persistEnv);
+  }
   sessions.set(id, session);
   return session;
 }
@@ -133,6 +144,9 @@ function listUserSessions(userId) {
 
 async function destroySession(session) {
   abortSession(session);
+  if (session.chatId && session.userId && session.workspace) {
+    await snapshot(session.workspace, session.userId, session.chatId, session.persistEnv).catch(() => {});
+  }
   sessions.delete(session.id);
   if (session.workspace && typeof session.workspace.destroy === 'function') {
     await session.workspace.destroy().catch(() => {});

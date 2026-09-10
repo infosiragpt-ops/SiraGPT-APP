@@ -66,6 +66,7 @@ router.post('/session', authenticateToken, async (req, res) => {
       agent: seed.agent || seed.agentId,
       model: seed.model,
       title: seed.title,
+      chatId: seed.chatId || seed.projectId || req.body.chatId,
     });
     return res.json({ session });
   } catch (err) {

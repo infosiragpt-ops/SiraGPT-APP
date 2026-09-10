@@ -14,6 +14,7 @@ const { authorizeTool, WRITE_TOOLS } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { withProgress } = require('./progress');
+const { snapshot } = require('./project-store');
 
 function emitStage(session, step, extra = {}) {
   const progress = withProgress(session, step, extra);
@@ -314,6 +315,9 @@ async function runPrompt(session, text, {
         maybeCompactStage(packedResult.truncated || packedAfter.compacted);
         if (result.ok && WRITE_TOOLS.has(auth.tool)) {
           emitStage(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
+          if (session.chatId && session.userId) {
+            await snapshot(session.workspace, session.userId, session.chatId, session.persistEnv).catch(() => {});
+          }
         }
       }
       if (pausedForQuestion) break;
