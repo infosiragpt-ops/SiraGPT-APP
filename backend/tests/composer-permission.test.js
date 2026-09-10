@@ -8,6 +8,7 @@ const {
   normalizeComposerPermission,
   resolveComposerPermission,
   authorizeComposerTool,
+  isProtectedWriteTool,
 } = require('../src/services/composer-permission');
 const { authorizeTool } = require('../src/services/sira-code/permissions');
 const { createChatToolGate } = require('../src/services/agents/chat-tool-policy');
@@ -95,5 +96,14 @@ describe('composer permission policy', () => {
     assert.equal(write.denied, true);
     const read = authorizeTool('construir', 'write', { permission: 'read', approved: true });
     assert.equal(read.denied, true);
+  });
+
+  it('isProtectedWriteTool flags writes but not commands or reads', () => {
+    for (const tool of ['write', 'write_file', 'edit', 'computer_write_file', 'computer_edit_file', 'host_file', 'apply_patch', 'task']) {
+      assert.equal(isProtectedWriteTool(tool), true, tool);
+    }
+    for (const tool of ['bash', 'host_bash', 'shell', 'read', 'read_file', 'webfetch', 'ls']) {
+      assert.equal(isProtectedWriteTool(tool), false, tool);
+    }
   });
 });

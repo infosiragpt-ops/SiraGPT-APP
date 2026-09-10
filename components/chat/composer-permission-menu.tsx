@@ -50,13 +50,32 @@ const LEVELS: Array<{
 
 export function ComposerPermissionMenu() {
   const [open, setOpen] = React.useState(false)
-  const [level, setLevel] = React.useState<ComposerPermissionId>("full")
+  const [level, setLevel] = React.useState<ComposerPermissionId>("default")
 
   React.useEffect(() => {
     setLevel(readComposerPermission())
   }, [])
 
-  const active = LEVELS.find((row) => row.id === level) || LEVELS[4]
+  const select = React.useCallback((id: ComposerPermissionId) => {
+    setLevel(id)
+    writeComposerPermission(id)
+    setOpen(false)
+  }, [])
+
+  // Atajos 1-5: el número visible a la derecha de cada fila la selecciona.
+  React.useEffect(() => {
+    if (!open) return
+    function onKey(e: KeyboardEvent) {
+      const index = ["1", "2", "3", "4", "5"].indexOf(e.key)
+      if (index < 0 || index >= LEVELS.length) return
+      e.preventDefault()
+      select(LEVELS[index].id)
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [open, select])
+
+  const active = LEVELS.find((row) => row.id === level) || LEVELS[0]
   const Icon = active.icon
 
   return (
@@ -94,9 +113,7 @@ export function ComposerPermissionMenu() {
                   data-permission-level={row.id}
                   className={cn("composer-permission-row", selected && "is-selected")}
                   onClick={() => {
-                    setLevel(row.id)
-                    writeComposerPermission(row.id)
-                    setOpen(false)
+                    select(row.id)
                   }}
                 >
                   <RowIcon className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.8} />
