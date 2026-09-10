@@ -309,3 +309,29 @@ test('resolveImageAspectRatio: no shape described → null (keep picker default)
   assert.equal(resolveImageAspectRatio(''), null);
   assert.equal(resolveImageAspectRatio(null), null);
 });
+
+// ── Spoken image directives (typos, counts, edit targets) ─────────────────
+
+test('image intent tolerates chat typos and resolves the exact frame', () => {
+  const r = detectMediaIntent('dma euna imagen orisailntal de un perro para la portada');
+  assert.equal(r.kind, 'image');
+  assert.equal(r.tool, 'generate_image');
+  assert.equal(r.specs.frame, '16:9');
+  assert.equal(r.specs.aspectRatio, 'wide');
+});
+
+test('image intent understands "varias imágenes" as a multi-image request', () => {
+  const r = detectMediaIntent('hazme varias imágenes de gatos');
+  assert.equal(r.kind, 'image');
+  assert.equal(r.specs.count, 3);
+  assert.match(buildMediaIntentHint(r), /3/);
+});
+
+test('edit intent carries the spoken target into the hint', () => {
+  const intents = detectMediaIntents('en la imagen cambia el cielo a un atardecer naranja');
+  assert.equal(intents[0].tool, 'edit_image');
+  assert.match(intents[0].specs.editTarget, /cielo/);
+  const hint = buildMediaIntentHint(intents[0]);
+  assert.match(hint, /cielo/);
+  assert.match(hint, /target/);
+});

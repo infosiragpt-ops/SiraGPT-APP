@@ -458,6 +458,77 @@ const GENERATORS = {
   xai: generateWithXai,
 };
 
+// Max images per request — matches the app picker (1..5) and the
+// /generate-image route validation. Providers that reject batch sizes fall
+// back to sequential single-image calls (see attemptProviderImages).
+const MAX_IMAGES_PER_REQUEST = 5;
+
+function isQuotaOrAuthError(err) {
+  const status = Number(err?.status ?? err?.statusCode) || null;
+  if (status === 401 || status === 403 || status === 429) return true;
+  const msg = String((err && err.message) || '');
+  return /RESOURCE_EXHAUSTED|exceeded your current quota|insufficient_quota|rate.?limit|too many requests|quota|invalid api key|unauthorized|forbidden/i.test(msg);
+}
+
+/**
+ * True when a provider rejected the BATCH size (not the prompt itself), so a
+ * sequential single-image retry on the SAME provider is worth attempting.
+ * Never true for quota/auth/moderation failures — those must fail over (or
+ * fail), never multiply into N doomed calls.
+ */
+function isBatchSizeError(err) {
+  const msg = String((err && err.message) || '');
+  if (/content[_ -]?policy|moderation|safety|inappropriate|blocked/i.test(msg)) return false;
+  if (isQuotaOrAuthError(err)) return false;
+  if (/\bmust be 1\b|only (?:supports?|allows?|returns?) (?:a single|one|1)\b|single image at a time|parallel requests?|not supported|invalid (?:value|parameter)|expected 1\b/i.test(msg)) return true;
+  const status = Number(err?.status ?? err?.statusCode) || null;
+  if (status === 400 && /\b(n|num_images|num-images)\b/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * Call one provider asking for n images, filling up to n with sequential
+ * single-image calls on the SAME provider when the provider returns fewer
+ * (e.g. OpenRouter yields one image per chat completion, fal caps
+ * num_images at 4). Providers that reject the batch size outright (gpt-image
+ * models that only allow n=1) are retried as n sequential singles.
+ * Throws the original error when nothing usable comes back.
+ */
+async function attemptProviderImages(provider, { model, prompt, ratio, quality, n, signal, timeoutMs }) {
+  const callOnce = (count) => GENERATORS[provider]({
+    model, prompt, ratio, quality, n: count,
+    signal, timeoutMs,
+  });
+  try {
+    const first = await callOnce(n);
+    if (first && first.length >= n) return first.slice(0, n);
+    if (first && first.length >= 1) {
+      const acc = [...first];
+      for (let i = acc.length; i < n; i += 1) {
+        if (signal && signal.aborted) throw signal.reason || new Error('aborted');
+        const more = await callOnce(1);
+        if (more && more.length) acc.push(more[0]);
+        else break;
+      }
+      if (acc.length) return acc.slice(0, n);
+    }
+    throw new Error('provider returned no image data');
+  } catch (err) {
+    if (signal && signal.aborted) throw err;
+    if (n > 1 && isBatchSizeError(err)) {
+      const acc = [];
+      for (let i = 0; i < n; i += 1) {
+        if (signal && signal.aborted) throw signal.reason || new Error('aborted');
+        const more = await callOnce(1);
+        if (more && more.length) acc.push(more[0]);
+        else throw err;
+      }
+      return acc.slice(0, n);
+    }
+    throw err;
+  }
+}
+
 // ── Public: generateImage ─────────────────────────────────────────────────
 
 /**
@@ -469,7 +540,7 @@ const GENERATORS = {
  * @param {string} [spec.provider]    explicit provider override ('openai'|'gemini'|'fal'|'openrouter'|'xai')
  * @param {string} [spec.aspectRatio] '1:1'|'16:9'|'3:4'|… or 'square'|'wide'|'portrait'
  * @param {string} [spec.quality]     '512px'|'1K'|'2K'|'4K' or 'standard'|'hd'
- * @param {number} [spec.n]           1..4 (default 1)
+ * @param {number} [spec.n]           1..5 (default 1)
  * @param {AbortSignal} [spec.signal]
  * @param {boolean} [spec.failover]   default true — try other configured providers on failure
  * @returns {Promise<{ok:boolean, images?:Array<{b64:string,mime:string}>, provider?:string, model?:string, attempts:Array, error?:string}>}
@@ -480,7 +551,7 @@ async function generateImage(spec = {}) {
 
   const ratio = normalizeAspectRatio(spec.aspectRatio);
   const quality = normalizeQuality(spec.quality);
-  const n = Math.min(Math.max(Number.parseInt(spec.n, 10) || 1, 1), 4);
+  const n = Math.min(Math.max(Number.parseInt(spec.n, 10) || 1, 1), MAX_IMAGES_PER_REQUEST);
   const timeoutMs = Number(spec.timeoutMs) || DEFAULT_TIMEOUT_MS;
   const allowFailover = spec.failover !== false;
 
@@ -518,7 +589,9 @@ async function generateImage(spec = {}) {
     const model = step.model || DEFAULT_MODEL_BY_PROVIDER[step.provider];
     const attemptSignal = createAttemptSignal(spec.signal, timeoutMs, `${step.provider}:${model}`);
     try {
-      const b64s = await GENERATORS[step.provider]({
+      // Single call when possible; sequential singles on the same provider
+      // when it rejects the batch size or returns fewer images.
+      const b64s = await attemptProviderImages(step.provider, {
         model, prompt, ratio, quality, n,
         signal: attemptSignal.signal, timeoutMs,
       });
@@ -690,6 +763,10 @@ module.exports = {
     openRouterImageSizeFor,
     stripImageDataUrl,
     extractOpenRouterImageBase64s,
+    isBatchSizeError,
+    isQuotaOrAuthError,
+    attemptProviderImages,
+    MAX_IMAGES_PER_REQUEST,
     withTimeout,
     createAttemptSignal,
     setOpenAIFactory: (fn) => { _openAIFactory = fn; },

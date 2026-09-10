@@ -39,6 +39,20 @@ function normalize(text) {
     .replace(/[̀-ͯ]/g, ''); // strip combining diacritics
 }
 
+// Lazy, one-way dependency on the image-directive parser (it is pure and
+// dependency-free, so this cannot cycle). Used for typo-tolerant canonical
+// text plus exact frames / counts / edit targets in image intents.
+let imageDirectiveMod = null;
+function getImageDirective() {
+  if (!imageDirectiveMod) imageDirectiveMod = require('./image-directive');
+  return imageDirectiveMod;
+}
+
+/** Accent/case-normalised text with common chat typos canonicalised. */
+function canonicalNorm(text) {
+  return getImageDirective().canonicalizeImageTypos(normalize(text));
+}
+
 // ── Media-kind lexicons (matched against the normalised text) ────────────
 // Word-boundary anchored so "video" does not fire on "videojuego" and
 // "foto" does not fire on "fotosintesis".
@@ -152,24 +166,15 @@ function detectOrientation(normText) {
  * e.g. a Facebook post).
  */
 function resolveImageAspectRatio(text) {
-  const norm = normalize(text);
-  if (!norm) return null;
-
-  const colon = norm.match(/\b(1:1|2:3|3:2|3:4|9:16|4:3|16:9)\b/);
-  if (colon) return colon[1];
-  const cross = norm.match(/\b(1x1|2x3|3x2|3x4|9x16|4x3|16x9)\b/);
-  if (cross) return cross[1].replace('x', ':');
-
-  // Vertical-mobile / full-screen stories → tall 9:16.
-  if (/\b(histori(?:a|as)|story|stories|reels?|tiktok|status|para movil|formato movil)\b/.test(norm)) return '9:16';
-  // Generic vertical / portrait → 3:4.
-  if (/\b(vertical|retrato|portrait|mas alto que ancho)\b/.test(norm)) return '3:4';
-  // Square (profile pictures, logos, instagram feed posts).
-  if (/\b(cuadrad[oa]s?|square|post de instagram|foto de perfil|avatar|logo|logotipo|icono)\b/.test(norm)) return '1:1';
-  // Horizontal / landscape / rectangular / social-wide → 16:9.
-  if (/\b(rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|para youtube|youtube|miniatura|thumbnail|portada|portadas|facebook|banner|banners|cover|cabecera|encabezado|cartel|carteles|flyer|flyers|poster|posters|afiche|afiches|mas ancho que alto)\b/.test(norm)) return '16:9';
-
-  return null;
+  // Single source of truth lives in image-directive.js (typo-tolerant and
+  // shared with the agent tools); this wrapper preserves the public API and
+  // its exact return contract (concrete ratio or null).
+  try {
+    const detected = getImageDirective().detectImageFrame(text);
+    return detected ? detected.frame : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveVideoAspectRatio(text) {
@@ -276,7 +281,7 @@ const IMPLICIT_EDIT_OP = /\b(?:quit(?:a|ale|ar)|elimin(?:a|ale|ar)|borr(?:a|ale|
  * @returns {boolean}
  */
 function detectImageEditIntent(text, opts = {}) {
-  const norm = normalize(text);
+  const norm = canonicalNorm(text);
   if (!norm) return false;
   if (!EDIT_VERB.test(norm)) return false;
   if (IMPLICIT_EDIT_OP.test(norm)) return true;
@@ -288,7 +293,7 @@ function detectImageEditIntent(text, opts = {}) {
 }
 
 /** Extract the per-kind specs the user stated in natural language. */
-function buildSpecsForKind(kind, norm) {
+function buildSpecsForKind(kind, norm, rawText) {
   const durationSeconds = parseDurationSeconds(norm);
   const orientation = detectOrientation(norm);
   const style = detectStyle(norm);
@@ -301,6 +306,31 @@ function buildSpecsForKind(kind, norm) {
     const count = detectImageCount(norm);
     if (count && count > 1) specs.count = count;
     if (style) specs.style = style;
+    // Exact spoken image directive: concrete frame, typo-tolerant count and
+    // — for edits — an explicit target. Never overrides the coarse specs
+    // above when they already agree; it only fills gaps and adds detail.
+    try {
+      const directive = getImageDirective();
+      const source = typeof rawText === 'string' && rawText ? rawText : norm;
+      if (kind === 'image') {
+        const generation = directive.resolveGenerationDirective(source, {});
+        if (generation.frame) {
+          specs.frame = generation.frame;
+          specs.aspectRatio = generation.aspectRatio === 'wide' ? 'wide'
+            : generation.aspectRatio === 'portrait' ? 'portrait' : 'square';
+        }
+        if ((!specs.count || specs.count < 2) && generation.count > 1) {
+          specs.count = Math.min(10, generation.count);
+        }
+        if (!specs.style && generation.imageType) specs.imageType = generation.imageType;
+      } else {
+        const edit = directive.resolveEditDirective(source, {});
+        if (edit.operation) specs.editOperation = edit.operation;
+        if (edit.target) specs.editTarget = edit.target;
+        if (edit.replacement) specs.editReplacement = edit.replacement;
+        if (edit.scope) specs.editScope = edit.scope;
+      }
+    } catch { /* best-effort: keep the coarse specs */ }
   } else if (kind === 'video') {
     specs.durationSeconds = durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS;
     specs.aspectRatio = orientation ? (ORIENTATION_TO_VIDEO[orientation] || DEFAULT_VIDEO_ASPECT_RATIO) : DEFAULT_VIDEO_ASPECT_RATIO;
@@ -339,7 +369,7 @@ function detectMediaIntent(text) {
   const raw = String(text == null ? '' : text);
   if (!raw.trim()) return empty;
 
-  const norm = normalize(raw);
+  const norm = canonicalNorm(raw);
 
   let kind = null;
   if (VIDEO_NOUNS.test(norm)) kind = 'video';
@@ -350,7 +380,7 @@ function detectMediaIntent(text) {
   if (!kind) return empty;
 
   const hasCreateVerb = CREATE_VERB.test(norm);
-  const specs = buildSpecsForKind(kind, norm);
+  const specs = buildSpecsForKind(kind, norm, raw);
 
   // Confidence: an explicit create verb next to a media noun is a clear
   // "do it" request; a bare media noun is weaker (could be conversational).
@@ -393,7 +423,7 @@ const STRICT_CREATE_VERB = /\b(cr[ée]a|cre[ée]me|gener(?:a|ame|ar)|haz(?:me)?|
 function detectMediaIntents(text, opts = {}) {
   const raw = String(text == null ? '' : text);
   if (!raw.trim()) return [];
-  const norm = normalize(raw);
+  const norm = canonicalNorm(raw);
 
   const kinds = [];
   if (VIDEO_NOUNS.test(norm)) kinds.push('video');
@@ -423,7 +453,7 @@ function detectMediaIntents(text, opts = {}) {
     tool: KIND_TO_TOOL[kind],
     confidence,
     hasCreateVerb,
-    specs: buildSpecsForKind(kind, norm),
+    specs: buildSpecsForKind(kind, norm, raw),
     reason: kind === 'image-edit' ? 'edit-verb+image-ref' : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
   }));
 }
@@ -454,11 +484,15 @@ function buildMediaIntentHint(intent) {
   if (intent.kind === 'image-edit') {
     params.push('- instruction: la transformación que pidió el usuario (extráela literal del mensaje).');
     params.push('- NO generes una imagen nueva con `generate_image`: el usuario quiere MODIFICAR una imagen existente (la adjunta o la última del chat).');
+    if (s.editTarget) params.push(`- objetivo de la edición: "${s.editTarget}" — pásalo como \`target\` y aplica el cambio solo ahí, conservando el resto.`);
+    if (s.editReplacement) params.push(`- resultado esperado en el objetivo: "${s.editReplacement}".`);
   } else if (intent.kind === 'image') {
     if (s.aspectRatio) params.push(`- aspectRatio: "${s.aspectRatio}"`);
+    if (s.frame) params.push(`- frame exacto: "${s.frame}" (inclúyelo en el prompt como requisito de encuadre).`);
     if (s.quality) params.push(`- quality: "${s.quality}"`);
     if (s.style) params.push(`- style: "${s.style}"`);
-    if (s.count) params.push(`- el usuario pidió ${s.count} imágenes: llama \`generate_image\` ${s.count} veces (una por imagen).`);
+    if (s.imageType) params.push(`- tipo de visual: "${s.imageType}" (conserva ese formato en el prompt).`);
+    if (s.count) params.push(`- el usuario pidió ${s.count} imágenes: pasa \`count: ${s.count}\` a \`generate_image\` en UNA sola llamada (devuelve las ${s.count} como artefactos).`);
   } else if (intent.kind === 'video') {
     params.push(`- model: "${s.model || DEFAULT_VIDEO_MODEL}" (Veo Fast).`);
     params.push(`- duration: ${s.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS} (segundos; por defecto Veo Fast 8s, ajústalo al rango válido de la herramienta solo si el usuario pidió otra duración).`);

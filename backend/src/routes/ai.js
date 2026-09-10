@@ -9893,6 +9893,8 @@ router.post(
     body('aspectRatio').optional().isIn(Object.keys(IMAGE_ASPECT_RATIOS)).withMessage('Invalid image aspect ratio'),
     body('quality').optional().isIn(['512px', '1K', '2K', '4K']).withMessage('Invalid image quality'),
     body('imageCount').optional().isInt({ min: 1, max: 5 }).withMessage('Image count must be between 1 and 5'),
+    body('target').optional().isString().isLength({ max: 120 }).withMessage('Edit target must be a short string'),
+    body('selection').optional().custom((v) => v === null || typeof v === 'object').withMessage('Selection must be an object'),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
@@ -9934,7 +9936,7 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount } = req.body;
+      let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection } = req.body;
       const honoredImagePick = honorPickerModel(model, { provider });
       if (honoredImagePick.model) {
         model = honoredImagePick.model;
@@ -9943,7 +9945,22 @@ router.post(
       const grokImageRequested = isGrokImageModelName(model);
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
-      imageCount = normalizeImageCount(imageCount);
+      // Spoken image count ("dame 3 imágenes", "varias fotos") fills the gap
+      // only when the caller did not send an explicit imageCount — the
+      // picker's explicit value always wins.
+      let spokenImageCount = null;
+      let providerPromptBase = prompt;
+      try {
+        // eslint-disable-next-line global-require
+        const imageDirective = require('../services/agents/image-directive');
+        const cleaned = imageDirective.stripImageCommand(prompt);
+        if (cleaned) providerPromptBase = cleaned;
+        const parsedCount = imageDirective.detectImageCount(prompt);
+        if (parsedCount && parsedCount >= 1) spokenImageCount = Math.min(5, parsedCount);
+      } catch (_) { /* best-effort: keep the raw prompt and default count */ }
+      const imageCount = rawImageCount === undefined || rawImageCount === null || rawImageCount === ''
+        ? normalizeImageCount(spokenImageCount || 1)
+        : normalizeImageCount(rawImageCount);
       // Sync the frame to what the user described in the prompt itself
       // ("rectangular", "vertical", "para facebook", "9:16"…), overriding the
       // picker default so the generated image matches the request.
@@ -9951,7 +9968,7 @@ router.post(
         const promptAspect = require('../services/agents/media-intent').resolveImageAspectRatio(prompt);
         if (promptAspect) aspectRatio = normalizeImageAspectRatio(promptAspect);
       } catch (_) { /* best-effort: keep the picker aspect ratio */ }
-      const imagePrompt = promptWithImageAspectRatio(prompt, aspectRatio, quality);
+      const imagePrompt = promptWithImageAspectRatio(providerPromptBase, aspectRatio, quality);
       const requestedImageSize = imageGenerationSizeFor(provider, aspectRatio);
       const userId = req.user.id;
       console.log('userId', userId);
@@ -10145,8 +10162,21 @@ router.post(
       const generateSingleImage = async () => {
         if (imagePath) {
           const sourceImageBuffer = await fs.readFile(imagePath);
+          // Scope the edit to the spoken/explicit target ("cambia el cielo",
+          // "solo los ojos") plus an optional selection box — everything
+          // else is preserved. Unlike generation, no framing suffix is
+          // appended: an edit must keep the original composition.
+          let editPrompt = imagePrompt;
+          try {
+            // eslint-disable-next-line global-require
+            const imageDirective = require('../services/agents/image-directive');
+            editPrompt = imageDirective.resolveEditDirective(prompt, {
+              target: typeof editTarget === 'string' ? editTarget : undefined,
+              selection: editSelection !== undefined ? editSelection : undefined,
+            }).prompt;
+          } catch (_) { /* best-effort: fall back to the framed prompt */ }
           const result = await imageEngine.editImage({
-            prompt: imagePrompt,
+            prompt: editPrompt,
             imageBuffer: sourceImageBuffer,
             mimeType: imageMimeType,
             model,
