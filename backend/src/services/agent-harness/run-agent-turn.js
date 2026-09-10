@@ -108,6 +108,9 @@ function buildHarnessTools(existingNames, opts = {}) {
  *                   tools defined outside the harness (the chat's stage
  *                   labels), reused so the UI shows ONE consistent voice.
  * @param {boolean} [opts.mcpEnabled=true]
+ * @param {string} [opts.composerPermission] — composer level for the turn
+ *   (`default` when unset). `protected` routes write-side tools through the
+ *   interactive reviewer inside the event stream.
  * @returns {Promise<object|null>} harness context or null when disabled.
  */
 async function attachHarness(opts = {}) {
@@ -129,6 +132,7 @@ async function attachHarness(opts = {}) {
     fileIds = [],
     workspaceId = null,
     coworkRunId = null,
+    composerPermission = null,
   } = opts;
 
   const registry = createToolRegistry();
@@ -210,7 +214,7 @@ async function attachHarness(opts = {}) {
     write,
     registry,
     permission: permissionManager,
-    ctxInfo: { chatId, userId, workspaceId, coworkRunId, prisma },
+    ctxInfo: { chatId, userId, workspaceId, coworkRunId, prisma, composerPermission },
     provider,
     signal,
   });
