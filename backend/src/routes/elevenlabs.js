@@ -17,6 +17,11 @@ const {
   generateOfficeSoundscape,
   officeSoundDefinition,
 } = require('../services/ai/elevenlabs-office-soundscape');
+const {
+  isKnownVoiceModelId,
+  modelById,
+  resolveModelId,
+} = require('../services/ai/voice-director');
 const localWhisper = require('../services/local-whisper-engine');
 const voiceStudio = require('../services/ai/voicestudio-client');
 const {
@@ -202,7 +207,7 @@ router.post('/text-to-speech', [
     const {
       text,
       voice_id, // No default - must be provided by frontend
-      model_id = 'eleven_monolingual_v1',
+      model_id: raw_model_id,
       voice_settings = {
         stability: 0.5,
         similarity_boost: 0.5,
@@ -210,6 +215,13 @@ router.post('/text-to-speech', [
         use_speaker_boost: true
       }
     } = req.body;
+    // Default to the multilingual model (never the English-only monolingual
+    // one), and resolve UI aliases ("eleven-turbo-v2", …) to real model ids.
+    // Unknown explicit ids pass through untouched.
+    const requested_model = String(raw_model_id || '').trim() || 'eleven_multilingual_v2';
+    const model_id = isKnownVoiceModelId(requested_model)
+      ? modelById(resolveModelId(requested_model)).id
+      : requested_model;
 
     // Validate voice_id is provided
     if (!voice_id) {

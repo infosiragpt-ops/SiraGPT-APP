@@ -29,6 +29,7 @@ import {
 import { useVoices } from "@/hooks/use-voices"
 import { apiClient } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { describeVoiceStability, VOICE_STABILITY_PRESETS } from "@/lib/chat/media-composer-config"
 
 export interface VoiceCatalogModalProps {
   open: boolean
@@ -238,7 +239,7 @@ export default function VoiceCatalogModal({
   stability,
   onStabilityChange,
 }: VoiceCatalogModalProps) {
-  const { voices, loading } = useVoices()
+  const { voices, loading, error, retry } = useVoices()
   const [query, setQuery] = React.useState("")
   const [genderFilter, setGenderFilter] = React.useState("all")
   const [categoryFilter, setCategoryFilter] = React.useState("all")
@@ -368,6 +369,17 @@ export default function VoiceCatalogModal({
               <Loader2 className="h-6 w-6 animate-spin" />
               <span className="text-sm">Cargando voces…</span>
             </div>
+          ) : error && filtered.length === 0 ? (
+            <div className="flex h-48 flex-col items-center justify-center gap-3 px-6 text-center">
+              <span className="text-sm text-zinc-500">{error}</span>
+              <button
+                type="button"
+                onClick={retry}
+                className="h-9 rounded-full bg-violet-600 px-4 text-[13px] font-semibold text-white transition-colors hover:bg-violet-700"
+              >
+                Reintentar
+              </button>
+            </div>
           ) : filtered.length === 0 ? (
             <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-zinc-400">
               <Sparkles className="h-6 w-6" />
@@ -464,7 +476,7 @@ export default function VoiceCatalogModal({
           <div className="mt-4">
             <div className="mb-1 flex items-center justify-between text-[13px] text-zinc-600">
               <span>Estabilidad</span>
-              <span className="font-semibold text-zinc-800">{stability}%</span>
+              <span className="font-semibold text-zinc-800">{stability}% · {describeVoiceStability(stability)}</span>
             </div>
             <input
               type="range"
@@ -473,8 +485,27 @@ export default function VoiceCatalogModal({
               step={1}
               value={stability}
               onChange={(e) => onStabilityChange(Number(e.target.value))}
+              aria-label={`Estabilidad de voz: ${stability} por ciento, ${describeVoiceStability(stability)}.`}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-zinc-200 accent-violet-600"
             />
+            <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Preajustes de estabilidad">
+              {VOICE_STABILITY_PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  title={preset.hint}
+                  onClick={() => onStabilityChange(preset.value)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                    stability === preset.value
+                      ? "border-violet-600 bg-violet-600 text-white"
+                      : "border-zinc-200 text-zinc-600 hover:bg-zinc-100",
+                  )}
+                >
+                  {preset.name} {preset.value}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </DialogContent>

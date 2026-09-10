@@ -75,6 +75,8 @@ const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
 const geminiTts = require('../services/ai/gemini-tts');
+const openaiTts = require('../services/ai/openai-tts');
+const { mapStabilityToOpenAiSpeed, normalizeLanguage, resolveVoicePlan } = require('../services/ai/voice-director');
 const voiceStudio = require('../services/ai/voicestudio-client');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
@@ -8714,7 +8716,7 @@ router.post(
 function buildSpeechAgentState({ displayText, artifact, model }) {
   const safeText = String(displayText || '').slice(0, 200);
   return {
-    meta: { goal: safeText, model: model || 'Gemini 2.5 Flash TTS', tools: ['generate_speech'] },
+    meta: { goal: safeText, model: model || 'Gemini Flash TTS', tools: ['generate_speech'] },
     steps: [
       {
         id: 'speech-1',
@@ -8826,13 +8828,26 @@ router.post(
 
     const elevenReady = elevenLabsTts.isElevenLabsConfigured();
     const geminiReady = geminiTts.isGeminiTtsConfigured();
+    const openaiReady = openaiTts.isOpenAiTtsConfigured();
     const voiceStudioReady = voiceStudio.isConfigured();
     const wantsSiraVoz = voiceStudio.isSiraVozModel(req.body?.model);
     if (wantsSiraVoz && !voiceStudioReady) {
       return res.status(503).json({ ok: false, error: 'Sira Voz todavía no está disponible en este servidor.', code: 'VOICESTUDIO_NOT_CONFIGURED' });
     }
-    if (!elevenReady && !geminiReady && !voiceStudioReady) {
-      return res.status(503).json({ ok: false, error: 'El servicio de voz no está configurado.' });
+    if (!elevenReady && !geminiReady && !openaiReady && !voiceStudioReady) {
+      // No speech provider configured anywhere — signal the browser-TTS
+      // last resort so the client can still speak locally instead of
+      // erroring. `rate` comes from the same stability curve as OpenAI.
+      const requestedStability = Number.isFinite(Number(req.body.stability)) ? Number(req.body.stability) : 100;
+      const fallbackLang = normalizeLanguage(req.body.language);
+      return res.status(503).json({
+        ok: false,
+        error: 'El servicio de voz no está configurado.',
+        fallback: 'browser-tts',
+        languageBcp47: fallbackLang.bcp47,
+        language: fallbackLang.name,
+        rate: mapStabilityToOpenAiSpeed(requestedStability / 100),
+      });
     }
 
     const text = String(req.body.text || '').trim();
@@ -8846,7 +8861,10 @@ router.post(
     const honoredSpeech = honorPickerModel(req.body.model, { provider: req.body.provider });
     const selectedModel = honoredSpeech.model || String(req.body.model || '').trim();
     const language = String(req.body.language || 'Spanish').trim();
-    const accent = String(req.body.accent || 'Latino').trim();
+    // No hard-coded accent default: the voice-director picks the default per
+    // language (Latino for Spanish, US for English, …) without a bogus
+    // "Latino not available" warning on non-Spanish requests.
+    const accent = String(req.body.accent || '').trim();
     const effect = String(req.body.effect || 'Studio Clean').trim();
     const stability = Number.isFinite(Number(req.body.stability)) ? Number(req.body.stability) : 100;
     const voiceSettings = req.body.voiceSettings && typeof req.body.voiceSettings === 'object'
@@ -8862,41 +8880,80 @@ router.post(
         const ownedVoice = await prisma.voiceProfile.findFirst({ where: { id: voiceId, userId: req.user.id, deletedAt: null } }).catch(() => null);
         if (ownedVoice) siraVoice = ownedVoice.providerId;
       }
-      const wantsGemini = /gemini|mimo|minimax/i.test(selectedModel);
+      // Central voice direction for cloud voices: ONE plan decides the real
+      // provider/model and how language / accent / stability / effect are
+      // honoured on ANY engine (auto-upgrade when the requested model can't
+      // cover the language or the text length — e.g. Turbo V2 + Spanish).
+      // Sira Voz (local profiles) bypasses the plan entirely.
+      const plan = wantsSiraVoz ? null : resolveVoicePlan({
+        text,
+        model: selectedModel,
+        modelId,
+        language,
+        accent,
+        effect,
+        stability,
+        voiceSettings,
+      });
+      if (plan) {
+        for (const warning of plan.warnings) {
+          console.info(`[ai/generate-speech] voice-plan: ${warning}`);
+        }
+      }
+      const readiness = { elevenlabs: elevenReady, gemini: geminiReady, openai: openaiReady, voicestudio: voiceStudioReady };
+      const cloudOrder = plan
+        ? [plan.provider, ...['elevenlabs', 'gemini', 'openai'].filter((p) => p !== plan.provider), 'voicestudio']
+        : [];
       const providerOrder = wantsSiraVoz
         ? ['voicestudio']
-        : (wantsGemini
-          ? [geminiReady && 'gemini', elevenReady && 'elevenlabs', voiceStudioReady && 'voicestudio']
-          : [elevenReady && 'elevenlabs', geminiReady && 'gemini', voiceStudioReady && 'voicestudio']).filter(Boolean);
+        : cloudOrder.filter((p) => readiness[p]);
       let result = null;
       let usedProvider = null;
       let lastError = null;
 
       for (const provider of providerOrder) {
         try {
-          result = provider === 'voicestudio'
-            ? await generateVoiceStudioSpeechFile({
+          if (provider === 'voicestudio') {
+            result = await generateVoiceStudioSpeechFile({
               text,
               voice: siraVoice,
-              language,
+              language: plan ? plan.language : language,
               signal: requestAbort.signal,
-            })
-            : provider === 'gemini'
-              ? await geminiTts.generateGeminiSpeechFile({
-                text,
-                language,
-                accent,
-                effect,
-                stability,
-                signal: requestAbort.signal,
-              })
-              : await elevenLabsTts.generateSpeechFile({
-                text,
-                voiceId,
-                modelId,
-                voiceSettings,
-                signal: requestAbort.signal,
-              });
+            });
+          } else if (provider === 'gemini') {
+            result = await geminiTts.generateGeminiSpeechFile({
+              text,
+              language: plan.language,
+              accent: plan.accent,
+              effect: plan.effect,
+              stability: plan.stability,
+              // Honour an explicit Gemini model pick (Flash/Pro); never leak
+              // an ElevenLabs voice id into the Gemini voice slot.
+              modelId: plan.provider === 'gemini' ? plan.modelId : undefined,
+              signal: requestAbort.signal,
+            });
+          } else if (provider === 'openai') {
+            result = await openaiTts.generateOpenAiSpeechFile({
+              text,
+              // Only an explicit OpenAI voice name travels; an ElevenLabs
+              // voice id must never leak into the OpenAI voice slot.
+              voiceId: plan.provider === 'openai' ? voiceId : undefined,
+              modelId: plan.provider === 'openai' ? plan.modelId : undefined,
+              speed: plan.openaiSpeed,
+              instructions: plan.openaiInstructions,
+              signal: requestAbort.signal,
+            });
+          } else {
+            result = await elevenLabsTts.generateSpeechFile({
+              text,
+              voiceId,
+              modelId: plan.provider === 'elevenlabs' ? plan.modelId : undefined,
+              voiceSettings,
+              stability: plan.stability,
+              elevenTagPrefix: plan.elevenTagPrefix,
+              signal: requestAbort.signal,
+            });
+          }
           usedProvider = provider;
           break;
         } catch (providerError) {
@@ -8915,11 +8972,15 @@ router.post(
         return;
       }
 
-      const modelLabel = usedProvider === 'gemini'
-        ? 'Gemini 2.5 Flash TTS'
-        : usedProvider === 'voicestudio'
-          ? 'Sira Voz'
-          : 'ElevenLabs';
+      const FALLBACK_MODEL_LABELS = {
+        gemini: 'Gemini Flash TTS',
+        elevenlabs: 'Multilingual V2',
+        openai: 'OpenAI TTS',
+        voicestudio: 'Sira Voz',
+      };
+      const modelLabel = (plan && usedProvider === plan.provider)
+        ? plan.modelLabel
+        : (FALLBACK_MODEL_LABELS[usedProvider] || 'Multilingual V2');
       const audioFormat = String(result.format || path.extname(result.filename).slice(1) || 'mp3').toLowerCase();
 
       const artifact = {
@@ -8949,7 +9010,7 @@ router.post(
             text,
             content,
             text.length,
-            usedProvider === 'gemini' ? 'gemini-tts' : usedProvider === 'voicestudio' ? 'sira-voz-tts' : 'elevenlabs-tts',
+            usedProvider === 'gemini' ? 'gemini-tts' : usedProvider === 'voicestudio' ? 'sira-voz-tts' : usedProvider === 'openai' ? 'openai-tts' : 'elevenlabs-tts',
             [],
             [],
             regenerate,
@@ -8973,6 +9034,17 @@ router.post(
         model: modelLabel,
         voiceId: result.voiceId,
         modelId: result.modelId,
+        // Applied voice direction — lets the client surface auto-adjustments
+        // instead of silently ignoring the user's language/accent/effect
+        // choices. Absent on the Sira Voz path (local profiles).
+        voice: plan ? {
+          language: plan.language,
+          accent: plan.accent,
+          effect: plan.effect,
+          stability: plan.stability,
+          stabilityLabel: plan.stabilityLabel,
+        } : undefined,
+        warnings: plan ? plan.warnings : [],
       });
     } catch (error) {
       if (requestAbort.signal.aborted || isAbortError(error)) {
@@ -8981,7 +9053,7 @@ router.post(
       }
       console.error('[ai/generate-speech] error:', error?.message || error);
       const status = error?.code === 'TEXT_REQUIRED' ? 400
-        : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED' || error?.code === 'VOICESTUDIO_NOT_CONFIGURED') ? 503
+        : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED' || error?.code === 'OPENAI_TTS_NOT_CONFIGURED' || error?.code === 'VOICESTUDIO_NOT_CONFIGURED') ? 503
           : 502;
       return res.status(status).json({
         ok: false,

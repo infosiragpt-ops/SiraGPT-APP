@@ -84,6 +84,29 @@ test('generateSpeechFile: clamps voice settings into [0,1]', async () => {
   assert.equal(captured.opts.voice_settings.use_speaker_boost, false);
 });
 
+test('generateSpeechFile: unknown explicit model ids pass through untouched', async () => {
+  const captured = {};
+  await tts.generateSpeechFile({
+    text: 'Modelo futuro',
+    modelId: 'eleven_future_x1',
+    ElevenLabsClientCtor: makeFakeClientCtor(captured),
+  });
+  assert.equal(captured.opts.model_id, 'eleven_future_x1');
+});
+
+test('generateSpeechFile: UI aliases resolve and stability shapes the full curve', async () => {
+  const captured = {};
+  await tts.generateSpeechFile({
+    text: 'Alias y curva',
+    modelId: 'eleven-turbo-v2',
+    stability: 20,
+    ElevenLabsClientCtor: makeFakeClientCtor(captured),
+  });
+  assert.equal(captured.opts.model_id, 'eleven_turbo_v2_5');
+  assert.equal(captured.opts.voice_settings.stability, 0.2);
+  assert.ok(captured.opts.voice_settings.style > 0.4);
+});
+
 test('generateSpeechFile: forwards cancellation to the ElevenLabs SDK', async () => {
   const captured = {};
   const controller = new AbortController();

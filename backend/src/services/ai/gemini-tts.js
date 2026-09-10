@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { signalWithTimeout, throwIfAborted } = require('../../utils/abort-signal');
+const { buildGeminiDirectorPrompt } = require('./voice-director');
 
 const DEFAULT_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts';
 const DEFAULT_VOICE = process.env.GEMINI_TTS_VOICE || 'Kore';
@@ -68,22 +69,11 @@ function pcm16ToWav(pcmBuffer, { sampleRate = DEFAULT_SAMPLE_RATE, channels = 1 
 }
 
 function buildSpeechPrompt(text, { language, accent, effect, stability } = {}) {
-  const languageLabel = String(language || 'Spanish').trim();
-  const accentLabel = String(accent || 'Latino').trim();
-  const effectLabel = String(effect || 'Studio Clean').trim();
-  const stabilityValue = Number(stability);
-  const delivery = Number.isFinite(stabilityValue) && stabilityValue < 60
-    ? 'expressive and dynamic'
-    : 'steady, natural and professional';
-
-  return [
-    'Read the TRANSCRIPT exactly as written. Do not add, remove, translate, or explain any words.',
-    `Use ${languageLabel} with a ${accentLabel} accent and a ${delivery} delivery.`,
-    effectLabel && effectLabel !== 'None' ? `Audio direction: ${effectLabel}.` : '',
-    '',
-    'TRANSCRIPT:',
-    String(text || '').trim(),
-  ].filter((line) => line !== '').join('\n');
+  // Professional director prompt (Audio Profile + Scene + Director's Notes +
+  // delimited TRANSCRIPT) so language / accent / stability / effect shape the
+  // performance on ANY Gemini TTS model. Single source of truth lives in
+  // voice-director; this wrapper keeps the historical signature.
+  return buildGeminiDirectorPrompt(text, { language, accent, effect, stability });
 }
 
 function classifyGeminiError(status, body) {

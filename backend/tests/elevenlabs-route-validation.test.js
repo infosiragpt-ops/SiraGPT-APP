@@ -60,12 +60,12 @@ test('chat speech and music routes propagate client disconnect cancellation', ()
   assert.match(aiRouteSource, /const requestAbort = bindRequestAbort\(req, res\)/);
   assert.match(
     aiRouteSource,
-    /generateSpeechFile\(\{[\s\S]{0,240}signal: requestAbort\.signal/,
+    /generateSpeechFile\(\{[\s\S]{0,420}signal: requestAbort\.signal/,
     'speech generation must receive the request abort signal'
   );
   assert.match(
     aiRouteSource,
-    /generateGeminiSpeechFile\(\{[\s\S]{0,300}signal: requestAbort\.signal/,
+    /generateGeminiSpeechFile\(\{[\s\S]{0,600}signal: requestAbort\.signal/,
     'Gemini speech generation must receive the request abort signal'
   );
   assert.match(
@@ -83,8 +83,16 @@ test('chat speech and music routes propagate client disconnect cancellation', ()
 
 test('chat speech route selects Gemini and falls back across configured providers', () => {
   assert.match(aiRouteSource, /const geminiReady = geminiTts\.isGeminiTtsConfigured\(\)/);
-  assert.match(aiRouteSource, /const wantsGemini = \/gemini\|mimo\|minimax\/i\.test\(selectedModel\)/);
+  // Central voice direction: one plan resolves provider/model + how language /
+  // accent / stability / effect are honoured on ANY model (replaces the old
+  // wantsGemini regex routing that silently ignored those controls).
+  assert.match(aiRouteSource, /resolveVoicePlan\(\{/);
+  assert.match(aiRouteSource, /elevenTagPrefix: plan\.elevenTagPrefix/);
+  assert.match(aiRouteSource, /openaiReady = openaiTts\.isOpenAiTtsConfigured\(\)/);
+  assert.match(aiRouteSource, /generateOpenAiSpeechFile\(\{[\s\S]{0,600}signal: requestAbort\.signal/);
+  assert.match(aiRouteSource, /fallback: 'browser-tts'/);
+  assert.match(aiRouteSource, /warnings: plan \? plan\.warnings/);
   assert.match(aiRouteSource, /isRecoverableSpeechProviderError\(providerError\)/);
-  assert.match(aiRouteSource, /modelLabel = usedProvider === 'gemini'/);
+  assert.match(aiRouteSource, /usedProvider === plan\.provider/);
   assert.match(aiRouteSource, /format: audioFormat/);
 });
