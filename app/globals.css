@@ -810,21 +810,21 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 .chat-message-scroll-content {
   padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
     0.25rem;
-  /* Conversación anclada a la línea superior del composer: cuando el
-     contenido es corto, baja hasta tocar la barra en lugar de flotar arriba
-     con un hueco vacío. Con contenido largo el scroll se comporta igual. */
+  /* Conversación anclada arriba, estilo ChatGPT/Claude: el primer "hola"
+     arranca bajo el header. El hueco vacío queda entre el hilo y el
+     composer. Con contenido largo el scroll al final no cambia. */
   flex: 1 1 auto;
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   overflow-anchor: auto;
 }
 
 .chat-log {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.5rem;
   width: 100%;
   min-width: 0;

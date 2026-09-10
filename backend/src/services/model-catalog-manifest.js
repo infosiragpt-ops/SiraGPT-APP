@@ -428,32 +428,46 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openrouter', 'elevenlabs', 'audio', 'text-to-speech', 'voice', 'fast'],
   },
   // ── MUSIC models ───────────────────────────────────────────────────────
+  // Honest provider map: OpenRouter only exposes Lyria for music. Suno runs
+  // through a Suno-compatible gateway (SUNO_API_KEY), MiniMax through its
+  // official API (MINIMAX_API_KEY), ElevenLabs through its own API.
+  // Admin → AI Models publishes these rows; the /agentes music picker only
+  // offers rows with type MUSIC + isActive (see mediaModelOptions).
   {
     id: 'suno-v4',
     name: 'suno-v4',
     displayName: 'Suno V4',
-    provider: 'OpenRouter',
+    provider: 'Suno',
     type: 'MUSIC',
-    description: 'Suno V4 via OpenRouter: generación de música completa con voz y letra desde texto.',
-    tags: ['openrouter', 'suno', 'music', 'text-to-music', 'generative'],
+    description: 'Suno V4 via Suno-compatible gateway: canciones completas con voz y letra (requiere SUNO_API_KEY; gateway de terceros, sin API oficial de Suno).',
+    tags: ['suno', 'music', 'text-to-music', 'generative'],
   },
   {
     id: 'suno-v3.5',
     name: 'suno-v3.5',
     displayName: 'Suno V3.5',
-    provider: 'OpenRouter',
+    provider: 'Suno',
     type: 'MUSIC',
-    description: 'Suno V3.5 via OpenRouter: generación de canciones completas con letra.',
-    tags: ['openrouter', 'suno', 'music', 'text-to-music'],
+    description: 'Suno V3.5 via Suno-compatible gateway: generación de canciones completas con letra (requiere SUNO_API_KEY).',
+    tags: ['suno', 'music', 'text-to-music'],
   },
   {
-    id: 'udio-130',
-    name: 'udio-130',
-    displayName: 'Udio 130',
+    id: 'minimax-music',
+    name: 'minimax-music',
+    displayName: 'MiniMax',
+    provider: 'MiniMax',
+    type: 'MUSIC',
+    description: 'MiniMax Music API oficial: generación de música de alta calidad con letra optimizada (requiere MINIMAX_API_KEY).',
+    tags: ['minimax', 'music', 'text-to-music', 'instrumental'],
+  },
+  {
+    id: 'lyria-3-pro',
+    name: 'google/lyria-3-pro-preview',
+    displayName: 'Lyria 3 Pro',
     provider: 'OpenRouter',
     type: 'MUSIC',
-    description: 'Udio 130 via OpenRouter: generación de música instrumental y con voz de alta calidad.',
-    tags: ['openrouter', 'udio', 'music', 'text-to-music', 'instrumental'],
+    description: 'Google Lyria 3 Pro via OpenRouter: generación musical por streaming (requiere OPENROUTER_API_KEY). Único modelo musical en OpenRouter.',
+    tags: ['openrouter', 'lyria', 'music', 'text-to-music'],
   },
 ]);
 

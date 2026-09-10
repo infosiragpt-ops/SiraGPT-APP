@@ -47,6 +47,13 @@ const PROVIDER_ENV_MAP = Object.freeze({
   fireworks: 'FIREWORKS_API_KEY',
   fal: 'FAL_KEY',
   meta: 'MODEL_API_KEY',
+  // Music providers (production-music module): admin-managed keys feed the
+  // music services, which read these env vars lazily per request — same
+  // mechanism as the chat providers above. ELEVENLABS_API_KEY also serves
+  // TTS; SUNO_API_KEY targets a Suno-compatible gateway (no official API).
+  elevenlabs: 'ELEVENLABS_API_KEY',
+  minimax: 'MINIMAX_API_KEY',
+  suno: 'SUNO_API_KEY',
   // `custom` is intentionally absent: each AdminConnection has its own
   // base URL (Ollama / vLLM / LM Studio). Live chat reads the row at
   // request time via services/ai/custom-provider-client.js — stuffing
@@ -77,6 +84,9 @@ const PROVIDER_CATALOG_MAP = Object.freeze({
   fireworks: 'Fireworks',
   fal: 'fal.ai',
   meta: 'Meta',
+  elevenlabs: 'ElevenLabs',
+  minimax: 'MiniMax',
+  suno: 'Suno',
 });
 
 // providerKey → { url, authHeader: (key) => headers }
@@ -96,6 +106,13 @@ const PROVIDER_PROBE = Object.freeze({
   fireworks:  { url: 'https://api.fireworks.ai/inference/v1/models',                auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   meta:       { url: 'https://api.meta.ai/v1/models',                               auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fal:        { url: 'https://api.fal.ai/v1/models?limit=1',                         auth: (k) => ({ Authorization: /^key\s+/i.test(k) ? k : `Key ${k}` }) },
+  // ElevenLabs authenticates with xi-api-key (not Bearer). GET /v1/models is
+  // a lightweight key check — it lists TTS models, not music, but a 200
+  // proves the key is valid for the account that also serves Music.
+  elevenlabs: { url: 'https://api.elevenlabs.io/v1/models',                         auth: (k) => ({ 'xi-api-key': k }) },
+  // MiniMax and the Suno gateway expose no verified lightweight key-check
+  // endpoint, so they are intentionally unprobed: the write path fail-open
+  // accepts them and reconcile reports them as present-but-unprobed.
 });
 
 const KEY_PREFIX = 'enc:v1:';
@@ -296,6 +313,12 @@ async function reconcileCatalog() {
       .find((value) => value && String(value).trim());
     if (!key) {
       results[providerKey] = { healthy: false, reason: 'no_key' };
+      continue;
+    }
+    // Providers without a verified probe endpoint (MiniMax, Suno gateway)
+    // report present-but-unprobed instead of a misleading red dot.
+    if (!PROVIDER_PROBE[providerKey]) {
+      results[providerKey] = { healthy: true, reason: 'unprobed' };
       continue;
     }
     results[providerKey] = { healthy: await probeKey(providerKey, key), reason: 'probed' };

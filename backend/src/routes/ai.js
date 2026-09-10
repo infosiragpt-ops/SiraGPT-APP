@@ -78,6 +78,10 @@ const geminiTts = require('../services/ai/gemini-tts');
 const voiceStudio = require('../services/ai/voicestudio-client');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
+const openRouterMusic = require('../services/ai/openrouter-music');
+const minimaxMusic = require('../services/ai/minimax-music');
+const sunoMusic = require('../services/ai/suno-music');
+const musicRegistry = require('../services/ai/music-model-registry');
 const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
@@ -253,6 +257,8 @@ const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(m
 // truth shared with the seeding layer (manifest) so any model that is seeded
 // ACTIVE is also accepted here — covering OpenAI, Gemini, OpenRouter and fal.ai.
 const VERIFIED_CHAT_IMAGE_MODEL_NAMES = DEFAULT_ACTIVE_IMAGE_MODEL_NAMES;
+const { isGrokImageModelName, isActiveGrokImageModel, normalizeCatalogModelType } = require('../services/model-output-type');
+const { resolveImageGenerationFileId } = require('../services/media/image-input-selection');
 
 function isVerifiedChatImageModelName(name) {
   return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
@@ -875,7 +881,12 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       // VOICE is a UI alias for the Voz chip, not a Prisma ModelType: the
       // TTS rows live as AUDIO. Filtering 'VOICE' verbatim threw and left
       // the chip empty ("Sin modelos activos") while generation worked.
+      // Include legacy TEXT/IMAGE rows in either picker read. The curators
+      // repair known Grok image names before filtering, without a DB write.
       whereClause.type = type === 'VOICE' ? 'AUDIO' : type;
+      if (['TEXT', 'IMAGE'].includes(type)) {
+        whereClause.type = { in: ['TEXT', 'IMAGE'] };
+      }
     }
 
 
@@ -9014,17 +9025,21 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const elevenReady = elevenLabsMusic.isElevenLabsConfigured();
-    const lyriaReady = lyriaMusic.isLyriaConfigured();
-    if (!elevenReady && !lyriaReady) {
+    const sunoReady = sunoMusic.isSunoConfigured();
+    const minimaxReady = minimaxMusic.isMinimaxConfigured();
+    const openRouterReady = openRouterMusic.isOpenRouterMusicConfigured() || lyriaMusic.isLyriaConfigured();
+    if (!elevenReady && !sunoReady && !minimaxReady && !openRouterReady) {
       return res.status(503).json({ ok: false, error: 'El servicio de música no está configurado.' });
     }
 
     const text = String(req.body.text || '').trim();
     const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
+    // Honor the /agentes picker first (never silent-swap), then resolve the
+    // music provider from the honored id. Empty picker → composer default.
     const honoredMusic = honorPickerModel(req.body.model, { provider: req.body.provider });
-    const selectedModel = honoredMusic.model || String(req.body.model || '').trim();
-    const wantsLyria = /lyria/i.test(selectedModel);
+    const selectedModel = String(honoredMusic.model || req.body.model || 'Suno V4').trim() || 'Suno V4';
+    const resolved = musicRegistry.resolveMusicModel(selectedModel);
     const requestAbort = bindRequestAbort(req, res);
 
     // Fold the composer's visible settings into the prompt so Style / Mood /
@@ -9037,33 +9052,81 @@ router.post(
     });
     const finalPrompt = composedPrompt || text;
 
-    // Provider order: explicit Lyria first; otherwise ElevenLabs then auto-fall
-    // back to Lyria when ElevenLabs is out of credits (the common long-track fail).
+    // Provider order: honour the selected model first, then auto-fall back
+    // so a credit/rate/slug failure still delivers music instead of a dead end.
+    // - Suno V4 / V3.5 → Suno gateway, fallback ElevenLabs, then Lyria.
+    // - MiniMax → MiniMax API, fallback ElevenLabs, then Lyria.
+    // - ElevenLabs → ElevenLabs, fallback Lyria.
+    // - Lyria 3 Pro → Lyria (proven path), fallback ElevenLabs.
+    // - Custom slug → OpenRouter with that slug, fallback ElevenLabs, then Lyria.
     const order = [];
-    if (wantsLyria && lyriaReady) {
-      order.push('lyria');
-      if (elevenReady) order.push('elevenlabs');
+    if (resolved.provider === 'suno') {
+      if (sunoReady) order.push({ provider: 'suno', model: resolved.gatewayModel });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
+    } else if (resolved.provider === 'minimax') {
+      if (minimaxReady) order.push({ provider: 'minimax', model: resolved.gatewayModel });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
+    } else if (resolved.provider === 'elevenlabs') {
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
+    } else if (resolved.key === 'lyria') {
+      if (openRouterReady) order.push({ provider: 'lyria' });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
     } else {
-      if (elevenReady) order.push('elevenlabs');
-      if (lyriaReady) order.push('lyria');
+      if (openRouterReady) order.push({ provider: 'openrouter', model: resolved.gatewayModel });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
     }
 
     let result = null;
     let usedProvider = null;
+    let usedModelLabel = resolved.label;
     let lastErr = null;
-    for (const provider of order) {
+    for (const step of order) {
       try {
-        result = provider === 'lyria'
-          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal })
-          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
-        usedProvider = provider;
+        if (step.provider === 'suno') {
+          result = await sunoMusic.generateSunoMusicFile({
+            prompt: finalPrompt,
+            durationSeconds,
+            model: step.model,
+            style: req.body.style,
+            mood: req.body.mood,
+            influence: req.body.influence,
+            signal: requestAbort.signal,
+          });
+          usedModelLabel = result.modelLabel || resolved.label;
+        } else if (step.provider === 'minimax') {
+          result = await minimaxMusic.generateMinimaxMusicFile({
+            prompt: finalPrompt,
+            durationSeconds,
+            model: step.model,
+            signal: requestAbort.signal,
+          });
+          usedModelLabel = result.modelLabel || resolved.label;
+        } else if (step.provider === 'lyria') {
+          result = await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
+          usedModelLabel = 'Lyria 3 Pro';
+        } else if (step.provider === 'openrouter') {
+          result = await openRouterMusic.generateOpenRouterMusicFile({ prompt: finalPrompt, durationSeconds, model: step.model, signal: requestAbort.signal });
+          usedModelLabel = result.modelLabel || resolved.label;
+        } else {
+          result = await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
+          usedModelLabel = 'ElevenLabs Music';
+        }
+        usedProvider = step.provider === 'openrouter' || step.provider === 'suno'
+          ? (result.modelKey || step.provider)
+          : step.provider;
         break;
       } catch (err) {
         lastErr = err;
         if (requestAbort.signal.aborted || isAbortError(err)) break;
-        console.warn(`[ai/generate-music] ${provider} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
-        // Only fall through on credit/quota/rate exhaustion; hard errors stop here.
-        if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED') break;
+        console.warn(`[ai/generate-music] ${step.provider}${step.model ? `:${step.model}` : ''} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
+        // Fall through on transient/quota/slug failures; hard input errors stop here.
+        if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED'
+          && err?.code !== 'MODEL_NOT_FOUND' && err?.code !== 'EMPTY_AUDIO'
+          && err?.code !== 'API_ERROR' && err?.code !== 'TIMEOUT') break;
       }
     }
 
@@ -9075,17 +9138,20 @@ router.post(
       }
       const code = lastErr?.code;
       const status = code === 'PROMPT_REQUIRED' ? 400
-        : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED') ? 503
+        : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED'
+          || code === 'SUNO_NOT_CONFIGURED' || code === 'MINIMAX_NOT_CONFIGURED') ? 503
           : (code === 'INSUFFICIENT_CREDITS' || code === 'RATE_LIMITED') ? 402
             : 502;
       console.error('[ai/generate-music] all providers failed:', lastErr?.message || lastErr);
       return res.status(status).json({
         ok: false,
         error: status === 402
-          ? 'Sin créditos suficientes para generar una pista de esta duración. Prueba con una duración menor o recarga créditos (ElevenLabs / OpenRouter).'
+          ? 'Sin créditos suficientes para generar una pista de esta duración. Prueba con una duración menor o recarga créditos (ElevenLabs / Suno / MiniMax / OpenRouter).'
           : status === 503
             ? 'El servicio de música no está configurado.'
-            : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
+            : code === 'MODEL_NOT_FOUND'
+              ? 'El modelo de música seleccionado no está disponible. Revisa la configuración o prueba con ElevenLabs.'
+              : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
     }
 
@@ -9095,7 +9161,12 @@ router.post(
       return;
     }
 
-    const modelLabel = usedProvider === 'lyria' ? 'Lyria 3 Pro' : 'ElevenLabs Music';
+    const modelLabel = usedModelLabel || 'Suno V4';
+    const usageModel = usedProvider === 'lyria' ? 'lyria-music'
+      : usedProvider === 'elevenlabs' ? 'elevenlabs-music'
+        : usedProvider === 'minimax' ? 'minimax-music'
+          : usedProvider === 'sunoV4' || usedProvider === 'sunoV35' ? `suno-music-${usedProvider}`
+            : `openrouter-music-${usedProvider || 'custom'}`;
     const artifact = {
       id: `music-${result.filename}`,
       filename: `musica-${Date.now()}.mp3`,
@@ -9122,7 +9193,7 @@ router.post(
           text,
           content,
           text.length,
-          usedProvider === 'lyria' ? 'lyria-music' : 'elevenlabs-music',
+          usageModel,
           [],
         );
         assistantMessageId = saved?.assistantMessage?.id || null;
@@ -9869,6 +9940,7 @@ router.post(
         model = honoredImagePick.model;
         provider = honoredImagePick.provider || provider;
       }
+      const grokImageRequested = isGrokImageModelName(model);
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
       imageCount = normalizeImageCount(imageCount);
@@ -9890,31 +9962,25 @@ router.post(
 
       let imagePath;
       let imageMimeType = 'image/png';
-      // If fileId is not provided, check the last message in the chat for an image
-      if (!fileId && chatId) {
-        const lastMessage = await prisma.message.findFirst({
-          where: {
-            chatId: chatId,
-            role: 'ASSISTANT',
-            files: {
-              not: null
-            }
-          },
-          orderBy: {
-            timestamp: 'desc'
-          }
-        });
-
-        if (lastMessage && lastMessage.files) {
+      fileId = await resolveImageGenerationFileId({
+        fileId,
+        chatId,
+        generationOnly: grokImageRequested,
+        findPreviousImageFileId: async (historyChatId) => {
+          const lastMessage = await prisma.message.findFirst({
+            where: {
+              chatId: historyChatId,
+              role: 'ASSISTANT',
+              files: { not: null },
+            },
+            orderBy: { timestamp: 'desc' },
+          });
+          if (!lastMessage?.files) return undefined;
           const parsed = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
           const files = Array.isArray(parsed) ? parsed : [];
-          const lastImage = files.find(f => f && f.type === 'image' && f.fileId);
-          if (lastImage) {
-            fileId = lastImage.fileId;
-            console.log(`Found last image in chat with fileId: ${fileId}`);
-          }
-        }
-      }
+          return files.find(f => f && f.type === 'image' && f.fileId)?.fileId;
+        },
+      });
 
       let userMessageFiles = undefined;
       if (fileId) {
@@ -9957,23 +10023,43 @@ router.post(
         }
       }
 
-      // Allow-list de proveedores que SÍ saben generar imágenes. Cualquier
-      // otro (DeepSeek, Anthropic, Groq, xAI, etc.) hablaría con un endpoint
-      // OpenAI-compatible que NO implementa /v1/images/generations y
-      // devolvería un 404 "no body" (visto en prod con server: 'elb',
-      // x-ds-trace-id). Lo cortamos aquí con un mensaje claro en español
-      // antes de gastar tiempo en una llamada que va a fallar igual.
+      if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
+        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+      }
+      const adminModel = await prisma.aiModel.findUnique({
+        where: { name: model },
+        select: { id: true, name: true, provider: true, displayName: true, isActive: true, type: true },
+      });
+      const activeGrokImage = adminModel && isActiveGrokImageModel(adminModel);
+      if (grokImageRequested) {
+        if (!activeGrokImage) {
+          return res.status(403).json({
+            error: 'Este modelo de imagen no está activo. Elige un modelo disponible en la herramienta Imágenes.',
+            code: 'image_model_inactive',
+          });
+        }
+        // Grok images use their own xAI API. A catalog discovery prefix is
+        // not permission to route this selection through another provider.
+        provider = 'xAI';
+        if (imagePath) {
+          return res.status(400).json({
+            error: 'Este modelo permite crear imágenes nuevas. La edición de imágenes con este modelo aún no está disponible.',
+            code: 'image_edit_unsupported',
+          });
+        }
+      }
+
       const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter', 'Fal']);
+      if (activeGrokImage) IMAGE_CAPABLE_PROVIDERS.add('xAI');
       if (!IMAGE_CAPABLE_PROVIDERS.has(provider)) {
         return res.status(400).json({
-          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini, OpenRouter o fal.ai.`,
+          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa uno de los modelos disponibles en Imágenes.`,
           code: 'image_provider_unsupported',
           provider: provider || null,
           supported: Array.from(IMAGE_CAPABLE_PROVIDERS),
         });
       }
-
-      if (!isVerifiedChatImageModelName(model)) {
+      if (!isVerifiedChatImageModelName(model) && !activeGrokImage) {
         return res.status(400).json({
           error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Elige uno de los modelos de imagen disponibles en el selector.`,
           code: 'image_model_unverified',
@@ -9981,16 +10067,7 @@ router.post(
           supported: Array.from(VERIFIED_CHAT_IMAGE_MODEL_NAMES),
         });
       }
-
-      if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
-        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
-      }
-
-      const adminModel = await prisma.aiModel.findUnique({
-        where: { name: model },
-        select: { displayName: true, isActive: true, type: true },
-      });
-      if (adminModel && adminModel.type === 'IMAGE' && !adminModel.isActive) {
+      if (adminModel && normalizeCatalogModelType(adminModel).type === 'IMAGE' && !adminModel.isActive) {
         return res.status(403).json({
           error: `El modelo "${adminModel.displayName || model}" no esta activo. Activalo en Admin > AI Models antes de usarlo.`,
           code: 'image_model_inactive',
@@ -10093,14 +10170,14 @@ router.post(
         }
         const result = await imageEngine.generateImage({
           prompt: imagePrompt,
-          model,
+          model: grokImageRequested ? model.replace(/^(?:x-ai|xai)\//i, '') : model,
           provider: toImageEngineProvider(provider),
           aspectRatio,
           quality,
           n: imageCount,
           signal: requestAbortController.signal,
           timeoutMs: imageProviderAttemptTimeoutMs(),
-          failover: true,
+          failover: !grokImageRequested,
         });
         if (!result.ok || !result.images?.length) {
           const err = new Error(result.error || 'Image provider did not return any image data.');
@@ -10112,7 +10189,7 @@ router.post(
         return result.images.map((img) => ({
           b64: img.b64,
           provider: actualProvider,
-          model: result.model || model,
+          model: grokImageRequested ? model : result.model || model,
           attempts: result.attempts || [],
         }));
       };

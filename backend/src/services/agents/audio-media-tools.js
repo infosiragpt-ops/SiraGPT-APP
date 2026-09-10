@@ -341,7 +341,7 @@ const generateSpeech = {
 
 const generateMusic = {
   name: 'generate_music',
-  description: 'Generate an original music track / song from a text description with ElevenLabs Music and save it as a downloadable, playable MP3 artifact in the chat. Use when the user asks for a "canción", "música", "melodía", "instrumental", "banda sonora", "jingle" or "song" — optionally with a duration (e.g. "una canción de 3 minutos" → durationSeconds 180) and a genre/mood.',
+  description: 'Generate an original music track / song from a text description and save it as a downloadable, playable MP3 artifact in the chat. Providers: Suno V4 / Suno V3.5 (Suno gateway), MiniMax (official API), Lyria 3 Pro (OpenRouter), ElevenLabs Music (default fallback). Use when the user asks for a "canción", "música", "melodía", "instrumental", "banda sonora", "jingle" or "song" — optionally with a duration (e.g. "una canción de 3 minutos" → durationSeconds 180), a genre/mood and a model.',
   parameters: {
     type: 'object',
     properties: {
@@ -353,14 +353,129 @@ const generateMusic = {
         description: `Target length in seconds (default 30). Clamped to [${MUSIC_MIN_SECONDS}, ${MUSIC_MAX_SECONDS}]. A 3-minute song = 180.`,
       },
       genre: { type: 'string', description: 'Optional genre/style hint: lofi, rock, pop, jazz, cinematic, reggaeton, ambient, épica, etc.' },
+      model: { type: 'string', description: 'Optional music model: "Suno V4", "Suno V3.5" (Suno gateway), "MiniMax" (official API), "Lyria 3 Pro" (OpenRouter), "ElevenLabs" (default fallback).' },
+      style: { type: 'string', description: 'Optional production style: Auto, Cinematic, Pop, Electronic, Ambient, Orchestral, Latin, Hip-Hop, Jazz.' },
+      mood: { type: 'string', description: 'Optional mood: Balanced, Energetic, Emotional, Dark, Happy, Epic, Relaxed.' },
+      effect: { type: 'string', description: 'Optional finish: Studio Master, Spatial, Warm Tape, Radio Ready, Lo-Fi, None.' },
+      influence: { type: 'number', minimum: 0, maximum: 1, description: 'Prompt adherence 0..1 (default 0.3): high follows the description literally, low takes creative liberty.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, durationSeconds, genre } = {}, ctx = {}) {
+  async execute({ prompt, durationSeconds, genre, model, style, mood, effect, influence } = {}, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_music', preview: prompt });
     const cleanPrompt = String(prompt || '').trim();
     if (!cleanPrompt) return { ok: false, error: 'La descripción de la música está vacía.' };
+
+    const seconds = clampInt(durationSeconds, 30, MUSIC_MIN_SECONDS, MUSIC_MAX_SECONDS);
+    // Fold every composer control into the prompt so Style / Mood / Effect /
+    // Prompt-influence actually shape the track — same contract as the chat route.
+    let finalPrompt = cleanPrompt;
+    try {
+      // eslint-disable-next-line global-require
+      const { composeMusicPrompt } = require('../ai/elevenlabs-music');
+      finalPrompt = composeMusicPrompt(cleanPrompt, {
+        style: style || genre,
+        mood,
+        effect,
+        influence,
+      }) || cleanPrompt;
+      if (genre && !new RegExp(escapeRe(genre), 'i').test(finalPrompt)) {
+        finalPrompt = `${finalPrompt} Estilo/género: ${genre}.`;
+      }
+    } catch {
+      if (genre && !new RegExp(escapeRe(genre), 'i').test(finalPrompt)) {
+        finalPrompt = `${cleanPrompt}. Estilo/género: ${genre}.`;
+      }
+    }
+
+    // Explicit model routing (deterministic: with no `model` the tool keeps
+    // the legacy ElevenLabs path, so existing behaviour and tests hold).
+    // Each provider is key-gated; a missing key falls through to ElevenLabs.
+    let requested = null;
+    if (String(model || '').trim()) {
+      try {
+        // eslint-disable-next-line global-require
+        const registry = require('../ai/music-model-registry');
+        requested = registry.resolveMusicModel(model);
+      } catch { requested = null; }
+    }
+    const providerCall = requested && (
+      (requested.provider === 'suno' && process.env.SUNO_API_KEY && 'suno')
+      || (requested.provider === 'minimax' && process.env.MINIMAX_API_KEY && 'minimax')
+      || (requested.provider === 'openrouter' && process.env.OPENROUTER_API_KEY && 'openrouter')
+    );
+    if (requested && !providerCall && requested.provider !== 'elevenlabs') {
+      emitEvent(ctx, 'tool_output', {
+        tool: 'generate_music',
+        preview: `${requested.label} no está configurado; usando ElevenLabs Music como respaldo…`,
+        partial: true,
+      });
+    }
+    if (providerCall) {
+      try {
+        emitEvent(ctx, 'tool_output', { tool: 'generate_music', preview: `Componiendo música con ${requested.label} (${seconds}s)…`, partial: true });
+        let track;
+        const seam = { fetchImpl: _fetchImpl || undefined, signal: ctx.signal };
+        if (providerCall === 'suno') {
+          // eslint-disable-next-line global-require
+          track = await require('../ai/suno-music').generateSunoMusicFile({
+            prompt: finalPrompt, durationSeconds: seconds, model: requested.gatewayModel,
+            style: style || genre, mood, influence, ...seam,
+          });
+        } else if (providerCall === 'minimax') {
+          // eslint-disable-next-line global-require
+          track = await require('../ai/minimax-music').generateMinimaxMusicFile({
+            prompt: finalPrompt, durationSeconds: seconds, model: requested.gatewayModel, ...seam,
+          });
+        } else {
+          // eslint-disable-next-line global-require
+          track = await require('../ai/openrouter-music').generateOpenRouterMusicFile({
+            prompt: finalPrompt, durationSeconds: seconds, model: requested.gatewayModel, ...seam,
+          });
+        }
+        const buffer = require('fs').readFileSync(track.audioPath);
+        try { require('fs').unlinkSync(track.audioPath); } catch { /* best-effort */ }
+        const filename = `cancion_${crypto.randomBytes(4).toString('hex')}.mp3`;
+        const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx, category: 'music' });
+        emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg', {
+          category: 'music',
+          kind: 'music',
+          durationSeconds: track.durationSeconds,
+          prompt: finalPrompt,
+          model: track.modelLabel,
+        });
+        emitEvent(ctx, 'tool_output', {
+          tool: 'generate_music',
+          ok: true,
+          preview: `Música lista: ${artifact.filename} (${track.durationSeconds}s, ${Math.round(artifact.sizeBytes / 1024)} KB, ${track.modelLabel})`,
+        });
+        return {
+          ok: true,
+          id: artifact.id,
+          filename: artifact.filename,
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+          mime: 'audio/mpeg',
+          kind: 'music',
+          durationSeconds: track.durationSeconds,
+          prompt: finalPrompt,
+          model: track.modelLabel,
+        };
+      } catch (err) {
+        const msg = (err && err.message) || String(err);
+        // Fall through to ElevenLabs when configured; otherwise report.
+        if (!process.env.ELEVENLABS_API_KEY) {
+          emitEvent(ctx, 'tool_output', { tool: 'generate_music', ok: false, preview: `Error: ${msg}` });
+          return { ok: false, error: msg };
+        }
+        emitEvent(ctx, 'tool_output', {
+          tool: 'generate_music',
+          preview: `${(requested && requested.label) || 'El proveedor'} no respondió; usando ElevenLabs Music como respaldo…`,
+          partial: true,
+        });
+      }
+    }
 
     const key = process.env.ELEVENLABS_API_KEY;
     const doFetch = getFetch();
@@ -370,12 +485,6 @@ const generateMusic = {
         : 'fetch no está disponible en este runtime.';
       emitEvent(ctx, 'tool_output', { tool: 'generate_music', ok: false, preview: msg });
       return { ok: false, error: msg };
-    }
-
-    const seconds = clampInt(durationSeconds, 30, MUSIC_MIN_SECONDS, MUSIC_MAX_SECONDS);
-    let finalPrompt = cleanPrompt;
-    if (genre && !new RegExp(escapeRe(genre), 'i').test(finalPrompt)) {
-      finalPrompt = `${cleanPrompt}. Estilo/género: ${genre}.`;
     }
 
     try {

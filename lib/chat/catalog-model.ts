@@ -1,6 +1,23 @@
 export type CatalogModelLike = {
   name?: string
   provider?: string
+  type?: string
+}
+
+/**
+ * Keep generation models out of the text selector, including cached Grok
+ * image rows saved as TEXT before catalog classification was repaired.
+ * Input/vision capabilities do not change a text model's output lane.
+ */
+export function filterTextCatalogModels<T extends CatalogModelLike>(models: T[] = []): T[] {
+  if (!Array.isArray(models)) return []
+  return models.filter((model) => {
+    if (!model || !String(model.name || "").trim()) return false
+    const type = String(model.type || "").trim().toUpperCase()
+    if (type && type !== "TEXT") return false
+    return !/^(?:(?:x-ai|xai)\/)?grok-(?:imagine-image|(?:\d+(?:\.\d+)*-)?image)(?:[-.][a-z0-9.-]+)?$/i
+      .test(String(model.name).trim())
+  })
 }
 
 const FLASH = "deepseek-v4-flash"
