@@ -20,6 +20,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- CONSTRUIR GitHub PR slice (flag `AGENTES_CODING_V2` stays OFF): from
+  `/agentes`, connect GitHub at `/conexiones`, open a repo the user can
+  access into an isolated jailed workspace, list/read/write/exec, then
+  open a Pull Request with the user's OAuth token. Tools:
+  `github_open_repo`, `github_repo_*`, `github_open_pull_request`.
+  Injectable GitHub + sandbox in CI. See `docs/construir-github-pr.md`.
 - Phase 4f of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   API-only CI smoke that drives the coding harness through a tiny
   todo-app fixture in the memory sandbox. Injectable `llmTurn` writes
