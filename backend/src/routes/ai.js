@@ -78,6 +78,10 @@ const geminiTts = require('../services/ai/gemini-tts');
 const voiceStudio = require('../services/ai/voicestudio-client');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
+const openRouterMusic = require('../services/ai/openrouter-music');
+const minimaxMusic = require('../services/ai/minimax-music');
+const sunoMusic = require('../services/ai/suno-music');
+const musicRegistry = require('../services/ai/music-model-registry');
 const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
@@ -9014,17 +9018,21 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const elevenReady = elevenLabsMusic.isElevenLabsConfigured();
-    const lyriaReady = lyriaMusic.isLyriaConfigured();
-    if (!elevenReady && !lyriaReady) {
+    const sunoReady = sunoMusic.isSunoConfigured();
+    const minimaxReady = minimaxMusic.isMinimaxConfigured();
+    const openRouterReady = openRouterMusic.isOpenRouterMusicConfigured() || lyriaMusic.isLyriaConfigured();
+    if (!elevenReady && !sunoReady && !minimaxReady && !openRouterReady) {
       return res.status(503).json({ ok: false, error: 'El servicio de música no está configurado.' });
     }
 
     const text = String(req.body.text || '').trim();
     const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
+    // Honor the /agentes picker first (never silent-swap), then resolve the
+    // music provider from the honored id. Empty picker → composer default.
     const honoredMusic = honorPickerModel(req.body.model, { provider: req.body.provider });
-    const selectedModel = honoredMusic.model || String(req.body.model || '').trim();
-    const wantsLyria = /lyria/i.test(selectedModel);
+    const selectedModel = String(honoredMusic.model || req.body.model || 'Suno V4').trim() || 'Suno V4';
+    const resolved = musicRegistry.resolveMusicModel(selectedModel);
     const requestAbort = bindRequestAbort(req, res);
 
     // Fold the composer's visible settings into the prompt so Style / Mood /
@@ -9037,33 +9045,81 @@ router.post(
     });
     const finalPrompt = composedPrompt || text;
 
-    // Provider order: explicit Lyria first; otherwise ElevenLabs then auto-fall
-    // back to Lyria when ElevenLabs is out of credits (the common long-track fail).
+    // Provider order: honour the selected model first, then auto-fall back
+    // so a credit/rate/slug failure still delivers music instead of a dead end.
+    // - Suno V4 / V3.5 → Suno gateway, fallback ElevenLabs, then Lyria.
+    // - MiniMax → MiniMax API, fallback ElevenLabs, then Lyria.
+    // - ElevenLabs → ElevenLabs, fallback Lyria.
+    // - Lyria 3 Pro → Lyria (proven path), fallback ElevenLabs.
+    // - Custom slug → OpenRouter with that slug, fallback ElevenLabs, then Lyria.
     const order = [];
-    if (wantsLyria && lyriaReady) {
-      order.push('lyria');
-      if (elevenReady) order.push('elevenlabs');
+    if (resolved.provider === 'suno') {
+      if (sunoReady) order.push({ provider: 'suno', model: resolved.gatewayModel });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
+    } else if (resolved.provider === 'minimax') {
+      if (minimaxReady) order.push({ provider: 'minimax', model: resolved.gatewayModel });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
+    } else if (resolved.provider === 'elevenlabs') {
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
+    } else if (resolved.key === 'lyria') {
+      if (openRouterReady) order.push({ provider: 'lyria' });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
     } else {
-      if (elevenReady) order.push('elevenlabs');
-      if (lyriaReady) order.push('lyria');
+      if (openRouterReady) order.push({ provider: 'openrouter', model: resolved.gatewayModel });
+      if (elevenReady) order.push({ provider: 'elevenlabs' });
+      if (openRouterReady) order.push({ provider: 'lyria' });
     }
 
     let result = null;
     let usedProvider = null;
+    let usedModelLabel = resolved.label;
     let lastErr = null;
-    for (const provider of order) {
+    for (const step of order) {
       try {
-        result = provider === 'lyria'
-          ? await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal })
-          : await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
-        usedProvider = provider;
+        if (step.provider === 'suno') {
+          result = await sunoMusic.generateSunoMusicFile({
+            prompt: finalPrompt,
+            durationSeconds,
+            model: step.model,
+            style: req.body.style,
+            mood: req.body.mood,
+            influence: req.body.influence,
+            signal: requestAbort.signal,
+          });
+          usedModelLabel = result.modelLabel || resolved.label;
+        } else if (step.provider === 'minimax') {
+          result = await minimaxMusic.generateMinimaxMusicFile({
+            prompt: finalPrompt,
+            durationSeconds,
+            model: step.model,
+            signal: requestAbort.signal,
+          });
+          usedModelLabel = result.modelLabel || resolved.label;
+        } else if (step.provider === 'lyria') {
+          result = await lyriaMusic.generateLyriaMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
+          usedModelLabel = 'Lyria 3 Pro';
+        } else if (step.provider === 'openrouter') {
+          result = await openRouterMusic.generateOpenRouterMusicFile({ prompt: finalPrompt, durationSeconds, model: step.model, signal: requestAbort.signal });
+          usedModelLabel = result.modelLabel || resolved.label;
+        } else {
+          result = await elevenLabsMusic.generateMusicFile({ prompt: finalPrompt, durationSeconds, signal: requestAbort.signal });
+          usedModelLabel = 'ElevenLabs Music';
+        }
+        usedProvider = step.provider === 'openrouter' || step.provider === 'suno'
+          ? (result.modelKey || step.provider)
+          : step.provider;
         break;
       } catch (err) {
         lastErr = err;
         if (requestAbort.signal.aborted || isAbortError(err)) break;
-        console.warn(`[ai/generate-music] ${provider} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
-        // Only fall through on credit/quota/rate exhaustion; hard errors stop here.
-        if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED') break;
+        console.warn(`[ai/generate-music] ${step.provider}${step.model ? `:${step.model}` : ''} failed (${err?.code || 'ERR'}): ${err?.message || err}`);
+        // Fall through on transient/quota/slug failures; hard input errors stop here.
+        if (err?.code !== 'INSUFFICIENT_CREDITS' && err?.code !== 'RATE_LIMITED'
+          && err?.code !== 'MODEL_NOT_FOUND' && err?.code !== 'EMPTY_AUDIO'
+          && err?.code !== 'API_ERROR' && err?.code !== 'TIMEOUT') break;
       }
     }
 
@@ -9075,17 +9131,20 @@ router.post(
       }
       const code = lastErr?.code;
       const status = code === 'PROMPT_REQUIRED' ? 400
-        : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED') ? 503
+        : (code === 'ELEVENLABS_NOT_CONFIGURED' || code === 'OPENROUTER_NOT_CONFIGURED'
+          || code === 'SUNO_NOT_CONFIGURED' || code === 'MINIMAX_NOT_CONFIGURED') ? 503
           : (code === 'INSUFFICIENT_CREDITS' || code === 'RATE_LIMITED') ? 402
             : 502;
       console.error('[ai/generate-music] all providers failed:', lastErr?.message || lastErr);
       return res.status(status).json({
         ok: false,
         error: status === 402
-          ? 'Sin créditos suficientes para generar una pista de esta duración. Prueba con una duración menor o recarga créditos (ElevenLabs / OpenRouter).'
+          ? 'Sin créditos suficientes para generar una pista de esta duración. Prueba con una duración menor o recarga créditos (ElevenLabs / Suno / MiniMax / OpenRouter).'
           : status === 503
             ? 'El servicio de música no está configurado.'
-            : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
+            : code === 'MODEL_NOT_FOUND'
+              ? 'El modelo de música seleccionado no está disponible. Revisa la configuración o prueba con ElevenLabs.'
+              : 'No se pudo generar la música. Intenta de nuevo en unos segundos.',
       });
     }
 
@@ -9095,7 +9154,12 @@ router.post(
       return;
     }
 
-    const modelLabel = usedProvider === 'lyria' ? 'Lyria 3 Pro' : 'ElevenLabs Music';
+    const modelLabel = usedModelLabel || 'Suno V4';
+    const usageModel = usedProvider === 'lyria' ? 'lyria-music'
+      : usedProvider === 'elevenlabs' ? 'elevenlabs-music'
+        : usedProvider === 'minimax' ? 'minimax-music'
+          : usedProvider === 'sunoV4' || usedProvider === 'sunoV35' ? `suno-music-${usedProvider}`
+            : `openrouter-music-${usedProvider || 'custom'}`;
     const artifact = {
       id: `music-${result.filename}`,
       filename: `musica-${Date.now()}.mp3`,
@@ -9122,7 +9186,7 @@ router.post(
           text,
           content,
           text.length,
-          usedProvider === 'lyria' ? 'lyria-music' : 'elevenlabs-music',
+          usageModel,
           [],
         );
         assistantMessageId = saved?.assistantMessage?.id || null;

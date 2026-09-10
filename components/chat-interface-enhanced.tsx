@@ -3429,7 +3429,7 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("music", selectedMusicModel, (name) => {
             setSelectedMusicModel(name as MusicModel);
-            track("model.selected", { model: name, provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "music-tool-picker" });
+            track("model.selected", { model: name, provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : name === "MiniMax" ? "MiniMax" : "Suno", surface: "music-tool-picker" });
           })}
 
           <DropdownMenu>
@@ -13435,12 +13435,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     });
 
     const runningState = {
-      meta: { goal: description.slice(0, 200), model: 'ElevenLabs Music', tools: ['generate_music'] },
+      meta: { goal: description.slice(0, 200), model: selectedMusicModel, tools: ['generate_music'] },
       steps: [{
         id: 'music-bootstrap',
         label: 'Componiendo música',
         icon: 'thought',
-        reasoning: 'Generando una pista original con ElevenLabs Music.',
+        reasoning: `Generando una pista original con ${selectedMusicModel} (${selectedMusicStyle} / ${selectedMusicMood} / ${selectedMusicEffect} / ${selectedMusicDuration}s).`,
         status: 'running',
         toolCalls: [],
       }],
@@ -14142,6 +14142,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         initialStyle={selectedMusicStyle}
                         initialMood={selectedMusicMood}
                         initialEffect={selectedMusicEffect}
+                        initialModel={selectedMusicModel}
                       />
                     )}
                     {audioTab === 'video' && (
@@ -14451,6 +14452,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         initialStyle={selectedMusicStyle}
                         initialMood={selectedMusicMood}
                         initialEffect={selectedMusicEffect}
+                        initialModel={selectedMusicModel}
                       />
                     )}
                     {audioTab === 'video' && (

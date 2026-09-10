@@ -17,6 +17,7 @@ const {
   generateOfficeSoundscape,
   officeSoundDefinition,
 } = require('../services/ai/elevenlabs-office-soundscape');
+const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const localWhisper = require('../services/local-whisper-engine');
 const voiceStudio = require('../services/ai/voicestudio-client');
 const {
@@ -627,7 +628,9 @@ router.get('/user/subscription', authenticateToken, async (req, res) => {
 });
 // ...existing code...
 
-// Music Generation using ElevenLabs
+// Music Generation using ElevenLabs — thin wrapper over the shared
+// `elevenlabs-music.js` service so the legacy route and
+// `/api/ai/generate-music` share ONE generation + file-naming code path.
 router.post('/generate-music', [
   body('text').trim().notEmpty().isLength({ max: 2000 }).withMessage('Text prompt is required (max 2000 chars)'),
   body('duration').optional().isInt({ min: 1, max: 300 }).toInt().withMessage('Duration must be an integer between 1 and 300 seconds'),
@@ -640,15 +643,13 @@ router.post('/generate-music', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    if (!ELEVENLABS_API_KEY) {
+    if (!elevenLabsMusic.isElevenLabsConfigured()) {
       return res.status(400).json({ error: 'ElevenLabs API key not configured' });
     }
 
     const {
       text,
       duration: rawDuration = 10, // Default 10 seconds
-      // prompt_influence = 0.3, // Default prompt influence
-      // normalize_output = true
       output_format = 'mp3_44100_128',
       model_id = 'music_v1'
     } = req.body;
@@ -658,85 +659,55 @@ router.post('/generate-music', [
     const duration = Math.min(300, Math.max(1, Math.round(Number(rawDuration) || 10)));
 
     console.log('Music generation request received:', {
-      text: text.substring(0, 50) + '...',
+      text: String(text).substring(0, 50) + '...',
       duration,
     });
 
-    // Generate music using ElevenLabs Music API
+    // Generate music through the shared service (same contract as the chat route).
     console.log('Calling ElevenLabs Music Generation API...');
-
-    const musicResponse = await fetch('https://api.elevenlabs.io/v1/music', {
-      method: 'POST',
-      // Music generation is slower than the probes — give it a larger budget.
-      signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_MUSIC_TIMEOUT_MS) || 120000),
-      headers: {
-        'xi-api-key': ELEVENLABS_API_KEY,
-        'Content-Type': 'application/json',
-      },
-      // body: JSON.stringify({
-      //   text,
-      //   duration_seconds: duration,
-      //   prompt_influence,
-      //   normalize_output
-      // })
-      body: JSON.stringify({
+    let track;
+    try {
+      track = await elevenLabsMusic.generateMusicFile({
         prompt: text,
-        music_length_ms: duration * 1000,  // convert seconds → ms
-        model_id,
-        output_format
-      })
-    });
-
-    if (!musicResponse.ok) {
-      const errorData = await musicResponse.text();
-      console.error('ElevenLabs Music API error:', musicResponse.status, errorData);
-
-      if (musicResponse.status === 402) {
+        durationSeconds: duration,
+        modelId: model_id,
+        outputFormat: output_format,
+      });
+    } catch (genErr) {
+      console.error('ElevenLabs Music API error:', genErr?.status || '', genErr?.message || genErr);
+      if (genErr?.code === 'INSUFFICIENT_CREDITS') {
         return res.status(402).json({
           error: 'Insufficient credits for music generation. Please upgrade your ElevenLabs subscription.'
         });
-      } else if (musicResponse.status === 400) {
+      }
+      if (genErr?.code === 'INVALID_PARAMS' || genErr?.code === 'PROMPT_REQUIRED') {
         return res.status(400).json({
           error: 'Invalid music generation parameters. Please check your input.'
         });
-      } else {
-        return res.status(musicResponse.status).json({
-          error: `Music generation failed: ${errorData}`
-        });
       }
+      return res.status(genErr?.status && Number.isFinite(Number(genErr.status)) ? Number(genErr.status) : 502).json({
+        error: `Music generation failed: ${String(genErr?.message || genErr).slice(0, 300)}`
+      });
     }
 
     console.log('Music generated successfully from ElevenLabs');
-
-    // Get the audio buffer from response
-    const audioBuffer = await musicResponse.arrayBuffer();
-    const musicBuffer = Buffer.from(audioBuffer);
-
-    // Generate unique filename
-    const filename = generatedAudioFilename('music');
-    const filepath = path.join(audioDir, filename);
-    ensureDir(audioDir);
-
-    // Save music file
-    fs.writeFileSync(filepath, musicBuffer);
 
     // Track usage
     await prisma.apiUsage.create({
       data: {
         userId: req.user.id,
         model: 'elevenlabs-music',
-        tokens: text.length,
+        tokens: String(text).length,
         cost: duration * 0.01 // Approximate cost per second
       }
     });
 
     res.json({
       success: true,
-      audio_url: `/elevenlabs/audio/${filename}`,
-      filename,
-      duration: duration,
+      audio_url: track.audioUrl,
+      filename: track.filename,
+      duration: track.durationSeconds,
       text_prompt: text,
-      // prompt_influence: prompt_influence
     });
 
   } catch (error) {
@@ -745,19 +716,21 @@ router.post('/generate-music', [
   }
 });
 
-// Get available music styles/genres (placeholder for future enhancement)
+// Available music production styles. Mirrors the chat composer's
+// MUSIC_STYLE_OPTIONS + MUSIC_STYLE_PROFILES so the audio-panel Music tab
+// offers exactly the same directions as the "Producción musical" menu.
 router.get('/music-styles', authenticateToken, async (req, res) => {
   try {
-    // For now, return predefined styles. In future, this could be dynamic from ElevenLabs
     const styles = [
-      { id: 'ambient', name: 'Ambient', description: 'Atmospheric and peaceful sounds' },
-      { id: 'electronic', name: 'Electronic', description: 'Synthesized and digital sounds' },
-      { id: 'classical', name: 'Classical', description: 'Orchestral and traditional instruments' },
-      { id: 'jazz', name: 'Jazz', description: 'Smooth and improvised melodies' },
-      { id: 'rock', name: 'Rock', description: 'Energetic and guitar-driven' },
-      { id: 'pop', name: 'Pop', description: 'Catchy and mainstream melodies' },
-      { id: 'cinematic', name: 'Cinematic', description: 'Epic and dramatic soundscapes' },
-      { id: 'nature', name: 'Nature', description: 'Natural sounds and environments' }
+      { id: 'auto', name: 'Auto', description: 'Deja que el modelo elija el genero segun tu prompt.' },
+      { id: 'cinematic', name: 'Cinematic', description: 'Texturas amplias, tension y final de trailer.' },
+      { id: 'pop', name: 'Pop', description: 'Hook claro, bateria pulida y estructura comercial.' },
+      { id: 'electronic', name: 'Electronic', description: 'Sintetizadores, pulso moderno y energia digital.' },
+      { id: 'ambient', name: 'Ambient', description: 'Capas suaves, atmosfera y movimiento discreto.' },
+      { id: 'orchestral', name: 'Orchestral', description: 'Cuerdas, metales y dinamica de partitura.' },
+      { id: 'latin', name: 'Latin', description: 'Ritmo calido, percusion marcada y sabor latino.' },
+      { id: 'hip-hop', name: 'Hip-Hop', description: 'Beat con groove, bajo presente y espacio vocal.' },
+      { id: 'jazz', name: 'Jazz', description: 'Armonia rica, swing sutil e instrumentacion organica.' }
     ];
 
     res.json({ styles });

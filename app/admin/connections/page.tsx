@@ -45,6 +45,9 @@ const KNOWN_URLS = [
   "https://api.deepseek.com/v1",
   "https://api.x.ai/v1",
   "https://api.meta.ai/v1",
+  "https://api.elevenlabs.io/v1",
+  "https://api.minimax.io",
+  "https://api.sunoapi.org",
 ]
 
 type AuthType = "Bearer" | "Key" | "None" | "Custom"
@@ -66,6 +69,9 @@ const PROVIDER_DEFAULTS: Record<string, { url: string; authType: AuthType; apiTy
   deepseek: { url: "https://api.deepseek.com/v1", authType: "Bearer", apiType: "chat_completions" },
   xai: { url: "https://api.x.ai/v1", authType: "Bearer", apiType: "chat_completions" },
   meta: { url: "https://api.meta.ai/v1", authType: "Bearer", apiType: "chat_completions" },
+  elevenlabs: { url: "https://api.elevenlabs.io/v1", authType: "Custom", apiType: "chat_completions" },
+  minimax: { url: "https://api.minimax.io", authType: "Bearer", apiType: "chat_completions" },
+  suno: { url: "https://api.sunoapi.org", authType: "Bearer", apiType: "chat_completions" },
 }
 
 const PROVIDERS: Array<{ key: string; label: string }> = [
@@ -84,6 +90,9 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "deepseek", label: "DeepSeek API" },
   { key: "xai", label: "xAI API" },
   { key: "meta", label: "Meta Model API" },
+  { key: "elevenlabs", label: "ElevenLabs API (voz + música)" },
+  { key: "minimax", label: "MiniMax API (música)" },
+  { key: "suno", label: "Suno Gateway API (música)" },
   { key: "custom", label: "Custom API" },
 ]
 
@@ -102,6 +111,9 @@ const QUICK_PICK: Array<{ key: string; label: string }> = [
   { key: "fal", label: "fal.ai" },
   { key: "mistral", label: "Mistral" },
   { key: "meta", label: "Meta" },
+  { key: "elevenlabs", label: "ElevenLabs" },
+  { key: "minimax", label: "MiniMax" },
+  { key: "suno", label: "Suno" },
 ]
 
 type Connection = {
@@ -152,6 +164,9 @@ function inferProviderFromUrl(u: string): string {
     || lower.includes("llama-api.meta.com")
     || lower.includes("developer.meta.com")
   ) return "meta"
+  if (lower.includes("elevenlabs.io")) return "elevenlabs"
+  if (lower.includes("minimax.io")) return "minimax"
+  if (lower.includes("sunoapi.org") || lower.includes("suno-api") || lower.includes("suno_api")) return "suno"
   return "custom"
 }
 
