@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { PensandoBars } from "@/components/pensando-bars"
+import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import {
   CODE_PREVIEW_STATE_EVENT,
   type CodePreviewState,
@@ -63,6 +64,8 @@ export type AgentComputerShellProps = {
   variant?: "workspace" | "overlay"
   onClose?: () => void
   liveStatus?: AgentComputerLiveStatus
+  /** Open focused on the live browser so the agent can search the web. */
+  initialDock?: DockApp
 }
 
 export function AgentComputerShell({
@@ -71,11 +74,12 @@ export function AgentComputerShell({
   variant = "workspace",
   onClose,
   liveStatus,
+  initialDock = "browser",
 }: AgentComputerShellProps) {
   const t = useTranslations("codex.panel.agentComputer")
   const [preview, setPreview] = React.useState<CodePreviewState | null>(null)
   const [routinesOpen, setRoutinesOpen] = React.useState(true)
-  const [activeApp, setActiveApp] = React.useState<DockApp>("browser")
+  const [activeApp, setActiveApp] = React.useState<DockApp>(initialDock)
   const [focusNote, setFocusNote] = React.useState<string | null>(null)
   const [deptName, setDeptName] = React.useState<string>("")
 
@@ -144,9 +148,9 @@ export function AgentComputerShell({
     [conversationId, t],
   )
 
-  const addressPath = isLive && typeof window !== "undefined" && preview?.src
-    ? safePathOf(preview.src)
-    : "/"
+  React.useEffect(() => {
+    if (initialDock && initialDock !== "desktop") void focusApp(initialDock)
+  }, [conversationId, initialDock, focusApp])
 
   return (
     <section
@@ -170,9 +174,11 @@ export function AgentComputerShell({
           <RefreshCw className={cn("h-3.5 w-3.5 text-zinc-400", isStarting && "animate-spin")} />
           <Square className="h-3 w-3 text-zinc-400" />
         </span>
-        <div className="mx-auto flex h-7 min-w-0 max-w-md flex-1 items-center justify-center gap-1.5 rounded-full border border-black/10 bg-white/70 px-3 text-[11px] text-zinc-600 shadow-inner dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300">
-          <Globe className="h-3 w-3 shrink-0 opacity-60" />
-          <span className="truncate font-mono">{addressPath}</span>
+        <div className="mx-auto flex h-7 min-w-0 max-w-xl flex-1 items-center justify-center gap-1.5 text-[11px] text-zinc-600 dark:text-zinc-300">
+          <IntegratedBrowserBar
+            conversationId={conversationId}
+            onNavigated={() => void focusApp("browser")}
+          />
           <span
             className={cn(
               "ml-1 flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-semibold tracking-wide",
@@ -346,13 +352,4 @@ function DockIcon({
       </span>
     </button>
   )
-}
-
-function safePathOf(src: string): string {
-  try {
-    const url = new URL(src, "http://placeholder.local")
-    return url.pathname + url.search || "/"
-  } catch {
-    return "/"
-  }
 }

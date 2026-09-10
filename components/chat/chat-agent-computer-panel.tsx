@@ -21,6 +21,7 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { AgentComputerShell } from "@/components/code/agent-computer-shell"
 import { DepartmentComputerPane } from "@/components/code/department-computer-pane"
+import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import { ComputerLoginHandoffBanner } from "@/components/chat/computer-login-handoff-banner"
 import { coworkApi, type ScheduledCoworkTask } from "@/lib/cowork-api"
 import { formatScheduleEsPE } from "@/lib/format-schedule-es-pe"
@@ -41,6 +42,8 @@ export type ChatAgentComputerPanelProps = {
   loginHandoff?: boolean
   loginHandoffSite?: string | null
   loginHandoffKind?: string | null
+  startExpanded?: boolean
+  initialDock?: "browser" | "desktop" | "files" | "terminal"
 }
 
 type LiveStatus = "starting" | "live" | "error" | "idle"
@@ -72,10 +75,12 @@ export default function ChatAgentComputerPanel({
   loginHandoff = false,
   loginHandoffSite = null,
   loginHandoffKind = null,
+  startExpanded = false,
+  initialDock = "browser",
 }: ChatAgentComputerPanelProps) {
   const chatId = String(conversationId || "").trim()
   const [liveStatus, setLiveStatus] = React.useState<LiveStatus>("starting")
-  const [expanded, setExpanded] = React.useState(false)
+  const [expanded, setExpanded] = React.useState(Boolean(startExpanded || loginHandoff))
   const [handoffActive, setHandoffActive] = React.useState(Boolean(loginHandoff))
   const [handoffSite, setHandoffSite] = React.useState<string>(String(loginHandoffSite || ""))
   const [handoffKind, setHandoffKind] = React.useState<string>(String(loginHandoffKind || ""))
@@ -103,8 +108,8 @@ export default function ChatAgentComputerPanel({
     setHandoffActive(Boolean(loginHandoff))
     if (loginHandoffSite) setHandoffSite(String(loginHandoffSite))
     if (loginHandoffKind) setHandoffKind(String(loginHandoffKind))
-    if (loginHandoff) setExpanded(true)
-  }, [loginHandoff, loginHandoffSite, loginHandoffKind])
+    if (loginHandoff || startExpanded) setExpanded(true)
+  }, [loginHandoff, loginHandoffSite, loginHandoffKind, startExpanded])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -275,6 +280,7 @@ export default function ChatAgentComputerPanel({
             variant="overlay"
             onClose={onClose}
             liveStatus={liveStatus}
+            initialDock={initialDock}
           >
             {pane}
           </AgentComputerShell>
@@ -317,8 +323,12 @@ export default function ChatAgentComputerPanel({
         </button>
       </div>
 
-      {/* Live screen thumbnail — click opens the full window. */}
       <div className="shrink-0 px-4 pt-1">
+        <IntegratedBrowserBar conversationId={chatId} compact onNavigated={() => setExpanded(true)} />
+      </div>
+
+      {/* Live screen thumbnail — click opens the full window. */}
+      <div className="shrink-0 px-4 pt-2">
         <button
           type="button"
           onClick={() => setExpanded(true)}

@@ -17,15 +17,18 @@ const bootEs = "Arranca" + "ndo"
 const runEs = "Ejecu" + "tar"
 
 describe("chat agent computer home", () => {
-  it("places the computer button immediately beside share", () => {
+  it("places the computer button and navigator globe before share", () => {
     const chat = source("components/chat-interface-enhanced.tsx")
     const buttonIdx = chat.indexOf('data-testid="chat-computer-button"')
     const shareIdx = chat.indexOf('title="Compartir conversación completa"')
+    const browserIdx = chat.indexOf('data-testid="chat-browser-button"')
     assert.ok(buttonIdx > 0, "missing chat-computer-button")
-    assert.ok(shareIdx > buttonIdx, "computer button must sit before share")
-    assert.ok(shareIdx - buttonIdx < 1200, "computer button must be immediately beside share")
+    assert.ok(browserIdx > buttonIdx, "navigator globe must sit after the computer")
+    assert.ok(shareIdx > browserIdx, "computer and navigator must sit before share")
+    assert.ok(browserIdx - buttonIdx < 900, "navigator must sit immediately beside the computer")
     assert.match(chat, /title="Computadora"/)
     assert.match(chat, /aria-label="Computadora"/)
+    assert.match(chat, /title="Navegador"/)
     assert.match(chat, /<Monitor className="h-5 w-5" \/>/)
     assert.match(chat, /<ChatAgentComputerPanel/)
   })
@@ -58,6 +61,7 @@ describe("chat agent computer home", () => {
     assert.equal(isAgentsHomePath("/code"), false)
     assert.equal(chatSearchToAgentsHome("id=abc"), "/agentes?id=abc")
     assert.equal(chatSearchToAgentsHome("id=abc&computer=1", "#top"), "/agentes?id=abc&computer=1#top")
+    assert.equal(chatSearchToAgentsHome("id=abc&browser=1"), "/agentes?id=abc&browser=1")
     assert.equal(chatSearchToAgentsHome(""), "/agentes")
     assert.equal(chatSearchToAgentsHome("", null, "/chat/abc"), "/agentes/abc")
     assert.equal(agentsHomeHref("id=abc"), "/agentes?id=abc")

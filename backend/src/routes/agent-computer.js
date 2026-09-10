@@ -33,6 +33,7 @@ const {
   chromeOpenUrlCommand,
   chromeMaximizeOrLaunch,
 } = require('../services/computer/chrome-desktop-flags');
+const { sanitizeNavigateUrl } = require('../services/computer/navigate-url');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -176,20 +177,6 @@ function failComputer(res, err, fallbackCode) {
     error: err.code || fallbackCode,
     message: publicComputerError(err, err.code === 'isolation_required' ? ISOLATION_REFUSED_ES : OPEN_FAILED_ES),
   });
-}
-
-function sanitizeNavigateUrl(raw) {
-  const value = String(raw || '').trim();
-  let parsed;
-  try { parsed = new URL(value); } catch (_) { parsed = null; }
-  if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
-    const err = new Error('La URL debe ser http(s).');
-    err.status = 400;
-    err.code = 'invalid_url';
-    err.publicMessage = 'La URL debe ser http(s).';
-    throw err;
-  }
-  return parsed.toString();
 }
 
 async function navigateMemberDesktop(session, url) {

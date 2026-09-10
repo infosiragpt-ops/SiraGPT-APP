@@ -6302,6 +6302,7 @@ function ChatInterfaceContent() {
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
+  const [computerBrowserMode, setComputerBrowserMode] = React.useState(false);
   const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
   const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
   const [loginHandoffKind, setLoginHandoffKind] = React.useState("");
@@ -12473,7 +12474,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }).catch(() => undefined);
   }, [setCurrentChat]);
 
-  const openComputerPanel = React.useCallback(() => {
+  const openComputerPanel = React.useCallback((opts?: { browser?: boolean }) => {
     setShowAudioPanel(false);
     setActiveSearchActivityId(null);
     setDocumentPreviewUrl(null);
@@ -12485,6 +12486,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsExcelConnectorActive(false);
     closeArtifactPanel();
     setCoworkPanelOpen(false);
+    setComputerBrowserMode(Boolean(opts?.browser));
     setComputerPanelOpen(true);
     if (!currentChatIdRef.current) {
       void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
@@ -12496,6 +12498,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const params = new URLSearchParams(window.location.search);
     const computer = params.get("computer");
     if (computer === "1" || computer === "true") openComputerPanel();
+    const browser = params.get("browser");
+    if (browser === "1" || browser === "true") openComputerPanel({ browser: true });
     const login = params.get("login");
     if (login === "1" || login === "true") {
       setLoginHandoffActive(true);
@@ -13889,16 +13893,28 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 <Button
-                  variant={computerPanelOpen ? "secondary" : "ghost"}
+                  variant={computerPanelOpen && !computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
-                  onClick={() => computerPanelOpen ? setComputerPanelOpen(false) : openComputerPanel()}
+                  onClick={() => computerPanelOpen && !computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel()}
                   title="Computadora"
                   aria-label="Computadora"
-                  aria-pressed={computerPanelOpen}
+                  aria-pressed={computerPanelOpen && !computerBrowserMode}
                   data-testid="chat-computer-button"
                   className="chat-header-icon-btn chat-computer-action h-11 w-11 rounded-full"
                 >
                   <Monitor className="h-5 w-5" />
+                </Button>
+                <Button
+                  variant={computerPanelOpen && computerBrowserMode ? "secondary" : "ghost"}
+                  size="icon"
+                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel({ browser: true })}
+                  title="Navegador"
+                  aria-label="Navegador"
+                  aria-pressed={computerPanelOpen && computerBrowserMode}
+                  data-testid="chat-browser-button"
+                  className="chat-header-icon-btn chat-browser-action h-11 w-11 rounded-full"
+                >
+                  <Globe className="h-5 w-5" />
                 </Button>
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
@@ -14400,13 +14416,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               )}
               {computerPanelOpen && (
                 <ChatAgentComputerPanel
-                  key={currentChat?.id || "none"}
+                  key={`${currentChat?.id || "none"}-${computerBrowserMode ? "browser" : "desktop"}`}
                   conversationId={currentChat?.id || ""}
                   loginHandoff={loginHandoffActive}
                   loginHandoffSite={loginHandoffSite}
                   loginHandoffKind={loginHandoffKind}
+                  startExpanded={computerBrowserMode || loginHandoffActive}
+                  initialDock={computerBrowserMode ? "browser" : "desktop"}
                   onClose={() => {
                     setComputerPanelOpen(false)
+                    setComputerBrowserMode(false)
                     setLoginHandoffActive(false)
                   }}
                 />
