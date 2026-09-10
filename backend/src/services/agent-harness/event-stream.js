@@ -145,6 +145,8 @@ function estimateCostUsd(provider, tokensEstimate) {
  * @param {object}   opts.registry  — harness tool registry (metaFor / tiers).
  * @param {object}   [opts.permission] — permission-manager module (injectable for tests).
  * @param {object}   [opts.ctxInfo] — { chatId, userId } echoed into permission requests.
+ *   Pass `composerPermission: 'protected'` to route write-side tools through
+ *   the interactive reviewer (see wrapTools).
  * @param {string}   [opts.provider] — provider label for the cost estimate.
  * @param {AbortSignal} [opts.signal]
  */
@@ -391,6 +393,12 @@ function createAgentEventStream(opts = {}) {
    * 'confirm'-tier tools pause on the interactive permission gate first.
    * The wrapped execute rethrows tool errors unchanged — dispatchTool's
    * try/catch keeps turning them into is_error observations for the model.
+   *
+   * Protegido (composer permission `protected`) routes every write-side tool
+   * through the same gate even when its registry tier is `auto`: reads run
+   * freely, writes pause on permission_request until the user allows/denies
+   * in the AgentTrace card. An allow propagates `approved` into the inner
+   * call so composer-aware tools (computer_write_file, …) don't re-deny it.
    */
   function wrapTools(tools) {
     return (tools || []).map((tool) => {
@@ -401,7 +409,16 @@ function createAgentEventStream(opts = {}) {
         execute: async (args, ctx) => {
           const call = claimPlanned(tool.name, args);
           const meta = registry ? registry.metaFor(tool.name, args) : { permissionTier: 'auto' };
-          if (meta.permissionTier === 'confirm' && permission) {
+          let protectedWrite = false;
+          if (meta.permissionTier !== 'confirm' && ctxInfo.composerPermission === 'protected') {
+            try {
+              const composerPermission = require('../composer-permission');
+              protectedWrite = typeof composerPermission.isProtectedWriteTool === 'function'
+                && composerPermission.isProtectedWriteTool(tool.name) === true;
+            } catch (_) { /* fail-closed: no helper → no ask (the tool gate already denied) */ }
+          }
+          let runCtx = ctx;
+          if ((meta.permissionTier === 'confirm' || protectedWrite) && permission) {
             const outcome = await permission.requestPermission({
               chatId: ctxInfo.chatId || null,
               userId: ctxInfo.userId || null,
@@ -436,6 +453,13 @@ function createAgentEventStream(opts = {}) {
               finishCall(call, { result: { error: reason }, isError: true, status: 'denied' });
               throw new Error(`${reason}. Do not retry this exact call; adapt the plan or ask the user in your final answer.`);
             }
+            // The user approved this call: propagate into the inner execute
+            // so composer-aware tools (computer_write_file, …) don't re-deny
+            // it on their own gate. Scoped to this call only — never mutate
+            // the shared turn ctx.
+            runCtx = ctx && typeof ctx === 'object'
+              ? { ...ctx, approved: true, approvalGranted: true }
+              : ctx;
           }
           emit('tool_executing', { blockIndex: call.blockIndex, id: call.id, name: tool.name });
           call.state = 'executing';
@@ -457,12 +481,12 @@ function createAgentEventStream(opts = {}) {
                 if (timer && typeof timer.unref === 'function') timer.unref();
               });
               try {
-                result = await Promise.race([Promise.resolve(inner(args, ctx)), timeout]);
+                result = await Promise.race([Promise.resolve(inner(args, runCtx)), timeout]);
               } finally {
                 clearTimeout(timer);
               }
             } else {
-              result = await inner(args, ctx);
+              result = await inner(args, runCtx);
             }
             const capped = capToolResult(result);
             finishCall(call, { result: capped, isError: false });
