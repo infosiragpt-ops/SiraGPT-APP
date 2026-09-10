@@ -1347,20 +1347,21 @@ details[open] > summary .think-chevron,
   padding: 0.55rem 1.1rem 0.3rem;
   border: 0;
   background: transparent;
-  /* Single source of slider geometry: the track, thumb, fill, ticks and
+  /* Single source of slider geometry: the track, stops, fill, ticks and
      bubble all resolve these by inheritance, so every stop lands on the
-     same x in every element. */
+     same x in every element. (--effort-thumb-w names the stop travel inset;
+     there is no visible dial.) */
   --effort-steps: 3;
-  --effort-rail-h: 0.875rem;
+  --effort-rail-h: 1rem;
   --effort-thumb-w: 1.5rem;
   --effort-thumb-h: 1.5rem;
   --effort-pad: 0.3rem;
-  --effort-rail: hsl(260 18% 93%);
-  --effort-fill-base: hsl(260 78% 88%);
-  --effort-violet: hsl(266 84% 60%);
-  --effort-accent: hsl(266 84% 60%);
-  --effort-fill-mid: hsl(263 84% 68%);
-  --effort-fill-end: hsl(267 76% 51%);
+  --effort-rail: hsl(257 62% 93%);
+  --effort-fill-base: hsl(258 70% 92%);
+  --effort-violet: hsl(259 88% 62%);
+  --effort-accent: hsl(259 88% 62%);
+  --effort-fill-mid: hsl(262 80% 82%);
+  --effort-fill-end: hsl(258 70% 92%);
   --effort-grip: hsl(260 24% 48%);
 }
 
@@ -1408,18 +1409,28 @@ details[open] > summary .think-chevron,
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
-  /* The rail clips its own texture; the dial, focus ring and value bubble
+  /* The rail clips its own texture; the focus ring and value bubble
      need to remain visible outside it. */
   overflow: visible;
   --effort-index: 0;
   /* Declared HERE on purpose: var(--effort-index) inside this expression
      resolves against the declaring element, and the [data-effort] overrides
-     below also land on the track. Defining it on the section froze the thumb
+     below also land on the track. Defining it on the section froze the fill
      at stop 0 (custom properties substitute at declaration scope). */
   --effort-x: calc(
     var(--effort-pad) + var(--effort-thumb-w) / 2 +
     var(--effort-index) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
   );
+  /* The reveal position itself animates (registered @property below), so the
+     cloud glides between stops instead of jumping. */
+  transition: --effort-x 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* Registered so --effort-x interpolates as a length-percentage: without this
+   the reveal would snap discretely. Unsupported browsers simply jump. */
+@property --effort-x {
+  syntax: "<length-percentage>";
+  inherits: true;
+  initial-value: 0%;
 }
 .effort-track[data-effort="0"] { --effort-index: 0; }
 .effort-track[data-effort="1"] { --effort-index: 1; }
@@ -1477,11 +1488,13 @@ details[open] > summary .think-chevron,
   border-radius: inherit;
   pointer-events: none;
   overflow: hidden;
-  background: linear-gradient(100deg, var(--effort-fill-base), var(--effort-fill-mid) 52%, var(--effort-fill-end));
+  background: linear-gradient(90deg, var(--effort-fill-base), var(--effort-fill-mid) 50%, var(--effort-fill-end));
   box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.3);
-  /* Reveal the anchored dither up to the thumb centre. */
-  clip-path: inset(0 calc(100% - var(--effort-x)) 0 0);
-  transition: clip-path 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Reveal the anchored cloud up to the active stop with a soft 16 px
+     dissolve edge instead of a hard cut. The mask rides --effort-x, which
+     animates on the track (see @property above). */
+  -webkit-mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 16px), transparent var(--effort-x));
+  mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 16px), transparent var(--effort-x));
 }
 .effort-dither {
   position: absolute;
@@ -1489,17 +1502,21 @@ details[open] > summary .think-chevron,
   display: block;
   width: 100%;
   height: 100%;
-  opacity: 0.22;
+  opacity: 1;
 }
 .effort-dither-base {
   fill: transparent;
 }
-.effort-dither-ink,
-.effort-dither-px {
+.effort-dither-core {
   fill: var(--effort-violet);
+  opacity: 0.45;
 }
 .effort-dither-px {
-  fill: hsl(0 0% 100% / 0.72);
+  fill: var(--effort-violet);
+  shape-rendering: crispEdges;
+}
+.effort-dither-spark {
+  fill: hsl(0 0% 100% / 0.9);
   shape-rendering: crispEdges;
 }
 /* Living pixels: the sparse layers breathe with a wave that travels left →
@@ -1582,81 +1599,8 @@ details[open] > summary .think-chevron,
 .effort-stop[data-stop="2"] { --i: 2; }
 .effort-stop[data-stop="3"] { --i: 3; }
 
-.effort-stop::after {
-  content: "";
-  width: 0.2rem;
-  height: 0.2rem;
-  border-radius: 999px;
-  background: hsl(220 8% 70%);
-  transition: opacity 160ms ease, background-color 160ms ease;
-}
-.effort-stop:hover::after {
-  background: hsl(220 8% 52%);
-}
-.effort-stop-reached::after,
-.effort-stop-active::after {
-  opacity: 0;
-}
-.effort-stop-active {
-  background: transparent;
-}
-
-/* Raised white dial with a fine grip. The outline keeps its original
-   contrast; layered highlights describe depth without a heavy neon glow. */
-.effort-thumb {
-  position: absolute;
-  top: 50%;
-  left: var(--effort-x);
-  z-index: 2;
-  width: var(--effort-thumb-w);
-  height: var(--effort-thumb-h);
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  /* 3:1 against the white fill inside AND the grey rail outside (WCAG 1.4.11),
-     so the thumb stays perceivable at every stop — including Bajo, where it
-     sits on light grey. */
-  border: 1px solid hsl(220 12% 52%);
-  background: #ffffff;
-  background-image: linear-gradient(165deg, #ffffff 30%, hsl(260 30% 95%));
-  box-shadow:
-    inset 0 1px 0 hsl(0 0% 100%),
-    0 0 0 3px hsl(265 65% 70% / 0.12),
-    0 1px 2px hsl(220 25% 10% / 0.14),
-    0 3px 8px -2px hsl(220 25% 10% / 0.2);
-  pointer-events: none;
-  transition:
-    left 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 160ms ease,
-    transform 160ms ease;
-}
-.effort-thumb::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 4px;
-  height: 7px;
-  border-inline: 1px solid var(--effort-grip);
-  border-radius: 1px;
-  transform: translate(-50%, -50%);
-}
-.effort-track[data-dragging="true"] .effort-thumb {
-  transform: translate(-50%, -50%) scale(1.08);
-  box-shadow:
-    0 2px 4px hsl(220 25% 10% / 0.2),
-    0 6px 14px -4px hsl(220 25% 10% / 0.3);
-}
-.effort-track:hover .effort-thumb {
-  box-shadow:
-    0 1px 2px hsl(220 25% 10% / 0.18),
-    0 4px 10px -2px hsl(220 25% 10% / 0.26);
-}
-.effort-section .effort-track:focus-visible .effort-thumb {
-  box-shadow:
-    0 0 0 2px hsl(0 0% 100%),
-    0 0 0 4px var(--effort-accent),
-    0 3px 8px -2px hsl(220 25% 10% / 0.2);
-}
+/* No visible dial: the value lives in the pixel cloud's cut position, the
+   header readout and the tick marks below. Stops stay invisible hit areas. */
 
 /* Discrete step marks under the rail: four fixed stops, snapped on
    release — a second non-color cue next to the header readout. */
@@ -1686,7 +1630,7 @@ details[open] > summary .think-chevron,
   background: hsl(0 0% 100% / 0.4);
 }
 
-/* Value bubble that follows the thumb while dragging. Clamped so it never
+/* Value bubble that follows the active stop while dragging. Clamped so it never
    leaves the popover at the end stops. */
 .effort-bubble {
   position: absolute;
@@ -1743,12 +1687,11 @@ details[open] > summary .think-chevron,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .effort-track,
   .effort-track-fill,
-  .effort-thumb,
   .effort-dither-twinkle,
   .effort-sheen,
-  .effort-bubble,
-  .effort-stop::after {
+  .effort-bubble {
     animation: none !important;
     transition: none !important;
   }
@@ -1756,12 +1699,12 @@ details[open] > summary .think-chevron,
 
 .dark .effort-section {
   background: transparent;
-  --effort-rail: hsl(260 13% 22%);
-  --effort-fill-base: hsl(261 35% 43%);
-  --effort-violet: hsl(268 90% 70%);
+  --effort-rail: hsl(258 18% 20%);
+  --effort-fill-base: hsl(258 30% 32%);
+  --effort-violet: hsl(268 90% 72%);
   --effort-accent: hsl(268 90% 72%);
-  --effort-fill-mid: hsl(263 72% 63%);
-  --effort-fill-end: hsl(267 86% 72%);
+  --effort-fill-mid: hsl(262 55% 48%);
+  --effort-fill-end: hsl(258 30% 32%);
 }
 .dark .effort-level {
   color: hsl(264 100% 86%);
@@ -1777,25 +1720,6 @@ details[open] > summary .think-chevron,
   border-color: hsl(264 80% 85% / 0.12);
   background: linear-gradient(180deg, hsl(0 0% 100% / 0.12), transparent 55%);
 }
-.dark .effort-track:focus-visible .effort-thumb {
-  box-shadow:
-    0 0 0 2px hsl(220 12% 10%),
-    0 0 0 4px var(--effort-accent),
-    0 3px 8px -2px hsl(0 0% 0% / 0.6);
-}
-.dark .effort-stop::after {
-  background: hsl(0 0% 100% / 0.35);
-}
-.dark .effort-stop:hover::after {
-  background: hsl(0 0% 100% / 0.6);
-}
-.dark .effort-thumb {
-  border-color: hsl(0 0% 100% / 0.35);
-  background: hsl(0 0% 96%);
-  box-shadow:
-    0 1px 2px hsl(0 0% 0% / 0.5),
-    0 3px 8px -2px hsl(0 0% 0% / 0.6);
-}
 
 @media (forced-colors: active) {
   .effort-track-line {
@@ -1803,8 +1727,6 @@ details[open] > summary .think-chevron,
     background: Canvas;
   }
   .effort-track-fill { background: Highlight; }
-  .effort-section .effort-thumb { border-color: CanvasText; background: ButtonFace; }
-  .effort-thumb::after { border-color: ButtonText; }
   .effort-dither, .effort-sheen, .effort-track-line::after { display: none; }
   .effort-section .effort-level { color: CanvasText; border-color: CanvasText; background: Canvas; }
   .effort-section .effort-track:focus-visible { outline-color: Highlight; }

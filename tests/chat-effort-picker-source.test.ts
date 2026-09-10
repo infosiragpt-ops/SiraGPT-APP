@@ -117,12 +117,12 @@ describe("composer effort picker source contract", () => {
     assert.match(section![1], /PageUp/, "PageUp jumps forward")
     assert.match(section![1], /PageDown/, "PageDown jumps back")
     assert.match(section![1], /className="effort-ticks"/, "discrete step marks under the rail")
-    assert.match(section![1], /className="effort-bubble"/, "value bubble follows the thumb while dragging")
+    assert.match(section![1], /className="effort-bubble"/, "value bubble follows the active stop while dragging")
     assert.match(section![1], /data-dragging=\{dragging \? "true" : undefined\}/)
     assert.match(
       globals,
       /\.effort-track \{[\s\S]{0,700}overflow: visible/,
-      "the outer hit target must leave the thumb and value bubble visible",
+      "the outer hit target must leave the focus ring and value bubble visible",
     )
     for (const rail of ["effort-track-line", "effort-track-fill"]) {
       assert.match(
@@ -141,7 +141,7 @@ describe("composer effort picker source contract", () => {
   })
 
   it("ships the effort styles in the curated stylesheet", () => {
-    for (const cls of [".effort-section", ".effort-track-line", ".effort-stop-active", ".effort-ends"]) {
+    for (const cls of [".effort-section", ".effort-track-line", ".effort-dither-core", ".effort-ends"]) {
       assert.ok(globals.includes(`${cls} {`), `${cls} must exist in globals.css`)
     }
     assert.ok(!globals.includes(".effort-caption {"), "the removed caption must not keep stale layout CSS")
