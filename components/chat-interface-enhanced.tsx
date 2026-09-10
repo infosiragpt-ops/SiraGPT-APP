@@ -83,7 +83,6 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
-import { ChatMascot } from "@/components/chat-mascot"
 // Visor de documentos: pesado (PDF.js, mammoth, xlsx, etc.). Solo se
 // monta cuando el usuario abre un adjunto, así que lo cargamos por
 // demanda. SSR desactivado porque el visor depende de APIs del
@@ -13864,11 +13863,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   >
                     <SidebarOvalIcon className="h-[18px] w-[18px]" />
                   </button>
-                ) : null}
-                {currentChat?.id ? (
-                  <span data-testid="chat-header-mascot" className="flex h-7 w-7 shrink-0 items-center justify-center">
-                    <ChatMascot seed={currentChat.id} size={20} title="Mascota de esta conversación" />
-                  </span>
                 ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">

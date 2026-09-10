@@ -10,6 +10,7 @@ import {
   ArrowDown,
   X,
   List,
+  MessageCircle,
 } from "lucide-react"
 import {
   Dialog,
@@ -25,7 +26,6 @@ import { useRouter, usePathname } from "next/navigation"
 import { isAgentsHomePath, agentsHomeHref } from "@/lib/agents-home-path"
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { ChatMascot } from "@/components/chat-mascot"
 import { projectsService, type Project } from "@/lib/projects-service"
 import { filterProjects } from "@/lib/projects-logic"
 
@@ -439,7 +439,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                         {isProject ? (
                           <List className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
                         ) : (
-                          <ChatMascot seed={chat.id} size={18} />
+                          <MessageCircle className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
