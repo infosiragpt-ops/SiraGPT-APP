@@ -1570,6 +1570,68 @@ const github_create_issue = createConnectedAppTool(
   },
 );
 
+const construir_scaffold = {
+  name: 'construir_scaffold',
+  description: [
+    'Crea un proyecto web/app FUNCIONAL (HTML/JS + zip descargable + base de datos en archivo).',
+    'USA cuando el usuario pide crear una web, landing, app, software o «créame algo funcional».',
+    'NO uses create_document (Word/PDF). El HTML se puede previsualizar y descargar.',
+    'Si pide publicarlo en GitHub, llama github_publish_project después (requiere OAuth conectado).',
+  ].join(' '),
+  schema: {
+    prompt: 'string (optional — defaults to the user query)',
+    title: 'string (optional)',
+    publishGithub: 'boolean (optional)',
+    repoName: 'string (optional)',
+    approved: 'boolean (required true if publishGithub)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.deliverConstruirProject({
+      prompt: (args && args.prompt) || ctx.userQuery || ctx.goal || '',
+      title: args && args.title,
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      modelAlias: ctx.modelAlias || ctx.model,
+      publishGithub: args && args.publishGithub === true,
+      approved: args && args.approved === true,
+      repoName: args && args.repoName,
+      onEvent: ctx.onEvent,
+      saveArtifact: ctx.saveArtifact,
+      fetchImpl: ctx.fetchImpl,
+      resolveToken: ctx.resolveGithubToken,
+    });
+  },
+};
+
+const github_publish_project = {
+  name: 'github_publish_project',
+  description: [
+    'Publica el último proyecto CONSTRUIR de este chat en GitHub (crea repo o empuja una rama).',
+    'Requiere la cuenta GitHub OAuth del usuario. Si no está conectada, devuelve un error en español con CTA a /conexiones.',
+    'NUNCA inventes un token. Escritura: approved=true obligatorio.',
+  ].join(' '),
+  schema: {
+    repoName: 'string (optional)',
+    branch: 'string (optional — si el repo ya existe, crea esta rama)',
+    description: 'string (optional)',
+    approved: 'boolean (required true)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.publishLastProject({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      repoName: args && args.repoName,
+      branch: args && args.branch,
+      description: args && args.description,
+      approved: args && args.approved === true,
+      fetchImpl: ctx.fetchImpl,
+      resolveToken: ctx.resolveGithubToken,
+    });
+  },
+};
+
 const linkedin_read_profile = createConnectedAppTool(
   'linkedin_read_profile',
   'Lee el perfil LinkedIn (OpenID userinfo) de la cuenta conectada del usuario.',
@@ -1610,6 +1672,7 @@ const ALL_TOOLS = [
   github_search, scientific_search, x_search,
   github_list_repos, github_create_issue, linkedin_read_profile, linkedin_publish_post,
   x_list_mentions, x_publish_post,
+  construir_scaffold, github_publish_project,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1630,6 +1693,7 @@ module.exports = {
   github_search, scientific_search, x_search,
   github_list_repos, github_create_issue, linkedin_read_profile, linkedin_publish_post,
   x_list_mentions, x_publish_post,
+  construir_scaffold, github_publish_project,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests
