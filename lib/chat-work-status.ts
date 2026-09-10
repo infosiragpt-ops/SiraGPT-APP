@@ -23,13 +23,17 @@ export type ChatDecisionOption = {
   replyText?: string
 }
 
+export type ChatDecisionQuestion = {
+  id: string
+  text: string
+  options: ChatDecisionOption[]
+}
+
 export type ChatDecisionRequest = {
   kind: ChatDecisionKind
-  title: string
-  body?: string
-  questions: string[]
-  options: ChatDecisionOption[]
+  questions: ChatDecisionQuestion[]
   allowCustomReply: boolean
+  allowSkip: boolean
   permissionId?: string
   runId?: string
 }
@@ -122,24 +126,63 @@ function normalizeOption(raw: unknown, index: number, recommendedIndex: number):
   }
 }
 
-function collectQuestionStrings(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    const text = asText(value)
-    return text ? [text] : []
+function defaultContinueOptions(): ChatDecisionOption[] {
+  return [{
+    id: "continue",
+    label: "Continuar con el criterio del agente",
+    description: "El agente toma la mejor decisión y sigue trabajando.",
+    recommended: true,
+    replyText: "Continúa con tu mejor criterio y toma la decisión por mí.",
+  }]
+}
+
+function optionsFromList(raw: unknown): ChatDecisionOption[] {
+  if (!Array.isArray(raw) || raw.length === 0) return []
+  const recommendedIndex = raw.findIndex((item) => asRecord(item)?.recommended === true)
+  const fallbackIndex = recommendedIndex >= 0 ? recommendedIndex : 0
+  const options = raw
+    .map((item, index) => normalizeOption(item, index, fallbackIndex))
+    .filter((item): item is ChatDecisionOption => Boolean(item))
+  if (options.length && !options.some((option) => option.recommended)) options[0].recommended = true
+  return options
+}
+
+function collectQuestionCards(payload: Record<string, unknown>): ChatDecisionQuestion[] {
+  const sharedOptions = collectOptionsFromPayload(payload)
+  const raw = payload.clarifying_questions || payload.questions || payload.prompts
+  if (!Array.isArray(raw) || raw.length === 0) {
+    const heading = asText(payload.text || payload.question)
+    if (!heading && !sharedOptions.length) return []
+    return [{
+      id: "q0",
+      text: heading || "¿Cómo quieres que continúe?",
+      options: sharedOptions.length ? sharedOptions : defaultContinueOptions(),
+    }]
   }
-  const out: string[] = []
-  for (const item of value) {
+  const cards: ChatDecisionQuestion[] = []
+  raw.forEach((item, index) => {
     if (typeof item === "string") {
       const text = item.trim()
-      if (text) out.push(text)
-      continue
+      if (!text) return
+      cards.push({
+        id: `q${index}`,
+        text,
+        options: sharedOptions.length ? sharedOptions : defaultContinueOptions(),
+      })
+      return
     }
     const record = asRecord(item)
-    if (!record) continue
+    if (!record) return
     const text = asText(record.question || record.text || record.prompt || record.title)
-    if (text) out.push(text)
-  }
-  return out
+    const options = optionsFromList(record.options)
+    if (!text) return
+    cards.push({
+      id: asText(record.id) || `q${index}`,
+      text,
+      options: options.length ? options : (sharedOptions.length ? sharedOptions : defaultContinueOptions()),
+    })
+  })
+  return cards
 }
 
 function collectOptionsFromPayload(payload: Record<string, unknown>): ChatDecisionOption[] {
@@ -197,6 +240,27 @@ function clarificationPayload(assistant: ChatAssistantRef | null | undefined): R
   return null
 }
 
+export function recommendedOption(question: ChatDecisionQuestion | undefined): ChatDecisionOption | null {
+  if (!question || question.options.length === 0) return null
+  return question.options.find((option) => option.recommended) || question.options[0]
+}
+
+export function formatDecisionAnswers(
+  questions: ChatDecisionQuestion[],
+  answers: Record<string, ChatDecisionOption | { label: string; replyText?: string }>,
+): string {
+  const lines: string[] = []
+  for (const question of questions) {
+    const answer = answers[question.id]
+    if (!answer) continue
+    const reply = asText((answer as ChatDecisionOption).replyText) || asText(answer.label)
+    if (!reply) continue
+    if (questions.length === 1) return reply
+    lines.push(`${question.text}\n${reply}`)
+  }
+  return lines.join("\n\n")
+}
+
 export function extractChatDecisionRequest(assistant: ChatAssistantRef | null | undefined): ChatDecisionRequest | null {
   if (!assistant) return null
 
@@ -204,16 +268,34 @@ export function extractChatDecisionRequest(assistant: ChatAssistantRef | null | 
   if (permission) {
     return {
       kind: "permission",
-      title: "El agente necesita tu decisión",
-      body: permission.humanDescription,
-      questions: [`El agente quiere usar ${permission.name}`],
-      options: [
-        { id: "allow", label: "Permitir", recommended: true, replyText: "Permitir" },
-        { id: "always_allow_in_chat", label: "Permitir siempre en este chat", replyText: "Permitir siempre en este chat" },
-        { id: "deny", label: "Denegar", replyText: "Denegar" },
-      ],
       allowCustomReply: false,
+      allowSkip: true,
       permissionId: permission.permissionId,
+      questions: [{
+        id: "permission",
+        text: `El agente quiere usar ${permission.name}. ¿Lo permites?`,
+        options: [
+          {
+            id: "allow",
+            label: "Permitir ahora",
+            description: permission.humanDescription || "El agente ejecuta esta acción y sigue trabajando.",
+            recommended: true,
+            replyText: "Permitir",
+          },
+          {
+            id: "always_allow_in_chat",
+            label: "Permitir siempre en este chat",
+            description: "No volver a preguntar por esta herramienta en esta conversación.",
+            replyText: "Permitir siempre en este chat",
+          },
+          {
+            id: "deny",
+            label: "Denegar",
+            description: "El agente no ejecuta esta acción y busca otra vía.",
+            replyText: "Denegar",
+          },
+        ],
+      }],
     }
   }
 
@@ -221,40 +303,40 @@ export function extractChatDecisionRequest(assistant: ChatAssistantRef | null | 
   if (WAITING_TASK_STATUSES.has(runStatus)) {
     return {
       kind: "approval",
-      title: "El agente necesita tu decisión",
-      body: "El agente no puede continuar hasta que apruebes el siguiente paso.",
-      questions: ["¿Apruebas que el agente continúe?"],
-      options: [
-        { id: "approve", label: "Aprobar y continuar", recommended: true, replyText: "Aprobado, continúa." },
-        { id: "reject", label: "Rechazar", replyText: "Rechazado. No continúes." },
-      ],
       allowCustomReply: true,
+      allowSkip: true,
       runId: asText(assistant.agentRun?.id) || undefined,
+      questions: [{
+        id: "approval",
+        text: "El agente no puede continuar hasta que apruebes el siguiente paso. ¿Cómo sigo?",
+        options: [
+          {
+            id: "approve",
+            label: "Aprobar y continuar",
+            description: "El agente sigue con el plan propuesto.",
+            recommended: true,
+            replyText: "Aprobado, continúa.",
+          },
+          {
+            id: "reject",
+            label: "Rechazar",
+            description: "Detén este paso. El agente no continúa por esta vía.",
+            replyText: "Rechazado. No continúes.",
+          },
+        ],
+      }],
     }
   }
 
   const payload = clarificationPayload(assistant)
   if (!payload) return null
-  const questions = collectQuestionStrings(
-    payload.clarifying_questions || payload.questions || payload.prompts,
-  )
-  const options = collectOptionsFromPayload(payload)
-  if (!questions.length && !options.length) return null
-  const resolvedOptions = options.length
-    ? options
-    : [{
-        id: "continue",
-        label: "Continuar con el criterio del agente",
-        recommended: true,
-        replyText: "Continúa con tu mejor criterio y toma la decisión por mí.",
-      }]
+  const questions = collectQuestionCards(payload)
+  if (!questions.length) return null
   return {
     kind: "clarification",
-    title: "El agente necesita tu decisión",
-    body: asText(payload.text || payload.clarification_reason || payload.reason) || undefined,
     questions,
-    options: resolvedOptions,
     allowCustomReply: true,
+    allowSkip: true,
   }
 }
 
