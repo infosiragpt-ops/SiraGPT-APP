@@ -18,53 +18,56 @@ function ruleBody(selector: string): string {
   return match![1]
 }
 
-describe("effort slider — dithered pixel-dissolve contract", () => {
-  it("builds the dissolve from SVG patterns and gradient masks, never a raster asset", () => {
+describe("effort slider — symmetric pixel-cloud contract", () => {
+  it("builds the dissolve from SVG patterns and symmetric tent masks, never a raster asset", () => {
     assert.match(ditherTrack, /<pattern[\s\S]{0,200}patternUnits="userSpaceOnUse"/, "pixels must tile in user space so they stay square at any width")
-    assert.match(ditherTrack, /<linearGradient[\s\S]{0,80}x1="0" y1="0" x2="1" y2="0"/, "each layer fades in along the x axis")
+    assert.match(ditherTrack, /<linearGradient[\s\S]{0,80}x1="0" y1="0" x2="1" y2="0"/, "each layer fades symmetrically around the centre")
+    assert.match(ditherTrack, /0\.5 - w/, "tent windows are centred at 0.5 with a flat opaque plateau")
     assert.match(ditherTrack, /<mask[\s\S]{0,120}maskUnits="userSpaceOnUse"/, "masks resolve against the full track")
     assert.doesNotMatch(ditherTrack, /<image|\.png|\.jpg|\.webp|data:image/i, "the effect must be generated, not a static image")
     assert.match(ditherTrack, /shape-rendering|effort-dither-px/, "pixel rects carry the crisp-edge class")
     assert.match(ditherTrack, /mulberry32|Fisher|seed/i, "cell ordering must be seeded so SSR and client markup match")
+    assert.match(ditherTrack, /psparkle/, "a dedicated white-sparkle pattern glints in the core")
+    assert.match(ditherTrack, /msparkle/, "the sparkles are masked to the tight centre")
   })
 
-  it("mounts the dither inside the fill and renders a capsule thumb on the track", () => {
+  it("mounts the dither inside the fill and ships no visible dial", () => {
     assert.match(effortMenu, /import \{ EffortDitherTrack \} from "@\/components\/chat\/effort-dither-track"/)
     assert.match(
       effortMenu,
       /<span className="effort-track-fill">\s*<EffortDitherTrack className="effort-dither" \/>\s*<span className="effort-sheen" aria-hidden \/>\s*<\/span>/,
-      "the dither is the fill's only child so clip-path reveals it up to the thumb",
+      "the dither is the fill's only child so the reveal uncovers it up to the active stop",
     )
-    assert.match(effortMenu, /<span className="effort-thumb" data-testid="composer-effort-thumb" aria-hidden \/>/)
+    assert.doesNotMatch(effortMenu, /effort-thumb/, "no dial: the cloud's cut position, header readout and ticks carry the value")
     assert.match(effortMenu, /data-stop=\{String\(index\)\}/, "stops expose their index so CSS can place tick marks")
   })
 
-  it("styles a fully rounded grey→violet rail with a white capsule thumb", () => {
+  it("styles a thin pale capsule rail with a feathered mask reveal", () => {
     const section = ruleBody(".effort-section")
-    assert.match(section, /--effort-violet: hsl\(26\d /, "the dissolve resolves to violet")
-    assert.match(section, /--effort-rail: hsl\(260 18% 93%\)/, "the unrevealed rail stays neutral")
+    assert.match(section, /--effort-violet: hsl\(25\d /, "the dissolve resolves to violet")
+    assert.match(section, /--effort-rail: hsl\(257 62% 93%\)/, "both rail ends stay pale lavender")
+    assert.match(section, /--effort-rail-h: 1rem;/, "thin rail")
 
     const track = ruleBody(".effort-track")
     assert.match(track, /border-radius: 999px;/)
     assert.match(track, /cursor: grab;/)
     assert.match(track, /--effort-index: 0;/)
-    assert.match(track, /--effort-x: calc\(/, "x must be declared on the track: var(--effort-index) substitutes at declaration scope, so section-level x froze the thumb at stop 0")
+    assert.match(track, /--effort-x: calc\(/, "x must be declared on the track: var(--effort-index) substitutes at declaration scope, so section-level x froze the fill at stop 0")
+    assert.match(track, /transition: --effort-x 220ms/, "the reveal position itself animates so the cloud glides between stops")
+    assert.match(globals, /@property --effort-x \{\s*syntax: "<length-percentage>";/, "registered custom property: without it the reveal would snap discretely")
 
     const fill = ruleBody(".effort-track-fill")
-    assert.match(fill, /clip-path: inset\(0 calc\(100% - var\(--effort-x\)\) 0 0\);/, "reveal is a clip, so the dissolve stays anchored to the full rail")
-    assert.match(fill, /transition: clip-path/)
+    assert.match(fill, /mask-image: linear-gradient\(90deg, #fff calc\(var\(--effort-x\) - 16px\), transparent var\(--effort-x\)\);/, "reveal is a feathered mask, so the cloud dissolves instead of cutting")
+    assert.doesNotMatch(fill, /clip-path/, "the old hard clip is gone")
 
-    const thumb = ruleBody(".effort-thumb")
-    assert.match(thumb, /border-radius: 999px;/, "capsule")
-    assert.match(thumb, /background: #ffffff;/, "white")
-    assert.match(thumb, /border: 1px solid hsl\(220 12% 52%\);/, "3:1 border against the white fill and the grey rail (WCAG 1.4.11)")
-    assert.match(thumb, /box-shadow:\s*inset 0 1px 0 hsl\(0 0% 100%\),\s*0 0 0 3px hsl\(265 65% 70% \/ 0\.12\),\s*0 1px 2px hsl\(220 25% 10% \/ 0\.14\),\s*0 3px 8px -2px hsl\(220 25% 10% \/ 0\.2\);/, "soft shadow")
-    assert.match(thumb, /left: var\(--effort-x\);/)
+    assert.ok(!globals.includes(".effort-thumb"), "no dial CSS may linger")
+    assert.ok(!globals.includes(".effort-stop::after"), "no stop dots may linger")
 
-    for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".dark .effort-section {", ".dark .effort-thumb {"]) {
+    for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".effort-dither-core {", ".effort-dither-spark {", ".dark .effort-section {"]) {
       assert.ok(globals.includes(cls), `${cls} must exist`)
     }
-    assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track-fill,\s*\.effort-thumb,\s*\.effort-dither-twinkle,\s*\.effort-sheen,/, "reduced motion freezes fill + thumb + pixels + sheen")
+    assert.ok(!globals.includes(".dark .effort-thumb {"), "no dark-mode dial CSS may linger")
+    assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track,\s*\.effort-track-fill,\s*\.effort-dither-twinkle,\s*\.effort-sheen,/, "reduced motion freezes track + fill + pixels + sheen")
     assert.ok(!globals.includes(".effort-track-fill::after {"), "the old striped neon overlay must be gone")
   })
 })

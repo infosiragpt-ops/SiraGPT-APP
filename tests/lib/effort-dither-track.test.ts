@@ -4,7 +4,7 @@ import { createElement } from "react"
 
 import { EFFORT_DITHER_SPEC, EffortDitherTrack } from "@/components/chat/effort-dither-track"
 
-describe("EffortDitherTrack — dithered pixel dissolve", () => {
+describe("EffortDitherTrack — symmetric pixel cloud", () => {
   it("partitions the tile into disjoint layers that together cover every cell", () => {
     const { tile, layerSizes, layers } = EFFORT_DITHER_SPEC
     const total = tile.cols * tile.rows
@@ -26,28 +26,48 @@ describe("EffortDitherTrack — dithered pixel dissolve", () => {
     expect(seen.size).toBe(total)
   })
 
-  it("ramps density and opacity from left to right, with isolated particles first", () => {
-    const { layerRamps, layerSizes, solidRamp, layers } = EFFORT_DITHER_SPEC
+  it("peaks density at the centre and dissolves symmetrically, with isolated particles first", () => {
+    const { layerHalfWidths, layerSizes, layers, tentStops } = EFFORT_DITHER_SPEC
+    expect(layerHalfWidths).toHaveLength(layerSizes.length)
     // Sparse → dense: every layer adds at least as many pixels as the previous one.
     for (let i = 1; i < layerSizes.length; i += 1) expect(layerSizes[i]).toBeGreaterThanOrEqual(layerSizes[i - 1])
-    // Each layer fades in later than the one before, and every ramp is a valid [0,1] window.
-    for (let i = 0; i < layerRamps.length; i += 1) {
-      const [from, to] = layerRamps[i]
-      expect(from).toBeGreaterThanOrEqual(0)
-      expect(to).toBeLessThanOrEqual(1)
-      expect(to).toBeGreaterThan(from)
-      if (i > 0) {
-        expect(from).toBeGreaterThan(layerRamps[i - 1][0])
-        expect(to).toBeGreaterThan(layerRamps[i - 1][1])
-      }
+    // Windows shrink toward the core and every window is a valid (0, 0.5] half-width.
+    for (let i = 0; i < layerHalfWidths.length; i += 1) {
+      const w = layerHalfWidths[i]
+      expect(w).toBeGreaterThan(0)
+      expect(w).toBeLessThanOrEqual(0.5)
+      if (i > 0) expect(w).toBeLessThan(layerHalfWidths[i - 1])
     }
-    // Particles start at the very left; the solid cap only covers the far right.
-    expect(layerRamps[0][0]).toBe(0)
-    expect(solidRamp[0]).toBeGreaterThan(0.75)
-    expect(solidRamp[1]).toBe(1)
+    // Tent stops are symmetric around 0.5 with a flat opaque plateau.
+    for (const w of layerHalfWidths) {
+      const stops = tentStops(w)
+      expect(stops).toHaveLength(4)
+      expect(stops.map(([, opacity]) => opacity)).toEqual([0, 1, 1, 0])
+      const [a, b, c, d] = stops.map(([offset]) => offset)
+      expect(a + d).toBeCloseTo(1, 10)
+      expect(b + c).toBeCloseTo(1, 10)
+      expect(a).toBeGreaterThanOrEqual(0)
+      expect(d).toBeLessThanOrEqual(1)
+    }
     // The particle layer holds two cells far apart (not a pair).
     const [[c1, r1], [c2, r2]] = layers[0]
     expect(Math.abs(c1 - c2) + Math.abs(r1 - r2)).toBeGreaterThanOrEqual(6)
+  })
+
+  it("glows a soft core and glints white sparkles only in the tight centre", () => {
+    const { coreHalfWidth, layerHalfWidths, sparkleCells, sparkleHalfWidth, sparkleSize } = EFFORT_DITHER_SPEC
+    expect(coreHalfWidth).toBeGreaterThan(0)
+    expect(coreHalfWidth).toBeLessThanOrEqual(0.5)
+    expect(sparkleHalfWidth).toBeGreaterThan(0)
+    expect(sparkleHalfWidth).toBeLessThan(coreHalfWidth)
+    expect(sparkleCells).toHaveLength(sparkleSize)
+    expect(sparkleSize).toBeGreaterThan(0)
+    const markup = renderToStaticMarkup(createElement(EffortDitherTrack, { className: "effort-dither" }))
+    expect((markup.match(/class="effort-dither-spark"/g) || []).length).toBe(sparkleSize)
+    expect(markup).toContain('class="effort-dither-core"')
+    expect(markup).toContain('class="effort-dither-sparkle-layer"')
+    // No sparkle rect shimmers.
+    expect((markup.match(/effort-dither-spark"/g) || []).length).toBe(sparkleSize)
   })
 
   it("twinkles only sparse layers with deterministic position-derived delays", () => {
@@ -86,12 +106,15 @@ describe("EffortDitherTrack — dithered pixel dissolve", () => {
     expect(first).toContain('class="effort-dither-base"')
     expect(first).toContain('class="effort-dither-px"')
     expect(first).not.toMatch(/<image|data:image/)
-    // Six pixel layers + the solid cap, each behind its own mask.
-    expect((first.match(/<pattern /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length)
-    expect((first.match(/<mask /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 1)
-    // Every pixel rect is exactly `pixel` wide/tall (twinkling or static).
-    const sizes = [...first.matchAll(/class="effort-dither-px(?: effort-dither-twinkle)?"(?: style="[^"]*")? x="[\d.]+" y="[\d.]+" width="(\d+)" height="(\d+)"/g)]
-    expect(sizes.length).toBe(EFFORT_DITHER_SPEC.tile.cols * EFFORT_DITHER_SPEC.tile.rows)
+    // Six pixel layers + sparkles, each behind its own pattern; one mask per
+    // layer plus the core and sparkle masks.
+    expect((first.match(/<pattern /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 1)
+    expect((first.match(/<mask /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 2)
+    // Every pixel rect is exactly `pixel` wide/tall (violet or sparkle).
+    const sizes = [...first.matchAll(/class="effort-dither-(?:px(?: effort-dither-twinkle)?|spark)"(?: style="[^"]*")? x="[\d.]+" y="[\d.]+" width="(\d+)" height="(\d+)"/g)]
+    expect(sizes.length).toBe(
+      EFFORT_DITHER_SPEC.tile.cols * EFFORT_DITHER_SPEC.tile.rows + EFFORT_DITHER_SPEC.sparkleSize,
+    )
     for (const [, w, h] of sizes) {
       expect(Number(w)).toBe(pixel)
       expect(Number(h)).toBe(pixel)

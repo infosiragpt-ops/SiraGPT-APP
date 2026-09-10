@@ -18,17 +18,19 @@ export const EFFORT_LEVELS = [
  * Four-stop effort slider.
  *
  * Visual contract (see globals.css `.effort-track*`):
- *   • fully rounded rail that starts grey and dissolves into violet through a
- *     dithered pixel grid (`EffortDitherTrack`, pure SVG — no raster asset);
- *   • the dither is anchored to the FULL rail and revealed up to the thumb
- *     with `clip-path`, so a higher effort literally uncovers more violet;
- *   • a white capsule thumb with a hairline border and a soft shadow marks
- *     the active stop; the remaining stops show as faint tick dots;
+ *   • thin fully rounded rail, pale lavender at both ends, carrying a
+ *     dithered pixel cloud (`EffortDitherTrack`, pure SVG — no raster asset)
+ *     that peaks in the middle and dissolves symmetrically outward;
+ *   • the cloud is anchored to the FULL rail and revealed up to the active
+ *     stop with a feathered mask, so a higher effort literally uncovers more violet;
+ *   • no visible dial: the value lives in the cloud's cut position, the
+ *     header readout and the tick marks below the rail; stops stay invisible
+ *     hit areas;
  *   • a light band travels the revealed region in a constant loop
  *     (`.effort-sheen`) so the bar feels alive while open.
  * Discrete control with four fixed stops: taps and drags snap to the nearest
  * stop, tick marks under the rail show the steps, the header names the active
- * level in text (never color alone), and a bubble follows the thumb while
+ * level in text (never color alone), and a bubble follows the active stop while
  * dragging. The title + value label the slider via `aria-labelledby`, so a
  * screen reader announces e.g. "Esfuerzo Extra high", never a bare number.
  * The track itself is the pointer target.
@@ -132,7 +134,9 @@ export function EffortSection({ selectedEffort, setSelectedEffort, disabled = fa
             onClick={() => moveTo(index)}
           />
         ))}
-        <span className="effort-thumb" data-testid="composer-effort-thumb" aria-hidden />
+        {/* No visible dial: the pixel cloud's cut position, the header
+            readout and the ticks below carry the value. Stops above stay
+            invisible hit areas. */}
         {dragging && !disabled ? (
           <span className="effort-bubble" data-testid="composer-effort-bubble" aria-hidden>
             {active.label}
