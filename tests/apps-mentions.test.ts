@@ -46,21 +46,30 @@ describe("apps @ mentions", () => {
     assert.doesNotMatch(JSON.stringify(payload), /token|gho_|Bearer /i)
   })
 
-  it("groups Conectadas first and keeps catalog apps unavailable to connect", () => {
+  it("groups Conectadas first and routes catalog apps to the computer", () => {
     const apps = buildPickerApps({ x: "connected", github: "expired" })
     const grouped = groupPickerApps(filterPickerApps(apps, ""))
     assert.equal(grouped.connected[0]?.id, "x")
     assert.ok(grouped.connect.some((app) => app.id === "github"))
     assert.ok(grouped.connect.some((app) => app.id === "linkedin"))
-    const indeed = grouped.unavailable.find((app) => app.id === "indeed")
+    const indeed = grouped.connect.find((app) => app.id === "indeed")
     assert.ok(indeed)
-    assert.equal(indeed.status, "unavailable")
+    assert.equal(indeed.status, "connect")
     assert.equal(resolveConnectPlan({ id: "indeed", name: "Indeed", domain: "indeed.com" }).kind, "computer")
     assert.ok(grouped.connect.some((app) => app.id === "facebook"))
     const facebook = buildPickerApps({ facebook: "connected" }).find((app) => app.id === "facebook")
     assert.equal(facebook?.status, "connect")
     assert.equal(MENTION_COPY.connectedGroup, "Conectadas")
     assert.equal(MENTION_COPY.connectGroup, "Conectar")
+  })
+
+  it("marks catalog mentions as computer-connectable instead of dead ends", () => {
+    const payload = resolveMentionedApps("Busca en @Etsy y @GitHub", [], {})
+    const etsy = payload.needsConnect.find((app) => app.id === "etsy")
+    assert.ok(etsy)
+    assert.equal(etsy.via, "computer")
+    assert.equal(etsy.host, "etsy.com")
+    assert.match(MENTION_COPY.computerHint("Etsy", "etsy.com"), /computadora de este chat/)
   })
 
   it("inserts an @AppName mention over the live token", () => {

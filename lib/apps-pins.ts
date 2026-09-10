@@ -25,6 +25,12 @@ export interface PinnedChipInput {
   connecting?: boolean
   expiresAt?: string | null
   lastError?: string | null
+  /**
+   * How the pinned app runs: `oauth` (first-party connection with tools) or
+   * `computer` (catalog app opened in the chat's computer browser, no OAuth
+   * tools). Computer pins are usable without a connection.
+   */
+  via?: "oauth" | "computer"
 }
 
 export function normalizeSearch(s: string): string {
@@ -78,10 +84,11 @@ export function isPinConnected(status: string | null | undefined): boolean {
   return String(status || "").trim() === "connected"
 }
 
-/** Guard: only available + connected apps can be pinned. */
+/** Guard: OAuth apps need available + connected; computer pins need available. */
 export function canPinApp(app: PinnedChipInput): boolean {
   if (app.availability === "unavailable") return false
   if (app.connecting) return false
+  if (app.via === "computer") return true
   return isPinConnected(app.connectionStatus)
 }
 
@@ -99,6 +106,9 @@ export function canAddPin(currentPins: string[]): boolean {
 export function deriveChipStatus(input: PinnedChipInput): ChipStatus {
   if (input.availability === "unavailable") return "blocked"
   if (input.connecting) return "loading"
+  // Computer pins need no OAuth connection: usable as long as the app has a
+  // site to open.
+  if (input.via === "computer") return "active"
   const status = String(input.connectionStatus || "").trim()
   if (status === "expired" || status === "revoked" || status === "error") return "blocked"
   if (status !== "connected") return "blocked"

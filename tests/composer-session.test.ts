@@ -6,6 +6,7 @@ import path from "node:path"
 
 import {
   composerBlocksTools,
+  composerDisablesAgentic,
   composerGenerateFlags,
   isComposerPermissionId,
   readComposerPermission,
@@ -20,19 +21,25 @@ describe("composer session policy", () => {
     assert.equal(composerBlocksTools("default"), false)
   })
 
-  it("defaults to full access without a browser store", () => {
-    assert.equal(isComposerPermissionId("full"), true)
+  it("defaults to the agent policy without a browser store", () => {
+    assert.equal(isComposerPermissionId("default"), true)
     assert.equal(isComposerPermissionId("admin"), false)
-    assert.equal(readComposerPermission(), "full")
-    assert.deepEqual(composerGenerateFlags(), { permission: "full" })
+    assert.equal(readComposerPermission(), "default")
+    assert.deepEqual(composerGenerateFlags(), { permission: "default" })
     assert.equal("disableAgentic" in composerGenerateFlags(), false)
   })
 
-  it("sends the selected permission on generate and keeps full unrestricted", () => {
+  it("sends the selected permission on generate and keeps default unrestricted", () => {
     const flags = composerGenerateFlags()
-    assert.equal(flags.permission, "full")
+    assert.equal(flags.permission, "default")
     assert.equal(flags.disableAgentic, undefined)
-    assert.deepEqual(composerGenerateFlags(), { permission: "full" })
+    assert.deepEqual(composerGenerateFlags(), { permission: "default" })
+  })
+
+  it("keeps the agentic loop on for Protegido so writes can ask the reviewer", () => {
+    assert.equal(composerBlocksTools("protected"), true)
+    assert.equal(composerDisablesAgentic("protected"), false)
+    assert.equal(composerDisablesAgentic("read"), true)
   })
 
   it("wires permission into generate and SiraCode payloads", () => {

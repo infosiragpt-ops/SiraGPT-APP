@@ -1353,6 +1353,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
           workspaceId: toolContext.workspaceId || null,
           coworkRunId: toolContext.coworkRunId || null,
+          // Protegido reviewer: the event stream pauses write-side tools on
+          // permission_request when this is 'protected'.
+          composerPermission: toolContext.permission
+            || toolContext.toolPermission
+            || toolContext.composerPermission
+            || 'default',
         });
         if (__harness) tools = applyCustomGptCapabilityGates(__harness.tools, customGptCapabilities);
       } catch (harnessErr) {
@@ -1757,6 +1763,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       || 'default';
     const toolGate = createChatToolGate({
       permission: composerPermission,
+      // Protegido writes are allowed through ONLY when the harness reviewer
+      // above is live; it pauses them on permission_request. Without a
+      // harness the gate keeps denying them (fail-closed).
+      deferProtectedAsk: Boolean(__harness),
       onAudit: (info) => { try { onEvent({ type: 'tool_authorized', tool: info.tool }); } catch (_) { /* noop */ } },
     });
 

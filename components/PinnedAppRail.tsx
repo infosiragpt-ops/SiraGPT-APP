@@ -33,6 +33,13 @@ export interface PinnedChipView {
   accountLabel?: string | null
   /** Connect/manage route for the popover's "Administrar conexión" action. */
   manageHref?: string
+  /**
+   * How the pinned app runs: `oauth` (default) or `computer` (catalog app
+   * without OAuth — opened in the chat's computer browser, no account tools).
+   */
+  via?: "oauth" | "computer"
+  /** Site host for computer pins, shown in the popover detail. */
+  computerHost?: string | null
 }
 
 const STATUS_LABEL: Record<ChipStatus, string> = {
@@ -176,6 +183,11 @@ function ChipPopover({
   const status = deriveChipStatus(chip as PinnedChipInput)
   const ref = React.useRef<HTMLDivElement>(null)
   const triggerRef = React.useRef<HTMLButtonElement>(null)
+  const computerDetail = chip.via === "computer"
+    ? (chip.computerHost
+      ? `Fijada en este chat. El agente abre https://${chip.computerHost} en la computadora cuando se lo pidas. Sin conexión de cuenta.`
+      : "Fijada en este chat. El agente la abre en la computadora cuando se lo pidas. Sin conexión de cuenta.")
+    : null
 
   React.useEffect(() => {
     function onPointerDown(event: MouseEvent) {
@@ -235,7 +247,7 @@ function ChipPopover({
           {chip.accountLabel ? (
             <p className="mt-0.5 truncate text-xs text-muted-foreground">{chip.accountLabel}</p>
           ) : null}
-          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{STATUS_DETAIL[status]}</p>
+          <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{computerDetail || STATUS_DETAIL[status]}</p>
         </div>
       </div>
       <div className="mt-2.5 flex items-center gap-1.5">

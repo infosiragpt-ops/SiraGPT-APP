@@ -8,9 +8,12 @@
  * OAuth connection — pins and connections are independent layers.
  *
  * Validation rules (enforced here, mirrored by the client):
- *   - every id exists in the catalog
- *   - availability === 'available'
- *   - the user has an active connection (status connected)
+ *   - registry apps (github/linkedin/x): manifest exists + active connection
+ *   - catalog apps without OAuth: pinnable as "computer" pins with no
+ *     connection. They load NO OAuth tools; the turn opens their site in
+ *     the chat's live computer (see apps/mentions.js prompt). Pins are
+ *     user-scoped prompt context, so an unknown id degrades to the same
+ *     computer guidance instead of failing the whole pin set.
  *   - length <= MAX_PINS
  *   - no duplicates
  */
@@ -90,7 +93,11 @@ async function validatePins(prisma, userId, rawPins) {
   for (const appId of pins) {
     const manifest = registry.getManifest(appId);
     if (!manifest) {
-      errors.push({ appId, code: PIN_ERRORS.APP_NOT_FOUND });
+      // Computer pin (catalog app without OAuth, e.g. @Etsy): no connection
+      // to check and no OAuth tools to load. classifyMentions routes it to
+      // the computer-browser guidance; a typo'd id degrades to the same
+      // harmless guidance instead of rejecting the whole pin set.
+      valid.push(appId);
       continue;
     }
     if (!manifestIsAvailable(appId)) {

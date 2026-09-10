@@ -57,11 +57,12 @@ test('validatePins rejects apps without an active connection', async () => {
   assert.deepEqual(result.pins, ['github']);
 });
 
-test('validatePins rejects unknown apps', async () => {
-  const prisma = fakePrisma([]);
-  const result = await pins.validatePins(prisma, 'u1', ['made-up-app']);
-  assert.equal(result.ok, false);
-  assert.equal(result.errors[0].code, pins.PIN_ERRORS.APP_NOT_FOUND);
+test('validatePins accepts catalog ids without OAuth as computer pins', async () => {
+  const prisma = fakePrisma([connectedRow('github')]);
+  const result = await pins.validatePins(prisma, 'u1', ['github', 'etsy', 'steer-astro']);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.pins, ['github', 'etsy', 'steer-astro']);
+  assert.deepEqual(result.errors, []);
 });
 
 test('validatePins rejects over the limit with PIN_LIMIT', async () => {
