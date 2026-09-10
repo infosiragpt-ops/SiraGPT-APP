@@ -1,6 +1,7 @@
 'use strict';
 
 const { getGema4RuntimeConfig } = require('./model-quota-router');
+const { normalizeCatalogModelType, isActiveGrokImageModel } = require('./model-output-type');
 
 const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
   {
@@ -320,7 +321,9 @@ function listVisibleTextModelDefinitions(env = process.env) {
 
 function curateVisibleTextModels(models = [], env = process.env) {
   const byName = new Map();
-  for (const model of Array.isArray(models) ? models : []) {
+  for (const row of Array.isArray(models) ? models : []) {
+    const model = normalizeCatalogModelType(row);
+    if (model.type !== 'TEXT') continue;
     const name = String(model?.name || '').trim();
     if (!name) continue;
     if (model?.isActive !== true) continue;
@@ -396,13 +399,14 @@ function curateVisibleAdminMediaModels(models = [], type, options = {}) {
     ? options.allowedNames
     : null;
 
-  return (Array.isArray(models) ? models : []).filter((model) => {
+  return (Array.isArray(models) ? models : []).map(normalizeCatalogModelType).filter((model) => {
     const name = String(model?.name || '').trim();
     if (!name) return false;
     if (normalizeModelType(model?.type) !== normalizedType) return false;
     if (model?.isActive !== true) return false;
     if (isVirtualModel(model)) return false;
-    if (allowedNames && !allowedNames.has(name)) return false;
+    if (allowedNames && !allowedNames.has(name)
+      && !(normalizedType === 'IMAGE' && isActiveGrokImageModel(model))) return false;
     return true;
   });
 }

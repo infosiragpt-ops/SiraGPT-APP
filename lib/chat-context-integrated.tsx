@@ -18,7 +18,7 @@ import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversation
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
-import { isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
@@ -979,7 +979,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       )
       devLog("modelsResponse", modelsResponse);
 
-      const activeModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : []
+      const catalogModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : []
+      const activeModels = chatType === 'text' ? filterTextCatalogModels(catalogModels) : catalogModels
       setAvailableModels(activeModels)
 
       const preferred = pickPreferredCatalogModel(activeModels, {
@@ -1016,7 +1017,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
         );
 
-        const activeModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : [];
+        const catalogModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : [];
+        const activeModels = chatType === 'text' ? filterTextCatalogModels(catalogModels) : catalogModels;
         setAvailableModels(activeModels);
         const preferred = pickPreferredCatalogModel(activeModels, {
           current: selectedModelRef.current,
@@ -1051,7 +1053,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
       );
       if (Array.isArray(r?.models)) {
-        const activeModels = r.models;
+        const activeModels = chatType === 'text' ? filterTextCatalogModels(r.models) : r.models;
         setAvailableModels(activeModels);
         const preferred = pickPreferredCatalogModel(activeModels, {
           current: selectedModelRef.current,

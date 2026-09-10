@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { inferModelOutputType } = require('./model-output-type');
 const prisma = require('../config/database');
 const {
   getProviderCatalogDiagnostics,
@@ -1180,68 +1181,7 @@ class ModelSyncService {
   }
 
   inferModelType(modelId, apiData = {}) {
-    const id = String(modelId || '').toLowerCase();
-    const mode = String(apiData.mode || '').toLowerCase();
-    const modalities = [
-      ...(apiData.supported_output_modalities || []),
-      ...(apiData.supported_modalities || []),
-      ...(apiData.output || []),
-      ...(apiData.input || []),
-    ].map(value => String(value).toLowerCase());
-
-    if (
-      id.includes('dall-e') ||
-      id.includes('gpt-image') ||
-      id.includes('imagen') ||
-      id.includes('seedream') ||
-      id.includes('flux') ||
-      id.includes('recraft') ||
-      id.includes('ideogram') ||
-      mode.includes('image') ||
-      modalities.includes('image')
-    ) {
-      return 'IMAGE';
-    }
-
-    if (
-      id.includes('video') ||
-      id.includes('veo') ||
-      id.includes('kling') ||
-      id.includes('runway') ||
-      id.includes('pika') ||
-      id.includes('luma') ||
-      id.includes('sora') ||
-      mode.includes('video') ||
-      modalities.includes('video')
-    ) {
-      return 'VIDEO';
-    }
-
-    if (
-      id.includes('suno') ||
-      id.includes('udio') ||
-      id.includes('music') ||
-      mode.includes('music') ||
-      modalities.includes('music')
-    ) {
-      return 'MUSIC';
-    }
-
-    if (
-      id.includes('whisper') ||
-      id.includes('tts-') ||
-      id.includes('-tts') ||
-      id.includes('speech') ||
-      id.includes('eleven') ||
-      id.includes('elevenlabs') ||
-      id.includes('audio') ||
-      mode.includes('audio') ||
-      modalities.includes('audio')
-    ) {
-      return 'AUDIO';
-    }
-
-    return 'TEXT';
+    return inferModelOutputType(modelId, apiData);
   }
 
   /**
