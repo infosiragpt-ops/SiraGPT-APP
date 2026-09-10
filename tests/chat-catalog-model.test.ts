@@ -1,9 +1,41 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "../lib/chat/catalog-model"
+import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "../lib/chat/catalog-model"
 
 describe("chat catalog model", () => {
+  it("excludes image generation from text even when a cached Grok row is mistyped", () => {
+    const text = { name: "deepseek-v4-pro", provider: "DeepSeek", type: "TEXT" }
+    const vision = {
+      name: "grok-4.6", provider: "xAI", type: "TEXT",
+      apiData: { architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] } },
+    }
+    const models = [text, vision,
+      { name: "grok-imagine-image-2.0", provider: "xAI", type: "TEXT" },
+      { name: "x-ai/grok-imagine-image", provider: "OpenRouter", type: "TEXT" },
+      { name: "grok-2-image-1212", provider: "xAI" },
+      { name: "gpt-image-1", provider: "OpenAI", type: "IMAGE" },
+      { name: "grok-imagine-video", provider: "xAI", type: "VIDEO" },
+      { name: "voice-model", type: "AUDIO" },
+      { name: "music-model", type: "MUSIC" },
+    ]
+    assert.deepEqual(filterTextCatalogModels(models), [text, vision])
+    assert.equal(models[2].type, "TEXT", "filtering must not mutate cached catalog rows")
+  })
+
+  it("reconciles current, pinned and last image picks against the text-only catalog", () => {
+    const image = { name: "grok-imagine-image-2.0", provider: "xAI", type: "TEXT" }
+    const text = { name: "deepseek-v4-pro", provider: "DeepSeek", type: "TEXT" }
+    const catalog = filterTextCatalogModels([image, text])
+    const preference = { current: image.name, pinned: image.name, last: image.name }
+    assert.equal(isActiveCatalogSelection(image.name, catalog), false)
+    assert.deepEqual(pickPreferredCatalogModel(catalog, preference), {
+      name: text.name, provider: text.provider,
+    })
+    assert.equal(pickPreferredCatalogModel(filterTextCatalogModels([image]), preference), null)
+    assert.deepEqual(filterTextCatalogModels(), [])
+  })
+
   it("keeps Flash when it is the selected generation model", () => {
     assert.deepEqual(
       resolveCatalogModel("deepseek-v4-flash", [
