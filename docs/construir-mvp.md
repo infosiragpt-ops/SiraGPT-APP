@@ -10,7 +10,7 @@ code, and (if GitHub OAuth is connected) publish a repo.
 |---|---|---|
 | «créame una web/app» on `/agentes` | Works. `webdev` → HTML preview + `.html` + `.zip` (Node + file DB) | Same, plus IDE shell |
 | Preview / download | HTML in the chat + artifact download URLs | Same + IDE preview pane |
-| GitHub | `github_publish_project` / `POST /api/construir-mvp/github` using the user's OAuth | Same |
+| GitHub | `github_publish_project` / `POST /api/construir-mvp/github` using the user's OAuth. Existing-repo PRs: `docs/construir-github-pr.md` | Same |
 | Isolated sandbox IDE | Hidden (`/api/agentes-coding/*` 404 except `/health`) | Gated IDE |
 
 Do **not** set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
@@ -52,3 +52,4 @@ must stay on `127.0.0.1` — see the generated README.
 
 - `construir_scaffold` — pinned on software-build turns (also used from generate-webdev)
 - `github_publish_project` — write, requires `approved=true` + user OAuth
+- Existing repo → isolated workspace → Pull Request: `docs/construir-github-pr.md`

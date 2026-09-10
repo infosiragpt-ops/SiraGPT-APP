@@ -1577,6 +1577,7 @@ const construir_scaffold = {
     'USA cuando el usuario pide crear una web, landing, app, software o «créame algo funcional».',
     'NO uses create_document (Word/PDF). El HTML se puede previsualizar y descargar.',
     'Si pide publicarlo en GitHub, llama github_publish_project después (requiere OAuth conectado).',
+    'Si pide abrir un repo existente y hacer un PR, usa github_open_repo + github_open_pull_request.',
   ].join(' '),
   schema: {
     prompt: 'string (optional — defaults to the user query)',
@@ -1632,6 +1633,157 @@ const github_publish_project = {
   },
 };
 
+const github_open_repo = {
+  name: 'github_open_repo',
+  description: [
+    'Abre un repositorio GitHub que el usuario posee o al que tiene acceso en un workspace aislado (sin .env del host).',
+    'Requiere la cuenta GitHub OAuth. Si no está conectada, error en español con CTA a /conexiones. NUNCA inventes un token.',
+    'USA cuando el usuario dice «abre un PR en owner/repo», «clona owner/repo» o «trabaja en este repo».',
+    'Después usa github_repo_list / github_repo_read / github_repo_write / github_repo_exec y github_open_pull_request.',
+  ].join(' '),
+  schema: {
+    owner: 'string (optional if repo is owner/repo)',
+    repo: 'string (required — name or owner/repo)',
+    ref: 'string (optional branch)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.openRepo({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      owner: args && args.owner,
+      repo: args && args.repo,
+      fullName: args && args.fullName,
+      ref: args && (args.ref || args.branch),
+      userQuery: ctx.userQuery || ctx.goal,
+      modelAlias: ctx.modelAlias || ctx.model,
+      fetchImpl: ctx.fetchImpl,
+      resolveToken: ctx.resolveGithubToken,
+      sandbox: ctx.repoSandbox,
+      execImpl: ctx.repoExecImpl,
+      env: ctx.env,
+    });
+  },
+};
+
+const github_repo_list = {
+  name: 'github_repo_list',
+  description: 'Lista archivos del workspace aislado abierto con github_open_repo. No toca el host.',
+  schema: {
+    path: 'string (optional — directorio relativo)',
+    workspaceId: 'string (optional — defaults to last repo in this chat)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.listRepoFiles({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      workspaceId: args && args.workspaceId,
+      path: args && args.path,
+    });
+  },
+};
+
+const github_repo_read = {
+  name: 'github_repo_read',
+  description: 'Lee un archivo del workspace aislado abierto con github_open_repo.',
+  schema: {
+    path: 'string (required — ruta relativa jaula)',
+    workspaceId: 'string (optional)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.readRepoFile({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      workspaceId: args && args.workspaceId,
+      path: args && args.path,
+    });
+  },
+};
+
+const github_repo_write = {
+  name: 'github_repo_write',
+  description: [
+    'Escribe un archivo en el workspace aislado (no empuja a GitHub).',
+    'Para publicar los cambios abre un PR con github_open_pull_request (approved=true).',
+  ].join(' '),
+  schema: {
+    path: 'string (required)',
+    content: 'string (required)',
+    workspaceId: 'string (optional)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.writeRepoFile({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      workspaceId: args && args.workspaceId,
+      path: args && args.path,
+      content: args && args.content,
+    });
+  },
+};
+
+const github_repo_exec = {
+  name: 'github_repo_exec',
+  description: [
+    'Ejecuta un comando jaula en el workspace aislado (ls, cat, pwd; u otro si hay runner inyectado).',
+    'Sin red y sin .env del host. No uses esto para push — usa github_open_pull_request.',
+  ].join(' '),
+  schema: {
+    command: 'string (required — ejecutable, sin shell)',
+    args: 'array of strings (optional)',
+    workspaceId: 'string (optional)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.execRepo({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      workspaceId: args && args.workspaceId,
+      command: args && args.command,
+      args: args && args.args,
+    });
+  },
+};
+
+const github_open_pull_request = {
+  name: 'github_open_pull_request',
+  description: [
+    'Crea una rama, commit y Pull Request en GitHub con el token OAuth del usuario a partir del workspace aislado.',
+    'Escritura: approved=true obligatorio. Si GitHub no está conectado, error en español con CTA a /conexiones. NUNCA inventes un token.',
+    'Devuelve prUrl para mostrarla en el chat. No empujes a main.',
+  ].join(' '),
+  schema: {
+    title: 'string (required)',
+    body: 'string (optional)',
+    branch: 'string (optional — nunca main/master)',
+    base: 'string (optional — default la rama del repo)',
+    approved: 'boolean (required true)',
+    workspaceId: 'string (optional)',
+  },
+  async handler(args, ctx = {}) {
+    const mvp = require('../construir-mvp');
+    return mvp.openPullRequest({
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      workspaceId: args && args.workspaceId,
+      title: args && args.title,
+      body: args && args.body,
+      branch: args && args.branch,
+      base: args && args.base,
+      message: args && args.message,
+      approved: args && args.approved === true,
+      fetchImpl: ctx.fetchImpl,
+      resolveToken: ctx.resolveGithubToken,
+      saveArtifact: ctx.saveArtifact,
+      onEvent: ctx.onEvent,
+      env: ctx.env,
+    });
+  },
+};
+
 const linkedin_read_profile = createConnectedAppTool(
   'linkedin_read_profile',
   'Lee el perfil LinkedIn (OpenID userinfo) de la cuenta conectada del usuario.',
@@ -1673,6 +1825,7 @@ const ALL_TOOLS = [
   github_list_repos, github_create_issue, linkedin_read_profile, linkedin_publish_post,
   x_list_mentions, x_publish_post,
   construir_scaffold, github_publish_project,
+  github_open_repo, github_repo_list, github_repo_read, github_repo_write, github_repo_exec, github_open_pull_request,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1694,6 +1847,7 @@ module.exports = {
   github_list_repos, github_create_issue, linkedin_read_profile, linkedin_publish_post,
   x_list_mentions, x_publish_post,
   construir_scaffold, github_publish_project,
+  github_open_repo, github_repo_list, github_repo_read, github_repo_write, github_repo_exec, github_open_pull_request,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests

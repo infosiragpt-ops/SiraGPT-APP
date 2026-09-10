@@ -11,6 +11,15 @@ const { resolveConstruirBrand, assertNoVendorLeak } = require('./brand');
 const { scaffoldConstruirProject } = require('./scaffold');
 const { zipProjectFiles } = require('./zip');
 const { publishProject, connectError, CONNECT_PATH } = require('./github-publish');
+const {
+  openRepo,
+  listRepoFiles,
+  readRepoFile,
+  writeRepoFile,
+  execRepo,
+  openPullRequest,
+} = require('./github-pr-flow');
+const { clearSessions: clearRepoSessions } = require('./github-repo-workspace');
 
 const lastByChat = new Map();
 
@@ -235,4 +244,11 @@ module.exports = {
   resolveConstruirBrand,
   publishProject,
   zipProjectFiles,
+  openRepo,
+  listRepoFiles,
+  readRepoFile,
+  writeRepoFile,
+  execRepo,
+  openPullRequest,
+  clearRepoSessions,
 };
