@@ -1,10 +1,7 @@
 "use client"
 
 import React, { useMemo, useState } from "react"
-import { ShieldQuestion } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { toast } from "sonner"
-import { apiClient } from "@/lib/api"
 import { formatThinkingDuration } from "@/components/thinking-trace"
 import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
@@ -46,42 +43,7 @@ function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineSte
   }
 }
 
-function PermissionCard({ permission, onAnswered }: { permission: AgentPermissionClient; onAnswered?: () => void }) {
-  const t = useTranslations("agent")
-  const [busy, setBusy] = useState<string | null>(null)
-  const [answered, setAnswered] = useState(false)
-  const answer = async (decision: "allow" | "always_allow_in_chat" | "deny") => {
-    if (busy) return
-    setBusy(decision)
-    try {
-      await apiClient.resolveAgentPermission(permission.permissionId, decision)
-      setAnswered(true)
-      onAnswered?.()
-    } catch (err: any) {
-      toast.error(t("permissionError"))
-      setBusy(null)
-    }
-  }
-  if (answered) return null
-  return (
-    <div className="my-2 rounded-xl border border-border/70 bg-muted/30 p-3">
-      <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground"><ShieldQuestion className="h-4 w-4" /></span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-foreground/90">{t("permissionTitle", { name: permission.name })}</div>
-          {permission.humanDescription ? <div className="mt-0.5 text-[12px] text-muted-foreground">{permission.humanDescription}</div> : null}
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            <button type="button" disabled={!!busy} onClick={() => answer("allow")} className="inline-flex h-7 items-center rounded-full bg-foreground px-3 text-[12px] font-medium text-background">{t("allow")}</button>
-            <button type="button" disabled={!!busy} onClick={() => answer("always_allow_in_chat")} className="inline-flex h-7 items-center rounded-full border border-border/70 px-3 text-[12px] font-medium text-foreground/80">{t("allowAlways")}</button>
-            <button type="button" disabled={!!busy} onClick={() => answer("deny")} className="inline-flex h-7 items-center rounded-full border border-red-500/30 px-3 text-[12px] font-medium text-red-500/90">{t("deny")}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function AgentTrace({ reasoning = "", reasoningStreaming = false, reasoningDurationMs, steps, run, permission, onPermissionAnswered }: AgentTraceProps) {
+export default function AgentTrace({ reasoning = "", reasoningStreaming = false, reasoningDurationMs, steps, run }: AgentTraceProps) {
   const t = useTranslations("agent")
   const active = reasoningStreaming || ["queued", "running", "paused", "waiting_approval"].indexOf(run?.status || "") >= 0 || (!run && steps.some((s) => s.status === "planned" || s.status === "executing"))
   const [userToggled, setUserToggled] = useState<boolean | null>(null)
@@ -136,7 +98,6 @@ export default function AgentTrace({ reasoning = "", reasoningStreaming = false,
           {expanded ? <ClaudeThinkingTimeline steps={rows} /> : null}
         </>
       )}
-      {permission ? <PermissionCard key={permission.permissionId} permission={permission} onAnswered={onPermissionAnswered} /> : null}
     </div>
   )
 }

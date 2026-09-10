@@ -37,6 +37,8 @@ test('isCustomProvider: Custom / Custom API / ollama only', () => {
   assert.equal(isCustomProvider('custom'), true);
   assert.equal(isCustomProvider('Custom API'), true);
   assert.equal(isCustomProvider('Ollama'), true);
+  assert.equal(isCustomProvider('LMStudio'), true);
+  assert.equal(isCustomProvider('vLLM'), true);
   assert.equal(isCustomProvider('HuggingFace'), true);
   assert.equal(isCustomProvider('DeepSeek'), false);
   assert.equal(isCustomProvider('OpenAI'), false);
@@ -88,6 +90,9 @@ test('SIRA_MINI_UPSTREAM_ID defaults to sira-mini and honors env override', () =
 
 test('isCustomConnectionRow: custom key or unknown /v1 host; never DeepSeek/OpenAI', () => {
   assert.equal(isCustomConnectionRow({ providerKey: 'custom', url: 'http://siragpt-ollama:11434/v1' }), true);
+  assert.equal(isCustomConnectionRow({ providerKey: 'ollama', url: 'http://127.0.0.1:11434/v1' }), true);
+  assert.equal(isCustomConnectionRow({ providerKey: 'lmstudio', url: 'http://127.0.0.1:1234/v1' }), true);
+  assert.equal(isCustomConnectionRow({ providerKey: 'vllm', url: 'http://127.0.0.1:8000/v1' }), true);
   assert.equal(isCustomConnectionRow({ providerKey: 'local-llm', url: 'http://siragpt-ollama:11434/v1' }), true);
   assert.equal(isCustomConnectionRow({ providerKey: 'openai', url: 'https://api.openai.com/v1' }), false);
   assert.equal(isCustomConnectionRow({ providerKey: 'deepseek', url: 'https://api.deepseek.com/v1' }), false);
@@ -182,6 +187,9 @@ test('collapseSiraMiniRows keeps one Mini row and prefers sira-mini over gemma4/
 test('catalogProviderForConnection canonicalises custom → Custom', () => {
   assert.equal(catalogProviderForConnection('custom', 'Ollama local'), 'Custom');
   assert.equal(catalogProviderForConnection('openai', 'OpenAI'), 'OpenAI');
+  assert.equal(catalogProviderForConnection('ollama', 'Ollama (local)'), 'Ollama');
+  assert.equal(catalogProviderForConnection('lmstudio', 'LM Studio (local)'), 'LM Studio');
+  assert.equal(catalogProviderForConnection('vllm', 'vLLM'), 'vLLM');
 });
 
 test('defaultCustomDisplayName: moondream / gemma4 → Sira Mini without a vendor display_name', () => {
