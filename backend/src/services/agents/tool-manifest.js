@@ -787,7 +787,7 @@ function getVisualMediaManifests() {
     },
     generate_video: {
       name: "generate_video",
-      purpose: "Generate a short video from a text description. If VIDEO_API_URL is configured, generates via API; otherwise produces a storyboard SVG with scene-by-scene breakdown.",
+      purpose: "Generate a professional short video from a text description with auto-directed prompts (camera, pacing, lighting, audio, anti-morph negative prompt) and cross-clip continuity via continuation + previousPrompt. Falls back to a storyboard SVG when no video API is configured.",
       inputs: {
         type: "object", required: ["prompt"],
         properties: {
@@ -796,6 +796,10 @@ function getVisualMediaManifests() {
           style: { type: "string" },
           duration: { type: "integer", minimum: 2, maximum: 60, default: 10 },
           aspectRatio: { type: "string", enum: ["16:9","9:16","1:1","4:3"] },
+          model: { type: "string" },
+          imageUrl: { type: "string" },
+          continuation: { type: "boolean" },
+          previousPrompt: { type: "string" },
         },
       },
       outputs: { type: "object", properties: {
@@ -803,6 +807,7 @@ function getVisualMediaManifests() {
         downloadUrl: { type: "string" },
         filename: { type: "string" },
         storyboard: { type: "boolean" },
+        continuityMode: { type: "string" },
         message: { type: "string" },
       } },
       allowed_formats: ["mp4","svg"],

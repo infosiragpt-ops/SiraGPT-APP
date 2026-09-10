@@ -10365,6 +10365,9 @@ router.post(
     body('image_urls').optional().isArray({ max: 12 }),
     body('image_urls.*').optional().isString(),
     body('model').optional().isString().withMessage('Invalid video model'),
+    body('history').optional().isArray({ max: 5 }),
+    body('continuation').optional().isBoolean(),
+    body('professionalize').optional().isBoolean(),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'video_generation' }),
@@ -10375,7 +10378,8 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model,
+        history: providedHistory = null, continuation = null, professionalize = true
       } = req.body;
       const userId = req.user.id;
       let effectiveAspectRatio = aspect_ratio;
@@ -10480,6 +10484,49 @@ router.post(
         const internalBase = `http://127.0.0.1:${process.env.PORT || 5000}`;
         let url = `${internalBase}/api/video/generate`;
 
+        // Continuity: anchor to previous videos in this chat so consecutive
+        // clips keep the same universe / character / style ("hilación").
+        // Falls back to the video service's own per-user history when the
+        // chat has no prior videos.
+        let videoHistory = Array.isArray(providedHistory) && providedHistory.length
+          ? providedHistory.slice(-5)
+          : [];
+        if (!videoHistory.length && chatId) {
+          try {
+            const recentMessages = await prisma.message.findMany({
+              where: { chatId },
+              orderBy: { createdAt: 'desc' },
+              take: 20,
+              select: { files: true }
+            });
+            const collected = [];
+            for (const msg of recentMessages) {
+              if (!msg.files) continue;
+              try {
+                const parsed = typeof msg.files === 'string' ? JSON.parse(msg.files) : msg.files;
+                const list = Array.isArray(parsed) ? parsed : [parsed];
+                for (const f of list) {
+                  if (!f || f.type !== 'video' || (!f.prompt && !f.originalPrompt)) continue;
+                  collected.push({
+                    prompt: f.originalPrompt || f.prompt,
+                    enhancedPrompt: f.enhanced_prompt || f.enhancedPrompt || null,
+                    aspect_ratio: f.aspect_ratio || null,
+                    resolution: f.resolution || null,
+                    audio: typeof f.audio === 'boolean' ? f.audio : null,
+                    model: f.model || f.modelDisplayName || null,
+                  });
+                }
+              } catch {
+                // Non-JSON files field — ignore.
+              }
+            }
+            videoHistory = collected.reverse().slice(-5);
+          } catch (historyError) {
+            console.error('Error building video continuity history:', historyError);
+            videoHistory = [];
+          }
+        }
+
         const videoPayload = {
           prompt,
           aspect_ratio: effectiveAspectRatio,
@@ -10489,7 +10536,10 @@ router.post(
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),
           ...(processedImageUrls.length > 0 && { image_urls: processedImageUrls }),
-          model: requestedVideoModel
+          model: requestedVideoModel,
+          ...(videoHistory.length && { history: videoHistory }),
+          ...(typeof continuation === 'boolean' && { continuation }),
+          professionalize
         };
 
         const videoResponse = await axios.post(url, videoPayload, {
@@ -10625,6 +10675,7 @@ router.post(
                 status: 'processing',
                 filename: videoResponse.data.filename,
                 prompt: prompt,
+                originalPrompt: prompt,
                 aspect_ratio: effectiveAspectRatio,
                 resolution,
                 duration: effectiveDuration,
@@ -10634,6 +10685,8 @@ router.post(
                 model: videoResponse.data.model || requestedVideoModel,
                 modelDisplayName: videoResponse.data.modelDisplayName || adminModel.displayName || requestedVideoModel,
                 usingPairedEndpoint: Boolean(videoResponse.data.usingPairedEndpoint),
+                continuation: typeof continuation === 'boolean' ? continuation : null,
+                historyUsed: videoHistory.length,
                 sourceImageUrl: processedImageUrl,
                 sourceImageUrls: processedImageUrls,
                 imageCount: processedImageUrls.length,
@@ -10943,6 +10996,11 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
                     aspect_ratio: result.aspect_ratio || statusResponse.data.aspect_ratio,
                     fal_video_url: result.fal_video_url,
                     fal_request_id: result.fal_request_id,
+                    // Continuity anchors for the next clip in this chat.
+                    enhanced_prompt: result.enhanced_prompt || f.enhanced_prompt || null,
+                    continuityMode: result.continuityMode || f.continuityMode || null,
+                    audio: typeof result.audio === 'boolean' ? result.audio : f.audio,
+                    model: result.model || f.model || null,
                     sourceImageUrl: result.sourceImageUrl || statusResponse.data.sourceImageUrl || f.sourceImageUrl,
                     sourceImageUrls: result.sourceImageUrls || statusResponse.data.sourceImageUrls || f.sourceImageUrls,
                     imageCount: result.imageCount || statusResponse.data.imageCount || f.imageCount,

@@ -48,6 +48,12 @@ function getImageEngine() {
   return imageEngineMod;
 }
 
+let videoDirectorMod;
+function getVideoDirector() {
+  if (!videoDirectorMod) videoDirectorMod = require('../video-prompt-director');
+  return videoDirectorMod;
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────────
 
 function ensureDir(p) {
@@ -1991,7 +1997,7 @@ ${chartHtml ? `<div class="charts-grid">${chartHtml}</div>` : ''}
 
 const generateVideo = {
   name: 'generate_video',
-  description: 'Generate a video from a text prompt using an AI video model (Veo, Runway, Pika, or similar). The video generation is launched asynchronously; the agent checks back for the result. Use for promotional videos, explainer animations, social media clips, or any short-form video content.',
+  description: 'Generate a professional video from a text prompt using an AI video model (Veo, Kling, Sora via fal.ai or a similar provider). The prompt is automatically directed with cinematic camera, pacing, lighting and audio cues plus a negative prompt that suppresses morphing/flicker. Pass continuation:true with previousPrompt when this clip must continue the previous shot — same character, wardrobe, location, style and locked capture settings — so consecutive videos keep visual continuity.',
   parameters: {
     type: 'object',
     properties: {
@@ -2001,11 +2007,13 @@ const generateVideo = {
       style: { type: 'string', description: 'Style hint: "cinematic", "realistic", "animated", "claymation", "retro", "3d-render".' },
       model: { type: 'string', description: 'Optional fal.ai video model (e.g. "fal-ai/veo3/fast", "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", "fal-ai/sora-2/text-to-video"). Only pass it when the user asked for a specific model; omit for the default (Veo 3 fast).' },
       imageUrl: { type: 'string', description: 'Optional source image URL to animate (image-to-video). Use the URL of an image the user attached or one generated earlier in this chat.' },
+      continuation: { type: 'boolean', description: 'Set true when this clip continues the previous shot (sequel). Forces strict visual continuity and locks capture settings.' },
+      previousPrompt: { type: 'string', description: 'Original prompt of the previous video clip, used as continuity anchor when continuation is true or history is unavailable.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style, model, imageUrl }, ctx = {}) {
+  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style, model, imageUrl, continuation = null, previousPrompt = null }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_video', preview: prompt });
 
     try {
@@ -2022,6 +2030,42 @@ const generateVideo = {
         };
         const styleDesc = styleMap[style] || '';
         if (styleDesc) enhancedPrompt = `${styleDesc} ${prompt}`;
+      }
+
+      // Professional direction + continuity via the shared prompt director.
+      let continuityMode = 'none';
+      let settingsLocked = [];
+      let directedNegativePrompt = null;
+      try {
+        const director = getVideoDirector();
+        const history = [];
+        const prior = ctx?.previousVideoPrompt || previousPrompt;
+        if (prior) history.push({ prompt: String(prior) });
+        if (Array.isArray(ctx?.videoHistory)) {
+          for (const h of ctx.videoHistory) {
+            if (h && (h.prompt || h.originalPrompt)) {
+              history.push({ prompt: h.originalPrompt || h.prompt, enhancedPrompt: h.enhancedPrompt || null });
+            }
+          }
+        }
+        const directed = director.directVideoPrompt({
+          prompt: enhancedPrompt,
+          aspectRatio,
+          durationSeconds: duration,
+          endpoint: model || '',
+          history: history.length ? history : null,
+          continuation: typeof continuation === 'boolean' ? continuation : null,
+          professionalize: true,
+        });
+        enhancedPrompt = directed.prompt;
+        continuityMode = directed.continuityMode;
+        settingsLocked = directed.settingsLocked || [];
+        directedNegativePrompt = directed.negativePrompt;
+        if (continuityMode === 'strict' && directed.settings.aspect_ratio) {
+          aspectRatio = directed.settings.aspect_ratio;
+        }
+      } catch {
+        // Director is best-effort: keep the style-enhanced prompt on failure.
       }
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: 'Iniciando generación de video…', partial: true });
@@ -2098,6 +2142,9 @@ const generateVideo = {
               downloadUrl: artifact.downloadUrl,
               mime: 'video/mp4',
               prompt: enhancedPrompt,
+              originalPrompt: prompt,
+              continuityMode,
+              settingsLocked,
               duration,
               aspectRatio,
             };
@@ -2117,6 +2164,9 @@ const generateVideo = {
             operationId,
             status: 'queued',
             prompt: enhancedPrompt,
+            originalPrompt: prompt,
+            continuityMode,
+            settingsLocked,
             duration,
             aspectRatio,
             message: 'La generación de video está en proceso. El resultado aparecerá automáticamente cuando esté listo.',
@@ -2133,6 +2183,9 @@ const generateVideo = {
           ok: true,
           status: 'submitted',
           prompt: enhancedPrompt,
+          originalPrompt: prompt,
+          continuityMode,
+          settingsLocked,
           ...pick(result, ['videoUrl', 'downloadUrl', 'operationId', 'jobId']),
         };
       }
@@ -2180,6 +2233,7 @@ const generateVideo = {
             prompt: enhancedPrompt,
             aspectRatio: falAspect,
             duration: secs,
+            negativePrompt: directedNegativePrompt,
             imageUrl: sourceImageUrl,
             resolution: '720p',
             audio: true,
@@ -2220,6 +2274,9 @@ const generateVideo = {
                 model: endpoint,
                 generationType: sourceImageUrl ? 'image-to-video' : 'text-to-video',
                 prompt: enhancedPrompt,
+                originalPrompt: prompt,
+                continuityMode,
+                settingsLocked,
                 duration: secs,
                 aspectRatio: falAspect,
               };
@@ -2337,6 +2394,8 @@ const generateVideo = {
           storyboard: true,
           scenes: scenes.length,
           prompt: enhancedPrompt,
+          originalPrompt: prompt,
+          continuityMode,
           duration,
           aspectRatio,
           message: 'No se configuró VIDEO_API_URL. Se generó un storyboard como alternativa.',
