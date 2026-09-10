@@ -12057,11 +12057,39 @@ Every element should feel intentionally designed, polished, and premium. The use
 
         const finalQuality = quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
         if (!candidateHtml || !finalQuality.passed) {
-          const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
-          throw new Error(`Web artifact validation failed before delivery: ${failed}`);
+          try {
+            const { ensureRenderableHtml } = require('../services/construir-mvp/webdev-hook');
+            const fallback = ensureRenderableHtml(candidateHtml, displayPrompt);
+            if (fallback && fallback.html) {
+              candidateHtml = fallback.html;
+            } else {
+              const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
+              throw new Error(`Web artifact validation failed before delivery: ${failed}`);
+            }
+          } catch (fallbackErr) {
+            if (fallbackErr && /Web artifact validation failed/.test(fallbackErr.message)) throw fallbackErr;
+            const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
+            throw new Error(`Web artifact validation failed before delivery: ${failed}`);
+          }
         }
 
         fullResponseContent = `\`\`\`html\n${candidateHtml}\n\`\`\``;
+        try {
+          const { attachConstruirDeliverable } = require('../services/construir-mvp/webdev-hook');
+          const attached = await attachConstruirDeliverable({
+            prompt: displayPrompt,
+            html: candidateHtml,
+            userId,
+            chatId,
+            modelAlias: model,
+            requireSoftwareAsk: false,
+          });
+          if (attached && attached.delivery && attached.delivery.footer) {
+            fullResponseContent += `\n\n${attached.delivery.footer}`;
+          }
+        } catch (construirErr) {
+          console.warn('[construir-mvp] webdev attach skipped:', construirErr && construirErr.message);
+        }
         res.write(`data: ${JSON.stringify({ content: fullResponseContent })}\n\n`);
         res.write(`data: [DONE]\n\n`);
       } catch (apiError) {
