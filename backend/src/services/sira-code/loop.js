@@ -13,6 +13,13 @@ const { getAgent } = require('./agents');
 const { authorizeTool, WRITE_TOOLS } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
+const { withProgress } = require('./progress');
+const { snapshot } = require('./project-store');
+
+function emitStage(session, step, extra = {}) {
+  const progress = withProgress(session, step, extra);
+  return stageEvent(session, step, { ...extra, progress });
+}
 const { appendMessage } = require('./session-store');
 const { ensureSessionTitle } = require('./session-title');
 const {
@@ -66,7 +73,7 @@ async function callLlmTurn(complete, args, session) {
   } catch (err) {
     if (!isTransientLlmError(err)) throw err;
     if (args.signal && args.signal.aborted) throw err;
-    stageEvent(session, 'retrying', { label: 'Reintentando' });
+    emitStage(session, 'retrying', { label: 'Reintentando' });
     return complete(args);
   }
 }
@@ -129,7 +136,7 @@ async function runPrompt(session, text, {
   if (!shouldStartSiraCodeRun(text, routerSignals)) {
     session.status = 'idle';
     session.abort = null;
-    stageEvent(session, 'done', { label: 'Listo' });
+    emitStage(session, 'done', { label: 'Listo' });
     return {
       status: 'idle',
       skipped: true,
@@ -143,7 +150,7 @@ async function runPrompt(session, text, {
   }
 
   session.status = 'running';
-  stageEvent(session, 'thinking', { label: 'Pensando' });
+  emitStage(session, 'thinking', { label: 'Pensando' });
 
   const transcript = buildTranscript(session, agent);
 
@@ -160,13 +167,13 @@ async function runPrompt(session, text, {
   function maybeCompactStage(didCompact) {
     if (!didCompact || compactedOnce) return;
     compactedOnce = true;
-    stageEvent(session, COMPACT_STAGE, { label: COMPACT_LABEL });
+    emitStage(session, COMPACT_STAGE, { label: COMPACT_LABEL });
   }
 
   try {
     for (let step = 0; step < maxSteps; step += 1) {
       if (combined.aborted) {
-        stageEvent(session, 'cancelled', { label: 'Cancelado' });
+        emitStage(session, 'cancelled', { label: 'Cancelado' });
         session.status = 'cancelled';
         return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
       }
@@ -190,13 +197,13 @@ async function runPrompt(session, text, {
 
       if (calls.length === 0) {
         session.status = 'idle';
-        stageEvent(session, 'done', { label: 'Listo' });
+        emitStage(session, 'done', { label: 'Listo' });
         break;
       }
 
       for (const call of calls) {
         if (combined.aborted) {
-          stageEvent(session, 'cancelled', { label: 'Cancelado' });
+          emitStage(session, 'cancelled', { label: 'Cancelado' });
           session.status = 'cancelled';
           return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
         }
@@ -284,7 +291,7 @@ async function runPrompt(session, text, {
           continue;
         }
 
-        stageEvent(session, 'executing', {
+        emitStage(session, 'executing', {
           label: auth.tool === 'read' || auth.tool === 'grep' || auth.tool === 'glob'
             || auth.tool === 'ls' || auth.tool === 'diagnostics'
             ? 'Analizando archivo'
@@ -307,7 +314,10 @@ async function runPrompt(session, text, {
         applyCompactedTranscript(transcript, packedAfter);
         maybeCompactStage(packedResult.truncated || packedAfter.compacted);
         if (result.ok && WRITE_TOOLS.has(auth.tool)) {
-          stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
+          emitStage(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
+          if (session.chatId && session.userId) {
+            await snapshot(session.workspace, session.userId, session.chatId, session.persistEnv).catch(() => {});
+          }
         }
       }
       if (pausedForQuestion) break;
@@ -323,11 +333,11 @@ async function runPrompt(session, text, {
     if (aborted) {
       session.status = 'cancelled';
       if (!session.events.some((ev) => ev.step === 'cancelled' || ev.label === 'Cancelado')) {
-        stageEvent(session, 'cancelled', { label: 'Cancelado' });
+        emitStage(session, 'cancelled', { label: 'Cancelado' });
       }
       return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
     }
-    stageEvent(session, 'error', { label: 'Error', preview: err.message });
+    emitStage(session, 'error', { label: 'Error', preview: err.message });
     session.status = 'error';
     throw err;
   }
@@ -358,7 +368,7 @@ async function runPrompt(session, text, {
     session.status = 'stopped';
     session.stopReason = 'tool_rounds';
     const stop = buildToolRoundsStop({ count: toolRounds, max: toolRoundCap });
-    stageEvent(session, stop.step, {
+    emitStage(session, stop.step, {
       label: stop.label,
       count: stop.count,
       max: stop.max,
@@ -366,10 +376,10 @@ async function runPrompt(session, text, {
   } else if (hitBudget && session.status === 'running') {
     session.status = 'stopped';
     session.stopReason = 'step_budget';
-    stageEvent(session, 'budgetExceeded', { label: 'Presupuesto agotado' });
+    emitStage(session, 'budgetExceeded', { label: 'Presupuesto agotado' });
   } else if (session.status === 'running') {
     session.status = 'idle';
-    stageEvent(session, 'done', { label: 'Listo' });
+    emitStage(session, 'done', { label: 'Listo' });
   }
   session.abort = null;
 
