@@ -104,9 +104,9 @@ function decryptKey(stored) {
   }
 }
 
-// Known provider keys — used to normalise UI grouping. The "custom"
-// catch-all lets admins point at anything OpenAI-compatible (e.g.
-// Ollama, LM Studio, vLLM) without us pre-blessing the URL.
+// Known provider keys — used to normalise UI grouping. First-class
+// OpenAI-compatible local runtimes (Ollama, LM Studio, vLLM) keep their
+// own key; `custom` remains the catch-all for any other /v1 host.
 const KNOWN_PROVIDERS = new Set([
   'openai',
   'anthropic',
@@ -129,6 +129,9 @@ const KNOWN_PROVIDERS = new Set([
   'elevenlabs',
   'minimax',
   'suno',
+  'ollama',
+  'lmstudio',
+  'vllm',
   'custom',
 ]);
 
@@ -151,6 +154,9 @@ const DEFAULT_PROVIDER_LABELS = {
   elevenlabs: 'ElevenLabs API (voz + música)',
   minimax: 'MiniMax API (música)',
   suno: 'Suno Gateway API (música)',
+  ollama: 'Ollama (local)',
+  lmstudio: 'LM Studio (local)',
+  vllm: 'vLLM',
   custom: 'Custom API',
 };
 

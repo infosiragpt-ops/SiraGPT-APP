@@ -918,12 +918,13 @@ class ModelSyncService {
     if (!res.ok) return { ...res, created: 0, updated: 0, errors: 0, count: 0 };
     if (!res.models.length) return { ok: true, error: null, created: 0, updated: 0, errors: 0, count: 0, models: [] };
 
-    if (providerKey === 'custom') {
+    if (providerKey === 'custom' || providerKey === 'ollama' || providerKey === 'lmstudio' || providerKey === 'vllm') {
       try {
-        const { defaultCustomDisplayName, collapseSiraMiniRows } = require('./ai/custom-provider-client');
+        const { defaultCustomDisplayName, collapseSiraMiniRows, catalogProviderForConnection } = require('./ai/custom-provider-client');
+        const catalogProvider = catalogProviderForConnection(providerKey, providerLabel);
         res.models = collapseSiraMiniRows(res.models.map((m) => ({
           ...m,
-          provider: 'Custom',
+          provider: catalogProvider,
           displayName: defaultCustomDisplayName(m.name, m.displayName),
         })));
       } catch (_) { /* keep discovered rows */ }

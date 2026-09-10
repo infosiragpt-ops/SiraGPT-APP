@@ -121,6 +121,7 @@ import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   lastAssistantMessage,
+  lastMessageRole,
   resolveChatWorkStatus,
 } from "@/lib/chat-work-status"
 import { CreditsBadge } from "@/components/CreditsBadge"
@@ -1947,11 +1948,13 @@ export function AppSidebar() {
                         const isTruncated = displayTitle.length > 25
                         const stream = bgStreams.get(chat.id)
                         const snapshot = chat.id === currentChatId ? getCurrentChatSnapshot() : null
+                        const thread = snapshot?.messages || chat.messages
                         const workStatus = resolveChatWorkStatus({
                           streamStatus: stream?.status,
                           streamContent: stream?.partialContent,
                           activeTaskStatus: (chat as { activeTask?: { status?: string } | null }).activeTask?.status,
-                          lastAssistant: lastAssistantMessage(snapshot?.messages || chat.messages),
+                          lastAssistant: lastAssistantMessage(thread),
+                          lastMessageRole: lastMessageRole(thread),
                         })
                         const workTitle =
                           workStatus === "working"

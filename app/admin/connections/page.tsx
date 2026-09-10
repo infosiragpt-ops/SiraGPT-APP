@@ -48,6 +48,9 @@ const KNOWN_URLS = [
   "https://api.elevenlabs.io/v1",
   "https://api.minimax.io",
   "https://api.sunoapi.org",
+  "http://127.0.0.1:11434/v1",
+  "http://127.0.0.1:1234/v1",
+  "http://127.0.0.1:8000/v1",
 ]
 
 type AuthType = "Bearer" | "Key" | "None" | "Custom"
@@ -72,6 +75,9 @@ const PROVIDER_DEFAULTS: Record<string, { url: string; authType: AuthType; apiTy
   elevenlabs: { url: "https://api.elevenlabs.io/v1", authType: "Custom", apiType: "chat_completions" },
   minimax: { url: "https://api.minimax.io", authType: "Bearer", apiType: "chat_completions" },
   suno: { url: "https://api.sunoapi.org", authType: "Bearer", apiType: "chat_completions" },
+  ollama: { url: "http://127.0.0.1:11434/v1", authType: "None", apiType: "chat_completions" },
+  lmstudio: { url: "http://127.0.0.1:1234/v1", authType: "None", apiType: "chat_completions" },
+  vllm: { url: "http://127.0.0.1:8000/v1", authType: "Bearer", apiType: "chat_completions" },
 }
 
 const PROVIDERS: Array<{ key: string; label: string }> = [
@@ -93,6 +99,9 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "elevenlabs", label: "ElevenLabs API (voz + música)" },
   { key: "minimax", label: "MiniMax API (música)" },
   { key: "suno", label: "Suno Gateway API (música)" },
+  { key: "ollama", label: "Ollama (local)" },
+  { key: "lmstudio", label: "LM Studio (local)" },
+  { key: "vllm", label: "vLLM" },
   { key: "custom", label: "Custom API" },
 ]
 
@@ -105,12 +114,16 @@ const QUICK_PICK: Array<{ key: string; label: string }> = [
   { key: "gemini", label: "Gemini" },
   { key: "xai", label: "Grok" },
   { key: "openrouter", label: "OpenRouter" },
+  { key: "groq", label: "GroqCloud" },
   { key: "cerebras", label: "Cerebras" },
   { key: "zai", label: "Z.ai" },
   { key: "kimi", label: "Kimi" },
   { key: "fal", label: "fal.ai" },
   { key: "mistral", label: "Mistral" },
   { key: "meta", label: "Meta" },
+  { key: "ollama", label: "Ollama" },
+  { key: "lmstudio", label: "LMStudio" },
+  { key: "vllm", label: "vLLM" },
   { key: "elevenlabs", label: "ElevenLabs" },
   { key: "minimax", label: "MiniMax" },
   { key: "suno", label: "Suno" },
@@ -167,6 +180,9 @@ function inferProviderFromUrl(u: string): string {
   if (lower.includes("elevenlabs.io")) return "elevenlabs"
   if (lower.includes("minimax.io")) return "minimax"
   if (lower.includes("sunoapi.org") || lower.includes("suno-api") || lower.includes("suno_api")) return "suno"
+  if (lower.includes("ollama") || /localhost:11434|127\.0\.0\.1:11434/.test(lower)) return "ollama"
+  if (lower.includes("lmstudio") || lower.includes("lm.studio") || /localhost:1234|127\.0\.0\.1:1234/.test(lower)) return "lmstudio"
+  if (lower.includes("vllm") || /localhost:8000|127\.0\.0\.1:8000/.test(lower)) return "vllm"
   return "custom"
 }
 
@@ -302,7 +318,10 @@ export default function AdminConnectionsPage() {
           <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Plug className="h-6 w-6" /> Conexiones
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
+            Conecte cualquier API compatible con OpenAI junto con los modelos locales de Ollama. Apunte la URL de la API en LMStudio, GroqCloud, Mistral, OpenRouter, vLLM y más para mezclar y combinar proveedores libremente.
+          </p>
+          <p className="text-sm text-muted-foreground mt-1 max-w-3xl">
             API keys de proveedores. Las conexiones activas sincronizan modelos en AI Models como inactivos; publícalos desde AI Models.
           </p>
         </div>

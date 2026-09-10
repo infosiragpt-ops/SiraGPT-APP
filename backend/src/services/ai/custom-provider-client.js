@@ -86,15 +86,23 @@ function isOpenAiCompatibleUrl(url) {
   return /\/v1$/i.test(normalizeOpenAiCompatibleUrl(url));
 }
 
+const LOCAL_OPENAI_COMPAT_KEYS = Object.freeze(new Set([
+  'custom',
+  'ollama',
+  'lmstudio',
+  'vllm',
+]));
+
 function isCustomProvider(provider) {
   const p = String(provider || '').trim().toLowerCase();
-  return p === 'custom' || p === 'custom api' || p === 'ollama' || p === 'huggingface';
+  return p === 'custom' || p === 'custom api' || p === 'ollama' || p === 'huggingface'
+    || p === 'lmstudio' || p === 'lm studio' || p === 'vllm';
 }
 
 function isCustomConnectionRow(row) {
   if (!row) return false;
   const key = String(row.providerKey || '').trim().toLowerCase();
-  if (key === 'custom') return true;
+  if (LOCAL_OPENAI_COMPAT_KEYS.has(key)) return true;
   if (KNOWN_CLOUD_PROVIDER_KEYS.has(key)) return false;
   return isOpenAiCompatibleUrl(row.url);
 }
@@ -620,6 +628,9 @@ function isLocalVisionModel(model) {
 function catalogProviderForConnection(providerKey, providerLabel) {
   const key = String(providerKey || '').trim().toLowerCase();
   if (key === 'custom') return 'Custom';
+  if (key === 'ollama') return 'Ollama';
+  if (key === 'lmstudio') return 'LM Studio';
+  if (key === 'vllm') return 'vLLM';
   return providerLabel || providerKey || 'Custom';
 }
 

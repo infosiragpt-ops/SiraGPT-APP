@@ -364,6 +364,8 @@ import {
   writePersistedComposerQueue,
   type PersistedComposerQueueItem,
 } from "@/lib/chat/composer-queue"
+import { extractChatDecisionRequestFromMessages } from "@/lib/chat-work-status"
+import { ChatDecisionPanel } from "@/components/chat/decision-panel"
 import {
   DEFAULT_IMAGE_MODEL,
   DEFAULT_IMAGE_PROVIDER,
@@ -5277,6 +5279,10 @@ function ChatInterfaceContent() {
   selectedModelRef.current = selectedModel
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
+  const chatDecisionRequest = React.useMemo(
+    () => extractChatDecisionRequestFromMessages(currentChat?.messages),
+    [currentChat?.messages],
+  )
   // Per-chat draft persistence. The composer's text is saved (debounced)
   // to localStorage scoped by chatId and restored when the user comes
   // back to the same conversation after a reload or accidental
@@ -12004,6 +12010,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // would otherwise freeze the version from initial render.
   React.useEffect(() => { handleSendRef.current = handleSend; });
 
+  const sendDecisionReply = React.useCallback((text: string) => {
+    const reply = String(text || "").trim()
+    if (!reply) return
+    queuedComposerSendRef.current = createPersistedComposerQueueItem({
+      id: `decision-${Date.now()}`,
+      ownerId: queueOwnerId || "decision",
+      chatId: currentChat?.id ?? null,
+      msg: reply,
+      files: [],
+      idempotencyKey: `decision-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    })
+    void handleSendRef.current()
+  }, [currentChat?.id, queueOwnerId])
+
   // Drain queued messages when a chat's pipeline goes idle.
   // Foreground: current chat idle → restore composer + handleSend.
   // Background: other idle chats → addMessage directly so work continues
@@ -14191,6 +14211,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                   <div ref={chatComposerDockRef} className="chat-composer-dock sticky bottom-0 left-0 right-0 z-10">
                     <div className="chat-composer-frame relative flex flex-col gap-2">
+                      {chatDecisionRequest ? (
+                        <ChatDecisionPanel
+                          key={chatDecisionRequest.permissionId || chatDecisionRequest.runId || chatDecisionRequest.questions.join("|")}
+                          request={chatDecisionRequest}
+                          onReply={sendDecisionReply}
+                        />
+                      ) : null}
                       {/* Queued-tasks chip — while the agent is thinking the
                           user can keep sending; messages park in a queue and
                           run in order. This makes that visible (the queue is
