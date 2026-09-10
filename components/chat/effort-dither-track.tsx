@@ -3,25 +3,24 @@
 /**
  * Dithered pixel-dissolve fill for the effort slider.
  *
- * Pure SVG — no raster asset. A cloud of small square "pixels" sits centred
- * on the rail and dissolves symmetrically toward both pale ends: density AND
- * opacity peak in the middle and fall off left and right, with a few isolated
- * pixels that read as particles near the edges and white sparkles glinting
- * in the dense core.
+ * Pure SVG — no raster asset. A cloud of small square "pixels" grows from
+ * pale, isolated particles at the left into a dense violet grid toward the
+ * right, so the filled part always gets stronger as it approaches the active
+ * stop and reads as a full bar at Max.
  *
  * How it is built (all responsive — nothing depends on the rendered width):
  *   • `<pattern patternUnits="userSpaceOnUse">` tiles keep every pixel a true
  *     square whatever the track width is (no viewBox stretching).
- *   • Six pattern layers hold disjoint subsets of an 8×4 cell tile. Layer 0
+ *   • Seven pattern layers hold disjoint subsets of an 8×4 cell tile. Layer 0
  *     is the sparse "particles" layer; each next layer adds more cells so the
  *     cumulative density climbs to a full grid.
- *   • Each layer is masked by a symmetric "tent" luminance gradient (flat
- *     opaque plateau around the centre, fading to 0 at the window edges).
- *     Narrower windows per layer make both the density (which layers are
- *     visible yet) and the opacity (how far into its ramp a layer is) grow
- *     toward the middle.
- *   • A soft violet core glows under the densest region, and a white sparkle
- *     layer glints only in the tight centre.
+ *   • Each layer is masked by a left→right luminance ramp: transparent until
+ *     its own start, then fading to fully opaque and staying there. Later
+ *     (denser) layers start further right, which makes both the density
+ *     (which layers are visible yet) and the opacity (how far into its ramp a
+ *     layer is) grow toward the right.
+ *   • A soft violet core glows under the dense right side, and a white
+ *     sparkle layer glints there too.
  *
  * The cell ordering is a seeded shuffle so SSR and client markup are byte
  * identical and the "particles" never move between renders.
@@ -37,12 +36,12 @@ const TILE_W = TILE_COLS * CELL
 const TILE_H = TILE_ROWS * CELL
 
 /** Cells per layer — sums to TILE_COLS × TILE_ROWS (32). */
-const LAYER_SIZES = [2, 4, 6, 6, 6, 8] as const
+const LAYER_SIZES = [3, 4, 5, 5, 5, 5, 5] as const
 
 /**
- * Layers whose pixels shimmer. Only the sparse, outer layers twinkle — the
- * dense core, the glow and the sparkles stay rock-stable so the bar keeps
- * reading as a solid control, not a loading spinner.
+ * Layers whose pixels shimmer. Only the sparse, leftmost layers twinkle — the
+ * dense right side, the glow and the sparkles stay rock-stable so the bar
+ * keeps reading as a solid control, not a loading spinner.
  */
 const TWINKLE_LAYERS = 3
 
@@ -62,22 +61,27 @@ function twinkleDelayS(col: number, row: number): number {
   return (col * 0.35 + row * 0.13) % TWINKLE_PERIOD_S
 }
 
-/** Symmetric tent half-widths (fractions of the fill width) per layer. */
-const LAYER_HALF_WIDTHS: ReadonlyArray<number> = [
-  0.42, // particles: isolated pixels dissolving before the pale end caps
-  0.36,
-  0.29,
-  0.22,
-  0.15,
-  0.1, // densest grid: tight core only
+/**
+ * Left→right ramp windows (fractions of the fill width) per layer: each layer
+ * fades in over [from, to] and stays opaque after `to`. Later layers start
+ * further right, so density and opacity grow toward the active stop.
+ */
+const LAYER_RAMPS: ReadonlyArray<readonly [number, number]> = [
+  [0.0, 0.2], // particles: isolated pixels from the very start
+  [0.05, 0.3],
+  [0.12, 0.42],
+  [0.2, 0.54],
+  [0.28, 0.66],
+  [0.36, 0.78],
+  [0.44, 0.9], // densest grid: completes before the right end
 ]
 
-/** Soft violet core glowing under the densest region. */
-const CORE_HALF_WIDTH = 0.15
+/** Soft violet core glowing under the dense right side. */
+const CORE_RAMP: readonly [number, number] = [0.45, 0.95]
 
-/** White sparkles glinting in the tight centre. */
-const SPARKLE_SIZE = 10
-const SPARKLE_HALF_WIDTH = 0.12
+/** White sparkles glinting in the dense right zone. */
+const SPARKLE_SIZE = 6
+const SPARKLE_RAMP: readonly [number, number] = [0.6, 0.92]
 
 function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -125,23 +129,20 @@ const SPARKLE_CELLS = [...LAYERS[LAYERS.length - 1], ...LAYERS[LAYERS.length - 2
 const INSET = (CELL - PIXEL) / 2
 
 /**
- * Symmetric "tent" mask stops for a half-width w: flat opaque plateau
- * around the centre, fading to transparent at the window edges.
+ * Left→right ramp mask stops: transparent until `from`, fully opaque from
+ * `to` onward (gradients hold their last stop value).
  */
-function tentStops(w: number): Array<readonly [number, number]> {
-  const inner = w * 0.35
+function rampStops(from: number, to: number): Array<readonly [number, number]> {
   return [
-    [0.5 - w, 0],
-    [0.5 - inner, 1],
-    [0.5 + inner, 1],
-    [0.5 + w, 0],
+    [from, 0],
+    [to, 1],
   ]
 }
 
-function TentGradient({ id: gid, halfWidth }: { id: string; halfWidth: number }) {
+function RampGradient({ id: gid, from, to }: { id: string; from: number; to: number }) {
   return (
     <linearGradient id={gid} x1="0" y1="0" x2="1" y2="0">
-      {tentStops(halfWidth).map(([offset, opacity]) => (
+      {rampStops(from, to).map(([offset, opacity]) => (
         <stop key={offset} offset={offset} stopColor="#fff" stopOpacity={opacity} />
       ))}
     </linearGradient>
@@ -208,12 +209,12 @@ export function EffortDitherTrack({ className }: { className?: string }) {
             />
           ))}
         </pattern>
-        {LAYER_HALF_WIDTHS.map((halfWidth, index) => (
-          <TentGradient key={`g${index}`} id={id(`g${index}`)} halfWidth={halfWidth} />
+        {LAYER_RAMPS.map(([from, to], index) => (
+          <RampGradient key={`g${index}`} id={id(`g${index}`)} from={from} to={to} />
         ))}
-        <TentGradient id={id("gcore")} halfWidth={CORE_HALF_WIDTH} />
-        <TentGradient id={id("gsparkle")} halfWidth={SPARKLE_HALF_WIDTH} />
-        {LAYER_HALF_WIDTHS.map((_, index) => (
+        <RampGradient id={id("gcore")} from={CORE_RAMP[0]} to={CORE_RAMP[1]} />
+        <RampGradient id={id("gsparkle")} from={SPARKLE_RAMP[0]} to={SPARKLE_RAMP[1]} />
+        {LAYER_RAMPS.map((_, index) => (
           <mask
             key={`m${index}`}
             id={id(`m${index}`)}
@@ -236,7 +237,7 @@ export function EffortDitherTrack({ className }: { className?: string }) {
 
       {/* Pale rail shows through at both ends. */}
       <rect className="effort-dither-base" width="100%" height="100%" />
-      {/* Soft violet core glowing under the densest region. */}
+      {/* Soft violet core glowing under the dense right side. */}
       <rect className="effort-dither-core" width="100%" height="100%" mask={`url(#${id("mcore")})`} />
       {/* Pixel layers — sparse particles first, full grid last. */}
       {LAYERS.map((_, index) => (
@@ -249,7 +250,7 @@ export function EffortDitherTrack({ className }: { className?: string }) {
           mask={`url(#${id(`m${index}`)})`}
         />
       ))}
-      {/* White sparkles glinting in the tight centre. */}
+      {/* White sparkles glinting in the dense right zone. */}
       <rect
         className="effort-dither-sparkle-layer"
         width="100%"
@@ -267,13 +268,13 @@ export const EFFORT_DITHER_SPEC = Object.freeze({
   pixel: PIXEL,
   tile: Object.freeze({ cols: TILE_COLS, rows: TILE_ROWS, width: TILE_W, height: TILE_H }),
   layerSizes: LAYER_SIZES,
-  layerHalfWidths: LAYER_HALF_WIDTHS,
-  coreHalfWidth: CORE_HALF_WIDTH,
+  layerRamps: LAYER_RAMPS,
+  coreRamp: CORE_RAMP,
   sparkleSize: SPARKLE_SIZE,
-  sparkleHalfWidth: SPARKLE_HALF_WIDTH,
+  sparkleRamp: SPARKLE_RAMP,
   layers: LAYERS,
   sparkleCells: SPARKLE_CELLS,
-  tentStops,
+  rampStops,
   twinkleLayers: TWINKLE_LAYERS,
   twinklePeriodS: TWINKLE_PERIOD_S,
   twinkleDelayS,

@@ -4,7 +4,7 @@ import { createElement } from "react"
 
 import { EFFORT_DITHER_SPEC, EffortDitherTrack } from "@/components/chat/effort-dither-track"
 
-describe("EffortDitherTrack — symmetric pixel cloud", () => {
+describe("EffortDitherTrack — left→right pixel dissolve", () => {
   it("partitions the tile into disjoint layers that together cover every cell", () => {
     const { tile, layerSizes, layers } = EFFORT_DITHER_SPEC
     const total = tile.cols * tile.rows
@@ -26,40 +26,48 @@ describe("EffortDitherTrack — symmetric pixel cloud", () => {
     expect(seen.size).toBe(total)
   })
 
-  it("peaks density at the centre and dissolves symmetrically, with isolated particles first", () => {
-    const { layerHalfWidths, layerSizes, layers, tentStops } = EFFORT_DITHER_SPEC
-    expect(layerHalfWidths).toHaveLength(layerSizes.length)
+  it("grows density and opacity toward the right, with isolated particles first", () => {
+    const { layerRamps, layerSizes, layers, rampStops } = EFFORT_DITHER_SPEC
+    expect(layerRamps).toHaveLength(layerSizes.length)
     // Sparse → dense: every layer adds at least as many pixels as the previous one.
     for (let i = 1; i < layerSizes.length; i += 1) expect(layerSizes[i]).toBeGreaterThanOrEqual(layerSizes[i - 1])
-    // Windows shrink toward the core and every window is a valid (0, 0.5] half-width.
-    for (let i = 0; i < layerHalfWidths.length; i += 1) {
-      const w = layerHalfWidths[i]
-      expect(w).toBeGreaterThan(0)
-      expect(w).toBeLessThanOrEqual(0.5)
-      if (i > 0) expect(w).toBeLessThan(layerHalfWidths[i - 1])
+    // Every ramp is a valid left→right window, and later layers start and
+    // finish further right so density climbs toward the active stop.
+    for (let i = 0; i < layerRamps.length; i += 1) {
+      const [from, to] = layerRamps[i]
+      expect(from).toBeGreaterThanOrEqual(0)
+      expect(to).toBeLessThanOrEqual(1)
+      expect(to).toBeGreaterThan(from)
+      if (i > 0) {
+        expect(from).toBeGreaterThanOrEqual(layerRamps[i - 1][0])
+        expect(to).toBeGreaterThan(layerRamps[i - 1][1])
+      }
     }
-    // Tent stops are symmetric around 0.5 with a flat opaque plateau.
-    for (const w of layerHalfWidths) {
-      const stops = tentStops(w)
-      expect(stops).toHaveLength(4)
-      expect(stops.map(([, opacity]) => opacity)).toEqual([0, 1, 1, 0])
-      const [a, b, c, d] = stops.map(([offset]) => offset)
-      expect(a + d).toBeCloseTo(1, 10)
-      expect(b + c).toBeCloseTo(1, 10)
-      expect(a).toBeGreaterThanOrEqual(0)
-      expect(d).toBeLessThanOrEqual(1)
+    // Particles start at the very left; the full grid completes before the end.
+    expect(layerRamps[0][0]).toBe(0)
+    expect(layerRamps[layerRamps.length - 1][1]).toBeLessThanOrEqual(1)
+    // Ramp stops fade in then hold opaque (gradients keep their last stop).
+    for (const [from, to] of layerRamps) {
+      const stops = rampStops(from, to)
+      expect(stops).toEqual([
+        [from, 0],
+        [to, 1],
+      ])
     }
     // The particle layer holds two cells far apart (not a pair).
     const [[c1, r1], [c2, r2]] = layers[0]
     expect(Math.abs(c1 - c2) + Math.abs(r1 - r2)).toBeGreaterThanOrEqual(6)
   })
 
-  it("glows a soft core and glints white sparkles only in the tight centre", () => {
-    const { coreHalfWidth, layerHalfWidths, sparkleCells, sparkleHalfWidth, sparkleSize } = EFFORT_DITHER_SPEC
-    expect(coreHalfWidth).toBeGreaterThan(0)
-    expect(coreHalfWidth).toBeLessThanOrEqual(0.5)
-    expect(sparkleHalfWidth).toBeGreaterThan(0)
-    expect(sparkleHalfWidth).toBeLessThan(coreHalfWidth)
+  it("glows a soft core and glints white sparkles only in the dense right zone", () => {
+    const { coreRamp, sparkleCells, sparkleRamp, sparkleSize, layerRamps } = EFFORT_DITHER_SPEC
+    expect(coreRamp[0]).toBeGreaterThan(0)
+    expect(coreRamp[1]).toBeLessThanOrEqual(1)
+    expect(coreRamp[1]).toBeGreaterThan(coreRamp[0])
+    // Sparkles live inside the dense right side, after most layers started.
+    expect(sparkleRamp[0]).toBeGreaterThan(layerRamps[0][1])
+    expect(sparkleRamp[1]).toBeLessThanOrEqual(1)
+    expect(sparkleRamp[1]).toBeGreaterThan(sparkleRamp[0])
     expect(sparkleCells).toHaveLength(sparkleSize)
     expect(sparkleSize).toBeGreaterThan(0)
     const markup = renderToStaticMarkup(createElement(EffortDitherTrack, { className: "effort-dither" }))
@@ -106,7 +114,7 @@ describe("EffortDitherTrack — symmetric pixel cloud", () => {
     expect(first).toContain('class="effort-dither-base"')
     expect(first).toContain('class="effort-dither-px"')
     expect(first).not.toMatch(/<image|data:image/)
-    // Six pixel layers + sparkles, each behind its own pattern; one mask per
+    // Seven pixel layers + sparkles, each behind its own pattern; one mask per
     // layer plus the core and sparkle masks.
     expect((first.match(/<pattern /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 1)
     expect((first.match(/<mask /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 2)

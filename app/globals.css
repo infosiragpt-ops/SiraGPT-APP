@@ -1490,11 +1490,11 @@ details[open] > summary .think-chevron,
   overflow: hidden;
   background: linear-gradient(90deg, var(--effort-fill-base), var(--effort-fill-mid) 50%, var(--effort-fill-end));
   box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.3);
-  /* Reveal the anchored cloud up to the active stop with a soft 16 px
+  /* Reveal the anchored cloud up to the active stop with a soft 28 px
      dissolve edge instead of a hard cut. The mask rides --effort-x, which
      animates on the track (see @property above). */
-  -webkit-mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 16px), transparent var(--effort-x));
-  mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 16px), transparent var(--effort-x));
+  -webkit-mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 28px), transparent var(--effort-x));
+  mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 28px), transparent var(--effort-x));
 }
 .effort-dither {
   position: absolute;
@@ -1516,7 +1516,7 @@ details[open] > summary .think-chevron,
   shape-rendering: crispEdges;
 }
 .effort-dither-spark {
-  fill: hsl(0 0% 100% / 0.9);
+  fill: hsl(0 0% 100% / 0.78);
   shape-rendering: crispEdges;
 }
 /* Living pixels: the sparse layers breathe with a wave that travels left →

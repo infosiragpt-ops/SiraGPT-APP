@@ -18,17 +18,18 @@ function ruleBody(selector: string): string {
   return match![1]
 }
 
-describe("effort slider — symmetric pixel-cloud contract", () => {
-  it("builds the dissolve from SVG patterns and symmetric tent masks, never a raster asset", () => {
+describe("effort slider — left→right pixel-dissolve contract", () => {
+  it("builds the dissolve from SVG patterns and left→right ramp masks, never a raster asset", () => {
     assert.match(ditherTrack, /<pattern[\s\S]{0,200}patternUnits="userSpaceOnUse"/, "pixels must tile in user space so they stay square at any width")
-    assert.match(ditherTrack, /<linearGradient[\s\S]{0,80}x1="0" y1="0" x2="1" y2="0"/, "each layer fades symmetrically around the centre")
-    assert.match(ditherTrack, /0\.5 - w/, "tent windows are centred at 0.5 with a flat opaque plateau")
+    assert.match(ditherTrack, /<linearGradient[\s\S]{0,80}x1="0" y1="0" x2="1" y2="0"/, "each layer fades in along the x axis")
+    assert.match(ditherTrack, /function rampStops\(/, "ramp windows fade in and stay opaque: density grows toward the active stop")
+    assert.match(ditherTrack, /\[from, 0\],\s*\[to, 1\],/, "each ramp goes transparent → opaque and holds")
     assert.match(ditherTrack, /<mask[\s\S]{0,120}maskUnits="userSpaceOnUse"/, "masks resolve against the full track")
     assert.doesNotMatch(ditherTrack, /<image|\.png|\.jpg|\.webp|data:image/i, "the effect must be generated, not a static image")
     assert.match(ditherTrack, /shape-rendering|effort-dither-px/, "pixel rects carry the crisp-edge class")
     assert.match(ditherTrack, /mulberry32|Fisher|seed/i, "cell ordering must be seeded so SSR and client markup match")
-    assert.match(ditherTrack, /psparkle/, "a dedicated white-sparkle pattern glints in the core")
-    assert.match(ditherTrack, /msparkle/, "the sparkles are masked to the tight centre")
+    assert.match(ditherTrack, /psparkle/, "a dedicated white-sparkle pattern glints in the dense zone")
+    assert.match(ditherTrack, /msparkle/, "the sparkles are masked to the dense right zone")
   })
 
   it("mounts the dither inside the fill and ships no visible dial", () => {
@@ -57,7 +58,7 @@ describe("effort slider — symmetric pixel-cloud contract", () => {
     assert.match(globals, /@property --effort-x \{\s*syntax: "<length-percentage>";/, "registered custom property: without it the reveal would snap discretely")
 
     const fill = ruleBody(".effort-track-fill")
-    assert.match(fill, /mask-image: linear-gradient\(90deg, #fff calc\(var\(--effort-x\) - 16px\), transparent var\(--effort-x\)\);/, "reveal is a feathered mask, so the cloud dissolves instead of cutting")
+    assert.match(fill, /mask-image: linear-gradient\(90deg, #fff calc\(var\(--effort-x\) - 28px\), transparent var\(--effort-x\)\);/, "reveal is a feathered mask, so the cloud dissolves instead of cutting")
     assert.doesNotMatch(fill, /clip-path/, "the old hard clip is gone")
 
     assert.ok(!globals.includes(".effort-thumb"), "no dial CSS may linger")
