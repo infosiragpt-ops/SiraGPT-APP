@@ -120,10 +120,12 @@ import {
   MENTION_COPY,
   REGISTRY_APP_IDS,
   buildPickerApps,
+  connectableDomain,
   detectAtMention,
   filterPickerApps,
   groupPickerApps,
   insertMention,
+  isRealConnector,
   resolveMentionedApps,
   type MentionPickerApp,
   type MentionTrigger,
@@ -7339,6 +7341,9 @@ But first, you need to connect your Spotify account securely using the button be
     for (const appId of appPins.pinnedAppIds) {
       const app = byId.get(appId)
       if (!app) continue
+      const via = app.status === "connected" || isRealConnector({ id: app.id, name: app.name, domain: app.domain })
+        ? "oauth"
+        : "computer"
       chips.push({
         appId,
         name: app.name,
@@ -7347,6 +7352,8 @@ But first, you need to connect your Spotify account securely using the button be
         brandColor: undefined,
         availability: app.status === "unavailable" ? "unavailable" : "available",
         connectionStatus: health[appId] || null,
+        via,
+        computerHost: via === "computer" ? connectableDomain({ domain: app.domain }) : null,
       })
     }
     return chips
@@ -7440,8 +7447,24 @@ But first, you need to connect your Spotify account securely using the button be
   const startAppConnect = React.useCallback(async (app: MentionPickerApp) => {
     const plan = resolveConnectPlan({ id: app.id, name: app.name, domain: app.domain })
     if (plan.kind !== "oauth") {
-      toast.message(MENTION_COPY.unavailableDetail(app.name))
-      return { status: "unavailable" as const, markConnected: false, message: MENTION_COPY.unavailableDetail(app.name) }
+      // Catálogo sin OAuth: vive en la computadora del chat. Se inserta la
+      // mención para que el turno la abra con computer_navigate; el bloque
+      // de apps del system prompt guía al modelo (ver apps/mentions.js).
+      const host = connectableDomain({ domain: app.domain }) || app.domain
+      const next = insertMention(input, mentionTrigger, app.name)
+      if (next !== input) {
+        setInput(next)
+        chatDraft.save(next)
+      }
+      setMentionMenuOpen(false)
+      setMentionTrigger(null)
+      setMentionSearchQuery("")
+      const hint = MENTION_COPY.computerHint(app.name, host)
+      toast.message(hint)
+      window.setTimeout(() => {
+        try { textareaRef.current?.focus() } catch { /* old Safari */ }
+      }, 0)
+      return { status: "computer_opened" as const, markConnected: false, message: hint }
     }
     const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
     const result = await connectGptStoreApp(
@@ -7480,22 +7503,21 @@ But first, you need to connect your Spotify account securely using the button be
       return result
     }
     if (result.status === "computer_opened") {
-      toast.message(MENTION_COPY.unavailableDetail(app.name))
+      toast.message(result.message)
       return result
     }
     if (result.status !== "oauth_started") {
       toast.error(result.message)
     }
     return result
-  }, [user])
+  }, [user, input, mentionTrigger, chatDraft])
 
   const handleAppsMentionPick = React.useCallback(async (app: MentionPickerApp) => {
     setMentionMenuOpen(false)
-    if (app.status === "connected") {
-      // Pin it (spec §4.3): connected + unpinned → pin + close panel +
-      // clear the @query token. The pin persists across turns and every
-      // subsequent message carries pinnedAppIds, so no inline @mention
-      // text is needed.
+    // Pin + clear the @query token (spec §4.3): the pin persists across turns
+    // and every subsequent message carries pinnedAppIds, so no inline
+    // @mention text is needed.
+    const pinAndClearToken = async (notice?: string) => {
       let nextInput = input
       if (mentionTrigger) {
         nextInput = `${input.slice(0, mentionTrigger.start)}${input.slice(mentionTrigger.start + 1 + mentionTrigger.query.length)}`
@@ -7508,6 +7530,7 @@ But first, you need to connect your Spotify account securely using the button be
       setMentionTrigger(null)
       const ok = await appPins.pinApp(app.id)
       if (!ok) toast.error("Puedes fijar hasta 4 apps. Quita una para agregar otra.")
+      else if (notice) toast.message(notice)
       window.setTimeout(() => {
         const el = textareaRef.current
         if (!el) return
@@ -7515,9 +7538,20 @@ But first, you need to connect your Spotify account securely using the button be
         const caret = nextInput.length
         try { el.setSelectionRange(caret, caret) } catch { /* old Safari */ }
       }, 0)
+    }
+    if (app.status === "connected") {
+      await pinAndClearToken()
       return
     }
     if (app.status === "connect") {
+      const plan = resolveConnectPlan({ id: app.id, name: app.name, domain: app.domain })
+      if (plan.kind === "computer") {
+        // Catálogo sin OAuth: se fija como pin de computadora — el turno la
+        // abre en la computadora del chat (ver apps/mentions.js).
+        const host = connectableDomain({ domain: app.domain }) || app.domain
+        await pinAndClearToken(MENTION_COPY.computerHint(app.name, host))
+        return
+      }
       await startAppConnect(app)
       return
     }
@@ -10007,8 +10041,11 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const mentionPayload = resolveMentionedApps(rawMsg, selectedMentionIds, mentionHealthById, undefined, mentionRegistryIds)
-    if (mentionPayload.needsConnect[0]) {
-      toast.message(MENTION_COPY.connectPrompt(mentionPayload.needsConnect[0].name))
+    const need = mentionPayload.needsConnect[0]
+    if (need) {
+      toast.message(need.via === "computer" && need.host
+        ? MENTION_COPY.computerHint(need.name, need.host)
+        : MENTION_COPY.connectPrompt(need.name))
     }
     if (mentionPayload.unavailable[0] && mentionPayload.connectedAppIds.length === 0 && mentionPayload.needsConnect.length === 0) {
       toast.message(MENTION_COPY.unavailableDetail(mentionPayload.unavailable[0].name))

@@ -121,9 +121,9 @@ function buildMentionPrompt({ attached = [], needsConnect = [], unavailable = []
     }
   }
   if (unavailable.length) {
-    lines.push('Estas menciones son del catálogo y todavía no se pueden conectar. Dilo con claridad. No abras un navegador ni marques la app como conectada.');
+    lines.push('Estas menciones son del catálogo y no tienen conexión OAuth. Siguen siendo útiles: usa web_search para localizar su sitio oficial y computer_navigate para abrirlo en la computadora EN VIVO de este chat cuando el usuario quiera operar ahí. No la marques como conectada, no pidas ni inventes tokens o credenciales, y no simules datos de su cuenta.');
     for (const app of unavailable) {
-      lines.push(`- @${app.name} todavía no está disponible para conectar.`);
+      lines.push(`- @${app.name}: sin conexión OAuth; opera en su sitio con la computadora del chat si el usuario lo pide.`);
     }
   }
   return lines.join('\n');

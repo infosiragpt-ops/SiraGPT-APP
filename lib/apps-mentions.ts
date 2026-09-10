@@ -28,6 +28,9 @@ export const MENTION_COPY = {
     `${name} todavía no se puede conectar. No abre el navegador ni queda marcada como Conectada.`,
   connectPrompt: (name: string) =>
     `${name} no está conectada. Conéctala con la autorización oficial para usarla en este chat.`,
+  /** Catalog app without OAuth: it runs in this chat's computer browser. */
+  computerHint: (name: string, host: string) =>
+    `@${name} se usa en la computadora de este chat (https://${host}). El agente la abre ahí cuando se lo pidas.`,
 } as const
 
 /** Registry first-party apps that can receive Conectada from GET /api/apps/connections. */
@@ -81,7 +84,7 @@ export type MentionPickerApp = {
 export type MentionedAppPayload = {
   mentionedApps: string[]
   connectedAppIds: string[]
-  needsConnect: Array<{ id: string; name: string }>
+  needsConnect: Array<{ id: string; name: string; via: "oauth" | "computer"; host?: string }>
   unavailable: Array<{ id: string; name: string }>
 }
 
@@ -121,6 +124,24 @@ export function isRealConnector(app: ConnectableApp): boolean {
   }
   const id = canonicalAppId(app.id)
   return Boolean(id && (REAL_CONNECTOR_IDS as readonly string[]).includes(id))
+}
+
+/**
+ * Host a catalog app can open in the chat's computer browser
+ * (https://host). Null when the app has no usable site — only those stay
+ * "unavailable". Every catalog row with a domain is "connect": OAuth apps
+ * connect with official authorization, the rest open in the computer.
+ */
+export function connectableDomain(app: { domain?: string }): string | null {
+  const host = String(app.domain || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .split("/")[0]
+    .replace(/^www\./, "")
+  if (!host || /[^a-z0-9.-]/i.test(host)) return null
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host)) return null
+  return host
 }
 
 /**
@@ -179,6 +200,7 @@ export function mentionStatusFor(
   const health = healthById[id] || healthById[app.id]
   if (isRegistryApp(id, registryIds) && isHealthConnected(health)) return "connected"
   if (isRealConnector(app)) return "connect"
+  if (connectableDomain(app)) return "connect"
   return "unavailable"
 }
 
@@ -325,7 +347,7 @@ export function resolveMentionedApps(
 
   const mentionedApps = [...ids]
   const connectedAppIds: string[] = []
-  const needsConnect: Array<{ id: string; name: string }> = []
+  const needsConnect: MentionedAppPayload["needsConnect"] = []
   const unavailable: Array<{ id: string; name: string }> = []
 
   for (const id of mentionedApps) {
@@ -333,7 +355,11 @@ export function resolveMentionedApps(
     const name = app?.name || id
     const status = app?.status || mentionStatusFor({ id, name, domain: "" }, healthById, registryIds)
     if (status === "connected") connectedAppIds.push(id)
-    else if (status === "connect") needsConnect.push({ id, name })
+    else if (status === "connect") {
+      const host = app ? connectableDomain(app) : null
+      const oauth = app ? isRealConnector({ id: app.id, name: app.name, domain: app.domain }) : isRealConnector({ id, name, domain: "" })
+      needsConnect.push(oauth ? { id, name, via: "oauth" } : { id, name, via: "computer", ...(host ? { host } : {}) })
+    }
     else unavailable.push({ id, name })
   }
 

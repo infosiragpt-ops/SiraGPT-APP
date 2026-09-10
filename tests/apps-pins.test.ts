@@ -102,6 +102,17 @@ describe("deriveChipStatus", () => {
       "blocked",
     )
   })
+
+  it("active for computer pins without any connection", () => {
+    assert.equal(
+      deriveChipStatus({ appId: "etsy", via: "computer", availability: "available" }),
+      "active",
+    )
+    assert.equal(
+      deriveChipStatus({ appId: "etsy", via: "computer", availability: "unavailable" }),
+      "blocked",
+    )
+  })
 })
 
 describe("pin guards", () => {

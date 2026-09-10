@@ -33,14 +33,16 @@ test('parses @mentions and attaches only healthy connected app tools', () => {
   assert.doesNotMatch(prompt, /gho_|Bearer |accessToken/i);
 });
 
-test('catalog-only mentions stay unavailable and never look connected', () => {
+test('catalog-only mentions stay unconnected but usable via the chat computer', () => {
   const ids = resolveMentionedApps('Busca en @Indeed y @Etsy');
   const classified = classifyMentions(ids, []);
   assert.equal(classified.attached.length, 0);
   assert.ok(classified.unavailable.some((app) => app.id === 'indeed'));
   const prompt = buildMentionPrompt(classified);
-  assert.match(prompt, /todavía no está disponible para conectar/);
+  assert.match(prompt, /sin conexión OAuth/);
+  assert.match(prompt, /computer_navigate/);
   assert.doesNotMatch(prompt, /connection_id=/);
+  assert.doesNotMatch(prompt, /No abras un navegador/);
 });
 
 test('parseMentionedNames ignores emails', () => {

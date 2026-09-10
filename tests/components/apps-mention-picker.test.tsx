@@ -52,7 +52,7 @@ const unknown: MentionPickerApp = {
   id: "obscure-demo",
   name: "Obscure Demo",
   description: "No official mark",
-  domain: "steerastro.com",
+  domain: "",
   status: "unavailable",
   healthStatus: null,
   logo: null,
