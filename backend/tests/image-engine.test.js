@@ -428,6 +428,38 @@ test('generateImage requires a prompt', async () => {
 
 // ── editImage ─────────────────────────────────────────────────────────────
 
+test('Grok image selection uses its exact xAI model and never falls back when unavailable', async () => {
+  const calls = [];
+  let unavailable = false;
+  try {
+    setEnv({ XAI_API_KEY: 'test-xai', OPENAI_API_KEY: 'test-openai' });
+    _internal.setOpenAIFactory(fakeOpenAIFactory({
+      onGenerate: async (payload, _opts, config) => {
+        calls.push({ model: payload.model, endpoint: config.baseURL });
+        if (!unavailable) return { data: [{ b64_json: Buffer.from('grok-image').toString('base64') }] };
+        const error = new Error('provider unavailable');
+        error.status = 503;
+        throw error;
+      },
+    }));
+    const spec = {
+      prompt: 'a landscape', model: 'grok-imagine-image-2.0', provider: 'xai', failover: false,
+    };
+    const generated = await engine.generateImage(spec);
+    assert.equal(generated.ok, true);
+    assert.equal(generated.provider, 'xai');
+    assert.equal(generated.model, spec.model);
+    assert.equal(generated.images[0].b64, Buffer.from('grok-image').toString('base64'));
+    assert.deepEqual(calls, [{ model: spec.model, endpoint: 'https://api.x.ai/v1' }]);
+    calls.length = 0;
+    unavailable = true;
+    const result = await engine.generateImage(spec);
+    assert.equal(result.ok, false);
+    assert.deepEqual(calls, [{ model: 'grok-imagine-image-2.0', endpoint: 'https://api.x.ai/v1' }]);
+    assert.equal(result.attempts.length, 1);
+  } finally { restoreEnv(); }
+});
+
 test('editImage prefers Gemini and returns the edited image', async () => {
   setEnv({ GEMINI_API_KEY: 'g-x', OPENAI_API_KEY: 'sk-x' });
   const calls = [];
