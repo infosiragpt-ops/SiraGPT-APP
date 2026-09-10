@@ -4,6 +4,7 @@ import { describe, it } from "node:test"
 import {
   extractChatDecisionRequest,
   extractChatDecisionRequestFromMessages,
+  formatDecisionAnswers,
   lastAssistantMessage,
   resolveChatWorkStatus,
 } from "../lib/chat-work-status"
@@ -109,15 +110,16 @@ describe("chat decision request", () => {
     )
   })
 
-  it("marks Permitir as the recommended permission option", () => {
+  it("marks Permitir ahora as the recommended permission option", () => {
     const request = extractChatDecisionRequest({
       agentPermission: { permissionId: "perm-1", name: "shell", humanDescription: "npm install" },
     })
     assert.equal(request?.kind, "permission")
     assert.equal(request?.permissionId, "perm-1")
-    assert.equal(request?.options[0]?.id, "allow")
-    assert.equal(request?.options[0]?.recommended, true)
-    assert.equal(request?.options[0]?.label, "Permitir")
+    assert.equal(request?.questions[0]?.text.includes("shell"), true)
+    assert.equal(request?.questions[0]?.options[0]?.id, "allow")
+    assert.equal(request?.questions[0]?.options[0]?.recommended, true)
+    assert.equal(request?.questions[0]?.options[0]?.label, "Permitir ahora")
   })
 
   it("uses the first clarifying answer as recommended", () => {
@@ -128,10 +130,57 @@ describe("chat decision request", () => {
       },
     })
     assert.equal(request?.kind, "clarification")
-    assert.equal(request?.questions[0], "¿Qué enfoque prefieres?")
-    assert.equal(request?.options[0]?.label, "Sitio web responsive")
-    assert.equal(request?.options[0]?.recommended, true)
+    assert.equal(request?.questions[0]?.text, "¿Qué enfoque prefieres?")
+    assert.equal(request?.questions[0]?.options[0]?.label, "Sitio web responsive")
+    assert.equal(request?.questions[0]?.options[0]?.recommended, true)
     assert.equal(request?.allowCustomReply, true)
+    assert.equal(request?.allowSkip, true)
+  })
+
+  it("keeps one card per clarifying question with its own options", () => {
+    const request = extractChatDecisionRequest({
+      content: {
+        clarifying_questions: [
+          {
+            question: "Las 12 fotos incluyen 4 con niños del programa. ¿Cómo las inserto?",
+            options: [
+              { label: "Difuminar rostros", description: "Difumino los rostros antes de insertarlas.", recommended: true },
+              { label: "Insertarlas tal cual" },
+              { label: "Solo fotos sin rostro" },
+            ],
+          },
+          {
+            question: "¿Dónde las pongo en el informe?",
+            options: [
+              { label: "En el anexo", recommended: true },
+              { label: "En el cuerpo" },
+            ],
+          },
+        ],
+      },
+    })
+    assert.equal(request?.questions.length, 2)
+    assert.match(request?.questions[0]?.text || "", /¿Cómo las inserto/)
+    assert.equal(request?.questions[0]?.options[0]?.label, "Difuminar rostros")
+    assert.equal(request?.questions[0]?.options[0]?.recommended, true)
+    assert.equal(request?.questions[1]?.options[0]?.label, "En el anexo")
+  })
+
+  it("joins several answers so the agent can keep working", () => {
+    const text = formatDecisionAnswers(
+      [
+        { id: "q0", text: "¿Cómo las inserto?", options: [] },
+        { id: "q1", text: "¿Dónde las pongo?", options: [] },
+      ],
+      {
+        q0: { id: "a", label: "Difuminar rostros", replyText: "Difuminar rostros" },
+        q1: { id: "b", label: "En el anexo", replyText: "En el anexo" },
+      },
+    )
+    assert.match(text, /¿Cómo las inserto\?/)
+    assert.match(text, /Difuminar rostros/)
+    assert.match(text, /¿Dónde las pongo\?/)
+    assert.match(text, /En el anexo/)
   })
 
   it("hides a clarification panel after the human already answered", () => {

@@ -8486,7 +8486,9 @@ But first, you need to connect your Spotify account securely using the button be
                                   ? tComposer("placeholderWord")
                                   : isWorkModeActive
                                     ? "Describe el resultado que quieres obtener"
-                                    : tComposer("placeholderDefault")
+                                    : chatDecisionRequest
+                                      ? "O responde directamente…"
+                                      : tComposer("placeholderDefault")
             }
             className={cn(
               "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
@@ -14213,7 +14215,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <div className="chat-composer-frame relative flex flex-col gap-2">
                       {chatDecisionRequest ? (
                         <ChatDecisionPanel
-                          key={chatDecisionRequest.permissionId || chatDecisionRequest.runId || chatDecisionRequest.questions.join("|")}
+                          key={chatDecisionRequest.permissionId || chatDecisionRequest.runId || chatDecisionRequest.questions.map((question) => question.id).join("|")}
                           request={chatDecisionRequest}
                           onReply={sendDecisionReply}
                         />
