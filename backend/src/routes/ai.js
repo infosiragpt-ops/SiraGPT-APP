@@ -253,6 +253,8 @@ const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(m
 // truth shared with the seeding layer (manifest) so any model that is seeded
 // ACTIVE is also accepted here — covering OpenAI, Gemini, OpenRouter and fal.ai.
 const VERIFIED_CHAT_IMAGE_MODEL_NAMES = DEFAULT_ACTIVE_IMAGE_MODEL_NAMES;
+const { isGrokImageModelName, isActiveGrokImageModel, normalizeCatalogModelType } = require('../services/model-output-type');
+const { resolveImageGenerationFileId } = require('../services/media/image-input-selection');
 
 function isVerifiedChatImageModelName(name) {
   return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
@@ -875,7 +877,12 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       // VOICE is a UI alias for the Voz chip, not a Prisma ModelType: the
       // TTS rows live as AUDIO. Filtering 'VOICE' verbatim threw and left
       // the chip empty ("Sin modelos activos") while generation worked.
+      // Include legacy TEXT/IMAGE rows in either picker read. The curators
+      // repair known Grok image names before filtering, without a DB write.
       whereClause.type = type === 'VOICE' ? 'AUDIO' : type;
+      if (['TEXT', 'IMAGE'].includes(type)) {
+        whereClause.type = { in: ['TEXT', 'IMAGE'] };
+      }
     }
 
 
@@ -9869,6 +9876,7 @@ router.post(
         model = honoredImagePick.model;
         provider = honoredImagePick.provider || provider;
       }
+      const grokImageRequested = isGrokImageModelName(model);
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
       imageCount = normalizeImageCount(imageCount);
@@ -9890,31 +9898,25 @@ router.post(
 
       let imagePath;
       let imageMimeType = 'image/png';
-      // If fileId is not provided, check the last message in the chat for an image
-      if (!fileId && chatId) {
-        const lastMessage = await prisma.message.findFirst({
-          where: {
-            chatId: chatId,
-            role: 'ASSISTANT',
-            files: {
-              not: null
-            }
-          },
-          orderBy: {
-            timestamp: 'desc'
-          }
-        });
-
-        if (lastMessage && lastMessage.files) {
+      fileId = await resolveImageGenerationFileId({
+        fileId,
+        chatId,
+        generationOnly: grokImageRequested,
+        findPreviousImageFileId: async (historyChatId) => {
+          const lastMessage = await prisma.message.findFirst({
+            where: {
+              chatId: historyChatId,
+              role: 'ASSISTANT',
+              files: { not: null },
+            },
+            orderBy: { timestamp: 'desc' },
+          });
+          if (!lastMessage?.files) return undefined;
           const parsed = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
           const files = Array.isArray(parsed) ? parsed : [];
-          const lastImage = files.find(f => f && f.type === 'image' && f.fileId);
-          if (lastImage) {
-            fileId = lastImage.fileId;
-            console.log(`Found last image in chat with fileId: ${fileId}`);
-          }
-        }
-      }
+          return files.find(f => f && f.type === 'image' && f.fileId)?.fileId;
+        },
+      });
 
       let userMessageFiles = undefined;
       if (fileId) {
@@ -9957,23 +9959,43 @@ router.post(
         }
       }
 
-      // Allow-list de proveedores que SÍ saben generar imágenes. Cualquier
-      // otro (DeepSeek, Anthropic, Groq, xAI, etc.) hablaría con un endpoint
-      // OpenAI-compatible que NO implementa /v1/images/generations y
-      // devolvería un 404 "no body" (visto en prod con server: 'elb',
-      // x-ds-trace-id). Lo cortamos aquí con un mensaje claro en español
-      // antes de gastar tiempo en una llamada que va a fallar igual.
+      if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
+        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+      }
+      const adminModel = await prisma.aiModel.findUnique({
+        where: { name: model },
+        select: { id: true, name: true, provider: true, displayName: true, isActive: true, type: true },
+      });
+      const activeGrokImage = adminModel && isActiveGrokImageModel(adminModel);
+      if (grokImageRequested) {
+        if (!activeGrokImage) {
+          return res.status(403).json({
+            error: 'Este modelo de imagen no está activo. Elige un modelo disponible en la herramienta Imágenes.',
+            code: 'image_model_inactive',
+          });
+        }
+        // Grok images use their own xAI API. A catalog discovery prefix is
+        // not permission to route this selection through another provider.
+        provider = 'xAI';
+        if (imagePath) {
+          return res.status(400).json({
+            error: 'Este modelo permite crear imágenes nuevas. La edición de imágenes con este modelo aún no está disponible.',
+            code: 'image_edit_unsupported',
+          });
+        }
+      }
+
       const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter', 'Fal']);
+      if (activeGrokImage) IMAGE_CAPABLE_PROVIDERS.add('xAI');
       if (!IMAGE_CAPABLE_PROVIDERS.has(provider)) {
         return res.status(400).json({
-          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini, OpenRouter o fal.ai.`,
+          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa uno de los modelos disponibles en Imágenes.`,
           code: 'image_provider_unsupported',
           provider: provider || null,
           supported: Array.from(IMAGE_CAPABLE_PROVIDERS),
         });
       }
-
-      if (!isVerifiedChatImageModelName(model)) {
+      if (!isVerifiedChatImageModelName(model) && !activeGrokImage) {
         return res.status(400).json({
           error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Elige uno de los modelos de imagen disponibles en el selector.`,
           code: 'image_model_unverified',
@@ -9981,16 +10003,7 @@ router.post(
           supported: Array.from(VERIFIED_CHAT_IMAGE_MODEL_NAMES),
         });
       }
-
-      if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
-        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
-      }
-
-      const adminModel = await prisma.aiModel.findUnique({
-        where: { name: model },
-        select: { displayName: true, isActive: true, type: true },
-      });
-      if (adminModel && adminModel.type === 'IMAGE' && !adminModel.isActive) {
+      if (adminModel && normalizeCatalogModelType(adminModel).type === 'IMAGE' && !adminModel.isActive) {
         return res.status(403).json({
           error: `El modelo "${adminModel.displayName || model}" no esta activo. Activalo en Admin > AI Models antes de usarlo.`,
           code: 'image_model_inactive',
@@ -10093,14 +10106,14 @@ router.post(
         }
         const result = await imageEngine.generateImage({
           prompt: imagePrompt,
-          model,
+          model: grokImageRequested ? model.replace(/^(?:x-ai|xai)\//i, '') : model,
           provider: toImageEngineProvider(provider),
           aspectRatio,
           quality,
           n: imageCount,
           signal: requestAbortController.signal,
           timeoutMs: imageProviderAttemptTimeoutMs(),
-          failover: true,
+          failover: !grokImageRequested,
         });
         if (!result.ok || !result.images?.length) {
           const err = new Error(result.error || 'Image provider did not return any image data.');
@@ -10112,7 +10125,7 @@ router.post(
         return result.images.map((img) => ({
           b64: img.b64,
           provider: actualProvider,
-          model: result.model || model,
+          model: grokImageRequested ? model : result.model || model,
           attempts: result.attempts || [],
         }));
       };
