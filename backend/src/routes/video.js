@@ -619,6 +619,7 @@ const {
 } = require('../services/fal-video-model-catalog');
 const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
+const videoPromptDirector = require('../services/video-prompt-director');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
 const prisma = require('../config/database');
@@ -702,6 +703,30 @@ function generateOperationId() {
   return `veo3_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
+// Recent video history for a user (continuity / "hilación" between clips).
+// Reads the in-memory operations created by this instance, oldest first,
+// capped so prompts stay bounded. Entries expose the ORIGINAL prompt plus
+// capture settings so the prompt director can anchor the next generation.
+function getRecentVideoHistoryForUser(userId, limit = 5) {
+  const entries = [];
+  for (const op of activeOperations.values()) {
+    if (!op || op.userId !== userId) continue;
+    const prompt = op.originalPrompt || op.prompt;
+    if (!prompt) continue;
+    entries.push({
+      prompt,
+      enhancedPrompt: op.enhancedPrompt || null,
+      aspect_ratio: op.aspect_ratio || (op.result && op.result.aspect_ratio) || null,
+      resolution: op.resolution || (op.result && op.result.resolution) || null,
+      audio: typeof op.audio === 'boolean' ? op.audio : (op.result && typeof op.result.audio === 'boolean' ? op.result.audio : null),
+      model: (op.result && (op.result.model || op.result.modelDisplayName)) || op.resolvedModel || op.requestedModel || null,
+      createdAt: op.createdAt || null,
+    });
+  }
+  entries.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+  return entries.slice(-Math.max(1, Math.min(limit, 5)));
+}
+
 function resolveVeoFastDuration(requestedDuration, model) {
   const rawDuration = Number(requestedDuration);
   const modelName = String(model || '').toLowerCase();
@@ -725,7 +750,10 @@ router.post('/generate', [
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
   body('image_urls').optional().isArray({ max: 12 }).withMessage('Image URLs must be an array'),
   body('image_urls.*').optional().isString().withMessage('Image URL must be a string'),
-  body('model').optional().isString().withMessage('Model must be a string')
+  body('model').optional().isString().withMessage('Model must be a string'),
+  body('history').optional().isArray({ max: 5 }).withMessage('History must be an array'),
+  body('continuation').optional().isBoolean().withMessage('Continuation must be a boolean'),
+  body('professionalize').optional().isBoolean().withMessage('Professionalize must be a boolean')
 ], authenticateToken, requirePaidPlan({ feature: 'video_generation' }), async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -749,7 +777,10 @@ router.post('/generate', [
       negative_prompt,
       image_url,
       image_urls,
-      model = 'veo-fast' // Default model
+      model = 'veo-fast', // Default model
+      history: providedHistory = null,
+      continuation = null,
+      professionalize = true
     } = req.body;
 
     const inputImageUrls = [
@@ -760,7 +791,7 @@ router.post('/generate', [
       .filter(Boolean)
       .filter((value, index, values) => values.indexOf(value) === index);
 
-    const modelRouting = resolveFalVideoModelRequest(model, {
+    let modelRouting = resolveFalVideoModelRequest(model, {
       hasImage: inputImageUrls.length > 0,
       imageCount: inputImageUrls.length,
     });
@@ -773,22 +804,77 @@ router.post('/generate', [
       });
     }
 
-    const resolvedModel = modelRouting.endpoint;
+    let resolvedModel = modelRouting.endpoint;
     const numericDuration = resolveVeoFastDuration(requestedDuration, resolvedModel);
     const duration = `${numericDuration}s`;
+
+    // Professional direction + cross-clip continuity ("hilación").
+    // The prompt is directed once here (cinematic camera/pacing/quality +
+    // bible anchor to the previous clip) so retries reuse the exact same
+    // directed prompt. Strict continuity locks capture settings to the
+    // previous clip so consecutive videos cut cleanly against each other.
+    const history = Array.isArray(providedHistory) && providedHistory.length
+      ? providedHistory.slice(-5)
+      : getRecentVideoHistoryForUser(req.user.id, 5);
+    const resolvedFalCaps = modelRouting.model?.apiData?.fal || {};
+    let direction = null;
+    try {
+      direction = videoPromptDirector.directVideoPrompt({
+        prompt,
+        aspectRatio: aspect_ratio,
+        durationSeconds: numericDuration,
+        resolution,
+        audio,
+        endpoint: resolvedModel,
+        supportsAudio: typeof resolvedFalCaps.supportsAudio === 'boolean' ? resolvedFalCaps.supportsAudio : null,
+        history,
+        continuation: typeof continuation === 'boolean' ? continuation : null,
+        professionalize,
+      });
+    } catch (directorError) {
+      console.error('🎬 Video prompt director failed, using raw prompt:', directorError?.message || directorError);
+      direction = null;
+    }
+
+    let effectiveAspectRatio = aspect_ratio;
+    let effectiveResolution = resolution;
+    let effectiveAudio = audio;
+    if (direction && direction.continuityMode === 'strict') {
+      if (direction.settings.aspect_ratio) effectiveAspectRatio = direction.settings.aspect_ratio;
+      if (direction.settings.resolution) effectiveResolution = direction.settings.resolution;
+      if (typeof direction.settings.audio === 'boolean') effectiveAudio = direction.settings.audio;
+      if (direction.settings.model && direction.settings.model !== resolvedModel) {
+        const lockedRouting = resolveFalVideoModelRequest(direction.settings.model, {
+          hasImage: inputImageUrls.length > 0,
+          imageCount: inputImageUrls.length,
+        });
+        if (lockedRouting.ok) {
+          modelRouting = lockedRouting;
+          resolvedModel = lockedRouting.endpoint;
+        }
+      }
+    }
+
+    const directedPrompt = direction ? direction.prompt : prompt;
+    const effectiveNegativePrompt = negative_prompt || (direction ? direction.negativePrompt : null);
+    const continuityMode = direction ? direction.continuityMode : 'none';
+    const settingsLocked = direction ? direction.settingsLocked : [];
 
     console.log('Video generation request received:', {
       prompt: prompt.substring(0, 50) + '...',
       duration,
-      resolution,
-      audio,
-      aspect_ratio,
+      resolution: effectiveResolution,
+      audio: effectiveAudio,
+      aspect_ratio: effectiveAspectRatio,
       hasImageUrl: inputImageUrls.length > 0,
       imageCount: inputImageUrls.length,
       requestedModel: model,
       resolvedModel,
       usingPairedEndpoint: modelRouting.usingPairedEndpoint,
       falKeySource: falKeySource || 'none',
+      continuityMode,
+      historyUsed: history.length,
+      settingsLocked,
     });
 
     // Check user's monthly limit
@@ -825,9 +911,16 @@ router.post('/generate', [
       const operationData = {
         operationId,
         filename,
-        prompt,
+        prompt: directedPrompt,
+        originalPrompt: prompt,
+        enhancedPrompt: directedPrompt,
+        continuityMode,
+        settingsLocked,
+        historyUsed: history.length,
         duration,
-        aspect_ratio,
+        aspect_ratio: effectiveAspectRatio,
+        resolution: effectiveResolution,
+        audio: effectiveAudio,
         userId: req.user.id,
         status: 'processing',
         createdAt: new Date().toISOString(),
@@ -844,7 +937,11 @@ router.post('/generate', [
       activeOperations.set(operationId, operationData);
 
       // Start video generation with Fal.ai (async)
-      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, inputImageUrls, resolvedModel, resolution, audio)
+      generateVideoAsync(operationId, directedPrompt, effectiveAspectRatio, duration, effectiveNegativePrompt, filename, req.user.id, inputImageUrls, resolvedModel, effectiveResolution, effectiveAudio, {
+        originalPrompt: prompt,
+        continuityMode,
+        settingsLocked,
+      })
         .catch((error) => {
           console.error(`❌ Unhandled video generation failure for ${operationId}:`, error);
           const failedData = activeOperations.get(operationId) || operationData;
@@ -876,7 +973,7 @@ router.post('/generate', [
         checkUrl: `/video/status/${operationId}`,
         prompt: prompt,
         duration: duration,
-        aspect_ratio: aspect_ratio,
+        aspect_ratio: effectiveAspectRatio,
         requestedModel: model,
         model: resolvedModel,
         modelDisplayName: modelRouting.model?.displayName || resolvedModel,
@@ -884,7 +981,12 @@ router.post('/generate', [
         sourceImageUrl: inputImageUrls[0] || null,
         sourceImageUrls: inputImageUrls,
         imageCount: inputImageUrls.length,
-        generationType: inputImageUrls.length > 1 ? 'reference-to-video' : (inputImageUrls.length === 1 ? 'image-to-video' : 'text-to-video')
+        generationType: inputImageUrls.length > 1 ? 'reference-to-video' : (inputImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
+        continuity: {
+          mode: continuityMode,
+          historyUsed: history.length,
+          settingsLocked,
+        }
       });
 
     } catch (apiError) {
@@ -964,10 +1066,15 @@ async function prepareFalImageUrl(imageUrl) {
 }
 
 // generateVideoAsync function with proper variable scoping and syntax fix
-async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrls = [], model = 'veo-fast', resolution = '720p', audio = true) {
+async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrls = [], model = 'veo-fast', resolution = '720p', audio = true, opts = {}) {
   const maxRetries = 3;
   let retryCount = 0;
   const sourceImageUrls = normalizeVideoImageUrls(imageUrls);
+  const directionMeta = {
+    originalPrompt: typeof opts.originalPrompt === 'string' && opts.originalPrompt ? opts.originalPrompt : prompt,
+    continuityMode: opts.continuityMode || null,
+    settingsLocked: Array.isArray(opts.settingsLocked) ? opts.settingsLocked : [],
+  };
 
   while (retryCount < maxRetries) {
     let activeEndpoint = null;
@@ -1143,6 +1250,10 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         requestedModel: model,
         model: endpoint,
         prompt: prompt,
+        originalPrompt: directionMeta.originalPrompt,
+        enhanced_prompt: prompt,
+        continuityMode: directionMeta.continuityMode || operationData.continuityMode || 'none',
+        settingsLocked: directionMeta.settingsLocked.length ? directionMeta.settingsLocked : (operationData.settingsLocked || []),
         completedAt: new Date().toISOString()
       };
       completedData.updatedAt = new Date().toISOString();
