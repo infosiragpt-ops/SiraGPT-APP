@@ -51,9 +51,16 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(css, /--chat-content-max-width: var\(--content-max\)/)
   })
 
-  it("kills transcript dead space with flex-end, overflow-anchor, and 100dvh", () => {
+  it("anchors a short transcript to the top of the canvas", () => {
     const css = source("app/globals.css")
-    assert.match(css, /justify-content: flex-end;/)
+    assert.match(
+      css,
+      /\.chat-message-scroll-content\s*\{[\s\S]{0,420}justify-content: flex-start;/,
+    )
+    assert.match(
+      css,
+      /\.chat-log\s*\{[\s\S]{0,180}justify-content: flex-start;/,
+    )
     assert.match(css, /overflow-anchor: auto;/)
     assert.match(css, /height: 100dvh;/)
     assert.doesNotMatch(css, /\.chat-viewport\s*\{[^}]*100vh;/)
