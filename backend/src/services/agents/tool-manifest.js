@@ -617,7 +617,7 @@ function getVisualMediaManifests() {
   return {
     generate_image: {
       name: "generate_image",
-      purpose: "Generate an image from a text description using DALL-E or configured AI provider. Saves as downloadable PNG artifact.",
+      purpose: "Generate one or more images from a text description using DALL-E or configured AI provider. Saves each as a downloadable PNG artifact.",
       inputs: {
         type: "object", required: ["prompt"],
         properties: {
@@ -625,6 +625,7 @@ function getVisualMediaManifests() {
           style: { type: "string", enum: ["realistic","vivid","natural","photographic","digital-art","anime","oil-painting","line-art"] },
           aspectRatio: { type: "string", enum: ["square","wide","portrait"] },
           quality: { type: "string", enum: ["standard","hd"] },
+          count: { type: "integer", minimum: 1, maximum: 5 },
         },
       },
       outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
@@ -636,7 +637,7 @@ function getVisualMediaManifests() {
       ],
       acceptance_tests: ["returns ok:true with a non-empty downloadUrl for a simple prompt"],
       usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 10, requires_auth: true, requires_network: true },
-      examples_positive: [{ when: "user asks for an illustration", call: { prompt: "A futuristic city at sunset with flying cars", style: "vivid", aspectRatio: "wide" } }],
+      examples_positive: [{ when: "user asks for an illustration", call: { prompt: "A futuristic city at sunset with flying cars", style: "vivid", aspectRatio: "wide" } }, { when: "user asks for a vertical dog photo in words", call: { prompt: "dame una imagen vertical de un perro", aspectRatio: "portrait" } }],
       examples_negative: [{ when: "user wants a PDF document", why: "use create_document instead — generate_image only returns PNG." }],
       recovery_policy: { on_timeout: "Return ok:false. Agent may retry with a simpler prompt.", on_error: "Surface the error message. Do not fabricate an image.", max_retries: 1 },
       side_effect_level: "remote-read",
@@ -900,6 +901,8 @@ function getVisualMediaManifests() {
           imageUrl: { type: "string", description: "Optional source image URL (http(s), data: or /uploads path)." },
           fileId: { type: "string", description: "Optional uploaded file id; defaults to the attached / last chat image." },
           model: { type: "string", description: "Optional edit-model override (e.g. gemini-2.5-flash-image, gpt-image-1)." },
+          target: { type: "string", description: "Optional explicit edit target (e.g. 'el cielo'); the rest of the image is preserved." },
+          selection: { type: "object", description: "Optional selection scoping the edit: box 0..100, named region, label or mask ref." },
         },
       },
       outputs: { type: "object", properties: {
@@ -917,7 +920,7 @@ function getVisualMediaManifests() {
       ],
       acceptance_tests: ["returns ok:true with an edited image artifact when a source image and provider are available"],
       usage_limits: { timeout_ms_default: 60000, timeout_ms_max: 180000, max_calls_per_task: 5, requires_auth: true, requires_network: true },
-      examples_positive: [{ when: "user asks to remove a photo background", call: { instruction: "quita el fondo y déjalo transparente" } }],
+      examples_positive: [{ when: "user asks to remove a photo background", call: { instruction: "quita el fondo y déjalo transparente" } }, { when: "user asks to change one part of the image", call: { instruction: "cambia el cielo a un atardecer naranja", target: "el cielo" } }],
       examples_negative: [{ when: "user wants a brand-new image", why: "use generate_image instead." }],
       recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error message.", max_retries: 1 },
       side_effect_level: "remote-read",

@@ -28,6 +28,8 @@ const { saveArtifact, EXTENSION_TO_MIME, INTERNAL } = require('./task-tools');
 
 const { previewText, validateAgentArtifactBuffer } = INTERNAL;
 
+const imageDirective = require('./image-directive');
+
 // ── Lazy imports (avoid circular deps / unnecessary loads) ─────────────
 
 let aiServiceMod;
@@ -229,7 +231,7 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate an image from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The model is routed to its provider automatically and, if that provider fails or has no API key, the engine fails over to the next configured one. The resulting image is saved as a downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
+  description: 'Generate one or more images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The model is routed to its provider automatically and, if that provider fails or has no API key, the engine fails over to the next configured one. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
   parameters: {
     type: 'object',
     properties: {
@@ -238,11 +240,30 @@ const generateImage = {
       aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square". wide → landscape, portrait → vertical.' },
       quality: { type: 'string', enum: ['standard', 'hd'], description: 'Quality level. Default: "standard".' },
       model: { type: 'string', description: 'Optional image model id, e.g. "gpt-image-2", "imagen-4.0-generate-001", "fal-ai/flux/schnell", "google/gemini-2.5-flash-image", "grok-2-image". Only pass it when the user asked for a specific model; omit to use the best configured provider.' },
+      count: { type: 'integer', minimum: 1, maximum: 5, description: 'Optional number of image variants to generate (1..5). Defaults to the count stated in the prompt, or 1.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, style = 'vivid', aspectRatio = 'square', quality = 'standard', model }, ctx = {}) {
+  async execute(args = {}, ctx = {}) {
+    const { prompt: rawPrompt, style: styleArg, aspectRatio: ratioArg, quality: qualityArg, model, count: countArg } = args || {};
+    // Spoken context fills the gaps: "dame una imagen vertical",
+    // "una imagen orisontal para la portada", "3 imágenes estilo anime".
+    // Explicit tool arguments always win over the parsed request.
+    const directive = imageDirective.resolveGenerationDirective(rawPrompt, {
+      style: styleArg,
+      aspectRatio: ratioArg,
+      quality: qualityArg,
+    });
+    const prompt = directive.prompt;
+    const style = directive.style;
+    const aspectRatio = directive.aspectRatio;
+    const quality = directive.quality;
+    // Explicit count wins; otherwise the spoken count; always 1..5.
+    const parsedCount = Number.parseInt(countArg, 10);
+    const count = Number.isFinite(parsedCount)
+      ? Math.min(5, Math.max(1, parsedCount))
+      : directive.count;
     emitEvent(ctx, 'tool_call', { tool: 'generate_image', preview: prompt });
 
     try {
@@ -260,7 +281,7 @@ const generateImage = {
       const styleDesc = styleHints[style] || 'Vivid colors, striking composition.';
       const enhancedPrompt = `${styleDesc} ${prompt}`;
 
-      emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: 'Generando imagen…', partial: true });
+      emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: count > 1 ? `Generando ${count} imágenes…` : 'Generando imagen…', partial: true });
 
       const engine = getImageEngine();
       const result = await engine.generateImage({
@@ -268,7 +289,7 @@ const generateImage = {
         model: model || ctx.imageModel || undefined,
         aspectRatio,
         quality,
-        n: 1,
+        n: count,
         signal: ctx.signal,
       });
 
@@ -278,38 +299,55 @@ const generateImage = {
         return { ok: false, error: msg, attempts: result.attempts };
       }
 
-      const buffer = Buffer.from(result.images[0].b64, 'base64');
-      const filename = `image_${crypto.randomBytes(4).toString('hex')}.png`;
-
-      const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
-
-      emitEvent(ctx, 'file_artifact', {
-        artifact: {
+      // Every image becomes its own downloadable artifact (back-compat: the
+      // first artifact is also exposed at the top level).
+      const artifacts = [];
+      for (let index = 0; index < result.images.length; index += 1) {
+        const buffer = Buffer.from(result.images[index].b64, 'base64');
+        const filename = `image_${crypto.randomBytes(4).toString('hex')}${result.images.length > 1 ? `_${index + 1}` : ''}.png`;
+        const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
+        artifacts.push({
           id: artifact.id,
           filename: artifact.filename,
-          format: 'png',
-          mime: 'image/png',
           sizeBytes: artifact.sizeBytes,
           downloadUrl: artifact.downloadUrl,
-        },
-      });
+        });
+        emitEvent(ctx, 'file_artifact', {
+          artifact: {
+            id: artifact.id,
+            filename: artifact.filename,
+            format: 'png',
+            mime: 'image/png',
+            sizeBytes: artifact.sizeBytes,
+            downloadUrl: artifact.downloadUrl,
+          },
+        });
+      }
 
+      const first = artifacts[0];
+      const totalKB = artifacts.reduce((sum, a) => sum + (a.sizeBytes || 0), 0) / 1024;
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_image',
         ok: true,
-        preview: `Imagen lista: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+        preview: artifacts.length > 1
+          ? `${artifacts.length} imágenes listas (${Math.round(totalKB)} KB en total, ${result.model} vía ${result.provider})`
+          : `Imagen lista: ${first.filename} (${Math.round(first.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
       });
 
       return {
         ok: true,
-        id: artifact.id,
-        filename: artifact.filename,
-        sizeBytes: artifact.sizeBytes,
-        downloadUrl: artifact.downloadUrl,
+        id: first.id,
+        filename: first.filename,
+        sizeBytes: first.sizeBytes,
+        downloadUrl: first.downloadUrl,
         mime: 'image/png',
         prompt: enhancedPrompt,
         provider: result.provider,
         model: result.model,
+        frame: directive.frame,
+        requestedImages: count,
+        deliveredImages: artifacts.length,
+        images: artifacts,
       };
     } catch (err) {
       const msg = err?.message || String(err);
@@ -434,7 +472,7 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
 
 const editImage = {
   name: 'edit_image',
-  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, etc. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
+  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, etc. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Spoken targeting is understood ("en la imagen cambia el cielo a un atardecer", "cambia solo los ojos a verde"): the instruction is scoped to the detected target and everything else is preserved. An explicit `target` and/or `selection` (box 0..100, named region, label or mask ref) scopes the edit to a specific part. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
   parameters: {
     type: 'object',
     properties: {
@@ -442,11 +480,13 @@ const editImage = {
       imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
       fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
+      target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
+      selection: { type: 'object', description: 'Optional selection scoping the edit: { x, y, width, height } in 0..100 (fractions 0..1 also accepted), { kind: "region", region: "top-left"|"center"|… }, { kind: "label", label } or { kind: "mask", ref }. Invalid selections are ignored safely.' },
     },
     required: ['instruction'],
     additionalProperties: false,
   },
-  async execute({ instruction, imageUrl, fileId, model } = {}, ctx = {}) {
+  async execute({ instruction, imageUrl, fileId, model, target, selection } = {}, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
 
     try {
@@ -463,8 +503,12 @@ const editImage = {
 
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Aplicando la edición a la imagen…', partial: true });
       const engine = getImageEngine();
+      // Scope the provider instruction to the spoken/explicit target and
+      // selection so "cambia esto" / "solo los ojos" edits one part and
+      // preserves everything else.
+      const editDirective = imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
       const result = await engine.editImage({
-        prompt: cleanInstruction,
+        prompt: editDirective.prompt,
         imageBuffer: source.buffer,
         mimeType: source.mimeType,
         model,
@@ -509,6 +553,8 @@ const editImage = {
         sourceImage: source.source,
         provider: result.provider,
         model: result.model,
+        editTarget: editDirective.target,
+        editSelection: editDirective.selection,
       };
     } catch (err) {
       const msg = err?.message || String(err);

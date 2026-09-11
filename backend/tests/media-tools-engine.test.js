@@ -143,7 +143,10 @@ test('edit_image edits from an explicit data: URL', async () => {
   );
   assert.equal(r.ok, true);
   assert.equal(engineCalls.edit.length, 1);
-  assert.equal(engineCalls.edit[0].prompt, 'quita el fondo');
+  // The spoken instruction is kept verbatim as the base and scoped with a
+  // preservation clause so the background removal keeps the subject intact.
+  assert.ok(engineCalls.edit[0].prompt.startsWith('quita el fondo'), 'provider prompt keeps the user instruction first');
+  assert.match(engineCalls.edit[0].prompt, /sujeto principal sin cambios/);
   assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'source-image');
   assert.equal(r.provider, 'gemini');
   assert.ok(ctx._events.some((e) => e.type === 'file_artifact'));
@@ -206,6 +209,88 @@ test('edit_image returns clear guidance when no source image exists', async () =
 test('edit_image requires an instruction', async () => {
   const r = await tool('edit_image').execute({ instruction: '   ' }, fakeCtx());
   assert.equal(r.ok, false);
+});
+
+test('generate_image understands spoken framing ("vertical") without explicit args', async () => {
+  const ctx = fakeCtx();
+  const r = await tool('generate_image').execute({ prompt: 'dame una imagen vertical de un perro' }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate[0].aspectRatio, 'portrait');
+  assert.equal(r.frame, '3:4');
+  assert.match(engineCalls.generate[0].prompt, /Image framing requirement/);
+});
+
+test('generate_image keeps explicit args over spoken context', async () => {
+  const r = await tool('generate_image').execute(
+    { prompt: 'una imagen vertical de un perro', aspectRatio: 'square' },
+    fakeCtx()
+  );
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate[0].aspectRatio, 'square');
+});
+
+test('edit_image scopes "cambia el cielo" to the target and preserves the rest', async () => {
+  const dataUrl = `data:image/png;base64,${Buffer.from('source-image').toString('base64')}`;
+  const r = await tool('edit_image').execute(
+    { instruction: 'en la imagen cambia el cielo a un atardecer naranja', imageUrl: dataUrl },
+    fakeCtx()
+  );
+  assert.equal(r.ok, true);
+  assert.match(r.editTarget, /cielo/);
+  assert.match(engineCalls.edit[0].prompt, /cielo/);
+  assert.match(engineCalls.edit[0].prompt, /conserva el resto de la imagen exactamente igual/);
+});
+
+test('edit_image honours an explicit selection box', async () => {
+  const dataUrl = `data:image/png;base64,${Buffer.from('source-image').toString('base64')}`;
+  const r = await tool('edit_image').execute(
+    {
+      instruction: 'cambia el color',
+      imageUrl: dataUrl,
+      target: 'la camiseta',
+      selection: { x: 0, y: 0, width: 100, height: 50 },
+    },
+    fakeCtx()
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.editTarget, 'la camiseta');
+  assert.deepEqual(r.editSelection, { kind: 'box', x: 0, y: 0, width: 100, height: 50 });
+  assert.match(engineCalls.edit[0].prompt, /fuera de esa región/);
+});
+
+test('generate_image passes an explicit count through to the engine', async () => {
+  engineGenerateResult = {
+    ok: true,
+    images: [1, 2, 3].map((i) => ({ b64: Buffer.from(`generated-${i}`).toString('base64'), mime: 'image/png' })),
+    provider: 'openai',
+    model: 'gpt-image-2',
+    attempts: [],
+  };
+  const ctx = fakeCtx();
+  const r = await tool('generate_image').execute({ prompt: 'un perro', count: 3 }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate[0].n, 3);
+  assert.equal(r.requestedImages, 3);
+  assert.equal(r.deliveredImages, 3);
+  assert.equal(r.images.length, 3);
+  // Back-compat: the first artifact is also exposed at the top level.
+  assert.equal(r.filename, r.images[0].filename);
+  assert.equal(r.downloadUrl, r.images[0].downloadUrl);
+  assert.equal(ctx._events.filter((e) => e.type === 'file_artifact').length, 3);
+});
+
+test('generate_image fills count from the spoken prompt when no explicit count', async () => {
+  const r = await tool('generate_image').execute({ prompt: 'dame 3 imágenes estilo anime de gatos' }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate[0].n, 3);
+  assert.equal(r.requestedImages, 3);
+});
+
+test('generate_image clamps count to 1..5', async () => {
+  await tool('generate_image').execute({ prompt: 'x', count: 99 }, fakeCtx());
+  assert.equal(engineCalls.generate[0].n, 5);
+  await tool('generate_image').execute({ prompt: 'x', count: 0 }, fakeCtx());
+  assert.equal(engineCalls.generate[1].n, 1);
 });
 
 // ── edit_image security hardening ─────────────────────────────────────────

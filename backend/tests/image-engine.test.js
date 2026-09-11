@@ -548,3 +548,101 @@ test('editImage validates inputs', async () => {
   assert.equal((await engine.editImage({ prompt: 'x' })).ok, false);
   assert.equal((await engine.editImage({ prompt: 'x', imageBuffer: Buffer.alloc(0) })).ok, false);
 });
+
+// ── Multi-image batching (1..5) ───────────────────────────────────────────
+
+test('generateImage clamps n to 1..5', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const seen = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onGenerate: async (payload) => {
+      seen.push(payload.n);
+      return { data: Array.from({ length: payload.n }, (_, i) => ({ b64_json: `IMG${i}` })) };
+    },
+  }));
+  try {
+    const nine = await engine.generateImage({ prompt: 'x', model: 'gpt-image-2', n: 9, failover: false });
+    assert.equal(nine.ok, true);
+    assert.equal(nine.images.length, 5);
+    assert.deepEqual(seen, [5]);
+    const zero = await engine.generateImage({ prompt: 'x', model: 'gpt-image-2', n: 0, failover: false });
+    assert.equal(zero.ok, true);
+    assert.equal(zero.images.length, 1);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateImage retries sequential singles when the provider rejects batch n', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const seen = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onGenerate: async (payload) => {
+      seen.push(payload.n);
+      if (payload.n > 1) {
+        const err = new Error('Invalid value for n: must be 1, got 3');
+        err.status = 400;
+        throw err;
+      }
+      return { data: [{ b64_json: `SINGLE${seen.length}` }] };
+    },
+  }));
+  try {
+    const result = await engine.generateImage({ prompt: 'x', model: 'gpt-image-2', n: 3, failover: false });
+    assert.equal(result.ok, true);
+    assert.equal(result.images.length, 3);
+    // 1 rejected batch call + 3 sequential singles.
+    assert.deepEqual(seen, [3, 1, 1, 1]);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateImage never multiplies quota failures into sequential retries', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  let calls = 0;
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onGenerate: async () => {
+      calls += 1;
+      const err = new Error('RESOURCE_EXHAUSTED quota exceeded');
+      err.status = 429;
+      throw err;
+    },
+  }));
+  try {
+    const result = await engine.generateImage({ prompt: 'x', model: 'gpt-image-2', n: 3, failover: false });
+    assert.equal(result.ok, false);
+    assert.equal(calls, 1);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('generateImage fills up to n when a provider returns fewer images', async () => {
+  setEnv({ OPENROUTER_API_KEY: 'or-x' });
+  let calls = 0;
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onChat: async () => {
+      calls += 1;
+      return { choices: [{ message: { images: [{ image_url: { url: `data:image/png;base64,OR${calls}` } }] } }] };
+    },
+  }));
+  try {
+    const result = await engine.generateImage({ prompt: 'x', model: 'google/gemini-2.5-flash-image', n: 3, failover: false });
+    assert.equal(result.ok, true);
+    assert.equal(result.images.length, 3);
+    assert.equal(calls, 3);
+    assert.deepEqual(result.images.map((i) => i.b64), ['OR1', 'OR2', 'OR3']);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test('isBatchSizeError ignores quota/auth/moderation failures', () => {
+  const { isBatchSizeError } = _internal;
+  assert.equal(isBatchSizeError(Object.assign(new Error('Invalid value for n: must be 1'), { status: 400 })), true);
+  assert.equal(isBatchSizeError(Object.assign(new Error('quota exceeded'), { status: 429 })), false);
+  assert.equal(isBatchSizeError(Object.assign(new Error('incorrect api key'), { status: 401 })), false);
+  assert.equal(isBatchSizeError(new Error('content policy violation: blocked')), false);
+  assert.equal(isBatchSizeError(new Error('openai is down')), false);
+});
