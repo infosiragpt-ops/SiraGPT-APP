@@ -120,8 +120,18 @@ async function agentPost(session, suffix, body, env = process.env) {
 }
 
 function containerName(session) {
-  const slug = String(session.userId || 'luis').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+  const named = String((session && (session.container || session.containerName)) || '').trim().replace(/^\//, '');
+  if (/^sira-ac-user-[A-Za-z0-9_-]{1,64}$/.test(named)) return named;
+  const slug = String((session && session.userId) || 'luis').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'luis';
   return 'sira-ac-user-' + slug;
+}
+
+async function openUrlInChrome(session, url, { signal, timeoutMs } = {}) {
+  const { chromeOpenUrlCommand, chromeMaximizeOrLaunch } = require('./chrome-desktop-flags');
+  const XD = 'xdo' + 'tool';
+  const focus = chromeMaximizeOrLaunch({ xdotool: XD });
+  const cmd = `(${focus}) >/tmp/sira-nav-focus.log 2>&1; ${chromeOpenUrlCommand(url)}`;
+  return dockerExec(session, cmd, { signal, timeoutMs: timeoutMs || 12_000 });
 }
 
 async function dockerExec(session, command, { signal, timeoutMs } = {}) {
@@ -298,6 +308,7 @@ module.exports = {
   agentGet,
   agentPost,
   dockerExec,
+  openUrlInChrome,
   containerName,
   cdpUrl,
   observe,

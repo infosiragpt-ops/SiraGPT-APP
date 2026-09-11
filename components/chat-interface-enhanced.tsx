@@ -67,9 +67,9 @@ import {
 } from "@/lib/computer-login-handoff"
 import {
   COMPUTER_NAVIGATE_WINDOW_EVENT,
-  extractHttpUrlFromText,
   type ComputerNavigateDetail,
 } from "@/lib/computer-navigate"
+import { browserUrlFromPrompt, DEFAULT_BROWSER_HOME } from "@/lib/computer-navigate-client"
 import {
   getSpeechRecognitionCtor,
   isIgnorableSpeechError,
@@ -10732,7 +10732,7 @@ REWRITTEN TEXT:`;
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
         if (isLiveComputerUsePrompt(msg)) {
-          openComputerPanel({ browser: true, url: extractHttpUrlFromText(msg) || undefined });
+          openComputerPanel({ browser: true, url: browserUrlFromPrompt(msg) });
         }
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
         markQueuedSendSucceeded();
@@ -12508,7 +12508,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const computer = params.get("computer");
     if (computer === "1" || computer === "true") openComputerPanel();
     const browser = params.get("browser");
-    if (browser === "1" || browser === "true") openComputerPanel({ browser: true });
+    if (browser === "1" || browser === "true") openComputerPanel({ browser: true, url: DEFAULT_BROWSER_HOME });
     const login = params.get("login");
     if (login === "1" || login === "true") {
       setLoginHandoffActive(true);
@@ -13582,7 +13582,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       return;
     }
     if (isLiveComputerUsePrompt(goalText)) {
-      openComputerPanel({ browser: true, url: extractHttpUrlFromText(goalText) || undefined });
+      openComputerPanel({ browser: true, url: browserUrlFromPrompt(goalText) });
     }
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
@@ -13932,7 +13932,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <Button
                   variant={computerPanelOpen && computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
-                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel({ browser: true })}
+                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel({ browser: true, url: DEFAULT_BROWSER_HOME })}
                   title="Navegador"
                   aria-label="Navegador"
                   aria-pressed={computerPanelOpen && computerBrowserMode}

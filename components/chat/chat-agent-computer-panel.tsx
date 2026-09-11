@@ -233,6 +233,7 @@ export default function ChatAgentComputerPanel({
       computerRunId={chatId ? `chat-${chatId}` : "chat"}
       conversationId={chatId}
       embedded
+      preferAgentComputer
       onClose={onClose}
       onStatusChange={setLiveStatus}
     />

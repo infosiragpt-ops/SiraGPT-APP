@@ -154,6 +154,21 @@ describe('siragpt-computer-orchestrator session contract', () => {
       assert.equal(action.status, 200);
       assert.equal(body.ok, true);
       assert.equal(body.type, 'click');
+      const nav = await fetch(`${srv.url}/sessions/${created.body.sessionId}/agent/navigate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'https://www.google.com/' }),
+      });
+      const opened = await nav.json();
+      assert.equal(nav.status, 200);
+      assert.equal(opened.ok, true);
+      assert.equal(opened.url, 'https://www.google.com/');
+      const blocked = await fetch(`${srv.url}/sessions/${created.body.sessionId}/agent/navigate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: 'javascript:alert(1)' }),
+      });
+      assert.equal(blocked.status, 400);
     } finally {
       await srv.close();
     }

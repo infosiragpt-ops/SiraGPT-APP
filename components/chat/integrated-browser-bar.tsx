@@ -4,9 +4,8 @@ import * as React from "react"
 import { Globe, ArrowRight } from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { authenticatedFetch } from "@/lib/authenticated-fetch"
-import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { sanitizeNavigateUrl } from "@/lib/computer-navigate"
+import { postComputerNavigate } from "@/lib/computer-navigate-client"
 
 export type IntegratedBrowserBarProps = {
   conversationId?: string | null
@@ -23,10 +22,41 @@ export function IntegratedBrowserBar({
 }: IntegratedBrowserBarProps) {
   const [value, setValue] = React.useState(initialUrl)
   const [busy, setBusy] = React.useState(false)
+  const lastAutoUrl = React.useRef("")
+  const onNavigatedRef = React.useRef(onNavigated)
+  onNavigatedRef.current = onNavigated
 
   React.useEffect(() => {
     if (initialUrl) setValue(initialUrl)
   }, [initialUrl])
+
+  React.useEffect(() => {
+    const chatId = String(conversationId || "").trim()
+    if (!initialUrl || !chatId) return
+    const stamp = `${chatId}::${initialUrl}`
+    if (stamp === lastAutoUrl.current) return
+    lastAutoUrl.current = stamp
+    const parsed = sanitizeNavigateUrl(initialUrl)
+    if (!parsed.ok) return
+    let cancelled = false
+    setBusy(true)
+    void postComputerNavigate(chatId, parsed.url)
+      .then((url) => {
+        if (cancelled) return
+        setValue(url)
+        onNavigatedRef.current?.(url)
+      })
+      .catch((error: any) => {
+        if (cancelled) return
+        toast.error(error?.message || "No se pudo abrir la página")
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [initialUrl, conversationId])
 
   const go = async (event?: React.FormEvent) => {
     event?.preventDefault()
@@ -37,23 +67,10 @@ export function IntegratedBrowserBar({
     }
     setBusy(true)
     try {
-      const res = await authenticatedFetch(
-        `${getSameOriginApiBaseUrl().replace(/\/+$/, "")}/agent-computer/navigate`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            url: parsed.url,
-            ...(conversationId ? { conversationId } : {}),
-          }),
-          signal: AbortSignal.timeout(30_000),
-        },
-      )
-      const body = await res.json().catch(() => ({})) as { message?: string; error?: string }
-      if (!res.ok) throw new Error(body.message || body.error || "No se pudo abrir la página")
-      setValue(parsed.url)
-      onNavigated?.(parsed.url)
+      const url = await postComputerNavigate(conversationId, parsed.url)
+      setValue(url)
+      lastAutoUrl.current = `${String(conversationId || "").trim()}::${url}`
+      onNavigated?.(url)
     } catch (error: any) {
       toast.error(error?.message || "No se pudo abrir la página")
     } finally {

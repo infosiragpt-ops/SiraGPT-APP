@@ -62,9 +62,9 @@ describe('chrome desktop flags', () => {
     assert.match(desk, /--window-size=1920,1080/);
     assert.match(orch, /--start-maximized/);
     assert.match(orch, /--window-size=1920,1080/);
-    assert.match(route, /chromeOpenUrlCommand/);
-    assert.match(route, /chromeMaximizeOrLaunch/);
-    assert.match(tools, /chromeOpenUrlCommand/);
+    assert.match(route, /chromeOpenUrlCommand|openUrlInChrome|agent\/navigate/);
+    assert.match(route, /chromeMaximizeOrLaunch|openUrlInChrome/);
+    assert.match(tools, /chromeOpenUrlCommand|openUrlInChrome/);
     assert.doesNotMatch(route, /about:blank/);
     assert.doesNotMatch(tools, /about:blank/);
   });

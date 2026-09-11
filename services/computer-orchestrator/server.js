@@ -348,8 +348,21 @@ function createOrchestrator(opts = {}) {
       try {
         const body = await readBody(req);
         const urlToOpen = String(body.url || body.href || '').trim();
+        if (!/^https?:\/\//i.test(urlToOpen)) {
+          const err = new Error('url must be http(s)');
+          err.status = 400;
+          throw err;
+        }
         const chromeFlags = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-infobars --test-type --start-maximized --window-size=1920,1080 --window-position=0,0 --user-data-dir=/workspace/.chrome';
-        const cmd = `(google-chrome ${chromeFlags} --new-window ${JSON.stringify(urlToOpen)} || chromium ${chromeFlags} --new-window ${JSON.stringify(urlToOpen)} || xdg-open ${JSON.stringify(urlToOpen)}) >/tmp/sira-nav.log 2>&1 & echo Opening`;
+        const quoted = JSON.stringify(urlToOpen);
+        const focus = [
+          'xdotool search --onlyvisible --class google-chrome windowactivate --sync windowmove 0 0 windowsize 1920 1080',
+          'xdotool search --onlyvisible --class Chromium windowactivate --sync windowmove 0 0 windowsize 1920 1080',
+          'xdotool search --onlyvisible --class chromium windowactivate --sync windowmove 0 0 windowsize 1920 1080',
+          `google-chrome ${chromeFlags}`,
+          `chromium ${chromeFlags}`,
+        ].join(' || ');
+        const cmd = `(${focus}) >/tmp/sira-nav-focus.log 2>&1; (google-chrome ${chromeFlags} --new-window ${quoted} || chromium ${chromeFlags} --new-window ${quoted} || xdg-open ${quoted}) >/tmp/sira-nav.log 2>&1 & echo Opening`;
         if (driver === 'fake' && !opts.execImpl) {
           return json(res, 200, { ok: true, url: urlToOpen, fake: true });
         }
@@ -357,7 +370,7 @@ function createOrchestrator(opts = {}) {
         const out = exec ? await exec(session.container, cmd, { timeoutMs: 8000 }) : { stdout: 'Opening' };
         return json(res, 200, { ok: true, url: urlToOpen, stdout: out.stdout });
       } catch (err) {
-        return json(res, err.status || 500, { error: 'navigate_failed', message: ORCH_DOWN_ES });
+        return json(res, err.status || 500, { error: 'navigate_failed', message: err.status === 400 ? String(err.message) : ORCH_DOWN_ES });
       }
     }
 
