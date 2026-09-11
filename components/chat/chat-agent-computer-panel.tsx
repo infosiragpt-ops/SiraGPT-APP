@@ -44,6 +44,7 @@ export type ChatAgentComputerPanelProps = {
   loginHandoffKind?: string | null
   startExpanded?: boolean
   initialDock?: "browser" | "desktop" | "files" | "terminal"
+  navigateUrl?: string
 }
 
 type LiveStatus = "starting" | "live" | "error" | "idle"
@@ -77,6 +78,7 @@ export default function ChatAgentComputerPanel({
   loginHandoffKind = null,
   startExpanded = false,
   initialDock = "browser",
+  navigateUrl = "",
 }: ChatAgentComputerPanelProps) {
   const chatId = String(conversationId || "").trim()
   const [liveStatus, setLiveStatus] = React.useState<LiveStatus>("starting")
@@ -281,6 +283,7 @@ export default function ChatAgentComputerPanel({
             onClose={onClose}
             liveStatus={liveStatus}
             initialDock={initialDock}
+            navigateUrl={navigateUrl}
           >
             {pane}
           </AgentComputerShell>
@@ -324,7 +327,7 @@ export default function ChatAgentComputerPanel({
       </div>
 
       <div className="shrink-0 px-4 pt-1">
-        <IntegratedBrowserBar conversationId={chatId} compact onNavigated={() => setExpanded(true)} />
+        <IntegratedBrowserBar conversationId={chatId} compact initialUrl={navigateUrl} onNavigated={() => setExpanded(true)} />
       </div>
 
       {/* Live screen thumbnail — click opens the full window. */}

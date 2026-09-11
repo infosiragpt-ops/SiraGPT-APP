@@ -248,7 +248,8 @@ export function isPasswordPasteRequest(text: string): boolean {
 }
 
 const OPEN_COMPUTER_RE = /\b(abre|abrir|enciende|usa|usar|abre(?:me|la)?)\b.{0,48}\b(?:tu |la |el |mi )?(computadora|ordenador|navegador|browser|overlay)\b/i
-const LIVE_BROWSE_RE = /\b(busca(?:r|me|le)? en vivo|buscar en vivo|en el navegador|live (?:search|browse)|navega(?:r)? (?:a|en|por)|en tu computadora)\b/i
+const LIVE_BROWSE_RE = /\b(busca(?:r|me|le)? en vivo|buscar en vivo|en el navegador|live (?:search|browse)|navega(?:r)? (?:a|en|por)|en tu computadora|busca(?:r|me)? (?:información|informacion)(?:\s+\S+){0,16}|busca(?:r|me)? en (?:internet|la web|google|el navegador)|investiga(?:r)? en (?:internet|la web|l[ií]nea))\b/i
+const OPEN_URL_RE = /\b(abre|abrir|entra(?:r)? (?:a|en)|visita|navega(?:r)? a)\b[\s\S]{0,80}https?:\/\/[^\s]+/i
 const SHOPPING_RE = /\b(ofertas?|prendas? de vestir|shopping|comprar ropa|tienda de ropa|ropa de (?:mujer|hombre|ni[nñ][oa]s?))\b/i
 const BOOKING_RE = /\b(reserva(?:r)?(?: un[oa]?| el| la)? (?:vuelo|hotel|mesa|cita|restaurante|turno)|hacer una reserva|booking)\b/i
 const APPOINTMENT_RE = /\b(agend(?:a|ar)(?: una| la)? cita|pedir cita|saca(?:r)? una cita|cita (?:m[eé]dica|en el|para|del|de ))\b/i
@@ -274,6 +275,7 @@ export function isLiveComputerUsePrompt(prompt: string): boolean {
   if (!t.trim()) return false
   if (OPEN_COMPUTER_RE.test(t)) return true
   if (LIVE_BROWSE_RE.test(t)) return true
+  if (OPEN_URL_RE.test(t)) return true
   if (SHOPPING_RE.test(t)) return true
   if (BOOKING_RE.test(t)) return true
   if (APPOINTMENT_RE.test(t)) return true

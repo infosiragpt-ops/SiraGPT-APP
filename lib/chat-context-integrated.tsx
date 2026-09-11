@@ -38,6 +38,11 @@ import {
   type PendingRetryResult,
 } from "./pending-messages"
 import { devLog } from "./dev-log"
+import {
+  emitComputerNavigate,
+  isComputerNavigateTool,
+  parseNavigateUrlFromToolArgs,
+} from "./computer-navigate"
 import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
 import { safeUUID } from "./safe-uuid"
 import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
@@ -319,8 +324,9 @@ function createReasoningHandlers(opts: {
   setChat: (updater: (prev: any) => any) => void
   messageId: string
   isCancelled: () => boolean
+  conversationId?: string | null
 }) {
-  const { setChat, messageId, isCancelled } = opts
+  const { setChat, messageId, isCancelled, conversationId } = opts
   let reasoningAcc = ''
   let flushTimer: ReturnType<typeof setTimeout> | null = null
   const toolCalls = new Map<number, { index: number; name?: string; args: string }>()
@@ -361,6 +367,10 @@ function createReasoningHandlers(opts: {
       if (payload.argsDelta) existing.args += payload.argsDelta
       toolCalls.set(payload.index, existing)
       patchMessage({ reasoningToolCalls: Array.from(toolCalls.values()) })
+      if (isComputerNavigateTool(existing.name)) {
+        const url = parseNavigateUrlFromToolArgs(existing.args)
+        if (url) emitComputerNavigate({ url, conversationId, tool: existing.name })
+      }
     },
     onUsage: (payload: AIUsagePayload) => {
       if (isCancelled()) return
@@ -428,8 +438,9 @@ function createAgentTraceHandlers(opts: {
   setChat: (updater: (prev: any) => any) => void
   messageId: string
   isCancelled: () => boolean
+  conversationId?: string | null
 }) {
-  const { setChat, messageId, isCancelled } = opts
+  const { setChat, messageId, isCancelled, conversationId } = opts
   const steps = new Map<string, AgentStepClient>()
   let lastSeqByStep = new Map<string, number>()
   let coworkChecklist: AgentRunClient['checklist'] = []
@@ -467,6 +478,10 @@ function createAgentTraceHandlers(opts: {
             status: 'planned',
           })
           patchMessage({ agentSteps: orderedSteps(), agentRun: { status: 'running', ...coworkRun, checklist: coworkChecklist } })
+          if (isComputerNavigateTool(event.name)) {
+            const url = parseNavigateUrlFromToolArgs(event.args)
+            if (url) emitComputerNavigate({ url, conversationId, tool: event.name })
+          }
           break
         }
         case 'tool_executing': {
@@ -2198,6 +2213,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+                conversationId: activeChat.id,
               }),
               ...createActivityHandlers({
                 setChat: setCurrentChat,
@@ -2208,6 +2224,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+                conversationId: activeChat.id,
               }),
               onReplace: (replacement) => {
                 if (pendingStopsRef.current.has(activeChat.id)) {
@@ -3243,6 +3260,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+            conversationId: currentChat.id,
           }),
           ...createActivityHandlers({
             setChat: setCurrentChat,
@@ -3253,6 +3271,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+            conversationId: currentChat.id,
           }),
           onReplace: (replacement) => {
             if (pendingStopsRef.current.has(currentChat.id)) {
@@ -3642,6 +3661,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+            conversationId: currentChat.id,
           }),
           ...createActivityHandlers({
             setChat: setCurrentChat,
@@ -3652,6 +3672,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+            conversationId: currentChat.id,
           }),
           onReplace: (replacement) => {
             if (pendingStopsRef.current.has(currentChat.id)) {

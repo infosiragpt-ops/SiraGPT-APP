@@ -10,6 +10,56 @@ export type NavigateUrlResult =
   | { ok: true; url: string }
   | { ok: false; error: string }
 
+export const COMPUTER_NAVIGATE_WINDOW_EVENT = "siragpt:computer-navigate"
+
+export type ComputerNavigateDetail = {
+  url: string
+  conversationId?: string | null
+  tool?: string
+}
+
+export function parseNavigateUrlFromToolArgs(args: unknown): string | null {
+  if (args == null) return null
+  let record: Record<string, unknown> | null = null
+  if (typeof args === "object" && !Array.isArray(args)) {
+    record = args as Record<string, unknown>
+  } else if (typeof args === "string") {
+    const raw = args.trim()
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === "object") record = parsed as Record<string, unknown>
+    } catch {
+      const direct = sanitizeNavigateUrl(raw)
+      return direct.ok ? direct.url : null
+    }
+  }
+  if (!record) return null
+  const candidate = record.url || record.href || record.uri
+  const parsed = sanitizeNavigateUrl(candidate)
+  return parsed.ok ? parsed.url : null
+}
+
+export function isComputerNavigateTool(name: unknown): boolean {
+  return /^(computer_navigate|browser_navigate)$/i.test(String(name || "").trim())
+}
+
+export function emitComputerNavigate(detail: ComputerNavigateDetail): void {
+  if (typeof window === "undefined") return
+  const url = String(detail?.url || "").trim()
+  if (!url) return
+  window.dispatchEvent(new CustomEvent<ComputerNavigateDetail>(COMPUTER_NAVIGATE_WINDOW_EVENT, {
+    detail: { url, conversationId: detail.conversationId || null, tool: detail.tool },
+  }))
+}
+
+export function extractHttpUrlFromText(text: unknown): string | null {
+  const match = String(text || "").match(/https?:\/\/[^\s<>"']+/i)
+  if (!match) return null
+  const parsed = sanitizeNavigateUrl(match[0])
+  return parsed.ok ? parsed.url : null
+}
+
 export function sanitizeNavigateUrl(raw: unknown): NavigateUrlResult {
   let value = String(raw || "").trim()
   if (!value) return { ok: false, error: "La URL debe ser http(s)." }

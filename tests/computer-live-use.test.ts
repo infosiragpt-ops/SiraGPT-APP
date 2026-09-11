@@ -58,6 +58,9 @@ const COMPUTER_PHRASES = [
   "renueva mi licencia en el DMV",
   "tramita el pasaporte",
   "abre el navegador y entra a amazon",
+  "busca información sobre Scopus y papers de 2024",
+  "busca en internet el último informe de la OMS",
+  "abre https://id.elsevier.com y entra a Scopus",
 ]
 
 const NOT_COMPUTER = [
@@ -153,7 +156,9 @@ describe("live computer-use · shopping prompt must not cop out", () => {
     assert.match(compose, /SIRAGPT_AGENT_COMPUTER: \$\{SIRAGPT_AGENT_COMPUTER:-1\}/)
     const chat = source("components/chat-interface-enhanced.tsx")
     assert.match(chat, /isLiveComputerUsePrompt/)
-    assert.match(chat, /openComputerPanel\(\)/)
+    assert.match(chat, /openComputerPanel\(\{ browser: true/)
+    assert.match(chat, /COMPUTER_NAVIGATE_WINDOW_EVENT/)
+    assert.match(chat, /extractHttpUrlFromText/)
     assert.doesNotMatch(source("backend/src/services/agents/agent-tools.js"), /No active browser driver/)
   })
 })

@@ -18,6 +18,7 @@ const { HAS_COMPUTER_POLICY_ES, POLICY_ES } = require('./login-handoff');
 const { createWorkspaceFileApi } = require('./workspace-files');
 const { authorizeComposerTool, composerDeniedResult } = require('../composer-permission');
 const { chromeOpenUrlCommand } = require('./chrome-desktop-flags');
+const { sanitizeNavigateUrl } = require('./navigate-url');
 
 const COMPUTER_TOOL_NAMES = Object.freeze([
   'computer_screenshot',
@@ -57,9 +58,11 @@ function buildNavigateTool({ userId, conversationId, env }) {
       additionalProperties: false,
     },
     async execute(args = {}, ctx = {}) {
-      const url = String(args.url || args.href || '').trim();
-      if (!/^https?:\/\//i.test(url)) {
-        return { ok: false, error: 'invalid_url', message: 'computer_navigate requiere una URL http(s).' };
+      let url;
+      try {
+        url = sanitizeNavigateUrl(args.url || args.href);
+      } catch (err) {
+        return { ok: false, error: 'invalid_url', message: (err && err.publicMessage) || 'computer_navigate requiere una URL http(s).' };
       }
       const uid = ctx.userId || userId;
       const chatId = ctx.chatId || conversationId;

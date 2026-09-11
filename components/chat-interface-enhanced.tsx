@@ -66,6 +66,11 @@ import {
   type LoginHandoffDetail,
 } from "@/lib/computer-login-handoff"
 import {
+  COMPUTER_NAVIGATE_WINDOW_EVENT,
+  extractHttpUrlFromText,
+  type ComputerNavigateDetail,
+} from "@/lib/computer-navigate"
+import {
   getSpeechRecognitionCtor,
   isIgnorableSpeechError,
   isSpeechPermissionError,
@@ -6303,6 +6308,7 @@ function ChatInterfaceContent() {
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
   const [computerBrowserMode, setComputerBrowserMode] = React.useState(false);
+  const [computerNavigateUrl, setComputerNavigateUrl] = React.useState("");
   const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
   const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
   const [loginHandoffKind, setLoginHandoffKind] = React.useState("");
@@ -10725,7 +10731,9 @@ REWRITTEN TEXT:`;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
-        if (isLiveComputerUsePrompt(msg)) openComputerPanel();
+        if (isLiveComputerUsePrompt(msg)) {
+          openComputerPanel({ browser: true, url: extractHttpUrlFromText(msg) || undefined });
+        }
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
         markQueuedSendSucceeded();
       } finally {
@@ -12474,7 +12482,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }).catch(() => undefined);
   }, [setCurrentChat]);
 
-  const openComputerPanel = React.useCallback((opts?: { browser?: boolean }) => {
+  const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string }) => {
     setShowAudioPanel(false);
     setActiveSearchActivityId(null);
     setDocumentPreviewUrl(null);
@@ -12487,6 +12495,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     closeArtifactPanel();
     setCoworkPanelOpen(false);
     setComputerBrowserMode(Boolean(opts?.browser));
+    if (opts?.url) setComputerNavigateUrl(opts.url);
     setComputerPanelOpen(true);
     if (!currentChatIdRef.current) {
       void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
@@ -12505,6 +12514,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setLoginHandoffActive(true);
       openComputerPanel();
     }
+  }, [openComputerPanel]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<ComputerNavigateDetail>).detail;
+      if (!detail?.url) return;
+      const id = String(detail.conversationId || "").trim();
+      const openId = String(currentChatIdRef.current || "").trim();
+      if (id && openId && id !== openId) return;
+      openComputerPanel({ browser: true, url: detail.url });
+    };
+    window.addEventListener(COMPUTER_NAVIGATE_WINDOW_EVENT, onNavigate as EventListener);
+    return () => window.removeEventListener(COMPUTER_NAVIGATE_WINDOW_EVENT, onNavigate as EventListener);
   }, [openComputerPanel]);
 
   React.useEffect(() => {
@@ -13558,14 +13581,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Please enter a task');
       return;
     }
-    if (isLiveComputerUsePrompt(goalText)) openComputerPanel();
+    if (isLiveComputerUsePrompt(goalText)) {
+      openComputerPanel({ browser: true, url: extractHttpUrlFromText(goalText) || undefined });
+    }
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
 
     // «Abre tu computadora y …» — show the live screen without asking for a
     // second click: the right-hand computer panel opens with the run.
     if (isComputerRequestPrompt(goalText)) {
-      openComputerPanel();
+      openComputerPanel({ browser: true });
     }
     let activeChat = currentChatRef.current;
     const liveChatId = activeChat?.id != null ? String(activeChat.id) : '';
@@ -14423,9 +14448,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   loginHandoffKind={loginHandoffKind}
                   startExpanded={computerBrowserMode || loginHandoffActive}
                   initialDock={computerBrowserMode ? "browser" : "desktop"}
+                  navigateUrl={computerNavigateUrl}
                   onClose={() => {
                     setComputerPanelOpen(false)
                     setComputerBrowserMode(false)
+                    setComputerNavigateUrl("")
                     setLoginHandoffActive(false)
                   }}
                 />

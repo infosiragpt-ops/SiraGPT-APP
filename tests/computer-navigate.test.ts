@@ -3,7 +3,12 @@ import { describe, it } from "node:test"
 import fs from "node:fs"
 import path from "node:path"
 
-import { sanitizeNavigateUrl } from "../lib/computer-navigate"
+import {
+  extractHttpUrlFromText,
+  isComputerNavigateTool,
+  parseNavigateUrlFromToolArgs,
+  sanitizeNavigateUrl,
+} from "../lib/computer-navigate"
 
 const source = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8")
 
@@ -15,6 +20,18 @@ describe("client navigator URL gate", () => {
     assert.equal(sanitizeNavigateUrl("javascript:alert(1)").ok, false)
     assert.equal(sanitizeNavigateUrl("data:text/html,x").ok, false)
     assert.equal(sanitizeNavigateUrl("").ok, false)
+  })
+
+  it("parses computer_navigate tool args and URLs pasted in chat", () => {
+    assert.equal(isComputerNavigateTool("computer_navigate"), true)
+    assert.equal(isComputerNavigateTool("web_search"), false)
+    assert.equal(parseNavigateUrlFromToolArgs('{"url":"https://id.elsevier.com"}'), "https://id.elsevier.com/")
+    assert.equal(parseNavigateUrlFromToolArgs({ href: "scopus.com" }), "https://scopus.com/")
+    assert.equal(parseNavigateUrlFromToolArgs("javascript:alert(1)"), null)
+    assert.equal(
+      extractHttpUrlFromText("busca información en https://id.elsevier.com/as/authorization.oauth2"),
+      "https://id.elsevier.com/as/authorization.oauth2",
+    )
   })
 
   it("covers 1000 https search URLs the address bar can submit", () => {
@@ -39,8 +56,11 @@ describe("integrated browser chrome source contract", () => {
     assert.ok(browserIdx - computerIdx < 900, "globe must sit immediately beside the computer")
     assert.match(chat, /title="Navegador"/)
     assert.match(chat, /aria-label="Navegador"/)
-    assert.match(chat, /openComputerPanel\(\{ browser: true \}\)/)
+    assert.match(chat, /openComputerPanel\(\{ browser: true/)
     assert.match(chat, /params\.get\("browser"\)/)
+    assert.match(chat, /COMPUTER_NAVIGATE_WINDOW_EVENT/)
+    assert.match(source("lib/chat-context-integrated.tsx"), /emitComputerNavigate/)
+    assert.match(source("backend/src/services/computer/chat-computer-tools.js"), /sanitizeNavigateUrl/)
     assert.match(chat, /startExpanded=\{computerBrowserMode/)
     assert.match(chat, /initialDock=\{computerBrowserMode \? "browser" : "desktop"\}/)
   })
