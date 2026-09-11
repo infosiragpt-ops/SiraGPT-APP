@@ -55,6 +55,8 @@ export type DepartmentComputerPaneProps = {
   /** Hide this pane's own chrome when framed by AgentComputerShell. */
   embedded?: boolean
   onStatusChange?: (status: "starting" | "live" | "error" | "idle") => void
+  /** Skip the F7 desktop pool and use the agent-computer Chrome (navigator). */
+  preferAgentComputer?: boolean
 }
 
 function computerApiBase() {
@@ -362,6 +364,7 @@ export function DepartmentComputerPane({
   conversationId,
   embedded = false,
   onStatusChange,
+  preferAgentComputer = false,
 }: DepartmentComputerPaneProps) {
   const chatId = String(conversationId || "").trim()
   const initial = sessionCache.get(cacheKey(chatId || null)) ?? null
@@ -444,7 +447,7 @@ export function DepartmentComputerPane({
       setPoolWarm(warm)
       setPrepareProgress(desk?.enabled ? 42 : 28)
 
-      if (desk?.enabled) {
+      if (desk?.enabled && !preferAgentComputer) {
         try {
           const lease = await acquireDesktopLease(chatId)
           if (cancelled) return
@@ -524,7 +527,7 @@ export function DepartmentComputerPane({
     return () => {
       cancelled = true
     }
-  }, [computerRunId, chatId, buildId])
+  }, [computerRunId, chatId, buildId, preferAgentComputer])
 
   // Keepalive: while a desktop is live, revalidate the session every minute.
   // After consecutive misses the desktop is rebuilt silently once; if the
@@ -553,6 +556,11 @@ export function DepartmentComputerPane({
       clearInterval(timer)
     }
   }, [session?.sessionId, desktopLease?.sessionId, chatId, loading, exhausted, handleViewerConnectionError])
+
+  React.useEffect(() => {
+    if (!preferAgentComputer || !session?.sessionId || loading) return
+    void focusDesktopApp("chrome", chatId || null).catch(() => undefined)
+  }, [preferAgentComputer, session?.sessionId, loading, chatId])
 
   const chooseDock = React.useCallback((next: DepartmentComputerDock) => {
     setDock(next)

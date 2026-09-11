@@ -17,7 +17,6 @@ const { COMPUTER_TOOL_DEFINITIONS, makeComputerExecutors } = require('../agent-r
 const { HAS_COMPUTER_POLICY_ES, POLICY_ES } = require('./login-handoff');
 const { createWorkspaceFileApi } = require('./workspace-files');
 const { authorizeComposerTool, composerDeniedResult } = require('../composer-permission');
-const { chromeOpenUrlCommand } = require('./chrome-desktop-flags');
 const { sanitizeNavigateUrl } = require('./navigate-url');
 
 const COMPUTER_TOOL_NAMES = Object.freeze([
@@ -92,22 +91,18 @@ function buildNavigateTool({ userId, conversationId, env }) {
           env: env || process.env,
         });
         try {
-          // Skip agentPost('/navigate') until the computer agent implements it
-          // (orch http-proxy hangs ~120s). Open Chrome in the running session.
-          const opened = await persistent.dockerExec(
-            session,
-            chromeOpenUrlCommand(url),
-            { signal: ctx.signal, timeoutMs: 8000 },
-          );
+          const opened = await persistent.openUrlInChrome(session, url, {
+            signal: ctx.signal,
+            timeoutMs: 12_000,
+          });
           return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
         } catch (err) {
           return {
-            ok: true,
-            tool: 'computer_navigate',
-            url,
-            fallback: 'chrome',
+            ok: false,
+            error: 'navigate_failed',
+            message: 'No se pudo abrir la página en el navegador de este chat.',
             detail: err && err.message ? String(err.message).slice(0, 160) : undefined,
-            _preview: `Abriendo ${url}`,
+            url,
           };
         }
       } catch (err) {

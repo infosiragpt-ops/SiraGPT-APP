@@ -158,7 +158,7 @@ describe("live computer-use · shopping prompt must not cop out", () => {
     assert.match(chat, /isLiveComputerUsePrompt/)
     assert.match(chat, /openComputerPanel\(\{ browser: true/)
     assert.match(chat, /COMPUTER_NAVIGATE_WINDOW_EVENT/)
-    assert.match(chat, /extractHttpUrlFromText/)
+    assert.match(chat, /browserUrlFromPrompt/)
     assert.doesNotMatch(source("backend/src/services/agents/agent-tools.js"), /No active browser driver/)
   })
 })

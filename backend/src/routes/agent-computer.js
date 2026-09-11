@@ -30,7 +30,6 @@ const {
 } = require('../services/computer/computer-code-guard');
 const loginHandoff = require('../services/computer/login-handoff');
 const {
-  chromeOpenUrlCommand,
   chromeMaximizeOrLaunch,
 } = require('../services/computer/chrome-desktop-flags');
 const { sanitizeNavigateUrl } = require('../services/computer/navigate-url');
@@ -181,22 +180,31 @@ function failComputer(res, err, fallbackCode) {
 
 async function navigateMemberDesktop(session, url) {
   const persistent = require('../services/computer/persistent');
-  // Skip agentPost(session, '/navigate') until the computer agent implements it.
-  // The orch http-proxy hangs ~120s (express.json already consumed the body);
-  // FE AbortSignal.timeout(30s) then toasts "signal timed out" and chrome never runs.
-  const cmd = chromeOpenUrlCommand(url);
-  try {
-    const opened = await persistent.dockerExec(session, cmd, { timeoutMs: 8000 });
-    return { ok: true, url, result: opened, sessionId: session.sessionId, fallback: 'chrome' };
-  } catch (err) {
-    return {
-      ok: true,
-      url,
-      sessionId: session.sessionId,
-      fallback: 'chrome',
-      detail: err && err.message ? String(err.message).slice(0, 120) : undefined,
-    };
+  // Prefer the orchestrator exec (it owns session.container). Direct dockerExec
+  // is the same-host fallback. Do not call agentPost(session, '/navigate') —
+  // that path used to hang on the orch http-proxy for ~120s.
+  const orch = resolveOrchConfig();
+  if (session && session.sessionId && orch.url) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (orch.secret) headers.Authorization = `Bearer ${orch.secret}`;
+      const res = await fetch(
+        `${orch.url}/sessions/${encodeURIComponent(session.sessionId)}/agent/navigate`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ url }),
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data && data.ok !== false) {
+        return { ok: true, url, result: data, sessionId: session.sessionId, via: 'orch' };
+      }
+    } catch (_) { /* same-host docker exec below */ }
   }
+  const opened = await persistent.openUrlInChrome(session, url, { timeoutMs: 12_000 });
+  return { ok: true, url, result: opened, sessionId: session.sessionId, fallback: 'chrome' };
 }
 
 router.post('/navigate', requireFlag, authenticateToken, async (req, res) => {
@@ -275,8 +283,7 @@ async function dockerExec(container, command, { signal, timeoutMs } = {}) {
 }
 
 function sessionContainer(session) {
-  const slug = String(session.userId || 'luis').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
-  return 'sira-ac-user-' + slug;
+  return require('../services/computer/persistent').containerName(session);
 }
 
 async function handleAction(req, res, session) {

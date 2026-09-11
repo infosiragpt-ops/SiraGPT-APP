@@ -60,6 +60,17 @@ export function extractHttpUrlFromText(text: unknown): string | null {
   return parsed.ok ? parsed.url : null
 }
 
+export const DEFAULT_BROWSER_HOME = "https://www.google.com/"
+
+/** Open a pasted URL, otherwise search the prompt on Google in the live Chrome. */
+export function browserUrlFromPrompt(text: unknown): string {
+  const direct = extractHttpUrlFromText(text)
+  if (direct) return direct
+  const q = String(text || "").replace(/\s+/g, " ").trim().slice(0, 180)
+  if (!q) return DEFAULT_BROWSER_HOME
+  return `https://www.google.com/search?q=${encodeURIComponent(q)}`
+}
+
 export function sanitizeNavigateUrl(raw: unknown): NavigateUrlResult {
   let value = String(raw || "").trim()
   if (!value) return { ok: false, error: "La URL debe ser http(s)." }

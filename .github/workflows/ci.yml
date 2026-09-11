@@ -342,10 +342,21 @@ jobs:
           failure_bundle_sha=$(DOC_SANDBOX_TEST_PYTHON="$(command -v python)" \
             node --import tsx tests/helpers/doc-sandbox-failure-evidence-bundle.ts "$failure_bundle_dir/failure-evidence.json")
           [[ "$failure_bundle_sha" =~ ^[a-f0-9]{64}$ ]]
+          minio_image=quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          for pull_try in 1 2 3 4 5 6; do
+            if docker pull "$minio_image"; then
+              break
+            fi
+            if [ "$pull_try" -eq 6 ]; then
+              echo "MinIO image pull failed after $pull_try attempts"
+              exit 1
+            fi
+            sleep $((pull_try * 8))
+          done
           storage_id=$(docker run -d --rm --label siragpt.scope=doc-sandbox-ci-test \
             --publish 127.0.0.1:19000:9000 \
             -e MINIO_ROOT_USER=docfixture -e MINIO_ROOT_PASSWORD=fixture-only-isolated-s3 \
-            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data)
+            "$minio_image" server /data)
           trap 'docker stop "$storage_id" >/dev/null' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:19000/minio/health/ready >/dev/null; then break; fi

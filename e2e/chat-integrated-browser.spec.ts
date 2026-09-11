@@ -65,6 +65,12 @@ async function mockApi(page: Page) {
       return fulfillJson(route, { chats: [{ ...chat, messages: [] }], pagination: { page: 1, limit: 20, total: 1, pages: 1 } })
     }
     if (path === `/chats/${chat.id}`) return fulfillJson(route, { chat })
+    if (path === "/desktop/status") {
+      return fulfillJson(route, { enabled: true, poolWarm: 1 })
+    }
+    if (path === "/desktop/sessions") {
+      return fulfillJson(route, { error: "prefer_agent_computer" }, 503)
+    }
     if (path === "/agent-computer/sessions" && request.method() === "POST") {
       return fulfillJson(route, {
         sessionId: "sess-browser",

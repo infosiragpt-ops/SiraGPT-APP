@@ -63,6 +63,12 @@ describe('computer control loop 25/3 + cdpMode', () => {
     assert.equal(typeof persistent.agentGet, 'function');
     assert.equal(typeof persistent.agentPost, 'function');
     assert.equal(typeof persistent.dockerExec, 'function');
+    assert.equal(typeof persistent.openUrlInChrome, 'function');
+    assert.equal(typeof persistent.containerName, 'function');
+    assert.equal(
+      persistent.containerName({ container: 'sira-ac-user-luis_c_chatA', userId: 'other' }),
+      'sira-ac-user-luis_c_chatA',
+    );
     assert.equal(typeof persistent.observe, 'function');
     assert.equal(typeof persistent.computerToolsAvailable, 'function');
   });
