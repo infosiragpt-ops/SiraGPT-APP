@@ -7769,7 +7769,7 @@ But first, you need to connect your Spotify account securely using the button be
       setIsSubscribing(true);
       const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
         PRO: { monthlyLimit: 500000, price: 5 },
-        PRO_MAX: { monthlyLimit: 1000000, price: 20 },
+        PRO_MAX: { monthlyLimit: 1000000, price: 10 },
         ENTERPRISE: { monthlyLimit: 10000000, price: 200 },
       };
 
@@ -11139,7 +11139,7 @@ REWRITTEN TEXT:`;
           id: `msg-error-${Date.now()}`,
           chatId: chatToUpdate?.id || 'unknown',
           role: 'ASSISTANT' as const,
-          content: `Tu plan necesita una mejora para continuar.${usageInfo} Elige Pro, Pro Extendido o comunícate por WhatsApp para Enterprise.`,
+          content: `Tu plan necesita una mejora para continuar.${usageInfo} Elige el plan Pro o escríbenos por WhatsApp para un plan a medida.`,
           timestamp: new Date().toISOString(),
           error: 'Plan upgrade required',
         };

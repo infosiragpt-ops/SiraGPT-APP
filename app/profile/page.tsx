@@ -61,9 +61,9 @@ const PLAN_META: Record<PlanKey, PlanMeta> = {
     description: "Equipo, seguridad y soporte a medida",
   },
   PRO_MAX: {
-    label: "Pro Extendido",
+    label: "Pro",
     icon: Sparkles,
-    description: "Más volumen para uso intensivo",
+    description: "Todo SiraGPT con capacidad ampliada",
   },
   PRO: {
     label: "Pro",

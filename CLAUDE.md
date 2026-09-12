@@ -1311,6 +1311,38 @@ e2e real (servicio+BD y HTTP+auth) + UI en navegador (create→publish→running
 - Un seeder de arranque reescribe la password de `admin@example.com` a `password`
   en cada reinicio del backend (credencial local estable: `admin@example.com` / `password`).
 
+## Planes y pagos — solo dos planes (added 2026-09-12)
+
+Decisión de producto de Luis: la página de planes es **`/planes`** (pantalla
+completa, botón «Atrás» arriba a la izquierda, estilo Claude) y ofrece SOLO dos
+planes. No revivir tiers ni el plan de $5 en la UI.
+
+| Plan | Precio | Código backend | Acción |
+|---|---|---|---|
+| **Pro** | $10 USD/mes | `PRO_MAX` (ya costaba $10 en stripe.js / payments.js / proration / feature-cost-estimator; `PRO` $5 queda como tier legado para suscriptores existentes) | `POST /api/payments/stripe` → Stripe Checkout → `/payment/success` (`verify-session` activa el plan aunque no haya webhook) |
+| **Hablemos** | a medida | `ENTERPRISE` | Abre WhatsApp con mensaje prellenado (`wa.me/<SIRAGPT_WHATSAPP_NUMBER>`), fallback `/support` |
+
+- **Fuente única de verdad**: `lib/plans-catalog.ts` (copy, precios, `PLAN_DISPLAY_NAMES`
+  —`PRO_MAX` se muestra como «Pro»—, `buildWhatsAppHref`, `describeCheckoutError`).
+  La consumen `app/planes/page.tsx`, `components/landing/PricingSection.tsx`,
+  `components/subscription-manager.tsx` (billing) y `components/UpgradeModal.tsx`,
+  que ahora es un shim: cualquier `open=true` (sidebar, error de cuota en el chat,
+  evento `open-upgrade-modal`) navega a `/planes`.
+- **Backend**: `GET /api/payments/config` (público) → `{ stripeConfigured,
+  checkoutAvailable, whatsappNumber, paidPlan, contactPlan }`; la página lo lee en
+  runtime, así que habilitar ventas en prod solo requiere el `.env` del backend.
+  `stripe-setup.getPriceIdForPlan` **auto-provisiona** producto + precio en Stripe
+  (`stripeService.ensurePriceForPlan`, idempotente por `metadata.plan`) cuando solo
+  hay `STRIPE_SECRET_KEY`, y lo cachea en `systemSettings`. Sin clave, `POST /stripe`
+  responde 503 en español con `code: STRIPE_NOT_CONFIGURED` + número de WhatsApp.
+- **Env de producción (Luis)**: `STRIPE_SECRET_KEY` (obligatoria para cobrar),
+  `STRIPE_WEBHOOK_SECRET` (renovaciones/cancelaciones; endpoint
+  `/api/payments/stripe/webhook`), `SIRAGPT_WHATSAPP_NUMBER` (dígitos con código de
+  país), opcional `NEXT_PUBLIC_WHATSAPP_NUMBER` en el build del frontend, y
+  `FRONTEND_URL=https://siragpt.com`. Detalle en `docs/ENV_VARIABLES.md`.
+- **Tests**: `backend/tests/payments-public-config.test.js`,
+  `backend/tests/stripe-setup.test.js` (auto-provisión), `tests/plans-catalog.test.ts`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

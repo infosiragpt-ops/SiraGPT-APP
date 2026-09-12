@@ -424,6 +424,50 @@ router.post('/plan-change/cancel', authenticateToken, planCancelBillingRateLimit
   }
 });
 
+// ── Public payments configuration ─────────────────────────────────
+// Read by the /planes page (and any other surface that sells the plan) so
+// the frontend knows, at RUNTIME and without a rebuild, whether card
+// checkout is live and which WhatsApp number receives "Hablemos" leads.
+// No auth, no secrets: only booleans + the public sales number.
+const PUBLIC_PAID_PLAN = Object.freeze({
+  code: 'PRO_MAX',
+  name: 'Pro',
+  priceUsd: 10,
+  interval: 'month',
+  currency: 'usd',
+});
+
+function salesWhatsAppNumber(env = process.env) {
+  const raw = env.SIRAGPT_WHATSAPP_NUMBER || env.NEXT_PUBLIC_WHATSAPP_NUMBER || '';
+  const digits = String(raw).replace(/\D+/g, '');
+  return digits.length >= 7 ? digits : null;
+}
+
+function buildPublicPaymentsConfig() {
+  const stripeConfigured = Boolean(stripeService.isConfigured);
+  const whatsappNumber = salesWhatsAppNumber();
+  return {
+    stripeConfigured,
+    checkoutAvailable: stripeConfigured,
+    demoAllowed: Boolean(stripeService.demoAllowed),
+    whatsappNumber,
+    paidPlan: PUBLIC_PAID_PLAN,
+    contactPlan: {
+      code: 'ENTERPRISE',
+      name: 'Hablemos',
+      channel: whatsappNumber ? 'whatsapp' : 'support',
+    },
+  };
+}
+
+router.get('/config', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(buildPublicPaymentsConfig());
+});
+
+const CHECKOUT_UNAVAILABLE_MESSAGE =
+  'El pago con tarjeta aún no está habilitado. Escríbenos por WhatsApp y activamos tu plan Pro en minutos.';
+
 // Create Stripe checkout session
 router.post('/stripe', authenticateToken, checkoutStripeBillingRateLimit, [
   body('plan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
@@ -438,8 +482,10 @@ router.post('/stripe', authenticateToken, checkoutStripeBillingRateLimit, [
     if (!stripeService.isConfigured) {
       return res.status(503).json({ 
         error: 'Stripe not configured', 
-        message: 'Payment processing is not available. Please contact support or use demo mode.',
-        fallbackAvailable: true
+        code: 'STRIPE_NOT_CONFIGURED',
+        message: CHECKOUT_UNAVAILABLE_MESSAGE,
+        fallbackAvailable: true,
+        whatsappNumber: salesWhatsAppNumber(),
       });
     }
 
@@ -2968,6 +3014,9 @@ router.post('/subscription/reactivate', authenticateToken, subscriptionReactivat
 });
 
 module.exports = router;
+module.exports.buildPublicPaymentsConfig = buildPublicPaymentsConfig;
+module.exports.salesWhatsAppNumber = salesWhatsAppNumber;
+module.exports.PUBLIC_PAID_PLAN = PUBLIC_PAID_PLAN;
 module.exports.INTERNAL = Object.freeze({
   processStripeWebhookEvent,
   drainStripeWebhookEffects,
