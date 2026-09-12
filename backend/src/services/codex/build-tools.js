@@ -1097,14 +1097,20 @@ const TOOLS = {
       try {
         workspaceSkills = await skills.loadWorkspaceSkills({ runner: ctx.runner, project: ctx.project });
       } catch { /* best-effort — builtins always available */ }
+      // The user's Biblioteca (skills saved from chat) is reachable here too,
+      // so a playbook learned in /agentes applies to codex builds.
+      let userSkills = [];
+      try {
+        userSkills = skills.loadUserSkills({ userId: ctx.userId || null });
+      } catch { /* best-effort */ }
       const name = String(args?.name || '').trim().toLowerCase();
       if (name) {
-        const skill = skills.getSkill(name, workspaceSkills);
+        const skill = skills.getSkill(name, workspaceSkills, userSkills);
         if (skill) {
           return { isError: false, summary: `skill ${skill.name} cargado`, observation: `${skill.body}\n\nAplica este playbook al trabajo actual.` };
         }
       }
-      const catalog = skills.formatCatalog(workspaceSkills);
+      const catalog = skills.formatCatalog(workspaceSkills, userSkills);
       return {
         isError: false,
         summary: name ? `skill "${name}" no existe — catálogo devuelto` : 'catálogo de skills',

@@ -350,39 +350,94 @@ async function loadWorkspaceSkills({ runner, project } = {}) {
   return skills;
 }
 
-/** Merged catalog: builtins first, then valid workspace skills. */
-function listSkills(workspaceSkills = []) {
-  return [
-    ...BUILTIN_SKILLS.map((s) => ({ name: s.name, description: s.description, source: 'builtin' })),
-    ...workspaceSkills.map((s) => ({ name: s.name, description: s.description, source: 'workspace' })),
-  ];
+const MAX_USER_SKILLS = 10;
+
+/**
+ * The user's own persisted skills (Hermes "Biblioteca": SKILL.md files the
+ * user saved from chat / curator runs), so a playbook learned in /agentes
+ * chat is reachable from a codex build through use_skill. Synchronous and
+ * best-effort; never throws. `root` is only for tests.
+ */
+function loadUserSkills({ userId, root = undefined, persist = null } = {}) {
+  const uid = String(userId || '').trim();
+  if (!uid) return [];
+  let store = persist;
+  try {
+    // eslint-disable-next-line global-require
+    store = store || require('../skills-persist');
+  } catch {
+    return [];
+  }
+  const taken = new Set(BUILTIN_SKILLS.map((s) => s.name));
+  const skills = [];
+  let listed = [];
+  try {
+    listed = store.listPersistedSkills(root ? { userId: uid, root } : { userId: uid }) || [];
+  } catch {
+    return [];
+  }
+  for (const item of listed.slice(0, MAX_USER_SKILLS)) {
+    try {
+      const loaded = store.loadPersistedSkill(root ? { userId: uid, name: item.name, root } : { userId: uid, name: item.name });
+      if (!loaded || !loaded.ok) continue;
+      const parsed = parseSkillMarkdown(loaded.body, item.name);
+      if (!parsed || taken.has(parsed.name)) continue;
+      taken.add(parsed.name);
+      skills.push({ ...parsed, source: 'biblioteca' });
+    } catch {
+      /* skip unreadable skill — never fail the turn */
+    }
+  }
+  return skills;
 }
 
-function getSkill(name, workspaceSkills = []) {
+/** Merged catalog: builtins first, then workspace skills, then the user's Biblioteca. */
+function listSkills(workspaceSkills = [], userSkills = []) {
+  const seen = new Set(BUILTIN_SKILLS.map((s) => s.name));
+  const out = BUILTIN_SKILLS.map((s) => ({ name: s.name, description: s.description, source: 'builtin' }));
+  for (const s of workspaceSkills) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    out.push({ name: s.name, description: s.description, source: 'workspace' });
+  }
+  for (const s of userSkills) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    out.push({ name: s.name, description: s.description, source: 'biblioteca' });
+  }
+  return out;
+}
+
+function getSkill(name, workspaceSkills = [], userSkills = []) {
   const wanted = String(name || '').trim().toLowerCase();
   return (
     BUILTIN_SKILLS.find((s) => s.name === wanted) ||
     workspaceSkills.find((s) => s.name === wanted) ||
+    userSkills.find((s) => s.name === wanted) ||
     null
   );
 }
 
+const SOURCE_LABEL = { workspace: ' (del proyecto)', biblioteca: ' (de tu Biblioteca)' };
+
 /** One-line-per-skill catalog for tool observations / prompts. */
-function formatCatalog(workspaceSkills = []) {
-  return listSkills(workspaceSkills)
-    .map((s) => `- ${s.name}${s.source === 'workspace' ? ' (del proyecto)' : ''}: ${s.description}`)
+function formatCatalog(workspaceSkills = [], userSkills = []) {
+  return listSkills(workspaceSkills, userSkills)
+    .map((s) => `- ${s.name}${SOURCE_LABEL[s.source] || ''}: ${s.description}`)
     .join('\n');
 }
 
 /** Compact system-prompt line — names only; bodies load on demand. */
 function skillsPromptLine() {
   const names = BUILTIN_SKILLS.map((s) => s.name).join(', ');
-  return `SKILLS (playbooks bajo demanda): antes de construir algo de un tipo conocido, carga su playbook con use_skill — disponibles: ${names}, más los .md que el proyecto defina en .sira/skills/ (use_skill sin nombre lista todo). Sigue el playbook cargado: encodea el estándar de calidad esperado.`;
+  return `SKILLS (playbooks bajo demanda): antes de construir algo de un tipo conocido, carga su playbook con use_skill — disponibles: ${names}, más los .md que el proyecto defina en .sira/skills/ y los skills que el usuario guardó en su Biblioteca de SiraGPT (use_skill sin nombre lista todo). Sigue el playbook cargado: encodea el estándar de calidad esperado.`;
 }
 
 module.exports = {
   BUILTIN_SKILLS,
+  MAX_USER_SKILLS,
   loadWorkspaceSkills,
+  loadUserSkills,
   listSkills,
   getSkill,
   formatCatalog,
