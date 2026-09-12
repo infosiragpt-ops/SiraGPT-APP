@@ -11,7 +11,12 @@ const voiceConfig = read("lib", "chat", "media-composer-config.ts")
 
 describe("voice catalog — VOICE alias must survive to Prisma", () => {
   it("maps ?type=VOICE onto the AUDIO rows in the where clause", () => {
-    assert.match(aiRoute, /whereClause\.type = type === 'VOICE' \? 'AUDIO' : type;/)
+    // The where-clause now lives in the catalog serving layer the route reads
+    // through (per-scope snapshot); the VOICE → AUDIO alias must survive there.
+    const catalog = read("backend", "src", "services", "ai-model-catalog.js")
+    assert.match(catalog, /if \(normalized === 'VOICE'\) \{\s*whereClause\.type = 'AUDIO';/)
+    assert.match(catalog, /if \(normalized === 'VOICE'\) return 'AUDIO'/, "VOICE and AUDIO share one snapshot scope")
+    assert.match(aiRoute, /let models = await loadPickerRows\(\{ prisma, type \}\);/)
     assert.doesNotMatch(aiRoute, /whereClause\.type = type;/)
   })
 

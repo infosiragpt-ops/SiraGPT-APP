@@ -10,7 +10,9 @@ describe("composer auto mode — deterministic intent → tool chip", () => {
     assert.equal(mode("hazme un logo minimalista para una cafetería"), "image")
     assert.equal(mode("genera 3 fotos hiperrealistas de un bosque, formato vertical"), "image")
     const decision = detectComposerAutoMode("genera 3 fotos hiperrealistas de un bosque, formato vertical")!
-    assert.deepEqual(decision.settings, { imageCount: 3, imageAspectRatio: "9:16", imageQuality: "4K" })
+    // "formato vertical" is the generic portrait frame (3:4) — the same value the
+    // backend renders; 9:16 is reserved for stories/reels/tiktok surfaces.
+    assert.deepEqual(decision.settings, { imageCount: 3, imageAspectRatio: "3:4", imageQuality: "4K" })
     assert.equal(detectComposerAutoMode("dibuja un poster horizontal en 4k de una ciudad")!.settings.imageAspectRatio, "16:9")
     assert.equal(mode("make an illustration of a dragon"), "image")
   })
@@ -65,9 +67,29 @@ describe("composer auto mode — deterministic intent → tool chip", () => {
     assert.equal(mode("hola"), null)
   })
 
+  it("reads Producción musical settings from the request itself", () => {
+    const decision = detectComposerAutoMode("crea una balada triste estilo pop de 45 segundos con acabado lo-fi")!
+    assert.ok(decision, "a ballad is a song request")
+    assert.equal(decision.mode, "music")
+    assert.deepEqual(decision.settings, { musicDurationSeconds: 45, musicStyle: "Pop", musicMood: "Emotional", musicEffect: "Lo-Fi" })
+    const epic = detectComposerAutoMode("genera una canción épica orquestal para un trailer, sonido envolvente")!
+    assert.equal(epic.settings.musicStyle, "Cinematic")
+    assert.equal(epic.settings.musicMood, "Epic")
+    assert.equal(epic.settings.musicEffect, "Spatial")
+    const plain = detectComposerAutoMode("crea una canción sobre el verano")!
+    assert.deepEqual(plain.settings, {}, "nothing typed → the chips keep their selection")
+    assert.equal(__test.extractMusicStyle("un beat de reggaeton para bailar"), "Latin")
+    assert.equal(__test.extractMusicMood("algo relajante para estudiar"), "Relaxed")
+    assert.equal(__test.extractMusicEffect("masterizado listo para radio"), "Radio Ready")
+  })
+
   it("exposes the settings extractors", () => {
     assert.equal(__test.extractImageCount("dame cuatro versiones"), 4)
-    assert.equal(__test.extractImageCount("dame 12 imagenes"), 4, "clamped to the picker maximum")
+    assert.equal(__test.extractImageCount("dame 12 imagenes"), 5, "clamped to the picker maximum")
+    assert.equal(__test.extractImageCount("créame una imagen de un gato"), 1, "an explicit singular is a quantity too")
+    assert.equal(__test.extractImageCount("mejora la imagen"), null)
+    assert.equal(__test.extractImageAspectRatio("imagen para historia de instagram"), "9:16")
+    assert.equal(__test.extractImageAspectRatio("una imagen vertical"), "3:4")
     assert.equal(__test.extractMusicDuration("una pista de 45 segundos"), 45)
     assert.equal(__test.cleanVoicePrompt("Lee este texto: buenas noches a todos"), "buenas noches a todos")
   })

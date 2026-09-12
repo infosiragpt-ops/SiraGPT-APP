@@ -986,6 +986,14 @@ class ApiClient {
     reject: (err: any) => void;
   }> = [];
 
+  // In-flight coalescing for the picker catalog (`getAIModels`). Activating a
+  // media tool fires the same GET from two places in the same commit (the
+  // chat context reloads `availableModels` for the new chatType and the
+  // composer refreshes its own IMAGE/VIDEO catalog); share one round-trip
+  // instead of two. Only concurrent calls coalesce — nothing is memoised, so
+  // an admin activation still shows on the very next read.
+  private _aiModelsInFlight = new Map<string, Promise<any>>();
+
   constructor(baseURL: string) {
     this.baseURL = baseURL;
 
@@ -2878,10 +2886,19 @@ class ApiClient {
   // }
   async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' | 'VOICE') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
+    const inFlight = this._aiModelsInFlight.get(endpoint);
+    if (inFlight) return inFlight;
     // Always read the live list: the picker must reflect an admin model
     // activation immediately, so bypass the 5-min server response-cache
-    // (response-cache honours Cache-Control: no-cache → forced MISS).
-    return this.request(endpoint, { headers: { 'Cache-Control': 'no-cache' } });
+    // (response-cache honours Cache-Control: no-cache → forced MISS). The
+    // backend serves the rows from an in-memory snapshot that every admin
+    // write invalidates, so this stays cheap server-side.
+    const pending = this.request(endpoint, { headers: { 'Cache-Control': 'no-cache' } })
+      .finally(() => {
+        if (this._aiModelsInFlight.get(endpoint) === pending) this._aiModelsInFlight.delete(endpoint);
+      });
+    this._aiModelsInFlight.set(endpoint, pending);
+    return pending;
   }
 
   // Admin connections — CRUD + test

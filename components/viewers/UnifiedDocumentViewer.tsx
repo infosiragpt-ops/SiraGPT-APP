@@ -60,8 +60,11 @@ import {
   Maximize2,
   RefreshCw,
   Reply,
+  Share2,
+  Images,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { toast } from "sonner"
+import { cn, downloadUrlAsFile } from "@/lib/utils"
 import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import {
@@ -404,6 +407,14 @@ export default function UnifiedDocumentViewer({
     return () => window.removeEventListener("keydown", onKey)
   }, [open, attachment, canPrev, canNext, go])
 
+  // Set-level actions (share / download all) — hooks stay above the early
+  // return so the hook count is constant across renders.
+  const downloadableSiblings = React.useMemo(
+    () => (siblings || []).filter((a) => !!a?.url),
+    [siblings],
+  )
+  const [bulkDownloading, setBulkDownloading] = React.useState(false)
+
   // Safe early-return — every hook above ran, so React's hook count
   // stays constant across renders regardless of attachment state.
   if (!open || !attachment) return null
@@ -415,6 +426,61 @@ export default function UnifiedDocumentViewer({
 
   const downloadUrl = attachment.url ? absUrl(attachment.url) : null
   const canDownload = !!downloadUrl || !!attachment.file
+
+  // Share / download-all for the image set behind this viewer (a generated
+  // batch or the attachments of one message). Web Share API when the browser
+  // has it (mobile Safari/Chrome share sheet), otherwise the link goes to the
+  // clipboard. "Descargar todas" walks the siblings sequentially so every
+  // file lands in the browser's download list with its own name.
+  const canShare = !!downloadUrl && typeof window !== "undefined" && /^https?:/i.test(downloadUrl)
+  const handleShare = async () => {
+    if (!downloadUrl) return
+    const shareData = { title: attachment.name, url: downloadUrl }
+    try {
+      const nav = typeof navigator !== "undefined" ? navigator : null
+      if (nav && typeof nav.share === "function" && (!nav.canShare || nav.canShare(shareData))) {
+        await nav.share(shareData)
+        return
+      }
+      await navigator.clipboard.writeText(downloadUrl)
+      toast.success("Enlace copiado")
+    } catch (err: any) {
+      if (err?.name === "AbortError") return
+      try {
+        await navigator.clipboard.writeText(downloadUrl)
+        toast.success("Enlace copiado")
+      } catch {
+        toast.error("No se pudo compartir")
+      }
+    }
+  }
+  const handleDownloadAll = async () => {
+    if (!downloadableSiblings.length || bulkDownloading) return
+    setBulkDownloading(true)
+    let done = 0
+    try {
+      for (let i = 0; i < downloadableSiblings.length; i += 1) {
+        const item = downloadableSiblings[i]
+        const url = absUrl(item.url as string)
+        const ext = (String(item.name || "").match(/\.[a-z0-9]{2,5}$/i) || [""])[0]
+        const base = String(item.name || "").replace(/\.[a-z0-9]{2,5}$/i, "") || `imagen-${i + 1}`
+        const filename = downloadableSiblings.length > 1 ? `${base}-${i + 1}${ext}` : `${base}${ext}`
+        try {
+          await downloadUrlAsFile(url, filename)
+          done += 1
+        } catch {
+          window.open(url, "_blank", "noopener,noreferrer")
+        }
+        // Give the browser a beat between files so none is coalesced/blocked.
+        if (i < downloadableSiblings.length - 1) await new Promise((r) => setTimeout(r, 350))
+      }
+      toast.success(done === downloadableSiblings.length
+        ? `${done} archivo${done === 1 ? "" : "s"} descargado${done === 1 ? "" : "s"}`
+        : `${done} de ${downloadableSiblings.length} descargados`)
+    } finally {
+      setBulkDownloading(false)
+    }
+  }
 
   const handleDownload = async () => {
     if (downloadUrl) {
@@ -536,15 +602,40 @@ export default function UnifiedDocumentViewer({
               <Reply className="h-4 w-4" />
             </button>
           )}
+          {canShare && (
+            <button
+              type="button"
+              className={liquidIconButtonClass}
+              onClick={handleShare}
+              title="Compartir"
+              aria-label="Compartir"
+              data-testid="viewer-share"
+            >
+              <Share2 className="h-4 w-4" />
+            </button>
+          )}
           {canDownload && (
             <button
               type="button"
               className={liquidIconButtonClass}
               onClick={handleDownload}
-              title="Descargar"
-              aria-label="Descargar"
+              title={downloadableSiblings.length > 1 ? "Descargar esta" : "Descargar"}
+              aria-label={downloadableSiblings.length > 1 ? "Descargar esta" : "Descargar"}
             >
               <Download className="h-4 w-4" />
+            </button>
+          )}
+          {downloadableSiblings.length > 1 && (
+            <button
+              type="button"
+              className={liquidIconButtonClass}
+              onClick={handleDownloadAll}
+              disabled={bulkDownloading}
+              title={`Descargar todas (${downloadableSiblings.length})`}
+              aria-label={`Descargar todas (${downloadableSiblings.length})`}
+              data-testid="viewer-download-all"
+            >
+              <Images className="h-4 w-4" />
             </button>
           )}
           {downloadUrl && (

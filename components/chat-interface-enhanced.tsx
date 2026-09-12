@@ -5474,6 +5474,11 @@ function ChatInterfaceContent() {
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
   const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
+  // Mirror of the VIDEO catalog for the activation effect below: reading the
+  // state there would put the array in the effect's deps and re-run the fetch
+  // every time the fetch itself replaces the array (an unbounded refetch loop
+  // while the Video chip was on).
+  const videoCatalogModelsRef = React.useRef<any[]>([])
   const [voiceCatalogModels, setVoiceCatalogModels] = React.useState<any[]>([])
   // Mirror of the catalog for the best-effort refresh below: a failed fetch
   // must return the previous list (the useCallback closes over state).
@@ -5492,6 +5497,7 @@ function ChatInterfaceContent() {
     const models = filterAdminVisibleVideoModels(
       Array.isArray(modelsResponse?.models) ? modelsResponse.models : [],
     );
+    videoCatalogModelsRef.current = models;
     setVideoCatalogModels(models);
     return models;
   }, []);
@@ -6929,6 +6935,12 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => {
     if (!isVideoGenerationActive && chatType !== 'video') return;
     let cancelled = false;
+    // Whether a catalog was already loaded BEFORE this refresh. With no prior
+    // catalog the current selection is only the compile-time default and must
+    // not win over the freshly ranked list. Read through the ref (not state):
+    // the fetch replaces the array, and having it in the deps made this effect
+    // refetch in a loop for as long as the Video chip stayed on.
+    const hadCatalog = videoCatalogModelsRef.current.length > 0;
     refreshVideoModels()
       .then((models) => {
         if (cancelled) return;
@@ -6936,18 +6948,18 @@ But first, you need to connect your Spotify account securely using the button be
           setSelectedVideoModel('');
           return;
         }
-        const current = videoCatalogModels.length ? selectedVideoModel : '';
-        if (current && models.some((model: any) => model?.name === current)) {
-          setSelectedVideoModel(current);
-        } else {
-          setSelectedVideoModel(String(models[0]?.name ?? ''));
-        }
+        setSelectedVideoModel((current) => {
+          const trusted = hadCatalog ? current : '';
+          return trusted && models.some((model: any) => model?.name === trusted)
+            ? trusted
+            : String(models[0]?.name ?? '');
+        });
       })
       .catch((error) => {
         console.warn('No se pudo refrescar el catalogo de modelos de video:', error?.message || error);
       });
     return () => { cancelled = true; };
-  }, [chatType, isVideoGenerationActive, refreshVideoModels, selectedVideoModel, videoCatalogModels]);
+  }, [chatType, isVideoGenerationActive, refreshVideoModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -6964,7 +6976,14 @@ But first, you need to connect your Spotify account securely using the button be
   const autoVideoActivationRef = React.useRef(false);
 
   React.useEffect(() => {
-    const wantsVideo = shouldAutoActivateVideoGeneration(input);
+    const draft = input || '';
+    // Only trust the video intent once the token that carries it is complete:
+    // while typing "créame un videojuego…" the draft passes through "créame
+    // un video", which flipped the Video chip on and left it on. The draft is
+    // settled when it ends in whitespace/punctuation, or when the intent still
+    // holds with the (possibly half-typed) last token removed.
+    const draftSettled = /[\s.,;:!?)]$/.test(draft) || shouldAutoActivateVideoGeneration(draft.replace(/\S+$/, ''));
+    const wantsVideo = draftSettled && shouldAutoActivateVideoGeneration(draft);
     const hasOtherActiveTool =
       isWebSearchActive ||
       isImageGenerationActive ||
@@ -7008,6 +7027,18 @@ But first, you need to connect your Spotify account securely using the button be
         setSelectedVideoAudio(requestedAudio);
       }
       return;
+    }
+
+    // Undo OUR flip when the same draft stops asking for a clip ("créame un
+    // video" → "créame un videojuego con código html", or the user deleted the
+    // word). autoVideoActivationRef is only ever set by this effect, so a chip
+    // the user chose by hand is never touched; Nuevo chat / the chip's X keep
+    // working as the manual way out.
+    if (!wantsVideo && autoVideoActivationRef.current && isVideoGenerationActive && draft.trim().length > 0) {
+      isVideoGenerationActiveRef.current = false;
+      setIsVideoGenerationActive(false);
+      setChatType('text');
+      autoVideoActivationRef.current = false;
     }
   }, [
     chatType,
@@ -7088,6 +7119,13 @@ But first, you need to connect your Spotify account securely using the button be
       closeAllToolsAndConnectors();
       setIsMusicGenerationActive(true);
       if (decision.settings.musicDurationSeconds) setSelectedMusicDuration(decision.settings.musicDurationSeconds);
+      // A style / mood / finish written in the request lands on the
+      // Producción musical chips exactly like a selection would, so the
+      // backend receives it the same way (it folds the chips into the prompt).
+      const { musicStyle, musicMood, musicEffect } = decision.settings;
+      if (musicStyle && (MUSIC_STYLE_OPTIONS as readonly string[]).includes(musicStyle)) setSelectedMusicStyle(musicStyle as MusicStyle);
+      if (musicMood && (MUSIC_MOOD_OPTIONS as readonly string[]).includes(musicMood)) setSelectedMusicMood(musicMood as MusicMood);
+      if (musicEffect && (MUSIC_EFFECT_OPTIONS as readonly string[]).includes(musicEffect)) setSelectedMusicEffect(musicEffect as MusicEffect);
       autoModeActivationRef.current = { mode: 'music', input: draft };
       return;
     }
@@ -10345,6 +10383,11 @@ REWRITTEN TEXT:`;
     setMentionMenuOpen(false);
     setMentionTrigger(null);
     setMentionSearchQuery("");
+    // Sending settles the auto-activated Video chip: from here on it is the
+    // sticky tool the user actually used, so a follow-up draft without video
+    // words ("hazlo más lento") must not switch it off. Only the typing-time
+    // effect undoes its own flip, and only while the same draft is being typed.
+    autoVideoActivationRef.current = false;
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
@@ -10782,6 +10825,21 @@ REWRITTEN TEXT:`;
       });
     }
 
+    // The image/video handlers render their OWN typed placeholder
+    // ("Generando · 16:9"). Remove the generic empty landing bubble first:
+    // with both in the local list, the post-generation reload found one more
+    // local assistant turn than the server had and kept the extra one as an
+    // orphan — the blank "Generando" card that never resolved when the user
+    // asked for a single image in an existing chat.
+    const dropGenericAssistantPlaceholder = () => {
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        const messages = prevChat.messages || [];
+        if (!messages.some((m: any) => m?.id === assistantPlaceholder.id)) return prevChat;
+        return { ...prevChat, messages: messages.filter((m: any) => m?.id !== assistantPlaceholder.id) };
+      });
+    };
+
 
     try {
       // After optimistic update, run the logic.
@@ -10814,6 +10872,7 @@ REWRITTEN TEXT:`;
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
+          dropGenericAssistantPlaceholder();
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
           markQueuedSendSucceeded();
           return;
@@ -10825,6 +10884,7 @@ REWRITTEN TEXT:`;
         setIsVideoGenerationActive(true);
         setChatType('video');
         try {
+          dropGenericAssistantPlaceholder();
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
           markQueuedSendSucceeded();
         } finally {
@@ -11014,6 +11074,7 @@ REWRITTEN TEXT:`;
             await runContextPipeline('text');
             break;
           }
+          dropGenericAssistantPlaceholder();
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
@@ -11021,6 +11082,7 @@ REWRITTEN TEXT:`;
           isVideoGenerationActiveRef.current = true;
           setIsVideoGenerationActive(true);
           setChatType('video');
+          dropGenericAssistantPlaceholder();
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
           isVideoGenerationActiveRef.current = true;
           setIsVideoGenerationActive(true);

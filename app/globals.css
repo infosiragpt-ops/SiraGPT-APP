@@ -2851,8 +2851,16 @@ details[open] > summary .think-chevron,
     inset 0 0 0 1px hsl(150 72% 52% / 0.12);
 }
 
-.video-settings-menu [data-state="checked"] {
+/* Selected pills inside the video settings menu. The Audio switch's THUMB also
+   carries data-state="checked" (Radix), so an unscoped rule painted track and
+   knob the same colour and the toggle read as a solid dark pill with no
+   control. Scope the track colour to the switch root and keep the knob white. */
+.video-settings-menu [data-state="checked"]:not([role="switch"] > span) {
   background-color: hsl(150 70% 34%) !important;
+}
+.video-settings-menu button[role="switch"] > span {
+  background-color: #fff !important;
+  box-shadow: 0 1px 2px hsl(222 47% 11% / 0.24) !important;
 }
 
 /* MessageActionRail — "now reading" equalizer + active-state halo.

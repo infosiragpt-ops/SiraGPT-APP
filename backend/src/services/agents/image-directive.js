@@ -49,6 +49,18 @@ const TYPO_REPLACEMENTS = [
   [/\bmimso\b/g, 'mismo'],
   [/\bseleciona\b/g, 'selecciona'],
   [/\bgeenracion\b/g, 'generacion'],
+  [/\bimajenes\b/g, 'imagenes'],
+  [/\bimagens\b/g, 'imagenes'],
+  [/\bimgs?\b/g, 'imagenes'],
+  [/\bfotoz\b/g, 'fotos'],
+  [/\bfotografis\b/g, 'fotografias'],
+  [/\bcuadarad[oa]\b/g, 'cuadrada'],
+  [/\bcuadrad\b/g, 'cuadrada'],
+  [/\bpostada\b/g, 'portada'],
+  [/\bmuniatura\b/g, 'miniatura'],
+  [/\bistagram\b/g, 'instagram'],
+  [/\bfacebok\b/g, 'facebook'],
+  [/\byutube\b/g, 'youtube'],
 ];
 
 function canonicalizeImageTypos(normalizedText) {
@@ -95,39 +107,76 @@ const TOOL_ORIENTATION_FOR_FRAME = {
 };
 
 /**
+ * Frame lexicon — ONE ordered table, mirrored verbatim by the composer
+ * (lib/chat/image-request-lexicon.ts) so the chip the user sees and the frame
+ * the backend renders can never disagree. Tiers, first match wins:
+ *   1. explicit ratio tokens              "16:9", "9x16"
+ *   2. surface presets with a known ratio  story/reels → 9:16, portada de
+ *                                          facebook → 16:9, pin → 2:3, A4 → 3:4…
+ *   3. generic shape words                 vertical → 3:4, horizontal → 16:9,
+ *                                          cuadrada → 1:1
+ *   4. weak type defaults                  logo/avatar → 1:1, poster → 2:3,
+ *                                          banner/portada → 16:9
+ * A generic shape word therefore beats a type default ("poster horizontal"
+ * → 16:9) but not a surface preset ("vertical para historia" → 9:16, which is
+ * vertical anyway). Patterns run on canonicalised text (lowercase, accents
+ * stripped, known typos fixed).
+ */
+const IMAGE_FRAME_LEXICON = [
+  // ── tier 2: surface presets ──────────────────────────────────────────
+  { tier: 2, frame: '9:16', id: 'story', pattern: '\\b(?:histori(?:a|as)|story|stories|reels?|tiktok|shorts?|estados? de whatsapp|whatsapp status|status de whatsapp|pantalla (?:completa )?(?:de )?(?:celular|movil|telefono)|fondo de pantalla (?:de |del |para )?(?:celular|movil|telefono|iphone|android)|wallpaper (?:de |del |para )?(?:celular|movil|telefono|iphone|android)|para (?:el )?(?:movil|celular)|formato movil|lock ?screen)\\b' },
+  { tier: 2, frame: '16:9', id: 'cover-wide', pattern: '\\b(?:portadas? (?:de |para |del |de la )?(?:mi )?(?:pagina de |perfil de |canal de |grupo de )?(?:facebook|fb|linkedin|youtube|twitter|x)|(?:facebook|fb|linkedin|twitter|x) (?:cover|banner|header|portada|cabecera)|cover (?:de |para |photo (?:de |para )?)?(?:facebook|fb|linkedin|youtube|twitter)|banner (?:de |para )?(?:youtube|linkedin|twitter|x|facebook|fb|web|sitio|pagina)|cabecera (?:de |para )?(?:twitter|x|linkedin|facebook|youtube|web|pagina|blog)|miniaturas? (?:de |para )?(?:youtube|video|videos)|thumbnails? (?:de |para |for )?(?:youtube|video|videos)|youtube thumbnail|para youtube|portada (?:de |para )?(?:video|videos|blog|articulo|presentacion|diapositiva|slide)|fondo de pantalla (?:de |del |para )?(?:pc|escritorio|computadora|ordenador|laptop|monitor)|wallpaper (?:de |del |para )?(?:pc|escritorio|computadora|ordenador|laptop|monitor)|desktop wallpaper|presentacion|diapositiva|slide|pantalla (?:de )?(?:tv|television|monitor|pc)|formato (?:tv|television|cine|cinematografico|cine))\\b' },
+  { tier: 2, frame: '1:1', id: 'square-surface', pattern: '\\b(?:posts? (?:de |para |cuadrad[oa]s? (?:de |para )?)?(?:instagram|ig|feed|facebook|fb|linkedin)|publicacion(?:es)? (?:de |para )?(?:instagram|ig|feed|facebook|fb|linkedin)|feed (?:de )?(?:instagram|ig)|fotos? de perfil|profile (?:picture|photo|pic)|avatar(?:es)?|pfp|icono(?:s)? de (?:app|aplicacion|apps)|app icon|favicon|portadas? (?:de |para )?(?:album|disco|cancion|playlist|spotify|podcast)|album cover)\\b' },
+  { tier: 2, frame: '2:3', id: 'pin', pattern: '\\b(?:pin(?:es)? (?:de |para )?pinterest|pinterest|tarjetas? (?:de )?(?:visita|presentacion)|business cards?)\\b' },
+  { tier: 2, frame: '3:4', id: 'paper-portrait', pattern: '\\b(?:(?:hoja|pagina|formato|tamano) ?(?:a4|carta|oficio|letter)(?: vertical)?|a4 vertical|carta vertical|folleto vertical|documento vertical|portrait a4)\\b' },
+  { tier: 2, frame: '4:3', id: 'paper-landscape', pattern: '\\b(?:a4 horizontal|carta horizontal|hoja horizontal|pagina horizontal|formato (?:4:3|clasico)|pantalla (?:de )?(?:tablet|ipad)|ipad|tablet)\\b' },
+  // ── tier 3: generic shape words ──────────────────────────────────────
+  { tier: 3, frame: '1:1', id: 'square', pattern: '\\b(?:cuadrad[oa]s?|square|1 a 1|uno a uno|formato cuadrado)\\b' },
+  { tier: 3, frame: '3:4', id: 'portrait', pattern: '\\b(?:vertical(?:es)?|verticalmente|retrato|portrait|mas alt[oa] que anch[oa]|de pie|en vertical|orientacion vertical|formato vertical)\\b' },
+  { tier: 3, frame: '16:9', id: 'landscape', pattern: '\\b(?:horizontal(?:es)?|horizontalmente|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|rectangular(?:es)?|mas anch[oa] que alt[oa]|en horizontal|orientacion horizontal|formato horizontal|cinematic[oa]|cinematografic[oa]|ultrawide|ancha)\\b' },
+  // ── tier 4: weak type defaults ───────────────────────────────────────
+  { tier: 4, frame: '1:1', id: 'square-type', pattern: '\\b(?:logos?|logotipos?|isotipos?|iconos?|icons?|stickers?|pegatinas?|emojis?|sellos?|insignias?|badges?)\\b' },
+  { tier: 4, frame: '2:3', id: 'poster-type', pattern: '\\b(?:posters?|carteles?|cartel|afiches?|flyers?|volantes?|portadas? de (?:libro|novela|revista|ebook|cuento)|book covers?|tarjetas? (?:de )?(?:invitacion|cumpleanos|navidad|boda)|invitacion(?:es)?|menus? de restaurante)\\b' },
+  { tier: 4, frame: '16:9', id: 'wide-type', pattern: '\\b(?:banners?|portadas?|covers?|cabeceras?|encabezados?|headers?|miniaturas?|thumbnails?|wallpapers?|fondos? de pantalla|paisajes?|panoramas?|escenas? (?:amplia|panoramica)s?)\\b' },
+];
+
+const IMAGE_FRAME_LEXICON_COMPILED = IMAGE_FRAME_LEXICON.map((entry) => ({
+  ...entry,
+  re: new RegExp(entry.pattern),
+}));
+
+const EXPLICIT_RATIO_COLON_RE = /\b(1:1|2:3|3:2|3:4|9:16|4:3|16:9)\b/;
+const EXPLICIT_RATIO_CROSS_RE = /\b(1x1|2x3|3x2|3x4|9x16|4x3|16x9)\b/;
+const EXPLICIT_RATIO_WORDS_RE = /\b(1|2|3|4|9|16)\s*(?:a|por|by|to)\s*(1|3|2|4|16|9)\b/;
+
+/**
  * Detect an explicit frame / orientation in free text.
- * @returns {{frame: string, orientation: 'square'|'portrait'|'landscape'}|null}
+ * @returns {{frame: string, orientation: 'square'|'portrait'|'landscape', source: string}|null}
  */
 function detectImageFrame(text) {
   const norm = canonicalText(text);
   if (!norm) return null;
 
-  const colon = norm.match(/\b(1:1|2:3|3:2|3:4|9:16|4:3|16:9)\b/);
+  const colon = norm.match(EXPLICIT_RATIO_COLON_RE);
   if (colon) {
     const frame = colon[1];
-    return { frame, orientation: IMAGE_FRAMES[frame].orientation };
+    return { frame, orientation: IMAGE_FRAMES[frame].orientation, source: 'ratio' };
   }
-  const cross = norm.match(/\b(1x1|2x3|3x2|3x4|9x16|4x3|16x9)\b/);
+  const cross = norm.match(EXPLICIT_RATIO_CROSS_RE);
   if (cross) {
     const frame = cross[1].replace('x', ':');
-    return { frame, orientation: IMAGE_FRAMES[frame].orientation };
+    return { frame, orientation: IMAGE_FRAMES[frame].orientation, source: 'ratio' };
+  }
+  const words = norm.match(EXPLICIT_RATIO_WORDS_RE);
+  if (words) {
+    const frame = `${words[1]}:${words[2]}`;
+    if (IMAGE_FRAMES[frame]) return { frame, orientation: IMAGE_FRAMES[frame].orientation, source: 'ratio' };
   }
 
-  // Full-screen vertical surfaces → tall 9:16.
-  if (/\b(histori(?:a|as)|story|stories|reels?|tiktok|status|shorts?|para movil|formato movil)\b/.test(norm)) {
-    return { frame: '9:16', orientation: 'portrait' };
-  }
-  // Generic vertical / portrait → 3:4.
-  if (/\b(vertical|retrato|portrait|mas alto que ancho)\b/.test(norm)) {
-    return { frame: '3:4', orientation: 'portrait' };
-  }
-  // Square marks (profile pictures, logos, avatars, icons).
-  if (/\b(cuadrad[oa]s?|square|post de instagram|foto de perfil|avatar|logo|logotipo|icono)\b/.test(norm)) {
-    return { frame: '1:1', orientation: 'square' };
-  }
-  // Horizontal / landscape / rectangular / social-wide → 16:9.
-  if (/\b(rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|para youtube|youtube|miniatura|thumbnail|portada|portadas|facebook|banner|banners|cover|cabecera|encabezado|cartel|carteles|flyer|flyers|poster|posters|afiche|afiches|mas ancho que alto)\b/.test(norm)) {
-    return { frame: '16:9', orientation: 'landscape' };
+  for (const entry of IMAGE_FRAME_LEXICON_COMPILED) {
+    if (entry.re.test(norm)) {
+      return { frame: entry.frame, orientation: IMAGE_FRAMES[entry.frame].orientation, source: entry.id };
+    }
   }
 
   return null;
@@ -152,9 +201,34 @@ function toolQualityFor(appQuality) {
 // ── Count ─────────────────────────────────────────────────────────────────
 
 const COUNT_WORDS = {
-  un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5,
-  one: 1, two: 2, three: 3, four: 4, five: 5,
+  un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10,
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  a: 1, an: 1,
 };
+
+const IMAGE_COUNT_MAX = 5;
+
+// Nouns that carry a count ("3 fotos", "dos logos", "cinco versiones").
+const COUNT_NOUN_RE_FRAGMENT =
+  '(?:imagen(?:es)?|fotos?|fotografias?|ilustracion(?:es)?|dibujos?|renders?|disenos?|propuestas?|alternativas?|version(?:es)?|variantes?|variacion(?:es)?|opcion(?:es)?|ejemplos?|muestras?|bocetos?|logos?|logotipos?|posters?|carteles?|afiches?|flyers?|banners?|miniaturas?|wallpapers?|retratos?|iconos?|stickers?|avatares?|portadas?|images?|pictures?|pics?|photos?|illustrations?|drawings?|designs?|versions?|variants?|variations?|options?|takes?|renders?|mockups?)';
+// Adjectives allowed between the number and the noun ("3 nuevas fotos").
+const COUNT_ADJ_RE_FRAGMENT =
+  '(?:nuev[oa]s?|distint[oa]s?|diferentes|hermos[oa]s?|bonit[oa]s?|buen[oa]s?|posibles|pequen[oa]s?|grandes|otr[oa]s?|primer[oa]s?|mas|different|new|more|nice|good|possible|other|quick)';
+const COUNT_NUMBER_RE_FRAGMENT =
+  '(\\d{1,2}|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|one|two|three|four|five|six|seven|eight|nine|ten|a|an)';
+
+const COUNT_EXPLICIT_RE = new RegExp(
+  `\\b${COUNT_NUMBER_RE_FRAGMENT}\\s+(?:${COUNT_ADJ_RE_FRAGMENT}\\s+)?${COUNT_NOUN_RE_FRAGMENT}\\b`,
+);
+// "imagenes x3", "3x", "x 3"
+const COUNT_MULTIPLIER_RE = new RegExp(`\\b${COUNT_NOUN_RE_FRAGMENT}\\s*(?:x\\s*(\\d)|(\\d)\\s*x)\\b|\\b(?:x\\s*(\\d)|(\\d)\\s*x)\\s*${COUNT_NOUN_RE_FRAGMENT}\\b`);
+const COUNT_SINGLE_MARKER_RE = new RegExp(
+  `\\b(?:una sola|un solo|solo una|solo un|solamente una|solamente un|unicamente una|nada mas una|only one|just one|a single|one single|single)\\s+(?:${COUNT_ADJ_RE_FRAGMENT}\\s+)?${COUNT_NOUN_RE_FRAGMENT}\\b|\\b${COUNT_NOUN_RE_FRAGMENT}\\s+(?:nada mas|solamente|unicamente|only)\\b`,
+);
+const COUNT_PAIR_RE = new RegExp(`\\b(?:un par|una pareja|a pair|a couple)(?: de| of)?\\s+(?:${COUNT_ADJ_RE_FRAGMENT}\\s+)?${COUNT_NOUN_RE_FRAGMENT}\\b`);
+const COUNT_HALF_DOZEN_RE = new RegExp(`\\b(?:media docena|half a dozen)(?: de| of)?\\s+${COUNT_NOUN_RE_FRAGMENT}\\b`);
+const COUNT_SEVERAL_RE = new RegExp(`\\b(?:varias|varios|algunas|algunos|diferentes|distintas|distintos|multiples|several|multiple|a few|some|various)\\s+(?:${COUNT_ADJ_RE_FRAGMENT}\\s+)?${COUNT_NOUN_RE_FRAGMENT}\\b`);
+const COUNT_NOUN_PRESENT_RE = new RegExp(`\\b${COUNT_NOUN_RE_FRAGMENT}\\b`);
 
 function wordToCount(token) {
   if (token == null) return null;
@@ -163,28 +237,57 @@ function wordToCount(token) {
   return Object.prototype.hasOwnProperty.call(COUNT_WORDS, t) ? COUNT_WORDS[t] : null;
 }
 
+function clampImageCount(n) {
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(IMAGE_COUNT_MAX, Math.max(1, Math.round(n)));
+}
+
 /**
- * How many images the user asked for (2..5), or null when unspecified or
- * singular ("una imagen" states no plurality).
- * Understands "3 imágenes", "tres fotos", "un par de imágenes" (=2) and
- * "varias imágenes" (=3).
+ * How many images the user asked for, 1..5, or null when the text states no
+ * quantity. Mirrored by the composer chip (lib/chat/image-request-lexicon.ts).
+ *
+ *   "3 imágenes", "tres fotos", "five pictures"      → 3 / 3 / 5
+ *   "una imagen", "a picture", "una sola foto"        → 1  (explicit singular)
+ *   "un par de imágenes"                              → 2
+ *   "varias / algunas / several imágenes"             → 3
+ *   "media docena", "12 imágenes"                     → 5  (picker ceiling)
+ *   "la imagen del colibrí", "una imagen de 3 gatos"  → null / 1
+ * Numbers only count when an image-like noun follows them, so "3 gatos" or
+ * "2 horas" never turn into a quantity.
+ */
+function detectExplicitImageCount(text) {
+  const norm = canonicalText(text);
+  if (!norm || !COUNT_NOUN_PRESENT_RE.test(norm)) return null;
+
+  const single = COUNT_SINGLE_MARKER_RE.test(norm);
+  if (single) return 1;
+  if (COUNT_HALF_DOZEN_RE.test(norm)) return IMAGE_COUNT_MAX;
+  if (COUNT_PAIR_RE.test(norm)) return 2;
+
+  const multiplier = norm.match(COUNT_MULTIPLIER_RE);
+  if (multiplier) {
+    const raw = multiplier.slice(1).find((g) => g != null);
+    const n = clampImageCount(Number(raw));
+    if (n) return n;
+  }
+
+  const explicit = norm.match(COUNT_EXPLICIT_RE);
+  if (explicit) {
+    const n = clampImageCount(wordToCount(explicit[1]));
+    if (n) return n;
+  }
+
+  if (COUNT_SEVERAL_RE.test(norm)) return 3;
+  return null;
+}
+
+/**
+ * Legacy contract kept for the agent tools: only counts ABOVE 1 drive
+ * multi-image behaviour; a singular ("una imagen") reads as "no plurality".
  */
 function detectImageCount(text) {
-  const norm = canonicalText(text);
-  if (!norm) return null;
-  const hasImageNoun = /\b(imagen(?:es)?|fotos?|fotografias?|ilustraciones?|images?|pictures?|versiones?|variaciones?|opciones?)\b/.test(norm);
-  if (!hasImageNoun) return null;
-
-  const explicit = norm.match(/\b(\d+|un|uno|una|dos|tres|cuatro|cinco|one|two|three|four|five)\s*(?:imagen(?:es)?|fotos?|fotografias?|ilustraciones?|images?|pictures?|versiones?|variaciones?|opciones?)\b/);
-  if (explicit) {
-    const n = wordToCount(explicit[1]);
-    // A singular ("una imagen") states no plurality — only counts above 1
-    // drive multi-image behaviour.
-    if (n != null && n > 1) return Math.min(5, Math.max(2, Math.round(n)));
-  }
-  if (/\b(un par|una pareja)(?: de)?\b/.test(norm)) return 2;
-  if (/\b(varias|varios|algunas|algunos|diferentes|distintas|distintos|multiples)\b/.test(norm)) return 3;
-  return null;
+  const n = detectExplicitImageCount(text);
+  return n != null && n > 1 ? n : null;
 }
 
 // ── Style + image type ────────────────────────────────────────────────────
@@ -618,6 +721,17 @@ function resolveEditDirective(instruction, opts = {}) {
 
 module.exports = {
   IMAGE_FRAMES,
+  IMAGE_FRAME_LEXICON,
+  IMAGE_COUNT_MAX,
+  // Exposed for the composer parity test (lib/chat/image-request-lexicon.ts
+  // must hold the very same tables).
+  COUNT_LEXICON: Object.freeze({
+    noun: COUNT_NOUN_RE_FRAGMENT,
+    adjective: COUNT_ADJ_RE_FRAGMENT,
+    number: COUNT_NUMBER_RE_FRAGMENT,
+  }),
+  TYPO_REPLACEMENTS,
+  detectExplicitImageCount,
   normalizeImageText,
   canonicalizeImageTypos,
   fixKnownTypos,
