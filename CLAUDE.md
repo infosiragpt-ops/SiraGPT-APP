@@ -42,9 +42,13 @@ npm run type-check     # TSC completo
    `git diff --check` y `bash scripts/verify-ui-lock.sh` antes de abrir el PR.
 5. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código.
 6. **Producción es la Lenovo de oficina** (túnel Cloudflare → siragpt.com), no Hostinger ni
-   un VPS nuevo. La publicación (`publish.sh`) la corre Luis o el box operador por SSH; desde
-   una sesión sin ese acceso el trabajo termina en el squash-merge. Nunca `compose down -v`,
-   nunca `git reset --hard`, nunca mover DNS ni crear otro `.env`.
+   un VPS nuevo. **Desde 2026-09-12 la publicación es automática**: cada squash-merge a
+   `production-main` dispara el workflow "Publish production (Lenovo)"
+   (`.github/workflows/publish-production.yml`) en el runner self-hosted de la Lenovo
+   (`deploy/lenovo-runner`, contenedor `siragpt-github-runner`), que espera el CI del push
+   y ejecuta el mismo `publish.sh` con todas sus barreras (fast-forward, sin diffs de
+   schema, rollback). Cambios de schema/migraciones siguen siendo release manual por SSH.
+   Nunca `compose down -v`, nunca `git reset --hard`, nunca mover DNS ni crear otro `.env`.
 7. **Secretos:** jamás en el chat, en commits ni en docs. Viven en Replit Secrets y en el único
    `.env` de producción. Un secreto nuevo se pide a Luis por canal enmascarado.
 8. **Producto:** `/agentes` es la superficie canónica (`/chat` y `/code` redirigen; no revivir
