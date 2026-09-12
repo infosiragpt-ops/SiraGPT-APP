@@ -30,12 +30,27 @@ npm run type-check     # TSC completo
 ```
 
 ## Reglas para Claude
-1. **No modificar la UI/componentes visuales** — solo funcionalidad interna
+1. **No modificar la UI/componentes visuales** — solo funcionalidad interna. El UI lock
+   (`scripts/verify-ui-lock.sh`, 270 archivos) lo verifica en CI; levantarlo es decisión de Luis.
 2. **Trabajar en:** agentes, herramientas de generación, pipelines, sistema de archivos, backend
-3. **Push directo a main** en `https://github.com/SiraGPT-ORg/siraGPT`
-4. **Cada cambio debe mantener CI verde** — correr `npm test` y `npm run lint` antes de push
-5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
-6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
+3. **Nunca push a `main`.** Todo cambio = rama + PR a `production-main` en
+   `https://github.com/infosiragpt-ops/SiraGPT-APP`, esperar el check
+   "CI · required checks passed", squash-merge. Auto-merge está deshabilitado y la
+   protección exige la rama al día: tras cada fusión, `gh pr update-branch <n>` en el
+   siguiente PR y esperar su CI otra vez. No usar `--admin` con CI rojo.
+4. **Cada cambio debe mantener CI verde** — correr los tests afectados (`node --test`),
+   `git diff --check` y `bash scripts/verify-ui-lock.sh` antes de abrir el PR.
+5. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código.
+6. **Producción es la Lenovo de oficina** (túnel Cloudflare → siragpt.com), no Hostinger ni
+   un VPS nuevo. La publicación (`publish.sh`) la corre Luis o el box operador por SSH; desde
+   una sesión sin ese acceso el trabajo termina en el squash-merge. Nunca `compose down -v`,
+   nunca `git reset --hard`, nunca mover DNS ni crear otro `.env`.
+7. **Secretos:** jamás en el chat, en commits ni en docs. Viven en Replit Secrets y en el único
+   `.env` de producción. Un secreto nuevo se pide a Luis por canal enmascarado.
+8. **Producto:** `/agentes` es la superficie canónica (`/chat` y `/code` redirigen; no revivir
+   `/code`). Modelos: solo DeepSeek V4 Flash/Pro, mostrados como "Sira Rápido" / "Sira Pro"
+   (nunca el model_id ni el proveedor); nada de OpenRouter u otros modelos. Una app cuenta como
+   "Conectada" solo con token válido + health, nunca por abrir un navegador o un catálogo.
 
 ## Visual Tools Inventory (34 tools)
 | Tool | File | Description |
@@ -1140,6 +1155,24 @@ desactiva) · `CODEX_AUTOSCALE_QUEUE_DEPTH` (3) · `CODEX_AUTOSCALE_STEP` (2) ·
   que mantiene vivo el proceso (cuelga node --test).
 - git-real tests: `git config core.autocrlf false` en el repo temporal (Windows CRLF rompe la comparación byte-a-byte).
 
+## Paridad con Claude Code web — etapas publicadas (2026-09-11)
+
+Diagnóstico completo (14 dimensiones, brechas P0/P1/P2 con evidencia) en la página
+"Paridad con Claude Code" del 11-sep-2026. Cinco etapas backend, sin UI, ya en `production-main`:
+
+| PR | Etapa | Qué cambia |
+|---|---|---|
+| #690 | Base segura + modelo | `codex/deepseek-turn.js`: DeepSeek V4 con tool-calling NATIVO para todos los tiers (power → v4-pro, resto → v4-flash); ladder `deepseek → anthropic → openrouter → cerebras` con `exclude`. Runner heredado `github/workspace-runner.service.js` OFF en producción (`SIRAGPT_WORKSPACE_RUN_ENABLED=1` opt-in). |
+| #691 | Sesión = repo | `POST /api/codex/projects/clone` clona repos PRIVADOS con el OAuth GitHub del usuario (`-c http.<github>.extraheader`, remote limpio), rama por defecto real, 404 sin acceso; `github/plan` y `github/publish` usan el OAuth guardado si no llega `githubToken`. |
+| #692 | Aviso al terminar | `agents/task-store` publica `agent.task.{completed\|failed\|cancelled}` una vez por tarea; `user-notifications` crea la fila de bandeja con `metadata.actionUrl → /agentes/<chatId>`. `SIRAGPT_AGENT_TASK_NOTIFY`. |
+| #693 | CI del PR | Tool `github_checks` (`codex/github-checks.js`): checks de la rama `run/<id>`, una `ref` o un `pr`, pasos fallidos de Actions, con la cuenta del usuario. |
+| #694 | Memoria y Biblioteca | `codex/user-memory.js` inyecta la memoria Hermes del usuario en el system prompt de codex (`CODEX_USER_MEMORY*`); `use_skill` alcanza los skills de la Biblioteca del usuario. |
+
+Pendiente que requiere a Luis: GitHub App (claves en `.env` prod + Replit), cierre del catálogo
+de modelos por código, runner aislado gVisor en la Lenovo, `MCP_ALLOWED_HOSTS`, levantar el UI
+lock para `/agentes` (selector de repo, diffs, push). Envs nuevas documentadas en
+`docs/ENV_VARIABLES.md`.
+
 ## Codex Agent — Claude Code parity + Agent SDK (added 2026-07-02)
 
 El loop de APPS (/code) ahora se comporta como Claude Code: modelo fuerte con
@@ -1276,7 +1309,9 @@ e2e real (servicio+BD y HTTP+auth) + UI en navegador (create→publish→running
   en cada reinicio del backend (credencial local estable: `admin@example.com` / `password`).
 
 ## Conexiones externas
-- Repo: https://github.com/SiraGPT-ORg/siraGPT
+- Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
-- Branch: main (push directo)
-- CI: GitHub Actions (automatic cancel on newer commit)
+- Rama de producción: `production-main` (solo vía PR + squash-merge; nunca push a `main`)
+- CI: GitHub Actions, check requerido "CI · required checks passed" (frontend, backend en 4
+  shards, seguridad, licencias, UI lock, visual regression, e2e-critical, desktop)
+- Producción: https://siragpt.com (health en `/api/health`; `api.siragpt.com` es 404)
