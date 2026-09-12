@@ -20,10 +20,12 @@
  *      exec vía runner; este módulo expone el catálogo estilo-OpenCode que
  *      `/agentes` consume vía `build-tools.js`. Sin controles nuevos.
  *   2. Clonar desde la web: `parsePublicGithubRepo` + `clonePublicRepo` clonan
- *      un repo público HTTPS en el workspace del runner (fetch --depth=1),
+ *      un repo github.com HTTPS en el workspace del runner (fetch --depth=1),
  *      sin allowlist de operador (el allowlist sigue en `self-hosting.js`
- *      para el flujo self-host). Reutiliza `workspace.js`/`git-workflow.js`.
- *      NO clona en máquinas de usuario (AGENTS.md §6).
+ *      para el flujo self-host). Con el OAuth del usuario (`accessToken`, en
+ *      memoria, vía `-c http.<github>.extraheader`) alcanza sus repos
+ *      PRIVADOS; el remote queda siempre limpio. Reutiliza `workspace.js`/
+ *      `git-workflow.js`. NO clona en máquinas de usuario (AGENTS.md §6).
  *   3. Publicar en GitHub desde la web: `buildPublishPlan` valida el diff
  *      (paths sensibles, secretos, topes) y delega el push/PR real a
  *      `self-hosting.publishSelfHostedPullRequest` con token por-request
@@ -186,22 +188,50 @@ function parsePublicGithubRepo(input) {
   };
 }
 
+/**
+ * Credencial de un solo uso para `git fetch` sobre github.com: cabecera
+ * Authorization inyectada con `-c http.<url>.extraheader=…` (el patrón de
+ * actions/checkout). Va SOLO en los argumentos de ese fetch: el remote queda
+ * limpio, nunca se escribe en .git/config ni en disco.
+ */
+function githubAuthConfigArgs(accessToken) {
+  const token = String(accessToken || '').trim();
+  if (!token) return [];
+  const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
+  return ['-c', `http.https://${GITHUB_HOST}/.extraheader=AUTHORIZATION: basic ${basic}`];
+}
+
+/** Strip a transient credential (and its base64 form) from any git output. */
+function scrubCredential(text, accessToken) {
+  let out = String(text || '');
+  const token = String(accessToken || '').trim();
+  if (token) {
+    const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
+    out = out.split(token).join('[REDACTED]').split(basic).join('[REDACTED]');
+  }
+  return redactGitOutput(out);
+}
+
 async function execGitOrThrow(runner, projectId, args, opts = {}) {
-  const out = await runner.exec(projectId, ['git', ...args], opts);
+  const { accessToken = null, ...execOpts } = opts || {};
+  const out = await runner.exec(projectId, ['git', ...args], execOpts);
   if (out?.exitCode === 0) return out;
   const err = new Error('repository bootstrap failed');
   err.code = 'git_operation_failed';
   err.details = {
-    operation: args[0],
+    operation: args.find((a) => typeof a === 'string' && !a.startsWith('-') && !/=/.test(a)) || args[0],
     exitCode: Number.isInteger(out?.exitCode) ? out.exitCode : 1,
-    detail: redactGitOutput(out?.stderr || out?.stdout),
+    detail: scrubCredential(out?.stderr || out?.stdout, accessToken),
   };
   throw err;
 }
 
 /**
- * Clona un repo público en el workspace del runner (fetch --depth=1).
+ * Clona un repo github.com en el workspace del runner (fetch --depth=1).
  * Equivalente servidor del `git clone` + `switch -c run/<id>` local.
+ * Con `accessToken` (OAuth del usuario, en memoria) el fetch va autenticado y
+ * alcanza repos privados; sin token, solo repos públicos. En ambos casos el
+ * remote `origin` queda con la URL limpia (sin credenciales).
  */
 async function clonePublicRepo({
   runner,
@@ -210,6 +240,7 @@ async function clonePublicRepo({
   branch = 'main',
   runId = null,
   fetchTimeoutMs = 120_000,
+  accessToken = null,
 } = {}) {
   if (!runner || typeof runner.initWorkspace !== 'function' || typeof runner.exec !== 'function') {
     throw new TypeError('runner.initWorkspace and runner.exec are required');
@@ -242,8 +273,8 @@ async function clonePublicRepo({
   await execGitOrThrow(
     runner,
     projectId,
-    ['fetch', '--depth=1', 'origin', `refs/heads/${baseBranch}`],
-    { timeoutMs: Math.max(10_000, Number(fetchTimeoutMs) || 120_000) },
+    [...githubAuthConfigArgs(accessToken), 'fetch', '--depth=1', 'origin', `refs/heads/${baseBranch}`],
+    { timeoutMs: Math.max(10_000, Number(fetchTimeoutMs) || 120_000), accessToken },
   );
   await execGitOrThrow(runner, projectId, ['checkout', '-B', baseBranch, 'FETCH_HEAD']);
   if (workBranch) {
@@ -256,6 +287,7 @@ async function clonePublicRepo({
     repository,
     sourceBranch: baseBranch,
     workBranch,
+    authenticated: Boolean(String(accessToken || '').trim()),
     commitSha: String(head.stdout || '').trim(),
     workspacePath: `projects/${projectId}`,
   };
@@ -389,6 +421,8 @@ module.exports = {
   visibleTools,
   parsePublicGithubRepo,
   clonePublicRepo,
+  githubAuthConfigArgs,
+  scrubCredential,
   buildPublishPlan,
   buildCompareUrl,
   isBlockedPublishPath,
