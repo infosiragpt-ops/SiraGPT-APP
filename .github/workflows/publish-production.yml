@@ -1,0 +1,135 @@
+name: Publish production (Lenovo)
+
+# Continuous deployment for siragpt.com.
+#
+# Every commit that lands on production-main (PR squash-merge, CI-gated by
+# branch protection) is published by the self-hosted runner installed on
+# the Lenovo (deploy/lenovo-runner). The job reuses the reviewed
+# /home/user/deployments/iliagpt/publish.sh with ALL of its gates:
+#   · push CI green for the exact merged SHA (waited for below)
+#   · clean checkout, fast-forward only (live must be an ancestor of target)
+#   · no schema/migration diffs (the script refuses them)
+#   · health baseline before, atomic activation, rollback on failure
+# It never touches .env secrets, DNS, volumes or the database.
+#
+# Manual use: "Run workflow" with an optional target SHA (defaults to the
+# branch head). The job is a no-op when the target is already live.
+on:
+  push:
+    branches: [production-main]
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'Full production-main commit to publish (defaults to the branch head)'
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+# One publication at a time; never cancel a running publish.
+concurrency:
+  group: publish-production
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to siragpt.com
+    runs-on: [self-hosted, linux, siragpt-lenovo]
+    timeout-minutes: 90
+    env:
+      REPO: /home/user/SiraGPT-APP
+      PUBLISH: /home/user/deployments/iliagpt/publish.sh
+      ORIGIN: https://siragpt.com
+    steps:
+      - name: Resolve target commit
+        id: target
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          target="${INPUT_SHA:-$GITHUB_SHA}"
+          [[ "$target" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::A full lowercase commit SHA is required"; exit 1; }
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+          echo "Target: $target"
+
+      - name: Wait for push CI on the exact commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 100); do
+            runs=$(curl -fsS --max-time 20 \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=production-main&event=push&head_sha=${TARGET}&per_page=10" || echo '{}')
+            state=$(jq -r --arg sha "$TARGET" '[.workflow_runs[]? | select(.head_sha==$sha)] | sort_by(.run_number) | last | "\(.status)/\(.conclusion)"' <<<"$runs")
+            case "$state" in
+              completed/success) echo "CI push run for $TARGET is green"; exit 0 ;;
+              completed/*) echo "::error::CI push run for $TARGET concluded '${state#completed/}' — not publishing"; exit 1 ;;
+              *) echo "CI for $TARGET: $state (attempt $attempt/100, waiting 30s)"; sleep 30 ;;
+            esac
+          done
+          echo "::error::Timed out waiting for CI on $TARGET"; exit 1
+
+      - name: Read live release
+        id: live
+        shell: bash
+        run: |
+          set -euo pipefail
+          live=$(curl -fsS --max-time 15 -H 'Cache-Control: no-cache' "$ORIGIN/api/version" | jq -r '.commit')
+          [[ "$live" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not read the live commit from $ORIGIN/api/version"; exit 1; }
+          echo "sha=$live" >> "$GITHUB_OUTPUT"
+          echo "Live: $live"
+
+      - name: Already live
+        if: steps.live.outputs.sha == steps.target.outputs.sha
+        shell: bash
+        run: |
+          echo "::notice::${{ steps.target.outputs.sha }} is already the live release — nothing to publish"
+          printf 'Already live: `%s`\n' "${{ steps.target.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fast-forward the Lenovo checkout to the target
+        if: steps.live.outputs.sha != steps.target.outputs.sha
+        shell: bash
+        env:
+          TARGET: ${{ steps.target.outputs.sha }}
+          LIVE: ${{ steps.live.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cd "$REPO"
+          git fetch --no-tags origin production-main
+          [[ -z "$(git status --porcelain)" ]] || { echo "::error::Lenovo checkout is dirty; refusing to publish"; exit 1; }
+          git merge-base --is-ancestor "$TARGET" refs/remotes/origin/production-main \
+            || { echo "::error::Target is not in production-main"; exit 1; }
+          git merge-base --is-ancestor "$LIVE" "$TARGET" \
+            || { echo "::error::Live release $LIVE is not an ancestor of $TARGET (no fast-forward); publish manually"; exit 1; }
+          git checkout -q -B deploy-from-github "$TARGET"
+          echo "Checkout at $(git rev-parse HEAD)"
+
+      - name: Publish (reviewed publish.sh)
+        if: steps.live.outputs.sha != steps.target.outputs.sha
+        shell: bash
+        env:
+          TARGET: ${{ steps.target.outputs.sha }}
+          LIVE: ${{ steps.live.outputs.sha }}
+        # publish.sh prints only summary lines; detailed build output stays
+        # private on the Lenovo under deployments/iliagpt/backups/reviewed-*.
+        run: |
+          set -euo pipefail
+          "$PUBLISH" "$TARGET" "$LIVE"
+
+      - name: Verify public release
+        if: steps.live.outputs.sha != steps.target.outputs.sha
+        shell: bash
+        env:
+          TARGET: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker run --rm --pull missing \
+            -v "$REPO/scripts/verify-lenovo-release.cjs:/verify.cjs:ro" \
+            node:22-alpine node /verify.cjs "$TARGET"
+          printf 'Published and verified: `%s`\n' "$TARGET" >> "$GITHUB_STEP_SUMMARY"
