@@ -345,6 +345,16 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     required: true,
   },
   {
+    file: "lib/plans-service.ts",
+    reason:
+      "Public payments-config GET (/planes reads checkout availability + sales WhatsApp number before login; must never attach user auth).",
+    accepts: (text) =>
+      text === 'fetch(`${API_ROOT}/payments/config`, { cache: "no-store", signal })'
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
+  },
+  {
     file: "lib/projects-service.ts",
     reason: "Public shared-project snapshot GET must not attach user auth.",
     accepts: (text) =>
