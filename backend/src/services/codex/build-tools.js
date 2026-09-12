@@ -1062,6 +1062,27 @@ const TOOLS = {
     },
   },
 
+  github_checks: {
+    kind: 'web',
+    description: 'Estado de CI/checks en GitHub para el repositorio de este proyecto, con la cuenta GitHub conectada del usuario. Úsalo DESPUÉS de publicar un PR (o cuando el usuario pregunte si el CI pasó) para leer cada check con su estado, conclusión y enlace; en los fallos de GitHub Actions incluye los pasos que fallaron. Por defecto mira la rama de este run (run/<id>); acepta `ref` (rama o SHA) o `pr` (número). No modifica nada.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Rama o SHA a consultar. Por defecto la rama run/<id> de este run.' },
+        pr: { type: 'number', description: 'Número de pull request; se consulta su HEAD y su estado de merge.' },
+        repository: { type: 'string', description: 'owner/repo. Por defecto el repositorio del proyecto.' },
+      },
+      required: [],
+    },
+    commandFor: (args) => `github_checks ${args?.pr ? `#${args.pr}` : (args?.ref || 'run branch')}`,
+    pathFor: () => null,
+    async execute(args, ctx) {
+      // eslint-disable-next-line global-require
+      const checks = require('./github-checks');
+      return checks.githubChecksTool(args || {}, ctx || {});
+    },
+  },
+
   use_skill: {
     kind: 'file_read',
     description: 'Carga un playbook (skill) con el estándar de calidad para un tipo de trabajo ANTES de construirlo: landing-profesional, crud-entidades, dashboard-kpis, auth-basica, formularios-validados, ecommerce-catalogo, portfolio-personal, app-empresarial, debug-runtime, más los .md del proyecto en .sira/skills/. Sin nombre (o con nombre desconocido) devuelve el catálogo completo. Úsalo al inicio de la tarea correspondiente y sigue el playbook.',
