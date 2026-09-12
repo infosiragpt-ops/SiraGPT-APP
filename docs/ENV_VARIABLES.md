@@ -42,6 +42,17 @@ degrades to Claude (eligible tiers) and then to the prompted provider ladder
 | `CODEX_DEEPSEEK_THINKING` | unset | `1` forces V4 thinking on, `0` off; default: Pro thinks, Flash only on high effort |
 | `CODEX_LLM_PROVIDER` | unset | Force a single ladder rung: `deepseek` \| `anthropic` \| `openrouter` \| `cerebras` |
 
+### /agentes task notifications
+
+When a long `/agentes` task reaches a terminal state, `agents/task-store`
+publishes `agent.task.completed | failed | cancelled` once per task through
+the trigger registry: an inbox notification (rendered by the existing
+notification center, linking to the chat) plus the user's webhooks.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_AGENT_TASK_NOTIFY` | unset | `0` disables the terminal notification everywhere; `1` forces it on (even under `NODE_ENV=test`). Default: on in production or whenever `DATABASE_URL` is set, off in tests |
+
 ### GitHub workspace "▶ Run" (legacy host runner)
 
 `backend/src/services/github/workspace-runner.service.js` runs a cloned
