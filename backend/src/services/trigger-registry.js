@@ -37,6 +37,8 @@ const TRIGGERS = Object.freeze([
   'payment.received',
   'file.uploaded',
   'agent.task.completed',
+  'agent.task.failed',
+  'agent.task.cancelled',
   'codex.run.completed',
   'codex.run.failed',
   'codex.run.cancelled',

@@ -117,6 +117,40 @@ async function handleTriggerEvent(prisma, event, payload, userId) {
   if (!prisma) return [];
   const p = payload && typeof payload === 'object' ? payload : {};
   try {
+    // /agentes long tasks: one inbox row when a task reaches a terminal
+    // state (published once per task by agents/task-store). The existing
+    // NotificationCenter renders `metadata.actionUrl` as the row's link, so
+    // "open the chat where it finished" needs no UI change.
+    if (event === 'agent.task.completed' || event === 'agent.task.failed' || event === 'agent.task.cancelled') {
+      if (!userId) return [];
+      const status = event.slice('agent.task.'.length);
+      const goal = clampStr(p.goal || '', 300);
+      const chatId = typeof p.chatId === 'string' && p.chatId ? p.chatId : null;
+      const label = goal ? `«${goal}»` : 'La tarea del agente';
+      const copy = {
+        completed: { title: 'Tarea terminada', message: `${label} terminó. Abre el chat para ver el resultado.`, severity: 'info' },
+        failed: { title: 'Tarea con error', message: `${label} se detuvo con un error. Abre el chat para reintentar.`, severity: 'warning' },
+        cancelled: { title: 'Tarea cancelada', message: `${label} fue cancelada.`, severity: 'info' },
+      }[status];
+      const row = await createNotification(prisma, {
+        userId,
+        type: `agent_task_${status}`,
+        title: copy.title,
+        message: copy.message,
+        severity: copy.severity,
+        metadata: {
+          taskId: p.taskId || null,
+          chatId,
+          status,
+          goal: goal || null,
+          model: p.model || null,
+          durationMs: Number.isFinite(Number(p.durationMs)) ? Number(p.durationMs) : null,
+          actionUrl: chatId ? `/agentes/${encodeURIComponent(chatId)}` : '/agentes',
+        },
+      });
+      return row ? [row] : [];
+    }
+
     if (event === 'payment.failed') {
       // payments.js already creates a notification inline for the
       // Stripe webhook path; create here ONLY when called from a code

@@ -264,3 +264,45 @@ describe('user-notifications.list/mark', () => {
     assert.equal(u2.items.length, 1);
   });
 });
+
+describe('agent.task.* → inbox row (tarea de /agentes terminada)', () => {
+  test('completed: fila info con actionUrl al chat y metadatos de la tarea', async () => {
+    const prisma = makePrisma();
+    const rows = await svc.handleTriggerEvent(prisma, 'agent.task.completed', {
+      taskId: 't-1', chatId: 'chat-9', status: 'completed', goal: 'Genera el informe de ventas', model: 'deepseek-v4-flash', durationMs: 4200,
+    }, 'u1');
+    assert.equal(rows.length, 1);
+    const row = rows[0];
+    assert.equal(row.userId, 'u1');
+    assert.equal(row.type, 'agent_task_completed');
+    assert.equal(row.title, 'Tarea terminada');
+    assert.match(row.message, /Genera el informe de ventas/);
+    assert.equal(row.severity, 'info');
+    assert.equal(row.metadata.actionUrl, '/agentes/chat-9');
+    assert.equal(row.metadata.taskId, 't-1');
+    assert.equal(row.metadata.durationMs, 4200);
+    assert.equal(row.metadata.model, 'deepseek-v4-flash');
+  });
+
+  test('failed: severidad warning; sin chatId el enlace cae a /agentes; sin goal usa texto genérico', async () => {
+    const prisma = makePrisma();
+    const rows = await svc.handleTriggerEvent(prisma, 'agent.task.failed', { taskId: 't-2', status: 'failed' }, 'u1');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].type, 'agent_task_failed');
+    assert.equal(rows[0].severity, 'warning');
+    assert.equal(rows[0].metadata.actionUrl, '/agentes');
+    assert.match(rows[0].message, /La tarea del agente se detuvo con un error/);
+    assert.equal(rows[0].metadata.goal, null);
+  });
+
+  test('cancelled: fila info; sin userId no crea nada; chatId raro se codifica en la URL', async () => {
+    const prisma = makePrisma();
+    const none = await svc.handleTriggerEvent(prisma, 'agent.task.cancelled', { taskId: 't-3' }, '');
+    assert.deepEqual(none, []);
+    const rows = await svc.handleTriggerEvent(prisma, 'agent.task.cancelled', { taskId: 't-3', chatId: 'a b/c' }, 'u2');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].type, 'agent_task_cancelled');
+    assert.equal(rows[0].title, 'Tarea cancelada');
+    assert.equal(rows[0].metadata.actionUrl, '/agentes/a%20b%2Fc');
+  });
+});
