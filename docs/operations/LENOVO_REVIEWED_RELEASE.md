@@ -22,6 +22,20 @@ in Git or command output.
    private, uniquely named backup first. Verify the uploaded file's hash and
    `bash -n`. The operator must have reviewed this version before invoking it.
 
+## Automatic publication (since 2026-09-12)
+
+Every commit that lands on `production-main` is published automatically by
+the workflow **Publish production (Lenovo)**
+(`.github/workflows/publish-production.yml`) running on the self-hosted
+runner installed on the Lenovo (`deploy/lenovo-runner`, container
+`siragpt-github-runner`). The job waits for the push CI of the exact SHA,
+fast-forwards `/home/user/SiraGPT-APP` to it and invokes the same
+`publish.sh <target> <live>` described below, then runs the public verifier.
+Nothing else changes: the gates in this document are enforced by the script
+itself, and a schema/migration diff still stops before activation and must
+be released by hand. Manual publication remains available (SSH + `publish.sh`,
+or "Run workflow" with a `target_sha`); do not run both at the same time.
+
 ## Publish
 
 Invoke through the existing, host-key-verified `siragpt-lenovo` SSH alias:
