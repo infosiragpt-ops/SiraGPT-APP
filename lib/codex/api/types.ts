@@ -1,6 +1,42 @@
 export interface CodexHealth { ok: boolean; enabled: boolean; previewOrigin?: string | null }
 export interface CodexAccess { ok: boolean; enabled: boolean; canRun: boolean; allowlistConfigured: boolean }
-export interface CodexProject { id: string; name: string; status: string; organizationId?: string | null; workspacePath: string | null; previewUrl: string | null; error: string | null }
+/** Metadatos públicos del repo de un proyecto clonado desde la web (nunca el token). */
+export interface CodexSourceControl {
+  repository: string | null
+  webUrl?: string | null
+  fullName?: string | null
+  private?: boolean
+  defaultBranch?: string | null
+  sourceBranch: string | null
+}
+export interface CodexProject {
+  id: string
+  name: string
+  status: string
+  organizationId?: string | null
+  workspacePath: string | null
+  previewUrl: string | null
+  error: string | null
+  kind?: "repo"
+  sourceControl?: CodexSourceControl | null
+  /** Chat de /agentes al que está vinculado el proyecto (brief.chatId). */
+  chatId?: string | null
+}
+/** Respuesta de POST /projects/clone. */
+export interface CodexCloneResult {
+  project: CodexProject
+  chatId?: string
+  sourceControl: {
+    repository: string
+    fullName: string
+    private: boolean
+    defaultBranch: string | null
+    authenticated: boolean
+    sourceBranch: string
+    workBranch: string | null
+    commitSha: string
+  }
+}
 export interface CodexChatBinding { project: CodexProject; reused: boolean; chatId: string }
 export interface CodexCompanyConnectorAssignment {
   id: string

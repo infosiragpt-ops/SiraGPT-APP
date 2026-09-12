@@ -103,11 +103,18 @@ const originals = {
   create: codexDb.codexProject.create,
   update: codexDb.codexProject.update,
   findFirst: codexDb.codexProject.findFirst,
+  findMany: codexDb.codexProject.findMany,
 };
 
 const dbCalls = [];
-function installDb({ row = null } = {}) {
+// `bound` simula proyectos ya existentes del usuario (vínculo chat↔proyecto
+// vive en brief.chatId y se resuelve con findMany).
+function installDb({ row = null, bound = [] } = {}) {
   codexDb.codexProject.findFirst = async () => (row ? { ...row } : null);
+  codexDb.codexProject.findMany = async ({ where }) => {
+    dbCalls.push(['findMany', where]);
+    return bound.filter((r) => r.userId === where.userId).map((r) => ({ id: r.id, brief: r.brief }));
+  };
   codexDb.codexProject.create = async ({ data }) => {
     dbCalls.push(['create', data]);
     return { id: 'p-clone', ...data, createdAt: new Date(), updatedAt: new Date() };
@@ -126,6 +133,7 @@ after(() => {
   codexDb.codexProject.create = originals.create;
   codexDb.codexProject.update = originals.update;
   codexDb.codexProject.findFirst = originals.findFirst;
+  codexDb.codexProject.findMany = originals.findMany;
   delete process.env.CODEX_AGENT_V2;
 });
 
@@ -350,4 +358,74 @@ test('POST /projects/:id/github/publish: githubToken del body gana sobre el guar
     .send({ repoUrl: 'https://github.com/acme/app', runId: 'run-9', confirm: true, githubToken: FAKE_TOKEN });
   assert.equal(res.status, 201);
   assert.equal(publishCalls[0].env.CODEX_SELF_HOST_GITHUB_TOKEN, FAKE_TOKEN);
+});
+
+// ── Etapa 6: repo vinculado al chat de /agentes ─────────────────────────────
+
+test('POST /projects/clone con chatId persiste el vínculo en brief y lo devuelve', async () => {
+  installDb();
+  githubState.token = STORED_TOKEN;
+  githubState.repo = { fullName: 'acme/app', private: true, defaultBranch: 'develop' };
+  const res = await request(buildApp())
+    .post('/api/codex/projects/clone')
+    .send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'chat_42' });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.chatId, 'chat_42');
+  assert.equal(res.body.sourceControl.sourceBranch, 'develop');
+  const created = dbCalls.find((c) => c[0] === 'create')[1];
+  assert.equal(created.brief.chatId, 'chat_42');
+  assert.equal(created.brief.source, 'agentes');
+  assert.equal(created.brief.kind, 'repo-private');
+  // Forma pública del proyecto: sourceControl + chatId, nunca el brief crudo.
+  assert.equal(res.body.project.kind, 'repo');
+  assert.equal(res.body.project.chatId, 'chat_42');
+  assert.equal(res.body.project.sourceControl.fullName, 'acme/app');
+  assert.equal(res.body.project.sourceControl.private, true);
+  assert.equal(res.body.project.sourceControl.sourceBranch, 'develop');
+  assert.equal(res.body.project.sourceControl.webUrl, 'https://github.com/acme/app');
+  assert.equal(res.body.project.brief, undefined);
+  assert.ok(!JSON.stringify(res.body).includes(STORED_TOKEN));
+});
+
+test('POST /projects/clone con chatId ya vinculado → 409 chat_already_bound sin clonar ni crear', async () => {
+  installDb({ bound: [{ id: 'p-old', userId: 'u-1', brief: { chatId: 'chat_42' } }] });
+  const res = await request(buildApp())
+    .post('/api/codex/projects/clone')
+    .send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'chat_42' });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, 'chat_already_bound');
+  assert.equal(res.body.projectId, 'p-old');
+  assert.equal(dbCalls.filter((c) => c[0] === 'create').length, 0);
+  assert.equal(activeRunner.calls.length, 0, 'no se toca el runner');
+});
+
+test('POST /projects/clone: el vínculo de otro usuario no bloquea (filtro userId primero)', async () => {
+  installDb({ bound: [{ id: 'p-ajeno', userId: 'u-2', brief: { chatId: 'chat_42' } }] });
+  const res = await request(buildApp())
+    .post('/api/codex/projects/clone')
+    .send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'chat_42' });
+  assert.equal(res.status, 201, JSON.stringify(res.body));
+  assert.equal(res.body.chatId, 'chat_42');
+});
+
+test('POST /projects/clone con chatId inválido → 400 invalid_chat_id', async () => {
+  installDb();
+  const res = await request(buildApp())
+    .post('/api/codex/projects/clone')
+    .send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'bad id!' });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'invalid_chat_id');
+  assert.equal(dbCalls.filter((c) => c[0] === 'create').length, 0);
+});
+
+test('POST /projects/clone sin chatId no toca el vínculo ni expone chatId', async () => {
+  installDb();
+  const res = await request(buildApp())
+    .post('/api/codex/projects/clone')
+    .send({ name: 'App', repoUrl: 'https://github.com/sst/opencode' });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.chatId, undefined);
+  assert.equal(res.body.project.chatId, undefined);
+  assert.equal(dbCalls.filter((c) => c[0] === 'findMany').length, 0);
+  assert.equal(dbCalls.find((c) => c[0] === 'create')[1].brief.chatId, undefined);
 });

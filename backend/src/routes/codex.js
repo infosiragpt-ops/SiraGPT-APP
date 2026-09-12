@@ -580,6 +580,8 @@ router.post(
     body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
     body('branch').optional().isString().trim().isLength({ min: 1, max: 128 }),
     body('organizationId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 160 }),
+    // Etapa 6: vincular el repo clonado al chat de /agentes que lo pidió.
+    body('chatId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 64 }),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -587,6 +589,11 @@ router.post(
     const name = req.body.name.trim();
     const repoUrl = String(req.body.repoUrl).trim();
     const requestedBranch = req.body.branch ? String(req.body.branch).trim() : '';
+    const rawChatId = req.body.chatId ? String(req.body.chatId).trim() : '';
+    const chatId = rawChatId ? projectChatBinding.cleanChatId(rawChatId) : null;
+    if (rawChatId && !chatId) {
+      return res.status(400).json({ error: 'invalid_chat_id', message: 'chatId inválido.' });
+    }
     let repository;
     try {
       repository = opencodeHarness.parsePublicGithubRepo(repoUrl);
@@ -595,6 +602,23 @@ router.post(
     }
     try {
       const organizationId = req.body.organizationId || null;
+      // Un chat abre exactamente un proyecto (mismo contrato que
+      // POST /projects/by-chat/:chatId). Con vínculo previo no se clona nada.
+      if (chatId) {
+        let boundProjectId = null;
+        try {
+          boundProjectId = await projectChatBinding.findProjectIdForChat({ userId: req.user.id, chatId, db: codexDb });
+        } catch (err) {
+          return sendBindingError(res, err);
+        }
+        if (boundProjectId) {
+          return res.status(409).json({
+            error: 'chat_already_bound',
+            message: 'Este chat ya tiene un proyecto vinculado.',
+            projectId: boundProjectId,
+          });
+        }
+      }
       if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
         userId: req.user.id,
         organizationId,
@@ -638,6 +662,7 @@ router.post(
             },
             sourceBranch: branch,
             authenticated: Boolean(stored),
+            ...(chatId ? { chatId, source: 'agentes' } : {}),
           },
           status: 'provisioning',
         },
@@ -656,7 +681,10 @@ router.post(
           data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
         });
         return res.status(201).json({
-          project: projectService.publicProject(ready),
+          // `row` conserva el brief recién creado (kind/repository/chatId) aunque
+          // el update devuelva una fila parcial: la proyección pública lo necesita.
+          project: projectService.publicProject({ ...row, ...ready }),
+          ...(chatId ? { chatId } : {}),
           sourceControl: {
             repository: repository.webUrl,
             fullName: `${repository.owner}/${repository.repo}`,
