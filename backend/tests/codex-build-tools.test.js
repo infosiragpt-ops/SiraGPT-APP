@@ -22,6 +22,7 @@ test('toolRegistry projects name/description/parameters for every tool', () => {
       'browser_check',
       'dev_server_check',
       'edit_file',
+      'github_checks',
       'glob',
       'grep_search',
       'inspect_database',
