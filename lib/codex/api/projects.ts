@@ -1,7 +1,7 @@
 // Codex project lifecycle, workspace files, export, and preview operations.
 // Kept behind the codexApi facade so existing callers retain one stable import.
 
-import type { CodexChatBinding, CodexProject } from "./types"
+import type { CodexChatBinding, CodexCloneResult, CodexProject } from "./types"
 import { requestCodex as req } from "./core"
 
 export const projectsCodexApi = {
@@ -18,6 +18,15 @@ export const projectsCodexApi = {
       timeoutMs: 180_000,
     }).then((r) => r.project),
   getProject: (id: string) => req<{ project: CodexProject }>(`/projects/${id}`).then((r) => r.project),
+  // Clona un repo de GitHub (público, o privado con el OAuth guardado) y, con
+  // `chatId`, lo deja vinculado a ese chat de /agentes. 180s: el fetch
+  // --depth=1 de un repo grande puede tardar más que el timeout por defecto.
+  cloneRepository: (input: { name: string; repoUrl: string; branch?: string; chatId?: string }) =>
+    req<CodexCloneResult>("/projects/clone", {
+      method: "POST",
+      body: JSON.stringify(input),
+      timeoutMs: 180_000,
+    }),
   // Vínculo chat↔proyecto (MVP programación web): un chat abre un proyecto
   // durable. 404 project_not_found ⇒ no hay proyecto vinculado todavía.
   getProjectByChat: (chatId: string) =>

@@ -125,6 +125,42 @@ async function getRepository(userId, owner, repo) {
 }
 
 /**
+ * List a repository's branches for the branch picker (Etapa 6 — repo bound
+ * to a /agentes chat). One page (<= 100) is enough for a selector; the
+ * default branch is always first so the UI can preselect it even when the
+ * repo has more branches than fit in the page.
+ */
+async function listBranches(userId, owner, repo, { perPage } = {}) {
+  const { octokit } = await octokitForUser(userId);
+  const [repoRes, branchRes] = await Promise.all([
+    octokit.rest.repos.get({ owner, repo }),
+    octokit.rest.repos.listBranches({ owner, repo, per_page: perPage == null ? 100 : clampPerPage(perPage) }),
+  ]);
+  const defaultBranch = repoRes.data.default_branch || 'main';
+  const seen = new Set();
+  const branches = [];
+  for (const b of branchRes.data || []) {
+    const name = String(b && b.name || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    branches.push({
+      name,
+      protected: Boolean(b.protected),
+      commitSha: b.commit && b.commit.sha ? String(b.commit.sha) : null,
+    });
+  }
+  branches.sort((a, b) => {
+    if (a.name === defaultBranch) return -1;
+    if (b.name === defaultBranch) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  if (!seen.has(defaultBranch)) {
+    branches.unshift({ name: defaultBranch, protected: false, commitSha: null });
+  }
+  return { defaultBranch, branches };
+}
+
+/**
  * Create a brand-new repository under the authenticated user (Phase F —
  * "Create Remote"). `autoInit` seeds an initial commit so it can be cloned
  * immediately into a workspace.
@@ -176,6 +212,7 @@ module.exports = {
   listRepositories,
   searchRepositories,
   getRepository,
+  listBranches,
   createRepository,
   toRepoDTO,
   normalizeError,

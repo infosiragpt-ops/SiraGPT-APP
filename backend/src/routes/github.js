@@ -251,6 +251,24 @@ router.get('/repos/:owner/:repo', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/github/repos/:owner/:repo/branches → { defaultBranch, branches[] }
+// Branch picker for the repo bound to a /agentes chat (Etapa 6). Reads GitHub
+// with the user's OAuth; nothing is cloned here.
+router.get('/repos/:owner/:repo/branches', authenticateToken, async (req, res) => {
+  const { owner, repo } = req.params;
+  if (!validName(owner) || !validName(repo)) {
+    return res.status(400).json({ error: 'Invalid owner or repo name', code: 'invalid_name' });
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const out = await githubApi.listBranches(req.user.id, owner, repo, { perPage: req.query.per_page });
+    return res.json({ owner, repo, ...out, count: out.branches.length });
+  } catch (err) {
+    const n = githubApi.normalizeError(err);
+    return res.status(n.status).json(n.body);
+  }
+});
+
 // POST /api/github/repos/connect { owner, repo } → validate access + persist
 router.post('/repos/connect', authenticateToken, async (req, res) => {
   const { owner, repo } = req.body || {};
