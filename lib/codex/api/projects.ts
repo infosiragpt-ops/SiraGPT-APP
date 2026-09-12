@@ -1,7 +1,13 @@
 // Codex project lifecycle, workspace files, export, and preview operations.
 // Kept behind the codexApi facade so existing callers retain one stable import.
 
-import type { CodexChatBinding, CodexCloneResult, CodexProject } from "./types"
+import type {
+  CodexChatBinding,
+  CodexCloneResult,
+  CodexProject,
+  CodexPublishWorkspaceResult,
+  CodexWorkspaceChanges,
+} from "./types"
 import { requestCodex as req } from "./core"
 
 export const projectsCodexApi = {
@@ -35,6 +41,16 @@ export const projectsCodexApi = {
     req<CodexChatBinding>(`/projects/by-chat/${encodeURIComponent(chatId)}`, {
       method: "POST",
       body: JSON.stringify(name ? { name } : {}),
+    }),
+  // Etapa 7: cambios del workspace frente a la rama base del repo vinculado y
+  // «Crear PR». Sin `confirm` el backend responde 428 con el plan (sin mutar).
+  getWorkspaceChanges: (id: string, signal?: AbortSignal) =>
+    req<CodexWorkspaceChanges>(`/projects/${id}/changes`, { cache: "no-store", timeoutMs: 60_000, signal }),
+  publishWorkspace: (id: string, input: { title?: string; body?: string; confirm?: boolean }) =>
+    req<CodexPublishWorkspaceResult>(`/projects/${id}/github/publish-workspace`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      timeoutMs: 180_000,
     }),
   startPreview: (id: string, signal?: AbortSignal) =>
     req<{ devUrl: string; previewUrl?: string; basePath?: string }>(

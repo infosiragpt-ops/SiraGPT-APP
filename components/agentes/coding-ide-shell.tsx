@@ -12,6 +12,7 @@ import * as React from "react"
 import dynamic from "next/dynamic"
 import { useParams } from "next/navigation"
 
+import { CodingChangesPane } from "@/components/agentes/coding-changes-pane"
 import { CodingPreviewPane } from "@/components/agentes/coding-preview-pane"
 import { CodingRepoPicker } from "@/components/agentes/coding-repo-picker"
 import { CodingTerminalPane } from "@/components/agentes/coding-terminal-pane"
@@ -31,7 +32,7 @@ import { cn } from "@/lib/utils"
 const MonacoCodeArea = dynamic(() => import("@/components/code/monaco-code-area"), { ssr: false })
 const CodingMonacoDiff = dynamic(() => import("@/components/agentes/coding-monaco-diff"), { ssr: false })
 
-type Pane = "editor" | "diff" | "terminal" | "preview"
+type Pane = "editor" | "diff" | "changes" | "terminal" | "preview"
 
 export function CodingIdeShell() {
   const [open, setOpen] = React.useState(true)
@@ -620,6 +621,7 @@ export function CodingIdeShell() {
           <div className="flex items-center gap-1 border-b border-border px-2">
             <PaneTab current={pane} id="editor" onSelect={setPane}>Editor</PaneTab>
             <PaneTab current={pane} id="diff" onSelect={setPane}>Diferencias</PaneTab>
+            <PaneTab current={pane} id="changes" onSelect={setPane}>Cambios</PaneTab>
             <PaneTab current={pane} id="terminal" onSelect={setPane}>Terminal</PaneTab>
             <PaneTab current={pane} id="preview" onSelect={setPane}>Vista previa</PaneTab>
             {pane === "diff" ? (
@@ -661,6 +663,14 @@ export function CodingIdeShell() {
                   Abre un archivo para revisar el diff.
                 </p>
               )
+            ) : null}
+            {pane === "changes" ? (
+              <CodingChangesPane
+                projectId={projectId}
+                sourceControl={project?.sourceControl ?? null}
+                fileVersion={fileVersion}
+                onOpenFile={handleOpenFile}
+              />
             ) : null}
             {pane === "terminal" ? (
               <CodingTerminalPane
