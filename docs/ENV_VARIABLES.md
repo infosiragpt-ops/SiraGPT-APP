@@ -18,7 +18,41 @@
 | `GROQ_API_KEY` | Groq Cloud | Llama 3.3 70B, DeepSeek R1 Distill | `llama-3.3-70b-versatile` |
 | `CEREBRAS_API_KEY` | Cerebras Inference | Ultra-fast inference | `llama-3.3-70b` |
 | `MISTRAL_API_KEY` | Mistral La Plateforme | Mistral Large, Small, Codestral | `mistral-large-latest` |
-| `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek Chat, DeepSeek Reasoner | `deepseek-chat` |
+| `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek V4 Flash / Pro (alias Sira Rápido / Sira Pro); also the codex coding agent's native tool-calling engine | `deepseek-v4-flash` |
+
+### Codex coding agent — DeepSeek native engine
+
+When `DEEPSEEK_API_KEY` is set the codex agent loop (`/api/codex`, builds behind
+`/agentes` and `/apps`) drives every step with DeepSeek V4 through native
+function calling (`backend/src/services/codex/deepseek-turn.js`). Power tier →
+`deepseek-v4-pro`, other tiers → `deepseek-v4-flash`. A failing DeepSeek step
+degrades to Claude (eligible tiers) and then to the prompted provider ladder
+(`deepseek → anthropic → openrouter → cerebras`), never to a failed run.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | API base URL (OpenAI-compatible) |
+| `CODEX_DEEPSEEK_DISABLED` | unset | `1` skips the native DeepSeek engine (ladder rung stays) |
+| `CODEX_DEEPSEEK_TIERS` | `eco,standard,power` | Run tiers served by DeepSeek; a tier carved out falls back to the previous engine for that tier |
+| `CODEX_DEEPSEEK_MODEL` | unset | Model for every tier (overridden by the two below) |
+| `CODEX_DEEPSEEK_MODEL_POWER` | `deepseek-v4-pro` | Model for the Power tier |
+| `CODEX_DEEPSEEK_MODEL_STANDARD` | `deepseek-v4-flash` | Model for Eco/Estándar |
+| `CODEX_DEEPSEEK_MAX_TOKENS` | `8192` | Output budget per step |
+| `CODEX_DEEPSEEK_TEMPERATURE` | `0.2` | Sampling temperature (ignored while thinking is enabled) |
+| `CODEX_DEEPSEEK_THINKING` | unset | `1` forces V4 thinking on, `0` off; default: Pro thinks, Flash only on high effort |
+| `CODEX_LLM_PROVIDER` | unset | Force a single ladder rung: `deepseek` \| `anthropic` \| `openrouter` \| `cerebras` |
+
+### GitHub workspace "▶ Run" (legacy host runner)
+
+`backend/src/services/github/workspace-runner.service.js` runs a cloned
+repository's dev server inside the backend process' own filesystem and
+network namespace. It is **disabled by default when `NODE_ENV=production`**;
+use the sandboxed codex runner instead.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_WORKSPACE_RUN_ENABLED` | unset | `1` opts a production host in (only where running third-party repos next to the DB/Redis is acceptable) |
+| `SIRAGPT_WORKSPACE_RUN_DISABLED` | unset | `1` kill switch in every environment (wins over the opt-in) |
 
 ### Free-Tier Fallback Model
 
