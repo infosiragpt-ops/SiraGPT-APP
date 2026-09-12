@@ -7,10 +7,12 @@
  * provider-agnostic. The loop ALWAYS injects this in tests (scripted), so the
  * real provider path here is exercised only in live runs / the F15 smoke.
  *
- * Default provider: FlashGPT/Cerebras (free tier) in PROMPTED mode — the tools
- * are described in the system prompt and the model emits fenced ```tool_call
- * blocks, parsed back with the shared prompted-tool-calling helpers. Any model
- * can therefore drive the loop.
+ * Engine order: DeepSeek V4 NATIVE tool calling (deepseek-turn) whenever
+ * DEEPSEEK_API_KEY is configured — the product ships only Sira Rápido / Sira
+ * Pro, i.e. DeepSeek V4 Flash / Pro — then Claude native for eligible tiers,
+ * then the PROMPTED ladder: the tools are described in the system prompt and
+ * the model emits fenced ```tool_call blocks, parsed back with the shared
+ * prompted-tool-calling helpers. Any model can therefore drive the loop.
  */
 
 const cerebrasClientModule = require('../ai/cerebras-client');
@@ -18,6 +20,7 @@ const { getCerebrasConfig } = cerebrasClientModule;
 const llmProvider = require('./llm-provider');
 const { buildPromptedToolsBlock, parsePromptedToolCalls } = require('../agents/prompted-tool-calling');
 const { anthropicTurn, getAnthropicTurnConfig } = require('./anthropic-turn');
+const { deepseekTurn, getDeepSeekTurnConfig } = require('./deepseek-turn');
 
 // Protocol scaffolding the prompted block tells the model to emit (e.g. a
 // `finalize` block — codex has no such tool, so parsePromptedToolCalls rejects
@@ -87,14 +90,24 @@ function extractUsage(resp, model) {
 
 /**
  * Which engine drives this step. The composer's Power selector tier travels on
- * the run row → the loop passes it here. Paid tiers (standard/power by default,
- * env CODEX_ANTHROPIC_TIERS) go to Claude with native tool use when the key is
- * configured; Eco — and any run when Anthropic is unavailable — stays on the
- * free Cerebras prompted path.
+ * the run row → the loop passes it here.
+ *   - `deepseek`  — DEEPSEEK_API_KEY configured and the tier is not carved out
+ *                   by CODEX_DEEPSEEK_TIERS (default: every tier). Native tool
+ *                   use; power → V4 Pro, otherwise → V4 Flash.
+ *   - `anthropic` — otherwise, paid tiers (standard/power by default, env
+ *                   CODEX_ANTHROPIC_TIERS) with ANTHROPIC_API_KEY.
+ *   - `cerebras`  — everything else: the free prompted path.
  */
 function resolveTurnEngine({ tier = null, env = process.env } = {}) {
+  const ds = getDeepSeekTurnConfig({ env, tier });
+  if (ds.enabled && ds.tierEligible) return 'deepseek';
   const cfg = getAnthropicTurnConfig({ env, tier });
   return cfg.enabled && cfg.tierEligible ? 'anthropic' : 'cerebras';
+}
+
+function anthropicEligible({ tier = null, env = process.env } = {}) {
+  const cfg = getAnthropicTurnConfig({ env, tier });
+  return cfg.enabled && cfg.tierEligible;
 }
 
 /**
@@ -112,6 +125,7 @@ async function defaultLlmTurn({
   tier = null,
   createClient,
   createAnthropicClient,
+  createDeepSeekClient,
   temperature = 0.3,
   maxTokens,
   onTextDelta = null,
@@ -119,22 +133,50 @@ async function defaultLlmTurn({
   model = null,
   effort = null,
 } = {}) {
-  // Native Claude engine for eligible tiers (composer Power selector): best
-  // tool-calling fidelity. On failure it degrades to the prompted ladder
-  // below (which itself may reach Anthropic in prompted mode, or OpenRouter/
-  // Cerebras) instead of failing the run.
+  // Native engines first (DeepSeek V4 for every tier when configured, then
+  // Claude for eligible tiers): best tool-calling fidelity. On failure they
+  // degrade to the prompted ladder below instead of failing the run.
   //
-  // `claudeDegraded` disambiguates WHY we reach the prompted path below:
-  //   - true  → a PAID tier (standard/power) whose native anthropicTurn threw;
-  //             the provider ladder (with Anthropic failover) is the correct,
-  //             legitimate degradation.
+  // `nativeDegraded` disambiguates WHY we reach the prompted path below:
+  //   - true  → a native engine (deepseekTurn / anthropicTurn) threw; the
+  //             provider ladder (with failover) is the correct, legitimate
+  //             degradation. The engine that just failed is excluded from the
+  //             ladder so it is not re-hit in prompted mode a second later.
   //   - false → a GENUINE eco run (resolveTurnEngine returned 'cerebras' because
-  //             the tier isn't Anthropic-eligible). Eco MUST be free, so it goes
-  //             to Cerebras DIRECT — NOT the ladder, which prioritizes Anthropic
-  //             ("first configured wins") and would silently bill Claude for the
-  //             free tier.
-  let claudeDegraded = false;
-  if (resolveTurnEngine({ tier, env }) === 'anthropic') {
+  //             no native engine serves the tier). Eco MUST be free, so it goes
+  //             to Cerebras DIRECT — NOT the ladder, which prioritizes paid
+  //             providers ("first configured wins") and would silently bill
+  //             them for the free tier.
+  let nativeDegraded = false;
+  const excludeFromLadder = [];
+  const engine = resolveTurnEngine({ tier, env });
+  if (engine === 'deepseek') {
+    try {
+      const opts = {
+        messages,
+        tools,
+        signal,
+        env,
+        tier,
+        onTextDelta,
+        onReasoningDelta,
+        model,
+        effort,
+      };
+      if (createDeepSeekClient) opts.createClient = createDeepSeekClient;
+      return await deepseekTurn(opts);
+    } catch (err) {
+      // An aborted run must stay aborted — don't burn another call on it.
+      if (signal?.aborted) throw err;
+      // Deltas already reached the user: another engine would splice two
+      // different answers into one transcript. Fail closed.
+      if (err?.partialResponse) throw err;
+      nativeDegraded = true;
+      excludeFromLadder.push('deepseek');
+      if (env?.NODE_ENV !== 'test') console.warn('[codex llm-turn] deepseek nativo falló, degradando:', err?.message || err);
+    }
+  }
+  if (engine === 'anthropic' || (nativeDegraded && anthropicEligible({ tier, env }))) {
     try {
       const opts = {
         messages,
@@ -152,7 +194,7 @@ async function defaultLlmTurn({
     } catch (err) {
       // An aborted run must stay aborted — don't burn another call on it.
       if (signal?.aborted) throw err;
-      claudeDegraded = true;
+      nativeDegraded = true;
       if (env?.NODE_ENV !== 'test') console.warn('[codex llm-turn] claude nativo falló, degradando al ladder prompted:', err?.message || err);
     }
   }
@@ -163,19 +205,19 @@ async function defaultLlmTurn({
   let reasoningText = '';
   let usage = null;
 
-  // Genuine eco (not a paid degradation) goes to Cerebras DIRECT when configured,
-  // never the Anthropic-first ladder. An injected `createClient` always wins
-  // (tests + explicit Cerebras callers) and behaves identically.
-  const ecoDirectCerebras = !claudeDegraded && getCerebrasConfig({ env }).enabled;
+  // Genuine eco (not a native degradation) goes to Cerebras DIRECT when
+  // configured, never the paid-first ladder. An injected `createClient` always
+  // wins (tests + explicit Cerebras callers) and behaves identically.
+  const ecoDirectCerebras = !nativeDegraded && getCerebrasConfig({ env }).enabled;
 
-  // Provider ladder: Anthropic (Claude) → OpenRouter → Cerebras, with
-  // quarantine-based failover. Reached when (a) a paid tier degraded from
-  // native Claude, (b) an eco run but Cerebras isn't configured, or (c) the
-  // direct Cerebras call failed (402 payment_required, invalid key, …) — in
-  // which case "something over nothing" wins, warned once so ops can see the
-  // eco tier is not actually running free.
+  // Provider ladder: DeepSeek → Anthropic (Claude) → OpenRouter → Cerebras,
+  // with quarantine-based failover. Reached when (a) a native engine degraded,
+  // (b) an eco run but Cerebras isn't configured, or (c) the direct Cerebras
+  // call failed (402 payment_required, invalid key, …) — in which case
+  // "something over nothing" wins, warned once so ops can see the eco tier is
+  // not actually running free.
   const runLadder = async () => {
-    if (!claudeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
+    if (!nativeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
       _warnedEcoLadderFallback = true;
       console.warn('[codex llm-turn] tier eco sin Cerebras utilizable — usando el ladder (puede cobrar un proveedor de pago)');
     }
@@ -189,6 +231,7 @@ async function defaultLlmTurn({
       onReasoningDelta,
       model,
       effort,
+      exclude: excludeFromLadder,
     });
     content = out.content;
     reasoningText = out.reasoning || '';
