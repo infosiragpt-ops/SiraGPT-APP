@@ -73,7 +73,12 @@ function isSafeBranchName(branch) {
 function redactGitOutput(value) {
   return String(value || '')
     .replace(/https:\/\/[^/@\s]+:[^/@\s]+@/gi, 'https://[REDACTED]@')
-    .replace(/\b(?:ghp|github_pat|glpat|xox[baprs])_[A-Za-z0-9_-]+\b/g, '[REDACTED]')
+    // Classic PATs, fine-grained PATs, OAuth (gho_), user-to-server (ghu_),
+    // installation (ghs_) and refresh (ghr_) tokens, GitLab and Slack tokens.
+    .replace(/\b(?:gh[pousr]|github_pat|glpat|xox[baprs])_[A-Za-z0-9_-]+\b/g, '[REDACTED]')
+    // `git -c http.<url>.extraheader=AUTHORIZATION: basic <b64>` echoed back in
+    // a git error message must never carry the credential.
+    .replace(/(authorization:\s*(?:basic|bearer)\s+)[A-Za-z0-9+/=_-]+/gi, '$1[REDACTED]')
     .slice(0, OUTPUT_CAP);
 }
 

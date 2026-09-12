@@ -523,11 +523,41 @@ router.post(
   },
 );
 
-// ── Clone público desde la web (contratos OpenCode, §25) ────────────────────
+// ── Clone desde la web (contratos OpenCode, §25) ────────────────────────────
 // POST /api/codex/projects/clone { name, repoUrl, branch? } → 201 { project, sourceControl }.
-// Clona CUALQUIER repo público github.com HTTPS sin credenciales en el
-// workspace CloudAgent (fetch --depth=1). Nunca clona en máquinas de usuario.
-// Difiere de POST /projects con `repository` (self-host con allowlist cerrada).
+// Clona un repo github.com HTTPS en el workspace CloudAgent (fetch --depth=1).
+// Con la cuenta GitHub del usuario conectada (OAuth guardado) el fetch va
+// autenticado — alcanza sus repos PRIVADOS y usa la rama por defecto real del
+// repo cuando no se indica `branch`. Sin cuenta conectada: solo públicos, rama
+// `main`. El token vive solo en memoria durante la petición: nunca en la
+// respuesta, la DB ni el remote del workspace. Nunca clona en máquinas de
+// usuario. Difiere de POST /projects con `repository` (self-host, allowlist).
+function githubApiService() {
+  // Lazy: keeps the router loadable without Octokit/Prisma repositories in
+  // tests that never touch the GitHub flow.
+  // eslint-disable-next-line global-require
+  return require('../services/github/github-api.service');
+}
+
+/**
+ * The user's stored GitHub OAuth token, or null when GitHub isn't connected
+ * (or the stored token is unusable). Never throws: a missing connection just
+ * degrades to the unauthenticated (public-only) path.
+ */
+async function resolveStoredGithubToken(userId) {
+  try {
+    const { accessToken } = await githubApiService().resolveUserToken(userId);
+    const token = String(accessToken || '').trim();
+    return token ? { accessToken: token } : null;
+  } catch (err) {
+    const code = String(err?.code || '');
+    if (code !== 'github_not_connected' && code !== 'github_token_invalid' && process.env.NODE_ENV !== 'test') {
+      console.warn('[codex github] stored token lookup failed:', err?.message || err);
+    }
+    return null;
+  }
+}
+
 function sendGithubFlowError(res, err) {
   const code = String(err?.code || 'codex_github_failed');
   const status = /^(invalid_|repository_|pull_request_sensitive_path)/.test(code) ? 400
@@ -556,7 +586,7 @@ router.post(
     if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     const name = req.body.name.trim();
     const repoUrl = String(req.body.repoUrl).trim();
-    const branch = req.body.branch ? String(req.body.branch).trim() : 'main';
+    const requestedBranch = req.body.branch ? String(req.body.branch).trim() : '';
     let repository;
     try {
       repository = opencodeHarness.parsePublicGithubRepo(repoUrl);
@@ -571,15 +601,43 @@ router.post(
       }))) {
         return res.status(404).json({ error: 'organization_not_found' });
       }
+      // Authenticated path when the user's GitHub account is connected: reach
+      // private repos and learn the real default branch. Token stays in memory.
+      const stored = await resolveStoredGithubToken(req.user.id);
+      let meta = null;
+      if (stored) {
+        try {
+          meta = await githubApiService().getRepository(req.user.id, repository.owner, repository.repo);
+        } catch (err) {
+          if (Number(err?.status) === 404) {
+            return res.status(404).json({
+              error: 'repository_not_found',
+              message: 'El repositorio no existe o tu cuenta de GitHub no tiene acceso a él.',
+            });
+          }
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn('[codex github] repository metadata lookup failed, cloning blind:', err?.message || err);
+          }
+        }
+      }
+      const branch = requestedBranch || (meta && meta.defaultBranch) || 'main';
+      const isPrivate = Boolean(meta && meta.private);
       const row = await codexDb.codexProject.create({
         data: {
           userId: req.user.id,
           organizationId,
           name,
           brief: {
-            kind: 'repo-public',
-            repository: { url: repository.cloneUrl, webUrl: repository.webUrl },
+            kind: isPrivate ? 'repo-private' : 'repo-public',
+            repository: {
+              url: repository.cloneUrl,
+              webUrl: repository.webUrl,
+              fullName: `${repository.owner}/${repository.repo}`,
+              private: isPrivate,
+              defaultBranch: (meta && meta.defaultBranch) || null,
+            },
             sourceBranch: branch,
+            authenticated: Boolean(stored),
           },
           status: 'provisioning',
         },
@@ -591,6 +649,7 @@ router.post(
           projectId: row.id,
           repoUrl: repository.cloneUrl,
           branch,
+          accessToken: stored ? stored.accessToken : null,
         });
         const ready = await codexDb.codexProject.update({
           where: { id: row.id },
@@ -600,6 +659,10 @@ router.post(
           project: projectService.publicProject(ready),
           sourceControl: {
             repository: repository.webUrl,
+            fullName: `${repository.owner}/${repository.repo}`,
+            private: isPrivate,
+            defaultBranch: (meta && meta.defaultBranch) || null,
+            authenticated: cloned.authenticated === true,
             sourceBranch: cloned.sourceBranch,
             workBranch: cloned.workBranch,
             commitSha: cloned.commitSha,
@@ -1959,6 +2022,9 @@ router.post('/projects/:id/publication/rollback', authenticateToken, requireCode
 //   → con token+confirm → 201 { plan, pullRequest }. Merge siempre vía PR
 //     (pull_request_only); el token viaja solo en memoria, nunca se persiste,
 //     loguea ni devuelve.
+//   El token es `githubToken` del body o, si falta, el OAuth de la cuenta
+//   GitHub conectada del usuario — así "PR como resultado" no exige pegar
+//   tokens a mano. `plan` refleja esa disponibilidad en `status`.
 const githubPlanValidators = [
   body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
   body('runId').isString().withMessage('runId must be a string').bail().trim().isLength({ min: 1, max: 96 }),
@@ -1973,6 +2039,7 @@ router.post('/projects/:id/github/plan', authenticateToken, githubPlanValidators
   try {
     const project = await loadOwnedProjectRecord(req, res);
     if (!project) return undefined;
+    const stored = await resolveStoredGithubToken(req.user.id);
     const plan = await opencodeHarness.buildPublishPlan({
       runner: createSandboxClient(),
       projectId: project.id,
@@ -1981,7 +2048,7 @@ router.post('/projects/:id/github/plan', authenticateToken, githubPlanValidators
       runId: String(req.body.runId).trim(),
       title: req.body.title ?? null,
       body: req.body.body ?? null,
-      hasGithubToken: false,
+      hasGithubToken: Boolean(stored),
     });
     return res.json({ plan });
   } catch (err) {
@@ -2007,7 +2074,11 @@ router.post(
       const repoUrl = String(req.body.repoUrl).trim();
       const runId = String(req.body.runId).trim();
       const sourceBranch = req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main';
-      const token = String(req.body.githubToken || '').trim();
+      let token = String(req.body.githubToken || '').trim();
+      if (!token) {
+        const stored = await resolveStoredGithubToken(req.user.id);
+        token = stored ? stored.accessToken : '';
+      }
       const runner = createSandboxClient();
       const plan = await opencodeHarness.buildPublishPlan({
         runner,

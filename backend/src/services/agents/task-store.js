@@ -315,6 +315,88 @@ const TERMINAL_STATUSES = new Set(Object.keys(TERMINAL_STATUS_TO_METRIC_STATUS))
 const AUTO_COMPACT_EVENT_THRESHOLD = 400;
 const AUTO_COMPACT_KEEP_RECENT = 150;
 
+// ── Terminal notification (inbox + webhooks) ────────────────────────
+// The trigger `agent.task.completed` was declared in trigger-registry but no
+// producer ever published it, so a long /agentes task finishing while the
+// user was away left no trace in the notification inbox. The first terminal
+// observation of a task (the same latch that increments the terminal metric
+// exactly once) now publishes agent.task.{completed|failed|cancelled}; the
+// registry persists the inbox row and fans out to the user's webhooks.
+// Best-effort by contract: it can never alter or delay the status write.
+const TERMINAL_STATUS_TO_EVENT = Object.freeze({
+  completed: 'agent.task.completed',
+  error: 'agent.task.failed',
+  failed: 'agent.task.failed',
+  cancelled: 'agent.task.cancelled',
+});
+const TERMINAL_NOTIFY_IDEMPOTENCY_MS = 24 * 60 * 60 * 1000;
+const TERMINAL_GOAL_EXCERPT_CHARS = 300;
+
+function terminalNotifyEnabled(env = process.env) {
+  const flag = String(env.SIRAGPT_AGENT_TASK_NOTIFY ?? '').trim();
+  if (flag === '0') return false;
+  if (flag === '1') return true;
+  // Unit tests drive the store with fake users; never write inbox rows for
+  // them (tests that need the hook inject a notifier explicitly).
+  if (env.NODE_ENV === 'test') return false;
+  // Same gate as codex/run-completion: without a database there is no inbox
+  // and no webhook table to fan out to (local dev).
+  return Boolean(env.DATABASE_URL) || env.NODE_ENV === 'production';
+}
+
+function buildTerminalNotification(task, status) {
+  const event = TERMINAL_STATUS_TO_EVENT[status];
+  if (!event || !task?.taskId || !task?.userId) return null;
+  const startedAt = Date.parse(task.createdAt || '') || null;
+  const finishedAt = Date.parse(task.completedAt || task.failedAt || task.cancelledAt || task.updatedAt || '') || Date.now();
+  const goal = String(task.displayGoal || task.agentGoal || '').trim().slice(0, TERMINAL_GOAL_EXCERPT_CHARS);
+  return {
+    event,
+    userId: task.userId,
+    payload: {
+      taskId: task.taskId,
+      chatId: task.chatId || null,
+      status,
+      goal,
+      model: task.model || null,
+      createdAt: task.createdAt || null,
+      finishedAt: new Date(finishedAt).toISOString(),
+      durationMs: startedAt ? Math.max(0, finishedAt - startedAt) : null,
+    },
+  };
+}
+
+function defaultTerminalNotifier({ task, status, env = process.env }) {
+  if (!terminalNotifyEnabled(env)) return;
+  const built = buildTerminalNotification(task, status);
+  if (!built) return;
+  // Lazy require: the registry pulls Prisma/webhook modules the store must
+  // not depend on at load time (local dev, CI without a database).
+  // eslint-disable-next-line global-require
+  const registry = require('../trigger-registry');
+  Promise.resolve()
+    .then(() => registry.publish(built.event, built.payload, built.userId, { idempotencyTtlMs: TERMINAL_NOTIFY_IDEMPOTENCY_MS }))
+    .catch((err) => {
+      if (env.NODE_ENV !== 'test') console.warn('[task-store] terminal notification failed:', err?.message || err);
+    });
+}
+
+let terminalNotifier = defaultTerminalNotifier;
+
+/** Test hook: replace (or restore with null) the terminal notifier. */
+function __setTerminalNotifier(fn) {
+  terminalNotifier = typeof fn === 'function' ? fn : defaultTerminalNotifier;
+}
+
+function notifyTerminalObservation(task, status) {
+  try {
+    terminalNotifier({ task, status, env: process.env });
+  } catch (err) {
+    // A notification bug must never turn a finished task into an error.
+    if (process.env.NODE_ENV !== 'test') console.warn('[task-store] terminal notifier threw:', err?.message || err);
+  }
+}
+
 function terminalStatusObservedByEvent(event, snapshotStatus) {
   if (event?.type === 'done') {
     if (snapshotStatus === 'cancelled') return 'cancelled';
@@ -353,6 +435,9 @@ function persistTerminalMetricObservation({
     } catch {
       // Best-effort process telemetry must never alter the task transition.
     }
+    // Exactly-once per task by the same latch as the metric: the inbox row and
+    // the user's webhooks see one terminal event, not one per status rewrite.
+    notifyTerminalObservation(written, observedStatus);
   }
   return written;
 }
@@ -1230,6 +1315,10 @@ function compressSnapshotBytes(rawBytes) {
 module.exports = {
   DEFAULT_EVENT_LIMIT,
   DEFAULT_MAX_FILES,
+  TERMINAL_STATUS_TO_EVENT,
+  __setTerminalNotifier,
+  buildTerminalNotification,
+  terminalNotifyEnabled,
   DEFAULT_RETENTION_MS,
   DEFAULT_STALE_RUNNING_MS,
   INDEX_FILE,
