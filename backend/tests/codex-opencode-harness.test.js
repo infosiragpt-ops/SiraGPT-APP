@@ -157,3 +157,79 @@ test('buildPublishPlan blocks sensitive paths and reports no_changes', async () 
   const out = await harness.buildPublishPlan({ runner: empty, projectId: 'p', repoUrl: 'https://github.com/a/b', runId: 'r1' });
   assert.equal(out.status, 'no_changes');
 });
+
+// ── Clone autenticado (OAuth del usuario, en memoria) ──────────────────────
+
+test('clonePublicRepo con accessToken: fetch autenticado vía -c http.<github>.extraheader, remote limpio', async () => {
+  const runner = fakeRunner();
+  const token = 'gho_userOAuthToken_1234567890abcdef';
+  const out = await harness.clonePublicRepo({
+    runner,
+    projectId: 'proj-1',
+    repoUrl: 'https://github.com/acme/private-app',
+    branch: 'develop',
+    accessToken: token,
+  });
+  assert.equal(out.ok, true);
+  assert.equal(out.authenticated, true);
+  assert.equal(out.sourceBranch, 'develop');
+  const execs = runner.calls.filter((c) => c[0] === 'exec').map((c) => c[2]);
+  const fetchCmd = execs.find((c) => c.includes('fetch --depth=1'));
+  assert.ok(fetchCmd, 'debe hacer el shallow fetch');
+  const expectedBasic = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
+  assert.ok(fetchCmd.includes(`-c http.https://github.com/.extraheader=AUTHORIZATION: basic ${expectedBasic}`), fetchCmd);
+  assert.ok(!fetchCmd.includes(token), 'el token crudo nunca viaja en los argumentos');
+  // El remote queda con la URL limpia: ni token ni credenciales en .git/config.
+  const remoteCmd = execs.find((c) => c.includes('remote add origin') || c.includes('remote set-url origin'));
+  assert.ok(remoteCmd.endsWith('https://github.com/acme/private-app.git'), remoteCmd);
+  assert.ok(!remoteCmd.includes(token) && !remoteCmd.includes('x-access-token'));
+  // El checkout/rev-parse posteriores no llevan la credencial.
+  for (const c of execs.filter((c) => !c.includes('fetch'))) assert.ok(!c.includes('extraheader'), c);
+});
+
+test('clonePublicRepo sin accessToken: sin -c extraheader y authenticated=false', async () => {
+  const runner = fakeRunner();
+  const out = await harness.clonePublicRepo({ runner, projectId: 'proj-1', repoUrl: 'https://github.com/sst/opencode' });
+  assert.equal(out.authenticated, false);
+  const execs = runner.calls.filter((c) => c[0] === 'exec').map((c) => c[2]);
+  assert.ok(execs.every((c) => !c.includes('extraheader')));
+});
+
+test('clonePublicRepo: un fallo de git nunca filtra el token ni su base64 en el error', async () => {
+  const token = 'gho_leakyToken_ABCDEF0123456789';
+  const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
+  const runner = {
+    calls: [],
+    async initWorkspace() { return { ok: true }; },
+    async exec(_p, cmd) {
+      const joined = cmd.join(' ');
+      if (joined.includes('remote get-url')) return { exitCode: 1, stdout: '', stderr: '' };
+      if (joined.includes('fetch')) {
+        return { exitCode: 128, stdout: '', stderr: `fatal: unable to access 'https://github.com/acme/private-app.git/': header AUTHORIZATION: basic ${basic} rejected; token ${token} invalid` };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  };
+  await assert.rejects(
+    () => harness.clonePublicRepo({ runner, projectId: 'proj-1', repoUrl: 'https://github.com/acme/private-app', accessToken: token }),
+    (err) => {
+      assert.equal(err.code, 'git_operation_failed');
+      assert.equal(err.details.operation, 'fetch', 'la operación es fetch, no el flag -c');
+      const blob = JSON.stringify(err.details) + err.message;
+      assert.ok(!blob.includes(token), 'token crudo filtrado');
+      assert.ok(!blob.includes(basic), 'base64 del token filtrado');
+      assert.ok(blob.includes('[REDACTED]'));
+      return true;
+    },
+  );
+});
+
+test('githubAuthConfigArgs / scrubCredential: vacío sin token; redacta gho_/ghu_/ghs_ y cabeceras basic', () => {
+  assert.deepEqual(harness.githubAuthConfigArgs(''), []);
+  assert.deepEqual(harness.githubAuthConfigArgs(null), []);
+  const args = harness.githubAuthConfigArgs('ghu_abc');
+  assert.equal(args[0], '-c');
+  assert.match(args[1], /^http\.https:\/\/github\.com\/\.extraheader=AUTHORIZATION: basic /);
+  const scrubbed = harness.scrubCredential('remote: gho_aaaaBBBB1111 ghu_x1 ghs_y2 ghr_z3 AUTHORIZATION: basic QUJD= Authorization: Bearer tok_1', null);
+  assert.ok(!/gho_aaaaBBBB1111|ghu_x1|ghs_y2|ghr_z3|QUJD=|tok_1/.test(scrubbed), scrubbed);
+});
