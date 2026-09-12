@@ -1171,10 +1171,14 @@ Diagnóstico completo (14 dimensiones, brechas P0/P1/P2 con evidencia) en la pá
 | #692 | Aviso al terminar | `agents/task-store` publica `agent.task.{completed\|failed\|cancelled}` una vez por tarea; `user-notifications` crea la fila de bandeja con `metadata.actionUrl → /agentes/<chatId>`. `SIRAGPT_AGENT_TASK_NOTIFY`. |
 | #693 | CI del PR | Tool `github_checks` (`codex/github-checks.js`): checks de la rama `run/<id>`, una `ref` o un `pr`, pasos fallidos de Actions, con la cuenta del usuario. |
 | #694 | Memoria y Biblioteca | `codex/user-memory.js` inyecta la memoria Hermes del usuario en el system prompt de codex (`CODEX_USER_MEMORY*`); `use_skill` alcanza los skills de la Biblioteca del usuario. |
+| #697 | Repo vinculado al chat | `POST /api/codex/projects/clone` acepta `chatId` (brief.chatId, 409 `chat_already_bound`); `GET /api/github/repos/:owner/:repo/branches`; `publicProject` expone `sourceControl` + `chatId`. UI: `components/agentes/coding-repo-picker.tsx` («Vincular repositorio» → repo + rama → «Abrir en este chat», chip `owner/repo · rama`) montado en `coding-ide-shell.tsx`. Primer levantamiento parcial del UI lock para `/agentes` (re-baseline solo de los archivos tocados). Visible con `AGENTES_CODING_V2=1`. |
+| #700 | Cambios y Crear PR | `codex/workspace-changes.js` (cambios del workspace vs rama base, untracked inline, cap; `prepareWorkspaceBranch` → `run/agentes-<proyecto>-<fecha>` + commit). `GET /api/codex/projects/:id/changes` y `POST /api/codex/projects/:id/github/publish-workspace` (428 plan → `confirm` → PR con el OAuth del usuario; repo/base del brief; exige allowlist `CODEX_SELF_HOST_GIT_HOSTS`). UI: pestaña «Cambios» (`components/agentes/coding-changes-pane.tsx`) en el shell: lista de archivos, diff por archivo, «Crear PR» → «Confirmar y abrir PR». |
 
 Pendiente que requiere a Luis: GitHub App (claves en `.env` prod + Replit), cierre del catálogo
-de modelos por código, runner aislado gVisor en la Lenovo, `MCP_ALLOWED_HOSTS`, levantar el UI
-lock para `/agentes` (selector de repo, diffs, push). Envs nuevas documentadas en
+de modelos por código, runner aislado gVisor en la Lenovo, `MCP_ALLOWED_HOSTS`, encender
+`AGENTES_CODING_V2=1` en producción para exponer el shell de IDE. El UI lock se levanta por
+etapas para `/agentes` (Luis lo autorizó el 2026-09-12): cada PR re-baselinea solo los archivos
+que toca. Siguiente etapa: montar el flujo de codex (selector de repo, Cambios, PR) en el chat cuando codex esté encendido, no solo bajo `AGENTES_CODING_V2`; sesiones paralelas visibles. Envs nuevas documentadas en
 `docs/ENV_VARIABLES.md`.
 
 ## Codex Agent — Claude Code parity + Agent SDK (added 2026-07-02)

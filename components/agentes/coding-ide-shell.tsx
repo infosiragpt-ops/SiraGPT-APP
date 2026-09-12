@@ -12,7 +12,9 @@ import * as React from "react"
 import dynamic from "next/dynamic"
 import { useParams } from "next/navigation"
 
+import { CodingChangesPane } from "@/components/agentes/coding-changes-pane"
 import { CodingPreviewPane } from "@/components/agentes/coding-preview-pane"
+import { CodingRepoPicker } from "@/components/agentes/coding-repo-picker"
 import { CodingTerminalPane } from "@/components/agentes/coding-terminal-pane"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
@@ -23,14 +25,14 @@ import {
   type CodingRepoMapHint,
 } from "@/lib/agentes-coding/api"
 import { projectsCodexApi } from "@/lib/codex/api/projects"
-import type { CodexProject } from "@/lib/codex/api/types"
+import type { CodexCloneResult, CodexProject } from "@/lib/codex/api/types"
 import { buildFileTree, applyMapHints, languageFromPath, type FileTreeNode } from "@/lib/agentes-coding/file-tree"
 import { cn } from "@/lib/utils"
 
 const MonacoCodeArea = dynamic(() => import("@/components/code/monaco-code-area"), { ssr: false })
 const CodingMonacoDiff = dynamic(() => import("@/components/agentes/coding-monaco-diff"), { ssr: false })
 
-type Pane = "editor" | "diff" | "terminal" | "preview"
+type Pane = "editor" | "diff" | "changes" | "terminal" | "preview"
 
 export function CodingIdeShell() {
   const [open, setOpen] = React.useState(true)
@@ -231,6 +233,25 @@ export function CodingIdeShell() {
       setProjectName("")
       await refreshProjects()
       await refreshProjectFiles(binding.project.id)
+      resetEditor()
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Etapa 6: el chat abre un repo de GitHub clonado (ya vinculado por el
+  // backend vía brief.chatId). Mismo camino que un proyecto recién creado.
+  async function handleRepoBound(result: CodexCloneResult) {
+    setBusy(true)
+    setError("")
+    try {
+      setProject(result.project)
+      setProjectName("")
+      setMapHints([])
+      await refreshProjects()
+      await refreshProjectFiles(result.project.id)
       resetEditor()
     } catch (err) {
       fail(err)
@@ -469,6 +490,12 @@ export function CodingIdeShell() {
           disabled={busy || !chatId}
           data-testid="agentes-coding-project-name"
         />
+        <CodingRepoPicker
+          chatId={chatId}
+          sourceControl={project?.sourceControl ?? null}
+          disabled={busy || !chatId}
+          onBound={handleRepoBound}
+        />
         {busy ? <ThinkingIndicator size="xs" label="Cargando" /> : null}
         <div className="ml-auto flex flex-wrap items-center gap-1">
           <button
@@ -594,6 +621,7 @@ export function CodingIdeShell() {
           <div className="flex items-center gap-1 border-b border-border px-2">
             <PaneTab current={pane} id="editor" onSelect={setPane}>Editor</PaneTab>
             <PaneTab current={pane} id="diff" onSelect={setPane}>Diferencias</PaneTab>
+            <PaneTab current={pane} id="changes" onSelect={setPane}>Cambios</PaneTab>
             <PaneTab current={pane} id="terminal" onSelect={setPane}>Terminal</PaneTab>
             <PaneTab current={pane} id="preview" onSelect={setPane}>Vista previa</PaneTab>
             {pane === "diff" ? (
@@ -635,6 +663,14 @@ export function CodingIdeShell() {
                   Abre un archivo para revisar el diff.
                 </p>
               )
+            ) : null}
+            {pane === "changes" ? (
+              <CodingChangesPane
+                projectId={projectId}
+                sourceControl={project?.sourceControl ?? null}
+                fileVersion={fileVersion}
+                onOpenFile={handleOpenFile}
+              />
             ) : null}
             {pane === "terminal" ? (
               <CodingTerminalPane

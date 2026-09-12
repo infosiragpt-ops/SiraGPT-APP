@@ -6,6 +6,7 @@ const {
   createProject,
   listProjects,
   getProject,
+  publicProject,
   hasFullStackIntent,
 } = require('../src/services/codex/project-service');
 
@@ -134,4 +135,56 @@ test('getProject is scoped by userId; listProjects returns only own projects', a
   const list = await listProjects({ userId: 'u1', db });
   assert.equal(list.length, 1);
   assert.equal(list[0].name, 'A');
+});
+
+// ── Etapa 6: forma pública de proyectos clonados desde la web ───────────────
+
+function row(brief) {
+  return {
+    id: 'p1', userId: 'u1', name: 'A', status: 'ready', organizationId: null,
+    workspacePath: 'projects/p1', previewUrl: null, error: null,
+    createdAt: new Date(0), updatedAt: new Date(0), brief,
+  };
+}
+
+test('publicProject expone sourceControl + chatId para repo clonado y nunca el brief', () => {
+  const out = publicProject(row({
+    kind: 'repo-private',
+    repository: {
+      url: 'https://github.com/acme/app.git', webUrl: 'https://github.com/acme/app',
+      fullName: 'acme/app', private: true, defaultBranch: 'develop',
+    },
+    sourceBranch: 'feature/x',
+    authenticated: true,
+    chatId: 'chat_1',
+    source: 'agentes',
+  }));
+  assert.equal(out.kind, 'repo');
+  assert.deepEqual(out.sourceControl, {
+    repository: 'https://github.com/acme/app.git',
+    webUrl: 'https://github.com/acme/app',
+    fullName: 'acme/app',
+    private: true,
+    defaultBranch: 'develop',
+    sourceBranch: 'feature/x',
+  });
+  assert.equal(out.chatId, 'chat_1');
+  assert.equal(out.brief, undefined);
+  assert.equal(out.authenticated, undefined);
+});
+
+test('publicProject: repo-public sin metadatos → sourceControl con nulls; kind repo (self-host) intacto', () => {
+  const pub = publicProject(row({ kind: 'repo-public', repository: { url: 'https://github.com/x/y.git' }, sourceBranch: 'main' }));
+  assert.equal(pub.sourceControl.private, false);
+  assert.equal(pub.sourceControl.fullName, null);
+  assert.equal(pub.sourceControl.sourceBranch, 'main');
+  assert.equal(pub.chatId, undefined);
+  const self = publicProject(row({ kind: 'repo', repository: { url: 'https://github.com/x/y.git', sourceBranch: 'main' } }));
+  assert.deepEqual(self.sourceControl, { repository: 'https://github.com/x/y.git', sourceBranch: 'main' });
+  const plain = publicProject(row({ chatId: 'chat_9', source: 'agentes' }));
+  assert.equal(plain.kind, undefined);
+  assert.equal(plain.sourceControl, undefined);
+  assert.equal(plain.chatId, 'chat_9');
+  const none = publicProject(row(null));
+  assert.equal(none.chatId, undefined);
 });

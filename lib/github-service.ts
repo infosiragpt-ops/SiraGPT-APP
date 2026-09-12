@@ -90,6 +90,12 @@ export interface GithubRepo {
   updatedAt?: string
 }
 
+export interface GithubBranch {
+  name: string
+  protected: boolean
+  commitSha: string | null
+}
+
 export interface ConnectedRepository {
   id: string
   repoId: string
@@ -201,6 +207,16 @@ export const githubService = {
     if (opts.page) p.set("page", String(opts.page))
     if (opts.perPage) p.set("per_page", String(opts.perPage))
     return get<{ items: GithubRepo[]; total: number; incompleteResults: boolean }>(`/repos/search?${p.toString()}`)
+  },
+  // Ramas de un repo (selector de rama al vincular un repo a un chat de
+  // /agentes). Solo lectura por API: aquí no se clona nada.
+  listBranches: (owner: string, repo: string, opts: { perPage?: number } = {}) => {
+    const p = new URLSearchParams()
+    if (opts.perPage) p.set("per_page", String(opts.perPage))
+    const qs = p.toString()
+    return get<{ owner: string; repo: string; defaultBranch: string; branches: GithubBranch[]; count: number }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches${qs ? `?${qs}` : ""}`,
+    )
   },
   connectRepo: (owner: string, repo: string) =>
     send<{ ok: boolean; connection: ConnectedRepository }>("POST", "/repos/connect", { owner, repo }),
