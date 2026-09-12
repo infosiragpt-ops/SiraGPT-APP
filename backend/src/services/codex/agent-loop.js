@@ -503,6 +503,7 @@ function buildSystemPrompt({
   openclawPromptBlock = '',
   companySoul = '',
   preserveExistingNext = false,
+  userMemory = '',
 }) {
   const appsMode = isAppsPrompt(sourcePrompt);
   // Existing Next applications are first-class imported workspaces. A follow-up
@@ -576,6 +577,10 @@ function buildSystemPrompt({
   if (companySoul) {
     lines.push('SOUL.md DE LA EMPRESA (generado desde Company; aplica a esta corrida y a todos sus subagentes):');
     lines.push(String(companySoul).slice(0, 8000));
+  }
+  if (userMemory) {
+    lines.push('MEMORIA DEL USUARIO (hechos y preferencias duraderas que el usuario dejó en SiraGPT — stack, convenciones, gustos; aplícalas sin recitarlas y sin contradecir SIRA.md del proyecto):');
+    lines.push(String(userMemory));
   }
   if (forceViteApps) {
     lines.push('Este run viene de /apps. Stack OBLIGATORIO: React 18 + Vite 7 + TypeScript (el starter ya provisto). Construye componentes .tsx en src/; el entry es src/main.tsx que monta <App/> en #root.');
@@ -1843,6 +1848,9 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         openclawPromptBlock: deps.openclawPromptBlock || '',
         companySoul,
         preserveExistingNext,
+        userMemory: deps.userMemory != null
+          ? deps.userMemory
+          : require('./user-memory').loadUserMemory({ userId: run?.userId || null, chatId: run?.chatId || null, env }),
       }),
     },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },

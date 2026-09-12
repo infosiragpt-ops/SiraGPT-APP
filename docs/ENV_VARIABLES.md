@@ -40,6 +40,9 @@ degrades to Claude (eligible tiers) and then to the prompted provider ladder
 | `CODEX_DEEPSEEK_MAX_TOKENS` | `8192` | Output budget per step |
 | `CODEX_DEEPSEEK_TEMPERATURE` | `0.2` | Sampling temperature (ignored while thinking is enabled) |
 | `CODEX_DEEPSEEK_THINKING` | unset | `1` forces V4 thinking on, `0` off; default: Pro thinks, Flash only on high effort |
+| `CODEX_USER_MEMORY` | unset | `0` stops injecting the user's Hermes memory (durable facts + curated block) into the codex system prompt |
+| `CODEX_USER_MEMORY_MAX_CHARS` | `3000` | Cap of the injected memory block |
+| `CODEX_USER_MEMORY_LIMIT` | `12` | Facts requested from the memory store per run |
 | `CODEX_LLM_PROVIDER` | unset | Force a single ladder rung: `deepseek` \| `anthropic` \| `openrouter` \| `cerebras` |
 
 ### /agentes task notifications
