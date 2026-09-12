@@ -142,21 +142,25 @@ class StripeService {
       });
     }
 
+    // Product names are what the customer sees on the Stripe Checkout page
+    // and on receipts. The plan SOLD from /planes is PRO_MAX ($10/mes,
+    // shown as "Pro"); PRO ($5) is a legacy tier kept for existing
+    // subscribers and ENTERPRISE is contact-only (WhatsApp).
     this.plans = {
       PRO: {
-        name: 'Go Plan',
+        name: 'SiraGPT Pro (plan anterior)',
         price: 500,
         credits: 500000,
         features: ['500,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features']
       },
       PRO_MAX: {
-        name: 'Plus Plan',
+        name: 'SiraGPT Pro',
         price: 1000,
         credits: 1000000,
         features: ['1,000,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
       },
       ENTERPRISE: {
-        name: 'Pro Plan',
+        name: 'SiraGPT Enterprise',
         price: 20000,
         credits: 10000000,
         features: ['10,000,000 tokens per month', 'All features', 'Dedicated support', 'Custom integrations', 'SLA guaranteed']
@@ -386,65 +390,80 @@ class StripeService {
     return this.callStripe('ping', () => this.stripe.products.list({ limit: 1 }));
   }
 
+  /**
+   * Idempotently make sure the Stripe product + monthly USD price for ONE
+   * plan exist, and return them. Products are matched by `metadata.plan`
+   * and prices by amount + monthly interval, so calling this repeatedly
+   * never duplicates anything in the Stripe account. This is what lets a
+   * fresh deployment sell the plan with only STRIPE_SECRET_KEY configured
+   * (no manual `init-stripe` step, no STRIPE_PRICE_* env vars).
+   */
+  async ensurePriceForPlan(planKey, operation = 'ensurePriceForPlan') {
+    const planData = this.plans[planKey];
+    if (!planData) {
+      throw new Error(`Unknown Stripe plan: ${planKey}`);
+    }
+
+    return this.callStripe(
+      operation,
+      async () => {
+        const products = await this.stripe.products.list({
+          active: true,
+          limit: 100
+        });
+
+        let product = products.data.find(p => p.metadata?.plan === planKey);
+
+        if (!product) {
+          product = await this.stripe.products.create({
+            name: planData.name,
+            description: `${planData.name} subscription with ${planData.credits.toLocaleString()} monthly API calls`,
+            metadata: {
+              plan: planKey,
+              credits: planData.credits.toString()
+            }
+          });
+        }
+
+        const prices = await this.stripe.prices.list({
+          product: product.id,
+          active: true
+        });
+
+        let price = prices.data.find(p =>
+          p.unit_amount === planData.price &&
+          p.recurring?.interval === 'month'
+        );
+
+        if (!price) {
+          price = await this.stripe.prices.create({
+            product: product.id,
+            unit_amount: planData.price,
+            currency: 'usd',
+            recurring: {
+              interval: 'month'
+            },
+            metadata: {
+              plan: planKey
+            }
+          });
+        }
+
+        return {
+          product,
+          price,
+          planData
+        };
+      },
+      { plan: planKey }
+    );
+  }
+
   async createOrUpdateProducts() {
     const results = {};
 
-    for (const [planKey, planData] of Object.entries(this.plans)) {
-      const result = await this.callStripe(
-        'createOrUpdateProducts',
-        async () => {
-          const products = await this.stripe.products.list({
-            active: true,
-            limit: 100
-          });
-
-          let product = products.data.find(p => p.metadata.plan === planKey);
-
-          if (!product) {
-            product = await this.stripe.products.create({
-              name: planData.name,
-              description: `${planData.name} subscription with ${planData.credits.toLocaleString()} monthly API calls`,
-              metadata: {
-                plan: planKey,
-                credits: planData.credits.toString()
-              }
-            });
-          }
-
-          const prices = await this.stripe.prices.list({
-            product: product.id,
-            active: true
-          });
-
-          let price = prices.data.find(p =>
-            p.unit_amount === planData.price &&
-            p.recurring?.interval === 'month'
-          );
-
-          if (!price) {
-            price = await this.stripe.prices.create({
-              product: product.id,
-              unit_amount: planData.price,
-              currency: 'usd',
-              recurring: {
-                interval: 'month'
-              },
-              metadata: {
-                plan: planKey
-              }
-            });
-          }
-
-          return {
-            product,
-            price,
-            planData
-          };
-        },
-        { plan: planKey }
-      );
-
-      results[planKey] = result;
+    for (const planKey of Object.keys(this.plans)) {
+      results[planKey] = await this.ensurePriceForPlan(planKey, 'createOrUpdateProducts');
     }
 
     return results;

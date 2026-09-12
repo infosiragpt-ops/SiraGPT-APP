@@ -388,6 +388,24 @@ only normal local boot may skip or use `MIGRATION_NONFATAL=1`.
 
 ---
 
+## Payments (Stripe) + sales WhatsApp
+
+`/planes` sells exactly two plans: **Pro** ($10 USD/mes, backend plan code
+`PRO_MAX`, Stripe Checkout) and **Hablemos** (WhatsApp). The page reads
+`GET /api/payments/config` at runtime, so enabling sales in production only
+needs the backend `.env` — no frontend rebuild.
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `STRIPE_SECRET_KEY` | yes (to sell) | `sk_live_…` / `sk_test_…`. Without it checkout answers 503 and `/planes` degrades to WhatsApp activation. |
+| `STRIPE_WEBHOOK_SECRET` | recommended | Signs `POST /api/payments/stripe/webhook` (renewals, cancellations, failed invoices). The first purchase is fulfilled by `POST /api/payments/verify-session` even without it. |
+| `STRIPE_PRICE_PRO_MAX` | no | Override the Stripe price id. If absent the backend **auto-provisions** the product + $10/month price on the first checkout (`stripe-setup.getPriceIdForPlan` → `stripeService.ensurePriceForPlan`, idempotent by `metadata.plan`) and caches it in `systemSettings`. |
+| `STRIPE_PRICE_PRO` / `STRIPE_PRICE_ENTERPRISE` | no | Same override for the legacy $5 tier and the contact-only tier. |
+| `SIRAGPT_WHATSAPP_NUMBER` | yes (Hablemos) | Sales number, digits with country code (`51999123456`). Served by `GET /api/payments/config`; wins over the build-time value. |
+| `NEXT_PUBLIC_WHATSAPP_NUMBER` | no | Build-time fallback baked into the Next.js bundle (landing pricing, sidebar WhatsApp button). |
+| `FRONTEND_URL` | yes | Base for Stripe `success_url` / `cancel_url` (`/payment/success`, `/payment/cancel`). Must be `https://siragpt.com` in production. |
+| `ALLOW_STRIPE_DEMO` | dev only | `true` + `NODE_ENV!=production` simulates paid sessions without keys. Never in production. |
+
 ## General
 
 | Variable | Default | Purpose |

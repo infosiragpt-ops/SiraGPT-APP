@@ -11,7 +11,7 @@ import styles from './payment-cancel.module.css'
 
 const PLAN_LABELS: Record<string, string> = {
   PRO: 'Pro',
-  PRO_MAX: 'Pro Extendido',
+  PRO_MAX: 'Pro',
 }
 
 const REASSURANCE = [
@@ -32,7 +32,7 @@ function PaymentCancelContent() {
   // Stripe en vez de dejarlo en un callejón sin salida. Si no, a los planes.
   const handleRetry = async () => {
     if (!plan) {
-      router.push('/agentes')
+      router.push('/planes')
       return
     }
     try {
@@ -46,8 +46,8 @@ function PaymentCancelContent() {
         toast.error('Tu sesión expiró — inicia sesión de nuevo.')
         router.push('/auth/login')
       } else {
-        toast.error('No pudimos reabrir el pago. Vuelve a intentarlo desde la app.')
-        router.push('/agentes')
+        toast.error('No pudimos reabrir el pago. Vuelve a intentarlo desde los planes.')
+        router.push('/planes')
       }
     } finally {
       setRetrying(false)

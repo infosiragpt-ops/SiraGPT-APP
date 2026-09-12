@@ -10,6 +10,7 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
+import { planDisplayName } from '@/lib/plans-catalog'
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 function PaymentSuccessContent() {
@@ -40,22 +41,28 @@ function PaymentSuccessContent() {
       color: 'from-blue-500 to-cyan-500',
       badge: 'bg-blue-500',
       icon: Crown,
-      limit: '500,000 tokens/month',
-      features: ['500,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features']
+      limit: 'Acceso completo',
+      features: ['Agentes, documentos e imágenes', 'Límites de uso más altos', 'Soporte prioritario']
     },
     PRO_MAX: {
       color: 'from-purple-500 to-pink-500',
       badge: 'bg-purple-500',
       icon: Sparkles,
-      limit: '1,000,000 tokens/month',
-      features: ['1,000,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
+      limit: 'Acceso completo y prioritario',
+      features: [
+        'Agentes que investigan y ejecutan tareas por ti',
+        'Documentos, hojas de cálculo y presentaciones',
+        'Imágenes, diagramas y contenido visual',
+        'Límites de uso más altos y acceso prioritario',
+        'Soporte prioritario por WhatsApp',
+      ]
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       badge: 'bg-amber-500',
       icon: Crown,
-      limit: '10,000,000 tokens/month',
-      features: ['10,000,000 tokens per month', 'All features', 'Dedicated support', 'Custom integrations', 'SLA guaranteed']
+      limit: 'Plan a medida',
+      features: ['Cuentas para todo el equipo', 'Integraciones y seguridad', 'Acompañamiento directo']
     }
   }
 
@@ -86,11 +93,11 @@ function PaymentSuccessContent() {
           console.warn('Failed to update user context:', userError)
         }
 
-        toast.success('Payment successful! Your subscription has been activated.')
+        toast.success('¡Pago confirmado! Tu plan Pro ya está activo.')
       } catch (error) {
         console.error('Payment verification error:', error)
         setSuccess(false)
-        toast.error('Error verifying payment. Please contact support.')
+        toast.error('No pudimos verificar el pago. Escríbenos a soporte y lo revisamos.')
       } finally {
         setLoading(false)
       }
@@ -140,7 +147,7 @@ function PaymentSuccessContent() {
                   <CheckCircle className="h-12 w-12 text-white" />
                 </div>
                 <h1 className="text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-2">
-                  ¡Te damos la bienvenida a {sessionInfo.plan}!
+                  ¡Te damos la bienvenida a {planDisplayName(sessionInfo.plan)}!
                 </h1>
                 <p className="text-lg text-muted-foreground">
                   Tu suscripción se activó correctamente
@@ -156,7 +163,7 @@ function PaymentSuccessContent() {
                       <div className="flex items-center space-x-3">
                         {currentPlanInfo?.icon && <currentPlanInfo.icon className="h-8 w-8" />}
                         <div>
-                          <CardTitle className="text-2xl">Plan {sessionInfo.plan}</CardTitle>
+                          <CardTitle className="text-2xl">Plan {planDisplayName(sessionInfo.plan)}</CardTitle>
                           <p className="text-muted-foreground">Suscripción activa</p>
                         </div>
                       </div>
