@@ -22,6 +22,51 @@ export interface CodexProject {
   /** Chat de /agentes al que está vinculado el proyecto (brief.chatId). */
   chatId?: string | null
 }
+/** Un archivo cambiado en el workspace frente a la rama base (GET /projects/:id/changes). */
+export interface CodexWorkspaceChangeFile {
+  path: string
+  status: "added" | "modified" | "deleted" | "renamed" | "copied" | "typechange" | "conflict" | "untracked"
+  from?: string
+  additions: number
+  deletions: number
+  binary: boolean
+  /** true si el cambio está en el working tree (sin commit). */
+  uncommitted: boolean
+}
+export interface CodexWorkspaceChanges {
+  ok: boolean
+  base: { branch: string; sha: string }
+  head: { branch: string | null; sha: string; ahead: number }
+  files: CodexWorkspaceChangeFile[]
+  filesChanged: number
+  additions: number
+  deletions: number
+  /** Diff unificado (tracked + untracked vs /dev/null), con cap. */
+  diff: string
+  truncated: boolean
+  dirty: boolean
+  repository?: { url: string; fullName: string | null }
+}
+export interface CodexPublishWorkspacePlan {
+  status: "ready_to_publish" | "github_auth_required" | "no_changes" | "manual_pr" | string
+  base?: string
+  branch?: string
+  repository?: string
+  files?: number
+  additions?: number
+  deletions?: number
+  hasGithubToken?: boolean
+  title?: string
+  body?: string
+  compareUrl?: string
+}
+/** Respuesta de POST /projects/:id/github/publish-workspace (200/201; el 428 trae `plan` en el body del error). */
+export interface CodexPublishWorkspaceResult {
+  plan: CodexPublishWorkspacePlan
+  pullRequest: { number: number | null; url: string | null; state: string | null } | null
+  branch?: string
+  commitSha?: string
+}
 /** Respuesta de POST /projects/clone. */
 export interface CodexCloneResult {
   project: CodexProject

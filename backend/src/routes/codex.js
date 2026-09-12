@@ -49,6 +49,7 @@ const codexDb = require('../config/database');
 const publicationService = require('../services/codex/publication-service');
 const opencodeHarness = require('../services/codex/opencode-harness');
 const selfHosting = require('../services/codex/self-hosting');
+const workspaceChanges = require('../services/codex/workspace-changes');
 const companyAssociationService = require('../services/codex/company-association-service');
 const {
   STRIP_REQUEST_HEADERS,
@@ -2151,6 +2152,150 @@ router.post(
       }
     } catch (err) {
       return sendGithubFlowError(res, err);
+    }
+  },
+);
+
+// ── Etapa 7 (paridad Claude Code): «Cambios» + «Crear PR» del repo del chat ──
+// Solo para proyectos clonados desde la web (brief.kind repo-public/private):
+// la rama base y el repo salen del brief, el cliente no los elige.
+
+function repoSourceControlFromBrief(row) {
+  const brief = row && row.brief && typeof row.brief === 'object' && !Array.isArray(row.brief) ? row.brief : null;
+  if (!brief || (brief.kind !== 'repo-public' && brief.kind !== 'repo-private')) return null;
+  const repository = brief.repository && typeof brief.repository === 'object' ? brief.repository : {};
+  const repoUrl = String(repository.webUrl || repository.url || '').trim();
+  if (!repoUrl) return null;
+  return {
+    repoUrl,
+    fullName: repository.fullName || null,
+    sourceBranch: String(brief.sourceBranch || repository.defaultBranch || 'main').trim(),
+  };
+}
+
+function sendWorkspaceChangesError(res, err) {
+  if (err instanceof workspaceChanges.WorkspaceChangesError) {
+    return res.status(err.status || 400).json({
+      error: err.code,
+      message: String(err.message || '').slice(0, 2_000),
+      ...(err.details ? { details: err.details } : {}),
+    });
+  }
+  if (err && err.name === 'RunnerError') {
+    return res.status(502).json({ error: 'runner_unreachable', message: String(err.message || '').slice(0, 2_000) });
+  }
+  return sendGithubFlowError(res, err);
+}
+
+router.get('/projects/:id/changes', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const sc = repoSourceControlFromBrief(project);
+    if (!sc) return res.status(409).json({ error: 'project_not_repo', message: 'Este proyecto no está vinculado a un repositorio.' });
+    const out = await workspaceChanges.getWorkspaceChanges({
+      runner: createSandboxClient(),
+      projectId: project.id,
+      baseBranch: sc.sourceBranch,
+    });
+    return res.json({ ...out, repository: { url: sc.repoUrl, fullName: sc.fullName } });
+  } catch (err) {
+    return sendWorkspaceChangesError(res, err);
+  }
+});
+
+// POST /projects/:id/github/publish-workspace { title?, body?, confirm? }
+// Sin confirm → 428 con el plan (archivos, rama destino, si hay token) y
+// CERO mutación. Con confirm:true y OAuth guardado → deja los cambios en
+// run/agentes-<proyecto>-<fecha>, valida rutas/tamaños y abre el PR contra la
+// rama base con la cuenta del usuario. Nunca push directo a la base.
+router.post(
+  '/projects/:id/github/publish-workspace',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('title').optional({ nullable: true }).isString().isLength({ max: 120 }),
+    body('body').optional({ nullable: true }).isString().isLength({ max: 60_000 }),
+    body('confirm').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const sc = repoSourceControlFromBrief(project);
+      if (!sc) return res.status(409).json({ error: 'project_not_repo', message: 'Este proyecto no está vinculado a un repositorio.' });
+      const runner = createSandboxClient();
+      const stored = await resolveStoredGithubToken(req.user.id);
+      const title = req.body.title ? String(req.body.title) : null;
+      const prBody = req.body.body ? String(req.body.body) : null;
+      const runId = workspaceChanges.workspaceRunId(project.id);
+
+      if (req.body.confirm !== true) {
+        const changes = await workspaceChanges.getWorkspaceChanges({ runner, projectId: project.id, baseBranch: sc.sourceBranch });
+        if (!changes.files.length) {
+          return res.json({ plan: { status: 'no_changes', base: sc.sourceBranch, files: 0 }, pullRequest: null });
+        }
+        return res.status(428).json({
+          error: 'confirmation_required',
+          message: 'Crear el PR exige confirmación explícita (confirm:true).',
+          plan: {
+            status: stored ? 'ready_to_publish' : 'github_auth_required',
+            base: sc.sourceBranch,
+            branch: `run/${runId}`,
+            repository: sc.repoUrl,
+            files: changes.filesChanged,
+            additions: changes.additions,
+            deletions: changes.deletions,
+            hasGithubToken: Boolean(stored),
+            mergePolicy: 'pull_request_only',
+          },
+        });
+      }
+      if (!stored) {
+        return res.status(428).json({
+          error: 'github_auth_required',
+          message: 'Conecta tu cuenta de GitHub para crear el PR desde el chat.',
+        });
+      }
+      const prepared = await workspaceChanges.prepareWorkspaceBranch({
+        runner, projectId: project.id, baseBranch: sc.sourceBranch, runId, title, body: prBody || '',
+      });
+      if (prepared.status === 'no_changes') {
+        return res.json({ plan: { status: 'no_changes', base: sc.sourceBranch, files: 0 }, pullRequest: null });
+      }
+      const plan = await opencodeHarness.buildPublishPlan({
+        runner,
+        projectId: project.id,
+        repoUrl: sc.repoUrl,
+        sourceBranch: sc.sourceBranch,
+        runId,
+        title,
+        body: prBody,
+        hasGithubToken: true,
+      });
+      if (plan.status === 'no_changes') return res.json({ plan, pullRequest: null, branch: prepared.branch });
+      const published = await selfHosting.publishSelfHostedPullRequest({
+        runner,
+        projectId: project.id,
+        runId,
+        repositoryUrl: sc.repoUrl,
+        sourceBranch: sc.sourceBranch,
+        title: plan.title,
+        body: plan.body,
+        env: { ...process.env, CODEX_SELF_HOST_GITHUB_TOKEN: stored.accessToken },
+      });
+      if (published.status === 'no_changes') return res.json({ plan, pullRequest: null, branch: prepared.branch });
+      return res.status(201).json({
+        plan,
+        pullRequest: published.pullRequest || null,
+        branch: published.branch || prepared.branch,
+        commitSha: published.commitSha || prepared.commitSha,
+      });
+    } catch (err) {
+      return sendWorkspaceChangesError(res, err);
     }
   },
 );
