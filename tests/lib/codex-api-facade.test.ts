@@ -25,6 +25,8 @@ const EXPECTED_METHODS = [
   "cloneRepository",
   "getProjectByChat",
   "ensureProjectForChat",
+  "getWorkspaceChanges",
+  "publishWorkspace",
   "startPreview",
   "previewStatus",
   "stopPreview",
