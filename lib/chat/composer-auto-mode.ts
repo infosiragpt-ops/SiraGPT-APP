@@ -24,6 +24,7 @@ import {
   shouldAutoActivateVideoGeneration,
 } from "@/lib/ai-service"
 import { detectDocumentChatFormat } from "@/lib/document-chat-request"
+import { canonicalizeImageTypos, detectExplicitImageCount, detectImageFrame, IMAGE_COUNT_MAX } from "@/lib/chat/image-request-lexicon"
 
 export type ComposerAutoMode = "image" | "video" | "music" | "voice" | "web_search" | "docx" | "xlsx" | "pptx"
 
@@ -36,6 +37,9 @@ export type ComposerAutoSettings = {
   videoResolution?: string
   videoAudio?: boolean
   musicDurationSeconds?: number
+  musicStyle?: string
+  musicMood?: string
+  musicEffect?: string
   documentFormat?: "docx" | "xlsx" | "pptx"
 }
 
@@ -63,10 +67,10 @@ function normalize(text: string): string {
 
 // Verbs that mean "produce it", shared by every mode.
 const CREATE_VERB =
-  "(?:cr(?:ea|eame|ear|eas)|gener(?:a|ame|ar|as|ate)|haz(?:me|melo|lo|la)?|hace(?:r|me)|dame|quiero|necesito|produc(?:e|eme|ir)|dise[nñ](?:a|ame|ar)|dibuj(?:a|ame|ar)|pint(?:a|ame|ar)|ilustr(?:a|ame|ar)|render(?:iza|izar)?|make|create|generate|draw|design|render|produce)"
+  "(?:cr(?:ea|eame|ear|eas)|gener(?:a|ame|ar|as|ate)|haz(?:me|melo|lo|la)?|hace(?:r|me)|dame|quiero|necesito|produc(?:e|eme|ir)|dise[nñ](?:a|ame|ar)|dibuj(?:a|ame|ar)|pint(?:a|ame|ar)|ilustr(?:a|ame|ar)|render(?:iza|izar)?|make|create|generate|draw|design|render|produce|want|need|give me|gimme)"
 
 const IMAGE_NOUN =
-  "(?:imagen(?:es)?|image|foto(?:s|grafia|grafias)?|photo|picture|ilustraci(?:on|ones)|illustration|dibujo(?:s)?|drawing|logo(?:tipo|s)?|render(?:s)?|poster(?:s)?|afiche(?:s)?|banner(?:s)?|portada(?:s)?|wallpaper|thumbnail|miniatura|icono(?:s)?|icon|sticker(?:s)?|retrato(?:s)?|caricatura(?:s)?|infograf(?:ia|ias)|arte digital|pixel art)"
+  "(?:imagen(?:es)?|image(?:s)?|foto(?:s|grafia|grafias)?|photo(?:s|graph|graphs)?|picture(?:s)?|pic(?:s)?|ilustraci(?:on|ones)|illustration(?:s)?|dibujo(?:s)?|drawing(?:s)?|logo(?:tipo|tipos|s)?|render(?:s)?|poster(?:s)?|afiche(?:s)?|banner(?:s)?|portada(?:s)?|wallpaper(?:s)?|thumbnail(?:s)?|miniatura(?:s)?|icono(?:s)?|icon(?:s)?|sticker(?:s)?|retrato(?:s)?|caricatura(?:s)?|infograf(?:ia|ias)|arte digital|pixel art)"
 
 const IMAGE_CREATE_RE = new RegExp(
   `\\b${CREATE_VERB}\\b[^.?!]{0,90}\\b${IMAGE_NOUN}\\b|\\b${IMAGE_NOUN}\\b[^.?!]{0,60}\\b${CREATE_VERB}\\b`,
@@ -95,26 +99,19 @@ const DOC_CREATE_RE =
 const DOC_FORMAT_QUESTION_RE =
   /\b(?:que dice|cual es|cuantas? (?:paginas?|filas?|columnas?|hojas?|diapositivas?)|resume\w*|explica\w*|analiza\w*|revisa\w*|corrige\w*|traduce\w*|lee\w*)\b[^.?!]{0,40}\b(?:el|la|este|esta|mi|del|de la)\b[^.?!]{0,20}\b(?:word|docx?|excel|xlsx?|ppt|pptx|presentaci[oó]n|documento|archivo|adjunto)\b/i
 
-const IMAGE_COUNT_RE = /\b(\d{1,2}|dos|tres|cuatro|cinco|seis)\s+(?:imagenes|imágenes|fotos|ilustraciones|versiones|variantes|variaciones|opciones|images|pictures|versions)\b/i
-const NUMBER_WORDS: Record<string, number> = { dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 }
-
+// Count + frame come from the lexicon the backend re-derives at generation
+// time (lib/chat/image-request-lexicon.ts mirrors image-directive.js), so the
+// chip shows exactly what will be rendered: "una imagen" → 1, "3 fotos" → 3,
+// "vertical" → 3:4, "historia de instagram" → 9:16, "portada de facebook" →
+// 16:9. Anything above the picker ceiling clamps to IMAGE_COUNT_MAX.
 function extractImageCount(normalized: string): number | null {
-  const m = normalized.match(IMAGE_COUNT_RE)
-  if (!m) return null
-  const raw = m[1]
-  const n = NUMBER_WORDS[raw] || Number(raw)
-  if (!Number.isFinite(n) || n < 1) return null
-  return Math.min(4, Math.max(1, n))
+  const n = detectExplicitImageCount(normalized)
+  if (n == null) return null
+  return Math.min(IMAGE_COUNT_MAX, Math.max(1, n))
 }
 
 function extractImageAspectRatio(normalized: string): string | null {
-  const ratio = normalized.match(/\b(16:9|9:16|1:1|4:3|3:4|21:9|4:5|3:2|2:3)\b/)
-  if (ratio) return ratio[1]
-  if (/\b(?:cuadrad[oa]s?|square|post de instagram|feed de instagram)\b/.test(normalized)) return "1:1"
-  if (/\b(?:vertical(?:es)?|retrato|portrait|tiktok|reels?|historias?|story|stories|shorts?|para movil|para celular|fondo de pantalla de (?:celular|movil))\b/.test(normalized)) return "9:16"
-  if (/\b(?:horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|youtube|banner|portada de (?:facebook|linkedin|youtube)|cabecera|cover|wallpaper de escritorio|fondo de pantalla de (?:pc|escritorio|computadora))\b/.test(normalized)) return "16:9"
-  if (/\b(?:cinema(?:tico|tografico)?|ultrawide|panavision)\b/.test(normalized)) return "21:9"
-  return null
+  return detectImageFrame(normalized)?.frame ?? null
 }
 
 function extractImageQuality(normalized: string): string | null {
@@ -131,6 +128,47 @@ function extractMusicDuration(normalized: string): number | null {
   if (!Number.isFinite(seconds) || seconds < 5) return null
   return Math.min(300, seconds)
 }
+
+// Producción musical: the same Estilo / Mood / Effect values the panel offers,
+// read from the request itself ("una balada triste estilo pop de 45 segundos
+// con acabado lo-fi") so a typed setting lands on the chip exactly like a
+// selected one. Values are the panel's enum labels (lib/chat/media-composer-config).
+const MUSIC_STYLE_RULES: Array<[string, RegExp]> = [
+  ["Cinematic", /\b(?:cinematic[oa]?|de pelicula|banda sonora|soundtrack|epic[oa] orquestal|trailer)\b/],
+  ["Orchestral", /\b(?:orquest(?:a|al|ada)|sinfoni(?:a|co|ca)|clasic[oa]|classical|orchestra(?:l)?|cuerdas|violines|piano solo)\b/],
+  ["Electronic", /\b(?:electronic[oa]|electronica|edm|techno|house|trance|dubstep|synth(?:wave|pop)?|dance|drum and bass|dnb|club)\b/],
+  ["Hip-Hop", /\b(?:hip[ -]?hop|rap|trap|drill|boom bap|beat de rap)\b/],
+  ["Jazz", /\b(?:jazz|jazzy|swing|bossa nova|blues|saxo(?:fon)?|bebop)\b/],
+  ["Latin", /\b(?:latin[oa]?|reggaeton|reggaeton|salsa|bachata|cumbia|merengue|bolero|ranchera|mariachi|tango|flamenco|corrido|banda|vallenato|samba)\b/],
+  // "lo-fi" is read as the finish (Effect), never as the genre, so "balada
+  // pop con acabado lo-fi" keeps Pop + Lo-Fi.
+  ["Ambient", /\b(?:ambient(?:al)?|ambiente|relajante|relajacion|meditacion|meditation|spa|chill(?:[ -]?out)?|atmosferic[oa]|drone|para dormir|sleep)\b/],
+  ["Pop", /\b(?:pop|balada|ballad|cancion pop|indie pop|k[ -]?pop|radio hit|pegajos[oa])\b/],
+]
+const MUSIC_MOOD_RULES: Array<[string, RegExp]> = [
+  ["Epic", /\b(?:epic[oa]|epic|heroic[oa]|grandios[oa]|triunfal|monumental)\b/],
+  ["Dark", /\b(?:oscur[oa]|dark|siniestr[oa]|tenebros[oa]|terror|miedo|sombri[oa]|gotic[oa]|misterios[oa])\b/],
+  ["Emotional", /\b(?:triste|tristeza|emotiv[oa]|emocional|emotional|melancolic[oa]|nostalgic[oa]|nostalgia|desamor|llorar|conmovedor[a]?|romantic[oa])\b/],
+  ["Energetic", /\b(?:energic[oa]|energetic|con energia|movid[oa]|intens[oa]|rapid[oa]|para entrenar|gym|gimnasio|workout|fiesta|party|bailable|upbeat|animad[oa])\b/],
+  ["Relaxed", /\b(?:relajad[oa]|relajante|tranquil[oa]|calmad[oa]|calm|chill|suave|soft|lent[oa]|para estudiar|para dormir|serena?)\b/],
+  ["Happy", /\b(?:alegre|feliz|felicidad|happy|divertid[oa]|optimista|positiv[oa]|cheerful|luminos[oa]|de cumpleanos|infantil)\b/],
+]
+const MUSIC_EFFECT_RULES: Array<[string, RegExp]> = [
+  ["Lo-Fi", /\b(?:lo[ -]?fi|lofi|sonido vintage de cassette|granulad[oa])\b/],
+  ["Warm Tape", /\b(?:cinta|tape|analogic[oa]|analog|calid[oa] y vintage|warm tape|vinilo|vinyl)\b/],
+  ["Spatial", /\b(?:espacial|spatial|3d|envolvente|surround|dolby|inmersiv[oa]|binaural)\b/],
+  ["Radio Ready", /\b(?:radio|listo para radio|radio ready|comercial|masterizad[oa] para radio|para spotify)\b/],
+  ["Studio Master", /\b(?:master(?:izad[oa]|izacion)?|studio master|calidad de estudio|estudio|profesional|limpi[oa]|nitid[oa])\b/],
+]
+
+function firstRuleMatch(rules: Array<[string, RegExp]>, normalized: string): string | null {
+  for (const [value, re] of rules) if (re.test(normalized)) return value
+  return null
+}
+
+function extractMusicStyle(normalized: string): string | null { return firstRuleMatch(MUSIC_STYLE_RULES, normalized) }
+function extractMusicMood(normalized: string): string | null { return firstRuleMatch(MUSIC_MOOD_RULES, normalized) }
+function extractMusicEffect(normalized: string): string | null { return firstRuleMatch(MUSIC_EFFECT_RULES, normalized) }
 
 /** Strip "narra:", "lee este texto:" prefixes so TTS reads only the content. */
 function cleanVoicePrompt(prompt: string): string {
@@ -184,6 +222,12 @@ export function detectComposerAutoMode(input: string, ctx: ComposerAutoContext =
     const settings: ComposerAutoSettings = {}
     const duration = extractMusicDuration(normalized)
     if (duration) settings.musicDurationSeconds = duration
+    const style = extractMusicStyle(normalized)
+    if (style) settings.musicStyle = style
+    const mood = extractMusicMood(normalized)
+    if (mood) settings.musicMood = mood
+    const effect = extractMusicEffect(normalized)
+    if (effect) settings.musicEffect = effect
     return { mode: "music", confidence: "high", settings, cleanedPrompt: raw.trim(), reason: "music-create" }
   }
 
@@ -200,7 +244,10 @@ export function detectComposerAutoMode(input: string, ctx: ComposerAutoContext =
   }
 
   // Image: needs a create verb + picture noun; analysis prompts stay on chat.
-  if (IMAGE_CREATE_RE.test(normalized) && !IMAGE_FALSE_POSITIVE_RE.test(normalized) && !isImageAnalysisPrompt(raw)) {
+  // Chat typos ("dma euna imajenes", "iamgen") are canonicalised with the same
+  // table the backend uses, so a misspelt request still flips the chip.
+  const imageNormalized = canonicalizeImageTypos(normalized)
+  if (IMAGE_CREATE_RE.test(imageNormalized) && !IMAGE_FALSE_POSITIVE_RE.test(imageNormalized) && !isImageAnalysisPrompt(raw)) {
     // An attached document + "crea una imagen" usually means "based on this" — still image.
     const settings: ComposerAutoSettings = {}
     const count = extractImageCount(normalized)
@@ -247,5 +294,8 @@ export const __test = {
   extractImageAspectRatio,
   extractImageQuality,
   extractMusicDuration,
+  extractMusicStyle,
+  extractMusicMood,
+  extractMusicEffect,
   cleanVoicePrompt,
 }

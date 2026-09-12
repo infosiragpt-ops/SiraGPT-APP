@@ -324,7 +324,7 @@ const MEDIA_CREATE_ACTION_RE_FRAGMENT =
   '(?:cr(?:ea|eame|ear)|gener(?:a|ame|ar|ate)|haz(?:me|melo|lo|la)?|dame|quiero|necesito|produce(?:me)?|compon(?:e|me|er)|prepara(?:me)?|convierte(?:lo)?|narra(?:me)?|lee(?:me)?|make|create|generate|compose|produce|turn|read)'
 
 const MUSIC_OBJECT_RE_FRAGMENT =
-  '(?:cancion(?:es)?|musica|music|melodi(?:a|as)|instrumental(?:es)?|soundtracks?|banda sonora|jingles?|tema musical|temas musicales|beats?|songs?|tune)'
+  '(?:cancion(?:es)?|musica|music|melodi(?:a|as)|instrumental(?:es)?|soundtracks?|banda sonora|jingles?|tema musical|temas musicales|beats?|songs?|tune|baladas?|himnos?)'
 
 const VOICE_OBJECT_RE_FRAGMENT =
   '(?:audios?|voz|voces|narracion(?:es)?|narra|locucion(?:es)?|podcasts?|voiceover|voice over|audiolibros?|dictado|tts|speech|doblaje|voz en off)'
@@ -572,9 +572,24 @@ export const ROUTING_PATTERNS = {
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
 }
 
+// "créame un videojuego con código html", "un reproductor de video en react",
+// "una animación css para el botón": the noun is a software artefact, not a
+// clip. Compound game nouns and technology tokens veto the Video chip so the
+// request stays on the coding/agent path. Bare "programa"/"juego" are NOT in
+// the list ("un video del programa de TV", "un video de un juego de fútbol"
+// are real clips).
+const VIDEO_CODE_CONTEXT_RE =
+  /\b(?:videojuegos?|video ?juegos?|videogames?|video ?games?|html5?|css3?|javascript|typescript|js|jsx|tsx|react(?:js)?|next\.?js|vue(?:js)?|angular|svelte|node(?:js)?|python|django|flask|php|laravel|java|kotlin|swift|flutter|dart|unity|godot|unreal|c\+\+|c#|rust|golang|sdk|api|codigo|code|snippet|script|programa(?:r|me|cion|ndo)|programming|desarrolla(?:r|me|ndo)?|reproductor|player|embed|iframe|componente|component|landing(?: page)?|frontend|backend|full ?stack|web ?app|sitio web|pagina web|website|webpage|canvas|webgl|three\.?js|sprite|pixel ?art)\b/i
+
+export function isVideoCodeContextPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  return !!normalized && VIDEO_CODE_CONTEXT_RE.test(normalized)
+}
+
 export function shouldAutoActivateVideoGeneration(prompt: string): boolean {
   const normalized = normalizePrompt(prompt)
-  return !!normalized && ROUTING_PATTERNS.video.test(normalized)
+  if (!normalized || !ROUTING_PATTERNS.video.test(normalized)) return false
+  return !VIDEO_CODE_CONTEXT_RE.test(normalized)
 }
 
 // Analysis/understanding questions ABOUT an image ("describe esta imagen",

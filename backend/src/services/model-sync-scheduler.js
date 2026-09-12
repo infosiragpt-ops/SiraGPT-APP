@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const modelSyncService = require('./model-sync-service');
+const { invalidateAiModelCatalog } = require('./ai-model-catalog');
 
 class ModelSyncScheduler {
   constructor() {
@@ -30,6 +31,7 @@ class ModelSyncScheduler {
         console.log('🚀 Starting scheduled model sync...');
         
         const result = await modelSyncService.syncModelsToDatabase();
+        if (result && (result.created || result.updated)) invalidateAiModelCatalog({ reason: 'scheduled_sync' });
         
         console.log(`✅ Scheduled model sync completed: ${result.created} created, ${result.updated} updated, ${result.errors} errors`);
         
@@ -114,6 +116,7 @@ class ModelSyncScheduler {
       console.log('🔄 Running manual model sync...');
       
       const result = await modelSyncService.syncModelsToDatabase();
+      if (result && (result.created || result.updated)) invalidateAiModelCatalog({ reason: 'manual_sync' });
       
       console.log(`✅ Manual model sync completed: ${result.created} created, ${result.updated} updated, ${result.errors} errors`);
       

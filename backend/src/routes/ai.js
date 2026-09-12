@@ -92,6 +92,7 @@ const conversationCompactor = require('../services/conversation-compactor');
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const { responseCache } = require('../middleware/response-cache');
+const { loadPickerRows, invalidateAiModelCatalog } = require('../services/ai-model-catalog');
 const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
@@ -836,19 +837,20 @@ router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, name
 });
 
 // ✅ Get available AI models
+// Slow-read telemetry for the picker catalog: one warning line when a read
+// exceeds the threshold (default 500 ms) instead of per-stage stderr noise.
+const AI_MODELS_SLOW_MS = (() => {
+  const raw = Number.parseInt(String(process.env.SIRAGPT_AI_MODELS_SLOW_MS || ''), 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 500;
+})();
+
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
-  const __dbgT0 = Date.now();
-  const __dbg = (m) => { try { console.error(`[models-dbg] +${Date.now() - __dbgT0}ms ${m}`); } catch (_) {} };
+  const startedAt = Date.now();
+  let stage = 'enter';
   try {
-    __dbg('handler-enter');
     const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
     const type = String(rawType || '').trim().toUpperCase();
     const userPlan = req.user?.plan || 'FREE';
-    const freeDailyCallsUsed = req.user?.plan === 'FREE'
-      ? await countDailyApiCalls(req.user.id)
-      : null;
-    const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
-    __dbg(`after-quota-policy type=${type}`);
     // VOICE is not a Prisma ModelType: the Voz composer chip lists the
     // Admin-active AUDIO rows (TTS models) — an empty list here left the chip
     // dead in production ("No hay modelos de voz activos") while the speech
@@ -869,44 +871,31 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     if (wantVideo) staticTypesToEnsure.push('VIDEO');
     if (wantAudio) staticTypesToEnsure.push('AUDIO');
     if (wantMusic) staticTypesToEnsure.push('MUSIC');
-    if (staticTypesToEnsure.length > 0) {
-      await modelSyncService.ensureStaticCatalogModels({ types: staticTypesToEnsure });
+
+    // The FREE quota count (one indexed COUNT per read) and the static-catalog
+    // pass are independent: run them together instead of back to back.
+    stage = 'quota+static-catalog';
+    const [freeDailyCallsUsed, staticCatalog] = await Promise.all([
+      req.user?.plan === 'FREE' ? countDailyApiCalls(req.user.id) : Promise.resolve(null),
+      staticTypesToEnsure.length > 0
+        // Read path: memoised per type (default 10 min) and diff-aware, so it
+        // no longer issues one UPDATE per manifest model on every picker read.
+        ? modelSyncService.ensureStaticCatalogModelsCached({ types: staticTypesToEnsure })
+        : Promise.resolve(null),
+    ]);
+    const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
+    if (staticCatalog && (staticCatalog.created || staticCatalog.updated)) {
+      // Rows were created/refreshed after the snapshot was taken: drop it so
+      // this very read sees the new metadata.
+      invalidateAiModelCatalog({ reason: 'static_catalog_sync' });
     }
 
-    const whereClause = {
-      isActive: true,
-    };
-
-    if (type) {
-      // VOICE is a UI alias for the Voz chip, not a Prisma ModelType: the
-      // TTS rows live as AUDIO. Filtering 'VOICE' verbatim threw and left
-      // the chip empty ("Sin modelos activos") while generation worked.
-      // Include legacy TEXT/IMAGE rows in either picker read. The curators
-      // repair known Grok image names before filtering, without a DB write.
-      whereClause.type = type === 'VOICE' ? 'AUDIO' : type;
-      if (['TEXT', 'IMAGE'].includes(type)) {
-        whereClause.type = { in: ['TEXT', 'IMAGE'] };
-      }
-    }
-
-
-    __dbg('before-main-findMany');
-    let models = await prisma.aiModel.findMany({
-      where: whereClause,
-      select: {
-        id: true,
-        name: true,
-        displayName: true,
-        provider: true,
-        description: true,
-        type: true, // Type bhi select karein
-        icon: true, // Icon bhi select karein
-        isActive: true,
-        contextLength: true,
-      },
-      orderBy: { createdAt: 'asc' }
-    });
-    __dbg(`after-main-findMany count=${models.length}`);
+    // Snapshot-backed read (per-scope in-memory rows, single-flight across
+    // concurrent readers, invalidated by every ai_models write path). The
+    // client's `Cache-Control: no-cache` only skips the HTTP response cache.
+    stage = 'load-rows';
+    let models = await loadPickerRows({ prisma, type });
+    stage = 'curate';
 
     if (type === 'IMAGE') {
       models = curateVisibleAdminMediaModels(models, 'IMAGE', {
@@ -922,7 +911,6 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     if (wantText) {
       models = curateVisibleTextModels(models);
     }
-    __dbg('after-curate');
 
     // Plan gating — drop catalogued models the user's plan can't use, but
     // leave models not in the catalog untouched (DB-only / virtual entries
@@ -958,11 +946,14 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // their upstream 503 only when actually invoked, instead of being
     // hidden from the picker.
 
-    __dbg(`before-res-json count=${models.length}`);
+    stage = 'respond';
     res.json({ models, policy: modelPolicy });
-    __dbg('after-res-json');
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= AI_MODELS_SLOW_MS) {
+      console.warn(`[ai-models] slow picker read type=${type || 'ALL'} count=${models.length} durationMs=${durationMs}`);
+    }
   } catch (error) {
-    console.error('Get AI models error:', error);
+    console.error(`Get AI models error (stage=${stage}, +${Date.now() - startedAt}ms):`, error);
     res.status(500).json({ error: 'Failed to fetch AI models' });
   }
 });
@@ -9945,9 +9936,12 @@ router.post(
       const grokImageRequested = isGrokImageModelName(model);
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
-      // Spoken image count ("dame 3 imágenes", "varias fotos") fills the gap
-      // only when the caller did not send an explicit imageCount — the
-      // picker's explicit value always wins.
+      // Image count precedence: a quantity the user WROTE ("dame 3 imágenes",
+      // "una sola foto", "un par de versiones") is the most direct statement
+      // of intent and wins over the picker chip, whose value can be left over
+      // from an earlier turn; with no quantity in the text the chip decides,
+      // and with neither we render one. The composer applies the same lexicon
+      // to the chip, so both normally agree.
       let spokenImageCount = null;
       let providerPromptBase = prompt;
       try {
@@ -9955,12 +9949,18 @@ router.post(
         const imageDirective = require('../services/agents/image-directive');
         const cleaned = imageDirective.stripImageCommand(prompt);
         if (cleaned) providerPromptBase = cleaned;
-        const parsedCount = imageDirective.detectImageCount(prompt);
+        const parsedCount = imageDirective.detectExplicitImageCount(prompt);
         if (parsedCount && parsedCount >= 1) spokenImageCount = Math.min(5, parsedCount);
       } catch (_) { /* best-effort: keep the raw prompt and default count */ }
-      const imageCount = rawImageCount === undefined || rawImageCount === null || rawImageCount === ''
-        ? normalizeImageCount(spokenImageCount || 1)
+      const pickerImageCount = rawImageCount === undefined || rawImageCount === null || rawImageCount === ''
+        ? null
         : normalizeImageCount(rawImageCount);
+      const imageCount = spokenImageCount
+        ? normalizeImageCount(spokenImageCount)
+        : (pickerImageCount || 1);
+      if (spokenImageCount && pickerImageCount && spokenImageCount !== pickerImageCount) {
+        console.log(`[generate-image] spoken count ${spokenImageCount} overrides picker ${pickerImageCount}`);
+      }
       // Sync the frame to what the user described in the prompt itself
       // ("rectangular", "vertical", "para facebook", "9:16"…), overriding the
       // picker default so the generated image matches the request.

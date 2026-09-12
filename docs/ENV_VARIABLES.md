@@ -416,6 +416,16 @@ needs the backend `.env` — no frontend rebuild.
 | `IDEMPOTENCY_ENABLED` | `false` | Enable Stripe-style replay protection |
 | `MAINTENANCE_MODE_ENABLED` | `false` | Enable 503 maintenance mode |
 
+### Model picker catalog (`GET /api/ai/models`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_AI_MODEL_CATALOG_TTL_MS` | `60000` | TTL of the in-memory per-scope snapshot of active `ai_models` rows served to the picker (1 s–1 h). Every admin/connections/scheduled write invalidates it, so the TTL only bounds staleness from out-of-band DB edits |
+| `SIRAGPT_AI_MODEL_CATALOG_CACHE_DISABLED` | unset | `1` bypasses the snapshot (one DB read per request) |
+| `SIRAGPT_STATIC_CATALOG_ENSURE_TTL_MS` | `600000` | How long the read path (`/api/ai/models`, generation guards, admin list) trusts that the static manifest rows exist before re-running the diff-aware pass. `0` re-runs on every read (legacy) |
+| `SIRAGPT_MODEL_CATALOG_WARMUP` | unset | `0` skips the boot warm-up that syncs the manifest once and primes the snapshot (fal.ai discovery included) so the first click on Imágenes/Voz/Video/Música is served from memory |
+| `SIRAGPT_AI_MODELS_SLOW_MS` | `500` | Log a `[ai-models] slow picker read` warning when a catalog read takes longer than this |
+
 ---
 
 ## Optional Scientific Search Keys

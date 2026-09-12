@@ -16,6 +16,7 @@ test('detectImageFrame: vertical → 3:4 portrait', () => {
   assert.deepEqual(directive.detectImageFrame('dame una imagen vertical de un perro'), {
     frame: '3:4',
     orientation: 'portrait',
+    source: 'portrait',
   });
 });
 
@@ -23,6 +24,7 @@ test('detectImageFrame: typo-tolerant horizontal ("orisailntal") → 16:9', () =
   assert.deepEqual(directive.detectImageFrame('hazme una imagen orisailntal para la portada'), {
     frame: '16:9',
     orientation: 'landscape',
+    source: 'landscape',
   });
 });
 
@@ -39,6 +41,37 @@ test('detectImageFrame: stories / logos map to their frames', () => {
 test('detectImageFrame: no shape described → null', () => {
   assert.equal(directive.detectImageFrame('creame una imagen de un perro'), null);
   assert.equal(directive.detectImageFrame(''), null);
+});
+
+test('detectImageFrame: tiered precedence — surface preset > shape word > type default', () => {
+  assert.equal(directive.detectImageFrame('una imagen vertical para historia de instagram').frame, '9:16');
+  assert.equal(directive.detectImageFrame('dibuja un poster horizontal de una ciudad').frame, '16:9');
+  assert.equal(directive.detectImageFrame('un poster de una banda de rock').frame, '2:3');
+  assert.equal(directive.detectImageFrame('un logo horizontal para la web').frame, '16:9');
+  assert.equal(directive.detectImageFrame('banner vertical para la tienda').frame, '3:4');
+  assert.equal(directive.detectImageFrame('quiero que la imagen del colibri sea horizontal para mi portada de Facebook').frame, '16:9');
+  assert.equal(directive.detectImageFrame('quiero que la imagen del colibri sea vertical porfavor').frame, '3:4');
+  assert.equal(directive.detectImageFrame('fondo de pantalla de celular').frame, '9:16');
+  assert.equal(directive.detectImageFrame('fondo de pantalla para mi pc').frame, '16:9');
+  assert.equal(directive.detectImageFrame('pin para pinterest').frame, '2:3');
+  assert.equal(directive.detectImageFrame('post para instagram').frame, '1:1');
+  assert.equal(directive.detectImageFrame('una imagen 4 por 3').frame, '4:3');
+  assert.equal(directive.detectImageFrame('una imagen vertical').source, 'portrait');
+});
+
+test('detectExplicitImageCount: singulars count as 1, plurals 2..5, ceiling 5, subject numbers ignored', () => {
+  assert.equal(directive.detectExplicitImageCount('créame una imagen de un gato'), 1);
+  assert.equal(directive.detectExplicitImageCount('solo una foto por favor'), 1);
+  assert.equal(directive.detectExplicitImageCount('a picture of a dragon'), 1);
+  assert.equal(directive.detectExplicitImageCount('una imagen de 3 gatos'), 1);
+  assert.equal(directive.detectExplicitImageCount('dos nuevas versiones del logo'), 2);
+  assert.equal(directive.detectExplicitImageCount('imagenes x3'), 3);
+  assert.equal(directive.detectExplicitImageCount('5 opciones de logo'), 5);
+  assert.equal(directive.detectExplicitImageCount('dame 12 imagenes'), 5);
+  assert.equal(directive.detectExplicitImageCount('media docena de fotos'), 5);
+  assert.equal(directive.detectExplicitImageCount('quiero que la imagen del colibri sea horizontal'), null);
+  assert.equal(directive.detectExplicitImageCount('3 gatos jugando'), null);
+  assert.equal(directive.IMAGE_COUNT_MAX, 5);
 });
 
 // ── Quality / count / style / type ────────────────────────────────────────

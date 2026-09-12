@@ -1344,6 +1344,84 @@ planes. No revivir tiers ni el plan de $5 en la UI.
 - **Tests**: `backend/tests/payments-public-config.test.js`,
   `backend/tests/stripe-setup.test.js` (auto-provisión), `tests/plans-catalog.test.ts`.
 
+## Selector de modelos + pedidos de medios en el composer — added 2026-09-12
+
+Corrige la latencia al elegir Imágenes/Voz/Video/Música y varios defectos del
+flujo de imagen que salieron al probar en producción. Solo lógica (el UI lock
+se re-baselineó; no hay cambios visuales salvo dos botones nuevos en el visor).
+
+### Capa de servicio del catálogo (`backend/src/services/ai-model-catalog.js`)
+- `GET /api/ai/models?type=X` ya no re-sincroniza el manifest estático en
+  cada lectura (antes: 1 UPDATE por modelo — 51 para VIDEO — y `findMany`
+  por clic). Ahora: instantánea en memoria por scope (VIDEO / AUDIO / MUSIC /
+  TEXT+IMAGE / ALL), single-flight entre lectores concurrentes e invalidación
+  explícita desde TODAS las escrituras (`invalidateAiModelCatalog`: admin
+  models, admin-connections, scheduler). El `Cache-Control: no-cache` del
+  cliente solo salta el response-cache HTTP.
+- `modelSyncService.ensureStaticCatalogModelsCached({types})`: memo por tipo
+  (10 min, `SIRAGPT_STATIC_CATALOG_ENSURE_TTL_MS`) + `skipUnchanged` (solo
+  escribe filas cuyo metadata difiere del manifest). El forzado
+  `ensureStaticCatalogModels` (admin sync) conserva el contrato legacy.
+- `fetchFalVideoModels`: stale-while-revalidate (sirve el catálogo viejo y
+  refresca en segundo plano; solo bloquea en frío). Warm-up al boot en
+  `index.js` (`SIRAGPT_MODEL_CATALOG_WARMUP=0` lo apaga).
+- Frontend: el efecto de activación de Video dependía de `videoCatalogModels`
+  (array nuevo en cada fetch) → refetch infinito mientras el chip estaba
+  activo; ahora usa un ref + functional update. `apiClient.getAIModels`
+  coalesce lecturas concurrentes idénticas (sin memo TTL).
+- Tests: `backend/tests/ai-model-catalog.test.js`,
+  `backend/tests/model-sync-static-catalog-read-path.test.js`,
+  `tests/composer-media-catalog-source.test.ts`.
+
+### Tarjeta "Generando" fantasma (imagen/video)
+En un chat existente el send flow añade un bubble asistente vacío genérico y el
+handler de imagen añade su `[GENERATING_IMAGE]`; tras la recarga,
+`preserveOrphanAssistantMessages` conservaba el sobrante → segunda tarjeta
+"Generando · 16:9" que nunca terminaba. Fix: `dropGenericAssistantPlaceholder()`
+antes de `handleImageGeneration`/`handleVideoGeneration` (fast path +
+classified) y regla en `lib/message-preservation.ts`: un sentinel
+`[GENERATING_*]`/`[PROCESSING_*]` local muere cuando el servidor trae una fila
+asistente nueva. Tests: `tests/message-preservation-transient-placeholder.test.ts`,
+`tests/chat-media-placeholder-source.test.ts`.
+
+### Léxico compartido de pedidos de imagen (cantidad + encuadre)
+- Fuente de verdad: `backend/src/services/agents/image-directive.js`
+  (`IMAGE_FRAME_LEXICON` por tiers: ratio explícito > superficie con ratio
+  conocido (story/reels → 9:16, portada de facebook/miniatura youtube → 16:9,
+  pin → 2:3, post de instagram/foto de perfil → 1:1, A4 → 3:4) > forma
+  genérica (vertical → 3:4, horizontal → 16:9, cuadrada → 1:1) > default por
+  tipo (logo → 1:1, poster → 2:3, banner → 16:9)); `detectExplicitImageCount`
+  1..5 ("una imagen" = 1, "un par" = 2, "varias" = 3, techo 5); typos comunes.
+- Espejo TS para el chip: `lib/chat/image-request-lexicon.ts` (mismas tablas;
+  `composer-auto-mode.ts` lo usa). Antes el chip decía 9:16 para "vertical" y
+  el backend generaba 3:4.
+- Ruta `generate-image`: la cantidad ESCRITA gana sobre el chip (que puede
+  quedar de un turno anterior); sin cantidad en el texto manda el chip.
+- `tests/image-request-parser-scenarios.test.ts`: generador determinista de
+  ~6.300 frases ES/EN (verbos × cantidades × sustantivos × sujetos con
+  números distractores × encuadres/plataformas × typos) que corre AMBOS
+  parsers y exige resultado esperado + paridad de tablas.
+
+### Auto-modo del composer
+- Video: `shouldAutoActivateVideoGeneration` veta contexto de software
+  ("videojuego con código html", "reproductor de video en react", "animación
+  css"); el efecto solo confía en el token completo (no se activa en el prefijo
+  "créame un video" de "videojuego") y deshace SU propio flip si el borrador
+  deja de pedir un clip. Tests: `tests/video-auto-activation-context.test.ts`.
+- Música: estilo / mood / acabado escritos ("balada triste estilo pop con
+  acabado lo-fi") se aplican a los chips de Producción musical igual que una
+  selección (el backend ya pliega los chips en el prompt).
+
+### Visor de imágenes (`components/viewers/UnifiedDocumentViewer.tsx`)
+Botones de cabecera: Compartir (Web Share API → copiar enlace) y Descargar
+todas (cuando el set tiene >1 archivo; descarga secuencial con nombre por
+índice). Test: `tests/unified-viewer-share-download-source.test.ts`.
+
+### Envs nuevas
+`SIRAGPT_AI_MODEL_CATALOG_TTL_MS` · `SIRAGPT_AI_MODEL_CATALOG_CACHE_DISABLED` ·
+`SIRAGPT_STATIC_CATALOG_ENSURE_TTL_MS` · `SIRAGPT_MODEL_CATALOG_WARMUP` ·
+`SIRAGPT_AI_MODELS_SLOW_MS` (ver `docs/ENV_VARIABLES.md`).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

@@ -19,7 +19,8 @@ const {
   countPublication,
   setAiModelActive,
 } = require('../services/ai-model-publication');
-const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
+const { responseCache } = require('../middleware/response-cache');
+const { invalidateAiModelCatalog } = require('../services/ai-model-catalog');
 const adminStats = require('../services/admin-stats-aggregator');
 const webhookDispatcher = require('../services/webhook-dispatcher');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -52,7 +53,9 @@ const {
 const PLAN_VALUES = ['FREE', 'PRO', 'PRO_MAX', 'ENTERPRISE'];
 
 function invalidateAiModelsCache() {
-  return invalidateResponseCache({ namespace: 'ai-models' });
+  // Drops the picker row snapshot AND the ai-models HTTP response cache so
+  // an Admin activation is visible on the very next picker read.
+  return invalidateAiModelCatalog({ reason: 'admin_models_write' });
 }
 
 function invoicePdfFilename(invoice) {
@@ -140,7 +143,7 @@ router.get('/providers', async (req, res) => {
 router.get('/models', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
-    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'] });
+    await modelSyncService.ensureStaticCatalogModelsCached({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'] });
     const models = await prisma.aiModel.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -416,7 +419,7 @@ router.post('/models/sync', async (req, res) => {
 router.get('/models/stats', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
-    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'] });
+    await modelSyncService.ensureStaticCatalogModelsCached({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'] });
     const stats = await modelSyncService.getProviderStats();
     const total = await prisma.aiModel.count();
     const active = await prisma.aiModel.count({ where: { isActive: true } });

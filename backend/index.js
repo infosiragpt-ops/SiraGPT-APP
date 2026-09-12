@@ -543,6 +543,7 @@ const {
 } = require('./src/services/codex/swarm-runner');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
+const { warmAiModelCatalog } = require('./src/services/ai-model-catalog');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
 const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
 const alerting = require('./src/services/alerting');
@@ -1637,6 +1638,16 @@ async function startServer() {
       .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
       .catch((err) => logger.warn({ err: err.message }, 'codex_swarm_recovery_failed'));
     startDocumentCollectionWorker();
+    // Catálogo del selector de modelos (Imágenes/Voz/Video/Música): sincroniza
+    // el manifest estático una vez y precalienta la instantánea en memoria para
+    // que el primer clic tras un deploy no pague el discovery de fal.ai ni la
+    // primera lectura. Best-effort, unref'd; SIRAGPT_MODEL_CATALOG_WARMUP=0 lo apaga.
+    if (process.env.NODE_ENV !== 'test' && process.env.SIRAGPT_MODEL_CATALOG_WARMUP !== '0') {
+        const catalogWarmupTimer = setTimeout(() => {
+            warmAiModelCatalog({ logger }).catch((err) => logger.warn({ err: err && err.message }, 'ai_model_catalog_warmup_failed'));
+        }, 1500);
+        if (typeof catalogWarmupTimer.unref === 'function') catalogWarmupTimer.unref();
+    }
     // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
     // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
     // producción; CODEX_PROACTIVE_ENABLED=0/1 fuerza). unref'd — nunca retiene

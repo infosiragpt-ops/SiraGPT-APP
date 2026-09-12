@@ -60,6 +60,14 @@ class ModelSyncService {
       falVideo: { data: null, lastFetch: 0, ttl: 3600000 }
     };
     this._staticCatalogSyncFlights = new Map();
+    // Per-type timestamp of the last successful static-catalog pass. Read
+    // paths (`/api/ai/models`, generation guards) go through
+    // `ensureStaticCatalogModelsCached`, which skips the pass while every
+    // requested type is inside the TTL; admin sync keeps calling the forced
+    // `ensureStaticCatalogModels` and refreshes the stamps too.
+    this._staticCatalogTypeEnsuredAt = new Map();
+    // Background refresh of the fal.ai video discovery (stale-while-revalidate).
+    this._falVideoRefreshFlight = null;
   }
 
   getStaticVideoModels() {
@@ -89,7 +97,28 @@ class ModelSyncService {
       console.log('📦 Using cached fal.ai video models');
       return cache.data;
     }
+    if (useCache && cache.data && !options.blocking) {
+      // Stale-while-revalidate: the discovery can take tens of seconds when
+      // fal.ai is slow (2 categories × up to 20 pages × 10 s timeout). A
+      // picker read must never wait for that once we have ANY catalog, so
+      // hand back the stale list and refresh once in the background.
+      if (!this._falVideoRefreshFlight) {
+        this._falVideoRefreshFlight = this._fetchFalVideoModelsUncached({ apiKey, useCache })
+          .catch((error) => {
+            console.warn('⚠️ fal.ai background video catalog refresh failed, keeping stale list:', error?.message || error);
+            return cache.data;
+          })
+          .finally(() => { this._falVideoRefreshFlight = null; });
+      }
+      return cache.data;
+    }
 
+    return this._fetchFalVideoModelsUncached({ apiKey, useCache });
+  }
+
+  async _fetchFalVideoModelsUncached({ apiKey = '', useCache = true } = {}) {
+    const now = Date.now();
+    const cache = this.cache.falVideo;
     const staticModels = this.getStaticVideoModels();
     const liveModels = [];
     const categories = ['text-to-video', 'image-to-video'];
@@ -1006,11 +1035,16 @@ class ModelSyncService {
     return { applied: true, count: 0, reason: 'marker_stamped_without_disable' };
   }
 
-  _getStaticCatalogSyncFlightKey(options = {}) {
-    const types = Array.isArray(options.types)
+  _normalizeStaticCatalogTypes(options = {}) {
+    return Array.isArray(options.types)
       ? [...new Set(options.types.map(type => String(type).toUpperCase()).filter(Boolean))].sort()
       : [];
-    return types.length ? `types:${types.join(',')}` : 'types:*';
+  }
+
+  _getStaticCatalogSyncFlightKey(options = {}) {
+    const types = this._normalizeStaticCatalogTypes(options);
+    const scope = types.length ? `types:${types.join(',')}` : 'types:*';
+    return options.skipUnchanged ? `${scope}|diff` : scope;
   }
 
   ensureStaticCatalogModels(options = {}) {
@@ -1026,10 +1060,88 @@ class ModelSyncService {
     return flight;
   }
 
+  static get STATIC_CATALOG_TYPES() {
+    return ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'];
+  }
+
+  getStaticCatalogEnsureTtlMs(env = process.env) {
+    const raw = Number.parseInt(String(env.SIRAGPT_STATIC_CATALOG_ENSURE_TTL_MS || ''), 10);
+    if (!Number.isFinite(raw)) return 10 * 60_000;
+    return Math.max(0, Math.min(24 * 60 * 60_000, raw));
+  }
+
+  _staticCatalogTypesCovered(types, ttlMs, now = Date.now()) {
+    if (ttlMs <= 0) return false;
+    const wanted = types.length ? types : ModelSyncService.STATIC_CATALOG_TYPES;
+    return wanted.every((type) => {
+      const stampedAt = this._staticCatalogTypeEnsuredAt.get(type);
+      return Number.isFinite(stampedAt) && (now - stampedAt) < ttlMs;
+    });
+  }
+
+  _stampStaticCatalogTypes(types, now = Date.now()) {
+    const stamped = types.length ? types : ModelSyncService.STATIC_CATALOG_TYPES;
+    for (const type of stamped) this._staticCatalogTypeEnsuredAt.set(type, now);
+  }
+
+  invalidateStaticCatalogMemo() {
+    this._staticCatalogTypeEnsuredAt.clear();
+  }
+
+  /**
+   * Read-path variant of `ensureStaticCatalogModels`.
+   *
+   * The picker and the generation guards only need the manifest rows to
+   * EXIST (new rows are created inactive; visibility is the admin's call), so
+   * re-running the full metadata pass on every read is wasted DB work: it
+   * used to issue one UPDATE per manifest model per request. This wrapper
+   *   1. skips the pass entirely while every requested type was ensured
+   *      within `SIRAGPT_STATIC_CATALOG_ENSURE_TTL_MS` (default 10 min), and
+   *   2. when it does run, only writes rows whose metadata actually drifted
+   *      from the manifest (`skipUnchanged`).
+   * Admin sync keeps using the forced method, which refreshes every row and
+   * its `lastSynced` stamp.
+   */
+  ensureStaticCatalogModelsCached(options = {}) {
+    const types = this._normalizeStaticCatalogTypes(options);
+    const ttlMs = Number.isFinite(options.ttlMs) ? Math.max(0, options.ttlMs) : this.getStaticCatalogEnsureTtlMs();
+    const now = Date.now();
+    if (!options.force && this._staticCatalogTypesCovered(types, ttlMs, now)) {
+      return Promise.resolve({ skipped: true, created: 0, updated: 0, unchanged: 0, existing: 0, count: 0 });
+    }
+    return this.ensureStaticCatalogModels({ ...options, skipUnchanged: options.skipUnchanged !== false });
+  }
+
+  _staticCatalogRowMatches(row, data) {
+    if (!row) return false;
+    const norm = (value) => (value === undefined ? null : value);
+    const json = (value) => {
+      if (value === undefined || value === null) return 'null';
+      try {
+        return JSON.stringify(value, Object.keys(value && typeof value === 'object' && !Array.isArray(value) ? value : {}).sort());
+      } catch (_) {
+        return String(value);
+      }
+    };
+    if (norm(row.displayName) !== norm(data.displayName)) return false;
+    if (norm(row.description) !== norm(data.description)) return false;
+    if (norm(row.provider) !== norm(data.provider)) return false;
+    if (norm(row.type) !== norm(data.type)) return false;
+    if (norm(row.icon) !== norm(data.icon)) return false;
+    if (norm(row.syncSource) !== norm(data.syncSource)) return false;
+    if (norm(row.contextLength) !== norm(data.contextLength)) return false;
+    if (json(row.pricing) !== json(data.pricing)) return false;
+    const rowTags = Array.isArray(row.tags) ? row.tags : [];
+    const dataTags = Array.isArray(data.tags) ? data.tags : [];
+    if (rowTags.length !== dataTags.length || rowTags.some((tag, index) => tag !== dataTags[index])) return false;
+    return true;
+  }
+
   async _ensureStaticCatalogModels(options = {}) {
     const types = Array.isArray(options.types) && options.types.length
       ? new Set(options.types.map(type => String(type).toUpperCase()))
       : null;
+    const skipUnchanged = options.skipUnchanged === true;
     const wantsVideo = !types || types.has('VIDEO');
     const videoModels = wantsVideo ? await this.fetchFalVideoModels() : [];
     const catalogModels = [
@@ -1048,11 +1160,26 @@ class ModelSyncService {
 
     let created = 0;
     let updated = 0;
+    let unchanged = 0;
     const existingRows = await this.prisma.aiModel.findMany({
       where: { name: { in: dedupedCatalogModels.map(model => model.name) } },
-      select: { name: true },
+      select: skipUnchanged
+        ? {
+          name: true,
+          displayName: true,
+          description: true,
+          provider: true,
+          type: true,
+          icon: true,
+          syncSource: true,
+          contextLength: true,
+          pricing: true,
+          tags: true,
+        }
+        : { name: true },
     });
     const existingNames = new Set(existingRows.map(row => row.name));
+    const existingByName = skipUnchanged ? new Map(existingRows.map(row => [row.name, row])) : null;
 
     for (const model of dedupedCatalogModels) {
       const data = {
@@ -1068,6 +1195,10 @@ class ModelSyncService {
         lastSynced: new Date(),
       };
       if (existingNames.has(model.name)) {
+        if (skipUnchanged && this._staticCatalogRowMatches(existingByName.get(model.name), data)) {
+          unchanged++;
+          continue;
+        }
         await this.prisma.aiModel.update({
           where: { name: model.name },
           data,
@@ -1102,7 +1233,8 @@ class ModelSyncService {
       existingNames.add(model.name);
     }
 
-    return { created, updated, existing: existingRows.length, count: dedupedCatalogModels.length };
+    this._stampStaticCatalogTypes(types ? [...types] : []);
+    return { created, updated, unchanged, existing: existingRows.length, count: dedupedCatalogModels.length };
   }
 
   /**

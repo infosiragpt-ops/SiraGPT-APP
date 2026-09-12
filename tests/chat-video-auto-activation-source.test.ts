@@ -54,12 +54,12 @@ describe("chat video auto-activation source contract", () => {
   it("keeps image attachment ids when a normal chat prompt routes to video", () => {
     assert.match(
       source,
-      /case 'video':[\s\S]{0,220}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\), filesToSend\)/,
+      /case 'video':[\s\S]{0,320}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\), filesToSend\)/,
       "intent-routed video generation must preserve attached image file ids for image-to-video"
     )
     assert.match(
       source,
-      /isVideoGenerationActive \|\| chatType === 'video'[\s\S]{0,220}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\), filesToSend\)/,
+      /isVideoGenerationActive \|\| chatType === 'video'[\s\S]{0,320}handleVideoGeneration\(msg, collectUploadFileIds\(filesToSend\), filesToSend\)/,
       "explicit video mode sends must preserve original attachment objects for image-to-video context"
     )
     assert.match(

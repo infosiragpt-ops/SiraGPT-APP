@@ -19,7 +19,7 @@ const prisma = require('../config/database');
 const { encrypt, decrypt } = require('../utils/encryption');
 const { applyAdminConnections, reconcileCatalog } = require('../services/admin-connections-bridge');
 const modelSyncService = require('../services/model-sync-service');
-const { invalidate: invalidateResponseCache } = require('../middleware/response-cache');
+const { invalidateAiModelCatalog } = require('../services/ai-model-catalog');
 
 const router = express.Router();
 router.use(authenticateToken, requireAdminRoutePermission);
@@ -70,7 +70,7 @@ async function discoverConnectionModels(connId) {
     }).catch(() => {});
 
     if (result.ok && (result.created || result.updated)) {
-      invalidateResponseCache({ namespace: 'ai-models' });
+      invalidateAiModelCatalog({ reason: 'admin_connections' });
       console.log(`[admin-connections] discovered ${conn.providerKey}: +${result.created} new, ${result.updated} updated`);
     }
   } catch (e) {
@@ -318,7 +318,7 @@ router.delete('/:id', async (req, res) => {
     refreshBridge();
     // Deleting a provider's connection can change which models are available,
     // so drop the cached ai-models response (mirrors create/patch/sync paths).
-    invalidateResponseCache({ namespace: 'ai-models' });
+    invalidateAiModelCatalog({ reason: 'admin_connections' });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Connection not found' });
     console.error('[admin-connections] delete failed:', err);
@@ -375,7 +375,7 @@ router.post('/:id/test', async (req, res) => {
       return res.status(502).json({ ok: false, status: result.status || 0, error: String(result.error || 'probe failed').slice(0, 400) });
     }
 
-    if (result.created || result.updated) invalidateResponseCache({ namespace: 'ai-models' });
+    if (result.created || result.updated) invalidateAiModelCatalog({ reason: 'admin_connections' });
 
     res.json({
       ok: true,

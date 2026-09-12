@@ -346,6 +346,9 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
 }
 
 const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
+// Client-only progress sentinels rendered as animated cards (image / PPT /
+// Gmail / Drive…). They never come back from the server.
+const TRANSIENT_PLACEHOLDER_RE = /^\[(?:GENERATING|PROCESSING|THESIS_GENERATING)_?[A-Z_]*\]$/;
 
 function parseTurnMetadata(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -691,10 +694,23 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
     if (key) incomingAssistantTurnKeys.add(key);
   }
 
+  // A LOCAL-ONLY placeholder such as "[GENERATING_IMAGE]" is the landing spot
+  // of a generation the server answers with a brand-new assistant row. Once
+  // the incoming list carries an assistant row local never saw (fresh id with
+  // content or files), that placeholder is finished — keeping it as an
+  // orphan rendered a second, never-resolving "Generando" card under the
+  // real image.
+  const localIds = new Set<string>();
+  for (const m of localMessages) if (m?.id) localIds.add(String(m.id));
+  const incomingHasFreshAssistant = enriched.some((m) =>
+    m?.role && !isUserMessage(m) && m.id && !localIds.has(String(m.id))
+    && (hasFiles(m.files) || hasText(m.content)));
+
   const orphans = localAssistants.slice(incomingAssistantCount).filter((local) => {
     if (!local) return false;
     // Skip orphans whose id already exists incoming (paranoid dedupe).
     if (local.id && incomingIds.has(String(local.id))) return false;
+    if (incomingHasFreshAssistant && TRANSIENT_PLACEHOLDER_RE.test(asText(local.content).trim())) return false;
     if (hasText(local.content) || hasFiles(local.files)) return true;
     // An EMPTY placeholder is the live stream's landing spot. Drop it only
     // once the server has an assistant row for the same turn; otherwise a
