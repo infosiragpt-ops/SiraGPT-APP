@@ -26,6 +26,10 @@ test('enabled with 1 / true / on (case-insensitive, trimmed)', () => {
   assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: '1' }), true);
   assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: 'true' }), true);
   assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: ' ON ' }), true);
+  assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: 'TRUE' }), true);
+  process.env.AGENTES_CODING_V2 = '1';
+  assert.equal(isAgentesCodingV2Enabled(), true);
+  delete process.env.AGENTES_CODING_V2;
 });
 
 test('disabled with 0 / false / off / garbage', () => {
@@ -33,4 +37,7 @@ test('disabled with 0 / false / off / garbage', () => {
   assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: 'false' }), false);
   assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: 'off' }), false);
   assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: 'yes please' }), false);
+  for (const v of ['no', '2', 'enabled']) {
+    assert.equal(isAgentesCodingV2Enabled({ AGENTES_CODING_V2: v }), false, JSON.stringify(v));
+  }
 });
