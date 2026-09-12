@@ -12,9 +12,16 @@
  *     on Windows and `&&` chaining works (cmd.exe + /bin/sh both support it)
  *   - process-tree kill: `taskkill /T /F` on win32, process-group kill on POSIX
  *
- * Security: this runs untrusted repo code (same trust model as Replit). The
- * route layer already ownership-checks the workspace. Disable entirely with
- * SIRAGPT_WORKSPACE_RUN_DISABLED=1.
+ * Security: this runs untrusted repo code IN THIS PROCESS' filesystem and
+ * network namespace — inside the backend container in production, next to
+ * the database, Redis and every internal service. That is the Replit trust
+ * model for a single-tenant laptop, not for a shared server, so:
+ *   - NODE_ENV=production → OFF by default. Opt in explicitly with
+ *     SIRAGPT_WORKSPACE_RUN_ENABLED=1 (only on a host where the operator
+ *     accepts running third-party repos in the backend's namespace).
+ *   - SIRAGPT_WORKSPACE_RUN_DISABLED=1 wins everywhere (kill switch).
+ * The route layer already ownership-checks the workspace; the isolated
+ * codex runner (services/codex) is the sandboxed way to execute projects.
  */
 
 const { spawn, spawnSync } = require('child_process');
@@ -149,8 +156,19 @@ function publicPreviewUrl(connectionId, port) {
   return `http://localhost:${port}`;
 }
 
-function isDisabled() {
-  return /^(1|true|on)$/i.test(String(process.env.SIRAGPT_WORKSPACE_RUN_DISABLED || ''));
+/**
+ * Kill switch first, then the production default: a shared server never runs
+ * third-party repos inside the backend unless the operator opted in.
+ */
+function isDisabled(env = process.env) {
+  if (/^(1|true|on)$/i.test(String(env.SIRAGPT_WORKSPACE_RUN_DISABLED || ''))) return true;
+  if (String(env.NODE_ENV || '').toLowerCase() !== 'production') return false;
+  return !flagEnabled(env.SIRAGPT_WORKSPACE_RUN_ENABLED, false);
+}
+
+function runDisabledReason(env = process.env) {
+  if (/^(1|true|on)$/i.test(String(env.SIRAGPT_WORKSPACE_RUN_DISABLED || ''))) return 'kill_switch';
+  return 'production_default';
 }
 
 function readJson(file) {
@@ -602,9 +620,13 @@ function hideRuntimeEnvFilesForInstall(root) {
 async function startInternal(connectionId, localPath, opts = {}) {
   assertAcceptingStarts();
   if (isDisabled()) {
-    const e = new Error('Workspace run is disabled on this server');
+    const reason = runDisabledReason();
+    const e = new Error(reason === 'production_default'
+      ? 'Workspace run is disabled on this server: production does not execute third-party repositories inside the backend (set SIRAGPT_WORKSPACE_RUN_ENABLED=1 to opt in on a trusted host)'
+      : 'Workspace run is disabled on this server');
     e.status = 503;
     e.code = 'run_disabled';
+    e.reason = reason;
     throw e;
   }
   // Restart if already running.

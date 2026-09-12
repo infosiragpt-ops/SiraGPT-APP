@@ -5,10 +5,13 @@
  * loop and exposes a single provider-agnostic `chatComplete()`.
  *
  * Ladder (first configured wins, override with CODEX_LLM_PROVIDER):
- *   1. anthropic  — ANTHROPIC_API_KEY  (Claude; the loop keeps the prompted
+ *   1. deepseek   — DEEPSEEK_API_KEY   (DeepSeek V4 Flash/Pro — the product's
+ *      only sanctioned models; native tool use lives in deepseek-turn, this
+ *      rung is the prompted-protocol fallback)
+ *   2. anthropic  — ANTHROPIC_API_KEY  (Claude; the loop keeps the prompted
  *      tool protocol, so no native tool_calls are needed)
- *   2. openrouter — OPENROUTER_API_KEY (OpenAI-compatible)
- *   3. cerebras   — CEREBRAS_API_KEY   (FlashGPT free tier; previous default)
+ *   3. openrouter — OPENROUTER_API_KEY (OpenAI-compatible)
+ *   4. cerebras   — CEREBRAS_API_KEY   (FlashGPT free tier; previous default)
  *
  * A provider that throws is quarantined for FAILOVER_TTL_MS and the call is
  * retried on the next rung, so a bad key / quota blip degrades quality instead
@@ -17,6 +20,12 @@
 
 const { getCerebrasConfig, createCerebrasClient } = require('../ai/cerebras-client');
 const { toAnthropicMessages, cacheStableTranscriptPrefix, cacheEnabled } = require('./anthropic-turn');
+const {
+  getDeepSeekTurnConfig,
+  normalizeDeepSeekModel,
+  defaultCreateClient: createDeepSeekClient,
+  DEFAULT_MODEL_FLASH: DEFAULT_DEEPSEEK_MODEL,
+} = require('./deepseek-turn');
 
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.6';
@@ -26,7 +35,7 @@ const FAILOVER_TTL_MS = 5 * 60 * 1000;
 // prompt too small to ever cache. Codex system prompts are many KB in practice.
 const CACHE_MIN_SYSTEM_CHARS = 1024;
 
-const LADDER = ['anthropic', 'openrouter', 'cerebras'];
+const LADDER = ['deepseek', 'anthropic', 'openrouter', 'cerebras'];
 
 // provider → epoch-ms until which it is quarantined. Module-level on purpose:
 // one bad key shouldn't be re-probed on every single agent step.
@@ -37,6 +46,7 @@ function clean(value) {
 }
 
 function providerConfigured(name, env) {
+  if (name === 'deepseek') return getDeepSeekTurnConfig({ env }).enabled;
   if (name === 'anthropic') return Boolean(clean(env.ANTHROPIC_API_KEY) || clean(env.SIRA_ANTHROPIC_API_KEY));
   if (name === 'openrouter') return Boolean(clean(env.OPENROUTER_API_KEY));
   if (name === 'cerebras') return getCerebrasConfig({ env }).enabled;
@@ -45,10 +55,13 @@ function providerConfigured(name, env) {
 
 function modelFor(name, env, override = null) {
   const requested = clean(override);
+  if (name === 'deepseek') {
+    return normalizeDeepSeekModel(requested) || clean(env.CODEX_DEEPSEEK_MODEL) || DEFAULT_DEEPSEEK_MODEL;
+  }
   if (requested) {
     if (name === 'anthropic' && /^claude-[a-z0-9._-]+$/i.test(requested)) return requested;
     if (name === 'openrouter' && requested.includes('/')) return requested;
-    if (name === 'cerebras' && !requested.includes('/') && !/^claude-/i.test(requested)) return requested;
+    if (name === 'cerebras' && !requested.includes('/') && !/^claude-/i.test(requested) && !normalizeDeepSeekModel(requested)) return requested;
   }
   if (name === 'anthropic') return clean(env.CODEX_ANTHROPIC_MODEL) || DEFAULT_ANTHROPIC_MODEL;
   if (name === 'openrouter') return clean(env.CODEX_OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL;
@@ -66,11 +79,16 @@ function defaultMaxTokensFor(name) {
  * Ordered candidate list for this call: the forced provider alone, or every
  * configured rung of the ladder with quarantined ones pushed to the back
  * (still tried — better a quarantined provider than no answer at all).
+ * `exclude` drops rungs the caller already tried natively this step (a
+ * failed deepseek-turn must not be re-hit in prompted mode a second later).
  */
-function resolveCandidates({ env = process.env, now = Date.now } = {}) {
+function resolveCandidates({ env = process.env, now = Date.now, exclude = [] } = {}) {
+  const skip = new Set((Array.isArray(exclude) ? exclude : []).map((n) => String(n || '').toLowerCase()));
   const forced = clean(env.CODEX_LLM_PROVIDER).toLowerCase();
-  if (forced) return LADDER.includes(forced) && providerConfigured(forced, env) ? [forced] : [];
-  const configured = LADDER.filter((name) => providerConfigured(name, env));
+  if (forced) {
+    return LADDER.includes(forced) && providerConfigured(forced, env) && !skip.has(forced) ? [forced] : [];
+  }
+  const configured = LADDER.filter((name) => providerConfigured(name, env) && !skip.has(name));
   const t = now();
   const healthy = configured.filter((name) => (quarantine.get(name) || 0) <= t);
   const sick = configured.filter((name) => (quarantine.get(name) || 0) > t);
@@ -216,7 +234,7 @@ async function callOpenAICompatible({
         max_tokens: maxTokens,
         ...(reasoning ? { reasoning } : {}),
         ...(shouldStream ? { stream: true } : {}),
-        ...(shouldStream && providerLabel === 'OpenRouter'
+        ...(shouldStream && (providerLabel === 'OpenRouter' || providerLabel === 'DeepSeek')
           ? { stream_options: { include_usage: true } }
           : {}),
       },
@@ -311,10 +329,11 @@ async function chatComplete({
   onReasoningDelta = null,
   model = null,
   effort = null,
+  exclude = [],
 } = {}) {
-  const candidates = resolveCandidates({ env, now });
+  const candidates = resolveCandidates({ env, now, exclude });
   if (candidates.length === 0) {
-    throw new Error('codex llm-provider: no LLM provider configured (ANTHROPIC_API_KEY / OPENROUTER_API_KEY / CEREBRAS_API_KEY)');
+    throw new Error('codex llm-provider: no LLM provider configured (DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY / CEREBRAS_API_KEY)');
   }
 
   let firstError = null;
@@ -322,7 +341,21 @@ async function chatComplete({
     const effectiveMax = maxTokens || defaultMaxTokensFor(name);
     try {
       let out;
-      if (name === 'anthropic') {
+      if (name === 'deepseek') {
+        const client = clients.deepseek || createDeepSeekClient({ env });
+        out = await callOpenAICompatible({
+          messages,
+          temperature,
+          maxTokens: effectiveMax,
+          signal,
+          model: modelFor('deepseek', env, model),
+          client,
+          providerLabel: 'DeepSeek',
+          onTextDelta,
+          onReasoningDelta,
+          effort,
+        });
+      } else if (name === 'anthropic') {
         out = await callAnthropic({
           messages,
           temperature,
@@ -383,8 +416,8 @@ async function chatComplete({
 }
 
 /** For health/telemetry: which provider+model would serve the next call. */
-function describeActiveProvider({ env = process.env, now = Date.now } = {}) {
-  const candidates = resolveCandidates({ env, now });
+function describeActiveProvider({ env = process.env, now = Date.now, exclude = [] } = {}) {
+  const candidates = resolveCandidates({ env, now, exclude });
   if (candidates.length === 0) return { provider: null, model: null };
   return { provider: candidates[0], model: modelFor(candidates[0], env) };
 }

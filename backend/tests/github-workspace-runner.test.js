@@ -474,3 +474,38 @@ test('static server starts, serves, and stops', async () => {
     await fsp.rm(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Production default: never execute third-party repos inside the backend
+// unless the operator explicitly opted in.
+
+test('isDisabled: production is OFF by default, opt-in with SIRAGPT_WORKSPACE_RUN_ENABLED, kill switch always wins', () => {
+  assert.equal(runner.isDisabled({ NODE_ENV: 'development' }), false);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'test' }), false);
+  assert.equal(runner.isDisabled({}), false);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'production' }), true);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'PRODUCTION' }), true);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'production', SIRAGPT_WORKSPACE_RUN_ENABLED: '1' }), false);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'production', SIRAGPT_WORKSPACE_RUN_ENABLED: 'true' }), false);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'production', SIRAGPT_WORKSPACE_RUN_ENABLED: '0' }), true);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'production', SIRAGPT_WORKSPACE_RUN_ENABLED: '1', SIRAGPT_WORKSPACE_RUN_DISABLED: '1' }), true);
+  assert.equal(runner.isDisabled({ NODE_ENV: 'development', SIRAGPT_WORKSPACE_RUN_DISABLED: 'on' }), true);
+});
+
+test('start() in production rejects with run_disabled (503) before touching the workspace', async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, ENABLED: process.env.SIRAGPT_WORKSPACE_RUN_ENABLED, DISABLED: process.env.SIRAGPT_WORKSPACE_RUN_DISABLED };
+  process.env.NODE_ENV = 'production';
+  delete process.env.SIRAGPT_WORKSPACE_RUN_ENABLED;
+  delete process.env.SIRAGPT_WORKSPACE_RUN_DISABLED;
+  try {
+    await assert.rejects(
+      () => runner.start('conn-prod-default', path.join(os.tmpdir(), 'does-not-matter-never-read')),
+      (err) => err.code === 'run_disabled' && err.status === 503 && err.reason === 'production_default' && /SIRAGPT_WORKSPACE_RUN_ENABLED/.test(err.message),
+    );
+    assert.equal(runner.status('conn-prod-default').running, false);
+  } finally {
+    if (saved.NODE_ENV === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved.NODE_ENV;
+    if (saved.ENABLED === undefined) delete process.env.SIRAGPT_WORKSPACE_RUN_ENABLED; else process.env.SIRAGPT_WORKSPACE_RUN_ENABLED = saved.ENABLED;
+    if (saved.DISABLED === undefined) delete process.env.SIRAGPT_WORKSPACE_RUN_DISABLED; else process.env.SIRAGPT_WORKSPACE_RUN_DISABLED = saved.DISABLED;
+  }
+});
