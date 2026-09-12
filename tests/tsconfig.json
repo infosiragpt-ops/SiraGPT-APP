@@ -74,7 +74,8 @@
     "../lib/project-scheduled-tasks.ts",
     "../lib/gpts-app-logos.ts",
     "../lib/gpts-apps-catalog.ts",
-    "../lib/chat-work-status.ts"
+    "../lib/chat-work-status.ts",
+    "../lib/plans-catalog.ts"
   ],
   "exclude": [
     "../tests/lib"
