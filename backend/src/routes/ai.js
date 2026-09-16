@@ -147,6 +147,7 @@ const documentAnalysisQuality = require('../services/document-analysis-quality')
 const directAnswerNormalizer = require('../services/direct-answer-normalizer');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const { loadPreferenceRows } = require('../services/agents/feedback-durable');
+const { preferenceAgent, formatDocumentRlhfBlock } = require('../services/document-analysis-rlhf');
 const modelRouter = require('../services/ai-product-os/model-router');
 const modelSyncService = require('../services/model-sync-service');
 const { listManifestModels, DEFAULT_ACTIVE_IMAGE_MODEL_NAMES } = require('../services/model-catalog-manifest');
@@ -3624,7 +3625,7 @@ router.post(
               embedder: texts => rag.embed(texts),
               k: 2,
               onlyHelpful: true,
-              agent: 'chat',
+              agent: preferenceAgent({ files: processedFiles, prompt }),
               loader: (uid) => loadPreferenceRows(prisma, uid),
             }).catch((e) => { generateLog.warnError('feedback.exemplars_unavailable', e); return []; })
           : Promise.resolve([]);
@@ -3697,7 +3698,9 @@ router.post(
           }
         }
         const _formatted = feedbackLedger.formatExemplarsBlock(_exemplars);
-        feedbackBlock = _formatted ? `\n\n## USER-PREFERRED RESPONSE EXAMPLES\n${_formatted}` : '';
+        feedbackBlock = preferenceAgent({ files: processedFiles, prompt }) === 'document'
+          ? formatDocumentRlhfBlock(_exemplars)
+          : (_formatted ? `\n\n## USER-PREFERRED RESPONSE EXAMPLES\n${_formatted}` : '');
       }
 
       // Attribution graph slot — kept for backwards compatibility.

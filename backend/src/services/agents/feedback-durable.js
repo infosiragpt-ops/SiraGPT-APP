@@ -8,6 +8,8 @@
  * No new table and no training job.
  */
 
+const { preferenceAgent } = require('../document-analysis-rlhf');
+
 async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
   if (!prisma || !userId) return [];
   const take = Math.max(1, Math.min(200, Number(limit) || 80));
@@ -37,7 +39,7 @@ async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
       deletedAt: null,
     },
     orderBy: { timestamp: 'asc' },
-    select: { chatId: true, content: true, timestamp: true },
+    select: { chatId: true, content: true, timestamp: true, files: true },
   });
   return assistants.map((asst) => {
     let prior = null;
@@ -47,7 +49,10 @@ async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
     }
     return {
       runId: asst.id,
-      agent: 'chat',
+      agent: preferenceAgent({
+        files: prior && prior.files,
+        prompt: prior ? prior.content : '',
+      }),
       request: prior ? String(prior.content || '') : '',
       response: asst.content,
       helpful: asst.feedback === 'liked',
