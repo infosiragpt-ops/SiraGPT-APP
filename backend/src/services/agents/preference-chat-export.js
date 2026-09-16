@@ -9,14 +9,7 @@
  */
 
 const piiScrubber = require('./pii-scrubber');
-
-const DISLIKE_REASONS = Object.freeze([
-  'invented',
-  'wrong_file',
-  'bad_math',
-  'wrong_tone',
-  'incomplete',
-]);
+const { DISLIKE_REASONS, REASON_CODES } = require('../rlhf/reason-codes');
 
 function mergeRlhfMetadata(existing, patch) {
   const base = existing && typeof existing === 'object' && !Array.isArray(existing)
@@ -155,6 +148,7 @@ function preferenceStats(rows) {
 
 module.exports = {
   DISLIKE_REASONS,
+  REASON_CODES,
   mergeRlhfMetadata,
   dpoPairsFromRows,
   exportFromRows,

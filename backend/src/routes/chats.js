@@ -15,11 +15,12 @@ const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../servi
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const { loadPreferenceRows } = require('../services/agents/feedback-durable');
 const {
-  DISLIKE_REASONS,
+  REASON_CODES,
   mergeRlhfMetadata,
   exportFromRows,
   preferenceStats,
 } = require('../services/agents/preference-chat-export');
+const { resolveFeedbackReasons } = require('../services/rlhf/reason-codes');
 const rag = require('../services/rag-service');
 const chatExport = require('../services/chat-export');
 const triggers = require('../services/trigger-registry');
@@ -1404,7 +1405,9 @@ router.delete('/:id/messages', authenticateToken, async (req, res) => {
 
 router.post('/messages/:messageId/feedback', [
   body('feedback').isIn(['liked', 'disliked']).withMessage('Invalid feedback value'),
-  body('reason').optional({ nullable: true }).isIn(DISLIKE_REASONS),
+  body('reason').optional({ nullable: true }).isString().isLength({ max: 500 }),
+  body('reasonCode').optional({ nullable: true }).isIn(REASON_CODES),
+  body('notes').optional({ nullable: true }).isString().isLength({ max: 500 }),
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -1413,7 +1416,13 @@ router.post('/messages/:messageId/feedback', [
     }
 
     const { messageId } = req.params;
-    const { feedback, reason } = req.body;
+    const { feedback } = req.body;
+    const reasons = resolveFeedbackReasons({
+      reason: req.body.reason,
+      reasonCode: req.body.reasonCode,
+      notes: req.body.notes,
+    });
+    const reason = reasons.reasonCode || null;
 
     // Primero verificar que el mensaje pertenezca a un chat del usuario
     const message = await prisma.message.findUnique({
@@ -1443,8 +1452,9 @@ router.post('/messages/:messageId/feedback', [
       feedback,
       at: new Date().toISOString(),
     };
-    if (feedback === 'disliked' && reason) rlhfPatch.reason = reason;
+    if (feedback === 'disliked' && reasons.reasonCode) rlhfPatch.reason = reasons.reasonCode;
     else if (feedback === 'liked') rlhfPatch.reason = null;
+    if (feedback === 'disliked' && reasons.notes) rlhfPatch.notes = reasons.notes;
     const updatedMessage = await prisma.message.update({
       where: { id: messageId },
       data: {
@@ -1478,7 +1488,9 @@ router.post('/messages/:messageId/feedback', [
             request: priorUser?.content || '',
             response: message.content || updatedMessage.content || '',
             helpful: feedback === 'liked',
-            notes: feedback === 'disliked' ? (reason || null) : null,
+            reason: req.body.reason,
+            reasonCode: reasons.reasonCode,
+            notes: feedback === 'disliked' ? (reasons.notes || reasons.reasonCode || null) : null,
             embedder: texts => rag.embed(texts),
           });
           try {

@@ -17,11 +17,16 @@ const {
   newId,
   clampText,
 } = require('./vectors');
+const {
+  NOTES_MAX,
+  normalizeReasonCode,
+  normalizeNotes,
+  resolveFeedbackReasons,
+} = require('./reason-codes');
 
 const MAX_ENTRIES_PER_USER = 2000;
 const PROMPT_MAX = 8000;
 const RESPONSE_MAX = 16000;
-const NOTES_MAX = 500;
 
 /** @type {Map<string, object[]>} userId → events (newest last) */
 const memory = new Map();
@@ -107,6 +112,7 @@ function fromPrismaRow(row) {
     promptEmbedding: decodeF32(row.promptEmbedding),
     responseEmbedding: decodeF32(row.responseEmbedding),
     judgeScore: row.judgeScore || null,
+    reasonCode: row.reasonCode || null,
     notes: row.notes || null,
     createdAt: row.createdAt instanceof Date ? row.createdAt.getTime() : Date.now(),
     helpful: row.label === 'chosen',
@@ -136,6 +142,7 @@ async function persistEvent(event) {
       promptEmbedding: event.promptEmbedding ? encodeF32(event.promptEmbedding) : null,
       responseEmbedding: event.responseEmbedding ? encodeF32(event.responseEmbedding) : null,
       judgeScore: event.judgeScore || null,
+      reasonCode: event.reasonCode || null,
       notes: event.notes || null,
     };
     await prismaClient.preferenceEvent.upsert({
@@ -144,6 +151,7 @@ async function persistEvent(event) {
       update: {
         label: data.label,
         pairId: data.pairId,
+        reasonCode: data.reasonCode,
         notes: data.notes,
         judgeScore: data.judgeScore,
         promptEmbedding: data.promptEmbedding,
@@ -312,7 +320,10 @@ async function recordEvent(args = {}) {
     promptEmbedding: embs.promptEmbedding,
     responseEmbedding: embs.responseEmbedding,
     judgeScore: args.judgeScore || existing?.judgeScore || null,
-    notes: typeof args.notes === 'string' ? clampText(args.notes, NOTES_MAX) : (existing?.notes || null),
+    reasonCode: normalizeReasonCode(args.reasonCode) || existing?.reasonCode || null,
+    notes: args.notes != null
+      ? normalizeNotes(args.notes)
+      : (existing?.notes || null),
     createdAt: existing?.createdAt || Date.now(),
     helpful: label === 'chosen',
     request: promptText,
@@ -360,6 +371,7 @@ function maybeScheduleTrain() {
 }
 
 async function ingestThumb(args) {
+  const reasons = resolveFeedbackReasons(args);
   return recordEvent({
     ...args,
     source: args.source || 'explicit',
@@ -368,7 +380,75 @@ async function ingestThumb(args) {
     responseText: args.response ?? args.responseText,
     messageId: args.messageId || args.runId,
     runId: args.runId,
+    reasonCode: reasons.reasonCode,
+    notes: reasons.notes,
   });
+}
+
+/**
+ * Durable A/B pair for one prompt. Always shares a pairId so DPO export
+ * can emit the pair even when prompt-hash auto-linking has not run yet.
+ * Fail-open: missing texts return { stored: false } without throwing.
+ */
+async function recordPair(args = {}) {
+  const userId = args.userId;
+  if (!userId) throw new Error('rlhf.recordPair: userId required');
+  if (!isCollectionEnabled()) return { stored: false, reason: 'disabled' };
+
+  const promptText = clampText(args.promptText ?? args.prompt ?? args.request ?? '', PROMPT_MAX);
+  const chosenText = clampText(args.chosen ?? args.chosenText ?? '', RESPONSE_MAX);
+  const rejectedText = clampText(args.rejected ?? args.rejectedText ?? '', RESPONSE_MAX);
+  if (!promptText || !chosenText || !rejectedText) {
+    return { stored: false, reason: 'incomplete_pair' };
+  }
+
+  const reasons = resolveFeedbackReasons(args);
+  const pairId = args.pairId || newId();
+  const promptHash = args.promptHash || hashPrompt(promptText);
+  const agent = args.agent || 'chat';
+  const chatId = args.chatId || null;
+
+  const chosen = await recordEvent({
+    userId,
+    chatId,
+    agent,
+    source: args.source || 'pairwise',
+    label: 'chosen',
+    pairId,
+    promptText,
+    responseText: chosenText,
+    promptHash,
+    messageId: args.chosenMessageId || args.chosenMessage?.id || null,
+    runId: args.chosenRunId || args.chosenMessageId || null,
+    promptMessageId: args.promptMessageId || null,
+    reasonCode: reasons.reasonCode,
+    notes: reasons.notes,
+    embedder: args.embedder,
+  });
+  const rejected = await recordEvent({
+    userId,
+    chatId,
+    agent,
+    source: args.source || 'pairwise',
+    label: 'rejected',
+    pairId,
+    promptText,
+    responseText: rejectedText,
+    promptHash,
+    messageId: args.rejectedMessageId || args.rejectedMessage?.id || null,
+    runId: args.rejectedRunId || args.rejectedMessageId || null,
+    promptMessageId: args.promptMessageId || null,
+    reasonCode: reasons.reasonCode,
+    notes: reasons.notes,
+    embedder: args.embedder,
+  });
+
+  return {
+    stored: !!(chosen.stored && rejected.stored),
+    pairId,
+    chosen: chosen.event && { id: chosen.event.id, pairId: chosen.event.pairId, messageId: chosen.event.messageId },
+    rejected: rejected.event && { id: rejected.event.id, pairId: rejected.event.pairId, messageId: rejected.event.messageId },
+  };
 }
 
 async function ingestRegenerate(args) {
@@ -384,10 +464,13 @@ async function ingestRegenerate(args) {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   const prior = list[list.length - 1] || null;
   let priorUpdated = null;
+  const reasons = resolveFeedbackReasons(args);
   if (prior && prior.label !== 'rejected') {
     prior.label = 'rejected';
     prior.helpful = false;
     prior.source = prior.source === 'explicit' ? 'regenerate' : prior.source;
+    if (reasons.reasonCode) prior.reasonCode = reasons.reasonCode;
+    if (reasons.notes) prior.notes = reasons.notes;
     await persistEvent(prior);
     priorUpdated = prior;
   }
@@ -403,6 +486,8 @@ async function ingestRegenerate(args) {
     promptText,
     responseText: args.responseText ?? args.response ?? '',
     promptHash,
+    reasonCode: reasons.reasonCode,
+    notes: reasons.notes,
     embedder: args.embedder,
   });
 
@@ -512,6 +597,7 @@ function ingestLocal(entry) {
     promptEmbedding: toFloat32(entry.promptEmbedding || entry.embedding),
     responseEmbedding: toFloat32(entry.responseEmbedding),
     judgeScore: entry.judgeScore || null,
+    reasonCode: normalizeReasonCode(entry.reasonCode) || null,
     notes: entry.notes || null,
     createdAt: entry.at || entry.createdAt || Date.now(),
     helpful: entry.helpful === true || entry.label === 'chosen',
@@ -527,6 +613,7 @@ module.exports = {
   getPrisma,
   recordEvent,
   ingestThumb,
+  recordPair,
   ingestRegenerate,
   findExemplars,
   hydrateUser,
@@ -541,4 +628,5 @@ module.exports = {
   MAX_ENTRIES_PER_USER,
   hashPrompt,
   normalizeLabel,
+  resolveFeedbackReasons,
 };

@@ -80,6 +80,7 @@ module.exports = {
   attachPrisma: store.attachPrisma,
   recordEvent: store.recordEvent,
   ingestThumb: store.ingestThumb,
+  recordPair: store.recordPair,
   ingestRegenerate: store.ingestRegenerate,
   findExemplars: store.findExemplars,
   hydrateUser: store.hydrateUser,

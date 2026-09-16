@@ -3,8 +3,9 @@
 /**
  * RLHF HTTP surface.
  *
- *   POST /api/rlhf/feedback          record an explicit thumb
+ *   POST /api/rlhf/feedback          record an explicit thumb (optional reason/reasonCode)
  *   POST /api/rlhf/pair              record a chosen/rejected pair for one prompt
+ *   POST /api/rlhf/rlaif/propose     optional synthetic pairs (flag-gated, rate-limited)
  *   GET  /api/rlhf/stats             caller's preference counts + phase-2 flags
  *                                    (admin also gets process telemetry)
  *   GET  /api/rlhf/export            SFT / DPO / RM JSONL
@@ -30,6 +31,8 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const rag = require('../services/rag-service');
 const rlhf = require('../services/rlhf');
+const { REASON_CODES, resolveFeedbackReasons } = require('../services/rlhf/reason-codes');
+const prisma = require('../config/database');
 const {
   isTrainJobsEnabled,
   isTrainSubmitEnabled,
@@ -64,6 +67,45 @@ function embedder() {
   return (texts) => rag.embed(texts);
 }
 
+async function loadOwnedMessage(userId, messageId) {
+  if (!userId || !messageId || !prisma?.message?.findUnique) return null;
+  try {
+    const message = await prisma.message.findUnique({
+      where: { id: String(messageId) },
+      select: {
+        id: true,
+        content: true,
+        role: true,
+        chatId: true,
+        timestamp: true,
+        chat: { select: { userId: true } },
+      },
+    });
+    if (!message || message.chat?.userId !== userId) return null;
+    return message;
+  } catch {
+    return null;
+  }
+}
+
+async function priorUserPrompt(message) {
+  if (!message?.chatId || !prisma?.message?.findFirst) return '';
+  try {
+    const prior = await prisma.message.findFirst({
+      where: {
+        chatId: message.chatId,
+        role: 'USER',
+        timestamp: { lt: message.timestamp },
+      },
+      orderBy: { timestamp: 'desc' },
+      select: { content: true, id: true },
+    });
+    return prior || null;
+  } catch {
+    return null;
+  }
+}
+
 router.post(
   '/feedback',
   authenticateToken,
@@ -76,10 +118,17 @@ router.post(
     body('response').custom((v) => v !== undefined),
     body('helpful').optional().isBoolean(),
     body('label').optional().isString().isLength({ max: 32 }),
+    body('reason').optional({ nullable: true }).isString().isLength({ max: 500 }),
+    body('reasonCode').optional({ nullable: true }).isString().isLength({ max: 32 }),
     body('notes').optional().isString().isLength({ max: 1000 }),
     body('chatId').optional().isString().isLength({ max: 128 }),
   ],
   handleErrors(async (req, res) => {
+    const reasons = resolveFeedbackReasons({
+      reason: req.body.reason,
+      reasonCode: req.body.reasonCode,
+      notes: req.body.notes,
+    });
     const r = await rlhf.ingestThumb({
       userId: req.user.id,
       runId: req.body.runId || req.body.messageId,
@@ -90,10 +139,12 @@ router.post(
       response: req.body.response,
       helpful: typeof req.body.helpful === 'boolean' ? req.body.helpful : undefined,
       label: req.body.label,
-      notes: req.body.notes || null,
+      reason: req.body.reason,
+      reasonCode: reasons.reasonCode,
+      notes: reasons.notes,
       embedder: embedder(),
     });
-    res.json({ ok: true, ...r, stats: rlhf.stats(req.user.id) });
+    res.json({ ok: true, ...r, reasonCodes: REASON_CODES, stats: rlhf.stats(req.user.id) });
   }),
 );
 
@@ -101,40 +152,115 @@ router.post(
   '/pair',
   authenticateToken,
   [
-    body('prompt').isString().isLength({ min: 1, max: 8000 }),
-    body('chosen').custom((v) => v !== undefined),
-    body('rejected').custom((v) => v !== undefined),
+    body('prompt').optional().isString().isLength({ max: 8000 }),
+    body('chosen').optional(),
+    body('rejected').optional(),
+    body('chosenMessageId').optional().isString().isLength({ min: 1, max: 128 }),
+    body('rejectedMessageId').optional().isString().isLength({ min: 1, max: 128 }),
+    body('reason').optional({ nullable: true }).isString().isLength({ max: 500 }),
+    body('reasonCode').optional({ nullable: true }).isString().isLength({ max: 32 }),
+    body('notes').optional().isString().isLength({ max: 1000 }),
     body('agent').optional().isString().isLength({ max: 32 }),
     body('chatId').optional().isString().isLength({ max: 128 }),
   ],
   handleErrors(async (req, res) => {
-    const prompt = req.body.prompt;
-    const agent = req.body.agent || 'chat';
-    const chatId = req.body.chatId || null;
-    const chosen = await rlhf.recordEvent({
+    let prompt = req.body.prompt || '';
+    let chosenText = req.body.chosen;
+    let rejectedText = req.body.rejected;
+    let chosenMessageId = req.body.chosenMessageId || null;
+    let rejectedMessageId = req.body.rejectedMessageId || null;
+    let chatId = req.body.chatId || null;
+    let promptMessageId = null;
+
+    if (chosenMessageId || rejectedMessageId) {
+      const [chosenMsg, rejectedMsg] = await Promise.all([
+        chosenMessageId ? loadOwnedMessage(req.user.id, chosenMessageId) : null,
+        rejectedMessageId ? loadOwnedMessage(req.user.id, rejectedMessageId) : null,
+      ]);
+      if (chosenMsg) {
+        chosenText = chosenText != null ? chosenText : chosenMsg.content;
+        chatId = chatId || chosenMsg.chatId;
+        const prior = await priorUserPrompt(chosenMsg);
+        if (prior) {
+          prompt = prompt || prior.content || '';
+          promptMessageId = prior.id || null;
+        }
+      }
+      if (rejectedMsg) {
+        rejectedText = rejectedText != null ? rejectedText : rejectedMsg.content;
+        chatId = chatId || rejectedMsg.chatId;
+        if (!prompt) {
+          const prior = await priorUserPrompt(rejectedMsg);
+          if (prior) {
+            prompt = prior.content || '';
+            promptMessageId = promptMessageId || prior.id || null;
+          }
+        }
+      }
+    }
+
+    const pair = await rlhf.recordPair({
       userId: req.user.id,
       chatId,
-      agent,
-      source: 'pairwise',
-      label: 'chosen',
-      promptText: prompt,
-      responseText: req.body.chosen,
-      embedder: embedder(),
-    });
-    const rejected = await rlhf.recordEvent({
-      userId: req.user.id,
-      chatId,
-      agent,
-      source: 'pairwise',
-      label: 'rejected',
-      promptText: prompt,
-      responseText: req.body.rejected,
+      agent: req.body.agent || 'chat',
+      prompt,
+      chosen: chosenText,
+      rejected: rejectedText,
+      chosenMessageId,
+      rejectedMessageId,
+      promptMessageId,
+      reason: req.body.reason,
+      reasonCode: req.body.reasonCode,
+      notes: req.body.notes,
       embedder: embedder(),
     });
     res.json({
+      ok: !!pair.stored,
+      ...pair,
+      stats: rlhf.stats(req.user.id),
+    });
+  }),
+);
+
+router.post(
+  '/rlaif/propose',
+  authenticateToken,
+  [
+    body('prompt').optional().isString().isLength({ max: 8000 }),
+    body('a').optional(),
+    body('b').optional(),
+    body('turns').optional().isArray({ max: 12 }),
+    body('chatId').optional().isString().isLength({ max: 128 }),
+    body('agent').optional().isString().isLength({ max: 32 }),
+  ],
+  handleErrors(async (req, res) => {
+    const openai = typeof rag.getOpenAI === 'function' ? rag.getOpenAI() : null;
+    let out;
+    if (req.body.a != null && req.body.b != null && req.body.prompt) {
+      out = await rlhf.rlaif.proposePair({
+        userId: req.user.id,
+        prompt: req.body.prompt,
+        a: req.body.a,
+        b: req.body.b,
+        chatId: req.body.chatId || null,
+        agent: req.body.agent || 'chat',
+        openai,
+        embedder: embedder(),
+      });
+    } else {
+      out = await rlhf.rlaif.proposeFromRecent({
+        userId: req.user.id,
+        turns: req.body.turns,
+        chatId: req.body.chatId || null,
+        agent: req.body.agent || 'chat',
+        openai,
+        embedder: embedder(),
+      });
+    }
+    res.json({
       ok: true,
-      chosen: chosen.event && { id: chosen.event.id, pairId: chosen.event.pairId },
-      rejected: rejected.event && { id: rejected.event.id, pairId: rejected.event.pairId },
+      enabled: rlhf.rlaif.isRlaifEnabled(),
+      ...out,
       stats: rlhf.stats(req.user.id),
     });
   }),
@@ -148,6 +274,7 @@ router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
     enabled: rlhf.isCollectionEnabled(),
     steering: rlhf.isSteeringEnabled(),
     bestOfN: rlhf.isBestOfNEnabled(),
+    rlaif: rlhf.rlaif.isRlaifEnabled(),
     model: rlhf.hasActiveModel() ? {
       version: rlhf.getActiveModel().version,
       metrics: rlhf.getActiveModel().metrics,
@@ -163,6 +290,7 @@ router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
       steeringEnabled: rlhf.isSteeringEnabled(),
       bestOfN: rlhf.isBestOfNEnabled(),
       trainJobsEnabled: isTrainJobsEnabled(),
+      rlaif: rlhf.rlaif.isRlaifEnabled(),
     },
   });
 }));

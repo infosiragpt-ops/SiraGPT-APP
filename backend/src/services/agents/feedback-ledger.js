@@ -68,7 +68,7 @@ function cosine(a, b) {
  *   Pass the shared rag.embed() here. When null, the entry is stored
  *   without an embedding and later findExemplars calls will skip it.
  */
-async function record({ userId, runId, agent, request, response, helpful, notes, embedder, chatId }) {
+async function record({ userId, runId, agent, request, response, helpful, notes, reason, reasonCode, embedder, chatId }) {
   if (!userId || !runId) throw new Error('feedback-ledger.record: userId and runId required');
   if (typeof helpful !== 'boolean') throw new Error('feedback-ledger.record: helpful must be boolean');
 
@@ -122,6 +122,8 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
         request: entry.request,
         response,
         helpful,
+        reason,
+        reasonCode,
         notes: entry.notes,
         embedding: embedding,
         embedder,
