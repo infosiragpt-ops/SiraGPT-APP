@@ -427,7 +427,10 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Size cap for the injected preference block |
 | `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost). Leave off in production |
 | `SIRAGPT_RLHF_RLAIF` | off | `1` allows synthetic HHH labels; abstains on mid scores |
-| `SIRAGPT_RLHF_AUTO_TRAIN` | on | `0` disables the cooldown retrainer after new labels |
+| `SIRAGPT_RLHF_AUTO_TRAIN` | on | `0` disables the cooldown retrainer after new labels. Local Bradley-Terry RM only — never enqueues a phase-3 job |
+| `SIRAGPT_RLHF_TRAIN_JOBS` | off | `1` / `true` / `on` enables admin SFT/DPO prep jobs (`POST /api/rlhf/jobs`). Leave off in production until an admin wants a JSONL artifact |
+| `SIRAGPT_RLHF_TRAIN_SUBMIT` | off | Optional submit after prep. No-op today (no in-repo catalog fine-tune adapter). Do not treat this as a paid auto-train switch |
+| `SIRAGPT_RLHF_TRAIN_JOB_CONCURRENCY` | 1 | In-process prep workers (capped at 4) |
 
 ---
 

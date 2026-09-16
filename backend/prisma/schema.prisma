@@ -227,6 +227,8 @@ model User {
   // RLHF flywheel — durable preference events + trained reward-model snapshots.
   preferenceEvents     PreferenceEvent[]
   rewardModelSnapshots RewardModelSnapshot[]
+  rlhfTrainJobsCreated RlhfTrainJob[] @relation("RlhfTrainJobCreatedBy")
+  rlhfTrainJobsScoped  RlhfTrainJob[] @relation("RlhfTrainJobScopeUser")
 
   @@index([deletedAt])
   @@index([lastActiveAt])
@@ -4338,4 +4340,36 @@ model RewardModelSnapshot {
   @@index([scope, userId, active])
   @@index([active, createdAt])
   @@map("reward_model_snapshots")
+}
+
+// Admin-triggered SFT/DPO prep jobs (phase 3). Status + artifact pointers
+// only — JSONL bytes live in object storage, never in this row. Additive;
+// does not change preference_events.
+model RlhfTrainJob {
+  id              String    @id @default(cuid())
+  createdById     String    @map("created_by_id")
+  status          String    @default("queued")
+  stage           String?
+  progress        Int       @default(0)
+  format          String
+  scope           String    @default("global")
+  scopeUserId     String?   @map("scope_user_id")
+  includeRlaif    Boolean   @default(false) @map("include_rlaif")
+  minPairs        Int       @default(1) @map("min_pairs")
+  scrubPii        Boolean   @default(true) @map("scrub_pii")
+  submitRequested Boolean   @default(false) @map("submit_requested")
+  filters         Json?
+  result          Json?
+  error           String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  finishedAt      DateTime? @map("finished_at")
+
+  createdBy User  @relation("RlhfTrainJobCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  scopeUser User? @relation("RlhfTrainJobScopeUser", fields: [scopeUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([createdById, createdAt])
+  @@index([scope, createdAt])
+  @@map("rlhf_train_jobs")
 }

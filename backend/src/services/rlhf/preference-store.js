@@ -181,6 +181,35 @@ async function hydrateUser(userId) {
  * Load the newest preference rows across users into the in-memory store.
  * Fail-open: a missing Prisma model or query error returns [].
  */
+/**
+ * Load preference rows for an SFT/DPO prep job. Scoped to one user when
+ * `userId` is set; otherwise the newest `limit` rows across users.
+ * Additive helper — does not change hydrateRecent's 1000-row cap.
+ */
+async function hydrateForExport({ userId = null, limit = 10_000 } = {}) {
+  if (userId) return hydrateUser(userId);
+  if (!hasPrismaModel()) return [...memory.values()].flat();
+  const take = Math.max(1, Math.min(50_000, Number(limit) || 10_000));
+  try {
+    const rows = await prismaClient.preferenceEvent.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+    });
+    const events = [];
+    for (const row of rows.reverse()) {
+      const event = fromPrismaRow(row);
+      if (!event || !event.userId) continue;
+      putMemory(event);
+      hydrated.add(event.userId);
+      events.push(event);
+    }
+    return events;
+  } catch (err) {
+    console.warn('[rlhf] hydrateForExport failed:', err.message || err);
+    return [...memory.values()].flat();
+  }
+}
+
 async function hydrateRecent({ limit = 200 } = {}) {
   if (!hasPrismaModel()) return [];
   const take = Math.max(1, Math.min(1000, Number(limit) || 200));
@@ -321,6 +350,8 @@ function maybeScheduleTrain() {
     if (s === '0' || s === 'false' || s === 'off') return;
   }
   try {
+    // In-process Bradley-Terry RM only. Never enqueue SIRAGPT_RLHF_TRAIN_JOBS
+    // or an external fine-tune — AUTO_TRAIN must stay a no-cost local fit.
     const trainer = require('./trainer');
     if (typeof trainer.maybeRetrain === 'function') trainer.maybeRetrain();
   } catch {
@@ -500,6 +531,7 @@ module.exports = {
   findExemplars,
   hydrateUser,
   hydrateRecent,
+  hydrateForExport,
   stats,
   dump,
   pairsFor,
