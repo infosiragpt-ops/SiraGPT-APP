@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import { createDocumentSandboxClient, documentJobState, isExplicitDocumentEdit, looksLikeExplicitDocumentEdit,
   parseDocumentJobPointer, parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
-import { connectorHtmlAttachment, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
+import { historyDocumentAttachments, mentionsDocumentTarget, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
 
 // HTTP protocol fixtures test the client only. These are not editor, independent
 // validation or paid-provider E2E evidence; those gates run in the backend suite.
@@ -46,47 +46,40 @@ test("routing refuses ambiguous legacy edits instead of falling back, while plai
   assert.equal(routeDocumentSandboxTurn("cambia el título del documento", []), null)
   assert.equal(routeDocumentSandboxTurn("cambia el título", [{ name: "imagen.png" }]), null)
 })
-test("explicit Spanish edit with a Word attachment admits even if a connector is also open", () => {
+test("explicit edit with an uploaded Word admits by file id, no local bytes required", () => {
   const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
-    attachments: [source()],
-    connectorOpen: true,
-    wordHtml: "<p>Informe abierto en el conector</p>",
+    attachments: [{ id: "uploaded-1", name: "Modelo Informe.docx" }],
   })
   assert.equal(admitted.route, "edit")
-  assert.equal((admitted.attachments[0] as { name: string }).name, "Modelo Informe.docx")
+  assert.equal((admitted.attachments[0] as { id: string }).id, "uploaded-1")
 })
-test("explicit edit with open Word HTML and no attachment uses the connector copy as input", async () => {
-  const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
-    attachments: [],
-    connectorOpen: true,
-    wordHtml: "<h1>Informe 2026</h1>",
-  })
-  assert.equal(admitted.route, "edit")
-  const html = connectorHtmlAttachment("<h1>Informe 2026</h1>")
-  assert.ok(html)
-  assert.equal((admitted.attachments[0] as { name: string }).name, "documento.html")
-  assert.equal(await ((admitted.attachments[0] as { file: File }).file.text()), "<h1>Informe 2026</h1>")
-})
-test("explicit edit with Word connector open but empty content asks for the original", () => {
-  const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
-    attachments: [],
-    connectorOpen: true,
-    wordHtml: "<p></p>",
-  })
-  assert.equal(admitted.route, "need_original")
-  assert.deepEqual(admitted.attachments, [])
-})
-test("explicit edit against a history document without original bytes asks to reattach", () => {
+test("explicit follow-up naming a document target edits the chat's latest document on the server", () => {
   const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
     attachments: [],
     historyAttachments: [{ id: "uploaded-1", name: "tesis.docx" }],
   })
-  assert.equal(admitted.route, "need_original")
+  assert.deepEqual(admitted, { route: "edit", attachments: [] })
+  assert.equal(resolveDocumentSandboxAdmission("ahora agrega una fila Este con 70", {
+    historyAttachments: [{ type: "doc", filename: "informe_editado.docx", url: "/api/agent/artifact/abc123" }],
+  }).route, "edit")
 })
-test("plain chat without a document is not forced into verified admission", () => {
+test("conversational tweaks never edit the chat document", () => {
+  for (const prompt of ["cambia el tono de tu respuesta", "hola", "resume el documento"]) {
+    assert.equal(resolveDocumentSandboxAdmission(prompt, { historyAttachments: [{ id: "uploaded-1", name: "tesis.docx" }] }).route, null, prompt)
+  }
+  assert.equal(mentionsDocumentTarget("cambia el título"), true)
+  assert.equal(mentionsDocumentTarget("cambia el tono de tu respuesta"), false)
+})
+test("history admission only looks at recent messages and parses persisted file JSON", () => {
+  const old = { files: [{ id: "uploaded-1", name: "viejo.docx" }] }
+  const chatter = Array.from({ length: 8 }, () => ({ files: [] }))
+  assert.deepEqual(historyDocumentAttachments([old, ...chatter]), [])
+  assert.deepEqual(historyDocumentAttachments([{ files: JSON.stringify([{ id: "uploaded-2", name: "nuevo.docx" }]) }]), [{ id: "uploaded-2", name: "nuevo.docx" }])
+})
+test("plain chat without a document is not forced into the document editor", () => {
   assert.equal(looksLikeExplicitDocumentEdit("puedes agregar comillas al título"), true)
   assert.equal(resolveDocumentSandboxAdmission("puedes agregar comillas al título", { attachments: [] }).route, null)
-  assert.equal(resolveDocumentSandboxAdmission("hola", { connectorOpen: true, wordHtml: "<h1>Doc</h1>" }).route, null)
+  assert.equal(resolveDocumentSandboxAdmission("cambia el título", { attachments: [{ id: "img-1", name: "foto.png" }] }).route, null)
 })
 test("durable pointer is narrow and does not reinterpret legacy tasks", () => {
   assert.deepEqual(parseDocumentJobPointer(JSON.stringify({ source: "doc-sandbox", docSandbox: pointer })), pointer)

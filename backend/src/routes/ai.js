@@ -9223,6 +9223,181 @@ router.post(
   }
 );
 
+// ─── Document editor (/agentes "edita mi documento") ─────────────────────────
+// Edits the user's attached document — or, on a follow-up, the latest document
+// of the conversation — with the model picked in the composer. The picked
+// model's own client drives the doc-agent loop inside the isolated document
+// sandbox; see services/document-editor/chat-document-editor.js. The run is not
+// tied to the socket: navigation/reload lets it finish and persist; only the
+// explicit Stop (POST /stop-stream with this streamId) aborts it.
+router.post(
+  '/document-edit',
+  [
+    body('prompt').isString().trim().isLength({ min: 1, max: 8000 }),
+    body('model').isString().trim().notEmpty(),
+    body('provider').optional().isString().trim().isLength({ max: 80 }),
+    body('chatId').isString().trim().notEmpty(),
+    body('fileIds').optional().isArray({ max: 10 }),
+    body('streamId').optional().isString().trim().isLength({ min: 1, max: 200 }),
+    body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: 200 }),
+    body('permission').optional().isString().isIn(['default', 'read', 'protected', 'workspace', 'full']),
+  ],
+  authenticateToken,
+  requireScope('ai:generate'),
+  enforceOrgQuotaSafe,
+  enforceOrgRateLimitSafe,
+  enforceOrgBudgetSafe,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const userId = req.user.id;
+    const prompt = String(req.body.prompt || '').trim();
+    const chatId = String(req.body.chatId || '').trim();
+    const fileIds = (Array.isArray(req.body.fileIds) ? req.body.fileIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean);
+    const streamId = String(req.body.streamId || '').trim() || crypto.randomUUID();
+    const idempotencyKey = String(req.body.idempotencyKey || '').trim() || streamId;
+    const permission = String(req.body.permission || 'default');
+    if (permission === 'read' || permission === 'protected') {
+      return res.status(403).json({
+        error: 'permission_blocks_document_edit',
+        message: 'Los permisos actuales no permiten editar documentos. Cambia el permiso del compositor para autorizar la edición.',
+      });
+    }
+
+    const chat = await prisma.chat.findFirst({ where: { id: chatId, userId }, select: { id: true } }).catch(() => null);
+    if (!chat) return res.status(404).json({ error: 'chat_not_found' });
+
+    // Same model resolution as /generate: honor the picker, then provider,
+    // Custom connections, connection readiness and plan gating.
+    let model = String(req.body.model || '').trim();
+    let provider = String(req.body.provider || '').trim();
+    const honoredPick = honorPickerModel(model, { provider });
+    if (honoredPick.model) {
+      model = honoredPick.model;
+      provider = honoredPick.provider || provider;
+    }
+    const actualModel = isSiraMiniAlias(model) ? SIRA_MINI_PUBLIC_NAME : model;
+    let actualProvider = resolveGenerateProvider(provider, model);
+    let customConnection = null;
+    try {
+      const custom = await resolveCustomConnectionForTurn({ provider, model, prisma });
+      if (custom.isCustom && !custom.connection) {
+        return res.status(503).json({
+          error: 'custom_connection_unavailable',
+          message: 'El modelo local no tiene una conexión Custom activa. Configúrala en Admin → Conexiones.',
+        });
+      }
+      if (custom.connection) {
+        customConnection = custom.connection;
+        actualProvider = 'Custom';
+      }
+    } catch (_) { /* same fail-open as /generate */ }
+    if (!customConnection && !providerConnectionReady(actualProvider)) {
+      return res.status(503).json({ error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE });
+    }
+    const catalogEntry = modelRouter.getModel(model);
+    const userPlan = req.user.plan || 'FREE';
+    if (catalogEntry && !modelRouter.isPlanEligible(catalogEntry.plans, userPlan)) {
+      return res.status(403).json({
+        error: 'plan_does_not_include_model',
+        message: `El modelo "${catalogEntry.id}" requiere un plan ${catalogEntry.plans.join(' o ')}. Tu plan actual: ${userPlan}.`,
+        requiredPlans: catalogEntry.plans,
+        currentPlan: userPlan,
+        upgradeRequired: true,
+      });
+    }
+    // Editing a document is an attachment turn for FREE metering.
+    const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user, hasAttachments: true });
+    if (!quota.ok) return res.status(quota.status).json(quota.body);
+
+    let client;
+    try {
+      client = createProviderClientForRequest(actualProvider, req, { customConnection, model: actualModel }).client;
+    } catch (clientErr) {
+      return res.status(503).json({ error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE });
+    }
+    let toolCallMode = 'native';
+    try {
+      const mode = require('../services/agentic-chat-stream').resolveToolCallMode(actualProvider, actualModel);
+      if (mode === 'prompted') toolCallMode = 'prompted';
+    } catch (_) { /* native by default */ }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+    const send = (payload) => {
+      if (res.writableEnded || res.destroyed) return;
+      try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch (_) { /* client detached */ }
+    };
+    const heartbeat = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return;
+      try { res.write(': ping\n\n'); } catch (_) { /* client detached */ }
+    }, 15000);
+    const controller = new AbortController();
+    const controllerKey = `${userId}:${streamId}`;
+    streamControllers.set(controllerKey, controller);
+    send({ type: 'start', streamId });
+
+    const processedFiles = fileIds.length
+      ? (await Promise.all(fileIds.map((id) => loadUserFile(id, userId).catch(() => null)))).filter(Boolean)
+      : [];
+    const persist = async (content, assistantFiles = []) => {
+      try {
+        const saved = await saveChatAndTrackUsage(
+          userId, chatId, prompt, content, prompt.length + content.length, actualModel,
+          processedFiles, assistantFiles, false,
+          { idempotencyKey, streamId, source: 'document-editor' }, userPlan,
+        );
+        return saved?.assistantMessage?.id || null;
+      } catch (saveErr) {
+        console.warn('[ai/document-edit] persistence failed:', saveErr?.message || saveErr);
+        return null;
+      }
+    };
+
+    try {
+      const { runChatDocumentEdit, toAssistantFiles } = require('../services/document-editor/chat-document-editor');
+      const result = await runChatDocumentEdit({
+        prisma,
+        userId,
+        chatId,
+        fileIds,
+        instruction: prompt,
+        llm: { client, model: actualModel, provider: actualProvider, toolCallMode },
+        signal: controller.signal,
+        onEvent: (stage) => send({ type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}) }),
+      });
+      if (result.ok) {
+        const files = toAssistantFiles(result.artifacts);
+        const assistantMessageId = await persist(result.summary, files);
+        send({ type: 'done', ok: true, content: result.summary, files, assistantMessageId, chatId });
+      } else {
+        const assistantMessageId = await persist(result.message);
+        send({ type: 'done', ok: false, code: result.code, content: result.message, files: [], assistantMessageId, chatId });
+      }
+    } catch (err) {
+      const cancelled = controller.signal.aborted || isAbortError(err);
+      const content = cancelled
+        ? 'Edición detenida. El documento original no se modificó.'
+        : 'No se pudo completar la edición del documento. El original no se modificó; inténtalo de nuevo.';
+      if (!cancelled) console.error('[ai/document-edit] failed:', err?.message || err);
+      const assistantMessageId = await persist(content);
+      send({ type: 'done', ok: false, code: cancelled ? 'CANCELLED' : 'FAILED', content, files: [], assistantMessageId, chatId });
+    } finally {
+      clearInterval(heartbeat);
+      if (streamControllers.get(controllerKey) === controller) streamControllers.delete(controllerKey);
+      if (!res.writableEnded) {
+        try { res.end(); } catch (_) { /* already closed */ }
+      }
+    }
+  },
+);
+
 router.post('/stop-stream', authenticateToken, async (req, res) => {
   const { streamId } = req.body;
   if (!streamId) {
