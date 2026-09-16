@@ -109,6 +109,10 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
   Telemetría `sira_rlhf_*` en `/api/rlhf/stats` (admin) y `/metrics`.
   Thumbs 👍/👎 → `routing-feedback` (`success` / `disliked`). Best-of-N
   sigue off. Docs: `docs/rlhf-phase2-steering.md`.
+- **RLHF phase 3:** backfill de `Message.feedback` → `preference_events`,
+  cron diario 08:00 UTC, panel `/admin/rlhf`. Prep SFT/DPO = `#713`
+  (`docs/rlhf-phase3-train-pipeline.md`). Best-of-N sigue off.
+  Docs: `docs/rlhf-phase3.md`.
 
 - **F0**: `ROADMAP.md` + `STATE.md` en la raíz, aprobados.
 - **AgentRunner v0** en `backend/src/services/agent-runner/`: loop LLM→tool→result→LLM

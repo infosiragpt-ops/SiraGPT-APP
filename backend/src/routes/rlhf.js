@@ -17,6 +17,7 @@
  *   GET  /api/rlhf/jobs              list recent prep jobs (admin)
  *   GET  /api/rlhf/jobs/:id          job status + artifact pointers (admin)
  *   GET  /api/rlhf/jobs/:id/artifact download scrubbed JSONL (admin)
+ *   POST /api/rlhf/backfill          copy Message.feedback → preference_events (admin)
  *
  * Collection is on by default (SIRAGPT_RLHF_ENABLED). Best-of-N sampling
  * at generation time is off by default (SIRAGPT_RLHF_BEST_OF_N) because
@@ -474,6 +475,17 @@ router.get('/jobs/:id/artifact', authenticateToken, requireAdmin, handleErrors(a
     return res.status(404).json({ error: 'artifact missing', code: 'E_PARAMS' });
   }
   fs.createReadStream(localPath).pipe(res);
+}));
+
+router.post('/backfill', authenticateToken, requireAdmin, handleErrors(async (req, res) => {
+  const prisma = require('../config/database');
+  const result = await rlhf.backfill({
+    prisma,
+    embedder: embedder(),
+    userId: req.body && req.body.userId ? String(req.body.userId) : null,
+    limit: req.body && req.body.limit,
+  });
+  res.json({ ok: !!result.ok, ...result, stats: rlhf.stats() });
 }));
 
 module.exports = router;

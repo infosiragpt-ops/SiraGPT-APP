@@ -31,6 +31,7 @@ const flags = require('./flags');
 const trainJobs = require('./train-jobs');
 const trainProcessor = require('./train-processor');
 const trainSubmit = require('./train-submit');
+const backfill = require('./backfill');
 
 function _reset() {
   store._reset();
@@ -120,6 +121,8 @@ module.exports = {
   processTrainJob: trainProcessor.processTrainJob,
   trainJobs,
   trainSubmit,
+  backfill: backfill.backfill,
+  backfillMod: backfill,
   // primitives (tests)
   rewardModel,
   vectors,

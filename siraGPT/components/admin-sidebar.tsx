@@ -1,5 +1,5 @@
 "use client"
-import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, Heart, LogOut, PanelLeft, ArrowLeft, Plug, ScrollText } from "lucide-react"
+import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, Heart, GraduationCap, LogOut, PanelLeft, ArrowLeft, Plug, ScrollText } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
 
 import {
@@ -79,6 +79,11 @@ const adminMenuItems = [
     title: "Estado",
     icon: Heart,
     url: "/admin/health",
+  },
+  {
+    title: "RLHF",
+    icon: GraduationCap,
+    url: "/admin/rlhf",
   },
   {
     title: "Ajustes",

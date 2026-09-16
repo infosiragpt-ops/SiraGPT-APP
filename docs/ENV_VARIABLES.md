@@ -433,6 +433,7 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | `SIRAGPT_RLHF_TRAIN_JOBS` | off | `1` / `true` / `on` enables admin SFT/DPO prep jobs (`POST /api/rlhf/jobs`). Leave off in production until an admin wants a JSONL artifact |
 | `SIRAGPT_RLHF_TRAIN_SUBMIT` | off | Optional submit after prep. No-op today (no in-repo catalog fine-tune adapter). Do not treat this as a paid auto-train switch |
 | `SIRAGPT_RLHF_TRAIN_JOB_CONCURRENCY` | 1 | In-process prep workers (capped at 4) |
+| `SYSTEM_CRON_RLHF_SCHEDULE` | `0 8 * * *` | Daily backfill of Message.feedback + local RM train (UTC) |
 
 ---
 

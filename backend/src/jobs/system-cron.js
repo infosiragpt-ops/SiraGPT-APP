@@ -104,6 +104,10 @@ const DETECT_IDLE_USERS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_USERS_SCH
 // nightly User-table state, and before the audit-archive sweep (07:15's
 // SystemSettings sibling already ran at 07:00; this job only reads).
 const GROWTH_GAUGES_SCHEDULE = process.env.SYSTEM_CRON_GROWTH_GAUGES_SCHEDULE || '30 7 * * *';
+// RLHF phase 3 — backfill Message.feedback into preference_events, then
+// maybe retrain the in-process reward model. Default 08:00 UTC, after the
+// 07:xx SystemSettings sweeps so we don't contend on that table.
+const RLHF_PHASE3_SCHEDULE = process.env.SYSTEM_CRON_RLHF_SCHEDULE || '0 8 * * *';
 // Ratchet 45 — daily SystemSettings drift cleanup. Default 07:00 UTC, runs
 // after the idle-org (06:00) and idle-user (06:30) detectors so the same
 // pass that *writes* fresh flag rows precedes the orphan sweep — we only
@@ -1052,6 +1056,44 @@ function start(opts = {}) {
     schedule: STALE_RUN_WATCHDOG_SCHEDULE,
     task: staleRunWatchdogTask,
     meta: staleRunWatchdogMeta,
+  });
+
+  let rlhfPhase3Running = false;
+  const rlhfPhase3Meta = {};
+  const rlhfPhase3Task = cron.schedule(
+    RLHF_PHASE3_SCHEDULE,
+    async () => {
+      if (rlhfPhase3Running) {
+        logger.warn?.('[system-cron] skip rlhf-phase3 — previous run still active');
+        return;
+      }
+      rlhfPhase3Running = true;
+      const finish = recordRun(rlhfPhase3Meta, 'rlhf-phase3');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./rlhf-phase3');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] rlhf-phase3 retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] rlhf-phase3 done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] rlhf-phase3 failed: ${err && err.message}`);
+      } finally {
+        rlhfPhase3Running = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'rlhf-phase3',
+    schedule: RLHF_PHASE3_SCHEDULE,
+    task: rlhfPhase3Task,
+    meta: rlhfPhase3Meta,
   });
 
   for (const t of tasks) {
