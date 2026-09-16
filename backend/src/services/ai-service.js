@@ -39,7 +39,7 @@ const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 const {
     inferProviderFromModelId,
     resolveGenerateProvider,
-    CONNECTION_UNAVAILABLE_MESSAGE,
+    PROVIDER_UNAVAILABLE_MESSAGE,
 } = require('./ai/provider-inference');
 const { sharedFetch } = require('../utils/provider-http-agent');
 const {
@@ -58,6 +58,7 @@ const {
 const { resolveThinkingLevelForTurn, isTrivialChatTurn } = require('./trivial-turn');
 const {
     publicGenerateErrorMessage,
+    classifyGenerateError,
     isProviderClientError,
     closeGenerateSseWithError,
 } = require('./ai/generate-sse-close');
@@ -341,7 +342,7 @@ class AIService {
                 process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY || '',
             ).trim();
             if (!apiKey) {
-                const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+                const err = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
                 err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
                 err.status = 503;
                 err.provider = 'Meta';
@@ -1066,10 +1067,11 @@ class AIService {
             // SSE body into HTTP 502 (Meta 400 unknown parameter reasoning).
             if (isPinnedUserGenerate(provider, model) || providerHttpError) {
                 const mini = isPinnedLocalGenerate(provider, model);
+                const classified = classifyGenerateError(apiError);
                 const message = mini
                     ? SIRA_MINI_UNAVAILABLE_MESSAGE
-                    : publicGenerateErrorMessage(apiError);
-                const error = mini ? 'sira_mini_unavailable' : 'connection_unavailable';
+                    : classified.message;
+                const error = mini ? 'sira_mini_unavailable' : classified.code;
                 reportProviderFailure(error);
                 closeGenerateSseWithError(res, { message, code: error, recovered: false });
                 return message;

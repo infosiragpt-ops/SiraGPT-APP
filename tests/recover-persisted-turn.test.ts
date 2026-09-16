@@ -28,6 +28,13 @@ describe("recover persisted generate turn", () => {
       shouldRecoverPersistedGenerate({ status: 503, code: "connection_unavailable", message: "Conexión no disponible" }),
       false,
     )
+    assert.equal(
+      shouldRecoverPersistedGenerate({
+        code: "provider_unavailable",
+        message: "Este modelo no está disponible ahora. No cambié a otro modelo.",
+      }),
+      false,
+    )
     assert.equal(shouldRecoverPersistedGenerate({ status: 503 }), false)
     assert.equal(shouldRecoverPersistedGenerate({ status: 401, message: "unauthorized" }), false)
   })

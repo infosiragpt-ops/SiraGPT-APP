@@ -334,6 +334,14 @@ test('isHandledAgenticChatResult keeps a successful Office edit off the plain st
     finalAnswer: 'Listo. Generé deck-editado.pptx.',
     artifacts: [{ id: 'art-1' }],
   }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'github_repo_connect',
+    finalAnswer: 'GitHub no está conectado. Ve a Conexiones (/conexiones).',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'github_open_repo',
+    finalAnswer: 'Abrí infosiragpt-ops/runelectric en un workspace aislado.',
+  }), true);
 });
 
 test('honest verification and resume failures cannot fall through to a second plain model answer', () => {
@@ -524,6 +532,101 @@ test('media tools also load for explicit audio/music requests', () => {
   assert.ok(music.includes('generate_music'));
   const audio = buildDefaultTools({ userQuery: 'hazme un audio narrando este texto' }).map(t => t.name);
   assert.ok(audio.includes('generate_speech'));
+});
+
+test('GitHub local-run preloop returns E_GITHUB_CONNECT without calling the model', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          throw new Error('model must not run when GitHub is disconnected');
+        },
+      },
+    },
+  };
+  const { res, body } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'grok-4.6',
+    userQuery: 'puedes ayudarme a delegar en local la app https://github.com/infosiragpt-ops/runelectric dame la web en local',
+    history: [],
+    res,
+    toolContext: {
+      userId: 'valeria',
+      chatId: 'c-local',
+      resolveGithubToken: async () => null,
+      fetchImpl: async () => {
+        throw new Error('must not fetch GitHub without a token');
+      },
+    },
+  });
+  assert.equal(llmCalls, 0);
+  assert.equal(result.stoppedReason, 'github_repo_connect');
+  assert.match(result.finalAnswer, /\/conexiones/i);
+  assert.match(result.finalAnswer, /GitHub no está conectado/i);
+  assert.doesNotMatch(result.finalAnswer, /Conexión no disponible|connection_unavailable|DeepSeek|OpenRouter/i);
+  assert.match(body(), /\/conexiones/i);
+  assert.equal(agenticStream.isHandledAgenticChatResult(result), true);
+});
+
+test('GitHub local-run preloop opens the repo and does not invent a localhost server', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: { completions: { create: async () => { llmCalls += 1; throw new Error('no llm'); } } },
+  };
+  const files = { 'README.md': '# runelectric\n', 'package.json': '{"name":"runelectric"}\n' };
+  const blobs = new Map();
+  const tree = Object.keys(files).map((rel, i) => {
+    const sha = `blob-${i + 1}`;
+    blobs.set(sha, Buffer.from(files[rel], 'utf8').toString('base64'));
+    return { path: rel, type: 'blob', sha, size: Buffer.byteLength(files[rel]) };
+  });
+  async function mockFetch(url, init = {}) {
+    const href = String(url);
+    const method = (init && init.method) || 'GET';
+    if (href.endsWith('/user')) return new Response(JSON.stringify({ login: 'valeria' }), { status: 200 });
+    if (/\/repos\/infosiragpt-ops\/runelectric$/.test(href) && method === 'GET') {
+      return new Response(JSON.stringify({
+        full_name: 'infosiragpt-ops/runelectric',
+        html_url: 'https://github.com/infosiragpt-ops/runelectric',
+        default_branch: 'main',
+      }), { status: 200 });
+    }
+    if (href.includes('/git/ref/heads/main')) {
+      return new Response(JSON.stringify({ object: { sha: 'aaa111' } }), { status: 200 });
+    }
+    if (href.includes('/git/trees/aaa111')) {
+      return new Response(JSON.stringify({ sha: 'tree0', truncated: false, tree }), { status: 200 });
+    }
+    const blobGet = href.match(/\/git\/blobs\/(blob-\d+)$/);
+    if (blobGet) {
+      return new Response(JSON.stringify({ encoding: 'base64', content: blobs.get(blobGet[1]) || '' }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ message: `unexpected ${method} ${href}` }), { status: 500 });
+  }
+  const { res } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'grok-4.6',
+    userQuery: 'puedes ayudarme a delegar en local la app https://github.com/infosiragpt-ops/runelectric dame la web en local',
+    history: [],
+    res,
+    toolContext: {
+      userId: 'valeria',
+      chatId: 'c-local-ok',
+      resolveGithubToken: async () => ({ accessToken: 'TEST_TOKEN_NOT_A_SECRET' }),
+      fetchImpl: mockFetch,
+    },
+  });
+  assert.equal(llmCalls, 0);
+  assert.equal(result.stoppedReason, 'github_open_repo');
+  assert.match(result.finalAnswer, /infosiragpt-ops\/runelectric/);
+  assert.match(result.finalAnswer, /workspace aislado/i);
+  assert.match(result.finalAnswer, /git clone/i);
+  assert.doesNotMatch(result.finalAnswer, /Conexión no disponible|ya corre en localhost|DeepSeek|OpenRouter|TEST_TOKEN/i);
+  assert.equal(agenticStream.isHandledAgenticChatResult(result), true);
 });
 
 test('runAgenticChat injects a media-intent directive naming the tool + specs', async () => {

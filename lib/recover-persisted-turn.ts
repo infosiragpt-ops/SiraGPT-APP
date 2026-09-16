@@ -25,9 +25,10 @@ export function shouldRecoverPersistedGenerate(
   const text = [error?.message, error?.name, error?.code].filter(Boolean).join(" ")
 
   // Missing-key / fail-closed generate never persisted an assistant row.
-  // Polling after 503 connection_unavailable keeps Pensando spinning.
+  // Polling after 503 connection_unavailable / provider_unavailable keeps
+  // Pensando spinning.
   if (
-    /connection_unavailable/i.test(text)
+    /connection_unavailable|provider_unavailable|PROVIDER_CONNECTION_UNAVAILABLE/i.test(text)
     || /conexión no disponible/i.test(text)
     || status === 503
   ) {

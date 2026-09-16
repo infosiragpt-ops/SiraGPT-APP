@@ -42,7 +42,7 @@ test('generate surfaces a Spanish error when the selected model cannot run', () 
     /Este modelo no se pudo ejecutar\. No cambié a otro modelo/,
     'failed Custom/local models must error in Spanish on that model',
   );
-  assert.match(aiRoute, /CONNECTION_UNAVAILABLE_MESSAGE/);
+  assert.match(aiRoute, /PROVIDER_UNAVAILABLE_MESSAGE/);
   assert.match(aiRoute, /ECONNREFUSED/);
   assert.match(aiRoute, /unknown model/);
 });

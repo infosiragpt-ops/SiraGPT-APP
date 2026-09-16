@@ -20,7 +20,14 @@ const {
   workBranchName,
 } = require('../src/services/construir-mvp/github-pr-flow');
 const { jailRelPath, clearSessions } = require('../src/services/construir-mvp/github-repo-workspace');
-const { isGithubPrRequest, extractOwnerRepo, parseOwnerRepo } = require('../src/services/agents/github-pr-intent');
+const {
+  isGithubPrRequest,
+  isGithubLocalRunRequest,
+  isGithubRepoWorkRequest,
+  extractOwnerRepo,
+  parseOwnerRepo,
+  buildGithubLocalReadyMessage,
+} = require('../src/services/agents/github-pr-intent');
 const { isAgentesCodingV2Enabled } = require('../src/services/agentes-coding/flags');
 const { createConstruirMvpRouter } = require('../src/routes/construir-mvp');
 const agentTools = require('../src/services/agents/agent-tools');
@@ -128,6 +135,26 @@ describe('github-pr-intent', () => {
     assert.equal(isGithubPrRequest('créame una web de ventas'), false);
     assert.equal(isGithubPrRequest('hola'), false);
     assert.equal(isGithubPrRequest('explica este código'), false);
+  });
+
+  test('detects clone + local-run of a public GitHub URL (Valeria repro)', () => {
+    const valeria = 'puedes ayudarme a delegar en local la app https://github.com/infosiragpt-ops/runelectric dame la web en local';
+    assert.equal(isGithubLocalRunRequest(valeria), true);
+    assert.equal(isGithubRepoWorkRequest(valeria), true);
+    assert.equal(isGithubPrRequest(valeria), false);
+    assert.deepEqual(extractOwnerRepo(valeria), { owner: 'infosiragpt-ops', repo: 'runelectric' });
+    assert.equal(isGithubLocalRunRequest('explica este código de https://github.com/luis/demo'), false);
+    assert.equal(isGithubRepoWorkRequest('hola'), false);
+    const ready = buildGithubLocalReadyMessage({
+      fullName: 'infosiragpt-ops/runelectric',
+      htmlUrl: 'https://github.com/infosiragpt-ops/runelectric',
+      files: ['README.md', 'package.json'],
+      fileCount: 2,
+    });
+    assert.match(ready, /workspace aislado/i);
+    assert.match(ready, /conexiones/i);
+    assert.doesNotMatch(ready, /localhost:5173 is running|ya corre/i);
+    assert.doesNotMatch(ready, /DeepSeek|OpenRouter|connection_unavailable/i);
   });
 });
 
@@ -337,6 +364,8 @@ describe('construir GitHub PR HTTP + wiring', () => {
     assert.match(streamSrc, /github_open_repo/);
     assert.match(streamSrc, /github_open_pull_request/);
     assert.match(streamSrc, /isGithubPrRequest/);
+    assert.match(streamSrc, /isGithubRepoWorkRequest/);
+    assert.match(streamSrc, /github_repo_connect/);
     const docs = fs.readFileSync(path.join(__dirname, '../../docs/construir-github-pr.md'), 'utf8');
     assert.match(docs, /\/conexiones/);
     assert.match(docs, /abre un PR/);

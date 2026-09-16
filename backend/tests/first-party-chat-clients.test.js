@@ -11,7 +11,7 @@ const {
   anthropicSupportsThinkingToggle,
   applyAnthropicThinkingControls,
 } = require('../src/services/ai/first-party-chat-clients');
-const { CONNECTION_UNAVAILABLE_MESSAGE } = require('../src/services/ai/provider-inference');
+const { PROVIDER_UNAVAILABLE_MESSAGE } = require('../src/services/ai/provider-inference');
 
 test('stripVendorPrefix removes only the matching leading slug', () => {
   assert.equal(stripVendorPrefix('anthropic/claude-fable-5', ['anthropic/']), 'claude-fable-5');
@@ -31,7 +31,7 @@ test('createXaiClient points at api.x.ai when the key is present', () => {
   }
 });
 
-test('missing first-party keys throw Conexión no disponible', () => {
+test('missing first-party keys throw provider-unavailable, not a vendor swap', () => {
   const prev = {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     SIRA_ANTHROPIC_API_KEY: process.env.SIRA_ANTHROPIC_API_KEY,
@@ -46,15 +46,16 @@ test('missing first-party keys throw Conexión no disponible', () => {
   delete process.env.XAI_API_KEY;
   try {
     assert.throws(() => createAnthropicStreamingClient({ apiKey: '' }), (err) => {
-      assert.equal(err.message, CONNECTION_UNAVAILABLE_MESSAGE);
+      assert.equal(err.message, PROVIDER_UNAVAILABLE_MESSAGE);
+      assert.equal(err.code, 'PROVIDER_CONNECTION_UNAVAILABLE');
       return true;
     });
     assert.throws(() => createMoonshotClient(), (err) => {
-      assert.equal(err.message, CONNECTION_UNAVAILABLE_MESSAGE);
+      assert.equal(err.message, PROVIDER_UNAVAILABLE_MESSAGE);
       return true;
     });
     assert.throws(() => createXaiClient(), (err) => {
-      assert.equal(err.message, CONNECTION_UNAVAILABLE_MESSAGE);
+      assert.equal(err.message, PROVIDER_UNAVAILABLE_MESSAGE);
       return true;
     });
   } finally {

@@ -282,13 +282,13 @@ const {
   inferProviderFromModelId,
   resolveGenerateProvider,
   providerConnectionReady,
-  CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
 } = require('../services/ai/provider-inference');
 const { honorPickerModel, lookupPickerDisplayName } = require('../services/ai/honor-picker-model');
 const {
   closeGenerateSseWithError,
   endGenerateSse,
-  publicGenerateErrorMessage,
+  classifyGenerateError,
 } = require('../services/ai/generate-sse-close');
 const { createClientGoneWriter } = require('../services/ai/sse-client-gone');
 const {
@@ -313,7 +313,7 @@ const {
 } = require('../services/trivial-turn');
 
 function throwConnectionUnavailable(provider) {
-  const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+  const err = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
   err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
   err.status = 503;
   err.provider = provider;
@@ -1215,7 +1215,7 @@ function sanitizeErrorForUser(error) {
     return 'Este modelo no se pudo ejecutar. No cambié a otro modelo. Elige otro modelo o revisa la configuración.';
   }
   if (/unknown parameter/i.test(msg)) {
-    return CONNECTION_UNAVAILABLE_MESSAGE;
+    return PROVIDER_UNAVAILABLE_MESSAGE;
   }
   return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
 }
@@ -3040,8 +3040,8 @@ router.post(
       if (!_customResolution.isCustom && !providerConnectionReady(actualProvider)) {
         controller.abort();
         return res.status(503).json({
-          error: 'connection_unavailable',
-          message: CONNECTION_UNAVAILABLE_MESSAGE,
+          error: 'provider_unavailable',
+          message: PROVIDER_UNAVAILABLE_MESSAGE,
         });
       }
       let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
@@ -3502,8 +3502,8 @@ router.post(
       }
       if (actualProvider !== 'Custom' && !providerConnectionReady(actualProvider)) {
         closeGenerateSseWithError(res, {
-          message: CONNECTION_UNAVAILABLE_MESSAGE,
-          code: 'connection_unavailable',
+          message: PROVIDER_UNAVAILABLE_MESSAGE,
+          code: 'provider_unavailable',
           recovered: false,
         });
         return;
@@ -7364,6 +7364,30 @@ router.post(
                 // them as success so the route delivers it instead of discarding
                 // it and re-generating via the plain stream.
                 const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult);
+                if (!__agenticOk && agenticResult && agenticResult.stoppedReason) {
+                  const degradedClassified = classifyGenerateError({
+                    message: agenticResult.finalAnswer || agenticResult.error || agenticResult.stoppedReason,
+                    code: agenticResult.stoppedReason,
+                  });
+                  if (
+                    degradedClassified.code === 'E_TIMEOUT'
+                    || degradedClassified.code === 'E_GITHUB_CONNECT'
+                    || degradedClassified.code === 'E_SANDBOX'
+                  ) {
+                    generateLog.warn('agentic.degraded_honest', {
+                      outcome: degradedClassified.code,
+                      reason: agenticResult.stoppedReason,
+                    });
+                    if (!res.writableEnded && !res._siraGenerateSseClosed) {
+                      closeGenerateSseWithError(res, {
+                        message: degradedClassified.message,
+                        code: degradedClassified.code,
+                        recovered: false,
+                      });
+                    }
+                    return degradedClassified.message;
+                  }
+                }
                 if (__agenticOk) {
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
@@ -8486,15 +8510,16 @@ router.post(
         durationMs: Date.now() - __generateStartedAt,
       });
 
-      const sanitizedError = sanitizeErrorForUser(error);
+      const classified = classifyGenerateError(error);
+      const sanitizedError = classified.message || sanitizeErrorForUser(error);
       streamFailureMessage = sanitizedError;
 
       if (!res.headersSent) {
-        res.status(500).json({ error: sanitizedError });
+        res.status(500).json({ error: sanitizedError, code: classified.code });
       } else if (!res._siraGenerateSseClosed) {
         closeGenerateSseWithError(res, {
-          message: publicGenerateErrorMessage({ message: sanitizedError, code: error && (error.code || error.name) }) || sanitizedError,
-          code: (error && (error.code || error.name)) || 'stream_error',
+          message: sanitizedError,
+          code: classified.code || (error && (error.code || error.name)) || 'stream_error',
           recovered: false,
         });
       }
@@ -9411,7 +9436,7 @@ router.post(
       }
     } catch (_) { /* same fail-open as /generate */ }
     if (!customConnection && !providerConnectionReady(actualProvider)) {
-      return res.status(503).json({ error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE });
+      return res.status(503).json({ error: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE });
     }
     const catalogEntry = modelRouter.getModel(model);
     const userPlan = req.user.plan || 'FREE';
@@ -9432,7 +9457,8 @@ router.post(
     try {
       client = createProviderClientForRequest(actualProvider, req, { customConnection, model: actualModel }).client;
     } catch (clientErr) {
-      return res.status(503).json({ error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE });
+      const classified = classifyGenerateError(clientErr);
+      return res.status(503).json({ error: classified.code, message: classified.message });
     }
     let toolCallMode = 'native';
     try {

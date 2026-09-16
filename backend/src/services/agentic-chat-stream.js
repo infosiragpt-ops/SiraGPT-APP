@@ -70,7 +70,12 @@
     isSoftwareBuildRequest,
     isExplicitDocumentRequest,
   } = require('./agents/software-build-intent');
-  const { isGithubPrRequest } = require('./agents/github-pr-intent');
+  const {
+    isGithubPrRequest,
+    isGithubLocalRunRequest,
+    isGithubRepoWorkRequest,
+    buildGithubLocalReadyMessage,
+  } = require('./agents/github-pr-intent');
 
   const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
   const SENTINEL_FENCE_CLOSE = '\n```';
@@ -541,6 +546,11 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   // (credits/model/verification). The honest Spanish error IS the final
   // answer — never fall through to the plain stream or the generic pipeline.
   'agent_runner_failed',
+  // GitHub CONSTRUIR pre-loop (OAuth CTA or isolated open). Falling through
+  // to the plain stream was collapsing these into «Conexión no disponible».
+  'github_open_repo',
+  'github_repo_connect',
+  'github_repo_preloop_error',
 ]);
 
 /**
@@ -629,6 +639,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       || isDocumentEditRequest(text)
       || customGptPolicy.requiresSkill;
   }
+  if (isGithubRepoWorkRequest(text)) return true;
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
   // Auto web-search routing: send freshness / live-data / factual-lookup
   // questions into the agentic loop (which owns web_search) even when the
@@ -835,7 +846,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       toolContext.goal = toolContext.goal || userQuery;
     }
     const softwareBuildTurn = isSoftwareBuildRequest(userQuery) && !isExplicitDocumentRequest(userQuery);
-    const githubPrTurn = isGithubPrRequest(userQuery);
+    const githubRepoWorkTurn = isGithubRepoWorkRequest(userQuery);
+    const githubPrTurn = githubRepoWorkTurn;
     if (!res) throw new Error('runAgenticChat: res is required');
 
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
@@ -878,10 +890,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* best-effort */ }
     const finishSourcePreservingPreloop = (stoppedReason, answer, artifacts = []) => {
       const finalAnswer = String(answer || '').trim();
+      const preloopTool = String(stoppedReason || '').startsWith('github_')
+        ? 'github_open_repo'
+        : 'document_edit';
       return {
         finalAnswer,
         persistedContent: buildPersistedContent({
-          meta: { goal: userQuery, model, tools: ['document_edit'] },
+          meta: { goal: userQuery, model, tools: [preloopTool] },
           steps: [],
           artifacts,
           approvals: [],
@@ -895,6 +910,46 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         artifacts,
       };
     };
+    if (githubRepoWorkTurn && toolContext.userId) {
+      try {
+        const { classifyGenerateError } = require('./ai/generate-sse-close');
+        const mvp = require('./construir-mvp');
+        await writeSse(res, { type: 'stage', label: 'Abriendo el repositorio', tool: 'github_open_repo' });
+        const opened = await mvp.openRepo({
+          userId: toolContext.userId,
+          chatId: toolContext.chatId,
+          userQuery,
+          prompt: userQuery,
+          modelAlias: model,
+          fetchImpl: toolContext.fetchImpl,
+          resolveToken: toolContext.resolveGithubToken,
+          sandbox: toolContext.repoSandbox,
+          execImpl: toolContext.repoExecImpl,
+          env: toolContext.env || process.env,
+        });
+        if (!opened || opened.ok !== true) {
+          const classified = classifyGenerateError(opened || { code: 'E_GITHUB_CONNECT' });
+          const answer = classified.message;
+          await writeSse(res, { replace: true, content: answer });
+          return finishSourcePreservingPreloop('github_repo_connect', answer, []);
+        }
+        toolContext.githubRepoWorkspace = opened;
+        if (isGithubLocalRunRequest(userQuery) && !isGithubPrRequest(userQuery)) {
+          const answer = buildGithubLocalReadyMessage(opened);
+          await writeSse(res, { replace: true, content: answer });
+          return finishSourcePreservingPreloop('github_open_repo', answer, []);
+        }
+      } catch (githubPreErr) {
+        if (signal?.aborted) throw githubPreErr;
+        try {
+          const { classifyGenerateError } = require('./ai/generate-sse-close');
+          const classified = classifyGenerateError(githubPreErr);
+          const answer = classified.message;
+          await writeSse(res, { replace: true, content: answer });
+          return finishSourcePreservingPreloop('github_repo_preloop_error', answer, []);
+        } catch (_) { /* continue the LLM loop */ }
+      }
+    }
     // F2 telemetry: one structured line per document turn stating which path
     // served it. Best-effort — never breaks the turn.
     const logDocRouting = (routePath, reason) => {
@@ -1699,7 +1754,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida audio, voz, narración, locución, mp3 o wav, DEBES llamar `generate_speech` con el texto exacto y adjuntar el archivo MP3 descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API, un reproductor en el navegador, o decirle al usuario que pulse reproducir. El entregable es un archivo de audio real.',
       githubPrTurn
-        ? 'El usuario pidio abrir un repositorio GitHub y/o crear un Pull Request. Usa `github_open_repo` con owner/repo (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). Edita en el workspace aislado con `github_repo_write`. Abre el PR con `github_open_pull_request` (approved=true) y devuelve prUrl. PROHIBIDO inventar tokens o model_id. No uses create_document.'
+        ? (isGithubPrRequest(userQuery)
+          ? 'El usuario pidio abrir un repositorio GitHub y/o crear un Pull Request. Usa `github_open_repo` con owner/repo (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). Edita en el workspace aislado con `github_repo_write`. Abre el PR con `github_open_pull_request` (approved=true) y devuelve prUrl. PROHIBIDO inventar tokens o model_id. No uses create_document.'
+          : 'El usuario pidio clonar o ver en local un repo GitHub existente. Usa `github_open_repo` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). El workspace es aislado: no es la computadora del usuario y no inventes un localhost que no corre. Si ya se abrio el repo, lista archivos y da instrucciones honestas de `git clone` + README. PROHIBIDO inventar tokens o model_id. No uses create_document.')
         : softwareBuildTurn
         ? 'El usuario pidio SOFTWARE con codigo real (HTML/CSS/JS o una app web), no un documento Word/PDF. Usa `construir_scaffold` para entregar un proyecto funcional (HTML previsualizable + zip + base de datos en archivo). Tambien puedes usar `create_artifact` tipo html. Si pide GitHub, usa `github_publish_project` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). PROHIBIDO create_document con .docx/.xlsx/.pptx/.pdf (E_SOFTWARE_CODE). No menciones verificaciones tecnicas de Word. No muestres model_id ni nombres de vendor.'
         : 'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',

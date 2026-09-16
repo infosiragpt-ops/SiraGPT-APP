@@ -13,6 +13,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes` «Conexión no disponible» as the entire assistant bubble after
+  a long think is no longer used for provider timeout, abort, GitHub OAuth
+  miss, sandbox jail, or tool failure. Those map to `E_TIMEOUT` /
+  `E_PROVIDER` / `E_GITHUB_CONNECT` / `E_SANDBOX` with Spanish retry or
+  `/conexiones` copy. Clone+run of a public/owned GitHub URL now takes the
+  CONSTRUIR `github_open_repo` pre-loop (#681) instead of falling through
+  to a second generate that looked like a dead connection.
 - `/agentes` website/app asks (“créame una web de ventas” and Spanish
   variants) stay on the code plane (`webdev` / HTML-JS artifacts). They
   no longer remap `.html` contracts into Document Sandbox Word. True
