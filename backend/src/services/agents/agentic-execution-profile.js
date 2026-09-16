@@ -206,8 +206,10 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
 
 function successfulToolCalls(steps = []) {
   const counts = new Map();
-  for (const step of steps || []) {
-    for (const action of step.actions || []) {
+  if (!Array.isArray(steps)) return counts;
+  for (const step of steps) {
+    const actions = step && Array.isArray(step.actions) ? step.actions : [];
+    for (const action of actions) {
       const tool = action.tool;
       if (!tool) continue;
       const obs = action.observation || {};

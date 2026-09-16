@@ -116,6 +116,18 @@ test('DocumentDeliveryPolicy answers attached-document conclusions in chat by de
   assert.equal(policy.thresholds.fileCount, 1);
 });
 
+test('DocumentDeliveryPolicy keeps image-only summaries in chat (no auto Word)', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame un resumen en un solo párrafo',
+    displayGoal: 'dame un resumen en un solo párrafo',
+    files: ['img-1'],
+    fileMetadata: [{ id: 'img-1', mimeType: 'image/png', name: 'RESULTADOS_CDD.png' }],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+});
+
 test('DocumentDeliveryPolicy auto-generates Word when an attached file is summarized', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'dame un resumen',

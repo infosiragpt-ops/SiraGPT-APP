@@ -53,6 +53,7 @@
   const {
     buildExecutionProfile,
     buildExecutionProfilePrompt,
+    classifyAttachmentKinds,
     validateFinalize,
   } = require('./agents/agentic-execution-profile');
   const {
@@ -667,8 +668,23 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   return agentFirstEnabled();
 }
 
-  function buildChatFinalizeProfile({ userQuery, fileIds = [], availableToolNames = new Set() } = {}) {
-    const profile = buildExecutionProfile({ goal: userQuery, fileIds });
+  function buildChatFinalizeProfile({
+    userQuery,
+    fileIds = [],
+    fileMetadata = [],
+    hasImageAttachment = false,
+    availableToolNames = new Set(),
+  } = {}) {
+    const kinds = classifyAttachmentKinds(fileMetadata);
+    const imageOnlyFallback = hasImageAttachment === true
+      && Array.isArray(fileIds) && fileIds.length > 0
+      && kinds.documentCount === 0;
+    const effectiveMetadata = kinds.total > 0
+      ? fileMetadata
+      : (imageOnlyFallback
+        ? fileIds.map((id) => ({ id, mimeType: 'image/*' }))
+        : []);
+    const profile = buildExecutionProfile({ goal: userQuery, fileIds, fileMetadata: effectiveMetadata });
     if (SIMPLE_CHAT_PROMPT.test(String(userQuery || '').trim())) {
       return {
         ...profile,
@@ -1515,6 +1531,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const executionProfile = buildChatFinalizeProfile({
       userQuery,
       fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
+      fileMetadata: Array.isArray(toolContext.fileMetadata) ? toolContext.fileMetadata : [],
+      hasImageAttachment: toolContext.hasImageAttachment === true,
       availableToolNames,
     });
     if (customGptAgentPolicy.requiresSkill && availableToolNames.has('run_skill')) {
@@ -2750,6 +2768,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       baseWebTools,
       buildDefaultTools,
       applyCustomGptCapabilityGates,
+      buildChatFinalizeProfile,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
     },

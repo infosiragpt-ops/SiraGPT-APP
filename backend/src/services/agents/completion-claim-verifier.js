@@ -138,10 +138,40 @@ function buildCorrectionInstruction(result) {
   ].join(' ');
 }
 
+// Read-only Q&A / summarize / explain-image. These turns answer from
+// attached pixels or already-injected text; they must not be held hostage
+// by a tool-evidence judge that cannot succeed without create/search tools.
+const READ_ONLY_QA_RE = /\b(?:resumen|resume(?:r|me|n)?|resumir|s[ií]ntesis|analiza(?:r|me)?|an[aá]lisis|explica(?:r|me)?|explique|describe(?:r|me)?|describ|qu[eé]\s+dice|qu[eé]\s+muestra|de\s+qu[eé]\s+trata|un\s+solo\s+p[aá]rrafo|en\s+(?:un|uno)\s+p[aá]rrafo|summarize|summarise|explain|describe|what\s+(?:does|is)|interpreta(?:r|me)?|identifica(?:r)?)\b/iu;
+
+const QUERY_NEEDS_TOOL_SIDEEFFECTS_RE = /\b(?:busca(?:r)?|investig(?:a|ar)|fuentes|citas)\b[^.?!\n]{0,40}\b(?:web|internet|online|google|papers?|art[ií]culos?)\b|\b(?:crea(?:r|me)?|genera(?:r|me)?|exporta(?:r|me)?|descarga(?:r|me)?|haz(?:me)?)\b[^.?!\n]{0,140}\b(?:word|docx|pdf|excel|xlsx|pptx?|powerpoint|archivo|documento|informe|imagen|video|gr[aá]fico)\b|\bdame\s+(?:un|una)\s+(?:word|docx|pdf|excel|xlsx|pptx?|powerpoint|archivo|documento)\b|\b(?:edita(?:r)?|modifica(?:r)?|actualiza(?:r)?)\b[^.?!\n]{0,80}\b(?:word|docx|pdf|excel|archivo|documento)\b|\b(?:commit|push|clone|deploy)\b/iu;
+
+function isReadOnlyQaIntent(query) {
+  const q = String(query || '');
+  if (!q.trim()) return false;
+  if (QUERY_NEEDS_TOOL_SIDEEFFECTS_RE.test(q)) return false;
+  return READ_ONLY_QA_RE.test(q);
+}
+
+/**
+ * Fail-open the quality/verify loop for pure Q&A, summarize-attachment and
+ * explain-image turns whose draft does not claim a tool side-effect.
+ * High-severity unsupported claims (created file, edited doc, ran code,
+ * modified repo) still require evidence.
+ */
+function shouldFailOpenVerification({ query, answer, executedTools } = {}) {
+  if (!isReadOnlyQaIntent(query)) return false;
+  const draft = String(answer || '').trim();
+  if (!draft) return false;
+  const claims = verifyClaims(draft, executedTools);
+  return claims.severity !== 'high';
+}
+
 module.exports = {
   CLAIM_KINDS,
   extractClaims,
   verifyClaims,
   buildCorrectionInstruction,
   normalizeExecuted,
+  isReadOnlyQaIntent,
+  shouldFailOpenVerification,
 };
