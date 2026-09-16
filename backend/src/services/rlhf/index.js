@@ -27,6 +27,10 @@ const vectors = require('./vectors');
 const steering = require('./steering');
 const metrics = require('./metrics');
 const routingBridge = require('./routing-bridge');
+const flags = require('./flags');
+const trainJobs = require('./train-jobs');
+const trainProcessor = require('./train-processor');
+const trainSubmit = require('./train-submit');
 
 function _reset() {
   store._reset();
@@ -108,6 +112,13 @@ module.exports = {
   rlaif,
   // export
   exportData: exporter.exportData,
+  // phase-3 train-prep jobs (flagged, admin, prep-only)
+  isTrainJobsEnabled: flags.isTrainJobsEnabled,
+  isTrainSubmitEnabled: flags.isTrainSubmitEnabled,
+  isSubmitAvailable: trainSubmit.isSubmitAvailable,
+  processTrainJob: trainProcessor.processTrainJob,
+  trainJobs,
+  trainSubmit,
   // primitives (tests)
   rewardModel,
   vectors,
@@ -115,5 +126,6 @@ module.exports = {
   trainer,
   policy,
   exporter,
+  flags,
   _reset,
 };

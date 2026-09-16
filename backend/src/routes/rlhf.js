@@ -12,17 +12,30 @@
  *   POST /api/rlhf/rerank            rank N candidates with the RM (judge fallback)
  *   POST /api/rlhf/train             fit the RM (admin)
  *   GET  /api/rlhf/model             active RM metrics
+ *   POST /api/rlhf/jobs              enqueue SFT/DPO prep (admin, flagged)
+ *   GET  /api/rlhf/jobs              list recent prep jobs (admin)
+ *   GET  /api/rlhf/jobs/:id          job status + artifact pointers (admin)
+ *   GET  /api/rlhf/jobs/:id/artifact download scrubbed JSONL (admin)
  *
  * Collection is on by default (SIRAGPT_RLHF_ENABLED). Best-of-N sampling
  * at generation time is off by default (SIRAGPT_RLHF_BEST_OF_N) because
- * it multiplies token cost.
+ * it multiplies token cost. Train-prep jobs are off by default
+ * (SIRAGPT_RLHF_TRAIN_JOBS) and stay prep-only unless a catalog adapter
+ * exists AND SIRAGPT_RLHF_TRAIN_SUBMIT is on.
  */
 
+const fs = require('fs');
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const rag = require('../services/rag-service');
 const rlhf = require('../services/rlhf');
+const {
+  isTrainJobsEnabled,
+  isTrainSubmitEnabled,
+  getTrainJobQueue,
+} = require('../services/rlhf/train-jobs');
+const objectStorage = require('../services/object-storage');
 const {
   contentDispositionHeader,
   safeDownloadFilename,
@@ -37,8 +50,12 @@ function handleErrors(fn) {
     try {
       await fn(req, res);
     } catch (err) {
-      console.error(`[rlhf ${req.path}] failed:`, err);
-      res.status(500).json({ error: err.message || 'rlhf failed' });
+      const code = err && err.code;
+      const status = Number(err && err.status) || (code === 'E_DISABLED' ? 403 : code === 'E_QUOTA' ? 429 : code === 'E_PARAMS' ? 400 : 500);
+      if (status >= 500) console.error(`[rlhf ${req.path}] failed:`, code || err.message || 'rlhf failed');
+      const body = { error: err.message || 'rlhf failed' };
+      if (code) body.code = code;
+      res.status(status).json(body);
     }
   };
 }
@@ -138,9 +155,14 @@ router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
     } : null,
     user: rlhf.stats(req.user.id),
     global: isAdmin ? rlhf.stats() : null,
-    phase2: isAdmin ? rlhf.phase2Stats() : {
+    phase2: isAdmin ? {
+      ...rlhf.phase2Stats(),
+      trainJobsEnabled: isTrainJobsEnabled(),
+      trainSubmitEnabled: isTrainSubmitEnabled(),
+    } : {
       steeringEnabled: rlhf.isSteeringEnabled(),
       bestOfN: rlhf.isBestOfNEnabled(),
+      trainJobsEnabled: isTrainJobsEnabled(),
     },
   });
 }));
@@ -224,6 +246,106 @@ router.get('/model', authenticateToken, handleErrors(async (req, res) => {
     trainedAt: active.trainedAt,
     scope: active.scope,
   });
+}));
+
+function adminJobsDisabled(res) {
+  return res.status(403).json({
+    error: 'RLHF train jobs are disabled',
+    code: 'E_DISABLED',
+  });
+}
+
+router.post(
+  '/jobs',
+  authenticateToken,
+  requireAdmin,
+  [
+    body('format').isString().isIn(['sft', 'dpo', 'pairs', 'rm']),
+    body('includeRlaif').optional().isBoolean(),
+    body('minPairs').optional().isInt({ min: 1, max: 10000 }),
+    body('scope').optional().isIn(['global', 'user']),
+    body('scopeUserId').optional().isString().isLength({ min: 1, max: 128 }),
+    body('agent').optional().isString().isLength({ max: 32 }),
+    body('scrubPii').optional().isBoolean(),
+    body('aggressive').optional().isBoolean(),
+    body('submit').optional().isBoolean(),
+  ],
+  handleErrors(async (req, res) => {
+    if (!isTrainJobsEnabled()) return adminJobsDisabled(res);
+    const queue = getTrainJobQueue();
+    const job = await queue.enqueue({
+      createdById: req.user.id,
+      format: req.body.format,
+      includeRlaif: req.body.includeRlaif === true,
+      minPairs: req.body.minPairs,
+      scope: req.body.scope,
+      scopeUserId: req.body.scopeUserId,
+      agent: req.body.agent,
+      scrubPii: req.body.scrubPii,
+      aggressive: req.body.aggressive === true,
+      submit: req.body.submit === true,
+    });
+    res.status(202).json({
+      ok: true,
+      job,
+      submitEnabled: isTrainSubmitEnabled(),
+    });
+  }),
+);
+
+router.get('/jobs', authenticateToken, requireAdmin, handleErrors(async (req, res) => {
+  if (!isTrainJobsEnabled()) return adminJobsDisabled(res);
+  const limit = req.query.limit;
+  const queue = getTrainJobQueue();
+  const jobs = await queue.list({ limit });
+  res.json({
+    ok: true,
+    jobs,
+    enabled: true,
+    submitEnabled: isTrainSubmitEnabled(),
+  });
+}));
+
+router.get('/jobs/:id', authenticateToken, requireAdmin, handleErrors(async (req, res) => {
+  if (!isTrainJobsEnabled()) return adminJobsDisabled(res);
+  const queue = getTrainJobQueue();
+  const job = await queue.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found', code: 'E_PARAMS' });
+  res.json({ ok: true, job });
+}));
+
+router.get('/jobs/:id/artifact', authenticateToken, requireAdmin, handleErrors(async (req, res) => {
+  if (!isTrainJobsEnabled()) return adminJobsDisabled(res);
+  const queue = getTrainJobQueue();
+  const row = await queue.getRow(req.params.id);
+  if (!row) return res.status(404).json({ error: 'job not found', code: 'E_PARAMS' });
+  if (row.status !== 'ready') {
+    return res.status(409).json({ error: 'artifact not ready', code: 'E_PARAMS', status: row.status });
+  }
+  const priv = row.result && row.result.__private;
+  const ref = (priv && (priv.ref || priv.localPath)) || null;
+  const format = row.format === 'pairs' ? 'dpo' : (row.format || 'sft');
+  const filename = safeDownloadFilename(
+    `rlhf-train-${format}-${row.id}.jsonl`,
+    { fallback: 'rlhf-train.jsonl', extension: '.jsonl' },
+  );
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Content-Disposition', contentDispositionHeader('attachment', filename));
+  if (row.result && row.result.count != null) {
+    res.setHeader('X-Export-Count', String(row.result.count));
+  }
+  res.setHeader('X-PII-Scrubbed', String(row.scrubPii !== false));
+
+  if (ref && objectStorage.isRemote(ref)) {
+    const { stream } = await objectStorage.readStream(ref);
+    stream.pipe(res);
+    return;
+  }
+  const localPath = (priv && priv.localPath) || ref;
+  if (!localPath || !fs.existsSync(localPath)) {
+    return res.status(404).json({ error: 'artifact missing', code: 'E_PARAMS' });
+  }
+  fs.createReadStream(localPath).pipe(res);
 }));
 
 module.exports = router;

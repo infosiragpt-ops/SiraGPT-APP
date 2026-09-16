@@ -347,6 +347,14 @@ try {
             Promise.resolve()
                 .then(() => rlhf.loadLatestActive().catch(() => null))
                 .then(() => rlhf.hydrateRecentIntoLedger(ledger, { limit: 200 }))
+                .then(() => {
+                    if (!rlhf.isTrainJobsEnabled()) return 0;
+                    try {
+                        return rlhf.trainJobs.getTrainJobQueue().recoverInterruptedJobs();
+                    } catch {
+                        return 0;
+                    }
+                })
                 .catch((err) => {
                     console.warn('[rlhf] boot hydrate skipped:', err && err.message);
                 });
