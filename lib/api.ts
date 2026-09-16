@@ -3238,6 +3238,35 @@ class ApiClient {
     return this.request('/admin/analytics');
   }
 
+  async getRlhfStats() {
+    return this.request('/rlhf/stats');
+  }
+
+  async postRlhfTrain(scope?: string) {
+    return this.request('/rlhf/train', {
+      method: 'POST',
+      body: JSON.stringify(scope ? { scope } : {}),
+    });
+  }
+
+  async postRlhfBackfill(body?: { userId?: string; limit?: number }) {
+    return this.request('/rlhf/backfill', {
+      method: 'POST',
+      body: JSON.stringify(body || {}),
+    });
+  }
+
+  async postRlhfTrainJob(format: 'sft' | 'dpo' = 'sft') {
+    return this.request('/rlhf/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ format, scope: 'global', includeRlaif: false }),
+    });
+  }
+
+  async getRlhfTrainJobs() {
+    return this.request('/rlhf/jobs');
+  }
+
   async getAllPayments(params?: { page?: number; limit?: number; status?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/admin/payments${query ? `?${query}` : ''}`);

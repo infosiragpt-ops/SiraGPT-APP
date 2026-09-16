@@ -11,6 +11,7 @@ import {
   FileText,
   Bot,
   Heart,
+  GraduationCap,
   LogOut,
   PanelLeft,
   ArrowLeft,
@@ -50,6 +51,7 @@ const adminMenuItems = [
   { title: "Seguridad", icon: Shield, url: "/admin/security" },
   { title: "Reportes", icon: FileText, url: "/admin/reports" },
   { title: "Estado", icon: Heart, url: "/admin/health" },
+  { title: "RLHF", icon: GraduationCap, url: "/admin/rlhf" },
   { title: "Ajustes", icon: Settings, url: "/admin/settings" },
 ]
 

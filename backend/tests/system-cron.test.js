@@ -101,6 +101,7 @@ describe('system-cron', () => {
         'hard-delete-deleted-users',
         'prune-api-usage',
         'research-saved-search-alerts',
+        'rlhf-phase3',
         'scrub-deleted-user-content',
         'stale-run-watchdog',
         'sweep-expired-announcements',
