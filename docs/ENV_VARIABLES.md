@@ -424,6 +424,9 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 |----------|---------|---------|
 | `SIRAGPT_RLHF_ENABLED` | on | `0` / `false` / `off` stops collecting preference events |
 | `SIRAGPT_RLHF_STEERING` | on | `0` / `false` / `off` skips few-shot preference injection at generate time |
+| `SIRAGPT_RLCD_ENABLED` | on | RLCD: registra decisiones tipadas con su confianza y une resultados (docs/rlcd.md) |
+| `SIRAGPT_RLCD_LANE_STEERING` | on | RLCD: la probabilidad calibrada puede forzar el bucle agéntico en turnos de código |
+| `SIRAGPT_RLCD_LANE_THRESHOLD` | 0.6 | RLCD: umbral de probabilidad calibrada para forzar el carril agéntico |
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Size cap for the injected preference block |
 | `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost). Leave off in production |
 | `SIRAGPT_RLHF_RLAIF` | off | `1` / `true` / `on` allows synthetic HHH labels; abstains on mid scores. Leave off in production |

@@ -1784,6 +1784,12 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         });
       }
 
+      // RLCD: join this turn's decisions to the assistant row so thumbs on it
+      // become calibration outcomes.
+      if (assistantMessage?.id && safeExtraMetadata.rlcd && Array.isArray(safeExtraMetadata.rlcd.decisions)) {
+        try { require('../services/rlcd').ledger.bindMessage(safeExtraMetadata.rlcd.decisions, assistantMessage.id); } catch (_) { /* advisory */ }
+      }
+
       // Agent harness: persist the run trace now that the assistant row
       // exists — agent_steps rows (full fidelity) + messages.agent_metadata
       // (compact projection for history hydration). Best-effort by design.
@@ -5569,6 +5575,11 @@ router.post(
                 outcome: 'regenerated',
               });
             }
+            if (regenerate && canPersist && chatId) {
+              try {
+                require('../services/rlcd').recordOutcome({ chatId, outcome: 'regenerated', source: 'regenerate' });
+              } catch (_) { /* RLCD is advisory */ }
+            }
           } catch (_) { /* learning must never break the turn */ }
 
           // Phase 6: record cognitive-core decisions for observability
@@ -5579,6 +5590,22 @@ router.post(
             cognitiveMetrics.recordRoutingDecision(cognitiveDecision);
             cognitiveMetrics.recordCompute({ mode: cognitiveDecision.compute && cognitiveDecision.compute.mode });
           } catch (_) { /* metrics must never break the turn */ }
+          // RLCD: record the turn's typed decisions with their stated
+          // confidence; outcomes (thumbs, regenerate, provider failure,
+          // faithfulness) are joined later by messageId / chat.
+          try {
+            const rlcd = require('../services/rlcd');
+            req._rlcdDecisionIds = rlcd.recordTurnDecisions({
+              chatId: canPersist ? chatId : null,
+              triage: intentTriageDecision,
+              cognitive: cognitiveDecision,
+              model: actualModel,
+            });
+            req._rlcdSignature = rlcd.signatureFor({ intent: cognitiveDecision.intent, difficulty: cognitiveDecision.difficulty, model: actualModel });
+            if (req._rlcdDecisionIds.length) {
+              generateLog.info('rlcd.decisions_recorded', { count: req._rlcdDecisionIds.length });
+            }
+          } catch (_) { /* RLCD is advisory */ }
 
           // Phase 3: test-time compute. Turn the orchestrator's compute plan
           // into a reasoning directive injected into the system prompt (extended
@@ -7127,9 +7154,28 @@ router.post(
               // fenced-JSON calls parsed back — lets ANY model drive the
               // loop), or 'none' (prompted disabled via env → legacy gate).
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
+              // RLCD execution lane: the calibrated probability that a coding
+              // turn needs tools can force the agentic loop when the regex
+              // hints missed it (e.g. a bare repo URL + "dame la web en local").
+              let __rlcdLane = { agentic: shouldRunAgentic, forced: false };
+              try {
+                const rlcd = require('../services/rlcd');
+                __rlcdLane = rlcd.decideExecutionLane({
+                  chatId: canPersist ? chatId : null,
+                  heuristicAgentic: shouldRunAgentic,
+                  codeConfidence: codeIntent && codeIntent.confidence,
+                  isCodeTask: Boolean(codeIntent && codeIntent.isCodeTask),
+                  signature: req._rlcdSignature || null,
+                });
+                if (__rlcdLane.decisionId) {
+                  req._rlcdDecisionIds = [...(req._rlcdDecisionIds || []), __rlcdLane.decisionId];
+                  if (canPersist && chatId) rlcd.ledger.markTurn(chatId, req._rlcdDecisionIds);
+                }
+                generateLog.info('rlcd.lane_decided', { agentic: Boolean(__rlcdLane.agentic), forced: Boolean(__rlcdLane.forced), calibrated: __rlcdLane.calibrated == null ? null : __rlcdLane.calibrated });
+              } catch (_) { /* RLCD is advisory */ }
               const __agenticWillRun = (
                 agenticStream.isEnabled()
-                && (shouldRunAgentic || documentEditRequested || createDocRequested)
+                && (shouldRunAgentic || __rlcdLane.forced === true || documentEditRequested || createDocRequested)
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)
@@ -7475,6 +7521,9 @@ router.post(
                     intent: req._cognitiveDecision && req._cognitiveDecision.intent,
                     difficulty: req._cognitiveDecision && req._cognitiveDecision.difficulty,
                   });
+                  if (Array.isArray(req._rlcdDecisionIds) && req._rlcdDecisionIds.length) {
+                    try { require('../services/rlcd').recordOutcome({ decisionIds: req._rlcdDecisionIds, outcome: code === 'ttfb_abort' ? 'ttfb_abort' : 'provider_failure', source: 'provider' }); } catch (_) { /* advisory */ }
+                  }
                   generateLog.warn('rlhf.implicit_signal', {
                     code: code || null,
                     outcome: rec && rec.outcome ? rec.outcome : null,
@@ -7699,6 +7748,9 @@ router.post(
                 if (__outcome && req._cognitiveDecision) {
                   __rf.recordOutcome({ intent: req._cognitiveDecision.intent, difficulty: req._cognitiveDecision.difficulty, model: actualModel, outcome: __outcome });
                 }
+                if (__outcome && Array.isArray(req._rlcdDecisionIds) && req._rlcdDecisionIds.length) {
+                  try { require('../services/rlcd').recordOutcome({ decisionIds: req._rlcdDecisionIds, outcome: __outcome, source: 'faithfulness' }); } catch (_) { /* advisory */ }
+                }
               } catch (_) { /* noop */ }
             }
             if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
@@ -7729,6 +7781,9 @@ router.post(
                   model: actualModel,
                   outcome: 'constraint_violation',
                 });
+                if (Array.isArray(req._rlcdDecisionIds) && req._rlcdDecisionIds.length) {
+                  try { require('../services/rlcd').recordOutcome({ decisionIds: req._rlcdDecisionIds, outcome: 'constraint_violation', source: 'constraints' }); } catch (_) { /* advisory */ }
+                }
               } catch (_) { /* noop */ }
             }
           }
@@ -8299,6 +8354,14 @@ router.post(
             ? { reasoningDurationMs: __reasoningSink.durationMs }
             : {}),
           generationUsage,
+          // Top-level model id: routing-bridge.extractModel reads meta.model on
+          // thumbs (it only lived under generationUsage before, so thumbs never
+          // reached routing-feedback).
+          ...(actualModel ? { model: actualModel } : {}),
+          // RLCD: decision ids of this turn, joined to the outcome on thumbs.
+          ...(Array.isArray(req._rlcdDecisionIds) && req._rlcdDecisionIds.length
+            ? { rlcd: { decisions: req._rlcdDecisionIds.slice(0, 8), signature: req._rlcdSignature || null } }
+            : {}),
           ...(pickerModel ? { pickerModel } : {}),
           ...(pickerDisplayName ? { pickerDisplayName } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
