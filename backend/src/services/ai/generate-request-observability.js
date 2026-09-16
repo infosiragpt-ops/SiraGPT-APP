@@ -127,6 +127,7 @@ const ENUM_VALUE_RE = /^[a-z0-9][a-z0-9._:-]{0,79}$/;
 const EVENT_RE = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 const ALLOWED_EVENTS = new Set([
   'agentic.degraded',
+  'agentic.degraded_honest',
   'agentic.loop_failed',
   'artifacts.generation_declined',
   'artifacts.generation_failed',
