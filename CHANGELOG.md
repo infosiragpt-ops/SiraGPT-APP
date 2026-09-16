@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- RLCD for document analysis (Reinforcement Learning for Calibrated
+  Decisions — not ICLR contrastive distillation): flag-gated confidence
+  metadata, defer/abstain, and Brier/ECE from thumbs
+  (`SIRAGPT_RLCD_DOCUMENTS` default off). Coexists with the #722
+  decision ledger (`SIRAGPT_RLCD_ENABLED` default on). See
+  `docs/rlhf-rlcd-documents.md` and `docs/rlcd.md`.
 - RLHF phase 3: backfill of historical thumbs, daily RM train cron, and
   `/admin/rlhf` dashboard (prep jobs remain `#713`). Best-of-N stays off.
 

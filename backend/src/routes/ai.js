@@ -1811,17 +1811,34 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           try {
             const rlhf = require('../services/rlhf');
             if (!rlhf.isCollectionEnabled()) return;
+            const __regenAgent = preferenceAgent({ files: processedFiles, prompt });
             rlhf.ingestRegenerate({
               userId,
               chatId,
               prompt,
               response: normalizedResponseContent,
               messageId: assistantMessage.id,
-              agent: preferenceAgent({ files: processedFiles, prompt }),
+              agent: __regenAgent,
               reason: rlhfFeedback && rlhfFeedback.reason,
               reasonCode: rlhfFeedback && rlhfFeedback.reasonCode,
               notes: rlhfFeedback && rlhfFeedback.notes,
               embedder: texts => rag.embed(texts),
+            }).then((regenOut) => {
+              try {
+                const rlcd = require('../services/rlcd');
+                if (!rlcd.isDocumentEnabled() || __regenAgent !== 'document') return;
+                const prior = regenOut && regenOut.prior;
+                if (!prior) return;
+                rlcd.recordFromRegenerate({
+                  agent: __regenAgent,
+                  prompt,
+                  priorResponse: prior.responseText,
+                  priorMetadata: prior.judgeScore && prior.judgeScore.rlcd
+                    ? { rlcd: prior.judgeScore.rlcd }
+                    : null,
+                  files: processedFiles,
+                });
+              } catch (_rlcdRegen) { /* fail-open */ }
             }).catch((e) => persistenceLog.warnError('rlhf.regenerate_ingest_failed', e));
           } catch (e) {
             persistenceLog.warnError('rlhf.regenerate_ingest_skipped', e);
@@ -6113,7 +6130,36 @@ router.post(
         }
       } catch (_calibErr) { /* fail-open: no posture directive */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock };
+      // RLCD (document calibrated decisions). Flag-gated, fail-open.
+      // Injects a compact confidence/defer contract after the existing
+      // posture directive so document turns can emit a hidden trailer.
+      let rlcdPromptBlock = '';
+      try {
+        const rlcd = require('../services/rlcd');
+        const { preferenceAgent: _rlcdAgent } = require('../services/document-analysis-rlhf');
+        const __rlcdAgent = _rlcdAgent({ files: processedFiles, prompt });
+        if (rlcd.isDocumentEnabled() && __rlcdAgent === 'document') {
+          const __rlcdPrep = rlcd.prepareDocumentTurn({
+            prompt,
+            files: processedFiles,
+            language: (langResolution && langResolution.language) || 'es',
+            calibration: req._calibration,
+            agent: __rlcdAgent,
+          });
+          req._rlcdPrep = __rlcdPrep;
+          rlcdPromptBlock = (__rlcdPrep && __rlcdPrep.block) || '';
+          if (__rlcdPrep && __rlcdPrep.applied) {
+            generateLog.info('rlcd.prompt_applied', { success: true, reasonCode: 'ok' });
+          } else {
+            generateLog.info('rlcd.skipped', {
+              success: true,
+              reasonCode: (__rlcdPrep && __rlcdPrep.reason) || 'skipped',
+            });
+          }
+        }
+      } catch (_rlcdPrepErr) { /* fail-open: no RLCD prompt */ }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock + rlcdPromptBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -6152,6 +6198,7 @@ router.post(
         { kind: 'reasoning-effort', text: reasoningEffortBlock, cacheable: false },
         { kind: 'constraints', text: constraintBlock, cacheable: false },
         { kind: 'response-posture', text: postureDirectiveBlock, cacheable: false },
+        { kind: 'document-rlcd', text: rlcdPromptBlock, cacheable: false },
       ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
 
       // Phase 4: prompt kernel — need-based block activation. On easy, low-risk,
@@ -8333,6 +8380,41 @@ router.post(
           finalContent = req._agentPersistedContent;
         }
 
+        // RLCD: score confidence, optionally defer, attach metadata.
+        // Fail-open. Flag off is a no-op. Trailer is stripped from the
+        // persisted text so the user never sees the hidden marker.
+        try {
+          const rlcd = require('../services/rlcd');
+          const { preferenceAgent: _rlcdAgentFin } = require('../services/document-analysis-rlhf');
+          if (rlcd.isDocumentEnabled() && _rlcdAgentFin({ files: processedFiles, prompt }) === 'document') {
+            const __rlcdOut = rlcd.finalizeAnswer({
+              text: finalContent,
+              prompt,
+              files: processedFiles,
+              language: (langResolution && langResolution.language) || 'es',
+              predicted: req._rlcdPrep,
+              calibration: req._calibration,
+            });
+            if (__rlcdOut && typeof __rlcdOut.text === 'string' && __rlcdOut.text.trim()) {
+              finalContent = __rlcdOut.text;
+            }
+            req._rlcdFinal = __rlcdOut;
+            if (__rlcdOut && __rlcdOut.deferred) {
+              generateLog.info('rlcd.deferred', {
+                success: true,
+                deferred: true,
+                reasonCode: __rlcdOut.reason || 'below_threshold',
+              });
+            } else {
+              generateLog.info('rlcd.confidence_scored', {
+                success: true,
+                deferred: false,
+                reasonCode: (__rlcdOut && __rlcdOut.reason) || 'ok',
+              });
+            }
+          }
+        } catch (_rlcdFinErr) { /* fail-open: leave the answer unchanged */ }
+
         generationUsage = buildGenerationUsage(finalContent);
         const codexMeta = req._codexRunId
           ? { codexRunId: req._codexRunId, taskId: req._codexRunId, type: 'codex_delegated' }
@@ -8359,9 +8441,10 @@ router.post(
           // reached routing-feedback).
           ...(actualModel ? { model: actualModel } : {}),
           // RLCD: decision ids of this turn, joined to the outcome on thumbs.
+          // Document confidence/defer fields merge into the same object when present.
           ...(Array.isArray(req._rlcdDecisionIds) && req._rlcdDecisionIds.length
-            ? { rlcd: { decisions: req._rlcdDecisionIds.slice(0, 8), signature: req._rlcdSignature || null } }
-            : {}),
+            ? { rlcd: { decisions: req._rlcdDecisionIds.slice(0, 8), signature: req._rlcdSignature || null, ...(req._rlcdFinal && req._rlcdFinal.metadata ? req._rlcdFinal.metadata : {}) } }
+            : (req._rlcdFinal && req._rlcdFinal.metadata ? { rlcd: req._rlcdFinal.metadata } : {})),
           ...(pickerModel ? { pickerModel } : {}),
           ...(pickerDisplayName ? { pickerDisplayName } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),

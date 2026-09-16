@@ -93,6 +93,24 @@ function toPublic(event) {
   return { ...event };
 }
 
+/**
+ * Merge judgeScore objects so RLAIF HHH scores and RLCD calibration
+ * can coexist on the same preference row. Incoming keys win; nested
+ * `rlcd` is shallow-merged.
+ */
+function mergeJudgeScore(incoming, existing) {
+  if (incoming == null) return existing || null;
+  if (existing == null) return incoming;
+  if (typeof incoming !== 'object' || typeof existing !== 'object') return incoming;
+  const merged = { ...existing, ...incoming };
+  if (existing.rlcd || incoming.rlcd) {
+    const prev = existing.rlcd && typeof existing.rlcd === 'object' ? existing.rlcd : {};
+    const next = incoming.rlcd && typeof incoming.rlcd === 'object' ? incoming.rlcd : {};
+    merged.rlcd = { ...prev, ...next };
+  }
+  return merged;
+}
+
 function fromPrismaRow(row) {
   if (!row) return null;
   return {
@@ -319,7 +337,7 @@ async function recordEvent(args = {}) {
     promptHash,
     promptEmbedding: embs.promptEmbedding,
     responseEmbedding: embs.responseEmbedding,
-    judgeScore: args.judgeScore || existing?.judgeScore || null,
+    judgeScore: mergeJudgeScore(args.judgeScore, existing?.judgeScore),
     reasonCode: normalizeReasonCode(args.reasonCode) || existing?.reasonCode || null,
     notes: args.notes != null
       ? normalizeNotes(args.notes)
@@ -491,7 +509,19 @@ async function ingestRegenerate(args) {
     embedder: args.embedder,
   });
 
-  return { stored: true, priorRejected: !!priorUpdated, created: created.event };
+  return {
+    stored: true,
+    priorRejected: !!priorUpdated,
+    created: created.event,
+    prior: priorUpdated
+      ? {
+        responseText: priorUpdated.responseText || '',
+        judgeScore: priorUpdated.judgeScore || null,
+        agent: priorUpdated.agent || null,
+        messageId: priorUpdated.messageId || null,
+      }
+      : null,
+  };
 }
 
 async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent }) {
@@ -624,6 +654,7 @@ module.exports = {
   pairsFor,
   labeledPointwise,
   ingestLocal,
+  mergeJudgeScore,
   _reset,
   MAX_ENTRIES_PER_USER,
   hashPrompt,

@@ -54,6 +54,7 @@ const BOOLEAN_FIELDS = new Set([
   'resume',
   'retryable',
   'success',
+  'deferred',
 ]);
 
 const ENUM_VALUES = Object.freeze({
@@ -102,7 +103,8 @@ const ENUM_VALUES = Object.freeze({
     'escalate', 'fair_queue', 'idempotency_conflict', 'not_applied',
     'queue_fairness', 'queue_wait', 'rate_limited', 'timeout', 'unknown',
     'disabled', 'empty_format', 'fail_open', 'missing_input', 'no_exemplars',
-    'ok', 'skipped',
+    'ok', 'skipped', 'below_threshold', 'extraction_thin', 'rate_capped',
+    'already_honest', 'not_document', 'verbalized', 'structured', 'heuristic',
   ]),
   resolvedLanguage: new Set([
     'ar', 'cs', 'da', 'de', 'en', 'es', 'fi', 'fr', 'he', 'hi', 'hu', 'id',
@@ -236,8 +238,12 @@ const ALLOWED_EVENTS = new Set([
   'rag.operational_unavailable',
   'rag.rerank_failed',
   'rag.reranked',
+  'rlcd.confidence_scored',
   'rlcd.decisions_recorded',
+  'rlcd.deferred',
   'rlcd.lane_decided',
+  'rlcd.prompt_applied',
+  'rlcd.skipped',
   'rlhf.implicit_signal',
   'rlhf.regenerate_ingest_failed',
   'rlhf.regenerate_ingest_skipped',

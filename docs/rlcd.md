@@ -58,12 +58,18 @@ turno. El módulo `backend/src/services/rlcd/`:
 
 | Env | Default | Efecto |
 |-----|---------|--------|
-| `SIRAGPT_RLCD_ENABLED` | on | Registro + unión de resultados. `0/false/off` apaga todo |
+| `SIRAGPT_RLCD_ENABLED` | on | Registro + unión de resultados. `0/false/off` apaga **el ledger** (no el slice documental) |
 | `SIRAGPT_RLCD_LANE_STEERING` | on | Uso activo en el carril de ejecución |
 | `SIRAGPT_RLCD_LANE_THRESHOLD` | 0.6 | Probabilidad calibrada mínima para forzar el bucle agéntico |
 | `SIRAGPT_RLCD_MIN_BIN_SAMPLES` | 5 | Muestras para marcar un bin como fiable en el informe |
 | `SIRAGPT_RLCD_PRIOR_WEIGHT` | 5 | Pseudo-muestras del encogimiento hacia la confianza cruda |
 | `SIRAGPT_RLCD_MAX_DECISIONS` | 20000 | Tope de decisiones en memoria (FIFO) |
+
+Otra superficie, **independiente**: análisis documental (`SIRAGPT_RLCD_DOCUMENTS`,
+default off) — trailer de confianza, defer, Brier/ECE sobre 👍/👎 de
+documentos. Ver `docs/rlhf-rlcd-documents.md`. `GET /api/rlcd/stats`
+incluye `documents` con ese snapshot; `GET /api/rlhf/stats` → `rlcd` es
+solo el slice documental.
 
 Estado en memoria (como `routing-feedback`); `snapshot()/load()` permiten
 persistirlo. Las decisiones también quedan en `messages.metadata.rlcd`, así

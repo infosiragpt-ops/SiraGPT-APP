@@ -68,7 +68,7 @@ function cosine(a, b) {
  *   Pass the shared rag.embed() here. When null, the entry is stored
  *   without an embedding and later findExemplars calls will skip it.
  */
-async function record({ userId, runId, agent, request, response, helpful, notes, reason, reasonCode, embedder, chatId }) {
+async function record({ userId, runId, agent, request, response, helpful, notes, reason, reasonCode, embedder, chatId, metadata }) {
   if (!userId || !runId) throw new Error('feedback-ledger.record: userId and runId required');
   if (typeof helpful !== 'boolean') throw new Error('feedback-ledger.record: helpful must be boolean');
 
@@ -113,6 +113,21 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
   try {
     const store = require('../rlhf/preference-store');
     if (store.isCollectionEnabled()) {
+      let judgeScore = null;
+      try {
+        const rlcd = require('../rlcd');
+        const tagged = rlcd.recordFromThumb({
+          agent: agent || null,
+          helpful,
+          response,
+          request: entry.request,
+          metadata,
+          source: 'explicit',
+        });
+        if (tagged && tagged.judgeScore) judgeScore = tagged.judgeScore;
+      } catch {
+        /* RLCD is fail-open */
+      }
       await store.ingestThumb({
         userId,
         runId,
@@ -127,6 +142,7 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
         notes: entry.notes,
         embedding: embedding,
         embedder,
+        judgeScore,
       });
     }
   } catch (err) {

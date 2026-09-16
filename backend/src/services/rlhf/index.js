@@ -32,11 +32,13 @@ const trainJobs = require('./train-jobs');
 const trainProcessor = require('./train-processor');
 const trainSubmit = require('./train-submit');
 const backfill = require('./backfill');
+const rlcd = require('../rlcd');
 
 function _reset() {
   store._reset();
   trainer._reset();
   metrics.reset();
+  try { rlcd.reset(); } catch { /* optional */ }
 }
 
 function pushEventIntoLedger(ledger, e) {
@@ -123,6 +125,9 @@ module.exports = {
   trainSubmit,
   backfill: backfill.backfill,
   backfillMod: backfill,
+  // RLCD document slice (Brier/ECE) — independent of the #722 ledger
+  rlcd,
+  rlcdStats: rlcd.documentStats,
   // primitives (tests)
   rewardModel,
   vectors,

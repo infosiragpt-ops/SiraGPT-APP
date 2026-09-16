@@ -1,11 +1,26 @@
 'use strict';
 
 /**
- * RLCD façade for the routes: turn-level helpers around the decision ledger.
- * Everything is fail-open — a telemetry problem must never change a reply.
+ * RLCD façade — two independent surfaces, one module:
+ *
+ *   1. Decision ledger (#722): intent_triage / execution_lane / model_route /
+ *      compute_mode. Flag `SIRAGPT_RLCD_ENABLED` (default ON).
+ *   2. Document analysis (#721): confidence trailer, defer, Brier/ECE on
+ *      document thumbs. Flag `SIRAGPT_RLCD_DOCUMENTS` (default OFF).
+ *
+ * Fail-open. A telemetry problem must never change a reply. No GPU PPO.
  */
 
 const ledger = require('./decision-ledger');
+const flags = require('./flags');
+const confidence = require('./confidence');
+const deferPolicy = require('./defer-policy');
+const calibration = require('./calibration');
+const prompt = require('./prompt');
+
+// ---------------------------------------------------------------------------
+// #722 — typed-decision ledger
+// ---------------------------------------------------------------------------
 
 function isEnabled(env = process.env) {
   const v = String(env.SIRAGPT_RLCD_ENABLED ?? '').trim().toLowerCase();
@@ -43,8 +58,8 @@ function recordTurnDecisions({ chatId, triage, cognitive, model } = {}) {
       if (ambiguity != null) {
         // Triage score is the ambiguity of the request; the stated confidence
         // in `execute` is its complement, in `ask` the ambiguity itself.
-        const confidence = triage.action === 'ask' ? ambiguity : 1 - ambiguity;
-        const id = ledger.recordDecision({ kind: 'intent_triage', choice: triage.action, confidence, signature: sig, chatId, meta: { source: triage.source || null } });
+        const conf = triage.action === 'ask' ? ambiguity : 1 - ambiguity;
+        const id = ledger.recordDecision({ kind: 'intent_triage', choice: triage.action, confidence: conf, signature: sig, chatId, meta: { source: triage.source || null } });
         if (id) ids.push(id);
       }
     }
@@ -62,8 +77,8 @@ function recordTurnDecisions({ chatId, triage, cognitive, model } = {}) {
         // Confidence that the chosen compute mode fits: high when the
         // difficulty estimate is far from the bucket boundaries.
         const distance = Math.min(Math.abs(dscore - 0.35), Math.abs(dscore - 0.65));
-        const confidence = Math.max(0.5, Math.min(1, 0.5 + distance * 2));
-        const id = ledger.recordDecision({ kind: 'compute_mode', choice: cognitive.compute.mode, confidence, signature: sig, chatId, meta: { bucket: cognitive.difficulty.bucket || null } });
+        const conf = Math.max(0.5, Math.min(1, 0.5 + distance * 2));
+        const id = ledger.recordDecision({ kind: 'compute_mode', choice: cognitive.compute.mode, confidence: conf, signature: sig, chatId, meta: { bucket: cognitive.difficulty.bucket || null } });
         if (id) ids.push(id);
       }
     }
@@ -123,7 +138,7 @@ function recordThumb({ messageId, feedback, metadata } = {}) {
   return ledger.recordOutcome({ messageId, decisionIds: ids && ids.length ? ids : null, outcome: label, source: 'thumb' });
 }
 
-function stats({ admin = false } = {}) {
+function ledgerStats({ admin = false } = {}) {
   const s = ledger.snapshot();
   const base = {
     enabled: isEnabled(),
@@ -138,7 +153,282 @@ function stats({ admin = false } = {}) {
   return { ...base, outcomesUnmatched: s.outcomesUnmatched, pending: s.pending, byKind: s.byKind, byOutcome: s.byOutcome, lane: s.lane, reliabilityBins: s.reliability };
 }
 
+// ---------------------------------------------------------------------------
+// #721 — document-analysis confidence / defer / Brier+ECE
+// ---------------------------------------------------------------------------
+
+function isDocumentEnabled(env) {
+  return flags.isDocumentEnabled(env);
+}
+
+function isDocumentAgent(agent) {
+  return String(agent || '') === 'document';
+}
+
+function extractThin(files) {
+  return confidence.extractionChars(files) < 400;
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' ? value : {};
+}
+
+function prepareDocumentTurn(raw = {}) {
+  try {
+    const args = asObject(raw);
+    const env = args.env || process.env;
+    if (!flags.isDocumentEnabled(env)) {
+      calibration.recordSkip();
+      return { applied: false, block: '', reason: 'disabled' };
+    }
+    if (args.agent && !isDocumentAgent(args.agent)) {
+      return { applied: false, block: '', reason: 'not_document' };
+    }
+    const language = args.language || 'es';
+    const block = flags.isPromptEnabled(env)
+      ? prompt.buildRlcdPromptBlock({ language })
+      : '';
+    const predicted = confidence.heuristicConfidence({
+      prompt: args.prompt,
+      files: args.files,
+      calibration: args.calibration,
+    });
+    return {
+      applied: true,
+      block,
+      predictedConfidence: predicted.confidence,
+      predictedBin: confidence.binFor(predicted.confidence),
+      extractionThin: extractThin(args.files),
+      reason: 'ok',
+    };
+  } catch {
+    return { applied: false, block: '', reason: 'fail_open' };
+  }
+}
+
+function finalizeAnswer(raw = {}) {
+  try {
+    const args = asObject(raw);
+    const env = args.env || process.env;
+    if (!flags.isDocumentEnabled(env)) {
+      return {
+        text: String(args.text || ''),
+        metadata: null,
+        deferred: false,
+        reason: 'disabled',
+      };
+    }
+    const score = confidence.scoreConfidence({
+      text: args.text,
+      prompt: args.prompt,
+      files: args.files,
+      calibration: args.calibration || (args.predicted && {
+        confidence: args.predicted.predictedConfidence,
+      }),
+      scrub: args.scrub,
+    });
+    const decision = deferPolicy.decideDefer({
+      confidence: score.confidence,
+      extractionEmpty: args.extractionEmpty === true
+        || confidence.extractionChars(args.files) === 0,
+      recentDeferRate: calibration.recentDeferRate(),
+      text: score.cleanedText,
+      env,
+      threshold: args.threshold,
+      maxRate: args.maxRate,
+    });
+    const applied = deferPolicy.applyPolicy({
+      text: score.cleanedText,
+      decision,
+      score,
+      language: args.language || 'es',
+      phrase: flags.isPhraseEnabled(env),
+    });
+    calibration.recordTurn({ deferred: applied.deferred, scored: true });
+    const metadata = {
+      v: 1,
+      confidence: score.confidence,
+      bin: score.bin,
+      source: score.source,
+      deferred: applied.deferred === true,
+      reason: decision.reason,
+    };
+    return {
+      text: applied.text,
+      metadata,
+      score,
+      decision,
+      deferred: applied.deferred,
+      reason: decision.reason,
+    };
+  } catch {
+    const fallback = asObject(raw);
+    return {
+      text: String(fallback.text || ''),
+      metadata: null,
+      deferred: false,
+      reason: 'fail_open',
+    };
+  }
+}
+
+function buildJudgeScore(existing, rlcdPayload) {
+  const base = existing && typeof existing === 'object' ? { ...existing } : {};
+  if (!rlcdPayload) return Object.keys(base).length ? base : null;
+  const prev = base.rlcd && typeof base.rlcd === 'object' ? base.rlcd : {};
+  base.rlcd = {
+    ...prev,
+    ...rlcdPayload,
+  };
+  return base;
+}
+
+function payloadFromScore(score, { outcome, source } = {}) {
+  if (!score || score.confidence == null) return null;
+  return {
+    confidence: score.confidence,
+    bin: score.bin,
+    source: score.source,
+    outcome: outcome || undefined,
+    deferred: score.deferred === true,
+    feedbackSource: source || undefined,
+  };
+}
+
+function resolveScore(args = {}) {
+  const meta = args.metadata && args.metadata.rlcd ? args.metadata.rlcd : args.rlcd || null;
+  if (meta && meta.confidence != null) {
+    return {
+      confidence: confidence.round2(confidence.clamp01(meta.confidence) ?? 0.5),
+      bin: meta.bin || confidence.binFor(meta.confidence),
+      source: meta.source || 'metadata',
+      rationale: meta.rationale || '',
+      deferred: meta.deferred === true,
+    };
+  }
+  return confidence.scoreConfidence({
+    text: args.response || args.text,
+    prompt: args.prompt || args.request,
+    files: args.files,
+    calibration: args.calibration,
+    scrub: args.scrub,
+  });
+}
+
+function recordFromThumb(raw = {}) {
+  try {
+    const args = asObject(raw);
+    if (!flags.isDocumentEnabled(args.env || process.env)) {
+      return { recorded: false, reason: 'disabled', judgeScore: args.judgeScore || null };
+    }
+    if (args.agent && !isDocumentAgent(args.agent)) {
+      return { recorded: false, reason: 'not_document', judgeScore: args.judgeScore || null };
+    }
+    const helpful = args.helpful;
+    if (typeof helpful !== 'boolean') {
+      return { recorded: false, reason: 'no_label', judgeScore: args.judgeScore || null };
+    }
+    const score = resolveScore(args);
+    const outcome = helpful ? 'correct' : 'incorrect';
+    const recorded = calibration.recordOutcome({
+      confidence: score.confidence,
+      outcome,
+      bin: score.bin,
+      agent: args.agent || 'document',
+      source: args.source || 'explicit',
+    });
+    const payload = payloadFromScore(score, { outcome, source: args.source || 'explicit' });
+    return {
+      recorded: recorded.recorded,
+      outcome,
+      judgeScore: buildJudgeScore(args.judgeScore, payload),
+      score,
+    };
+  } catch {
+    return { recorded: false, reason: 'fail_open', judgeScore: asObject(raw).judgeScore || null };
+  }
+}
+
+function recordFromRegenerate(raw = {}) {
+  try {
+    const args = asObject(raw);
+    if (!flags.isDocumentEnabled(args.env || process.env)) {
+      return { recorded: false, reason: 'disabled' };
+    }
+    if (args.agent && !isDocumentAgent(args.agent)) {
+      return { recorded: false, reason: 'not_document' };
+    }
+    const priorText = args.priorResponse || args.prior || '';
+    const priorMeta = args.priorMetadata || null;
+    const score = resolveScore({
+      response: priorText,
+      metadata: priorMeta,
+      prompt: args.prompt,
+      files: args.files,
+    });
+    if (!priorText && !(priorMeta && priorMeta.rlcd)) {
+      return { recorded: false, reason: 'no_prior' };
+    }
+    const recorded = calibration.recordOutcome({
+      confidence: score.confidence,
+      outcome: 'incorrect',
+      bin: score.bin,
+      agent: args.agent || 'document',
+      source: 'regenerate',
+    });
+    return {
+      recorded: recorded.recorded,
+      outcome: 'incorrect',
+      judgeScore: buildJudgeScore(args.judgeScore, payloadFromScore(score, {
+        outcome: 'incorrect',
+        source: 'regenerate',
+      })),
+      score,
+    };
+  } catch {
+    return { recorded: false, reason: 'fail_open' };
+  }
+}
+
+function documentStats() {
+  try {
+    return {
+      enabled: flags.isDocumentEnabled(),
+      threshold: flags.deferThreshold(),
+      maxDeferRate: flags.maxDeferRate(),
+      phrase: flags.isPhraseEnabled(),
+      prompt: flags.isPromptEnabled(),
+      meaning: 'calibrated_decisions',
+      ...calibration.snapshot(),
+    };
+  } catch {
+    return { enabled: false, n: 0, brier: null, ece: null };
+  }
+}
+
+function stats(opts = {}) {
+  const ledgerSnap = ledgerStats(opts);
+  return { ...ledgerSnap, documents: documentStats() };
+}
+
+function reset() {
+  try { ledger.reset(); } catch { /* optional */ }
+  try { calibration.reset(); } catch { /* optional */ }
+}
+
+const documents = {
+  isEnabled: isDocumentEnabled,
+  prepareDocumentTurn,
+  finalizeAnswer,
+  recordFromThumb,
+  recordFromRegenerate,
+  buildJudgeScore,
+  stats: documentStats,
+  reset: () => { try { calibration.reset(); } catch { /* optional */ } },
+};
+
 module.exports = {
+  // #722 ledger
   ledger,
   isEnabled,
   isLaneSteeringEnabled,
@@ -152,5 +442,19 @@ module.exports = {
   toPrometheusText: ledger.toPrometheusText,
   snapshot: ledger.snapshot,
   load: ledger.load,
-  reset: ledger.reset,
+  reset,
+  // #721 documents
+  documents,
+  isDocumentEnabled,
+  prepareDocumentTurn,
+  finalizeAnswer,
+  recordFromThumb,
+  recordFromRegenerate,
+  buildJudgeScore,
+  documentStats,
+  flags,
+  confidence,
+  deferPolicy,
+  calibration,
+  prompt,
 };
