@@ -25,6 +25,7 @@ import { consumeLoginHandoffSse } from "./computer-login-handoff"
 import {
   attachGenerateHttpError,
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
   shouldRetryGenerateHttp,
 } from "./generate-stream-errors"
 export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
@@ -200,7 +201,15 @@ function sanitizeStreamError(raw: string): string {
   if (/content.*policy|safety/i.test(raw)) {
     return "La solicitud no pudo ser procesada debido a las políticas de contenido."
   }
-  if (/connection_unavailable|unknown parameter/i.test(raw)) {
+  if (/unknown parameter/i.test(raw)) {
+    return PROVIDER_UNAVAILABLE_MESSAGE
+  }
+  if (/provider_unavailable|PROVIDER_CONNECTION_UNAVAILABLE/i.test(raw)) {
+    if (/no cambié a otro modelo|reconecta el proveedor/i.test(raw)) return raw
+    return PROVIDER_UNAVAILABLE_MESSAGE
+  }
+  if (/^connection_unavailable$/i.test(raw.trim()) || /connection_unavailable/i.test(raw)) {
+    if (/no cambié a otro modelo|reconecta el proveedor|\/conexiones/i.test(raw)) return raw
     return CONNECTION_UNAVAILABLE_MESSAGE
   }
   return raw

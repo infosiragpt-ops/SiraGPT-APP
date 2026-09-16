@@ -10,6 +10,7 @@ const {
   resolveGenerateProvider,
   providerConnectionReady,
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
 } = require('../src/services/ai/provider-inference');
 const service = require('../src/services/ai-service');
 
@@ -29,7 +30,10 @@ const LIVE = [
   { model: 'moonshotai/kimi-k2.7-code', provider: 'Kimi' },
   { model: 'x-ai/grok-4', provider: 'xAI' },
   { model: 'x-ai/grok-4.5', provider: 'xAI' },
+  { model: 'x-ai/grok-4.6', provider: 'xAI' },
+  { model: 'grok-4.6', provider: 'xAI' },
   { model: 'Grok 4.5', provider: 'xAI' },
+  { model: 'Grok 4.6', provider: 'xAI' },
   { model: 'muse-spark-1.2-contributor', provider: 'Meta' },
   { model: 'muse-spark-1.2', provider: 'Meta' },
 ];
@@ -82,23 +86,27 @@ test('boot audit lists Kimi when MOONSHOT/KIMI keys are missing', () => {
   assert.match(aiRoute, /MOONSHOT_API_KEY \(or KIMI_API_KEY\)/);
 });
 
-test('missing first-party key is Conexión no disponible, not a vendor swap', () => {
+test('missing first-party key is provider-unavailable, not a vendor swap', () => {
   assert.equal(CONNECTION_UNAVAILABLE_MESSAGE, 'Conexión no disponible');
+  assert.match(PROVIDER_UNAVAILABLE_MESSAGE, /Este modelo no está disponible/);
+  assert.doesNotMatch(PROVIDER_UNAVAILABLE_MESSAGE, /\/conexiones|DeepSeek|OpenRouter|xAI|model_id/i);
   const env = {};
   assert.equal(providerConnectionReady('Gemini', env), false);
   assert.equal(providerConnectionReady('Anthropic', env), false);
   assert.equal(providerConnectionReady('OpenAI', env), false);
   assert.equal(providerConnectionReady('Kimi', env), false);
+  assert.equal(providerConnectionReady('xAI', env), false);
   assert.equal(providerConnectionReady('Gemini', { GEMINI_API_KEY: 'x' }), true);
   assert.equal(providerConnectionReady('Kimi', { MOONSHOT_API_KEY: 'x' }), true);
+  assert.equal(providerConnectionReady('xAI', { XAI_API_KEY: 'x' }), true);
 });
 
 test('generate route pins the picker model and fails closed without a connection', () => {
   assert.match(aiRoute, /resolveGenerateProvider\(provider, model\)/);
   assert.match(aiRoute, /honorPickerModel\(model, \{ provider \}\)/);
   assert.match(aiRoute, /providerConnectionReady\(actualProvider\)/);
-  assert.match(aiRoute, /CONNECTION_UNAVAILABLE_MESSAGE/);
-  assert.match(aiRoute, /error: 'connection_unavailable'/);
+  assert.match(aiRoute, /PROVIDER_UNAVAILABLE_MESSAGE/);
+  assert.match(aiRoute, /error: 'provider_unavailable'/);
   assert.match(aiRoute, /&& !honorUserModel/);
 });
 
@@ -140,7 +148,8 @@ test('getClient factory wires Anthropic / Kimi / xAI — not OpenRouter or OpenA
   delete process.env.SIRA_ANTHROPIC_API_KEY;
   try {
     assert.throws(() => service.getClient('Anthropic'), (err) => {
-      assert.match(String(err && err.message), /Conexión no disponible/);
+      assert.match(String(err && err.message), /Este modelo no está disponible/);
+      assert.doesNotMatch(String(err && err.message), /DeepSeek|OpenRouter/);
       return true;
     });
     process.env.MOONSHOT_API_KEY = 'kimi-test-key';

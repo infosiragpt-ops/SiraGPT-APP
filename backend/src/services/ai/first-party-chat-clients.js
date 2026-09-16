@@ -6,10 +6,10 @@
  */
 
 const OpenAI = require('openai');
-const { CONNECTION_UNAVAILABLE_MESSAGE } = require('./provider-inference');
+const { PROVIDER_UNAVAILABLE_MESSAGE } = require('./provider-inference');
 
 function throwUnavailable(provider) {
-  const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+  const err = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
   err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
   err.status = 503;
   err.provider = provider;

@@ -5,12 +5,18 @@
  * Caddy turns an unterminated event-stream (headers flushed, no [DONE]/end)
  * into HTTP 502. Always write a typed error frame + [DONE], then end().
  *
- * Bare «Conexión no disponible» is reserved for a missing first-party key
- * or a vendor-leaking SDK dump. Timeouts, aborts, GitHub OAuth, sandbox
- * jail and tool failures get an actionable Spanish code (§16 / #681).
+ * Three user-facing classes:
+ *   1) Missing/broken first-party model pin → PROVIDER_UNAVAILABLE_MESSAGE
+ *      (reconnect/settings; never silent vendor swap; never /conexiones).
+ *   2) Missing GitHub OAuth for clone/PR → E_GITHUB_CONNECT + /conexiones.
+ *   3) True transport dead → short «Conexión no disponible», but an
+ *      actionable Spanish payload is allowed through.
  */
 
-const { CONNECTION_UNAVAILABLE_MESSAGE } = require('./provider-inference');
+const {
+  CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
+} = require('./provider-inference');
 
 let _githubConnectMessage;
 function githubConnectMessage() {
@@ -41,24 +47,26 @@ function classifyGenerateError(err) {
   if (!raw && !code) {
     return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
   }
-  if (VENDOR_LEAK_RE.test(raw)) {
-    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
-  }
-  if (/unknown parameter/i.test(blob)) {
-    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
-  }
-  if (
-    /^(connection_unavailable|PROVIDER_CONNECTION_UNAVAILABLE)$/i.test(code)
-    || raw === CONNECTION_UNAVAILABLE_MESSAGE
-  ) {
-    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
-  }
-
   if (
     /E_GITHUB_CONNECT|github_not_connected|github_token_invalid/i.test(blob)
     || (/\/conexiones/i.test(raw) && /github/i.test(raw))
   ) {
     return { code: 'E_GITHUB_CONNECT', message: githubConnectMessage() };
+  }
+  if (VENDOR_LEAK_RE.test(raw)) {
+    return { code: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE };
+  }
+  if (/unknown parameter/i.test(blob)) {
+    return { code: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE };
+  }
+  if (
+    /^(provider_unavailable|PROVIDER_CONNECTION_UNAVAILABLE)$/i.test(code)
+    || raw === PROVIDER_UNAVAILABLE_MESSAGE
+  ) {
+    return { code: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE };
+  }
+  if (/^connection_unavailable$/i.test(code) || raw === CONNECTION_UNAVAILABLE_MESSAGE) {
+    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
   }
 
   if (
@@ -152,6 +160,7 @@ function closeGenerateSseWithError(res, opts) {
 
 module.exports = {
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
   STREAM_TIMEOUT_MESSAGE,
   PROVIDER_FAIL_MESSAGE,
   SANDBOX_FAIL_MESSAGE,

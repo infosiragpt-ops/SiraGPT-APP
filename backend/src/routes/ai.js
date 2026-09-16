@@ -282,7 +282,7 @@ const {
   inferProviderFromModelId,
   resolveGenerateProvider,
   providerConnectionReady,
-  CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
 } = require('../services/ai/provider-inference');
 const { honorPickerModel, lookupPickerDisplayName } = require('../services/ai/honor-picker-model');
 const {
@@ -313,7 +313,7 @@ const {
 } = require('../services/trivial-turn');
 
 function throwConnectionUnavailable(provider) {
-  const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+  const err = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
   err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
   err.status = 503;
   err.provider = provider;
@@ -1215,7 +1215,7 @@ function sanitizeErrorForUser(error) {
     return 'Este modelo no se pudo ejecutar. No cambié a otro modelo. Elige otro modelo o revisa la configuración.';
   }
   if (/unknown parameter/i.test(msg)) {
-    return CONNECTION_UNAVAILABLE_MESSAGE;
+    return PROVIDER_UNAVAILABLE_MESSAGE;
   }
   return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
 }
@@ -3040,8 +3040,8 @@ router.post(
       if (!_customResolution.isCustom && !providerConnectionReady(actualProvider)) {
         controller.abort();
         return res.status(503).json({
-          error: 'connection_unavailable',
-          message: CONNECTION_UNAVAILABLE_MESSAGE,
+          error: 'provider_unavailable',
+          message: PROVIDER_UNAVAILABLE_MESSAGE,
         });
       }
       let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
@@ -3502,8 +3502,8 @@ router.post(
       }
       if (actualProvider !== 'Custom' && !providerConnectionReady(actualProvider)) {
         closeGenerateSseWithError(res, {
-          message: CONNECTION_UNAVAILABLE_MESSAGE,
-          code: 'connection_unavailable',
+          message: PROVIDER_UNAVAILABLE_MESSAGE,
+          code: 'provider_unavailable',
           recovered: false,
         });
         return;
@@ -9436,7 +9436,7 @@ router.post(
       }
     } catch (_) { /* same fail-open as /generate */ }
     if (!customConnection && !providerConnectionReady(actualProvider)) {
-      return res.status(503).json({ error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE });
+      return res.status(503).json({ error: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE });
     }
     const catalogEntry = modelRouter.getModel(model);
     const userPlan = req.user.plan || 'FREE';
@@ -9457,7 +9457,8 @@ router.post(
     try {
       client = createProviderClientForRequest(actualProvider, req, { customConnection, model: actualModel }).client;
     } catch (clientErr) {
-      return res.status(503).json({ error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE });
+      const classified = classifyGenerateError(clientErr);
+      return res.status(503).json({ error: classified.code, message: classified.message });
     }
     let toolCallMode = 'native';
     try {

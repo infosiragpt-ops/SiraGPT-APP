@@ -5,12 +5,14 @@ import path from "node:path"
 
 import {
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
   attachGenerateHttpError,
   friendlyGenerateHttpError,
   isConnectionUnavailablePayload,
   isCsrfInvalidPayload,
   isDeadGenerateConnection,
   isGenerateHttpTerminal,
+  isProviderUnavailablePayload,
   shouldRetryGenerateHttp,
 } from "../lib/generate-stream-errors"
 
@@ -77,7 +79,39 @@ describe("generate HTTP errors stop thinking", () => {
     )
     const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
     assert.match(apiSource, /jsonData\.message \|\| jsonData\.error/)
-    assert.match(apiSource, /connection_unavailable\|unknown parameter/)
+    assert.match(apiSource, /unknown parameter/)
+    assert.match(apiSource, /PROVIDER_UNAVAILABLE_MESSAGE/)
+  })
+
+  it("distinguishes provider pin fail from transport dead and keeps payload copy", () => {
+    assert.equal(isProviderUnavailablePayload({ error: "provider_unavailable" }), true)
+    assert.equal(
+      isDeadGenerateConnection(503, { error: "provider_unavailable", message: PROVIDER_UNAVAILABLE_MESSAGE }),
+      true,
+    )
+    assert.equal(
+      shouldRetryGenerateHttp(503, { error: "provider_unavailable" }, { attempt: 1, maxAttempts: 5 }),
+      false,
+    )
+    assert.equal(
+      friendlyGenerateHttpError(503, { error: "provider_unavailable", message: PROVIDER_UNAVAILABLE_MESSAGE }),
+      PROVIDER_UNAVAILABLE_MESSAGE,
+    )
+    assert.doesNotMatch(PROVIDER_UNAVAILABLE_MESSAGE, /Conexión no disponible|\/conexiones|DeepSeek/i)
+    assert.equal(
+      friendlyGenerateHttpError(503, {
+        error: "connection_unavailable",
+        message: "El modelo cortó el stream después de pensar. Reintenta; no es un fallo de GitHub.",
+      }),
+      "El modelo cortó el stream después de pensar. Reintenta; no es un fallo de GitHub.",
+    )
+    assert.equal(
+      friendlyGenerateHttpError(503, {
+        error: "provider_unavailable",
+        message: "GitHub no está conectado. Ve a Conexiones (/conexiones).",
+      }),
+      "GitHub no está conectado. Ve a Conexiones (/conexiones).",
+    )
   })
 
   it("keeps cookie/CSRF reconnect and cursor resume in the generate client", () => {

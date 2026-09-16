@@ -39,7 +39,7 @@ const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 const {
     inferProviderFromModelId,
     resolveGenerateProvider,
-    CONNECTION_UNAVAILABLE_MESSAGE,
+    PROVIDER_UNAVAILABLE_MESSAGE,
 } = require('./ai/provider-inference');
 const { sharedFetch } = require('../utils/provider-http-agent');
 const {
@@ -342,7 +342,7 @@ class AIService {
                 process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY || '',
             ).trim();
             if (!apiKey) {
-                const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+                const err = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
                 err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
                 err.status = 503;
                 err.provider = 'Meta';

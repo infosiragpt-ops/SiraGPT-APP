@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const {
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
   STREAM_TIMEOUT_MESSAGE,
   PROVIDER_FAIL_MESSAGE,
   classifyGenerateError,
@@ -32,20 +33,35 @@ function mockRes() {
   return res;
 }
 
-test('keeps missing-key / vendor leak as Conexión no disponible', () => {
-  assert.equal(
-    publicGenerateErrorMessage({ message: '400 unknown parameter reasoning' }),
-    CONNECTION_UNAVAILABLE_MESSAGE,
-  );
-  assert.equal(
-    publicGenerateErrorMessage({ message: 'OpenRouter 502 DeepSeek muse-spark-1.2-contributor' }),
-    CONNECTION_UNAVAILABLE_MESSAGE,
-  );
+test('missing first-party pin / vendor leak is provider_unavailable, not vague Conexión', () => {
+  const unknown = classifyGenerateError({ message: '400 unknown parameter reasoning' });
+  assert.equal(unknown.code, 'provider_unavailable');
+  assert.equal(unknown.message, PROVIDER_UNAVAILABLE_MESSAGE);
+  assert.doesNotMatch(unknown.message, /DeepSeek|OpenRouter|muse-spark|unknown parameter/i);
+  assert.doesNotMatch(unknown.message, /\/conexiones/);
+
+  const leak = classifyGenerateError({
+    message: 'OpenRouter 502 DeepSeek muse-spark-1.2-contributor',
+  });
+  assert.equal(leak.code, 'provider_unavailable');
+  assert.equal(leak.message, PROVIDER_UNAVAILABLE_MESSAGE);
+
+  const missingKey = classifyGenerateError({
+    message: PROVIDER_UNAVAILABLE_MESSAGE,
+    code: 'PROVIDER_CONNECTION_UNAVAILABLE',
+  });
+  assert.equal(missingKey.code, 'provider_unavailable');
+  assert.equal(missingKey.message, PROVIDER_UNAVAILABLE_MESSAGE);
+  assert.match(missingKey.message, /Ajustes|selector/i);
+});
+
+test('true transport dead stays short Conexión no disponible', () => {
   assert.equal(
     publicGenerateErrorMessage({ message: CONNECTION_UNAVAILABLE_MESSAGE, code: 'connection_unavailable' }),
     CONNECTION_UNAVAILABLE_MESSAGE,
   );
   assert.equal(classifyGenerateError({}).code, 'connection_unavailable');
+  assert.equal(classifyGenerateError({}).message, CONNECTION_UNAVAILABLE_MESSAGE);
 });
 
 test('maps timeout / abort / stream drop to E_TIMEOUT, not a fake GitHub connection', () => {
@@ -124,6 +140,11 @@ test('frontend remappers only collapse true connection_unavailable, not timeout 
       `${file} must not remap the new codes onto Conexión no disponible`,
     );
   }
+  const friendly = fs.readFileSync(path.join(__dirname, '../../lib/generate-stream-errors.ts'), 'utf8');
+  assert.match(friendly, /PROVIDER_UNAVAILABLE_MESSAGE/);
+  assert.match(friendly, /isProviderUnavailablePayload/);
   assert.equal(STREAM_TIMEOUT_MESSAGE.includes('conexión no disponible'), false);
   assert.equal(CONNECT_MESSAGE.includes('conexión no disponible'), false);
+  assert.equal(PROVIDER_UNAVAILABLE_MESSAGE.includes('conexión no disponible'), false);
+  assert.equal(PROVIDER_UNAVAILABLE_MESSAGE.includes('/conexiones'), false);
 });

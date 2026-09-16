@@ -94,7 +94,13 @@ const normalizeChatError = (raw: string): string => {
   if (/timeout|timed.?out|ETIMEDOUT/i.test(raw)) {
     return "La solicitud tardó demasiado. Intenta de nuevo."
   }
-  if (/conexión no disponible|connection_unavailable/i.test(raw)) {
+  if (/provider_unavailable|PROVIDER_CONNECTION_UNAVAILABLE|no cambié a otro modelo/i.test(raw)) {
+    return raw
+  }
+  if (/\/conexiones/i.test(raw) && /github/i.test(raw)) {
+    return raw
+  }
+  if (/^conexión no disponible$/i.test(raw.trim()) || /^connection_unavailable$/i.test(raw.trim())) {
     return "Conexión no disponible"
   }
   if (/failed to fetch|network|ECONN|ETIMEDOUT|ENOTFOUND/i.test(raw)) {

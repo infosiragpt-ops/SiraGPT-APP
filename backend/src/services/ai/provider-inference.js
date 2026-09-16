@@ -65,9 +65,13 @@ function isDirectDeepSeekModel(modelName) {
 
 const CONNECTION_UNAVAILABLE_MESSAGE = 'Conexión no disponible';
 
+const PROVIDER_UNAVAILABLE_MESSAGE =
+  'Este modelo no está disponible ahora. No cambié a otro modelo. Reintenta, elige otro en el selector o reconecta el proveedor en Ajustes.';
+
 /**
  * Whether the named first-party connection has a usable key in env.
- * Missing key → generate must fail, never silently swap vendors.
+ * Missing key → generate must fail with PROVIDER_UNAVAILABLE_MESSAGE,
+ * never silently swap vendors. Do not reuse /conexiones (that CTA is GitHub).
  */
 function providerConnectionReady(provider, env = process.env) {
   const p = String(provider || '').trim();
@@ -202,4 +206,5 @@ module.exports = {
   listKnownProviders,
   KNOWN_PROVIDERS,
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
 };

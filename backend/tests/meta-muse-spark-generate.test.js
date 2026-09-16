@@ -9,6 +9,7 @@ const gateway = require('../src/services/ai-product-os/litellm-gateway');
 const service = require('../src/services/ai-service');
 const {
   CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
   publicGenerateErrorMessage,
   isProviderClientError,
   closeGenerateSseWithError,
@@ -130,12 +131,13 @@ test('ai-service does not attach reasoning extra for Meta trivial turns', () => 
 test('public generate error never leaks vendor or raw model_id', () => {
   assert.equal(
     publicGenerateErrorMessage({ message: '400 unknown parameter reasoning' }),
-    CONNECTION_UNAVAILABLE_MESSAGE,
+    PROVIDER_UNAVAILABLE_MESSAGE,
   );
   assert.equal(
     publicGenerateErrorMessage({ message: 'OpenRouter 502 DeepSeek muse-spark-1.2-contributor' }),
-    CONNECTION_UNAVAILABLE_MESSAGE,
+    PROVIDER_UNAVAILABLE_MESSAGE,
   );
+  assert.doesNotMatch(PROVIDER_UNAVAILABLE_MESSAGE, /DeepSeek|OpenRouter|muse-spark|unknown parameter/i);
   assert.equal(publicGenerateErrorMessage({ message: CONNECTION_UNAVAILABLE_MESSAGE }), CONNECTION_UNAVAILABLE_MESSAGE);
   assert.equal(isProviderClientError({ status: 400, message: 'unknown parameter reasoning' }), true);
   assert.equal(isProviderClientError({ name: 'AbortError', message: 'aborted' }), false);
@@ -170,12 +172,13 @@ test('simulated Meta 400 unknown parameter reasoning closes SSE with Spanish err
   });
 
   const body = res.chunks.join('');
-  assert.equal(out, CONNECTION_UNAVAILABLE_MESSAGE);
-  assert.match(body, /Conexión no disponible/);
+  assert.equal(out, PROVIDER_UNAVAILABLE_MESSAGE);
+  assert.match(body, /Este modelo no está disponible/);
   assert.match(body, /"type":"error"/);
   assert.match(body, /data: \[DONE\]/);
   assert.equal(res.writableEnded, true);
   assert.doesNotMatch(body, /DeepSeek|OpenRouter|muse-spark-1\.2-contributor|unknown parameter/);
+  assert.doesNotMatch(body, /Conexión no disponible/);
 });
 
 test('SSE error helper writes a complete body even when write/end wrappers no-op', () => {
@@ -244,7 +247,8 @@ test('getClient wires Meta to api.meta.ai — not OpenAI or OpenRouter', () => {
   delete process.env.LLAMA_API_KEY;
   try {
     assert.throws(() => service.getClient('Meta'), (err) => {
-      assert.match(String(err && err.message), /Conexión no disponible/);
+      assert.match(String(err && err.message), /Este modelo no está disponible/);
+      assert.doesNotMatch(String(err && err.message), /DeepSeek|OpenRouter|Conexión no disponible/);
       return true;
     });
     process.env.META_API_KEY = 'meta-test-key';
