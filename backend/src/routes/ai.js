@@ -1796,6 +1796,28 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         }
       }
 
+      // RLHF: a regenerate is a revealed preference that the prior answer
+      // for this prompt was worse. Fail-open, never blocks the save path.
+      if (regenerate && userId && assistantMessage?.id) {
+        setImmediate(() => {
+          try {
+            const rlhf = require('../services/rlhf');
+            if (!rlhf.isCollectionEnabled()) return;
+            rlhf.ingestRegenerate({
+              userId,
+              chatId,
+              prompt,
+              response: normalizedResponseContent,
+              messageId: assistantMessage.id,
+              agent: 'chat',
+              embedder: texts => rag.embed(texts),
+            }).catch((e) => console.warn('[ai] rlhf regenerate ingest failed:', e?.message || e));
+          } catch (e) {
+            console.warn('[ai] rlhf regenerate ingest skipped:', e?.message || e);
+          }
+        });
+      }
+
       // ✅ Track usage
       // FREE plan meters TEXT-only generations (3/day). When this turn
       // carried a document/image attachment we skip the counted usage

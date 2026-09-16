@@ -108,6 +108,28 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
     list.splice(0, list.length - MAX_ENTRIES_PER_USER);
   }
 
+  // Durable RLHF flywheel. Fail-open: a store/prisma error must never
+  // fail the thumb the user just submitted.
+  try {
+    const store = require('../rlhf/preference-store');
+    if (store.isCollectionEnabled()) {
+      await store.ingestThumb({
+        userId,
+        runId,
+        messageId: runId,
+        agent: agent || null,
+        request: entry.request,
+        response,
+        helpful,
+        notes: entry.notes,
+        embedding: embedding,
+        embedder,
+      });
+    }
+  } catch (err) {
+    console.warn('[feedback-ledger] rlhf ingest skipped:', err.message || err);
+  }
+
   return { stored: true, total: list.length };
 }
 
@@ -160,7 +182,32 @@ async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = t
       console.warn('[feedback-ledger] durable hydrate failed:', err && err.message);
     }
   }
-  const list = ledger.get(userId);
+  let list = ledger.get(userId);
+  if (!list || list.length === 0) {
+    try {
+      const store = require('../rlhf/preference-store');
+      await store.hydrateUser(userId);
+      for (const e of store.dump(userId)) {
+        const runId = e.runId || e.id;
+        if (!runId) continue;
+        let dest = ledger.get(userId);
+        if (!dest) { dest = []; ledger.set(userId, dest); }
+        if (dest.some((x) => x.runId === runId)) continue;
+        dest.push({
+          runId,
+          userId: e.userId,
+          agent: e.agent || null,
+          request: e.promptText || e.request || '',
+          response: e.responseText || e.response,
+          helpful: e.label === 'chosen' || e.helpful === true,
+          notes: e.notes || null,
+          embedding: e.promptEmbedding || e.embedding || null,
+          at: e.createdAt || Date.now(),
+        });
+      }
+      list = ledger.get(userId);
+    } catch { /* hydrate is best-effort */ }
+  }
   if (!list || list.length === 0) return [];
   if (!request || typeof embedder !== 'function') return [];
 
@@ -218,7 +265,13 @@ function stats(userId) {
 }
 
 function clearUser(userId) { ledger.delete(userId); }
-function _reset() { ledger.clear(); }
+function _reset() {
+  ledger.clear();
+  try {
+    require('../rlhf/preference-store')._reset();
+    require('../rlhf/trainer')._reset();
+  } catch { /* flywheel optional in unit tests that never loaded it */ }
+}
 
 /**
  * Return a shallow copy of every entry for this user. Used by the

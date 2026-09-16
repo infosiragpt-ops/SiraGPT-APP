@@ -336,6 +336,9 @@ const passport = require('./src/config/passport');
 const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 
 const prisma = require('./src/config/database');
+try {
+    require('./src/services/rlhf').attachPrisma(prisma);
+} catch (_rlhfAttachErr) { /* RLHF persist is fail-open */ }
 const { createPoolAutoscaler } = require('./src/db/pool-autoscaler');
 const {
     createStripeWebhookRecovery,
@@ -468,6 +471,7 @@ const agentRunsRoutes = require('./src/routes/agent-runs');
 const agentBatchRoutes = require('./src/routes/agent-batch');
 const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
+const rlhfRoutes = require('./src/routes/rlhf');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
 const { createUploadStaticAccessGuard, createUploadR2Fallback, uploadAttachmentDisposition } = require('./src/middleware/upload-static-access');
@@ -1330,6 +1334,7 @@ app.use('/api/agent', agentRoutes);
 // MCP server registration for the chat agent.
 app.use('/api/agent', agentHarnessRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
+app.use('/api/rlhf', rlhfRoutes);
 app.use('/api/artifacts', artifactsRoutes);
 app.use('/api/document-ai', documentGenerateAiRoutes);
 app.use('/api/hooks', hooksRoutes);

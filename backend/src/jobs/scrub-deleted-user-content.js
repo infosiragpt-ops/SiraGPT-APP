@@ -173,6 +173,30 @@ async function run(opts = {}) {
       }
     }
 
+    // RLHF preference texts are user content. Scrub if the model exists
+    // on this Prisma client; skip silently in tests/stubs that omit it.
+    if (prisma.preferenceEvent && typeof prisma.preferenceEvent.findMany === 'function') {
+      try {
+        const prefs = await prisma.preferenceEvent.findMany({
+          where: { userId: u.id },
+          select: { id: true, promptText: true, responseText: true, notes: true, judgeScore: true },
+        });
+        for (const p of prefs) {
+          if (dryRun) continue;
+          await prisma.preferenceEvent.update({
+            where: { id: p.id },
+            data: {
+              promptText: p.promptText ? piiMask.mask(p.promptText) : p.promptText,
+              responseText: p.responseText ? piiMask.mask(p.responseText) : p.responseText,
+              notes: p.notes ? piiMask.mask(p.notes) : p.notes,
+            },
+          });
+        }
+      } catch (err) {
+        logger.warn(`[scrub-pii] preference events for ${u.id} failed: ${err?.message || err}`);
+      }
+    }
+
     // Best-effort audit row per scrubbed user.
     try {
       const { writeAuditLog } = require('../utils/audit-log');

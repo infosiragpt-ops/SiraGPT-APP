@@ -224,6 +224,10 @@ model User {
   voiceProfiles   VoiceProfile[]
   voiceStudioJobs VoiceStudioJob[]
 
+  // RLHF flywheel — durable preference events + trained reward-model snapshots.
+  preferenceEvents     PreferenceEvent[]
+  rewardModelSnapshots RewardModelSnapshot[]
+
   @@index([deletedAt])
   @@index([lastActiveAt])
   @@map("users")
@@ -4275,4 +4279,63 @@ model VoiceStudioJob {
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@map("voice_studio_jobs")
+}
+
+// ────────────────────────────────────────────────────────────
+// RLHF flywheel. PreferenceEvent is the durable human-feedback
+// ledger (thumbs, regenerates, pairwise, RLAIF). RewardModelSnapshot
+// stores the fitted Bradley-Terry linear reward model used at
+// inference for best-of-N / retry. No FK to Message/Chat on purpose:
+// training rows must survive message deletes; they die with the User
+// (GDPR cascade).
+model PreferenceEvent {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  chatId            String?  @map("chat_id")
+  messageId         String?  @map("message_id")
+  promptMessageId   String?  @map("prompt_message_id")
+  pairId            String?  @map("pair_id")
+  runId             String?  @map("run_id")
+  agent             String?
+  source            String // explicit | regenerate | edit | rlaif | pairwise
+  label             String // chosen | rejected | unlabeled
+  promptText        String   @map("prompt_text") @db.Text
+  responseText      String   @map("response_text") @db.Text
+  promptHash        String   @map("prompt_hash")
+  promptEmbedding   Bytes?   @map("prompt_embedding")
+  responseEmbedding Bytes?   @map("response_embedding")
+  judgeScore        Json?    @map("judge_score")
+  notes             String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, promptHash])
+  @@index([userId, runId])
+  @@index([pairId])
+  @@index([source, label])
+  @@map("preference_events")
+}
+
+model RewardModelSnapshot {
+  id        String   @id @default(cuid())
+  version   Int
+  scope     String   @default("global") // global | user
+  userId    String?  @map("user_id")
+  dim       Int
+  weights   Bytes
+  nTrain    Int      @map("n_train")
+  nPairs    Int      @map("n_pairs")
+  auc       Float?
+  logloss   Float?
+  active    Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([scope, userId, active])
+  @@index([active, createdAt])
+  @@map("reward_model_snapshots")
 }
