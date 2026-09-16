@@ -1501,6 +1501,8 @@ router.post('/messages/:messageId/feedback', [
               metadata: meta,
               agentMetadata: agentMeta,
             });
+            // RLCD: a thumb is the ground truth for the turn's typed decisions.
+            require('../services/rlcd').recordThumb({ messageId: message.id, feedback, metadata: meta });
           } catch (_rfErr) { /* routing-feedback is fail-open */ }
         } catch (ledgerErr) {
           console.warn('[chats] feedback ledger update failed:', ledgerErr.message || ledgerErr);
