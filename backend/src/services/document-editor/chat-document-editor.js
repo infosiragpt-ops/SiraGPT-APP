@@ -282,7 +282,8 @@ function stageFor(event) {
       if (event.phase === 'execute') return { label: event.attempt > 1 ? 'Corrigiendo la edición' : 'Editando el documento' };
       if (event.phase === 'validate') return { label: 'Verificando el archivo editado' };
       return null;
-    case 'tool_call': return { label: 'Editando el documento', detail: String(event.preview || event.tool || '').slice(0, 160) };
+    // Sandbox commands (paths, python snippets) are internal: the bubble shows the stage only.
+    case 'tool_call': return { label: 'Editando el documento' };
     default: return null;
   }
 }
