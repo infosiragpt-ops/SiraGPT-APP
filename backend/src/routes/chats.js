@@ -13,6 +13,13 @@ const streamCache = require('../services/stream-cache');
 const taskStore = require('../services/agents/task-store');
 const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
 const feedbackLedger = require('../services/agents/feedback-ledger');
+const { loadPreferenceRows } = require('../services/agents/feedback-durable');
+const {
+  DISLIKE_REASONS,
+  mergeRlhfMetadata,
+  exportFromRows,
+  preferenceStats,
+} = require('../services/agents/preference-chat-export');
 const rag = require('../services/rag-service');
 const chatExport = require('../services/chat-export');
 const triggers = require('../services/trigger-registry');
@@ -1397,6 +1404,7 @@ router.delete('/:id/messages', authenticateToken, async (req, res) => {
 
 router.post('/messages/:messageId/feedback', [
   body('feedback').isIn(['liked', 'disliked']).withMessage('Invalid feedback value'),
+  body('reason').optional({ nullable: true }).isIn(DISLIKE_REASONS),
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -1405,7 +1413,7 @@ router.post('/messages/:messageId/feedback', [
     }
 
     const { messageId } = req.params;
-    const { feedback } = req.body;
+    const { feedback, reason } = req.body;
 
     // Primero verificar que el mensaje pertenezca a un chat del usuario
     const message = await prisma.message.findUnique({
@@ -1416,6 +1424,7 @@ router.post('/messages/:messageId/feedback', [
         role: true,
         content: true,
         timestamp: true,
+        metadata: true,
         chat: {
           select: {
             userId: true
@@ -1429,9 +1438,18 @@ router.post('/messages/:messageId/feedback', [
     }
 
     // Actualizar el feedback
+    const rlhfPatch = {
+      feedback,
+      at: new Date().toISOString(),
+    };
+    if (feedback === 'disliked' && reason) rlhfPatch.reason = reason;
+    else if (feedback === 'liked') rlhfPatch.reason = null;
     const updatedMessage = await prisma.message.update({
       where: { id: messageId },
-      data: { feedback },
+      data: {
+        feedback,
+        metadata: mergeRlhfMetadata(message.metadata, rlhfPatch),
+      },
     });
 
     if (message.role === 'ASSISTANT') {
@@ -1458,6 +1476,7 @@ router.post('/messages/:messageId/feedback', [
             request: priorUser?.content || '',
             response: message.content || updatedMessage.content || '',
             helpful: feedback === 'liked',
+            notes: feedback === 'disliked' ? (reason || null) : null,
             embedder: texts => rag.embed(texts),
           });
         } catch (ledgerErr) {
@@ -1496,6 +1515,43 @@ router.post('/messages/:messageId/feedback', [
   } catch (error) {
     console.error('Add feedback error:', error);
     res.status(500).json({ error: 'Failed to add feedback' });
+  }
+});
+
+router.get('/preferences/stats', authenticateToken, async (req, res) => {
+  try {
+    const rows = await loadPreferenceRows(prisma, req.user.id, { limit: 200 });
+    return res.json({ ok: true, ...preferenceStats(rows) });
+  } catch (error) {
+    console.error('Preference stats error:', error);
+    res.status(500).json({ error: 'Failed to load preference stats' });
+  }
+});
+
+router.get('/preferences/export', authenticateToken, async (req, res) => {
+  try {
+    const format = String(req.query.format || 'kto').toLowerCase();
+    if (!['sft', 'kto', 'dpo'].includes(format)) {
+      return res.status(400).json({ error: "unknown format — use sft, kto or dpo" });
+    }
+    const agent = typeof req.query.agent === 'string' ? req.query.agent : null;
+    const scrubPii = req.query.scrubPii !== 'false';
+    const rows = await loadPreferenceRows(prisma, req.user.id, { limit: 200 });
+    const out = exportFromRows({
+      rows,
+      format,
+      agent,
+      scrubPii,
+      aggressive: req.query.aggressive === 'true',
+    });
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="preferences-${format}.jsonl"`);
+    res.setHeader('X-Export-Count', String(out.count));
+    res.setHeader('X-PII-Scrubbed', String(out.scrubbed));
+    res.send(out.ndjson);
+  } catch (error) {
+    console.error('Preference export error:', error);
+    res.status(500).json({ error: 'Failed to export preferences' });
   }
 });
 

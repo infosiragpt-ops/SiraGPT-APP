@@ -28,6 +28,7 @@ async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
       content: true,
       feedback: true,
       timestamp: true,
+      metadata: true,
     },
   });
   if (!assistants.length) return [];
@@ -49,6 +50,8 @@ async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
     }
     return {
       runId: asst.id,
+      chatId: asst.chatId,
+      timestamp: asst.timestamp,
       agent: preferenceAgent({
         files: prior && prior.files,
         prompt: prior ? prior.content : '',
@@ -56,6 +59,7 @@ async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
       request: prior ? String(prior.content || '') : '',
       response: asst.content,
       helpful: asst.feedback === 'liked',
+      reason: asst.metadata && asst.metadata.rlhf ? asst.metadata.rlhf.reason : null,
     };
   });
 }
