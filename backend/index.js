@@ -338,6 +338,20 @@ const { bigintSerializerMiddleware } = require('./src/utils/bigint-serializer');
 const prisma = require('./src/config/database');
 try {
     require('./src/services/rlhf').attachPrisma(prisma);
+    // Warm the in-memory ledger + RM after listen is free to start.
+    // Fail-open: missing tables / Prisma not ready must never block boot.
+    setImmediate(() => {
+        try {
+            const rlhf = require('./src/services/rlhf');
+            const ledger = require('./src/services/agents/feedback-ledger');
+            Promise.resolve()
+                .then(() => rlhf.loadLatestActive().catch(() => null))
+                .then(() => rlhf.hydrateRecentIntoLedger(ledger, { limit: 200 }))
+                .catch((err) => {
+                    console.warn('[rlhf] boot hydrate skipped:', err && err.message);
+                });
+        } catch (_rlhfHydrateErr) { /* fail-open */ }
+    });
 } catch (_rlhfAttachErr) { /* RLHF persist is fail-open */ }
 const { createPoolAutoscaler } = require('./src/db/pool-autoscaler');
 const {

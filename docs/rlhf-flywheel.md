@@ -1,0 +1,78 @@
+# RLHF flywheel
+
+InstructGPT-style loop inside SiraGPT: collect human preferences → fit a
+linear Bradley-Terry reward model on the same embeddings as RAG → export
+SFT / DPO / RM JSONL for an external fine-tune. There is **no** in-process
+GPU PPO in this slice.
+
+## What lands where
+
+| Signal | Writer | Durable row |
+|--------|--------|-------------|
+| Chat 👍 / 👎 | `POST /chats/messages/:id/feedback` → `feedback-ledger.record` | `preference_events` (`source=explicit`) plus `Message.feedback` |
+| Regenerar | `saveChatAndTrackUsage` when `regenerate` | prior row marked `rejected`; new candidate `unlabeled` |
+| Explicit pair | `POST /api/rlhf/pair` | chosen + rejected with a shared `pairId` |
+| Optional RLAIF | `SIRAGPT_RLHF_RLAIF=1` | only high-confidence HHH scores |
+
+On boot the process attaches Prisma (`attachPrisma`) and, in `setImmediate`,
+loads the latest active RM snapshot and hydrates the in-memory feedback
+ledger from the newest `preference_events` (fail-open if the table is
+missing). `findExemplars` can also hydrate a user from `Message.feedback`
+via `feedback-durable.loadPreferenceRows`.
+
+Thumbs-up also records `routing-feedback` `success` when the assistant
+message metadata carries a model id (fail-open; no model → no-op).
+
+## Flags
+
+| Env | Default | Effect |
+|-----|---------|--------|
+| `SIRAGPT_RLHF_ENABLED` | on | Collection. `0`/`false`/`off` skips writes |
+| `SIRAGPT_RLHF_BEST_OF_N` | **off** | Inference-time sample-and-rank. Leave off in production unless you accept N× tokens |
+| `SIRAGPT_RLHF_RLAIF` | off | Synthetic labels. Mid scores abstain |
+| `SIRAGPT_RLHF_AUTO_TRAIN` | on | Retrain after new labels (cooldown). `0` for tests / freeze |
+
+Prisma persist never blocks a thumb or a generate: errors stay in-memory
+and log once.
+
+## HTTP
+
+Mounted at `/api/rlhf` (auth required; train is admin):
+
+- `POST /feedback` — explicit thumb (`helpful` / `label`, optional `chatId`)
+- `POST /pair` — chosen vs rejected for one prompt
+- `GET /stats` — caller counts
+- `GET /export?format=sft\|dpo\|rm` — JSONL download
+- `POST /score` / `POST /rerank` — score or rank with the RM
+- `POST /train` — fit the RM now
+- `GET /model` — active snapshot metrics
+
+Brand names only in user-facing copy. Exports and logs must not dump
+secrets or raw provider model ids into UI/toasts.
+
+## Export SFT / DPO
+
+Need a logged-in session (or admin for a full dump). PII is scrubbed
+by default (`ada@example.com` → `<EMAIL>`).
+
+```bash
+# chosen, non-RLAIF rows → instruction/response JSONL
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  'https://siragpt.com/api/rlhf/export?format=sft' -o sft.jsonl
+
+# same-prompt chosen/rejected pairs (TRL / OpenRLHF DPO schema)
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  'https://siragpt.com/api/rlhf/export?format=dpo' -o dpo.jsonl
+
+# pointwise RM rows (prompt + response + label)
+curl -fsS -H "Authorization: Bearer $TOKEN" \
+  'https://siragpt.com/api/rlhf/export?format=rm' -o rm.jsonl
+```
+
+Pass `scrubPii=0` only on a locked admin box. GDPR scrub of
+`preference_events` text runs with the existing deleted-user job.
+
+## Out of scope (phase 2+)
+
+GPU training pipeline, new `/agentes` chrome, enabling best-of-N by
+default, OpenRouter as a hidden fallback, and any `/code` surface.

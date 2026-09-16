@@ -68,7 +68,7 @@ function cosine(a, b) {
  *   Pass the shared rag.embed() here. When null, the entry is stored
  *   without an embedding and later findExemplars calls will skip it.
  */
-async function record({ userId, runId, agent, request, response, helpful, notes, embedder }) {
+async function record({ userId, runId, agent, request, response, helpful, notes, embedder, chatId }) {
   if (!userId || !runId) throw new Error('feedback-ledger.record: userId and runId required');
   if (typeof helpful !== 'boolean') throw new Error('feedback-ledger.record: helpful must be boolean');
 
@@ -117,6 +117,7 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
         userId,
         runId,
         messageId: runId,
+        chatId: chatId || null,
         agent: agent || null,
         request: entry.request,
         response,
@@ -146,6 +147,7 @@ async function hydrateFromRows(userId, rows, embedder) {
     await record({
       userId,
       runId: String(row.runId),
+      chatId: row.chatId || null,
       agent: row.agent || 'chat',
       request: row.request,
       response: row.response,
@@ -264,6 +266,34 @@ function stats(userId) {
   };
 }
 
+/**
+ * Insert an already-durable row into the RAM ledger without writing
+ * back to Prisma. Used on boot so findExemplars works before the first
+ * thumb of the process.
+ */
+function ingestLocal({ userId, runId, agent, request, response, helpful, notes, embedding, at }) {
+  if (!userId || !runId) return;
+  const entry = {
+    runId: String(runId),
+    userId,
+    agent: agent || null,
+    request: String(request || '').slice(0, 4000),
+    response,
+    helpful: helpful === true,
+    notes: typeof notes === 'string' ? notes.slice(0, 500) : null,
+    embedding: embedding || null,
+    at: at || nowMs(),
+  };
+  let list = ledger.get(userId);
+  if (!list) { list = []; ledger.set(userId, list); }
+  const existingIdx = list.findIndex((e) => e.runId === entry.runId);
+  if (existingIdx >= 0) list[existingIdx] = entry;
+  else list.push(entry);
+  if (list.length > MAX_ENTRIES_PER_USER) {
+    list.splice(0, list.length - MAX_ENTRIES_PER_USER);
+  }
+}
+
 function clearUser(userId) { ledger.delete(userId); }
 function _reset() {
   ledger.clear();
@@ -291,6 +321,7 @@ module.exports = {
   formatExemplarsBlock,
   stats,
   clearUser,
+  ingestLocal,
   _reset,
   _dump,
   MAX_ENTRIES_PER_USER,

@@ -177,6 +177,33 @@ async function hydrateUser(userId) {
   return listMemory(userId);
 }
 
+/**
+ * Load the newest preference rows across users into the in-memory store.
+ * Fail-open: a missing Prisma model or query error returns [].
+ */
+async function hydrateRecent({ limit = 200 } = {}) {
+  if (!hasPrismaModel()) return [];
+  const take = Math.max(1, Math.min(1000, Number(limit) || 200));
+  try {
+    const rows = await prismaClient.preferenceEvent.findMany({
+      orderBy: { createdAt: 'desc' },
+      take,
+    });
+    const events = [];
+    for (const row of rows.reverse()) {
+      const event = fromPrismaRow(row);
+      if (!event || !event.userId) continue;
+      putMemory(event);
+      hydrated.add(event.userId);
+      events.push(event);
+    }
+    return events;
+  } catch (err) {
+    console.warn('[rlhf] hydrateRecent failed:', err.message || err);
+    return [];
+  }
+}
+
 function linkPairs(userId, promptHash) {
   const list = listMemory(userId).filter((e) => e.promptHash === promptHash);
   const chosen = list.filter((e) => e.label === 'chosen' && !e.pairId);
@@ -462,6 +489,7 @@ module.exports = {
   ingestRegenerate,
   findExemplars,
   hydrateUser,
+  hydrateRecent,
   stats,
   dump,
   pairsFor,

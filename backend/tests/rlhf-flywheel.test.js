@@ -294,4 +294,109 @@ describe('ledger dual-write', () => {
     assert.equal(dumped[0].label, 'chosen');
     assert.equal(dumped[0].promptText, 'hola');
   });
+
+  it('forwards chatId onto preference events', async () => {
+    await ledger.record({
+      userId: 'u1', runId: 'm10', chatId: 'chat-9',
+      request: 'q', response: 'a', helpful: true,
+    });
+    assert.equal(store.dump('u1')[0].chatId, 'chat-9');
+  });
+});
+
+describe('hydrateRecent', () => {
+  it('returns [] when Prisma is not attached', async () => {
+    assert.deepEqual(await store.hydrateRecent(), []);
+  });
+
+  it('loads newest durable rows into memory (fail-open on query error)', async () => {
+    const rows = [
+      {
+        id: 'e2', userId: 'u2', chatId: 'c2', messageId: 'm2', runId: 'm2',
+        source: 'explicit', label: 'rejected', promptText: 'q2', responseText: 'b',
+        promptHash: 'h2', promptEmbedding: null, responseEmbedding: null,
+        createdAt: new Date('2026-01-01'),
+      },
+      {
+        id: 'e1', userId: 'u1', chatId: 'c1', messageId: 'm1', runId: 'm1',
+        source: 'explicit', label: 'chosen', promptText: 'q', responseText: 'a',
+        promptHash: 'h', promptEmbedding: null, responseEmbedding: null,
+        createdAt: new Date('2026-01-02'),
+      },
+    ];
+    store.attachPrisma({
+      preferenceEvent: {
+        findMany: async () => rows,
+      },
+    });
+    try {
+      const events = await store.hydrateRecent({ limit: 10 });
+      assert.equal(events.length, 2);
+      assert.equal(store.stats('u1').chosen, 1);
+      assert.equal(store.stats('u2').rejected, 1);
+    } finally {
+      store.attachPrisma(null);
+    }
+  });
+
+  it('hydrateRecentIntoLedger uses ingestLocal (no second Prisma write)', async () => {
+    const rlhf = require('../src/services/rlhf');
+    let creates = 0;
+    store.attachPrisma({
+      preferenceEvent: {
+        findMany: async () => ([{
+          id: 'e1', userId: 'u1', runId: 'm1', messageId: 'm1', chatId: 'c1',
+          source: 'explicit', label: 'chosen', promptText: 'hola',
+          responseText: 'hola!', promptHash: 'x', createdAt: new Date(),
+        }]),
+        create: async () => { creates += 1; },
+        upsert: async () => { creates += 1; },
+      },
+    });
+    try {
+      const n = await rlhf.hydrateRecentIntoLedger(ledger, { limit: 5 });
+      assert.equal(n, 1);
+      assert.equal(ledger.stats('u1').helpful, 1);
+      assert.equal(creates, 0);
+    } finally {
+      store.attachPrisma(null);
+    }
+  });
+});
+
+describe('policy flags', () => {
+  it('best-of-N stays OFF unless SIRAGPT_RLHF_BEST_OF_N is explicitly on', () => {
+    const orig = process.env.SIRAGPT_RLHF_BEST_OF_N;
+    try {
+      delete process.env.SIRAGPT_RLHF_BEST_OF_N;
+      assert.equal(policy.isBestOfNEnabled(), false);
+      process.env.SIRAGPT_RLHF_BEST_OF_N = '0';
+      assert.equal(policy.isBestOfNEnabled(), false);
+      process.env.SIRAGPT_RLHF_BEST_OF_N = '1';
+      assert.equal(policy.isBestOfNEnabled(), true);
+    } finally {
+      if (orig == null) delete process.env.SIRAGPT_RLHF_BEST_OF_N;
+      else process.env.SIRAGPT_RLHF_BEST_OF_N = orig;
+    }
+  });
+});
+
+describe('source contracts', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  it('chat thumbs pass chatId and record routing success on liked', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../src/routes/chats.js'), 'utf8');
+    assert.match(src, /chatId:\s*message\.chatId/);
+    assert.match(src, /recordOutcome/);
+    assert.match(src, /outcome:\s*['"]success['"]/);
+  });
+
+  it('boot attaches Prisma then hydrates the ledger without blocking listen', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
+    assert.match(src, /attachPrisma\(prisma\)/);
+    assert.match(src, /hydrateRecentIntoLedger/);
+    assert.match(src, /loadLatestActive/);
+    assert.match(src, /setImmediate/);
+  });
 });

@@ -97,6 +97,7 @@ describe('loadPreferenceRows', () => {
     const rows = await loadPreferenceRows(prisma, 'owner');
     assert.equal(rows.length, 1);
     assert.equal(rows[0].runId, 'a1');
+    assert.equal(rows[0].chatId, 'c1');
     assert.equal(rows[0].request, 'como ordeno?');
     assert.equal(rows[0].helpful, true);
   });

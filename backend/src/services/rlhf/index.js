@@ -30,25 +30,38 @@ function _reset() {
   trainer._reset();
 }
 
+function pushEventIntoLedger(ledger, e) {
+  if (!ledger || typeof ledger.ingestLocal !== 'function' || !e) return false;
+  ledger.ingestLocal({
+    userId: e.userId,
+    runId: e.runId || e.messageId || e.id,
+    agent: e.agent,
+    request: e.promptText,
+    response: e.responseText,
+    helpful: e.label === 'chosen',
+    notes: e.notes,
+    embedding: e.promptEmbedding || e.embedding,
+    at: e.createdAt,
+  });
+  return true;
+}
+
 async function hydrateIntoLedger(userId, ledger) {
   if (!userId || !ledger) return 0;
   const events = await store.hydrateUser(userId);
   let n = 0;
   for (const e of events) {
-    if (typeof ledger.ingestLocal === 'function') {
-      ledger.ingestLocal({
-        userId: e.userId,
-        runId: e.runId || e.messageId || e.id,
-        agent: e.agent,
-        request: e.promptText,
-        response: e.responseText,
-        helpful: e.label === 'chosen',
-        notes: e.notes,
-        embedding: e.promptEmbedding || e.embedding,
-        at: e.createdAt,
-      });
-      n += 1;
-    }
+    if (pushEventIntoLedger(ledger, e)) n += 1;
+  }
+  return n;
+}
+
+async function hydrateRecentIntoLedger(ledger, { limit = 200 } = {}) {
+  const events = await store.hydrateRecent({ limit });
+  if (!ledger) return events.length;
+  let n = 0;
+  for (const e of events) {
+    if (pushEventIntoLedger(ledger, e)) n += 1;
   }
   return n;
 }
@@ -62,7 +75,9 @@ module.exports = {
   ingestRegenerate: store.ingestRegenerate,
   findExemplars: store.findExemplars,
   hydrateUser: store.hydrateUser,
+  hydrateRecent: store.hydrateRecent,
   hydrateIntoLedger,
+  hydrateRecentIntoLedger,
   stats: store.stats,
   dump: store.dump,
   // reward model

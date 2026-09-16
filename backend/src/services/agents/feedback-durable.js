@@ -50,7 +50,7 @@ async function loadPreferenceRows(prisma, userId, { limit = 80 } = {}) {
     }
     return {
       runId: asst.id,
-      chatId: asst.chatId,
+      chatId: asst.chatId || null,
       timestamp: asst.timestamp,
       agent: preferenceAgent({
         files: prior && prior.files,

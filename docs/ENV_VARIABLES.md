@@ -416,6 +416,17 @@ needs the backend `.env` — no frontend rebuild.
 | `IDEMPOTENCY_ENABLED` | `false` | Enable Stripe-style replay protection |
 | `MAINTENANCE_MODE_ENABLED` | `false` | Enable 503 maintenance mode |
 
+## RLHF flywheel
+
+Collects thumbs + regenerates into `preference_events`, fits an in-process Bradley-Terry reward model, and exports SFT/DPO JSONL. See `docs/rlhf-flywheel.md`. Prisma persist is fail-open (in-memory only when the client is not ready). Best-of-N at generation time stays **off** unless explicitly enabled.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_RLHF_ENABLED` | on | `0` / `false` / `off` stops collecting preference events |
+| `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost) |
+| `SIRAGPT_RLHF_RLAIF` | off | `1` allows synthetic HHH labels; abstains on mid scores |
+| `SIRAGPT_RLHF_AUTO_TRAIN` | on | `0` disables the cooldown retrainer after new labels |
+
 ---
 
 ## Optional Scientific Search Keys
