@@ -112,6 +112,31 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
 }
 
 /**
+ * Load durable preference rows (from Postgres Message.feedback) into the
+ * in-memory ledger. Used so RLHF-lite survives process restart. Dedupes
+ * on runId via record().
+ */
+async function hydrateFromRows(userId, rows, embedder) {
+  if (!userId || !Array.isArray(rows) || rows.length === 0) return { stored: 0 };
+  let stored = 0;
+  for (const row of rows) {
+    if (!row || !row.runId) continue;
+    await record({
+      userId,
+      runId: String(row.runId),
+      agent: row.agent || 'chat',
+      request: row.request,
+      response: row.response,
+      helpful: row.helpful === true,
+      notes: row.notes,
+      embedder,
+    });
+    stored += 1;
+  }
+  return { stored };
+}
+
+/**
  * Find top-K past feedback entries most similar to the current request.
  *
  * @param {object} args
@@ -121,11 +146,20 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
  * @param {number} [args.k=3]
  * @param {boolean} [args.onlyHelpful=true]
  * @param {string} [args.agent]  — filter to entries from the same specialist
+ * @param {function} [args.loader] — async (userId) => preference rows from durable store
  *
  * @returns {Promise<Array<{ runId, request, response, helpful, notes, score }>>}
  *   Sorted descending by similarity.
  */
-async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent }) {
+async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent, loader }) {
+  if (typeof loader === 'function' && (!ledger.get(userId) || ledger.get(userId).length === 0)) {
+    try {
+      const rows = await loader(userId);
+      await hydrateFromRows(userId, rows, embedder);
+    } catch (err) {
+      console.warn('[feedback-ledger] durable hydrate failed:', err && err.message);
+    }
+  }
   const list = ledger.get(userId);
   if (!list || list.length === 0) return [];
   if (!request || typeof embedder !== 'function') return [];
@@ -207,4 +241,5 @@ module.exports = {
   _reset,
   _dump,
   MAX_ENTRIES_PER_USER,
+  hydrateFromRows,
 };
