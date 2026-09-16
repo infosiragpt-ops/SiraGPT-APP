@@ -424,9 +424,9 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 |----------|---------|---------|
 | `SIRAGPT_RLHF_ENABLED` | on | `0` / `false` / `off` stops collecting preference events |
 | `SIRAGPT_RLHF_STEERING` | on | `0` / `false` / `off` skips few-shot preference injection at generate time |
-| `SIRAGPT_RLCD_ENABLED` | on | RLCD: registra decisiones tipadas con su confianza y une resultados (docs/rlcd.md) |
-| `SIRAGPT_RLCD_LANE_STEERING` | on | RLCD: la probabilidad calibrada puede forzar el bucle agéntico en turnos de código |
-| `SIRAGPT_RLCD_LANE_THRESHOLD` | 0.6 | RLCD: umbral de probabilidad calibrada para forzar el carril agéntico |
+| `SIRAGPT_RLCD_ENABLED` | on | RLCD ledger (#722): registra decisiones tipadas (`intent_triage` / `execution_lane` / `model_route` / `compute_mode`) y une resultados. `0` / `false` / `off` apaga el ledger. See `docs/rlcd.md` |
+| `SIRAGPT_RLCD_LANE_STEERING` | on | RLCD ledger: la probabilidad calibrada puede forzar el bucle agéntico en turnos de código |
+| `SIRAGPT_RLCD_LANE_THRESHOLD` | 0.6 | RLCD ledger: umbral de probabilidad calibrada para forzar el carril agéntico |
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Size cap for the injected preference block |
 | `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost). Leave off in production |
 | `SIRAGPT_RLHF_RLAIF` | off | `1` / `true` / `on` allows synthetic HHH labels; abstains on mid scores. Leave off in production |
@@ -437,6 +437,11 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | `SIRAGPT_RLHF_TRAIN_SUBMIT` | off | Optional submit after prep. No-op today (no in-repo catalog fine-tune adapter). Do not treat this as a paid auto-train switch |
 | `SIRAGPT_RLHF_TRAIN_JOB_CONCURRENCY` | 1 | In-process prep workers (capped at 4) |
 | `SYSTEM_CRON_RLHF_SCHEDULE` | `0 8 * * *` | Daily backfill of Message.feedback + local RM train (UTC) |
+| `SIRAGPT_RLCD_DOCUMENTS` | **off** | Document-analysis RLCD (#721): confidence trailer + defer + Brier/ECE on document thumbs. Independent of `SIRAGPT_RLCD_ENABLED`. `1` / `true` / `on` enables. Leave off in production. See `docs/rlhf-rlcd-documents.md` |
+| `SIRAGPT_RLCD_DEFER_THRESHOLD` | `0.45` | Document RLCD: defer when predicted confidence is below this (0.05–0.95) |
+| `SIRAGPT_RLCD_MAX_DEFER_RATE` | `0.25` | Document RLCD: cap of document turns that may defer in this process (0–1) |
+| `SIRAGPT_RLCD_PROMPT` | on (if documents on) | `0` / `off` skips the hidden confidence-trailer contract |
+| `SIRAGPT_RLCD_PHRASE` | on (if documents on) | `0` / `off` skips the compact Spanish “Confianza baja/media” line |
 
 ---
 

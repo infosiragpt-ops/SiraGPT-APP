@@ -21,7 +21,16 @@ function preferenceAgent({ files, prompt } = {}) {
 function formatDocumentRlhfBlock(exemplars) {
   const inner = formatExemplarsBlock(exemplars);
   if (!inner) return '';
-  return `\n\n## DOCUMENT ANALYSIS RLHF\n${inner}`;
+  let extra = '';
+  try {
+    const rlcd = require('./rlcd');
+    if (rlcd.isDocumentEnabled()) {
+      extra = rlcd.prompt.formatCalibratedNotes(exemplars) || '';
+    }
+  } catch {
+    extra = '';
+  }
+  return `\n\n## DOCUMENT ANALYSIS RLHF\n${inner}${extra}`;
 }
 
 module.exports = {

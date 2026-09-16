@@ -51,6 +51,8 @@ const ALWAYS_KEEP = new Set([
   'constraints',
   // Response posture (clarify / abstain / caveat) is load-bearing.
   'response-posture',
+  // Document RLCD confidence/defer contract — only present when the flag is on.
+  'document-rlcd',
   // Rolling context summary of the folded older turns — the thread's memory.
   'context-summary',
 ]);

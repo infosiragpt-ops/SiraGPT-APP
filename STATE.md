@@ -113,6 +113,13 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
   cron diario 08:00 UTC, panel `/admin/rlhf`. Prep SFT/DPO = `#713`
   (`docs/rlhf-phase3-train-pipeline.md`). Best-of-N sigue off.
   Docs: `docs/rlhf-phase3.md`.
+- **RLCD documentos (calibrated decisions):** slice flag-gated
+  (`SIRAGPT_RLCD_DOCUMENTS`, default off) sobre análisis documental:
+  confianza estructurada, defer si está baja, Brier/ECE desde 👍/👎.
+  Independiente del ledger #722 (`SIRAGPT_RLCD_ENABLED`, default on).
+  Sin migración Prisma (vive en `metadata.rlcd` + `judgeScore.rlcd`).
+  Docs: `docs/rlhf-rlcd-documents.md` + `docs/rlcd.md`. No es el paper
+  ICLR de contrastive distillation.
 
 - **F0**: `ROADMAP.md` + `STATE.md` en la raíz, aprobados.
 - **AgentRunner v0** en `backend/src/services/agent-runner/`: loop LLM→tool→result→LLM

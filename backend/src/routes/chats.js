@@ -1492,6 +1492,7 @@ router.post('/messages/:messageId/feedback', [
             reasonCode: reasons.reasonCode,
             notes: feedback === 'disliked' ? (reasons.notes || reasons.reasonCode || null) : null,
             embedder: texts => rag.embed(texts),
+            metadata: parseMessageMetadata(message.metadata),
           });
           try {
             const meta = parseMessageMetadata(message.metadata);

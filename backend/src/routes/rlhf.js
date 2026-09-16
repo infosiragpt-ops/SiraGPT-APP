@@ -7,6 +7,7 @@
  *   POST /api/rlhf/pair              record a chosen/rejected pair for one prompt
  *   POST /api/rlhf/rlaif/propose     optional synthetic pairs (flag-gated, rate-limited)
  *   GET  /api/rlhf/stats             caller's preference counts + phase-2 flags
+ *                                    + RLCD calibration snapshot (Brier/ECE)
  *                                    (admin also gets process telemetry)
  *   GET  /api/rlhf/export            SFT / DPO / RM JSONL
  *   POST /api/rlhf/score             score a (prompt, response) with the RM
@@ -283,6 +284,18 @@ router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
     } : null,
     user: rlhf.stats(req.user.id),
     global: isAdmin ? rlhf.stats() : null,
+    rlcd: (() => {
+      const snap = rlhf.rlcdStats();
+      if (isAdmin) return snap;
+      return {
+        enabled: snap.enabled,
+        meaning: snap.meaning,
+        n: snap.n,
+        brier: snap.brier,
+        ece: snap.ece,
+        deferRate: snap.deferRate,
+      };
+    })(),
     phase2: isAdmin ? {
       ...rlhf.phase2Stats(),
       trainJobsEnabled: isTrainJobsEnabled(),

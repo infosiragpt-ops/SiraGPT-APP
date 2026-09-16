@@ -92,6 +92,13 @@ Admin SFT/DPO prep jobs (still no paid auto-train) are documented in
 
 Dashboard + historical backfill: `docs/rlhf-phase3.md`.
 
+Document-analysis **RLCD** (Reinforcement Learning for Calibrated
+Decisions — not the ICLR contrastive-distillation paper) is a separate,
+**off-by-default** slice (`SIRAGPT_RLCD_DOCUMENTS`): structured
+confidence, defer/abstain, Brier/ECE from thumbs. Independent of the
+#722 decision ledger (`SIRAGPT_RLCD_ENABLED`). See
+`docs/rlhf-rlcd-documents.md` and `docs/rlcd.md`.
+
 ## Out of scope (later lotes)
 
 Enabling best-of-N by default, a hidden aggregator fallback, and any
