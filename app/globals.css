@@ -1352,7 +1352,7 @@ details[open] > summary .think-chevron,
      same x in every element. (--effort-thumb-w names the stop travel inset;
      there is no visible dial.) */
   --effort-steps: 3;
-  --effort-rail-h: 1rem;
+  --effort-rail-h: 0.9375rem;
   --effort-thumb-w: 1.5rem;
   --effort-thumb-h: 1.5rem;
   --effort-pad: 0.3rem;
@@ -1514,6 +1514,12 @@ details[open] > summary .think-chevron,
 .effort-dither-px {
   fill: var(--effort-violet);
   shape-rendering: crispEdges;
+}
+.effort-dither-px-light {
+  fill: hsl(262 80% 74%);
+}
+.effort-dither-px-deep {
+  fill: hsl(267 88% 50%);
 }
 .effort-dither-spark {
   fill: hsl(0 0% 100% / 0.78);

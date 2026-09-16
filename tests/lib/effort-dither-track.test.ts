@@ -4,7 +4,7 @@ import { createElement } from "react"
 
 import { EFFORT_DITHER_SPEC, EffortDitherTrack } from "@/components/chat/effort-dither-track"
 
-describe("EffortDitherTrack — left→right pixel dissolve", () => {
+describe("EffortDitherTrack — advanced left→right pixel dissolve", () => {
   it("partitions the tile into disjoint layers that together cover every cell", () => {
     const { tile, layerSizes, layers } = EFFORT_DITHER_SPEC
     const total = tile.cols * tile.rows
@@ -26,11 +26,27 @@ describe("EffortDitherTrack — left→right pixel dissolve", () => {
     expect(seen.size).toBe(total)
   })
 
-  it("grows density and opacity toward the right, with isolated particles first", () => {
-    const { layerRamps, layerSizes, layers, rampStops } = EFFORT_DITHER_SPEC
+  it("orders the dissolve with a Bayer matrix: deterministic halftone, not random scatter", () => {
+    const { layers, layerSizes, bayerValue } = EFFORT_DITHER_SPEC
+    // Cells arrive in non-decreasing Bayer order across the layer sequence.
+    const flat = layers.flat()
+    for (let i = 1; i < flat.length; i += 1) {
+      const prev = bayerValue(flat[i - 1][0], flat[i - 1][1])
+      const next = bayerValue(flat[i][0], flat[i][1])
+      expect(next).toBeGreaterThanOrEqual(prev)
+    }
+    // The sparse first layer holds the lowest values of the whole tile and the
+    // dense last layer holds the highest: the classic halftone progression.
+    const allValues = flat.map(([c, r]) => bayerValue(c, r)).sort((a, b) => a - b)
+    const firstLayerValues = layers[0].map(([c, r]) => bayerValue(c, r)).sort((a, b) => a - b)
+    const lastLayerValues = layers[layers.length - 1].map(([c, r]) => bayerValue(c, r)).sort((a, b) => a - b)
+    expect(firstLayerValues).toEqual(allValues.slice(0, layerSizes[0]))
+    expect(lastLayerValues).toEqual(allValues.slice(-layerSizes[layerSizes.length - 1]))
+  })
+
+  it("grows density and opacity toward the right, with light particles first", () => {
+    const { layerRamps, layerSizes, depthClass, rampStops } = EFFORT_DITHER_SPEC
     expect(layerRamps).toHaveLength(layerSizes.length)
-    // Sparse → dense: every layer adds at least as many pixels as the previous one.
-    for (let i = 1; i < layerSizes.length; i += 1) expect(layerSizes[i]).toBeGreaterThanOrEqual(layerSizes[i - 1])
     // Every ramp is a valid left→right window, and later layers start and
     // finish further right so density climbs toward the active stop.
     for (let i = 0; i < layerRamps.length; i += 1) {
@@ -48,15 +64,16 @@ describe("EffortDitherTrack — left→right pixel dissolve", () => {
     expect(layerRamps[layerRamps.length - 1][1]).toBeLessThanOrEqual(1)
     // Ramp stops fade in then hold opaque (gradients keep their last stop).
     for (const [from, to] of layerRamps) {
-      const stops = rampStops(from, to)
-      expect(stops).toEqual([
+      expect(rampStops(from, to)).toEqual([
         [from, 0],
         [to, 1],
       ])
     }
-    // The particle layer holds two cells far apart (not a pair).
-    const [[c1, r1], [c2, r2]] = layers[0]
-    expect(Math.abs(c1 - c2) + Math.abs(r1 - r2)).toBeGreaterThanOrEqual(6)
+    // Color depth tiers: light particles → base violet → deep violet.
+    const last = layerSizes.length - 1
+    expect(depthClass(0)).toContain("effort-dither-px-light")
+    expect(depthClass(last)).toContain("effort-dither-px-deep")
+    expect(depthClass(Math.floor(last / 2))).toBe("effort-dither-px")
   })
 
   it("glows a soft core and glints white sparkles only in the dense right zone", () => {
@@ -78,12 +95,12 @@ describe("EffortDitherTrack — left→right pixel dissolve", () => {
     expect((markup.match(/effort-dither-spark"/g) || []).length).toBe(sparkleSize)
   })
 
-  it("twinkles only sparse layers with deterministic position-derived delays", () => {
+  it("twinkles only light layers with deterministic position-derived delays", () => {
     const { twinkleLayers, twinklePeriodS, twinkleDelayS } = EFFORT_DITHER_SPEC
     expect(twinkleLayers).toBeGreaterThan(0)
     expect(twinkleLayers).toBeLessThan(EFFORT_DITHER_SPEC.layerSizes.length)
     const markup = renderToStaticMarkup(createElement(EffortDitherTrack, { className: "effort-dither" }))
-    const twinkles = [...markup.matchAll(/class="effort-dither-px effort-dither-twinkle"[^>]*style="animation-delay:([\d.]+)s"/g)]
+    const twinkles = [...markup.matchAll(/class="effort-dither-px effort-dither-px-light effort-dither-twinkle"[^>]*style="animation-delay:([\d.]+)s"/g)]
     const expected = EFFORT_DITHER_SPEC.layerSizes
       .slice(0, twinkleLayers)
       .reduce((sum, n) => sum + n, 0)
@@ -103,7 +120,7 @@ describe("EffortDitherTrack — left→right pixel dissolve", () => {
   })
 
   it("keeps pixels square in user space and renders deterministic SVG markup", () => {
-    const { cell, pixel } = EFFORT_DITHER_SPEC
+    const { cell, pixel, tile } = EFFORT_DITHER_SPEC
     expect(pixel).toBeLessThan(cell)
     expect(Number.isInteger(cell) && Number.isInteger(pixel)).toBe(true)
 
@@ -113,16 +130,16 @@ describe("EffortDitherTrack — left→right pixel dissolve", () => {
     expect(first).toContain('patternUnits="userSpaceOnUse"')
     expect(first).toContain('class="effort-dither-base"')
     expect(first).toContain('class="effort-dither-px"')
+    expect(first).toContain("effort-dither-px-light")
+    expect(first).toContain("effort-dither-px-deep")
     expect(first).not.toMatch(/<image|data:image/)
-    // Seven pixel layers + sparkles, each behind its own pattern; one mask per
-    // layer plus the core and sparkle masks.
+    // One pattern per pixel layer + the sparkle pattern; one mask per layer
+    // plus the core and sparkle masks.
     expect((first.match(/<pattern /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 1)
     expect((first.match(/<mask /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 2)
     // Every pixel rect is exactly `pixel` wide/tall (violet or sparkle).
-    const sizes = [...first.matchAll(/class="effort-dither-(?:px(?: effort-dither-twinkle)?|spark)"(?: style="[^"]*")? x="[\d.]+" y="[\d.]+" width="(\d+)" height="(\d+)"/g)]
-    expect(sizes.length).toBe(
-      EFFORT_DITHER_SPEC.tile.cols * EFFORT_DITHER_SPEC.tile.rows + EFFORT_DITHER_SPEC.sparkleSize,
-    )
+    const sizes = [...first.matchAll(/class="effort-dither-(?:px(?: effort-dither-px-(?:light|deep))?(?: effort-dither-twinkle)?|spark)"(?: style="[^"]*")? x="[\d.]+" y="[\d.]+" width="(\d+)" height="(\d+)"/g)]
+    expect(sizes.length).toBe(tile.cols * tile.rows + EFFORT_DITHER_SPEC.sparkleSize)
     for (const [, w, h] of sizes) {
       expect(Number(w)).toBe(pixel)
       expect(Number(h)).toBe(pixel)
