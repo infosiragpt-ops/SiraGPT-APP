@@ -90,7 +90,9 @@ is documented in `docs/rlhf-phase3-feedback-rlaif.md`.
 Admin SFT/DPO prep jobs (still no paid auto-train) are documented in
 `docs/rlhf-phase3-train-pipeline.md`.
 
+Dashboard + historical backfill: `docs/rlhf-phase3.md`.
+
 ## Out of scope (later lotes)
 
-Admin dashboard UI, enabling best-of-N by default, a hidden aggregator
-fallback, and any `/code` surface.
+Enabling best-of-N by default, a hidden aggregator fallback, and any
+`/code` surface.

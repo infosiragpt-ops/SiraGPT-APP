@@ -135,6 +135,6 @@ similar follow-up ask, `phase2.steering.applied` (admin) increments and
 
 ## Phase 3
 
-Admin-triggered SFT/DPO **prep** jobs (flagged off, artifact JSONL only)
-live in `docs/rlhf-phase3-train-pipeline.md`. The admin dashboard UI is
-still a later lote.
+Admin-triggered SFT/DPO **prep** jobs live in
+`docs/rlhf-phase3-train-pipeline.md`. Dashboard, backfill and daily cron:
+`docs/rlhf-phase3.md`.
