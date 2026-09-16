@@ -44,6 +44,21 @@ function isPromptEnabled(env = process.env) {
   return !envFlagOff(env.SIRAGPT_RLCD_PROMPT);
 }
 
+/**
+ * Apply ECE-suggested defer threshold. Default OFF — prod keeps the
+ * static env value unless an operator opts in after watching stats.
+ */
+function isAutoThresholdEnabled(env = process.env) {
+  if (!isDocumentEnabled(env)) return false;
+  return envFlagOn(env.SIRAGPT_RLCD_AUTO_THRESHOLD);
+}
+
+function minAutoSamples(env = process.env) {
+  const n = Number(env.SIRAGPT_RLCD_AUTO_THRESHOLD_MIN_N);
+  if (!Number.isFinite(n)) return 20;
+  return Math.min(200, Math.max(8, Math.floor(n)));
+}
+
 module.exports = {
   isDocumentEnabled,
   // Back-compat alias used by older document-only callers.
@@ -52,6 +67,8 @@ module.exports = {
   maxDeferRate,
   isPhraseEnabled,
   isPromptEnabled,
+  isAutoThresholdEnabled,
+  minAutoSamples,
   DEFAULT_DEFER_THRESHOLD,
   DEFAULT_MAX_DEFER_RATE,
 };

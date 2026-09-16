@@ -4,7 +4,13 @@
     "prompt": "cuál es el total",
     "files": [{ "name": "empty.pdf", "extractedText": "" }],
     "answer": "El total es 999 millones según el anexo. <!--rlcd:{\"c\":0.95,\"r\":\"seguro\"}-->",
-    "expect": { "maxConfidence": 0.35, "deferred": true, "threshold": 0.45 }
+    "expect": {
+      "maxConfidence": 0.35,
+      "deferred": true,
+      "threshold": 0.45,
+      "matchText": "sección o página",
+      "notScary": true
+    }
   },
   {
     "id": "grounded-high-trailer",
@@ -19,5 +25,74 @@
     "files": [{ "name": "tesis.docx", "extractedText": "Objetivo: medir X. Método: encuesta." }],
     "answer": "El autor es García (2019) y ganó el Nobel. Publicó el hallazgo en Nature. <!--rlcd:{\"c\":0.9,\"r\":\"sé\"}-->",
     "expect": { "hasInferred": true, "maxConfidence": 0.75, "threshold": 0.05 }
+  },
+  {
+    "id": "weak-rag-scores",
+    "prompt": "cuál es el total",
+    "files": [{ "name": "tesis.docx", "extractedText": "Objetivo: medir X. Método: encuesta." }],
+    "hits": [
+      { "text": "nota al pie irrelevante", "score": 0.08, "page": 19 }
+    ],
+    "answer": "El total facturado es 999 millones. <!--rlcd:{\"c\":0.88,\"r\":\"rag\"}-->",
+    "expect": {
+      "maxConfidence": 0.7,
+      "weakRetrieval": true,
+      "threshold": 0.2
+    }
+  },
+  {
+    "id": "strong-rag-page-cite",
+    "prompt": "cuál es el objetivo",
+    "files": [{ "name": "tesis.docx", "extractedText": "Objetivo: medir X. Método: encuesta. Resultados: 12%." }],
+    "hits": [
+      { "text": "Objetivo: medir X.", "score": 0.91, "page": 4, "title": "tesis" }
+    ],
+    "answer": "Según la página 4, el objetivo es medir X. <!--rlcd:{\"c\":0.78,\"r\":\"cita\"}-->",
+    "expect": {
+      "minConfidence": 0.78,
+      "pageCited": true,
+      "minRetrievalScore": 0.8,
+      "deferred": false,
+      "threshold": 0.2
+    }
+  },
+  {
+    "id": "defer-asks-candidate-page",
+    "prompt": "cuál es el total",
+    "files": [{ "name": "empty.pdf", "extractedText": "" }],
+    "hits": [
+      { "text": "anexo de cifras", "score": 0.22, "page": 12 }
+    ],
+    "answer": "El total es 999. <!--rlcd:{\"c\":0.2,\"r\":\"no esta\"}-->",
+    "expect": {
+      "deferred": true,
+      "threshold": 0.45,
+      "hasPageHint": true,
+      "matchText": "página 12",
+      "notScary": true
+    }
+  },
+  {
+    "id": "coding-turn-untouched",
+    "agent": "coding",
+    "prompt": "dame la web en local",
+    "files": [],
+    "answer": "Preview listo en http://127.0.0.1:5173",
+    "expect": {
+      "unchanged": true,
+      "deferred": false,
+      "reason": "not_document"
+    }
+  },
+  {
+    "id": "already-honest-no-double-defer",
+    "prompt": "cuál es el total",
+    "files": [{ "name": "tesis.docx", "extractedText": "Objetivo: medir X." }],
+    "answer": "No veo ese dato. ¿Me indicas la sección o página? <!--rlcd:{\"c\":0.2,\"r\":\"falta\"}-->",
+    "expect": {
+      "deferred": false,
+      "reason": "already_honest",
+      "threshold": 0.9
+    }
   }
 ]

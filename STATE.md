@@ -115,12 +115,14 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
   Docs: `docs/rlhf-phase3.md`.
 - **RLCD documentos (calibrated decisions):** slice flag-gated
   (`SIRAGPT_RLCD_DOCUMENTS`, default off) sobre análisis documental:
-  confianza estructurada, blend de evidencia (extracto/RAG/citas),
-  claims supported/inferred, defer si está baja, Brier/ECE ponderado
-  desde 👍/👎 / regenerate. Independiente del ledger #722
-  (`SIRAGPT_RLCD_ENABLED`, default on). Sin migración Prisma (vive en
-  `metadata.rlcd` + `judgeScore.rlcd`). Docs: `docs/rlhf-rlcd-documents.md`
-  + `docs/rlcd.md`. No es el paper ICLR de contrastive distillation.
+  confianza estructurada, blend de evidencia (extracto/RAG scores/páginas),
+  claims supported/inferred, defer en español pidiendo sección/página,
+  Brier/ECE ponderado desde 👍/👎 / regenerate, umbral sugerido por ECE
+  (`SIRAGPT_RLCD_AUTO_THRESHOLD` default off). Independiente del ledger
+  #722 (`SIRAGPT_RLCD_ENABLED`, default on). Sin migración Prisma (vive
+  en `metadata.rlcd` + `judgeScore.rlcd`). Docs:
+  `docs/rlhf-rlcd-documents.md` + `docs/rlcd.md`. No es el paper ICLR
+  de contrastive distillation.
 
 - **F0**: `ROADMAP.md` + `STATE.md` en la raíz, aprobados.
 - **AgentRunner v0** en `backend/src/services/agent-runner/`: loop LLM→tool→result→LLM

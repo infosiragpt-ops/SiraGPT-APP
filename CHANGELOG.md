@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- RLCD document analysis phase 3: retrieval-score + page-citation
+  evidence, warmer Spanish defer (ask for section/page, candidate pages
+  from RAG), expanded offline eval harness
+  (`backend/tests/fixtures/document-rlcd-eval.json`), and a
+  recommended defer threshold on `/api/rlcd` → `documents` (applied
+  only if `SIRAGPT_RLCD_AUTO_THRESHOLD` is on). Code default for
+  `SIRAGPT_RLCD_DOCUMENTS` stays off. See
+  `docs/rlhf-rlcd-documents.md`.
 - RLCD document analysis phase 2: evidence-aware confidence (extract /
   RAG coverage + citations), per-claim supported vs inferred labels,
   weighted regenerate outcomes, contrastive `format=rlcd` export, and

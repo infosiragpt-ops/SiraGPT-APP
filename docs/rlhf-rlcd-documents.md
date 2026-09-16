@@ -47,12 +47,13 @@ document turn
          ├─ generate (existing RAG / react-agent / fidelity paths)
          ├─ parse trailer or verbalized hedges or heuristic
          ├─ evidence blend: extract / RAG coverage, citations, empty extract
+         ├─ retrieval scores + page locators from RAG / docintel hits
          ├─ claims: each sentence → supported | inferred
          ├─ if confidence < threshold (and defer-rate cap allows)
-         │     defer: Spanish clarifying question / ask for page
-         │     instead of inventing
+         │     defer: warm Spanish ask for section/page (candidate
+         │     pages from hits when known). No scare copy.
          └─ persist message.metadata.rlcd
-              { v:2, confidence, rawConfidence, bin, deferred, evidence, claims }
+              { v:3, confidence, rawConfidence, bin, deferred, evidence, claims }
 
 user 👍 / 👎 / regenerate
     └─ record outcome against the stored (or re-parsed) confidence
@@ -73,6 +74,8 @@ Do **not** flip these on in the Lenovo `.env` from this PR.
 | `SIRAGPT_RLCD_MAX_DEFER_RATE` | `0.25` | Cap of document turns that may defer in this process (0–1) |
 | `SIRAGPT_RLCD_PROMPT` | on (when documents on) | `0` / `off` skips the hidden-trailer contract |
 | `SIRAGPT_RLCD_PHRASE` | on (when documents on) | `0` / `off` skips the compact “Confianza baja/media” line |
+| `SIRAGPT_RLCD_AUTO_THRESHOLD` | **off** | When on **and** there are enough labeled outcomes, use the ECE-suggested defer threshold. Code default stays off. Do not flip from this PR. |
+| `SIRAGPT_RLCD_AUTO_THRESHOLD_MIN_N` | `20` | Minimum labeled document outcomes before a suggested threshold is usable (8–200) |
 
 Independent of `SIRAGPT_RLHF_*` **and** of the #722 decision ledger
 (`SIRAGPT_RLCD_ENABLED`, default on — `docs/rlcd.md`). You can leave
@@ -93,6 +96,9 @@ Exposed on `GET /api/rlhf/stats` as `rlcd`:
 - `overconfidenceRate` — high-bin answers that were wrong
 - `claimSupportRate`, `evidenceQuality` — means over labeled turns
 - `deferRate`, `documentTurns`, `deferred`, `scored`
+- `recommendedThreshold`, `thresholdAdvice`, `thresholdDelta`,
+  `autoThreshold`, `effectiveThreshold` — ECE/overconfidence suggestion
+  (applied only when `SIRAGPT_RLCD_AUTO_THRESHOLD` is on)
 
 `GET /api/rlhf/export?format=rlcd` emits contrastive document pairs
 `{ prompt, chosen, rejected, chosen_confidence, rejected_confidence, overconfident_reject }`
@@ -106,7 +112,8 @@ rehydrate later without a new table.
 
 This slice does **not** add columns or tables.
 
-- **Inference:** `Message.metadata.rlcd` = `{ v:2, confidence, rawConfidence, bin, source, deferred, reason, adjusted, evidence, claims }`
+- **Inference:** `Message.metadata.rlcd` = `{ v:3, confidence, rawConfidence, bin, source, deferred, reason, adjusted, evidence, claims }`
+  (`evidence` may include `retrievalScore`, `pages`, `pageCited`)
 - **Outcomes:** `preference_events.judgeScore.rlcd` merged with existing RLAIF
   HHH scores (`mergeJudgeScore`). GDPR scrub of preference text is unchanged.
 
@@ -155,6 +162,31 @@ Deepens document calibration without touching the #722 ledger flag:
    `rlcd` and `/api/rlcd` → `documents` objects.
 
 Eval fixtures: `backend/tests/fixtures/document-rlcd-eval.json`.
+Runner: `rlcd.runDocumentEval()` / `rlcd/eval-harness.js` (offline, no GPU).
+
+## Phase 3 (after #721 + #723)
+
+Tightens calibration now that `SIRAGPT_RLCD_DOCUMENTS` may be on in prod.
+Code default remains **off**. This PR does not change `.env`.
+
+1. **Retrieval-aware evidence** — RAG / docintel hit `score` /
+   `rerankScore` / `similarity` and page locators (`page`, `pageNumber`,
+   `locator`, or a page mark in the snippet) blend into quality.
+   An answer that cites a retrieved page gets a small lift; a weak top
+   hit with low overlap pulls confidence down.
+2. **Spanish defer UX** — ask for the section or page in warm copy.
+   Candidate pages from hits are offered (“¿Es la página 12?”).
+   Invented high-trailer answers are replaced, not shown next to a
+   warning. No “afirmar con seguridad” / “inventar”.
+3. **Eval harness** — expanded fixtures (empty extract, grounded,
+   inferred, weak RAG, page cite, page-hint defer, coding-turn gate,
+   already-honest). `runDocumentEval` reports per-case pass/fail.
+4. **Suggested threshold** — `GET /api/rlcd/stats` → `documents` exposes
+   `recommendedThreshold` from ECE / overconfidence. Applied only if
+   `SIRAGPT_RLCD_AUTO_THRESHOLD` is on and `n ≥` min samples.
+
+Coding / local-preview turns stay untouched: `finalizeAnswer` no-ops
+when `agent` is present and not `document`.
 
 ## Rollout
 
