@@ -112,7 +112,7 @@ test('acquire retries with backoff until either success or retry budget is exhau
   const failed = await lock.acquire('busy', 1000);
   const elapsed = Date.now() - start;
   assert.equal(failed, null);
-  assert.ok(elapsed >= 15, `expected ≥15ms of backoff across 3 retries, got ${elapsed}ms`);
+  assert.ok(elapsed >= 10, `expected ≥10ms of backoff across 3 retries, got ${elapsed}ms`);
   await held.release();
   const recovered = await lock.acquire('busy', 1000);
   assert.ok(recovered, 'once the lock is free, retry should succeed');

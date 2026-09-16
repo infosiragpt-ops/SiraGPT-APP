@@ -1798,6 +1798,8 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 
       // RLHF: a regenerate is a revealed preference that the prior answer
       // for this prompt was worse. Fail-open, never blocks the save path.
+      // Logs go through persistenceLog — saveChatAndTrackUsage must not
+      // call console.* (ai-generate-log-safety).
       if (regenerate && userId && assistantMessage?.id) {
         setImmediate(() => {
           try {
@@ -1811,9 +1813,9 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
               messageId: assistantMessage.id,
               agent: 'chat',
               embedder: texts => rag.embed(texts),
-            }).catch((e) => console.warn('[ai] rlhf regenerate ingest failed:', e?.message || e));
+            }).catch((e) => persistenceLog.warnError('rlhf.regenerate_ingest_failed', e));
           } catch (e) {
-            console.warn('[ai] rlhf regenerate ingest skipped:', e?.message || e);
+            persistenceLog.warnError('rlhf.regenerate_ingest_skipped', e);
           }
         });
       }
