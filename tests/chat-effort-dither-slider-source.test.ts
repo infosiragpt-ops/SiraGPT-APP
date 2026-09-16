@@ -27,7 +27,7 @@ describe("effort slider — left→right pixel-dissolve contract", () => {
     assert.match(ditherTrack, /<mask[\s\S]{0,120}maskUnits="userSpaceOnUse"/, "masks resolve against the full track")
     assert.doesNotMatch(ditherTrack, /<image|\.png|\.jpg|\.webp|data:image/i, "the effect must be generated, not a static image")
     assert.match(ditherTrack, /shape-rendering|effort-dither-px/, "pixel rects carry the crisp-edge class")
-    assert.match(ditherTrack, /mulberry32|Fisher|seed/i, "cell ordering must be seeded so SSR and client markup match")
+    assert.match(ditherTrack, /BAYER_4x4|bayerValue/, "cell ordering uses a Bayer matrix: a deterministic halftone, not random scatter")
     assert.match(ditherTrack, /psparkle/, "a dedicated white-sparkle pattern glints in the dense zone")
     assert.match(ditherTrack, /msparkle/, "the sparkles are masked to the dense right zone")
   })
@@ -47,7 +47,7 @@ describe("effort slider — left→right pixel-dissolve contract", () => {
     const section = ruleBody(".effort-section")
     assert.match(section, /--effort-violet: hsl\(25\d /, "the dissolve resolves to violet")
     assert.match(section, /--effort-rail: hsl\(257 62% 93%\)/, "both rail ends stay pale lavender")
-    assert.match(section, /--effort-rail-h: 1rem;/, "thin rail")
+    assert.match(section, /--effort-rail-h: 0\.9375rem;/, "thin rail")
 
     const track = ruleBody(".effort-track")
     assert.match(track, /border-radius: 999px;/)
@@ -64,7 +64,7 @@ describe("effort slider — left→right pixel-dissolve contract", () => {
     assert.ok(!globals.includes(".effort-thumb"), "no dial CSS may linger")
     assert.ok(!globals.includes(".effort-stop::after"), "no stop dots may linger")
 
-    for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".effort-dither-core {", ".effort-dither-spark {", ".dark .effort-section {"]) {
+    for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".effort-dither-px-light {", ".effort-dither-px-deep {", ".effort-dither-core {", ".effort-dither-spark {", ".dark .effort-section {"]) {
       assert.ok(globals.includes(cls), `${cls} must exist`)
     }
     assert.ok(!globals.includes(".dark .effort-thumb {"), "no dark-mode dial CSS may linger")
@@ -78,11 +78,12 @@ describe("effort slider — living pixels", () => {
     assert.match(ditherTrack, /const TWINKLE_LAYERS = 3/, "dense grid + solid cap stay static")
     assert.match(
       ditherTrack,
-      /className=\{twinkle \? "effort-dither-px effort-dither-twinkle" : "effort-dither-px"\}/,
+      /`\$\{cls\} effort-dither-twinkle`/,
+      "the shimmer class rides on top of the layer's depth class",
     )
     assert.match(
       ditherTrack,
-      /style=\{twinkle \? \{ animationDelay: `\$\{twinkleDelayS\(col, row\)\.toFixed\(2\)\}s` \} : undefined\}/,
+      /animationDelay: `\$\{twinkleDelayS\(col, row\)\.toFixed\(2\)\}s`/,
       "delays come from grid position so the shimmer travels as a wave",
     )
     assert.match(

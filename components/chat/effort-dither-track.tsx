@@ -3,45 +3,58 @@
 /**
  * Dithered pixel-dissolve fill for the effort slider.
  *
- * Pure SVG — no raster asset. A cloud of small square "pixels" grows from
- * pale, isolated particles at the left into a dense violet grid toward the
- * right, so the filled part always gets stronger as it approaches the active
- * stop and reads as a full bar at Max.
+ * Pure SVG — no raster asset. A cloud of tiny square "pixels" grows from pale,
+ * isolated particles on the left into a dense violet grid toward the right,
+ * so the filled part always gets stronger as it approaches the active stop
+ * and reads as a full bar at Max.
+ *
+ * Advanced treatment:
+ *   • Finer grid: 2 px pixels on a 3 px cell (10×5 tile) for a delicate,
+ *     designed texture instead of coarse noise.
+ *   • Ordered dissolve: cells are sorted by a Bayer matrix, so the density
+ *     ramps wear the classic halftone pattern professionals use — a regular,
+ *     intentional texture rather than random scatter.
+ *   • Color depth: three violet tones — light particles in the sparse zone,
+ *     the base violet in the body, and a deeper violet in the dense zone —
+ *     layered over a gradient under-glow.
+ *   • Ten overlapped left→right ramp masks: each layer fades in over its own
+ *     window and stays opaque, giving a silky (not bandy) gradient.
+ *   • White sparkles glint only in the dense zone.
+ *
+ * "Muy avanzada": how it looks like a designed professional control.
  *
  * How it is built (all responsive — nothing depends on the rendered width):
  *   • `<pattern patternUnits="userSpaceOnUse">` tiles keep every pixel a true
  *     square whatever the track width is (no viewBox stretching).
- *   • Seven pattern layers hold disjoint subsets of an 8×4 cell tile. Layer 0
- *     is the sparse "particles" layer; each next layer adds more cells so the
- *     cumulative density climbs to a full grid.
- *   • Each layer is masked by a left→right luminance ramp: transparent until
- *     its own start, then fading to fully opaque and staying there. Later
- *     (denser) layers start further right, which makes both the density
- *     (which layers are visible yet) and the opacity (how far into its ramp a
- *     layer is) grow toward the right.
- *   • A soft violet core glows under the dense right side, and a white
- *     sparkle layer glints there too.
  *
- * The cell ordering is a seeded shuffle so SSR and client markup are byte
- * identical and the "particles" never move between renders.
+ * The cell ordering is deterministic (Bayer value primary, position tie-
+ * breaker) so SSR and client markup are byte identical and the "particles"
+ * never move between renders.
  */
 
 import * as React from "react"
 
-const CELL = 4 // px — one grid cell (pixel + gap)
-const PIXEL = 3 // px — the visible square inside a cell
-const TILE_COLS = 8
-const TILE_ROWS = 4
+const CELL = 3 // px — one grid cell (pixel + gap)
+const PIXEL = 2 // px — the visible square inside a cell
+const TILE_COLS = 10
+const TILE_ROWS = 5
 const TILE_W = TILE_COLS * CELL
 const TILE_H = TILE_ROWS * CELL
 
-/** Cells per layer — sums to TILE_COLS × TILE_ROWS (32). */
-const LAYER_SIZES = [3, 4, 5, 5, 5, 5, 5] as const
+/** Cells per layer — one fifth of the tile each (50). */
+const LAYER_SIZES = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5] as const
+
+/** Color tiers per layer index: light particles → base violet → deep violet. */
+function depthClass(index: number): string {
+  if (index < 3) return "effort-dither-px effort-dither-px-light"
+  if (index > 6) return "effort-dither-px effort-dither-px-deep"
+  return "effort-dither-px"
+}
 
 /**
  * Layers whose pixels shimmer. Only the sparse, leftmost layers twinkle — the
- * dense right side, the glow and the sparkles stay rock-stable so the bar
- * keeps reading as a solid control, not a loading spinner.
+ * dense zone, the glow and the sparkles stay rock-stable so the bar keeps
+ * reading as a solid control, not a loading spinner.
  */
 const TWINKLE_LAYERS = 3
 
@@ -67,64 +80,59 @@ function twinkleDelayS(col: number, row: number): number {
  * further right, so density and opacity grow toward the active stop.
  */
 const LAYER_RAMPS: ReadonlyArray<readonly [number, number]> = [
-  [0.0, 0.2], // particles: isolated pixels from the very start
-  [0.05, 0.3],
-  [0.12, 0.42],
-  [0.2, 0.54],
-  [0.28, 0.66],
-  [0.36, 0.78],
-  [0.44, 0.9], // densest grid: completes before the right end
+  [0.0, 0.18], // particles: isolated pixels from the very start
+  [0.06, 0.26],
+  [0.11, 0.34],
+  [0.16, 0.42],
+  [0.21, 0.5],
+  [0.26, 0.58],
+  [0.31, 0.66],
+  [0.36, 0.74],
+  [0.41, 0.82],
+  [0.46, 0.9], // densest grid: completes before the right end
 ]
 
 /** Soft violet core glowing under the dense right side. */
-const CORE_RAMP: readonly [number, number] = [0.45, 0.95]
+const CORE_RAMP: readonly [number, number] = [0.4, 0.95]
 
 /** White sparkles glinting in the dense right zone. */
-const SPARKLE_SIZE = 6
-const SPARKLE_RAMP: readonly [number, number] = [0.6, 0.92]
+const SPARKLE_SIZE = 5
+const SPARKLE_RAMP: readonly [number, number] = [0.55, 0.9]
 
-function mulberry32(seed: number) {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
+/** Bayer matrix disperses cells across the tile in a regular halftone order. */
+const BAYER_4x4: readonly number[] = [
+  0, 8, 2, 10, 12, 4, 14, 6,
+  3, 11, 1, 9, 15, 7, 13, 5,
+]
+function bayerValue(col: number, row: number): number {
+  return BAYER_4x4[(row % 4) * 4 + (col % 4)]
 }
 
 type Cell = readonly [col: number, row: number]
 
 function buildLayers(): Cell[][] {
-  const rand = mulberry32(0x5a1e5)
   const cells: Cell[] = []
   for (let row = 0; row < TILE_ROWS; row += 1) {
     for (let col = 0; col < TILE_COLS; col += 1) cells.push([col, row])
   }
-  // Fisher–Yates with the seeded generator: stable across renders/SSR.
-  for (let i = cells.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(rand() * (i + 1))
-    const tmp = cells[i]
-    cells[i] = cells[j]
-    cells[j] = tmp
-  }
-  // The two "particle" cells must sit far apart so they read as isolated
-  // pixels instead of a pair — pin them to opposite sides of the tile.
-  const particles: Cell[] = [[1, 1], [6, 2]]
-  const rest = cells.filter(([c, r]) => !particles.some(([pc, pr]) => pc === c && pr === r))
-  const ordered = [...particles, ...rest]
+  // Ordered dissolve: Bayer value first, position as tie-breaker, so the
+  // pattern is the classic halftone designed texture, not random scatter.
+  cells.sort((a, b) => {
+    const bDiff = bayerValue(a[0], a[1]) - bayerValue(b[0], b[1])
+    if (bDiff !== 0) return bDiff
+    return a[0] - b[0] || a[1] - b[1]
+  })
   const layers: Cell[][] = []
   let cursor = 0
   for (const size of LAYER_SIZES) {
-    layers.push(ordered.slice(cursor, cursor + size))
+    layers.push(cells.slice(cursor, cursor + size))
     cursor += size
   }
   return layers
 }
 
 const LAYERS = buildLayers()
-/** Sparkle cells ride on the dense core layers — deterministic, centre-masked. */
+/** Sparkle cells ride on the densest two layers — deterministic, centre-masked. */
 const SPARKLE_CELLS = [...LAYERS[LAYERS.length - 1], ...LAYERS[LAYERS.length - 2]].slice(0, SPARKLE_SIZE)
 const INSET = (CELL - PIXEL) / 2
 
@@ -149,14 +157,23 @@ function RampGradient({ id: gid, from, to }: { id: string; from: number; to: num
   )
 }
 
-function PixelCells({ cells, twinkle }: { cells: Cell[]; twinkle: boolean }) {
+function PixelCells({ cells, layerIndex }: { cells: Cell[]; layerIndex: number }) {
+  const cls = depthClass(layerIndex)
   return (
     <>
       {cells.map(([col, row]) => (
         <rect
           key={`${col}-${row}`}
-          className={twinkle ? "effort-dither-px effort-dither-twinkle" : "effort-dither-px"}
-          style={twinkle ? { animationDelay: `${twinkleDelayS(col, row).toFixed(2)}s` } : undefined}
+          className={
+            layerIndex < TWINKLE_LAYERS
+              ? `${cls} effort-dither-twinkle`
+              : cls
+          }
+          style={
+            layerIndex < TWINKLE_LAYERS
+              ? { animationDelay: `${twinkleDelayS(col, row).toFixed(2)}s` }
+              : undefined
+          }
           x={col * CELL + INSET}
           y={row * CELL + INSET}
           width={PIXEL}
@@ -189,7 +206,7 @@ export function EffortDitherTrack({ className }: { className?: string }) {
             height={TILE_H}
             patternUnits="userSpaceOnUse"
           >
-            <PixelCells cells={cells} twinkle={index < TWINKLE_LAYERS} />
+            <PixelCells cells={cells} layerIndex={index} />
           </pattern>
         ))}
         <pattern
@@ -239,7 +256,7 @@ export function EffortDitherTrack({ className }: { className?: string }) {
       <rect className="effort-dither-base" width="100%" height="100%" />
       {/* Soft violet core glowing under the dense right side. */}
       <rect className="effort-dither-core" width="100%" height="100%" mask={`url(#${id("mcore")})`} />
-      {/* Pixel layers — sparse particles first, full grid last. */}
+      {/* Pixel layers — light particles first, deep violet grid last. */}
       {LAYERS.map((_, index) => (
         <rect
           key={`l${index}`}
@@ -268,6 +285,7 @@ export const EFFORT_DITHER_SPEC = Object.freeze({
   pixel: PIXEL,
   tile: Object.freeze({ cols: TILE_COLS, rows: TILE_ROWS, width: TILE_W, height: TILE_H }),
   layerSizes: LAYER_SIZES,
+  depthClass,
   layerRamps: LAYER_RAMPS,
   coreRamp: CORE_RAMP,
   sparkleSize: SPARKLE_SIZE,
@@ -275,6 +293,7 @@ export const EFFORT_DITHER_SPEC = Object.freeze({
   layers: LAYERS,
   sparkleCells: SPARKLE_CELLS,
   rampStops,
+  bayerValue,
   twinkleLayers: TWINKLE_LAYERS,
   twinklePeriodS: TWINKLE_PERIOD_S,
   twinkleDelayS,
