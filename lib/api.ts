@@ -964,6 +964,11 @@ export interface VoiceStudioJob {
   finishedAt: string | null;
 }
 
+export type DocumentEditStreamEvent =
+  | { type: 'start'; streamId: string }
+  | { type: 'stage'; label: string; detail?: string }
+  | { type: 'done'; ok: boolean; code?: string; content: string; files: any[]; assistantMessageId: string | null; chatId: string }
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -3719,6 +3724,35 @@ class ApiClient {
       // second audio file after the first provider call already succeeded.
       maxRetries: 0,
     });
+  }
+
+  /**
+   * Edit the attached (or latest) document of a chat with the picked model.
+   * Streams progress stages and ends with one `done` event carrying the
+   * persisted answer and the edited file cards. Never retried: the server
+   * keeps working after a dropped socket and persists the result itself.
+   */
+  async editDocumentStream(
+    data: { prompt: string; chatId: string; fileIds: string[]; model: string; provider: string; streamId: string; idempotencyKey: string; permission?: string },
+    onEvent: (event: DocumentEditStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    // Same picker pinning as generateAIStream: the model the user chose reaches the server unchanged.
+    const locked = pinGenerateRequest({ model: data.model, provider: data.provider });
+    const response = await this.authenticatedFetch(`${this.baseURL}/ai/document-edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, provider: locked.provider, model: clampDeepSeekModel(locked.model) || locked.model }),
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      let details: any = {};
+      try { details = await response.json(); } catch { /* non-JSON error body */ }
+      throw new Error(details.message || details.error || `HTTP ${response.status}`);
+    }
+    for await (const event of streamSseJson<DocumentEditStreamEvent>(response.body, { signal })) {
+      if (event && typeof event === 'object' && typeof (event as { type?: unknown }).type === 'string') onEvent(event);
+    }
   }
 
   async generateMusicMessage(data: {

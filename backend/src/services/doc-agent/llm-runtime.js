@@ -202,4 +202,5 @@ module.exports = {
   resolveDocAgentCandidates,
   isFailoverError,
   createFailoverClient,
+  defaultCreateClient,
 };

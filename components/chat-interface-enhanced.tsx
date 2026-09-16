@@ -257,8 +257,8 @@ import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialA
 import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
 import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
-import { DOCUMENT_SANDBOX_NEED_ORIGINAL, historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
-import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
+import { historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
+import { useDocumentEditorChat } from "@/lib/use-document-editor-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { agentsHomeHref, conversationIdFromLocation } from "@/lib/agents-home-path"
@@ -5954,8 +5954,8 @@ function ChatInterfaceContent() {
     }
   }, [syncActiveLocalJobs]);
 
-  const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentSandboxChat({
-    currentChat, userId: user?.id || null, selectedModel, setCurrentChat, selectChat,
+  const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentEditorChat({
+    currentChat, userId: user?.id || null, selectedModel, selectProvider, setCurrentChat, selectChat,
     markBusy: markLocalJobBusy, markIdle: markLocalJobIdle, notify: (message) => toast.error(message),
   });
 
@@ -10181,20 +10181,16 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
-    const sandboxDecision = resolveDocumentSandboxAdmission(msg, {
-      attachments: composerFiles,
-      historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
-      previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
-      wordHtml: isWordConnectorActive
-        ? (wordConnectorRef.current?.getHTML() || (currentChat as { wordContent?: string } | null)?.wordContent || "")
-        : "",
-      connectorOpen: Boolean(isWordConnectorActive || isExcelConnectorActive),
-    });
-    if (sandboxDecision.route === "need_original") {
-      toast.error(DOCUMENT_SANDBOX_NEED_ORIGINAL);
-      inFlightSendKeysRef.current.delete(sendKey);
-      return;
-    }
+    // Document editor admission: the picked model edits the attached document,
+    // or the latest one of this chat on a follow-up. The Word/Excel connectors
+    // keep editing their own open document.
+    const sandboxDecision = isWordConnectorActive || isExcelConnectorActive
+      ? { route: null, attachments: [] }
+      : resolveDocumentSandboxAdmission(msg, {
+        attachments: composerFiles,
+        historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+        previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      });
     if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
       setInput("");
       setSelectedMentionIds([]);
@@ -10218,7 +10214,9 @@ But first, you need to connect your Spotify account securely using the button be
           if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
         })) markQueuedSendSucceeded();
       } catch (error) {
-        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        if (!documentPreflight.signal.aborted) {
+          toast.error(error instanceof Error && error.message ? error.message : "No se pudo iniciar la edición del documento. El original no se modificó.");
+        }
         if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
           setInput(msg);
           uploadedFilesRef.current = composerFiles;
@@ -10682,7 +10680,9 @@ REWRITTEN TEXT:`;
           if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
         })) markQueuedSendSucceeded();
       } catch (error) {
-        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        if (!documentPreflight.signal.aborted) {
+          toast.error(error instanceof Error && error.message ? error.message : "No se pudo iniciar la edición del documento. El original no se modificó.");
+        }
         // Preserve the user's draft when preflight rejects a model, permission or input.
         if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
           setInput(msg);
