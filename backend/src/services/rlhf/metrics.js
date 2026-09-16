@@ -50,6 +50,13 @@ function freshState() {
       lastCount: 0,
       lastBytes: 0,
     },
+    implicit: {
+      total: 0,
+      byKind: Object.create(null),
+      byCode: Object.create(null),
+      lastKind: null,
+      lastCode: null,
+    },
   };
 }
 
@@ -137,6 +144,22 @@ function recordExport({ format, count = 0, bytes = 0 } = {}) {
   }
 }
 
+/**
+ * Implicit (no-thumb) RLHF signal: a provider failure, a TTFB abort or any
+ * other outcome the software observed on its own and fed to routing-feedback.
+ */
+function recordImplicitSignal({ kind, code } = {}) {
+  try {
+    state.implicit.total += 1;
+    capLabel(state.implicit.byKind, kind || 'unknown', 1, 8);
+    capLabel(state.implicit.byCode, code || 'unknown', 1, 16);
+    state.implicit.lastKind = kind ? String(kind).slice(0, 32) : null;
+    state.implicit.lastCode = code ? String(code).slice(0, 48) : null;
+  } catch {
+    /* telemetry must never throw */
+  }
+}
+
 function snapshot() {
   const lookups = state.exemplars.lookups;
   const steeringTotal = state.steering.applied + state.steering.skipped;
@@ -175,6 +198,13 @@ function snapshot() {
       lastCount: state.exports.lastCount,
       lastBytes: state.exports.lastBytes,
     },
+    implicit: {
+      total: state.implicit.total,
+      byKind: { ...state.implicit.byKind },
+      byCode: { ...state.implicit.byCode },
+      lastKind: state.implicit.lastKind,
+      lastCode: state.implicit.lastCode,
+    },
   };
 }
 
@@ -212,6 +242,11 @@ function toPrometheusText() {
     Object.entries(s.exports.byFormat).map(([k, v]) => [`format="${esc(k)}"`, v]));
   push('sira_rlhf_export_last_bytes', 'Byte size of the last export payload', 'gauge', [['', s.exports.lastBytes]]);
   push('sira_rlhf_export_last_count', 'Row count of the last export payload', 'gauge', [['', s.exports.lastCount]]);
+  push('sira_rlhf_implicit_signals_total', 'Implicit RLHF signals fed to routing-feedback (provider failures, TTFB aborts)', 'counter', [['', s.implicit.total]]);
+  push('sira_rlhf_implicit_signal_kind', 'Implicit RLHF signals by kind', 'counter',
+    Object.entries(s.implicit.byKind).map(([k, v]) => [`kind="${esc(k)}"`, v]));
+  push('sira_rlhf_implicit_signal_code', 'Implicit RLHF signals by failure code', 'counter',
+    Object.entries(s.implicit.byCode).map(([k, v]) => [`code="${esc(k)}"`, v]));
   if (s.rm.lastScore != null) {
     push('sira_rlhf_rm_last_score', 'Most recent RM score', 'gauge', [['', s.rm.lastScore]]);
   }
@@ -228,6 +263,7 @@ module.exports = {
   recordSteering,
   recordRmScore,
   recordExport,
+  recordImplicitSignal,
   snapshot,
   phase2Stats,
   toPrometheusText,

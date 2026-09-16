@@ -58,6 +58,34 @@ Regenerate already records `regenerated` on the generate path. All three
 are no-ops without a model id in message metadata. Intelligent routing
 already consumes `penaltyProvider`; this only feeds outcomes.
 
+### Implicit signals (no thumb needed)
+
+The software also learns from turns that fail on their own. When the
+plain generate stream ends in a provider failure, `aiService.generateStream`
+calls the route's `onProviderFailure` and `rlhf/routing-bridge`
+`recordFromProviderFailure` records:
+
+| Generate outcome | Code | routing-feedback outcome |
+|------------------|------|--------------------------|
+| «Conexión no disponible» on a picked model (empty completion, 4xx/5xx) | `connection_unavailable` / `sira_mini_unavailable` | `provider_failure` |
+| Generic fallback note, nothing streamed | `provider_fallback` | `provider_failure` |
+| Stream cut after partial text | `partial_stream` | `provider_failure` |
+| First-byte watchdog aborted the turn | `ttfb_abort` | `ttfb_abort` |
+
+Both outcomes weigh like a 👎 for that (intent, difficulty, model)
+signature, so a model that keeps failing on a task type gets deprioritized
+by intelligent routing. No `preference_events` row is written: a failed
+turn has no answer text worth training the reward model on. Counters:
+`sira_rlhf_implicit_signals_total`, `sira_rlhf_implicit_signal_kind`,
+`sira_rlhf_implicit_signal_code` (also under `implicit` in
+`GET /api/rlhf/stats` for admins). The generate privacy logger emits
+`rlhf.implicit_signal`. Fail-open like the rest of the bridge.
+
+Note: reasoning deltas now count as the provider's first byte for the
+45 s TTFB watchdog (`services/generate-first-byte.js`), so a thinking model
+is no longer aborted mid-trace — that abort used to surface as a spurious
+«Conexión no disponible» and would have polluted this signal.
+
 ## Ops telemetry
 
 No UI. Counters live in `rlhf/metrics.js` (same pattern as

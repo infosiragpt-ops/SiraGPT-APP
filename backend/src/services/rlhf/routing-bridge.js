@@ -86,10 +86,41 @@ function recordFromRegenerate(args) {
   return recordFromUserSignal({ ...args, outcome: 'regenerated', feedback: 'regenerated' });
 }
 
+/**
+ * Implicit negative signal: the software itself saw the turn fail. No thumb
+ * involved. `code` is the public generate error code
+ * (`connection_unavailable`, `sira_mini_unavailable`, `provider_fallback`,
+ * `partial_stream`) or `ttfb_abort` when the first-byte watchdog cut the turn.
+ * Never writes a preference row: there is no answer text worth training on.
+ */
+function outcomeForFailure(code) {
+  const c = String(code || '').toLowerCase().trim();
+  if (!c) return 'provider_failure';
+  if (c === 'ttfb_abort') return 'ttfb_abort';
+  return 'provider_failure';
+}
+
+function recordFromProviderFailure(args) {
+  const a = args && typeof args === 'object' ? args : {};
+  const outcome = outcomeForFailure(a.code);
+  const out = recordFromUserSignal({ ...a, outcome, feedback: null });
+  try {
+    require('./metrics').recordImplicitSignal({
+      kind: outcome,
+      code: a.code || outcome,
+    });
+  } catch {
+    /* telemetry is optional */
+  }
+  return { ...out, outcome: out.recorded ? out.outcome : outcome };
+}
+
 module.exports = {
   extractModel,
   outcomeForFeedback,
+  outcomeForFailure,
   recordFromUserSignal,
   recordFromThumb,
   recordFromRegenerate,
+  recordFromProviderFailure,
 };
