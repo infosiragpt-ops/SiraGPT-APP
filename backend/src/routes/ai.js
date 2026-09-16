@@ -3065,6 +3065,17 @@ router.post(
       try {
         const adTtfb = require('../services/agent-runner/engine-adapter');
         if (typeof adTtfb.abortIfFirstByteOver45s === 'function') {
+          // Reasoning / tool-call deltas count as the provider's first byte:
+          // a thinking model (Grok 4.6, DeepSeek reasoner) that streams its
+          // trace for >45 s must not be aborted into «Conexión no disponible».
+          const { installFirstByteProbe } = require('../services/generate-first-byte');
+          installFirstByteProbe(res, function (at) {
+            if (__firstByteAt == null) __firstByteAt = at;
+            if (__firstByteWatchdog) {
+              try { clearInterval(__firstByteWatchdog); } catch (_) {}
+              __firstByteWatchdog = null;
+            }
+          });
           __firstByteWatchdog = setInterval(function () {
             try {
               const hit = adTtfb.abortIfFirstByteOver45s({
