@@ -134,6 +134,8 @@ export function EffortSection({ selectedEffort, setSelectedEffort, disabled = fa
             onClick={() => moveTo(index)}
           />
         ))}
+        {/* Visible knob (dial): a white dot riding the active stop. */}
+        <span className="effort-knob" data-testid="composer-effort-knob" aria-hidden />
         {/* No visible dial: the pixel cloud's cut position, the header
             readout and the ticks below carry the value. Stops above stay
             invisible hit areas. */}
