@@ -14,6 +14,7 @@
  *   - high_faithfulness  — Phase-2 gate graded the answer A/B.
  *   - honesty_flag       — agentic honesty check found unsupported claims.
  *   - success            — an explicit positive (👍) when available.
+ *   - disliked           — an explicit thumbs-down.
  *
  * Pure + in-memory (bounded). `snapshot()`/`load()` let an operator persist
  * across restarts; deterministic + fully unit-tested. Recording is always safe
@@ -41,6 +42,7 @@ const OUTCOME_WEIGHTS = Object.freeze({
   honesty_flag: { neg: 0.5, pos: 0 },
   high_faithfulness: { neg: 0, pos: 1 },
   success: { neg: 0, pos: 1 },
+  disliked: { neg: 1, pos: 0 },
 });
 
 let store = new Map(); // signature → { attempts, negatives, positives }

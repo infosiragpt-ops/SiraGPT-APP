@@ -24,10 +24,14 @@ const rlaif = require('./rlaif');
 const exporter = require('./export');
 const rewardModel = require('./reward-model');
 const vectors = require('./vectors');
+const steering = require('./steering');
+const metrics = require('./metrics');
+const routingBridge = require('./routing-bridge');
 
 function _reset() {
   store._reset();
   trainer._reset();
+  metrics.reset();
 }
 
 function pushEventIntoLedger(ledger, e) {
@@ -91,6 +95,15 @@ module.exports = {
   rankSamples: policy.rankSamples,
   pickBest: policy.pickBest,
   isBestOfNEnabled: policy.isBestOfNEnabled,
+  // phase-2 steering + telemetry
+  isSteeringEnabled: steering.isSteeringEnabled,
+  buildSteeringBlock: steering.buildSteeringBlock,
+  formatSteeringBlock: steering.formatSteeringBlock,
+  maybeRankSamples: steering.maybeRankSamples,
+  phase2Stats: metrics.phase2Stats,
+  metrics,
+  routingBridge,
+  steering,
   // rlaif
   rlaif,
   // export

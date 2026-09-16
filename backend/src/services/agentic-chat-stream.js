@@ -806,6 +806,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // U3: optional turn-policy snapshot (observe/enforce). Observe mode only
       // attaches telemetry + shadow diffs; never changes tool/routing behaviour.
       turnPolicy = null,
+      // RLHF phase-2 few-shot block (already retrieved by /generate). Empty
+      // string when steering missed or was skipped. Fail-open: never required.
+      preferenceBlock = '',
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -1688,6 +1691,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       attachedDocuments
         ? `\n=== DOCUMENTOS ADJUNTOS POR EL USUARIO (texto ya extraído) ===\nAnaliza este contenido DIRECTAMENTE para responder. NUNCA digas que no tienes acceso al documento ni que el usuario debe reenviarlo: el texto está aquí. Si necesitas más detalle del que aparece (el contenido puede venir recortado), usa \`rag_retrieve\` o \`docintel_*\` sobre estos mismos archivos.\n${attachedDocuments}\n=== FIN DOCUMENTOS ADJUNTOS ===`
         : '',
+      preferenceBlock || '',
       historyForPrompt,
     ].filter(Boolean).join('\n');
 

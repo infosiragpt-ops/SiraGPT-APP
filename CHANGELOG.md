@@ -20,6 +20,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- RLHF phase 2: collected thumbs steer the next chat/agent turn with a
+  compact Spanish few-shot block (`SIRAGPT_RLHF_STEERING`, default on,
+  fail-open, size-capped). Best-of-N stays behind
+  `SIRAGPT_RLHF_BEST_OF_N` (off). Ops counters on `/api/rlhf/stats` and
+  `/metrics`. Thumbs-down also feeds `routing-feedback`. See
+  `docs/rlhf-phase2-steering.md`.
 - CONSTRUIR GitHub PR slice (flag `AGENTES_CODING_V2` stays OFF): from
   `/agentes`, connect GitHub at `/conexiones`, open a repo the user can
   access into an isolated jailed workspace, list/read/write/exec, then

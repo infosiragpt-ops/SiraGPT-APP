@@ -40,6 +40,15 @@ async function scoreCompletion({ prompt, response, embedder, promptEmb, response
   const r = responseEmb || await embedOne(embedder, response);
   if (!p || !r) return { ready: true, score: 0, reason: 'no_embedding' };
   const s = rewardModel.score(trainer.getActive().model, p, r);
+  try {
+    require('./metrics').recordRmScore({
+      score: s,
+      used: true,
+      version: trainer.getActive().version,
+    });
+  } catch {
+    /* telemetry is optional */
+  }
   return {
     ready: true,
     score: s,

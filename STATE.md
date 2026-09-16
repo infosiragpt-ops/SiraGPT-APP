@@ -104,6 +104,11 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
   `/api/rlhf/*`. Best-of-N con RM en inferencia queda detrás de
   `SIRAGPT_RLHF_BEST_OF_N` (off: no multiplica coste de tokens). No es PPO GPU —
   es el loop InstructGPT de producto: recolectar → RM → rerank/export DPO.
+- **RLHF phase 2 (steering):** few-shot de preferencias en `/generate` +
+  `runAgenticChat` (`SIRAGPT_RLHF_STEERING` on, size-capped, fail-open).
+  Telemetría `sira_rlhf_*` en `/api/rlhf/stats` (admin) y `/metrics`.
+  Thumbs 👍/👎 → `routing-feedback` (`success` / `disliked`). Best-of-N
+  sigue off. Docs: `docs/rlhf-phase2-steering.md`.
 
 - **F0**: `ROADMAP.md` + `STATE.md` en la raíz, aprobados.
 - **AgentRunner v0** en `backend/src/services/agent-runner/`: loop LLM→tool→result→LLM
