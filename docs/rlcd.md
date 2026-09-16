@@ -66,10 +66,12 @@ turno. El módulo `backend/src/services/rlcd/`:
 | `SIRAGPT_RLCD_MAX_DECISIONS` | 20000 | Tope de decisiones en memoria (FIFO) |
 
 Otra superficie, **independiente**: análisis documental (`SIRAGPT_RLCD_DOCUMENTS`,
-default off) — trailer de confianza, defer, Brier/ECE sobre 👍/👎 de
-documentos. Ver `docs/rlhf-rlcd-documents.md`. `GET /api/rlcd/stats`
-incluye `documents` con ese snapshot; `GET /api/rlhf/stats` → `rlcd` es
-solo el slice documental.
+default off) — trailer de confianza, evidencia (extracto/RAG/citas), claims
+supported/inferred, defer, Brier/ECE sobre 👍/👎 de documentos. Ver
+`docs/rlhf-rlcd-documents.md`. `GET /api/rlcd/stats` incluye `documents`
+con ese snapshot (phase 2: `byBin`, `overconfidenceRate`, `claimSupportRate`);
+`GET /api/rlhf/stats` → `rlcd` es solo el slice documental. Export
+contrastivo: `GET /api/rlhf/export?format=rlcd`.
 
 Estado en memoria (como `routing-feedback`); `snapshot()/load()` permiten
 persistirlo. Las decisiones también quedan en `messages.metadata.rlcd`, así

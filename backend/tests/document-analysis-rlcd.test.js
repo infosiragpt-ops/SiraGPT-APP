@@ -331,7 +331,7 @@ describe('source contracts', () => {
       'utf8',
     );
     const ai = fs.readFileSync(path.join(__dirname, '../src/routes/ai.js'), 'utf8');
-    for (const event of ['rlcd.prompt_applied', 'rlcd.confidence_scored', 'rlcd.deferred', 'rlcd.skipped']) {
+    for (const event of ['rlcd.prompt_applied', 'rlcd.confidence_scored', 'rlcd.deferred', 'rlcd.skipped', 'rlcd.evidence_adjusted']) {
       assert.match(catalog, new RegExp(`'${event.replace('.', '\\.')}'`));
       assert.match(ai, new RegExp(`generateLog\\.info\\('${event.replace('.', '\\.')}'`));
     }
@@ -352,5 +352,215 @@ describe('fail-open', () => {
     assert.doesNotThrow(() => rlcd.recordFromThumb(null));
     assert.doesNotThrow(() => rlcd.recordFromRegenerate({}));
     assert.doesNotThrow(() => rlcd.stats());
+    assert.doesNotThrow(() => rlcd.exportDocumentPairs(null));
+  });
+});
+
+describe('evidence-aware confidence', () => {
+  it('pulls a high trailer down when the extract is empty', () => {
+    enable({ threshold: 0.45, maxRate: 1, phrase: '0' });
+    const out = rlcd.finalizeAnswer({
+      text: 'El total es 999 millones. <!--rlcd:{"c":0.95,"r":"seguro"}-->',
+      prompt: 'cuál es el total',
+      files: [{ name: 'vacio.pdf', extractedText: '' }],
+      language: 'es',
+    });
+    assert.ok(out.score.rawConfidence >= 0.9);
+    assert.ok(out.score.confidence <= 0.35);
+    assert.equal(out.score.adjusted, true);
+    assert.equal(out.score.evidence.emptyExtract, true);
+    assert.equal(out.deferred, true);
+    assert.equal(out.metadata.v, 2);
+    assert.ok(out.metadata.evidence);
+  });
+
+  it('keeps a grounded trailer when the extract covers the answer', () => {
+    enable({ threshold: 0.2 });
+    const out = rlcd.finalizeAnswer({
+      text: 'El objetivo es medir X.\n<!--rlcd:{"c":0.81,"r":"aparece en metodo"}-->',
+      prompt: 'analiza el documento',
+      files: [docx],
+      language: 'es',
+    });
+    assert.equal(out.score.confidence, 0.81);
+    assert.equal(out.score.adjusted, false);
+    assert.ok(out.score.evidence.quality >= 0.4);
+    assert.ok(out.score.evidence.coverage > 0);
+  });
+
+  it('raises slightly when the answer cites a RAG hit and coverage is high', () => {
+    const score = rlcd.confidence.scoreConfidence({
+      text: 'Según [S1] el objetivo es medir X. <!--rlcd:{"c":0.72,"r":"cita"}-->',
+      files: [docx],
+      hits: [{ text: 'Objetivo: medir X. Método: encuesta. Resultados: 12%.', score: 0.9 }],
+    });
+    assert.equal(score.source, 'structured');
+    assert.equal(score.evidence.cited, true);
+    assert.ok(score.confidence >= 0.72);
+  });
+});
+
+describe('claim grounding', () => {
+  it('labels extract-backed claims supported and invented ones inferred', () => {
+    const analyzed = rlcd.claims.analyzeClaims({
+      text: 'El objetivo es medir X. El autor es García y ganó el Nobel en 2019.',
+      files: [docx],
+    });
+    assert.ok(analyzed.n >= 2);
+    assert.ok(analyzed.supported >= 1);
+    assert.ok(analyzed.inferred >= 1);
+    assert.ok(analyzed.supportRate < 1);
+    const labels = analyzed.items.map((i) => i.label);
+    assert.ok(labels.includes('supported'));
+    assert.ok(labels.includes('inferred'));
+  });
+
+  it('adds a Spanish inferred-claim line when the flag is on', () => {
+    enable({ threshold: 0.05, phrase: '1' });
+    const out = rlcd.finalizeAnswer({
+      text: 'El autor es García y ganó el Nobel. Publicó en Nature. <!--rlcd:{"c":0.88,"r":"sé"}-->',
+      prompt: 'quién es el autor',
+      files: [docx],
+      language: 'es',
+    });
+    assert.ok(out.score.claims.inferred >= 1);
+    assert.match(out.text, /inferid/i);
+    assert.doesNotMatch(out.text, /deepseek|openrouter|model_id/i);
+  });
+});
+
+describe('outcome loop and contrastive pairs', () => {
+  it('weights regenerate of a high-confidence prior as overconfidence', () => {
+    enable();
+    const out = rlcd.recordFromRegenerate({
+      agent: 'document',
+      priorResponse: 'Dato falso <!--rlcd:{"c":0.95,"r":"seguro"}-->',
+      priorMetadata: { rlcd: { confidence: 0.95, bin: 'high', source: 'structured' } },
+    });
+    assert.equal(out.recorded, true);
+    assert.equal(out.weight, 2);
+    const snap = rlcd.documentStats();
+    assert.equal(snap.n, 1);
+    assert.ok(snap.overconfidenceRate === 1);
+    assert.ok(snap.byBin.high.n >= 1);
+  });
+
+  it('exports contrastive document pairs from chosen/rejected rows', () => {
+    enable();
+    const pairs = rlcd.exportDocumentPairs([
+      {
+        agent: 'document',
+        promptHash: 'p1',
+        promptText: 'resume la tesis',
+        label: 'chosen',
+        helpful: true,
+        responseText: 'El objetivo es medir X',
+        judgeScore: { rlcd: { confidence: 0.8, outcome: 'correct' } },
+      },
+      {
+        agent: 'document',
+        promptHash: 'p1',
+        promptText: 'resume la tesis',
+        label: 'rejected',
+        helpful: false,
+        responseText: 'El total es 999',
+        judgeScore: { rlcd: { confidence: 0.91, outcome: 'incorrect' } },
+      },
+      {
+        agent: 'chat',
+        promptHash: 'p1',
+        label: 'chosen',
+        responseText: 'hola',
+      },
+    ]);
+    assert.equal(pairs.length, 1);
+    assert.equal(pairs[0].agent, 'document');
+    assert.equal(pairs[0].overconfidentReject, true);
+    assert.equal(pairs[0].chosenConfidence, 0.8);
+    assert.doesNotMatch(JSON.stringify(pairs), /deepseek|openrouter/i);
+  });
+
+  it('GET-style export format=rlcd emits document pairs only', async () => {
+    enable();
+    const store = require('../src/services/rlhf/preference-store');
+    await store.recordEvent({
+      userId: 'u-rlcd-exp',
+      agent: 'document',
+      source: 'explicit',
+      label: 'chosen',
+      promptText: 'resume la tesis',
+      responseText: 'El objetivo es medir X',
+      judgeScore: { rlcd: { confidence: 0.8, outcome: 'correct' } },
+    });
+    await store.recordEvent({
+      userId: 'u-rlcd-exp',
+      agent: 'document',
+      source: 'explicit',
+      label: 'rejected',
+      promptText: 'resume la tesis',
+      responseText: 'El total es 999',
+      judgeScore: { rlcd: { confidence: 0.91, outcome: 'incorrect' } },
+    });
+    const exporter = require('../src/services/rlhf/export');
+    const out = await exporter.exportData({ userId: 'u-rlcd-exp', format: 'rlcd', scrubPii: true });
+    assert.equal(out.format, 'rlcd');
+    assert.ok(out.count >= 1);
+    const row = JSON.parse(out.ndjson.trim().split('\n')[0]);
+    assert.equal(row.agent, 'document');
+    assert.equal(row.overconfident_reject, true);
+    assert.doesNotMatch(out.ndjson, /deepseek|openrouter|sk-/i);
+  });
+});
+
+describe('eval harness fixtures', () => {
+  it('scores the document RLCD fixture slice', () => {
+    enable({ threshold: 0.45, maxRate: 1, phrase: '0' });
+    const path = require('node:path');
+    const fixtures = require('./fixtures/document-rlcd-eval.json');
+    assert.ok(fixtures.length >= 3);
+    for (const row of fixtures) {
+      const out = rlcd.finalizeAnswer({
+        text: row.answer,
+        prompt: row.prompt,
+        files: row.files,
+        hits: row.hits,
+        language: 'es',
+        threshold: row.expect.threshold,
+      });
+      if (row.expect.maxConfidence != null) {
+        assert.ok(out.score.confidence <= row.expect.maxConfidence, row.id);
+      }
+      if (row.expect.minConfidence != null) {
+        assert.ok(out.score.confidence >= row.expect.minConfidence, row.id);
+      }
+      if (row.expect.deferred != null) {
+        assert.equal(out.deferred, row.expect.deferred, row.id);
+      }
+      if (row.expect.hasInferred) {
+        assert.ok(out.score.claims && out.score.claims.inferred >= 1, row.id);
+      }
+    }
+  });
+});
+
+describe('admin stats stay isolated from the ledger', () => {
+  it('document snapshot does not overwrite ledger reliability', () => {
+    enable();
+    rlcd.recordFromThumb({
+      agent: 'document',
+      helpful: true,
+      response: 'Hallazgo A <!--rlcd:{"c":0.8,"r":"cita"}-->',
+      files: [docx],
+    });
+    const snap = rlcd.stats({ admin: false });
+    assert.equal(snap.enabled, true);
+    assert.ok(Array.isArray(snap.reliability));
+    assert.equal(snap.reliabilityBins, undefined);
+    assert.ok(snap.documents);
+    assert.equal(snap.documents.meaning, 'calibrated_decisions');
+    assert.ok(typeof snap.documents.overconfidenceRate === 'number' || snap.documents.overconfidenceRate === null);
+    const admin = rlcd.stats({ admin: true });
+    assert.ok(admin.documents.byBin);
+    assert.ok(admin.documents.bySource);
   });
 });

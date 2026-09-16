@@ -1,0 +1,23 @@
+[
+  {
+    "id": "empty-extract-high-trailer",
+    "prompt": "cuál es el total",
+    "files": [{ "name": "empty.pdf", "extractedText": "" }],
+    "answer": "El total es 999 millones según el anexo. <!--rlcd:{\"c\":0.95,\"r\":\"seguro\"}-->",
+    "expect": { "maxConfidence": 0.35, "deferred": true, "threshold": 0.45 }
+  },
+  {
+    "id": "grounded-high-trailer",
+    "prompt": "cuál es el objetivo",
+    "files": [{ "name": "tesis.docx", "extractedText": "Objetivo: medir X. Método: encuesta. Resultados: 12%." }],
+    "answer": "El objetivo es medir X. <!--rlcd:{\"c\":0.81,\"r\":\"aparece\"}-->",
+    "expect": { "minConfidence": 0.75, "deferred": false, "threshold": 0.2 }
+  },
+  {
+    "id": "inferred-claims",
+    "prompt": "quién es el autor",
+    "files": [{ "name": "tesis.docx", "extractedText": "Objetivo: medir X. Método: encuesta." }],
+    "answer": "El autor es García (2019) y ganó el Nobel. Publicó el hallazgo en Nature. <!--rlcd:{\"c\":0.9,\"r\":\"sé\"}-->",
+    "expect": { "hasInferred": true, "maxConfidence": 0.75, "threshold": 0.05 }
+  }
+]

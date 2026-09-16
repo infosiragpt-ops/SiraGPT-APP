@@ -29,9 +29,20 @@ function buildRlcdPromptBlock({ language = 'es' } = {}) {
   ].join('\n');
 }
 
+function flattenSnippet(value, max = 160) {
+  return String(value || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '<EMAIL>')
+    .trim()
+    .slice(0, max);
+}
+
 function formatCalibratedNotes(exemplars) {
   if (!Array.isArray(exemplars) || exemplars.length === 0) return '';
   const lines = [];
+  let good = null;
+  let bad = null;
   for (const e of exemplars) {
     const rlcd = (e && e.judgeScore && e.judgeScore.rlcd) || e.rlcd || null;
     if (!rlcd || rlcd.confidence == null) continue;
@@ -40,9 +51,14 @@ function formatCalibratedNotes(exemplars) {
     const c = Number(rlcd.confidence);
     if (!Number.isFinite(c)) continue;
     lines.push(`- Confianza ${c.toFixed(2)} → ${outcome}${rlcd.bin ? ` (${rlcd.bin})` : ''}`);
-    if (lines.length >= 3) break;
+    const snippet = flattenSnippet(e.response || e.responseText || e.chosen || '', 140);
+    if (outcome === 'correcta' && !good && snippet) good = snippet;
+    if (outcome === 'incorrecta' && !bad && snippet) bad = snippet;
+    if (lines.length >= 3 && good && bad) break;
   }
   if (!lines.length) return '';
+  if (good) lines.push(`- Bien calibrada: «${good}»`);
+  if (bad) lines.push(`- Sobreconfianza (no copies): «${bad}»`);
   return [
     '',
     '## CALIBRACION APRENDIDA',

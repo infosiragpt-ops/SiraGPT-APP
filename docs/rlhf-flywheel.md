@@ -95,8 +95,9 @@ Dashboard + historical backfill: `docs/rlhf-phase3.md`.
 Document-analysis **RLCD** (Reinforcement Learning for Calibrated
 Decisions — not the ICLR contrastive-distillation paper) is a separate,
 **off-by-default** slice (`SIRAGPT_RLCD_DOCUMENTS`): structured
-confidence, defer/abstain, Brier/ECE from thumbs. Independent of the
-#722 decision ledger (`SIRAGPT_RLCD_ENABLED`). See
+confidence, evidence blend, claim labels, defer/abstain, Brier/ECE from
+thumbs. Independent of the #722 decision ledger (`SIRAGPT_RLCD_ENABLED`).
+Contrastive document pairs: `GET /api/rlhf/export?format=rlcd`. See
 `docs/rlhf-rlcd-documents.md` and `docs/rlcd.md`.
 
 ## Out of scope (later lotes)

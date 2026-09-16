@@ -46,13 +46,17 @@ document turn
          │          (hidden <!--rlcd:{"c":0-1,"r":"..."}--> trailer)
          ├─ generate (existing RAG / react-agent / fidelity paths)
          ├─ parse trailer or verbalized hedges or heuristic
+         ├─ evidence blend: extract / RAG coverage, citations, empty extract
+         ├─ claims: each sentence → supported | inferred
          ├─ if confidence < threshold (and defer-rate cap allows)
          │     defer: Spanish clarifying question / ask for page
          │     instead of inventing
-         └─ persist message.metadata.rlcd  { confidence, bin, deferred }
+         └─ persist message.metadata.rlcd
+              { v:2, confidence, rawConfidence, bin, deferred, evidence, claims }
 
 user 👍 / 👎 / regenerate
     └─ record outcome against the stored (or re-parsed) confidence
+         ├─ regenerate of a high-confidence prior is weighted ×2
          └─ Brier + ECE on GET /api/rlhf/stats → rlcd
 ```
 
@@ -82,10 +86,17 @@ Exposed on `GET /api/rlhf/stats` as `rlcd`:
 
 - `enabled`, `threshold`, `maxDeferRate`
 - `n` — labeled (confidence, outcome) pairs
-- `brier` — mean `(p − y)²` (`y=1` thumb-up, `y=0` thumb-down / regenerate-of-prior)
-- `ece` — expected calibration error over 5 equal bins
+- `brier` — weighted mean `(p − y)²` (`y=1` thumb-up, `y=0` thumb-down / regenerate-of-prior; regenerate of a high-confidence prior counts twice)
+- `ece` — expected calibration error over 5 equal bins (same weights)
 - `buckets[]` — `{ lo, hi, n, avgConfidence, avgAccuracy, gap }` (admin)
+- `byBin`, `bySource` — accuracy / Brier split (admin on `/api/rlhf/stats`; always on `/api/rlcd` → `documents`)
+- `overconfidenceRate` — high-bin answers that were wrong
+- `claimSupportRate`, `evidenceQuality` — means over labeled turns
 - `deferRate`, `documentTurns`, `deferred`, `scored`
+
+`GET /api/rlhf/export?format=rlcd` emits contrastive document pairs
+`{ prompt, chosen, rejected, chosen_confidence, rejected_confidence, overconfident_reject }`
+(PII-scrubbed). Train-prep jobs stay `sft` / `dpo` / `rm` only.
 
 In-process counters (same pattern as RLHF phase-2 telemetry). Durable
 learning lives on `preference_events.judgeScore.rlcd` so a restart can
@@ -95,7 +106,7 @@ rehydrate later without a new table.
 
 This slice does **not** add columns or tables.
 
-- **Inference:** `Message.metadata.rlcd` = `{ v, confidence, bin, source, deferred, reason }`
+- **Inference:** `Message.metadata.rlcd` = `{ v:2, confidence, rawConfidence, bin, source, deferred, reason, adjusted, evidence, claims }`
 - **Outcomes:** `preference_events.judgeScore.rlcd` merged with existing RLAIF
   HHH scores (`mergeJudgeScore`). GDPR scrub of preference text is unchanged.
 
@@ -106,11 +117,15 @@ indexed `confidence` / `rlcd_outcome` columns if query volume justifies it.
 
 - `backend/src/services/rlcd/` — flags, parse, defer, metrics, prompt
 - `document-analysis-rlhf.formatDocumentRlhfBlock` — optional calibrated notes
-- `/api/ai/generate` — prompt block + finalize (strip trailer, maybe defer)
+  plus scrubbed good/bad document snippets when the flag is on
+- `/api/ai/generate` — prompt block + finalize (strip trailer, evidence blend,
+  claim labels, maybe defer). RAG hits from the operational runtime are passed in.
 - `feedback-ledger.record` / chats thumbs — outcome + `judgeScore.rlcd`
-- `ingestRegenerate` — prior rejected answer counts as incorrect
+- `ingestRegenerate` — prior rejected answer counts as incorrect (weight 2 if
+  the prior confidence was high)
 - Observability events (closed catalog): `rlcd.prompt_applied`,
-  `rlcd.confidence_scored`, `rlcd.deferred`, `rlcd.skipped`
+  `rlcd.confidence_scored`, `rlcd.deferred`, `rlcd.skipped`,
+  `rlcd.evidence_adjusted`
 
 No UI-lock files. Brand: no vendor / raw `model_id` in user-visible copy.
 Compact Spanish phrasing only when confidence is medium/low or the turn
@@ -119,8 +134,27 @@ defers.
 ## Contrastive pairs
 
 Existing chosen/rejected pairs (same prompt hash) already feed steering.
-RLCD reuses those rows when they carry `judgeScore.rlcd`. That is a
+Phase 2 also builds document-only pairs for `GET /api/rlhf/export?format=rlcd`
+and injects a scrubbed “bien calibrada / sobreconfianza” snippet into the
+few-shot block when `findExemplars` returns `judgeScore.rlcd`. That is a
 **calibration helper**, not ICLR contrastive distillation.
+
+## Phase 2 (after #721)
+
+Deepens document calibration without touching the #722 ledger flag:
+
+1. **Evidence-aware confidence** — empty extract, thin extract, citation
+   marks (`[S1]`, página, “según el documento”), and token overlap with
+   the extract / RAG hits adjust the trailer *before* defer.
+2. **Supported vs inferred claims** — each sentence is labelled; mostly
+   inferred answers lose confidence and may show a compact Spanish line.
+3. **Stronger outcome loop** — regenerate of a high-confidence prior is
+   weighted; contrastive document pairs are exportable.
+4. **Richer stats + steering** — `overconfidenceRate`, `byBin`,
+   `bySource`, `claimSupportRate` on the existing `/api/rlhf/stats` →
+   `rlcd` and `/api/rlcd` → `documents` objects.
+
+Eval fixtures: `backend/tests/fixtures/document-rlcd-eval.json`.
 
 ## Rollout
 

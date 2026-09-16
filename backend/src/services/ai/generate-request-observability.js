@@ -241,6 +241,7 @@ const ALLOWED_EVENTS = new Set([
   'rlcd.confidence_scored',
   'rlcd.decisions_recorded',
   'rlcd.deferred',
+  'rlcd.evidence_adjusted',
   'rlcd.lane_decided',
   'rlcd.prompt_applied',
   'rlcd.skipped',
