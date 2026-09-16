@@ -149,6 +149,9 @@ function heuristicConfidence({ prompt, answer, files, calibration } = {}) {
 
 /**
  * Score an answer. Never throws.
+ * Phase 2: after the stated signal (trailer / verbal / heuristic),
+ * blend evidence quality + claim support so an empty extract cannot
+ * keep a 0.95 trailer before defer.
  */
 function scoreConfidence(args = {}) {
   try {
@@ -163,23 +166,66 @@ function scoreConfidence(args = {}) {
       calibration: args.calibration,
     });
     const picked = trailer || verbal || heuristic;
-    const confidence = round2(clamp01(picked.confidence) ?? 0.5);
+    const stated = round2(clamp01(picked.confidence) ?? 0.5);
+    const source = picked.source || 'heuristic';
+
+    let evidence = null;
+    let claims = null;
+    let blended = { confidence: stated, raw: stated, adjusted: false };
+    try {
+      const evidenceMod = require('./evidence');
+      const claimsMod = require('./claims');
+      evidence = evidenceMod.scoreEvidence({
+        text: cleaned,
+        files: args.files,
+        hits: args.hits,
+      });
+      claims = claimsMod.analyzeClaims({
+        text: cleaned,
+        files: args.files,
+        hits: args.hits,
+      });
+      blended = evidenceMod.adjustConfidence({
+        stated,
+        source,
+        evidence,
+      });
+      const afterClaims = claimsMod.applyClaimAdjustment(blended.confidence, claims);
+      if (afterClaims.pulled) {
+        blended = {
+          confidence: afterClaims.confidence,
+          raw: blended.raw,
+          adjusted: true,
+        };
+      }
+    } catch {
+      /* evidence/claims are optional */
+    }
+
     return {
-      confidence,
-      bin: binFor(confidence),
-      source: picked.source || 'heuristic',
+      confidence: blended.confidence,
+      rawConfidence: blended.raw,
+      bin: binFor(blended.confidence),
+      source,
       rationale: scrubRationale(picked.rationale || '', { scrub: args.scrub }),
       cleanedText: cleaned,
       hadTrailer: !!trailer,
+      adjusted: blended.adjusted === true,
+      evidence,
+      claims,
     };
   } catch {
     return {
       confidence: 0.5,
+      rawConfidence: 0.5,
       bin: 'medium',
       source: 'fail_open',
       rationale: '',
       cleanedText: String(args.text ?? args.answer ?? ''),
       hadTrailer: false,
+      adjusted: false,
+      evidence: null,
+      claims: null,
     };
   }
 }

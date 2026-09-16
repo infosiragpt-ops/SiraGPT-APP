@@ -294,6 +294,8 @@ router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
         brier: snap.brier,
         ece: snap.ece,
         deferRate: snap.deferRate,
+        overconfidenceRate: snap.overconfidenceRate,
+        claimSupportRate: snap.claimSupportRate,
       };
     })(),
     phase2: isAdmin ? {
@@ -315,8 +317,8 @@ router.get('/export', authenticateToken, handleErrors(async (req, res) => {
   const scrubPii = req.query.scrubPii !== 'false';
   const aggressive = req.query.aggressive === 'true';
   const includeRlaif = req.query.includeRlaif === 'true';
-  if (!['sft', 'dpo', 'pairs', 'rm'].includes(format)) {
-    return res.status(400).json({ error: `unknown format '${format}' — use sft, dpo, or rm` });
+  if (!['sft', 'dpo', 'pairs', 'rm', 'rlcd'].includes(format)) {
+    return res.status(400).json({ error: `unknown format '${format}' — use sft, dpo, rm, or rlcd` });
   }
   const out = await rlhf.exportData({
     userId: req.user.id, format, agent, scrubPii, aggressive, includeRlaif,

@@ -147,6 +147,31 @@ function exportDPO({ events, agent, scrubPii, aggressive, includeRlaif }) {
   return { lines, count: lines.length, piiHits };
 }
 
+function exportRlcd({ events, agent, scrubPii, aggressive, includeRlaif }) {
+  const piiHits = [];
+  const pool = events
+    .filter((e) => includeRlaif || e.source !== 'rlaif')
+    .filter((e) => !agent || e.agent === agent);
+  let pairs = [];
+  try {
+    const contrastive = require('../rlcd/contrastive');
+    pairs = contrastive.buildDocumentPairs(pool, { limit: 80 });
+  } catch {
+    pairs = [];
+  }
+  const lines = pairs.map((p) => JSON.stringify({
+    prompt: maybeScrub(p.prompt, { scrubPii, aggressive, piiHits }),
+    chosen: maybeScrub(p.chosen, { scrubPii, aggressive, piiHits }),
+    rejected: maybeScrub(p.rejected, { scrubPii, aggressive, piiHits }),
+    chosen_confidence: p.chosenConfidence,
+    rejected_confidence: p.rejectedConfidence,
+    delta: p.delta,
+    overconfident_reject: p.overconfidentReject === true,
+    agent: 'document',
+  }));
+  return { lines, count: lines.length, piiHits };
+}
+
 function exportRM({ events, agent, scrubPii, aggressive, includeRlaif }) {
   const piiHits = [];
   const eligible = events
@@ -177,7 +202,8 @@ async function exportData({
   if (format === 'sft') out = exportSFT(args);
   else if (format === 'dpo' || format === 'pairs') out = exportDPO(args);
   else if (format === 'rm') out = exportRM(args);
-  else throw new Error(`rlhf.export: unknown format "${format}" (use 'sft', 'dpo', or 'rm')`);
+  else if (format === 'rlcd') out = exportRlcd(args);
+  else throw new Error(`rlhf.export: unknown format "${format}" (use 'sft', 'dpo', 'rm', or 'rlcd')`);
   const ndjson = out.lines.join('\n') + (out.lines.length > 0 ? '\n' : '');
   try {
     require('./metrics').recordExport({
@@ -202,6 +228,7 @@ module.exports = {
   exportSFT,
   exportDPO,
   exportRM,
+  exportRlcd,
   systemPromptFor,
   AGENT_PERSONAS,
   MIN_PAIR_SIMILARITY,

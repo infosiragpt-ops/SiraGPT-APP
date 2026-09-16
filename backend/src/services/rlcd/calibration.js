@@ -37,6 +37,17 @@ function outcomeValue(outcome) {
   return null;
 }
 
+function outcomeWeight(args = {}) {
+  const raw = Number(args.weight);
+  if (Number.isFinite(raw) && raw > 0 && raw <= 4) return raw;
+  const source = String(args.source || '');
+  const confidence = clamp01(args.confidence);
+  // Regenerating a high-confidence document answer is a stronger
+  // overconfidence signal than a casual thumb-down.
+  if (source === 'regenerate' && confidence != null && confidence >= 0.7) return 2;
+  return 1;
+}
+
 function recordOutcome(args = {}) {
   try {
     const confidence = clamp01(args.confidence);
@@ -49,13 +60,17 @@ function recordOutcome(args = {}) {
       bin: args.bin || (confidence >= 0.7 ? 'high' : confidence >= 0.45 ? 'medium' : 'low'),
       agent: args.agent || 'document',
       source: args.source || 'explicit',
+      scoreSource: args.scoreSource || null,
+      weight: outcomeWeight(args),
+      evidenceQuality: clamp01(args.evidenceQuality),
+      supportRate: clamp01(args.supportRate),
       at: Date.now(),
     };
     state.events.push(event);
     if (state.events.length > MAX_EVENTS) {
       state.events.splice(0, state.events.length - MAX_EVENTS);
     }
-    return { recorded: true, total: state.events.length };
+    return { recorded: true, total: state.events.length, weight: event.weight };
   } catch {
     return { recorded: false, reason: 'fail_open' };
   }
@@ -76,8 +91,14 @@ function recordSkip() {
 function brierScore(events) {
   if (!events.length) return null;
   let sum = 0;
-  for (const e of events) sum += (e.confidence - e.y) ** 2;
-  return Math.round((sum / events.length) * 1000) / 1000;
+  let wsum = 0;
+  for (const e of events) {
+    const w = Number(e.weight) > 0 ? Number(e.weight) : 1;
+    sum += w * (e.confidence - e.y) ** 2;
+    wsum += w;
+  }
+  if (wsum <= 0) return null;
+  return Math.round((sum / wsum) * 1000) / 1000;
 }
 
 function eceBuckets(events, bins = BIN_COUNT) {
@@ -98,18 +119,22 @@ function eceBuckets(events, bins = BIN_COUNT) {
     let idx = Math.min(bins - 1, Math.floor(e.confidence * bins));
     if (e.confidence >= 1) idx = bins - 1;
     const b = buckets[idx];
+    const w = Number(e.weight) > 0 ? Number(e.weight) : 1;
     b.n += 1;
-    b.avgConfidence += e.confidence;
-    b.avgAccuracy += e.y;
+    b.w = (b.w || 0) + w;
+    b.avgConfidence += e.confidence * w;
+    b.avgAccuracy += e.y * w;
   }
   let ece = 0;
-  const total = events.length || 1;
+  const totalW = events.reduce((s, e) => s + (Number(e.weight) > 0 ? Number(e.weight) : 1), 0) || 1;
   for (const b of buckets) {
     if (b.n === 0) continue;
-    b.avgConfidence = Math.round((b.avgConfidence / b.n) * 1000) / 1000;
-    b.avgAccuracy = Math.round((b.avgAccuracy / b.n) * 1000) / 1000;
+    const w = b.w || b.n;
+    b.avgConfidence = Math.round((b.avgConfidence / w) * 1000) / 1000;
+    b.avgAccuracy = Math.round((b.avgAccuracy / w) * 1000) / 1000;
     b.gap = Math.round(Math.abs(b.avgConfidence - b.avgAccuracy) * 1000) / 1000;
-    ece += (b.n / total) * b.gap;
+    ece += (w / totalW) * b.gap;
+    delete b.w;
   }
   return {
     ece: events.length ? Math.round(ece * 1000) / 1000 : null,
@@ -122,6 +147,52 @@ function recentDeferRate() {
   return Math.round((state.deferred / state.documentTurns) * 1000) / 1000;
 }
 
+function bySourceBreakdown(events) {
+  const out = {};
+  for (const e of events) {
+    const key = e.scoreSource || e.source || 'unknown';
+    if (!out[key]) out[key] = { n: 0, correct: 0, brierAcc: 0 };
+    out[key].n += 1;
+    out[key].correct += e.y;
+    out[key].brierAcc += (e.confidence - e.y) ** 2;
+  }
+  for (const row of Object.values(out)) {
+    row.accuracy = row.n ? Math.round((row.correct / row.n) * 1000) / 1000 : null;
+    row.brier = row.n ? Math.round((row.brierAcc / row.n) * 1000) / 1000 : null;
+    delete row.correct;
+    delete row.brierAcc;
+  }
+  return out;
+}
+
+function byBinBreakdown(events) {
+  const bins = { high: { n: 0, correct: 0 }, medium: { n: 0, correct: 0 }, low: { n: 0, correct: 0 } };
+  for (const e of events) {
+    const key = e.bin === 'high' || e.bin === 'low' ? e.bin : 'medium';
+    bins[key].n += 1;
+    bins[key].correct += e.y;
+  }
+  for (const row of Object.values(bins)) {
+    row.accuracy = row.n ? Math.round((row.correct / row.n) * 1000) / 1000 : null;
+    delete row.correct;
+  }
+  return bins;
+}
+
+function overconfidenceRate(events) {
+  const high = events.filter((e) => e.bin === 'high' || e.confidence >= 0.7);
+  if (!high.length) return null;
+  const wrong = high.filter((e) => e.y === 0).length;
+  return Math.round((wrong / high.length) * 1000) / 1000;
+}
+
+function meanOf(events, key) {
+  const vals = events.map((e) => e[key]).filter((v) => v != null && Number.isFinite(Number(v)));
+  if (!vals.length) return null;
+  const sum = vals.reduce((s, v) => s + Number(v), 0);
+  return Math.round((sum / vals.length) * 1000) / 1000;
+}
+
 function metrics({ agent } = {}) {
   const events = state.events.filter((e) => !agent || e.agent === agent);
   const ece = eceBuckets(events);
@@ -130,6 +201,11 @@ function metrics({ agent } = {}) {
     brier: brierScore(events),
     ece: ece.ece,
     buckets: ece.buckets,
+    bySource: bySourceBreakdown(events),
+    byBin: byBinBreakdown(events),
+    overconfidenceRate: overconfidenceRate(events),
+    claimSupportRate: meanOf(events, 'supportRate'),
+    evidenceQuality: meanOf(events, 'evidenceQuality'),
     documentTurns: state.documentTurns,
     deferred: state.deferred,
     scored: state.scored,
@@ -151,6 +227,10 @@ function hydrateFromPreferenceEvents(rows) {
       bin: rlcd.bin,
       agent: row.agent || 'document',
       source: row.source || 'hydrate',
+      scoreSource: rlcd.source,
+      evidenceQuality: rlcd.evidence && rlcd.evidence.quality,
+      supportRate: rlcd.claims && rlcd.claims.supportRate,
+      weight: rlcd.weight,
     });
     if (out.recorded) n += 1;
   }

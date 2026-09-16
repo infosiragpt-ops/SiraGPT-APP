@@ -554,6 +554,7 @@ async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = t
     response: e.responseText || e.response,
     helpful: e.label === 'chosen' || e.helpful === true,
     notes: e.notes,
+    judgeScore: e.judgeScore || null,
     score: cosine(queryVec, e.promptEmbedding || e.embedding),
   }));
   scored.sort((a, b) => b.score - a.score);

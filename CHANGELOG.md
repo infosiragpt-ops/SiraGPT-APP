@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- RLCD document analysis phase 2: evidence-aware confidence (extract /
+  RAG coverage + citations), per-claim supported vs inferred labels,
+  weighted regenerate outcomes, contrastive `format=rlcd` export, and
+  richer ECE/Brier admin stats. Still flag-gated
+  (`SIRAGPT_RLCD_DOCUMENTS` default off). Does not change the #722
+  ledger (`SIRAGPT_RLCD_ENABLED`). See `docs/rlhf-rlcd-documents.md`.
 - RLCD for document analysis (Reinforcement Learning for Calibrated
   Decisions — not ICLR contrastive distillation): flag-gated confidence
   metadata, defer/abstain, and Brier/ECE from thumbs

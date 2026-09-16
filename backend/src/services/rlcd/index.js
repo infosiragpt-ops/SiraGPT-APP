@@ -17,6 +17,9 @@ const confidence = require('./confidence');
 const deferPolicy = require('./defer-policy');
 const calibration = require('./calibration');
 const prompt = require('./prompt');
+const evidence = require('./evidence');
+const claims = require('./claims');
+const contrastive = require('./contrastive');
 
 // ---------------------------------------------------------------------------
 // #722 — typed-decision ledger
@@ -193,12 +196,18 @@ function prepareDocumentTurn(raw = {}) {
       files: args.files,
       calibration: args.calibration,
     });
+    const ev = evidence.scoreEvidence({
+      text: args.prompt,
+      files: args.files,
+      hits: args.hits,
+    });
     return {
       applied: true,
       block,
       predictedConfidence: predicted.confidence,
       predictedBin: confidence.binFor(predicted.confidence),
       extractionThin: extractThin(args.files),
+      evidence: evidence.publicEvidence(ev),
       reason: 'ok',
     };
   } catch {
@@ -222,15 +231,18 @@ function finalizeAnswer(raw = {}) {
       text: args.text,
       prompt: args.prompt,
       files: args.files,
+      hits: args.hits,
       calibration: args.calibration || (args.predicted && {
         confidence: args.predicted.predictedConfidence,
       }),
       scrub: args.scrub,
     });
+    const extractionEmpty = args.extractionEmpty === true
+      || (score.evidence && score.evidence.emptyExtract)
+      || confidence.extractionChars(args.files) === 0;
     const decision = deferPolicy.decideDefer({
       confidence: score.confidence,
-      extractionEmpty: args.extractionEmpty === true
-        || confidence.extractionChars(args.files) === 0,
+      extractionEmpty,
       recentDeferRate: calibration.recentDeferRate(),
       text: score.cleanedText,
       env,
@@ -244,17 +256,31 @@ function finalizeAnswer(raw = {}) {
       language: args.language || 'es',
       phrase: flags.isPhraseEnabled(env),
     });
+    let finalText = applied.text;
+    if (!applied.deferred && flags.isPhraseEnabled(env) && score.claims) {
+      const claimLine = claims.compactClaimPhrase({
+        language: args.language || 'es',
+        claims: score.claims,
+      });
+      if (claimLine && !finalText.includes(claimLine)) {
+        finalText = `${finalText}\n\n${claimLine}`;
+      }
+    }
     calibration.recordTurn({ deferred: applied.deferred, scored: true });
     const metadata = {
-      v: 1,
+      v: 2,
       confidence: score.confidence,
+      rawConfidence: score.rawConfidence,
       bin: score.bin,
       source: score.source,
       deferred: applied.deferred === true,
       reason: decision.reason,
+      adjusted: score.adjusted === true,
+      evidence: evidence.publicEvidence(score.evidence),
+      claims: claims.publicClaims(score.claims),
     };
     return {
-      text: applied.text,
+      text: finalText,
       metadata,
       score,
       decision,
@@ -283,15 +309,25 @@ function buildJudgeScore(existing, rlcdPayload) {
   return base;
 }
 
-function payloadFromScore(score, { outcome, source } = {}) {
+function payloadFromScore(score, { outcome, source, weight } = {}) {
   if (!score || score.confidence == null) return null;
   return {
     confidence: score.confidence,
+    rawConfidence: score.rawConfidence,
     bin: score.bin,
     source: score.source,
     outcome: outcome || undefined,
     deferred: score.deferred === true,
     feedbackSource: source || undefined,
+    weight: weight || undefined,
+    adjusted: score.adjusted === true,
+    evidence: evidence.publicEvidence(score.evidence),
+    claims: score.claims ? {
+      n: score.claims.n,
+      supported: score.claims.supported,
+      inferred: score.claims.inferred,
+      supportRate: score.claims.supportRate,
+    } : undefined,
   };
 }
 
@@ -300,16 +336,21 @@ function resolveScore(args = {}) {
   if (meta && meta.confidence != null) {
     return {
       confidence: confidence.round2(confidence.clamp01(meta.confidence) ?? 0.5),
+      rawConfidence: meta.rawConfidence,
       bin: meta.bin || confidence.binFor(meta.confidence),
       source: meta.source || 'metadata',
       rationale: meta.rationale || '',
       deferred: meta.deferred === true,
+      evidence: meta.evidence || null,
+      claims: meta.claims || null,
+      adjusted: meta.adjusted === true,
     };
   }
   return confidence.scoreConfidence({
     text: args.response || args.text,
     prompt: args.prompt || args.request,
     files: args.files,
+    hits: args.hits,
     calibration: args.calibration,
     scrub: args.scrub,
   });
@@ -336,6 +377,9 @@ function recordFromThumb(raw = {}) {
       bin: score.bin,
       agent: args.agent || 'document',
       source: args.source || 'explicit',
+      scoreSource: score.source,
+      evidenceQuality: score.evidence && score.evidence.quality,
+      supportRate: score.claims && score.claims.supportRate,
     });
     const payload = payloadFromScore(score, { outcome, source: args.source || 'explicit' });
     return {
@@ -365,6 +409,7 @@ function recordFromRegenerate(raw = {}) {
       metadata: priorMeta,
       prompt: args.prompt,
       files: args.files,
+      hits: args.hits,
     });
     if (!priorText && !(priorMeta && priorMeta.rlcd)) {
       return { recorded: false, reason: 'no_prior' };
@@ -375,13 +420,18 @@ function recordFromRegenerate(raw = {}) {
       bin: score.bin,
       agent: args.agent || 'document',
       source: 'regenerate',
+      scoreSource: score.source,
+      evidenceQuality: score.evidence && score.evidence.quality,
+      supportRate: score.claims && score.claims.supportRate,
     });
     return {
       recorded: recorded.recorded,
       outcome: 'incorrect',
+      weight: recorded.weight,
       judgeScore: buildJudgeScore(args.judgeScore, payloadFromScore(score, {
         outcome: 'incorrect',
         source: 'regenerate',
+        weight: recorded.weight,
       })),
       score,
     };
@@ -390,8 +440,9 @@ function recordFromRegenerate(raw = {}) {
   }
 }
 
-function documentStats() {
+function documentStats({ contrastiveCount } = {}) {
   try {
+    const snap = calibration.snapshot();
     return {
       enabled: flags.isDocumentEnabled(),
       threshold: flags.deferThreshold(),
@@ -399,10 +450,19 @@ function documentStats() {
       phrase: flags.isPhraseEnabled(),
       prompt: flags.isPromptEnabled(),
       meaning: 'calibrated_decisions',
-      ...calibration.snapshot(),
+      ...snap,
+      contrastivePairs: Number.isFinite(contrastiveCount) ? contrastiveCount : snap.contrastivePairs,
     };
   } catch {
     return { enabled: false, n: 0, brier: null, ece: null };
+  }
+}
+
+function exportDocumentPairs(events, opts) {
+  try {
+    return contrastive.buildDocumentPairs(events, opts);
+  } catch {
+    return [];
   }
 }
 
@@ -423,6 +483,7 @@ const documents = {
   recordFromThumb,
   recordFromRegenerate,
   buildJudgeScore,
+  exportDocumentPairs,
   stats: documentStats,
   reset: () => { try { calibration.reset(); } catch { /* optional */ } },
 };
@@ -451,10 +512,14 @@ module.exports = {
   recordFromThumb,
   recordFromRegenerate,
   buildJudgeScore,
+  exportDocumentPairs,
   documentStats,
   flags,
   confidence,
   deferPolicy,
   calibration,
   prompt,
+  evidence,
+  claims,
+  contrastive,
 };

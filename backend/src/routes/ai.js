@@ -1837,6 +1837,9 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
                     ? { rlcd: prior.judgeScore.rlcd }
                     : null,
                   files: processedFiles,
+                  hits: typeof operationalRagContext !== 'undefined'
+                    ? (operationalRagContext && (operationalRagContext.hits || operationalRagContext.snippets))
+                    : undefined,
                 });
               } catch (_rlcdRegen) { /* fail-open */ }
             }).catch((e) => persistenceLog.warnError('rlhf.regenerate_ingest_failed', e));
@@ -6142,6 +6145,7 @@ router.post(
           const __rlcdPrep = rlcd.prepareDocumentTurn({
             prompt,
             files: processedFiles,
+            hits: operationalRagContext && (operationalRagContext.hits || operationalRagContext.snippets),
             language: (langResolution && langResolution.language) || 'es',
             calibration: req._calibration,
             agent: __rlcdAgent,
@@ -8391,6 +8395,7 @@ router.post(
               text: finalContent,
               prompt,
               files: processedFiles,
+              hits: operationalRagContext && (operationalRagContext.hits || operationalRagContext.snippets),
               language: (langResolution && langResolution.language) || 'es',
               predicted: req._rlcdPrep,
               calibration: req._calibration,
@@ -8399,6 +8404,12 @@ router.post(
               finalContent = __rlcdOut.text;
             }
             req._rlcdFinal = __rlcdOut;
+            if (__rlcdOut && __rlcdOut.score && __rlcdOut.score.adjusted) {
+              generateLog.info('rlcd.evidence_adjusted', {
+                success: true,
+                reasonCode: 'evidence',
+              });
+            }
             if (__rlcdOut && __rlcdOut.deferred) {
               generateLog.info('rlcd.deferred', {
                 success: true,
