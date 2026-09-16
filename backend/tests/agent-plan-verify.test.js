@@ -132,6 +132,28 @@ describe('createAnswerVerifier', () => {
     assert.equal(openai.calls.length, 0);
   });
 
+  test('fail-opens image/attachment summaries so a rejecting judge cannot replace the paragraph', async () => {
+    const openai = judgeClient(['{"pass": false, "problems": ["no tool evidence"], "fix": "call tools"}']);
+    const query = 'dame un resumen en un solo párrafo';
+    const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: query });
+    const paragraph = 'La tabla de competencia digital docente resume Compromiso profesional y los puntajes CDD1 por indicador, con valores entre 4 y 5. '.repeat(4);
+    const verdict = await guard({ answer: paragraph, steps: [] });
+    assert.equal(verdict.ok, true);
+    assert.equal(openai.calls.length, 0, 'read-only summaries must not spend the repair budget on a tool-evidence judge');
+  });
+
+  test('still reviews drafts that claim a file was created without a tool', async () => {
+    const openai = judgeClient(['{"pass": false, "problems": ["claimed a file"], "fix": "do not claim a file"}']);
+    const query = 'dame un resumen en un solo párrafo';
+    const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: query });
+    const verdict = await guard({
+      answer: `${LONG_ANSWER} Creé el documento PDF con el resumen solicitado.`,
+      steps: [],
+    });
+    assert.equal(verdict.ok, false);
+    assert.equal(openai.calls.length, 1);
+  });
+
   test('SIRAGPT_AGENT_VERIFY=0 disables the judge entirely', async () => {
     process.env.SIRAGPT_AGENT_VERIFY = '0';
     const openai = judgeClient(['{"pass": false}']);

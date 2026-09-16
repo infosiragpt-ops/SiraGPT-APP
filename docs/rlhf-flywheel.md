@@ -35,7 +35,9 @@ on the generate path.
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Cap for the injected block |
 | `SIRAGPT_RLHF_BEST_OF_N` | **off** | Inference-time sample-and-rank. Leave off in production unless you accept N× tokens |
 | `SIRAGPT_RLHF_RLAIF` | off | Synthetic labels. Mid scores abstain |
-| `SIRAGPT_RLHF_AUTO_TRAIN` | on | Retrain after new labels (cooldown). `0` for tests / freeze |
+| `SIRAGPT_RLHF_AUTO_TRAIN` | on | Retrain the local Bradley-Terry RM after new labels (cooldown). `0` for tests / freeze. Never starts a phase-3 job |
+| `SIRAGPT_RLHF_TRAIN_JOBS` | **off** | Admin SFT/DPO prep jobs. See `docs/rlhf-phase3-train-pipeline.md` |
+| `SIRAGPT_RLHF_TRAIN_SUBMIT` | **off** | Optional submit after prep. No-op until a catalog adapter exists |
 
 Prisma persist never blocks a thumb or a generate: errors stay in-memory
 and log once.
@@ -51,6 +53,7 @@ Mounted at `/api/rlhf` (auth required; train is admin):
 - `POST /score` / `POST /rerank` — score or rank with the RM
 - `POST /train` — fit the RM now
 - `GET /model` — active snapshot metrics
+- `POST /jobs` / `GET /jobs` / `GET /jobs/:id` — admin SFT/DPO prep (flagged, off by default)
 
 Brand names only in user-facing copy. Exports and logs must not dump
 secrets or raw provider model ids into UI/toasts.
@@ -80,7 +83,10 @@ Pass `scrubPii=0` only on a locked admin box. GDPR scrub of
 Phase 2 (inference steering + ops telemetry) is documented in
 `docs/rlhf-phase2-steering.md`.
 
-## Out of scope (phase 3+)
+Phase 3 (admin SFT/DPO prep jobs, still no paid auto-train) is
+`docs/rlhf-phase3-train-pipeline.md`.
 
-GPU fine-tune jobs, admin dashboard UI, enabling best-of-N by default,
-OpenRouter as a hidden fallback, and any `/code` surface.
+## Out of scope (later lotes)
+
+Admin dashboard UI, enabling best-of-N by default, a hidden aggregator
+fallback, and any `/code` surface.

@@ -1,4 +1,5 @@
 const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('./software-build-intent');
+const { classifyAttachmentKinds } = require('./agentic-execution-profile');
 
 const WORDISH_RE = /\b(word|docx|informe|tesis|ensayo|monograf[ií]a|reporte|paper|art[ií]culo|marco te[oó]rico|legal|contrato|documento)\b/i;
 const SHEET_RE = /\b(excel|xlsx|spreadsheet|tabla|tabular|kpi|dashboard|f[oó]rmula|c[aá]lculo|presupuesto|base de datos|costos|margen|filas|columnas)\b/i;
@@ -203,6 +204,12 @@ function detectComplexity(text, estimatedWords) {
 // The assistant's draft answer can mention "documento", "informe" or
 // "tabla" while answering a plain question, and matching on that text
 // would auto-promote conversational turns to doc_required.
+function attachmentKindsFrom(files = [], fileMetadata = []) {
+  const fromMeta = classifyAttachmentKinds(fileMetadata);
+  if (fromMeta.total > 0) return fromMeta;
+  return classifyAttachmentKinds(files);
+}
+
 function classifyMode(requestText, estimatedWords, format, files = [], options = {}) {
   if (options.transcriptionOnly || options.chatOnlyDirective) return 'chat_only';
   if (isSoftwareBuildRequest(requestText) && !isExplicitDocumentRequest(requestText)) {
@@ -240,6 +247,14 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     // downloadable file. The live failure was a finished task that only
     // painted the chat summary — the Word card never appeared.
     // Short questions ("qué dice el PDF") stay in chat.
+    // Image-only attachments are vision Q&A: the user asked for a paragraph
+    // in chat, not a generated Word. Forcing doc_required made finalize
+    // demand create_document + verify_artifact and ended in verification_failed.
+    const kinds = attachmentKindsFrom(files, options.fileMetadata);
+    const onlyImages = kinds.total > 0 && kinds.documentCount === 0 && kinds.imageCount > 0;
+    if (onlyImages && !explicitFileFormat) {
+      return 'chat_only';
+    }
     if (Array.isArray(files) && files.length > 0 && DOCUMENT_SYNTHESIS_RE.test(requestText)) {
       return 'doc_required';
     }
@@ -297,6 +312,7 @@ function buildDocumentDeliveryPolicy({
   displayGoal,
   finalText,
   files = [],
+  fileMetadata = [],
   requestedFormat = null,
 } = {}) {
   const requestText = compactText(`${goal || ''} ${displayGoal || ''}`);
@@ -319,7 +335,11 @@ function buildDocumentDeliveryPolicy({
   const estimated = estimateWords({ goal, displayGoal, finalText });
   const format = detectFormat(requestText, requestedFormat);
   const template = detectTemplate(text, format);
-  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly, chatOnlyDirective });
+  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], {
+    transcriptionOnly,
+    chatOnlyDirective,
+    fileMetadata,
+  });
   const tableSignals = SHEET_RE.test(text);
   const complexity = detectComplexity(text, estimated);
   const reason = (() => {

@@ -56,6 +56,13 @@ function freshState() {
       byCode: Object.create(null),
       lastKind: null,
       lastCode: null,
+    trainJobs: {
+      created: 0,
+      ready: 0,
+      failed: 0,
+      cancelled: 0,
+      lastCount: 0,
+      lastBytes: 0,
     },
   };
 }
@@ -133,6 +140,20 @@ function recordRmScore({ score, used = false, version } = {}) {
   }
 }
 
+function recordTrainJob({ status, format, count = 0, bytes = 0 } = {}) {
+  try {
+    if (status === 'created') state.trainJobs.created += 1;
+    else if (status === 'ready') state.trainJobs.ready += 1;
+    else if (status === 'failed') state.trainJobs.failed += 1;
+    else if (status === 'cancelled') state.trainJobs.cancelled += 1;
+    if (count) state.trainJobs.lastCount = Number(count) || 0;
+    if (bytes) state.trainJobs.lastBytes = Number(bytes) || 0;
+    void format;
+  } catch {
+    /* telemetry must never throw */
+  }
+}
+
 function recordExport({ format, count = 0, bytes = 0 } = {}) {
   try {
     state.exports.total += 1;
@@ -204,6 +225,13 @@ function snapshot() {
       byCode: { ...state.implicit.byCode },
       lastKind: state.implicit.lastKind,
       lastCode: state.implicit.lastCode,
+    trainJobs: {
+      created: state.trainJobs.created,
+      ready: state.trainJobs.ready,
+      failed: state.trainJobs.failed,
+      cancelled: state.trainJobs.cancelled,
+      lastCount: state.trainJobs.lastCount,
+      lastBytes: state.trainJobs.lastBytes,
     },
   };
 }
@@ -247,6 +275,9 @@ function toPrometheusText() {
     Object.entries(s.implicit.byKind).map(([k, v]) => [`kind="${esc(k)}"`, v]));
   push('sira_rlhf_implicit_signal_code', 'Implicit RLHF signals by failure code', 'counter',
     Object.entries(s.implicit.byCode).map(([k, v]) => [`code="${esc(k)}"`, v]));
+  push('sira_rlhf_train_jobs_created_total', 'Admin SFT/DPO prep jobs created', 'counter', [['', s.trainJobs.created]]);
+  push('sira_rlhf_train_jobs_ready_total', 'Admin SFT/DPO prep jobs that produced an artifact', 'counter', [['', s.trainJobs.ready]]);
+  push('sira_rlhf_train_jobs_failed_total', 'Admin SFT/DPO prep jobs that failed', 'counter', [['', s.trainJobs.failed]]);
   if (s.rm.lastScore != null) {
     push('sira_rlhf_rm_last_score', 'Most recent RM score', 'gauge', [['', s.rm.lastScore]]);
   }
@@ -264,6 +295,7 @@ module.exports = {
   recordRmScore,
   recordExport,
   recordImplicitSignal,
+  recordTrainJob,
   snapshot,
   phase2Stats,
   toPrometheusText,

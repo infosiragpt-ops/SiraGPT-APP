@@ -26,6 +26,8 @@
  */
 
 const { createHash } = require('node:crypto');
+const { shouldFailOpenVerification } = require('./completion-claim-verifier');
+const { successfulToolCalls } = require('./agentic-execution-profile');
 
 const VERIFY_MIN_ANSWER_CHARS = 300;
 const VERIFY_MIN_QUERY_CHARS = 25;
@@ -273,6 +275,18 @@ function createAnswerVerifier({ openai, model, userQuery }) {
     if (!verifyEnabled()) return { ok: true };
     const draft = String(answer || '');
     const query = String(userQuery || '');
+    // Vision / attached-file Q&A ("dame un resumen en un solo párrafo") is
+    // answered from pixels or already-injected text. The judge used to fail
+    // those drafts as "unsupported" because there are no tool observations,
+    // then the repair loop exhausted and replaced a good paragraph with
+    // verification_failed. Fail-open unless the draft claims a side-effect.
+    // Malformed steps must not throw here — reviewInput below still fails closed.
+    try {
+      const executedTools = Array.from(successfulToolCalls(steps).keys());
+      if (shouldFailOpenVerification({ query, answer: draft, executedTools })) {
+        return { ok: true };
+      }
+    } catch (_) { /* fall through to fail-closed review */ }
     // Initial trivial turns retain the fast path. Once review starts, shortening
     // a rejected draft cannot bypass it or inherit another draft's approval.
     if (!reviewStarted && (draft.length < VERIFY_MIN_ANSWER_CHARS || query.length < VERIFY_MIN_QUERY_CHARS)) return { ok: true };

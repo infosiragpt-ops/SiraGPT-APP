@@ -133,7 +133,8 @@ Expect `steering: true`, `bestOfN: false`. After a few thumbs + a
 similar follow-up ask, `phase2.steering.applied` (admin) increments and
 `phase2.exemplars.hitRate` is > 0.
 
-## Phase 3 (not this PR)
+## Phase 3
 
-Real fine-tune jobs from the SFT/DPO JSONL export, and an admin
-dashboard UI for the counters above. Do not implement those here.
+Admin-triggered SFT/DPO **prep** jobs (flagged off, artifact JSONL only)
+live in `docs/rlhf-phase3-train-pipeline.md`. The admin dashboard UI is
+still a later lote.
