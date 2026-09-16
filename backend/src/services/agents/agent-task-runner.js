@@ -90,12 +90,20 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
       .filter((tool) => appTools.has(tool))
       .filter((tool) => !forbiddenTools.has(tool))
   );
+  const requiredTools = Array.from(new Set([
+    ...(executionProfile?.requiredTools || []),
+    ...executableContractTools,
+  ])).filter((tool) => !forbiddenTools.has(tool));
+  // Image-only / vision Q&A never needs private-context RAG. The contract
+  // still tags any fileId as rag_retrieve; leaving that in requiredTools
+  // dead-ends summarize-image turns in verification_failed.
+  const imageOnlyQa = executionProfile?.capabilities?.needsPrivateContext === false;
+  const filteredRequired = imageOnlyQa
+    ? requiredTools.filter((tool) => !['rag_retrieve', 'self_rag_answer', 'docintel_analyze'].includes(tool))
+    : requiredTools;
   return {
     ...(executionProfile || {}),
-    requiredTools: Array.from(new Set([
-      ...(executionProfile?.requiredTools || []),
-      ...executableContractTools,
-    ])).filter((tool) => !forbiddenTools.has(tool)),
+    requiredTools: filteredRequired,
     minimumToolCalls: {
       ...(executionProfile?.minimumToolCalls || {}),
       ...(universalTaskContract?.source_requirements?.verification_policy === 'strict' && executableContractTools.has('web_search')
@@ -1774,6 +1782,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       goal,
       displayGoal,
       files,
+      fileMetadata,
     })
   );
   const runtimeModelProfile = normalizeAgentRuntimeModel(model);

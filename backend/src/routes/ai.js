@@ -7046,7 +7046,7 @@ router.post(
             // the user never sees a blank reply.
             try {
               const agenticStream = require('../services/agentic-chat-stream');
-              const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
+              const hasImages = (processedFiles || []).some((f) => f && isImageMime(f.mimeType || f.type));
               const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
               // Count Office/PDF attachments even when vision images were
               // stripped from filesForVision. The document-edit preloop needs
@@ -7282,6 +7282,11 @@ router.post(
                       ? Math.max(0.01, Number(req.body.coworkBudget.maxCostUsd))
                       : null,
                     fileIds: agenticFileIds,
+                    fileMetadata: (processedFiles || []).map((file) => ({
+                      id: file && (file.id || file.fileId || file.uploadId || file.databaseId),
+                      mimeType: file && (file.mimeType || file.type || file.contentType),
+                      name: file && (file.originalName || file.name || file.filename || file.path),
+                    })).filter((file) => file.id || file.mimeType || file.name),
                     // Lets media-intent treat edit phrasings ("mejora la
                     // calidad", "recorta la imagen") as img2img edits.
                     hasImageAttachment: (processedFiles || []).some(
