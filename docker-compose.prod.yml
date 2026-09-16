@@ -116,7 +116,12 @@ services:
       CODE_RUNNER_RLIMIT_CPU_SECONDS: "${CODE_RUNNER_RLIMIT_CPU_SECONDS:-1800}"
       # A preview is not admitted until its declared production build passes.
       # Projects without a build script keep their custom dev-server contract.
-      CODE_RUNNER_BUILD_PREFLIGHT: "${CODE_RUNNER_BUILD_PREFLIGHT:-1}"
+      # Dev previews do not need a production build; `next build` also forks
+      # one worker per CPU and blew the pids cap (spawn EAGAIN). Default off.
+      CODE_RUNNER_BUILD_PREFLIGHT: "${CODE_RUNNER_BUILD_PREFLIGHT:-0}"
+      # Browser origins allowed to reach Next dev endpoints through the preview
+      # proxy (allowedDevOrigins in the generated next.config.js wrapper).
+      CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS: "${CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS:-siragpt.com,www.siragpt.com}"
       CODE_RUNNER_BUILD_TIMEOUT_MS: "${CODE_RUNNER_BUILD_TIMEOUT_MS:-180000}"
       # Fail closed until the release manager has verified a real per-run OS
       # boundary. Git worktrees alone are not a hostile-process boundary.
@@ -153,7 +158,9 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
-    pids_limit: 512
+    # bun install + a Next/Vite dev server with its workers need far more than
+    # 512 pids (threads count); 2048 keeps a fork bomb bounded.
+    pids_limit: 2048
     cpus: 4.0
     mem_limit: 2g
     tmpfs:

@@ -450,7 +450,103 @@ function createDevPool({ ports, now = () => Date.now() } = {}) {
   };
 }
 
+
+// ── Next.js preview under a tokenized basePath ─────────────────────────────
+// Vite takes `--base`; Next only reads basePath from next.config.* and its dev
+// bundler re-reads that file (a `conf` object passed to `next()` is ignored
+// for routing). So the runner writes a `next.config.js` wrapper that imports
+// the project's own config and adds basePath/assetPrefix/allowedDevOrigins.
+// `next.config.js` wins Next's precedence (js > mjs > ts), so a user config
+// with that exact name is moved aside to NEXT_PREVIEW_USER_BACKUP first.
+const NEXT_PREVIEW_MARKER = "SIRAGPT_NEXT_PREVIEW_WRAPPER";
+const NEXT_PREVIEW_WRAPPER = "next.config.js";
+const NEXT_PREVIEW_USER_BACKUP = "next.config.siragpt-user.js";
+const NEXT_CONFIG_CANDIDATES = ["next.config.js", "next.config.mjs", "next.config.ts", "next.config.mts", "next.config.cjs"];
+
+function normalizeNextBasePath(basePath) {
+  const raw = String(basePath || "").trim();
+  if (!raw || raw === "/") return "";
+  if (!raw.startsWith("/") || raw.includes("..") || /[\s'"`\\]/.test(raw)) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+/**
+ * Decide which files to move/write. `existing` = config filenames present in
+ * the project dir, `wrapperIsOurs` = the current next.config.js carries the
+ * marker. Returns { userConfig, rename } where `rename` is
+ * [from, to] | null.
+ */
+function planNextPreviewConfig({ existing = [], wrapperIsOurs = false, backupExists = false } = {}) {
+  const present = NEXT_CONFIG_CANDIDATES.filter((f) => existing.includes(f));
+  let userConfig = null;
+  let rename = null;
+  if (present[0] === NEXT_PREVIEW_WRAPPER) {
+    if (wrapperIsOurs) {
+      userConfig = backupExists ? NEXT_PREVIEW_USER_BACKUP : (present[1] || null);
+    } else {
+      rename = [NEXT_PREVIEW_WRAPPER, NEXT_PREVIEW_USER_BACKUP];
+      userConfig = NEXT_PREVIEW_USER_BACKUP;
+    }
+  } else {
+    userConfig = backupExists ? NEXT_PREVIEW_USER_BACKUP : (present[0] || null);
+  }
+  return { userConfig, rename };
+}
+
+function parseAllowedOriginsEnv(value) {
+  return String(value || "")
+    .split(",")
+    .map((s) => s.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
+    .filter((s) => /^[A-Za-z0-9.-]+$/.test(s));
+}
+
+function buildNextPreviewWrapper({ basePath, userConfig = null, allowedOrigins = [] } = {}) {
+  const base = normalizeNextBasePath(basePath);
+  if (!base) throw new Error("next preview wrapper needs a basePath");
+  const origins = Array.from(new Set(["runner", "127.0.0.1", "localhost", ...parseAllowedOriginsEnv(allowedOrigins.join(","))]));
+  const safeUser = userConfig && NEXT_CONFIG_CANDIDATES.concat(NEXT_PREVIEW_USER_BACKUP).includes(userConfig) ? userConfig : null;
+  return [
+    `// ${NEXT_PREVIEW_MARKER} — generado por el runner de SiraGPT para servir el preview`,
+    "// bajo un basePath tokenizado. No forma parte de tu proyecto; se ignora en git.",
+    "'use strict';",
+    "const path = require('path');",
+    `const BASE = ${JSON.stringify(base)};`,
+    `const USER_CONFIG = ${JSON.stringify(safeUser)};`,
+    `const ORIGINS = ${JSON.stringify(origins)};`,
+    "module.exports = async (phase, ctx) => {",
+    "  let user = {};",
+    "  if (USER_CONFIG) {",
+    "    const p = path.join(__dirname, USER_CONFIG);",
+    "    if (/\\.(ts|mts)$/.test(USER_CONFIG)) {",
+    "      const { transpileConfig } = require('next/dist/build/next-config-ts/transpile-config');",
+    "      const out = await transpileConfig({ nextConfigPath: p, dir: __dirname });",
+    "      user = out && out.default ? out.default : out;",
+    "    } else if (/\\.mjs$/.test(USER_CONFIG)) {",
+    "      const mod = await import(p);",
+    "      user = mod && mod.default ? mod.default : mod;",
+    "    } else {",
+    "      const mod = require(p);",
+    "      user = mod && mod.default ? mod.default : mod;",
+    "    }",
+    "    if (typeof user === 'function') user = await user(phase, ctx);",
+    "    user = user && typeof user === 'object' ? user : {};",
+    "  }",
+    "  const allowedDevOrigins = Array.from(new Set([...(user.allowedDevOrigins || []), ...ORIGINS]));",
+    "  return { ...user, basePath: BASE, assetPrefix: BASE, allowedDevOrigins };",
+    "};",
+    "",
+  ].join("\n");
+}
+
 module.exports = {
+  NEXT_PREVIEW_MARKER,
+  NEXT_PREVIEW_WRAPPER,
+  NEXT_PREVIEW_USER_BACKUP,
+  NEXT_CONFIG_CANDIDATES,
+  normalizeNextBasePath,
+  planNextPreviewConfig,
+  parseAllowedOriginsEnv,
+  buildNextPreviewWrapper,
   sanitizeProjectId,
   sanitizeRunId,
   resolveProjectRelPath,

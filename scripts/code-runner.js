@@ -44,6 +44,9 @@ const { randomBytes } = require("node:crypto");
 const {
   mkdirSync,
   writeFileSync,
+  readFileSync,
+  renameSync,
+  appendFileSync,
   existsSync,
   lstatSync,
   rmSync,
@@ -72,6 +75,14 @@ const {
   controlTokenForEnv,
   projectIdentity,
   sandboxCommand,
+  NEXT_PREVIEW_MARKER,
+  NEXT_PREVIEW_WRAPPER,
+  NEXT_PREVIEW_USER_BACKUP,
+  NEXT_CONFIG_CANDIDATES,
+  normalizeNextBasePath,
+  planNextPreviewConfig,
+  parseAllowedOriginsEnv,
+  buildNextPreviewWrapper,
 } = require("./code-runner-utils.js");
 
 const WORKDIR = process.env.RUNNER_WORKDIR || "/workspace";
@@ -883,6 +894,46 @@ function safeBasePath(value) {
  * when reusing). Throws { code: "dev_pool_exhausted" } when the pool is full
  * and nothing is evictable.
  */
+
+// Next preview under the tokenized base: write the config wrapper (see
+// code-runner-utils buildNextPreviewWrapper). Idempotent per start; files are
+// owned by the project's sandbox identity and excluded from git so they never
+// leak into project_write diffs or pull requests.
+function prepareNextPreviewConfig(projectId, cwd, basePath, entry) {
+  const base = normalizeNextBasePath(basePath);
+  if (!base) return null;
+  const existing = NEXT_CONFIG_CANDIDATES.filter((f) => existsSync(`${cwd}/${f}`));
+  let wrapperIsOurs = false;
+  if (existing.includes(NEXT_PREVIEW_WRAPPER)) {
+    try { wrapperIsOurs = readFileSync(`${cwd}/${NEXT_PREVIEW_WRAPPER}`, "utf8").includes(NEXT_PREVIEW_MARKER); } catch { wrapperIsOurs = false; }
+  }
+  const backupExists = existsSync(`${cwd}/${NEXT_PREVIEW_USER_BACKUP}`);
+  const plan = planNextPreviewConfig({ existing, wrapperIsOurs, backupExists });
+  const identity = sandboxIdentityFor(projectId);
+  if (plan.rename) {
+    renameSync(`${cwd}/${plan.rename[0]}`, `${cwd}/${plan.rename[1]}`);
+    pushLog(entry, `[runner] next preview: ${plan.rename[0]} movido a ${plan.rename[1]} (tu config sigue cargándose desde ahí)`);
+  }
+  const wrapper = buildNextPreviewWrapper({
+    basePath: base,
+    userConfig: plan.userConfig,
+    allowedOrigins: parseAllowedOriginsEnv(process.env.CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS),
+  });
+  writeFileSync(`${cwd}/${NEXT_PREVIEW_WRAPPER}`, wrapper, { mode: 0o644 });
+  try { chownSync(`${cwd}/${NEXT_PREVIEW_WRAPPER}`, identity.uid, identity.gid); } catch { /* best effort */ }
+  try {
+    const excludePath = `${cwd}/.git/info/exclude`;
+    if (existsSync(`${cwd}/.git`)) {
+      let current = "";
+      try { current = readFileSync(excludePath, "utf8"); } catch { current = ""; }
+      const lines = [NEXT_PREVIEW_WRAPPER, NEXT_PREVIEW_USER_BACKUP].filter((l) => !current.split("\n").includes(l));
+      if (lines.length) appendFileSync(excludePath, `${current.endsWith("\n") || !current ? "" : "\n"}${lines.join("\n")}\n`);
+    }
+  } catch { /* git metadata is optional */ }
+  pushLog(entry, `[runner] next preview: basePath ${base} via ${NEXT_PREVIEW_WRAPPER}${plan.userConfig ? ` (+ ${plan.userConfig})` : ""}`);
+  return { base, userConfig: plan.userConfig, renamed: Boolean(plan.rename) };
+}
+
 async function startDev(projectId = null, runId = null, basePath = null) {
   if (!projectId) {
     const error = new Error("legacy workspace-root execution is disabled; provide a project id");
@@ -1047,6 +1098,13 @@ async function runDev(entry, projectId, cwd) {
   // Dev command per framework. Host 0.0.0.0 so it's reachable from the proxy.
   let cmd;
   if (isNext) {
+    if (entry.basePath) {
+      try {
+        prepareNextPreviewConfig(projectId, cwd, entry.basePath, entry);
+      } catch (e) {
+        pushLog(entry, `[runner] next preview wrapper failed: ${String(e && e.message ? e.message : e)}`);
+      }
+    }
     cmd = ["node", "node_modules/next/dist/bin/next", "dev", "-H", "0.0.0.0", "-p", String(port)];
   } else if (isCompositeDev) {
     // Full-stack starter: concurrently boots API + web; flags can't reach the
