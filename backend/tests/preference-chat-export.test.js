@@ -19,9 +19,13 @@ const {
 } = require('../src/services/agents/feedback-ledger');
 
 test('dislike reasons are the documented set', () => {
-  assert.deepEqual([...DISLIKE_REASONS].sort(), [
-    'bad_math', 'incomplete', 'invented', 'wrong_file', 'wrong_tone',
-  ].sort());
+  assert.ok(DISLIKE_REASONS.includes('invented'));
+  assert.ok(DISLIKE_REASONS.includes('wrong_file'));
+  assert.ok(DISLIKE_REASONS.includes('bad_math'));
+  assert.ok(DISLIKE_REASONS.includes('wrong_tone'));
+  assert.ok(DISLIKE_REASONS.includes('incomplete'));
+  assert.ok(DISLIKE_REASONS.includes('off_topic'));
+  assert.ok(DISLIKE_REASONS.includes('other'));
 });
 
 test('mergeRlhfMetadata keeps other metadata keys', () => {

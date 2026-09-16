@@ -1630,7 +1630,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog } = {}) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null } = {}) {
   const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
     ? observabilityLog
     : generatePersistenceLog;
@@ -1812,10 +1812,34 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
               response: normalizedResponseContent,
               messageId: assistantMessage.id,
               agent: preferenceAgent({ files: processedFiles, prompt }),
+              reason: rlhfFeedback && rlhfFeedback.reason,
+              reasonCode: rlhfFeedback && rlhfFeedback.reasonCode,
+              notes: rlhfFeedback && rlhfFeedback.notes,
               embedder: texts => rag.embed(texts),
             }).catch((e) => persistenceLog.warnError('rlhf.regenerate_ingest_failed', e));
           } catch (e) {
             persistenceLog.warnError('rlhf.regenerate_ingest_skipped', e);
+          }
+        });
+      }
+
+      // Optional RLAIF: propose synthetic pairs from recent unlabeled
+      // turns when the flag is on. setImmediate + fail-open — never
+      // blocks persist or the generate path. Off by default.
+      if (userId && assistantMessage?.id) {
+        setImmediate(() => {
+          try {
+            const rlhf = require('../services/rlhf');
+            if (!rlhf.rlaif || !rlhf.rlaif.isRlaifEnabled()) return;
+            const openai = typeof rag.getOpenAI === 'function' ? rag.getOpenAI() : null;
+            rlhf.rlaif.proposeFromRecent({
+              userId,
+              chatId,
+              openai,
+              embedder: texts => rag.embed(texts),
+            }).catch((e) => persistenceLog.warnError('rlhf.rlaif_propose_failed', e));
+          } catch (e) {
+            persistenceLog.warnError('rlhf.rlaif_skipped', e);
           }
         });
       }
@@ -2087,6 +2111,10 @@ router.post(
     // Composer permission chip (#513 / #519): default|read|protected|workspace|full.
     body('permission').optional().isString().isIn(['default', 'read', 'protected', 'workspace', 'full']),
     body('toolPermission').optional().isString().isIn(['default', 'read', 'protected', 'workspace', 'full']),
+    // Optional rich regenerate / thumb reasons (API-first; no new UI).
+    body('reason').optional({ nullable: true }).isString().isLength({ max: 500 }),
+    body('reasonCode').optional({ nullable: true }).isString().isLength({ max: 32 }),
+    body('notes').optional({ nullable: true }).isString().isLength({ max: 500 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -2267,6 +2295,17 @@ router.post(
       }
 
       let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
+      let rlhfFeedback = null;
+      try {
+        const { resolveFeedbackReasons } = require('../services/rlhf/reason-codes');
+        rlhfFeedback = resolveFeedbackReasons({
+          reason: req.body.reason,
+          reasonCode: req.body.reasonCode,
+          notes: req.body.notes,
+        });
+      } catch {
+        rlhfFeedback = null;
+      }
       applyTrivialTurnGuards(req, prompt);
       const honoredPick = honorPickerModel(model, { provider });
       const pickerModel = honoredPick.model || String(model || '').trim();
@@ -7847,7 +7886,7 @@ router.post(
                 null,
                 req._agentRun || null,
                 0,
-                { observabilityLog: generateLog },
+                { observabilityLog: generateLog, rlhfFeedback },
               );
               if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
                 req._activeGenerateTurn.resolve(savedChat);
@@ -8256,7 +8295,7 @@ router.post(
           __reasoningSink,
           req._agentRun || null,
           0,
-          { observabilityLog: generateLog },
+          { observabilityLog: generateLog, rlhfFeedback },
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);

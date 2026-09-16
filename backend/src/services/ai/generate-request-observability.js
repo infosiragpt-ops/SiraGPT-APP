@@ -238,6 +238,8 @@ const ALLOWED_EVENTS = new Set([
   'rlhf.implicit_signal',
   'rlhf.regenerate_ingest_failed',
   'rlhf.regenerate_ingest_skipped',
+  'rlhf.rlaif_propose_failed',
+  'rlhf.rlaif_skipped',
   'rlhf.steering_applied',
   'rlhf.steering_skipped',
   'reasoning.confidence_calibrated',

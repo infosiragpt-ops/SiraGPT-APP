@@ -418,7 +418,7 @@ needs the backend `.env` — no frontend rebuild.
 
 ## RLHF flywheel
 
-Collects thumbs + regenerates into `preference_events`, fits an in-process Bradley-Terry reward model, and exports SFT/DPO JSONL. Phase 2 injects a compact few-shot block from those preferences at generate time. See `docs/rlhf-flywheel.md` and `docs/rlhf-phase2-steering.md`. Prisma persist is fail-open (in-memory only when the client is not ready). Best-of-N at generation time stays **off** unless explicitly enabled.
+Collects thumbs + regenerates into `preference_events`, fits an in-process Bradley-Terry reward model, and exports SFT/DPO JSONL. Phase 2 injects a compact few-shot block from those preferences at generate time. See `docs/rlhf-flywheel.md`, `docs/rlhf-phase2-steering.md`, and `docs/rlhf-phase3-feedback-rlaif.md`. Prisma persist is fail-open (in-memory only when the client is not ready). Best-of-N at generation time stays **off** unless explicitly enabled. RLAIF stays **off** unless explicitly enabled.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -426,7 +426,9 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | `SIRAGPT_RLHF_STEERING` | on | `0` / `false` / `off` skips few-shot preference injection at generate time |
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Size cap for the injected preference block |
 | `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost). Leave off in production |
-| `SIRAGPT_RLHF_RLAIF` | off | `1` allows synthetic HHH labels; abstains on mid scores |
+| `SIRAGPT_RLHF_RLAIF` | off | `1` / `true` / `on` allows synthetic HHH labels; abstains on mid scores. Leave off in production |
+| `SIRAGPT_RLHF_RLAIF_MAX_PER_USER` | 8 | Cap of synthetic rows per user per window |
+| `SIRAGPT_RLHF_RLAIF_WINDOW_MS` | 3600000 | RLAIF rate-limit window (milliseconds) |
 | `SIRAGPT_RLHF_AUTO_TRAIN` | on | `0` disables the cooldown retrainer after new labels. Local Bradley-Terry RM only — never enqueues a phase-3 job |
 | `SIRAGPT_RLHF_TRAIN_JOBS` | off | `1` / `true` / `on` enables admin SFT/DPO prep jobs (`POST /api/rlhf/jobs`). Leave off in production until an admin wants a JSONL artifact |
 | `SIRAGPT_RLHF_TRAIN_SUBMIT` | off | Optional submit after prep. No-op today (no in-repo catalog fine-tune adapter). Do not treat this as a paid auto-train switch |

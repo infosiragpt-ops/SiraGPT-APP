@@ -34,7 +34,9 @@ on the generate path.
 | `SIRAGPT_RLHF_STEERING` | on | Few-shot preference injection at generate time. Cheap retrieval; fail-open |
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Cap for the injected block |
 | `SIRAGPT_RLHF_BEST_OF_N` | **off** | Inference-time sample-and-rank. Leave off in production unless you accept N× tokens |
-| `SIRAGPT_RLHF_RLAIF` | off | Synthetic labels. Mid scores abstain |
+| `SIRAGPT_RLHF_RLAIF` | **off** | Synthetic HHH labels. Mid scores abstain. See `docs/rlhf-phase3-feedback-rlaif.md` |
+| `SIRAGPT_RLHF_RLAIF_MAX_PER_USER` | 8 | Cap of synthetic rows per user per window |
+| `SIRAGPT_RLHF_RLAIF_WINDOW_MS` | 3600000 | RLAIF rate-limit window |
 | `SIRAGPT_RLHF_AUTO_TRAIN` | on | Retrain the local Bradley-Terry RM after new labels (cooldown). `0` for tests / freeze. Never starts a phase-3 job |
 | `SIRAGPT_RLHF_TRAIN_JOBS` | **off** | Admin SFT/DPO prep jobs. See `docs/rlhf-phase3-train-pipeline.md` |
 | `SIRAGPT_RLHF_TRAIN_SUBMIT` | **off** | Optional submit after prep. No-op until a catalog adapter exists |
@@ -46,8 +48,9 @@ and log once.
 
 Mounted at `/api/rlhf` (auth required; train is admin):
 
-- `POST /feedback` — explicit thumb (`helpful` / `label`, optional `chatId`)
-- `POST /pair` — chosen vs rejected for one prompt
+- `POST /feedback` — explicit thumb (`helpful` / `label`, optional `reason` / `reasonCode` / `notes` / `chatId`)
+- `POST /pair` — chosen vs rejected texts **or** message ids, shared `pairId`
+- `POST /rlaif/propose` — synthetic pair / recent-turn scan (flag-gated)
 - `GET /stats` — caller counts
 - `GET /export?format=sft\|dpo\|rm` — JSONL download
 - `POST /score` / `POST /rerank` — score or rank with the RM
@@ -81,9 +84,10 @@ Pass `scrubPii=0` only on a locked admin box. GDPR scrub of
 `preference_events` text runs with the existing deleted-user job.
 
 Phase 2 (inference steering + ops telemetry) is documented in
-`docs/rlhf-phase2-steering.md`.
+`docs/rlhf-phase2-steering.md`. Phase 3 (rich reasons + pairwise + RLAIF)
+is documented in `docs/rlhf-phase3-feedback-rlaif.md`.
 
-Phase 3 (admin SFT/DPO prep jobs, still no paid auto-train) is
+Admin SFT/DPO prep jobs (still no paid auto-train) are documented in
 `docs/rlhf-phase3-train-pipeline.md`.
 
 ## Out of scope (later lotes)
