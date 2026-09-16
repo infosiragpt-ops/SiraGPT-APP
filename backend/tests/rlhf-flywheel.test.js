@@ -327,6 +327,7 @@ describe('hydrateRecent', () => {
     store.attachPrisma({
       preferenceEvent: {
         findMany: async () => rows,
+        create: async () => ({}),
       },
     });
     try {
