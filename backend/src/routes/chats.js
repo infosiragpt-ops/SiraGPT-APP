@@ -1444,13 +1444,17 @@ router.post('/messages/:messageId/feedback', [
               timestamp: { lt: message.timestamp },
             },
             orderBy: { timestamp: 'desc' },
-            select: { content: true },
+            select: { content: true, files: true },
           });
 
+          const { preferenceAgent } = require('../services/document-analysis-rlhf');
           await feedbackLedger.record({
             userId: req.user.id,
             runId: message.id,
-            agent: 'chat',
+            agent: preferenceAgent({
+              files: priorUser?.files,
+              prompt: priorUser?.content,
+            }),
             request: priorUser?.content || '',
             response: message.content || updatedMessage.content || '',
             helpful: feedback === 'liked',
