@@ -145,9 +145,9 @@ const documentResponseFidelity = require('../services/document-response-fidelity
 const documentBlockBudget = require('../services/document-block-budget');
 const documentAnalysisQuality = require('../services/document-analysis-quality');
 const directAnswerNormalizer = require('../services/direct-answer-normalizer');
-const feedbackLedger = require('../services/agents/feedback-ledger');
 const { loadPreferenceRows } = require('../services/agents/feedback-durable');
-const { preferenceAgent, formatDocumentRlhfBlock } = require('../services/document-analysis-rlhf');
+const { preferenceAgent } = require('../services/document-analysis-rlhf');
+const rlhfSteering = require('../services/rlhf/steering');
 const modelRouter = require('../services/ai-product-os/model-router');
 const modelSyncService = require('../services/model-sync-service');
 const { listManifestModels, DEFAULT_ACTIVE_IMAGE_MODEL_NAMES } = require('../services/model-catalog-manifest');
@@ -1811,7 +1811,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
               prompt,
               response: normalizedResponseContent,
               messageId: assistantMessage.id,
-              agent: 'chat',
+              agent: preferenceAgent({ files: processedFiles, prompt }),
               embedder: texts => rag.embed(texts),
             }).catch((e) => persistenceLog.warnError('rlhf.regenerate_ingest_failed', e));
           } catch (e) {
@@ -3642,17 +3642,18 @@ router.post(
               prismaClient: prisma,
             }).catch((e) => { generateLog.warnError('memory.cross_chat_recall_failed', e); return []; })
           : Promise.resolve([]);
-        const _feedbackPromise = _useSemanticEnrichment
-          ? feedbackLedger.findExemplars({
+        const _feedbackPromise = _useSemanticEnrichment && rlhfSteering.isSteeringEnabled()
+          ? rlhfSteering.buildSteeringBlock({
               userId,
-              request: prompt,
+              prompt,
+              files: processedFiles,
               embedder: texts => rag.embed(texts),
-              k: 2,
-              onlyHelpful: true,
-              agent: preferenceAgent({ files: processedFiles, prompt }),
               loader: (uid) => loadPreferenceRows(prisma, uid),
-            }).catch((e) => { generateLog.warnError('feedback.exemplars_unavailable', e); return []; })
-          : Promise.resolve([]);
+            }).catch((e) => {
+              generateLog.warnError('feedback.exemplars_unavailable', e);
+              return { block: '', applied: false, reason: 'fail_open' };
+            })
+          : Promise.resolve({ block: '', applied: false, reason: 'skipped' });
         const [_memRecalled, _crossChatTurns, _exemplars] = await Promise.all([
           chatLatencyPolicy.resolveWithinBudget(_memoryPromise, {
             fallback: [], budgetMs: _enrichmentBudgetMs, label: 'memory-recall',
@@ -3661,7 +3662,8 @@ router.post(
             fallback: [], budgetMs: _enrichmentBudgetMs, label: 'cross-chat-recall',
           }),
           chatLatencyPolicy.resolveWithinBudget(_feedbackPromise, {
-            fallback: [], budgetMs: _enrichmentBudgetMs, label: 'feedback-exemplars',
+            fallback: { block: '', applied: false, reason: 'skipped' },
+            budgetMs: _enrichmentBudgetMs, label: 'feedback-exemplars',
           }),
         ]);
         recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
@@ -3721,10 +3723,18 @@ router.post(
             generateLog.info('memory.cross_chat_recalled', { historyMessageCount: _crossChatTurns.length });
           }
         }
-        const _formatted = feedbackLedger.formatExemplarsBlock(_exemplars);
-        feedbackBlock = preferenceAgent({ files: processedFiles, prompt }) === 'document'
-          ? formatDocumentRlhfBlock(_exemplars)
-          : (_formatted ? `\n\n## USER-PREFERRED RESPONSE EXAMPLES\n${_formatted}` : '');
+        const _steer = _exemplars && typeof _exemplars === 'object' ? _exemplars : { block: '' };
+        feedbackBlock = typeof _steer.block === 'string' ? _steer.block : '';
+        if (_steer.applied) {
+          generateLog.info('rlhf.steering_applied', {
+            sourceCount: _steer.exemplarCount || 0,
+            reasonCode: 'ok',
+          });
+        } else if (_useSemanticEnrichment && rlhfSteering.isSteeringEnabled()) {
+          generateLog.info('rlhf.steering_skipped', {
+            reasonCode: _steer.reason || 'no_exemplars',
+          });
+        }
       }
 
       // Attribution graph slot — kept for backwards compatibility.
@@ -7210,6 +7220,7 @@ router.post(
                   provider: actualProvider,
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
+                  preferenceBlock: feedbackBlock || '',
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
                   customGptSkillPlan: {
                     selectedSkillIds: Array.isArray(semanticIntentAnalysis?.skill_plan?.selected_skills)

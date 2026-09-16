@@ -386,11 +386,11 @@ describe('source contracts', () => {
   const fs = require('node:fs');
   const path = require('node:path');
 
-  it('chat thumbs pass chatId and record routing success on liked', () => {
+  it('chat thumbs pass chatId and record routing outcomes via the phase-2 bridge', () => {
     const src = fs.readFileSync(path.join(__dirname, '../src/routes/chats.js'), 'utf8');
     assert.match(src, /chatId:\s*message\.chatId/);
-    assert.match(src, /recordOutcome/);
-    assert.match(src, /outcome:\s*['"]success['"]/);
+    assert.match(src, /routing-bridge/);
+    assert.match(src, /recordFromThumb/);
   });
 
   it('boot attaches Prisma then hydrates the ledger without blocking listen', () => {

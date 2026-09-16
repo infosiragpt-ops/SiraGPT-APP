@@ -20,14 +20,18 @@ ledger from the newest `preference_events` (fail-open if the table is
 missing). `findExemplars` can also hydrate a user from `Message.feedback`
 via `feedback-durable.loadPreferenceRows`.
 
-Thumbs-up also records `routing-feedback` `success` when the assistant
-message metadata carries a model id (fail-open; no model → no-op).
+Thumbs-up records `routing-feedback` `success` and thumbs-down records
+`disliked` when the assistant message metadata carries a model id
+(fail-open; no model → no-op). Regenerates already record `regenerated`
+on the generate path.
 
 ## Flags
 
 | Env | Default | Effect |
 |-----|---------|--------|
 | `SIRAGPT_RLHF_ENABLED` | on | Collection. `0`/`false`/`off` skips writes |
+| `SIRAGPT_RLHF_STEERING` | on | Few-shot preference injection at generate time. Cheap retrieval; fail-open |
+| `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Cap for the injected block |
 | `SIRAGPT_RLHF_BEST_OF_N` | **off** | Inference-time sample-and-rank. Leave off in production unless you accept N× tokens |
 | `SIRAGPT_RLHF_RLAIF` | off | Synthetic labels. Mid scores abstain |
 | `SIRAGPT_RLHF_AUTO_TRAIN` | on | Retrain after new labels (cooldown). `0` for tests / freeze |
@@ -72,7 +76,10 @@ curl -fsS -H "Authorization: Bearer $TOKEN" \
 Pass `scrubPii=0` only on a locked admin box. GDPR scrub of
 `preference_events` text runs with the existing deleted-user job.
 
-## Out of scope (phase 2+)
+Phase 2 (inference steering + ops telemetry) is documented in
+`docs/rlhf-phase2-steering.md`.
 
-GPU training pipeline, new `/agentes` chrome, enabling best-of-N by
-default, OpenRouter as a hidden fallback, and any `/code` surface.
+## Out of scope (phase 3+)
+
+GPU fine-tune jobs, admin dashboard UI, enabling best-of-N by default,
+OpenRouter as a hidden fallback, and any `/code` surface.

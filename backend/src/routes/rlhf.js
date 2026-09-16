@@ -5,7 +5,8 @@
  *
  *   POST /api/rlhf/feedback          record an explicit thumb
  *   POST /api/rlhf/pair              record a chosen/rejected pair for one prompt
- *   GET  /api/rlhf/stats             caller's preference counts
+ *   GET  /api/rlhf/stats             caller's preference counts + phase-2 flags
+ *                                    (admin also gets process telemetry)
  *   GET  /api/rlhf/export            SFT / DPO / RM JSONL
  *   POST /api/rlhf/score             score a (prompt, response) with the RM
  *   POST /api/rlhf/rerank            rank N candidates with the RM (judge fallback)
@@ -124,10 +125,11 @@ router.post(
 
 router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
   await rlhf.hydrateUser(req.user.id);
-  const globalStats = req.user.isAdmin || req.user.isSuperAdmin ? rlhf.stats() : null;
+  const isAdmin = !!(req.user.isAdmin || req.user.isSuperAdmin);
   res.json({
     ok: true,
     enabled: rlhf.isCollectionEnabled(),
+    steering: rlhf.isSteeringEnabled(),
     bestOfN: rlhf.isBestOfNEnabled(),
     model: rlhf.hasActiveModel() ? {
       version: rlhf.getActiveModel().version,
@@ -135,7 +137,11 @@ router.get('/stats', authenticateToken, handleErrors(async (req, res) => {
       trainedAt: rlhf.getActiveModel().trainedAt,
     } : null,
     user: rlhf.stats(req.user.id),
-    global: globalStats,
+    global: isAdmin ? rlhf.stats() : null,
+    phase2: isAdmin ? rlhf.phase2Stats() : {
+      steeringEnabled: rlhf.isSteeringEnabled(),
+      bestOfN: rlhf.isBestOfNEnabled(),
+    },
   });
 }));
 

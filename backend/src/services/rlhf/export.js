@@ -178,12 +178,22 @@ async function exportData({
   else if (format === 'dpo' || format === 'pairs') out = exportDPO(args);
   else if (format === 'rm') out = exportRM(args);
   else throw new Error(`rlhf.export: unknown format "${format}" (use 'sft', 'dpo', or 'rm')`);
+  const ndjson = out.lines.join('\n') + (out.lines.length > 0 ? '\n' : '');
+  try {
+    require('./metrics').recordExport({
+      format,
+      count: out.count,
+      bytes: Buffer.byteLength(ndjson, 'utf8'),
+    });
+  } catch {
+    /* telemetry is optional */
+  }
   return {
     format,
     count: out.count,
     scrubbed: scrubPii,
     piiHits: out.piiHits,
-    ndjson: out.lines.join('\n') + (out.lines.length > 0 ? '\n' : ''),
+    ndjson,
   };
 }
 

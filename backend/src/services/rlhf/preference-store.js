@@ -301,6 +301,16 @@ async function recordEvent(args = {}) {
 
   maybeScheduleTrain();
 
+  try {
+    require('./metrics').recordIngest({
+      source: event.source,
+      label: event.label,
+      agent: event.agent,
+    });
+  } catch {
+    /* telemetry is optional */
+  }
+
   return { stored: true, total: listMemory(userId).length, event: toPublic(event), paired };
 }
 

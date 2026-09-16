@@ -1481,23 +1481,15 @@ router.post('/messages/:messageId/feedback', [
             notes: feedback === 'disliked' ? (reason || null) : null,
             embedder: texts => rag.embed(texts),
           });
-          if (feedback === 'liked') {
-            try {
-              const meta = parseMessageMetadata(message.metadata);
-              const agentMeta = parseMessageMetadata(message.agentMetadata);
-              const model = meta.model || meta.selectedModel || meta.actualModel
-                || agentMeta.model || agentMeta.selectedModel || null;
-              if (model) {
-                const routingFeedback = require('../services/routing-feedback');
-                routingFeedback.recordOutcome({
-                  model,
-                  intent: meta.intent || agentMeta.intent || 'chat',
-                  difficulty: meta.difficulty || agentMeta.difficulty || null,
-                  outcome: 'success',
-                });
-              }
-            } catch (_rfErr) { /* routing-feedback is fail-open */ }
-          }
+          try {
+            const meta = parseMessageMetadata(message.metadata);
+            const agentMeta = parseMessageMetadata(message.agentMetadata);
+            require('../services/rlhf/routing-bridge').recordFromThumb({
+              feedback,
+              metadata: meta,
+              agentMetadata: agentMeta,
+            });
+          } catch (_rfErr) { /* routing-feedback is fail-open */ }
         } catch (ledgerErr) {
           console.warn('[chats] feedback ledger update failed:', ledgerErr.message || ledgerErr);
         }
