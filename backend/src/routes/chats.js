@@ -1425,6 +1425,7 @@ router.post('/messages/:messageId/feedback', [
         content: true,
         timestamp: true,
         metadata: true,
+        agentMetadata: true,
         chat: {
           select: {
             userId: true
@@ -1469,6 +1470,7 @@ router.post('/messages/:messageId/feedback', [
           await feedbackLedger.record({
             userId: req.user.id,
             runId: message.id,
+            chatId: message.chatId,
             agent: preferenceAgent({
               files: priorUser?.files,
               prompt: priorUser?.content,
@@ -1479,6 +1481,23 @@ router.post('/messages/:messageId/feedback', [
             notes: feedback === 'disliked' ? (reason || null) : null,
             embedder: texts => rag.embed(texts),
           });
+          if (feedback === 'liked') {
+            try {
+              const meta = parseMessageMetadata(message.metadata);
+              const agentMeta = parseMessageMetadata(message.agentMetadata);
+              const model = meta.model || meta.selectedModel || meta.actualModel
+                || agentMeta.model || agentMeta.selectedModel || null;
+              if (model) {
+                const routingFeedback = require('../services/routing-feedback');
+                routingFeedback.recordOutcome({
+                  model,
+                  intent: meta.intent || agentMeta.intent || 'chat',
+                  difficulty: meta.difficulty || agentMeta.difficulty || null,
+                  outcome: 'success',
+                });
+              }
+            } catch (_rfErr) { /* routing-feedback is fail-open */ }
+          }
         } catch (ledgerErr) {
           console.warn('[chats] feedback ledger update failed:', ledgerErr.message || ledgerErr);
         }

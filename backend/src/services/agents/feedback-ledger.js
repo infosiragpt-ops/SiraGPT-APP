@@ -68,7 +68,7 @@ function cosine(a, b) {
  *   Pass the shared rag.embed() here. When null, the entry is stored
  *   without an embedding and later findExemplars calls will skip it.
  */
-async function record({ userId, runId, agent, request, response, helpful, notes, embedder }) {
+async function record({ userId, runId, agent, request, response, helpful, notes, embedder, chatId }) {
   if (!userId || !runId) throw new Error('feedback-ledger.record: userId and runId required');
   if (typeof helpful !== 'boolean') throw new Error('feedback-ledger.record: helpful must be boolean');
 
@@ -108,6 +108,29 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
     list.splice(0, list.length - MAX_ENTRIES_PER_USER);
   }
 
+  // Durable RLHF flywheel. Fail-open: a store/prisma error must never
+  // fail the thumb the user just submitted.
+  try {
+    const store = require('../rlhf/preference-store');
+    if (store.isCollectionEnabled()) {
+      await store.ingestThumb({
+        userId,
+        runId,
+        messageId: runId,
+        chatId: chatId || null,
+        agent: agent || null,
+        request: entry.request,
+        response,
+        helpful,
+        notes: entry.notes,
+        embedding: embedding,
+        embedder,
+      });
+    }
+  } catch (err) {
+    console.warn('[feedback-ledger] rlhf ingest skipped:', err.message || err);
+  }
+
   return { stored: true, total: list.length };
 }
 
@@ -124,6 +147,7 @@ async function hydrateFromRows(userId, rows, embedder) {
     await record({
       userId,
       runId: String(row.runId),
+      chatId: row.chatId || null,
       agent: row.agent || 'chat',
       request: row.request,
       response: row.response,
@@ -160,7 +184,32 @@ async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = t
       console.warn('[feedback-ledger] durable hydrate failed:', err && err.message);
     }
   }
-  const list = ledger.get(userId);
+  let list = ledger.get(userId);
+  if (!list || list.length === 0) {
+    try {
+      const store = require('../rlhf/preference-store');
+      await store.hydrateUser(userId);
+      for (const e of store.dump(userId)) {
+        const runId = e.runId || e.id;
+        if (!runId) continue;
+        let dest = ledger.get(userId);
+        if (!dest) { dest = []; ledger.set(userId, dest); }
+        if (dest.some((x) => x.runId === runId)) continue;
+        dest.push({
+          runId,
+          userId: e.userId,
+          agent: e.agent || null,
+          request: e.promptText || e.request || '',
+          response: e.responseText || e.response,
+          helpful: e.label === 'chosen' || e.helpful === true,
+          notes: e.notes || null,
+          embedding: e.promptEmbedding || e.embedding || null,
+          at: e.createdAt || Date.now(),
+        });
+      }
+      list = ledger.get(userId);
+    } catch { /* hydrate is best-effort */ }
+  }
   if (!list || list.length === 0) return [];
   if (!request || typeof embedder !== 'function') return [];
 
@@ -217,8 +266,42 @@ function stats(userId) {
   };
 }
 
+/**
+ * Insert an already-durable row into the RAM ledger without writing
+ * back to Prisma. Used on boot so findExemplars works before the first
+ * thumb of the process.
+ */
+function ingestLocal({ userId, runId, agent, request, response, helpful, notes, embedding, at }) {
+  if (!userId || !runId) return;
+  const entry = {
+    runId: String(runId),
+    userId,
+    agent: agent || null,
+    request: String(request || '').slice(0, 4000),
+    response,
+    helpful: helpful === true,
+    notes: typeof notes === 'string' ? notes.slice(0, 500) : null,
+    embedding: embedding || null,
+    at: at || nowMs(),
+  };
+  let list = ledger.get(userId);
+  if (!list) { list = []; ledger.set(userId, list); }
+  const existingIdx = list.findIndex((e) => e.runId === entry.runId);
+  if (existingIdx >= 0) list[existingIdx] = entry;
+  else list.push(entry);
+  if (list.length > MAX_ENTRIES_PER_USER) {
+    list.splice(0, list.length - MAX_ENTRIES_PER_USER);
+  }
+}
+
 function clearUser(userId) { ledger.delete(userId); }
-function _reset() { ledger.clear(); }
+function _reset() {
+  ledger.clear();
+  try {
+    require('../rlhf/preference-store')._reset();
+    require('../rlhf/trainer')._reset();
+  } catch { /* flywheel optional in unit tests that never loaded it */ }
+}
 
 /**
  * Return a shallow copy of every entry for this user. Used by the
@@ -238,6 +321,7 @@ module.exports = {
   formatExemplarsBlock,
   stats,
   clearUser,
+  ingestLocal,
   _reset,
   _dump,
   MAX_ENTRIES_PER_USER,

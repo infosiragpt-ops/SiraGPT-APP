@@ -339,7 +339,8 @@ describe('module surface', () => {
     const keys = Object.keys(mod).sort();
     assert.deepEqual(keys, [
       'MAX_ENTRIES_PER_USER', '_dump', '_reset', 'clearUser',
-      'findExemplars', 'formatExemplarsBlock', 'hydrateFromRows', 'record', 'stats',
+      'findExemplars', 'formatExemplarsBlock', 'hydrateFromRows', 'ingestLocal',
+      'record', 'stats',
     ]);
   });
 });

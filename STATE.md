@@ -98,6 +98,13 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## Completado (honesto)
 
+- **RLHF flywheel (2026-09-16):** preferencias humanas durables (`preference_events`),
+  pares chosen/rejected (thumbs + regenerate), reward model Bradley-Terry lineal
+  sobre embeddings, export SFT/DPO/RM, RLAIF opcional (off por defecto). Superficie
+  `/api/rlhf/*`. Best-of-N con RM en inferencia queda detrás de
+  `SIRAGPT_RLHF_BEST_OF_N` (off: no multiplica coste de tokens). No es PPO GPU —
+  es el loop InstructGPT de producto: recolectar → RM → rerank/export DPO.
+
 - **F0**: `ROADMAP.md` + `STATE.md` en la raíz, aprobados.
 - **AgentRunner v0** en `backend/src/services/agent-runner/`: loop LLM→tool→result→LLM
   (tope 25, nativo + ReAct), tools (`execute_python/bash`, `read/write_file`,
