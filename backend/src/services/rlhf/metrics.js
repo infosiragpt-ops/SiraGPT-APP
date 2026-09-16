@@ -56,6 +56,7 @@ function freshState() {
       byCode: Object.create(null),
       lastKind: null,
       lastCode: null,
+    },
     trainJobs: {
       created: 0,
       ready: 0,
@@ -225,6 +226,7 @@ function snapshot() {
       byCode: { ...state.implicit.byCode },
       lastKind: state.implicit.lastKind,
       lastCode: state.implicit.lastCode,
+    },
     trainJobs: {
       created: state.trainJobs.created,
       ready: state.trainJobs.ready,
