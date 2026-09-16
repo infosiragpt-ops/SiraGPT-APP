@@ -1397,6 +1397,16 @@ details[open] > summary .think-chevron,
   white-space: nowrap;
 }
 
+.effort-description {
+  display: block;
+  max-width: 18rem;
+  margin: 0 0 0.55rem;
+  color: hsl(220 9% 42%);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .effort-track {
   position: relative;
   display: block;
@@ -1717,6 +1727,9 @@ details[open] > summary .think-chevron,
   border-color: hsl(264 80% 76% / 0.18);
   background: hsl(264 50% 60% / 0.14);
 }
+.dark .effort-description {
+  color: hsl(var(--muted-foreground));
+}
 .dark .effort-track-line {
   box-shadow:
     inset 0 1px 3px hsl(0 0% 0% / 0.35),
@@ -1735,6 +1748,7 @@ details[open] > summary .think-chevron,
   .effort-track-fill { background: Highlight; }
   .effort-dither, .effort-sheen, .effort-track-line::after { display: none; }
   .effort-section .effort-level { color: CanvasText; border-color: CanvasText; background: Canvas; }
+  .effort-section .effort-description { color: CanvasText; }
   .effort-section .effort-track:focus-visible { outline-color: Highlight; }
 }
 
