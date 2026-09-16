@@ -45,7 +45,9 @@ test('interim runner is resource-contained and separated from the data network',
   assert.match(runner, /cap_add:[\s\S]*- SETGID[\s\S]*- SETUID/);
   assert.doesNotMatch(runner, /- SETPCAP/);
   assert.match(runner, /no-new-privileges:true/);
-  assert.match(runner, /pids_limit:\s*512/);
+  // Bounded pid budget: 512 starved `bun install` + a Next/Vite dev server
+  // with its worker threads (spawn EAGAIN); 2048 still contains a fork bomb.
+  assert.match(runner, /pids_limit:\s*2048/);
   assert.match(runner, /runner_bun_cache:\/runner-cache/);
   assert.match(runner, /\/runner-home:rw,nosuid,nodev/);
   assert.match(runner, /\/runner-tmp:rw,nosuid,nodev/);
