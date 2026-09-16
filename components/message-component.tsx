@@ -97,7 +97,7 @@ import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
-import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { parseMessageFilesForRender } from "@/lib/chat/message-rendering"
 import { getAudioMediaMeta, isAudioComposerFile, isVideoComposerFile, resolveComposerMediaSrc } from "@/lib/chat/composer-files"
@@ -749,6 +749,7 @@ const MessageDocChipsInner = ({
                     <ChatVideoPlayer
                         key={file.id || file.tempId || `video-${i}`}
                         src={resolveComposerMediaSrc(file)}
+                        file={getAttachmentLocalFile(file)}
                         poster={meta?.thumbnailDataUrl || file?.thumbnailUrl || null}
                         title={name}
                         durationSeconds={meta?.durationSeconds}
@@ -763,6 +764,7 @@ const MessageDocChipsInner = ({
                     <ChatAudioPlayer
                         key={file.id || file.tempId || `audio-${i}`}
                         src={resolveComposerMediaSrc(file)}
+                        file={getAttachmentLocalFile(file)}
                         title={name}
                         durationSeconds={meta?.durationSeconds}
                         peaks={Array.isArray(meta?.peaks) ? meta.peaks : []}
