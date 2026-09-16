@@ -4307,6 +4307,7 @@ model PreferenceEvent {
   promptEmbedding   Bytes?   @map("prompt_embedding")
   responseEmbedding Bytes?   @map("response_embedding")
   judgeScore        Json?    @map("judge_score")
+  reasonCode        String?  @map("reason_code")
   notes             String?
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")

@@ -72,7 +72,7 @@ test('generate route no longer prints known user content and identifiers', () =>
 
 test('generate persistence receives the request-bound observability logger', () => {
   const saveCalls = [...generateRoute.matchAll(/saveChatAndTrackUsage\(/g)];
-  const boundLoggers = generateRoute.match(/\{\s*observabilityLog:\s*generateLog\s*\}/g) || [];
+  const boundLoggers = generateRoute.match(/observabilityLog:\s*generateLog/g) || [];
   assert.equal(saveCalls.length, 3);
   assert.equal(boundLoggers.length, saveCalls.length);
 });

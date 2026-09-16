@@ -200,7 +200,7 @@ async function run(opts = {}) {
       try {
         const prefs = await prisma.preferenceEvent.findMany({
           where: { userId: u.id },
-          select: { id: true, promptText: true, responseText: true, notes: true, judgeScore: true },
+          select: { id: true, promptText: true, responseText: true, notes: true, reasonCode: true, judgeScore: true },
         });
         for (const p of prefs) {
           if (dryRun) continue;
