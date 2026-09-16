@@ -125,7 +125,7 @@ async function resolveBoundProject(ctx) {
       error: {
         ok: false,
         code: 'no_project',
-        message: 'Este chat aún no tiene proyecto web vinculado. Pide al usuario que pulse "Nuevo proyecto" en el panel IDE de /agentes y reintenta.',
+        message: 'Este chat aún no tiene proyecto web vinculado. Si el usuario nombró un repositorio de GitHub, llama project_clone_repo con su URL; si no, pídele el repo o que pulse "Nuevo proyecto" en el panel IDE de /agentes.',
       },
     };
   }
@@ -254,7 +254,7 @@ async function projectExec(args, ctx) {
 
 const projectReadTool = {
   name: 'project_read',
-  description: 'Read a text file from this chat\'s linked web project (Codex workspace). Use to inspect code, configs or docs before editing. Line-based offset/limit, output capped. Fails with no_project when the chat has no linked project yet — ask the user to press "Nuevo proyecto" in the /agentes IDE panel.',
+  description: 'Read a text file from this chat\'s linked web project (Codex workspace). Use to inspect code, configs or docs before editing. Line-based offset/limit, output capped. Fails with no_project when the chat has no linked project yet — clone the user\'s repo with project_clone_repo first.',
   parameters: {
     type: 'object',
     properties: {
