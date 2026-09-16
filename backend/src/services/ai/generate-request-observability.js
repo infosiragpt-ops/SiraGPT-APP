@@ -235,6 +235,7 @@ const ALLOWED_EVENTS = new Set([
   'rag.operational_unavailable',
   'rag.rerank_failed',
   'rag.reranked',
+  'rlhf.implicit_signal',
   'rlhf.regenerate_ingest_failed',
   'rlhf.regenerate_ingest_skipped',
   'rlhf.rlaif_propose_failed',

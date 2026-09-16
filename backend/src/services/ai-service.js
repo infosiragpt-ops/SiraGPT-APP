@@ -535,7 +535,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null }) {
         // The route hands us a client for the provider it resolved. When an
         // image turn has to leave a text-only model, `provider` changes below;
         // that client must then NOT be reused (live 2026-09-02: Meta's client
@@ -1032,10 +1032,29 @@ class AIService {
             }
             console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
 
+            // RLHF implicit signal: the caller (generate route) feeds this
+            // failure into routing-feedback + sira_rlhf_* telemetry. Advisory,
+            // never throws, never changes what the user sees.
+            const reportProviderFailure = (code) => {
+                if (typeof onProviderFailure !== 'function') return;
+                try {
+                    onProviderFailure({
+                        code,
+                        provider,
+                        model,
+                        reason: String(apiError?.code || apiError?.status || apiError?.name || 'error').slice(0, 48),
+                        message: String(apiError?.message || '').slice(0, 200),
+                        partial: hasStreamedAnyContent === true,
+                        streamedChars: String(fullResponseContent || '').length,
+                    });
+                } catch { /* advisory */ }
+            };
+
             // If we already streamed part of the answer, append a short,
             // in-language note so the user understands why the reply cut off,
             // instead of just getting a silent truncation.
             if (hasStreamedAnyContent) {
+                reportProviderFailure('partial_stream');
                 const note = '\n\n' + getFallbackMessage(language);
                 try { res.write(`data: ${JSON.stringify({ content: note })}\n\n`); } catch { /* socket may be gone */ }
                 return fullResponseContent + note;
@@ -1051,6 +1070,7 @@ class AIService {
                     ? SIRA_MINI_UNAVAILABLE_MESSAGE
                     : publicGenerateErrorMessage(apiError);
                 const error = mini ? 'sira_mini_unavailable' : 'connection_unavailable';
+                reportProviderFailure(error);
                 closeGenerateSseWithError(res, { message, code: error, recovered: false });
                 return message;
             }
@@ -1059,6 +1079,7 @@ class AIService {
             // assistant's reply AND surface the technical error on a side
             // channel so the UI can toast/retry if it wants to.
             const fallback = getFallbackMessage(language);
+            reportProviderFailure('provider_fallback');
             try {
                 res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
                 res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable.`, recovered: true })}\n\n`);

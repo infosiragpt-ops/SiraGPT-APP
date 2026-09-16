@@ -2186,6 +2186,7 @@ router.post(
     let __fairQueueRelease = null;
     let __firstByteAt = null;
     let __firstByteWatchdog = null;
+    let __ttfbAbortedAt = null;
 
     // A reconnect must never replace the original owner's stop controller.
     // The follower is attached to the in-process stream fanout below after
@@ -3104,6 +3105,17 @@ router.post(
       try {
         const adTtfb = require('../services/agent-runner/engine-adapter');
         if (typeof adTtfb.abortIfFirstByteOver45s === 'function') {
+          // Reasoning / tool-call deltas count as the provider's first byte:
+          // a thinking model (Grok 4.6, DeepSeek reasoner) that streams its
+          // trace for >45 s must not be aborted into «Conexión no disponible».
+          const { installFirstByteProbe } = require('../services/generate-first-byte');
+          installFirstByteProbe(res, function (at) {
+            if (__firstByteAt == null) __firstByteAt = at;
+            if (__firstByteWatchdog) {
+              try { clearInterval(__firstByteWatchdog); } catch (_) {}
+              __firstByteWatchdog = null;
+            }
+          });
           __firstByteWatchdog = setInterval(function () {
             try {
               const hit = adTtfb.abortIfFirstByteOver45s({
@@ -3112,6 +3124,7 @@ router.post(
                 firstByteAt: __firstByteAt,
               });
               if (hit && hit.abort) {
+                __ttfbAbortedAt = Date.now();
                 controller.abort();
                 if (__firstByteWatchdog) {
                   clearInterval(__firstByteWatchdog);
@@ -7424,6 +7437,29 @@ router.post(
               thinkingLevel: req._thinkingLevel || undefined,
               trivialTurn: req._trivialTurn === true,
               toolChoice: req._trivialTurn === true ? 'none' : undefined,
+              // RLHF implicit signal: a failed turn (Conexión no disponible,
+              // empty completion, fallback note, TTFB abort) is a negative
+              // outcome for this (intent, difficulty, model) in routing-feedback
+              // and a sira_rlhf_implicit_* counter. Fail-open.
+              onProviderFailure: (info) => {
+                try {
+                  const code = __ttfbAbortedAt != null ? 'ttfb_abort' : (info && info.code);
+                  const bridge = require('../services/rlhf/routing-bridge');
+                  const rec = bridge.recordFromProviderFailure({
+                    code,
+                    model: actualModel,
+                    intent: req._cognitiveDecision && req._cognitiveDecision.intent,
+                    difficulty: req._cognitiveDecision && req._cognitiveDecision.difficulty,
+                  });
+                  generateLog.warn('rlhf.implicit_signal', {
+                    code: code || null,
+                    outcome: rec && rec.outcome ? rec.outcome : null,
+                    recorded: Boolean(rec && rec.recorded),
+                    reason: info && info.reason ? info.reason : null,
+                    partial: Boolean(info && info.partial),
+                  });
+                } catch (_) { /* implicit signal is advisory */ }
+              },
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't

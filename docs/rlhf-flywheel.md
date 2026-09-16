@@ -13,6 +13,7 @@ GPU PPO in this slice.
 | Regenerar | `saveChatAndTrackUsage` when `regenerate` | prior row marked `rejected`; new candidate `unlabeled` |
 | Explicit pair | `POST /api/rlhf/pair` | chosen + rejected with a shared `pairId` |
 | Optional RLAIF | `SIRAGPT_RLHF_RLAIF=1` | only high-confidence HHH scores |
+| Implicit failure (Conexión no disponible, TTFB abort, partial stream) | `routing-bridge.recordFromProviderFailure` from the generate route | none — routing-feedback penalty + `sira_rlhf_implicit_*` counters only (see phase 2 doc) |
 
 On boot the process attaches Prisma (`attachPrisma`) and, in `setImmediate`,
 loads the latest active RM snapshot and hydrates the in-memory feedback
