@@ -4,23 +4,90 @@
  * Complete an /api/ai/generate SSE response after a provider 4xx/5xx.
  * Caddy turns an unterminated event-stream (headers flushed, no [DONE]/end)
  * into HTTP 502. Always write a typed error frame + [DONE], then end().
+ *
+ * Bare «Conexión no disponible» is reserved for a missing first-party key
+ * or a vendor-leaking SDK dump. Timeouts, aborts, GitHub OAuth, sandbox
+ * jail and tool failures get an actionable Spanish code (§16 / #681).
  */
 
 const { CONNECTION_UNAVAILABLE_MESSAGE } = require('./provider-inference');
 
+let _githubConnectMessage;
+function githubConnectMessage() {
+  if (_githubConnectMessage) return _githubConnectMessage;
+  try {
+    _githubConnectMessage = require('../construir-mvp/github-publish').CONNECT_MESSAGE;
+  } catch {
+    _githubConnectMessage =
+      'GitHub no está conectado. Ve a Conexiones (/conexiones) y conecta tu cuenta para crear el repositorio o empujar una rama. Sira no inventa tokens.';
+  }
+  return _githubConnectMessage;
+}
+
 const VENDOR_LEAK_RE = /deepseek|openrouter|sk-|Bearer\s|AKIA|BEGIN (RSA|OPENSSH|PRIVATE)/i;
 
-function publicGenerateErrorMessage(err) {
-  const raw = String((err && (err.message || err.error || err.code)) || '').trim();
-  if (!raw) return CONNECTION_UNAVAILABLE_MESSAGE;
-  if (VENDOR_LEAK_RE.test(raw)) return CONNECTION_UNAVAILABLE_MESSAGE;
-  if (/unknown parameter/i.test(raw)) return CONNECTION_UNAVAILABLE_MESSAGE;
-  if (/connection_unavailable/i.test(raw)) return CONNECTION_UNAVAILABLE_MESSAGE;
-  // Already-localized Spanish copy (á/é/í/ó/ú/ñ/¿/¡). Never pass English SDK text.
-  if (raw.length < 200 && !/^https?:/i.test(raw) && /[áéíóúñ¿¡]/i.test(raw)) {
-    return raw;
+const STREAM_TIMEOUT_MESSAGE =
+  'El modelo cortó el stream después de pensar. Reintenta; no es un fallo de GitHub. Si el modelo no responde, elige otro.';
+const PROVIDER_FAIL_MESSAGE =
+  'El modelo no pudo completar la respuesta. Reintenta o elige otro modelo. No cambié de modelo.';
+const SANDBOX_FAIL_MESSAGE =
+  'El workspace aislado rechazó esa ruta o comando. Indica owner/repo otra vez o pide un archivo concreto.';
+
+function classifyGenerateError(err) {
+  const code = String((err && (err.code || err.error || err.stoppedReason || err.name)) || '').trim();
+  const raw = String((err && (err.message || err.error || err.code || err.name)) || '').trim();
+  const blob = `${code} ${raw}`;
+
+  if (!raw && !code) {
+    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
   }
-  return CONNECTION_UNAVAILABLE_MESSAGE;
+  if (VENDOR_LEAK_RE.test(raw)) {
+    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
+  }
+  if (/unknown parameter/i.test(blob)) {
+    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
+  }
+  if (
+    /^(connection_unavailable|PROVIDER_CONNECTION_UNAVAILABLE)$/i.test(code)
+    || raw === CONNECTION_UNAVAILABLE_MESSAGE
+  ) {
+    return { code: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE };
+  }
+
+  if (
+    /E_GITHUB_CONNECT|github_not_connected|github_token_invalid/i.test(blob)
+    || (/\/conexiones/i.test(raw) && /github/i.test(raw))
+  ) {
+    return { code: 'E_GITHUB_CONNECT', message: githubConnectMessage() };
+  }
+
+  if (
+    /E_TIMEOUT|ETIMEDOUT|timed?\s*out|first-byte timeout|stream (ended|stalled|connect)|runtime_budget_exhausted|AbortError|\baborted\b/i.test(blob)
+    || /tard[oó] demasiado|cort[oó] el stream/i.test(raw)
+  ) {
+    return { code: 'E_TIMEOUT', message: STREAM_TIMEOUT_MESSAGE };
+  }
+
+  if (/E_PATH_ESCAPE|E_SANDBOX|\bjail\b|\bsandbox\b/i.test(blob)) {
+    return { code: 'E_SANDBOX', message: raw && /[áéíóúñ¿¡]/i.test(raw) && raw.length < 240 ? raw : SANDBOX_FAIL_MESSAGE };
+  }
+
+  if (/\bE_PROVIDER\b|model_error|tool_error|EMPTY_COMPLETION|AI generation failed/i.test(blob)) {
+    if (raw && raw.length < 240 && !/^https?:/i.test(raw) && /[áéíóúñ¿¡]/i.test(raw) && !/conexión no disponible/i.test(raw)) {
+      return { code: 'E_PROVIDER', message: raw };
+    }
+    return { code: 'E_PROVIDER', message: PROVIDER_FAIL_MESSAGE };
+  }
+
+  if (raw.length < 200 && !/^https?:/i.test(raw) && /[áéíóúñ¿¡]/i.test(raw) && !/conexión no disponible/i.test(raw)) {
+    return { code: code || 'E_PROVIDER', message: raw };
+  }
+
+  return { code: 'E_PROVIDER', message: PROVIDER_FAIL_MESSAGE };
+}
+
+function publicGenerateErrorMessage(err) {
+  return classifyGenerateError(err).message;
 }
 
 function isProviderClientError(err) {
@@ -85,6 +152,10 @@ function closeGenerateSseWithError(res, opts) {
 
 module.exports = {
   CONNECTION_UNAVAILABLE_MESSAGE,
+  STREAM_TIMEOUT_MESSAGE,
+  PROVIDER_FAIL_MESSAGE,
+  SANDBOX_FAIL_MESSAGE,
+  classifyGenerateError,
   publicGenerateErrorMessage,
   isProviderClientError,
   writeGenerateSseError,

@@ -288,7 +288,7 @@ const { honorPickerModel, lookupPickerDisplayName } = require('../services/ai/ho
 const {
   closeGenerateSseWithError,
   endGenerateSse,
-  publicGenerateErrorMessage,
+  classifyGenerateError,
 } = require('../services/ai/generate-sse-close');
 const { createClientGoneWriter } = require('../services/ai/sse-client-gone');
 const {
@@ -7364,6 +7364,30 @@ router.post(
                 // them as success so the route delivers it instead of discarding
                 // it and re-generating via the plain stream.
                 const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult);
+                if (!__agenticOk && agenticResult && agenticResult.stoppedReason) {
+                  const degradedClassified = classifyGenerateError({
+                    message: agenticResult.finalAnswer || agenticResult.error || agenticResult.stoppedReason,
+                    code: agenticResult.stoppedReason,
+                  });
+                  if (
+                    degradedClassified.code === 'E_TIMEOUT'
+                    || degradedClassified.code === 'E_GITHUB_CONNECT'
+                    || degradedClassified.code === 'E_SANDBOX'
+                  ) {
+                    generateLog.warn('agentic.degraded_honest', {
+                      outcome: degradedClassified.code,
+                      reason: agenticResult.stoppedReason,
+                    });
+                    if (!res.writableEnded && !res._siraGenerateSseClosed) {
+                      closeGenerateSseWithError(res, {
+                        message: degradedClassified.message,
+                        code: degradedClassified.code,
+                        recovered: false,
+                      });
+                    }
+                    return degradedClassified.message;
+                  }
+                }
                 if (__agenticOk) {
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
@@ -8486,15 +8510,16 @@ router.post(
         durationMs: Date.now() - __generateStartedAt,
       });
 
-      const sanitizedError = sanitizeErrorForUser(error);
+      const classified = classifyGenerateError(error);
+      const sanitizedError = classified.message || sanitizeErrorForUser(error);
       streamFailureMessage = sanitizedError;
 
       if (!res.headersSent) {
-        res.status(500).json({ error: sanitizedError });
+        res.status(500).json({ error: sanitizedError, code: classified.code });
       } else if (!res._siraGenerateSseClosed) {
         closeGenerateSseWithError(res, {
-          message: publicGenerateErrorMessage({ message: sanitizedError, code: error && (error.code || error.name) }) || sanitizedError,
-          code: (error && (error.code || error.name)) || 'stream_error',
+          message: sanitizedError,
+          code: classified.code || (error && (error.code || error.name)) || 'stream_error',
           recovered: false,
         });
       }

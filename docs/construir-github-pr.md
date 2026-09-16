@@ -26,6 +26,10 @@ Do **not** set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 
    **«abre un PR en owner/repo que añada un README con instrucciones de arranque»**
 
+   or, to open an existing repo and get honest local-run instructions:
+
+   **«delegar en local https://github.com/owner/repo dame la web en local»**
+
    Replace `owner/repo` with a repository your GitHub user can push to.
 4. The agent should:
    - open the repo in an isolated workspace (`github_open_repo`)
@@ -33,7 +37,9 @@ Do **not** set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
    - create a branch (never `main`), commit, and open a Pull Request
    - return the **PR URL** in the chat (and a small markdown artifact)
 5. If GitHub is not connected, the tool answers in Spanish and points to
-   `/conexiones`. Sira never invents a token.
+   `/conexiones` (`E_GITHUB_CONNECT`). Sira never invents a token and never
+   pretends a localhost server is running. The isolated workspace is not
+   the user's machine.
 
 Greenfield «créame una web» still uses `construir_scaffold` +
 `github_publish_project` (`docs/construir-mvp.md`). This slice is for an
