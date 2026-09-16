@@ -7,6 +7,7 @@ const path = require('node:path');
 const routingFeedback = require('../src/services/routing-feedback');
 const routingBridge = require('../src/services/rlhf/routing-bridge');
 const metrics = require('../src/services/rlhf/metrics');
+const { PROVIDER_FAIL_MESSAGE } = require('../src/services/ai/generate-sse-close');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
@@ -86,14 +87,16 @@ test('generateStream reports a pinned-model empty completion through onProviderF
       skipDoneSentinel: true,
       onProviderFailure: (info) => failures.push(info),
     });
-    assert.equal(out, 'Conexión no disponible');
+    // #716 classifies EMPTY_COMPLETION as E_PROVIDER (not bare «Conexión»).
+    // #717 still records the implicit RLHF signal with that classified code.
+    assert.equal(out, PROVIDER_FAIL_MESSAGE);
     assert.equal(failures.length, 1);
-    assert.equal(failures[0].code, 'connection_unavailable');
+    assert.equal(failures[0].code, 'E_PROVIDER');
     assert.equal(failures[0].provider, 'xAI');
     assert.equal(failures[0].model, 'grok-4.6');
     assert.equal(failures[0].reason, 'EMPTY_COMPLETION');
     assert.equal(failures[0].partial, false);
-    assert.match(frames.join('\n'), /connection_unavailable/);
+    assert.match(frames.join('\n'), /E_PROVIDER/);
   } finally {
     if (prevKey === undefined) delete process.env.XAI_API_KEY;
     else process.env.XAI_API_KEY = prevKey;
@@ -118,7 +121,7 @@ test('a throwing onProviderFailure never changes the user-facing outcome', async
       skipDoneSentinel: true,
       onProviderFailure: () => { throw new Error('telemetry down'); },
     });
-    assert.equal(out, 'Conexión no disponible');
+    assert.equal(out, PROVIDER_FAIL_MESSAGE);
   } finally {
     if (prevKey === undefined) delete process.env.XAI_API_KEY;
     else process.env.XAI_API_KEY = prevKey;
