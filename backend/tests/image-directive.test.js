@@ -170,7 +170,7 @@ test('resolveEditDirective honours an explicit selection box', () => {
 test('canonicalizeImageTypos: fuzzy media tokens and split create verbs', () => {
   const { canonicalizeImageTypos, normalizeImageText, fuzzyMediaToken, osaDistanceLe } = require('../src/services/agents/image-directive');
   const canon = (t) => canonicalizeImageTypos(normalizeImageText(t));
-  assert.equal(canon('cre aun aimgen de un gato'), 'crea un imagen de un gato');
+  assert.equal(canon('cre aun aimgen de un gato'), 'crea una imagen de un gato');
   assert.equal(canon('crea me una imgaen'), 'creame una imagen');
   assert.equal(canon('genera un vidio'), 'genera un video');
   assert.equal(canon('que es una imagen raster'), 'que es una imagen raster');
