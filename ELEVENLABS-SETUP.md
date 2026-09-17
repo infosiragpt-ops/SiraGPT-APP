@@ -235,3 +235,32 @@ For issues related to:
 ---
 
 **Note**: This integration requires an active ElevenLabs subscription for production use. The free tier has limited usage quotas.
+
+## 🎙️ Clon de voz profesional (PVC, oficial)
+
+La tarjeta "Clon de voz profesional" del Estudio de voz (Mis voces → Crear voz)
+implementa el flujo oficial de ElevenLabs:
+
+1. Crear shell: `POST /api/elevenlabs/pvc/voices` `{name, language}` → `{voice_id}`
+2. Subir muestras: `POST /api/elevenlabs/pvc/voices/:id/samples` (campo `files`,
+   hasta 10 archivos de audio/vídeo de ≤ 25 MB; el cliente exige ≥ 30 minutos
+   totales antes de "Siguiente")
+3. Entrenar: `POST /api/elevenlabs/pvc/voices/:id/train` (~5 minutos)
+4. Sondear: `GET /api/elevenlabs/pvc/voices/:id` (`.fine_tuning.state` hasta
+   `fine_tuned`; el frontend sondea cada 15 s)
+5. Extras: `DELETE …/samples/:sampleId`, `GET …/captcha`,
+   `POST …/verification` (verificación de identidad cuando ElevenLabs la exige)
+
+Requisitos en producción:
+
+- Plan ElevenLabs de pago con 1 espacio profesional libre (ver
+  `GET /api/elevenlabs/user/subscription`).
+- `ELEVENLABS_API_KEY` configurada (env, ya cableada en
+  `docker-compose.prod.yml`, o Admin → Conexiones → elevenlabs sin reinicio).
+- Plan Sira de pago en la cuenta que clona (`voice_generation`, igual que el TTS).
+- Opcional: `ELEVENLABS_UPLOAD_TIMEOUT_MS` (default 600000 ms).
+
+La voz entrenada aparece sola en `GET /api/elevenlabs/voices` y por tanto en el
+catálogo Voz del composer, donde ya viene activo por defecto el modelo
+**ElevenLabs Turbo V2** con **Spanish 100%**.
+Ver prueba: `node --test backend/tests/elevenlabs-route-validation.test.js`.
