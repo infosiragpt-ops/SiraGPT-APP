@@ -64,4 +64,7 @@ test('runner wires the install plan, pinned port and env passthrough', () => {
   assert.match(src, /"CODE_RUNNER_INSTALL_TIMEOUT_MS", 900_000/);
   assert.match(src, /"CODE_RUNNER_RLIMIT_NOFILE", 8192/);
   assert.match(src, /"CODE_RUNNER_RLIMIT_NPROC", 512/);
+  assert.match(src, /"CODE_RUNNER_RLIMIT_AS_BYTES", 256 \* 1024 \* 1024 \* 1024/);
+  assert.match(src, /NODE_OPTIONS: `--max-old-space-size=\$\{DEV_HEAP_MB\}`/);
+  assert.match(src, /probeReady\(port, entry\.basePath, entry\.framework\)/);
 });

@@ -127,6 +127,9 @@ const TMP_ROOT = process.env.RUNNER_TMP_ROOT || "/runner-tmp";
 // Large repos (SiraGPT-APP) need ~8 min for a cold npm ci; the chat tools poll
 // /status meanwhile, so a generous default costs nothing on small starters.
 const INSTALL_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_INSTALL_TIMEOUT_MS", 900_000, 1_000, 30 * 60_000);
+// V8 heap for the dev server. `next dev` forks `next-server`, which only
+// inherits NODE_OPTIONS (not CLI flags); a large app OOMs at the default heap.
+const DEV_HEAP_MB = boundedPositiveEnv("CODE_RUNNER_DEV_HEAP_MB", 4096, 512, 16384);
 const BUILD_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_BUILD_TIMEOUT_MS", 180_000, 1_000, 30 * 60_000);
 const DEV_READY_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_DEV_READY_TIMEOUT_MS", 90_000, 5_000, 30 * 60_000);
 const EXEC_DEFAULT_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_EXEC_TIMEOUT_MS", 30_000, 1_000, 30 * 60_000);
@@ -141,7 +144,10 @@ const SANDBOX_LIMITS = Object.freeze({
   // RLIMIT_AS lets simple node:http/node:sqlite apps start but then fail while
   // instantiating llhttp WebAssembly. RSS remains hard-capped by the container
   // cgroup; this limit only prevents unbounded virtual mappings.
-  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 64 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
+  // webpack + V8 in a Next dev server of a large app (SiraGPT-APP) map ~80 GiB
+  // of *virtual* memory (VmPeak) while using ~2 GiB of RSS; a 64 GiB cap made
+  // V8 die with "Check failed: (result.ptr) != nullptr". Default 256 GiB.
+  addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 256 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 1024 * 1024 * 1024 * 1024),
   // npm ci of a large repo opens thousands of files and next dev forks workers;
   // 128 procs / 256 fds made SiraGPT-APP die with EMFILE. Container hard limits
   // (pids_limit, nofile) still cap the whole runner.
@@ -853,11 +859,15 @@ async function migrateLegacyVitePreviewProxy(projectId, entry, cwd = projectDirO
 }
 
 /** Is the configured preview base returning a renderable HTTP response? */
-async function probeReady(port, basePath = null) {
+async function probeReady(port, basePath = null, framework = null) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1500);
-    const probePath = safeBasePath(basePath) || "/";
+    let probePath = safeBasePath(basePath) || "/";
+    // Next (basePath) serves the app at the base WITHOUT a trailing slash; apps
+    // that set skipTrailingSlashRedirect answer the slashed URL with an empty
+    // 200, which would mark the preview ready before the page really renders.
+    if (framework === "next" && probePath.length > 1 && probePath.endsWith("/")) probePath = probePath.replace(/\/+$/, "");
     const r = await fetch(`http://127.0.0.1:${port}${probePath}`, { signal: ctrl.signal });
     const contentType = r.headers.get("content-type") || "";
     const body = /text\/html|application\/xhtml\+xml/i.test(contentType)
@@ -969,7 +979,7 @@ async function startDev(projectId = null, runId = null, basePath = null, opts = 
     && (existing.basePath || null) === normBase
     && (pinnedPort == null || existing.port === pinnedPort)
     && JSON.stringify(existing.extraEnv || {}) === JSON.stringify(extraEnv)
-    && (await probeReady(existing.port, existing.basePath))
+    && (await probeReady(existing.port, existing.basePath, existing.framework))
   ) {
     devPool.touch(key);
     lastStartedKey = key;
@@ -1177,6 +1187,7 @@ async function runDev(entry, projectId, cwd) {
       // vite starters ignore both — harmless.
       VITE_BASE: entry.basePath || "/",
       API_PORT: String(port + 1000),
+      NODE_OPTIONS: `--max-old-space-size=${DEV_HEAP_MB}`,
       // Public build-time variables the chat asked for (NEXT_PUBLIC_*, VITE_*…),
       // e.g. NEXT_PUBLIC_API_URL=/api so a full-stack frontend talks to the
       // same-origin production API through the preview proxy.
@@ -1193,7 +1204,7 @@ async function runDev(entry, projectId, cwd) {
   while (Date.now() < readyDeadline) {
     await Bun.sleep(1500);
     if (stale()) return;
-    if (await probeReady(port, entry.basePath)) {
+    if (await probeReady(port, entry.basePath, entry.framework)) {
       entry.preflight.render = { status: "passed" };
       // Publish ready only after every preflight field is terminal. Status
       // readers must never observe ready=true with render still pending.

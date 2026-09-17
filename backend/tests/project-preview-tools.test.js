@@ -244,3 +244,18 @@ test('RLCD outcomes: ready preview is tool_success, hard failure is failure, pen
   assert.equal(rlcd.ledger.getDecision(id).outcome.label, 'failure');
   rlcd.reset();
 });
+
+test('Next previews are shared without the trailing slash (skipTrailingSlashRedirect apps answer "/" empty)', async () => {
+  const runner = makeRunner({ statuses: [
+    { running: false, ready: false },
+    { running: true, ready: true, state: 'ready', port: 5000, project: 'pX', framework: 'next', tail: [] },
+  ] });
+  const binding = makeBinding({ 'u1:c1': { id: 'pX', name: 'SiraGPT-APP' } });
+  const out = await tools.projectPreviewStartTool.execute({ preferredPort: 5000 }, { userId: 'u1', chatId: 'c1', projectTools: { db: makeDb(), runner, binding, projectService: {}, env: ENV, sleep: noSleep } });
+  assert.equal(out.ok, true);
+  assert.match(out.previewUrl, /\/app$/);
+  assert.match(out.basePath, /\/app\/$/);
+  const { absolutePreviewUrl } = svc._internal;
+  assert.equal(absolutePreviewUrl('/x/app/', ENV, 'vite'), 'https://siragpt.com/x/app/');
+  assert.equal(absolutePreviewUrl('/x/app/', ENV, 'next'), 'https://siragpt.com/x/app');
+});

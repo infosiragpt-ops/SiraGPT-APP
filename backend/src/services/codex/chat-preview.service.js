@@ -42,9 +42,12 @@ function previewBasePath(projectId, token) {
   return `/api/codex/projects/${encodeURIComponent(projectId)}/preview/${encodeURIComponent(token)}/app/`;
 }
 
-function absolutePreviewUrl(basePath, env = process.env) {
+function absolutePreviewUrl(basePath, env = process.env, framework = null) {
   const origin = publicOrigin(env);
-  return origin ? `${origin}${basePath}` : basePath;
+  // Next serves a basePath app at the base without a trailing slash; with
+  // skipTrailingSlashRedirect the slashed URL is an empty 200 (SiraGPT-APP).
+  const path = framework === 'next' ? String(basePath || '').replace(/\/+$/, '') : basePath;
+  return origin ? `${origin}${path}` : path;
 }
 
 function defaultDeps() {
@@ -311,7 +314,7 @@ async function startPreviewForChat({ userId, chatId, preferredPort, env: devEnv,
           ok: true,
           reused: true,
           project: { id: project.id, name: project.name || null },
-          previewUrl: absolutePreviewUrl(liveBase, d.env),
+          previewUrl: absolutePreviewUrl(liveBase, d.env, wait.status && wait.status.framework),
           basePath: liveBase,
           port: Number.isInteger(live.port) ? live.port : null,
           status: compactStatus(wait.status),
@@ -329,7 +332,7 @@ async function startPreviewForChat({ userId, chatId, preferredPort, env: devEnv,
       return fail('preview_pending', `El proyecto sigue en fase «${wait.status?.state || 'installing'}» (instalar dependencias de un repo grande puede tardar varios minutos). No es un error: consulta project_preview_status más tarde o dile al usuario que vuelva en unos minutos.`, {
         pending: true,
         project: { id: project.id, name: project.name || null },
-        previewUrl: absolutePreviewUrl(basePath, d.env),
+        previewUrl: absolutePreviewUrl(basePath, d.env, wait.status && wait.status.framework),
         basePath,
         port: Number.isInteger(out?.port) ? out.port : null,
         status: compactStatus(wait.status),
@@ -345,7 +348,7 @@ async function startPreviewForChat({ userId, chatId, preferredPort, env: devEnv,
       ok: true,
       reused: Boolean(out?.reused),
       project: { id: project.id, name: project.name || null },
-      previewUrl: absolutePreviewUrl(basePath, d.env),
+      previewUrl: absolutePreviewUrl(basePath, d.env, wait.status && wait.status.framework),
       basePath,
       port: Number.isInteger(out?.port) ? out.port : null,
       status: compactStatus(wait.status),
@@ -373,7 +376,7 @@ async function previewStatusForChat({ userId, chatId, waitMs } = {}, deps = {}) 
     return {
       ok: true,
       project: { id: project.id, name: project.name || null },
-      previewUrl: basePath ? absolutePreviewUrl(basePath, d.env) : null,
+      previewUrl: basePath ? absolutePreviewUrl(basePath, d.env, status && status.framework) : null,
       status: compactStatus(status),
     };
   } catch (err) {
