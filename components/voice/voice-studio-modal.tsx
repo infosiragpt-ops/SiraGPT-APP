@@ -889,6 +889,7 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
         </div>
         {cloneMode === "instant" ? (
         <>
+        <p className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-white/55">Clonar una voz nueva</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label className="text-[12px] text-zinc-700 dark:text-white/75">Nombre</Label>
