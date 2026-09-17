@@ -33,6 +33,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes` «dame la web en local» + a github.com URL now clones into the
+  **server** chat workspace and starts `project_preview_*` (preview URL).
+  It no longer tells the user to clone on their phone or claims it cannot
+  open port 5000. Document RLCD (`SIRAGPT_RLCD_DOCUMENTS`) confidence
+  trailers / «Nivel de confianza» apply only to document-analysis turns.
 - `/agentes` «Conexión no disponible» as the entire assistant bubble after
   a long think is no longer used for provider timeout, abort, GitHub OAuth
   miss, sandbox jail, or tool failure. Those map to `E_TIMEOUT` /

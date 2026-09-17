@@ -73,9 +73,13 @@
   } = require('./agents/software-build-intent');
   const {
     isGithubPrRequest,
-    isGithubLocalRunRequest,
+    isGithubLocalPreviewRequest,
     isGithubRepoWorkRequest,
-    buildGithubLocalReadyMessage,
+    extractGithubHttpsUrl,
+    extractOwnerRepo,
+    extractPreferredPort,
+    buildLocalPreviewReadyMessage,
+    buildLocalPreviewErrorMessage,
   } = require('./agents/github-pr-intent');
 
   const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
@@ -552,6 +556,9 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   'github_open_repo',
   'github_repo_connect',
   'github_repo_preloop_error',
+  'project_clone_repo',
+  'project_preview_start',
+  'project_preview_error',
 ]);
 
 /**
@@ -847,8 +854,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       toolContext.goal = toolContext.goal || userQuery;
     }
     const softwareBuildTurn = isSoftwareBuildRequest(userQuery) && !isExplicitDocumentRequest(userQuery);
-    const githubRepoWorkTurn = isGithubRepoWorkRequest(userQuery);
-    const githubPrTurn = githubRepoWorkTurn;
+    const githubPrTurn = isGithubPrRequest(userQuery);
+    const githubLocalPreviewTurn = isGithubLocalPreviewRequest(userQuery);
     if (!res) throw new Error('runAgenticChat: res is required');
 
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
@@ -891,9 +898,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* best-effort */ }
     const finishSourcePreservingPreloop = (stoppedReason, answer, artifacts = []) => {
       const finalAnswer = String(answer || '').trim();
-      const preloopTool = String(stoppedReason || '').startsWith('github_')
+      const reason = String(stoppedReason || '');
+      const preloopTool = reason.startsWith('github_')
         ? 'github_open_repo'
-        : 'document_edit';
+        : reason.startsWith('project_preview')
+          ? 'project_preview_start'
+          : reason.startsWith('project_')
+            ? 'project_clone_repo'
+            : 'document_edit';
       return {
         finalAnswer,
         persistedContent: buildPersistedContent({
@@ -911,7 +923,56 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         artifacts,
       };
     };
-    if (githubRepoWorkTurn && toolContext.userId) {
+    if (githubLocalPreviewTurn && toolContext.userId) {
+      try {
+        const previewTools = require('./agents/project-preview-tools');
+        const svc = (toolContext.projectTools && toolContext.projectTools.previewService)
+          || require('./codex/chat-preview.service');
+        const deps = previewTools._internal.depsFromCtx(toolContext);
+        const repoRef = extractGithubHttpsUrl(userQuery) || extractOwnerRepo(userQuery);
+        if (!repoRef) {
+          const answer = 'Indica el repositorio como https://github.com/owner/repo para clonarlo en el servidor y darte la vista previa.';
+          await writeSse(res, { replace: true, content: answer });
+          return finishSourcePreservingPreloop('project_preview_error', answer, []);
+        }
+        const repoUrl = repoRef.url || `https://github.com/${repoRef.owner}/${repoRef.repo}`;
+        const preferredPort = extractPreferredPort(userQuery);
+        await writeSse(res, { type: 'stage', label: 'Clonando el repositorio', tool: 'project_clone_repo' });
+        const cloned = await svc.cloneRepoForChat({
+          userId: toolContext.userId,
+          chatId: toolContext.chatId,
+          repoUrl,
+        }, deps);
+        if (!cloned || cloned.ok !== true) {
+          const answer = buildLocalPreviewErrorMessage(cloned);
+          await writeSse(res, { replace: true, content: answer });
+          return finishSourcePreservingPreloop('project_clone_repo', answer, []);
+        }
+        await writeSse(res, { type: 'stage', label: 'Levantando la vista previa', tool: 'project_preview_start' });
+        const preview = await svc.startPreviewForChat({
+          userId: toolContext.userId,
+          chatId: toolContext.chatId,
+          preferredPort,
+        }, deps);
+        const answer = buildLocalPreviewReadyMessage({ cloned, preview, preferredPort });
+        await writeSse(res, { replace: true, content: answer });
+        return finishSourcePreservingPreloop(
+          preview && preview.ok ? 'project_preview_start' : 'project_preview_error',
+          answer,
+          [],
+        );
+      } catch (previewPreErr) {
+        if (signal?.aborted) throw previewPreErr;
+        const answer = buildLocalPreviewErrorMessage({
+          code: 'internal',
+          message: String((previewPreErr && previewPreErr.message) || previewPreErr || 'No se pudo levantar la vista previa.'),
+        });
+        try {
+          await writeSse(res, { replace: true, content: answer });
+          return finishSourcePreservingPreloop('project_preview_error', answer, []);
+        } catch (_) { /* continue the LLM loop */ }
+      }
+    } else if (githubPrTurn && toolContext.userId) {
       try {
         const { classifyGenerateError } = require('./ai/generate-sse-close');
         const mvp = require('./construir-mvp');
@@ -935,11 +996,6 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           return finishSourcePreservingPreloop('github_repo_connect', answer, []);
         }
         toolContext.githubRepoWorkspace = opened;
-        if (isGithubLocalRunRequest(userQuery) && !isGithubPrRequest(userQuery)) {
-          const answer = buildGithubLocalReadyMessage(opened);
-          await writeSse(res, { replace: true, content: answer });
-          return finishSourcePreservingPreloop('github_open_repo', answer, []);
-        }
       } catch (githubPreErr) {
         if (signal?.aborted) throw githubPreErr;
         try {
@@ -1463,7 +1519,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           ...mediaIntents.map((intent) => intent && intent.tool),
           ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
           ...(artifactDeliveryContract.active && !softwareBuildTurn ? ['create_document', 'verify_artifact'] : []),
-          ...(softwareBuildTurn && !githubPrTurn ? ['create_artifact', 'construir_scaffold', 'github_publish_project'] : []),
+          ...(softwareBuildTurn && !githubPrTurn && !githubLocalPreviewTurn ? ['create_artifact', 'construir_scaffold', 'github_publish_project'] : []),
+          ...(githubLocalPreviewTurn ? [
+            'project_clone_repo',
+            'project_preview_start',
+            'project_preview_status',
+          ] : []),
           ...(githubPrTurn ? [
             'github_open_repo',
             'github_repo_list',
@@ -1558,11 +1619,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (name === 'create_document') availableToolNames.delete(name);
       }
     }
-    if (githubPrTurn && !initialToolChoice && availableToolNames.has('github_open_repo')) {
+    if (githubLocalPreviewTurn && !initialToolChoice && availableToolNames.has('project_clone_repo')) {
+      initialToolChoice = 'project_clone_repo';
+    } else if (githubPrTurn && !initialToolChoice && availableToolNames.has('github_open_repo')) {
       initialToolChoice = 'github_open_repo';
-    } else if (softwareBuildTurn && !githubPrTurn && !initialToolChoice && availableToolNames.has('construir_scaffold')) {
+    } else if (softwareBuildTurn && !githubPrTurn && !githubLocalPreviewTurn && !initialToolChoice && availableToolNames.has('construir_scaffold')) {
       initialToolChoice = 'construir_scaffold';
-    } else if (softwareBuildTurn && !githubPrTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
+    } else if (softwareBuildTurn && !githubPrTurn && !githubLocalPreviewTurn && !initialToolChoice && availableToolNames.has('create_artifact')) {
       initialToolChoice = 'create_artifact';
     }
     // A strong specialized-skill intent gets one deterministic first call. The
@@ -1741,8 +1804,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Estándar de calidad (nivel experto): en tareas difíciles piensa antes de actuar (descompón el problema, explicita supuestos y casos límite, verifica cada paso); responde con la conclusión primero; distingue lo que SABES de lo que INFIERES de lo que NO SABES y NUNCA inventes datos, cifras, citas, fuentes ni APIs; cuando dudes, verifica con una herramienta en vez de adivinar; admite y corrige tus errores directamente, sin adular.',
       'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',
       'Cuando el usuario pide abrir un repo suyo y hacer un PR («abre un PR en owner/repo que…»): usa `github_open_repo` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens), luego `github_repo_list` / `github_repo_read` / `github_repo_write` / `github_repo_exec` en el workspace aislado, y `github_open_pull_request` con approved=true. Devuelve la URL del PR. No uses clone_project ni host_bash para este flujo (evita el .env del host). No empujes a main. No muestres model_id ni nombres de vendor.',
-      'Cuando detectes otras operaciones de repositorio público (clonar, editar, commit, push, deploy, CI) y NO sea el flujo OAuth de arriba, actúa como un coding agent completo:',
-      '  1. Clona o localiza el repositorio usando `clone_project` o `host_bash` con git.',
+      'Cuando el usuario pide «dame la web en local» o clonar un github.com para verlo: usa `project_clone_repo` + `project_preview_start` (servidor). Nunca le pidas clonar en su teléfono ni digas que no puedes abrir un puerto.',
+      'Cuando detectes otras operaciones de repositorio público (clonar, editar, commit, push, deploy, CI) y NO sea el flujo OAuth de arriba ni el preview local, actúa como un coding agent completo:',
+      '  1. Clona o localiza el repositorio usando `project_clone_repo` (preview) o `clone_project` / `host_bash` con git.',
       '  2. Comprende la estructura del proyecto: usa `list_dir` para explorar el árbol, `glob_files` para localizar archivos por patrón (ej. "**/*.ts") y `code_grep` para buscar dónde se define o se usa un símbolo/cadena antes de editar.',
       '  3. Realiza los cambios necesarios editando archivos con `host_file` para cambios de texto y `host_bash` solo para comandos.',
       '  4. Ejecuta `npm test` o la suite de pruebas respectiva para verificar.',
@@ -1754,10 +1818,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida audio, voz, narración, locución, mp3 o wav, DEBES llamar `generate_speech` con el texto exacto y adjuntar el archivo MP3 descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API, un reproductor en el navegador, o decirle al usuario que pulse reproducir. El entregable es un archivo de audio real.',
-      githubPrTurn
-        ? (isGithubPrRequest(userQuery)
-          ? 'El usuario pidio abrir un repositorio GitHub y/o crear un Pull Request. Usa `github_open_repo` con owner/repo (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). Edita en el workspace aislado con `github_repo_write`. Abre el PR con `github_open_pull_request` (approved=true) y devuelve prUrl. PROHIBIDO inventar tokens o model_id. No uses create_document.'
-          : 'El usuario pidio clonar o ver en local un repo GitHub existente. Usa `github_open_repo` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). El workspace es aislado: no es la computadora del usuario y no inventes un localhost que no corre. Si ya se abrio el repo, lista archivos y da instrucciones honestas de `git clone` + README. PROHIBIDO inventar tokens o model_id. No uses create_document.')
+      githubLocalPreviewTurn
+        ? 'El usuario pidio clonar un repo GitHub y verlo en local ("dame la web en local", "en local 5000"). DEBES usar `project_clone_repo` con la URL https://github.com/owner/repo y luego `project_preview_start`. Comparte previewUrl como su web en local. El puerto lo asigna el runner; si pidio 5000 y el sandbox usa otro, explica el enlace — NUNCA digas que no puedes abrir el puerto ni le pidas clonar en su telefono/laptop. PROHIBIDO "Nivel de confianza". PROHIBIDO inventar tokens o model_id. No uses create_document.'
+        : githubPrTurn
+        ? 'El usuario pidio abrir un repositorio GitHub y/o crear un Pull Request. Usa `github_open_repo` con owner/repo (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). Edita en el workspace aislado con `github_repo_write`. Abre el PR con `github_open_pull_request` (approved=true) y devuelve prUrl. PROHIBIDO inventar tokens o model_id. No uses create_document.'
         : softwareBuildTurn
         ? 'El usuario pidio SOFTWARE con codigo real (HTML/CSS/JS o una app web), no un documento Word/PDF. Usa `construir_scaffold` para entregar un proyecto funcional (HTML previsualizable + zip + base de datos en archivo). Tambien puedes usar `create_artifact` tipo html. Si pide GitHub, usa `github_publish_project` (OAuth del usuario; si no hay conexion, informa /conexiones — nunca inventes tokens). PROHIBIDO create_document con .docx/.xlsx/.pptx/.pdf (E_SOFTWARE_CODE). No menciones verificaciones tecnicas de Word. No muestres model_id ni nombres de vendor.'
         : 'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',

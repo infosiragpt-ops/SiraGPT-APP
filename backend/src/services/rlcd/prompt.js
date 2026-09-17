@@ -16,6 +16,7 @@ function buildRlcdPromptBlock({ language = 'es' } = {}) {
       'Al final, en una línea oculta (nunca la menciones al usuario), escribe exactamente:',
       '<!--rlcd:{"c":0.00,"r":"razon breve"}-->',
       'c es 0-1. r es una frase corta sin datos personales.',
+      'Este bloque SOLO aplica a análisis de documentos adjuntos. No lo uses en código, preview local ni Construir.',
     ].join('\n');
   }
   return [
@@ -26,6 +27,7 @@ function buildRlcdPromptBlock({ language = 'es' } = {}) {
     'At the end, on a hidden line the user must never see, write exactly:',
     '<!--rlcd:{"c":0.00,"r":"short reason"}-->',
     'c is 0-1. r is a short phrase with no personal data.',
+    'This block applies ONLY to attached-document analysis. Never use it on coding, local-preview, or Construir turns.',
   ].join('\n');
 }
 

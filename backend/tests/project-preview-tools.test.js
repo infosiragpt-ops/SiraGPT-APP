@@ -133,6 +133,19 @@ test('project_preview_start: starts the dev server and returns an absolute token
   assert.match(start[2].basePath, /^\/api\/codex\/projects\/pX\/preview\//);
 });
 
+test('project_preview_start: preferredPort is forwarded as a hint', async () => {
+  const runner = makeRunner({ statuses: [
+    { running: false, ready: false },
+    { running: true, ready: true, state: 'ready', port: 4301, project: 'pX', tail: ['ready'] },
+  ] });
+  const binding = makeBinding({ 'u1:c1': { id: 'pX', name: 'x' } });
+  const ctx = { userId: 'u1', chatId: 'c1', projectTools: { db: makeDb(), runner, binding, projectService: {}, env: ENV, sleep: noSleep } };
+  const out = await tools.projectPreviewStartTool.execute({ preferredPort: 5000 }, ctx);
+  assert.equal(out.ok, true, JSON.stringify(out));
+  const start = runner.calls.find((c) => c[0] === 'startDev');
+  assert.equal(start[2].preferredPort, 5000);
+});
+
 test('project_preview_start: no project → no_project; dev error → preview_not_ready with tail', async () => {
   const none = await tools.projectPreviewStartTool.execute({}, { userId: 'u1', chatId: 'c9', projectTools: { db: makeDb(), runner: makeRunner(), binding: makeBinding(), projectService: {}, env: ENV, sleep: noSleep } });
   assert.equal(none.code, 'no_project');

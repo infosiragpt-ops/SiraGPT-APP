@@ -104,14 +104,25 @@ const projectCloneRepoTool = {
 
 const projectPreviewStartTool = {
   name: 'project_preview_start',
-  description: 'Install dependencies and start the dev server of this chat\'s project in the sandboxed runner, then return previewUrl (the user\'s "web en local"). Reuses a running server. Waits up to ~90 s; if it returns preview_not_ready, read status.tail, fix the project (project_read/project_write/project_exec) and retry. Fails with no_project until project_clone_repo ran.',
-  parameters: { type: 'object', properties: {}, additionalProperties: false },
-  execute: async (_args, ctx) => {
+  description: 'Install dependencies and start the dev server of this chat\'s project in the sandboxed runner, then return previewUrl (the user\'s "web en local"). Reuses a running server. Waits up to ~90 s; if it returns preview_not_ready, read status.tail, fix the project (project_read/project_write/project_exec) and retry. Fails with no_project until project_clone_repo ran. preferredPort is a hint (e.g. 5000); the runner may assign another host port — still share previewUrl.',
+  parameters: {
+    type: 'object',
+    properties: {
+      preferredPort: { type: 'integer', description: 'Puerto pedido por el usuario (p. ej. 5000). El runner puede ignorarlo y asignar el suyo.' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args, ctx) => {
     try {
       const scope = chatScope(ctx);
       if (scope.error) return scope.error;
       const svc = serviceFromCtx(ctx);
-      return withPreviewHint(await svc.startPreviewForChat({ userId: scope.userId, chatId: scope.chatId }, depsFromCtx(ctx)));
+      const preferredPort = Number(args && args.preferredPort);
+      return withPreviewHint(await svc.startPreviewForChat({
+        userId: scope.userId,
+        chatId: scope.chatId,
+        preferredPort: Number.isInteger(preferredPort) ? preferredPort : undefined,
+      }, depsFromCtx(ctx)));
     } catch (err) {
       return { ok: false, code: 'internal', message: String((err && err.message) || err) };
     }

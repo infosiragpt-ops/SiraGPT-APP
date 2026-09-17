@@ -164,6 +164,7 @@ function createRunnerClient({
       startDev: (project, opts = {}) => call('POST', '/run', bodyFor({
         project: projectFor(project),
         basePath: opts.basePath || null,
+        preferredPort: Number.isInteger(opts.preferredPort) ? opts.preferredPort : undefined,
       })),
       devStatus: (project) => {
         const resolvedProject = projectFor(project);
