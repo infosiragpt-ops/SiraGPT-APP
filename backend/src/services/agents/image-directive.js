@@ -72,6 +72,13 @@ const FUZZY_STOP_WORDS = new Set([
   'perro', 'casa', 'auto', 'coche', 'tema', 'texto', 'todo', 'toda', 'nada', 'vida', 'ver', 'dato',
   'datos', 'sino', 'aun', 'aqui', 'algo', 'mira', 'fuera', 'cara', 'foto', 'video', 'audio', 'logo',
   'crea', 'dame', 'haz', 'pon', 'seria', 'serie', 'poema', 'canta', 'cuenta', 'idea', 'ideas',
+  // English media words are already recognised as-is by the lexicons; never
+  // rewrite them into their Spanish neighbours ("image" → "imagen" broke
+  // English reframe follow-ups).
+  'image', 'images', 'photo', 'photos', 'picture', 'pictures', 'drawing', 'drawings', 'illustration',
+  'illustrations', 'artwork', 'video', 'videos', 'song', 'songs', 'music', 'audio', 'voice', 'render',
+  'poster', 'sticker', 'avatar', 'icon', 'icons', 'cover', 'scene', 'same', 'make', 'create', 'generate',
+  'draw', 'design', 'build', 'want', 'need', 'give',
 ]);
 const FUZZY_LEXICON_SET = new Set(FUZZY_LEXICON);
 
