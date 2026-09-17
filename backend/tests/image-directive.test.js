@@ -67,6 +67,18 @@ test('detectImageStyle + detectImageType', () => {
 
 // ── Command stripping ─────────────────────────────────────────────────────
 
+test('canonicalizes screenshot typos "cre aun aimgen de un gato"', () => {
+  assert.equal(
+    directive.canonicalizeImageTypos('cre aun aimgen de un gato'),
+    'crea una imagen de un gato'
+  );
+  assert.equal(
+    directive.canonicalizeImageTypos('aun no tengo foto'),
+    'aun no tengo foto',
+    'aún/aun meaning still must not become una'
+  );
+});
+
 test('stripImageCommand removes the spoken wrapper but keeps the subject', () => {
   assert.equal(
     directive.stripImageCommand('dma euna imagen vertical de un perro'),

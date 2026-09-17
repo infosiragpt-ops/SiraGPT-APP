@@ -29,17 +29,22 @@ function normalizeImageText(text) {
     .trim();
 }
 
-// Common Spanish typos seen in chat ("dma euna imagen orisailntal").
-// Word-boundary anchored so normal words are never rewritten.
+// Common Spanish typos seen in chat ("dma euna imagen orisailntal",
+// "cre aun aimgen de un gato"). Word-boundary anchored so normal words
+// are never rewritten. "aun" (aún) is only rewritten before an image noun.
 const TYPO_REPLACEMENTS = [
   [/\bdma\b/g, 'dame'],
   [/\beuna\b/g, 'una'],
   [/\biamgen\b/g, 'imagen'],
+  [/\baimgen\b/g, 'imagen'],
   [/\bimajen\b/g, 'imagen'],
   [/\bimasgen\b/g, 'imagen'],
   [/\bimgen\b/g, 'imagen'],
   [/\blgoo\b/g, 'logo'],
   [/\bfotto\b/g, 'foto'],
+  [/\bimgagen\b/g, 'imagen'],
+  [/\bimangen\b/g, 'imagen'],
+  [/\bimagne\b/g, 'imagen'],
   [/\boris[a-z]*ntal\b/g, 'horizontal'],
   [/\boriz[a-z]*ntal\b/g, 'horizontal'],
   [/\borizontal\w*/g, 'horizontal'],
@@ -48,6 +53,10 @@ const TYPO_REPLACEMENTS = [
   [/\bcmabia\b/g, 'cambia'],
   [/\bcanbia\b/g, 'cambia'],
   [/\bgenra\b/g, 'genera'],
+  [/\bcre\b/g, 'crea'],
+  // "aun" after stripping accents is also "aún". Only rewrite the article
+  // typo when it sits in front of an image noun ("cre aun imagen").
+  [/\baun\s+(?=imagen\b)/g, 'una '],
   [/\bmimso\b/g, 'mismo'],
   [/\bseleciona\b/g, 'selecciona'],
   [/\bgeenracion\b/g, 'generacion'],
