@@ -626,6 +626,234 @@ router.get('/user/subscription', authenticateToken, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+// ── Clon de voz profesional (ElevenLabs PVC, oficial) ────────────────────────
+// "Crear voz → Clon de voz profesional": réplica digital de alta fidelidad.
+// Flujo oficial ElevenLabs: crear shell (POST /v1/voices/pvc {name, language})
+// → subir muestras (POST /v1/voices/pvc/:id/samples, al menos 30 minutos de
+// audio limpio) → entrenar (POST /v1/voices/pvc/:id/train, ~5 minutos) →
+// sondear estado (GET /v1/voices/pvc/:id, .fine_tuning.state hasta
+// `fine_tuned`). Requiere plan ElevenLabs de pago con slots PVC libres (ver
+// GET /elevenlabs/user/subscription) y plan Sira de pago (voice_generation,
+// igual que el TTS de ElevenLabs). La voz entrenada aparece automáticamente
+// en GET /elevenlabs/voices y por tanto en el catálogo Voz del composer.
+const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io';
+const PVC_SAMPLE_MAX_FILES = 10;
+const PVC_SAMPLE_MAX_BYTES = 25 * 1024 * 1024;
+const PVC_UPLOAD_TIMEOUT_MS = Number(process.env.ELEVENLABS_UPLOAD_TIMEOUT_MS) || 600000;
+
+const pvcUpload = multer({
+  dest: audioDir,
+  limits: { fileSize: PVC_SAMPLE_MAX_BYTES, files: PVC_SAMPLE_MAX_FILES },
+  fileFilter: (req, file, cb) => {
+    const ok = /^(audio|video)\//.test(file.mimetype || '')
+      || /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|mp4|mov|mkv|m4v|mpeg|mpg|wma|3gp)$/i.test(file.originalname || '');
+    if (ok) return cb(null, true);
+    cb(new Error(`Tipo de archivo no permitido: ${file.mimetype || file.originalname}. Sube audio o vídeo.`), false);
+  },
+});
+
+function pvcVoiceId(req, res) {
+  const voiceId = String(req.params.voiceId || '').trim();
+  if (!voiceId || voiceId.length > 120) {
+    res.status(400).json({ error: 'voiceId inválido' });
+    return null;
+  }
+  return voiceId;
+}
+
+function elevenLabsDetail(data, fallback) {
+  const detail = data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail.message === 'string' && detail.message.trim()) return detail.message;
+  if (typeof data?.message === 'string' && data.message.trim()) return data.message;
+  return fallback;
+}
+
+async function proxyElevenLabs(res, targetPath, { method = 'GET', json, form, timeoutMs } = {}) {
+  const headers = { 'xi-api-key': ELEVENLABS_API_KEY, accept: 'application/json' };
+  let body;
+  if (form) {
+    Object.assign(headers, form.getHeaders());
+    body = form;
+  } else if (json !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(json);
+  }
+  const upstream = await fetch(`${ELEVENLABS_API_BASE}${targetPath}`, {
+    method,
+    headers,
+    body,
+    signal: AbortSignal.timeout(timeoutMs || Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000),
+  });
+  const data = await upstream.json().catch(() => ({}));
+  if (!upstream.ok) {
+    return res.status(upstream.status).json({ error: elevenLabsDetail(data, 'ElevenLabs request failed') });
+  }
+  return res.status(upstream.status === 201 ? 201 : 200).json(data);
+}
+
+// Paso 1 — crear el shell de la voz profesional
+router.post('/pvc/voices', [
+  body('name').trim().notEmpty().isLength({ max: 80 }).withMessage('Name is required (max 80 chars)'),
+  body('language').optional().isString().trim().isLength({ max: 10 }),
+], authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    const { name, language = 'es' } = req.body;
+    return await proxyElevenLabs(res, '/v1/voices/pvc', { method: 'POST', json: { name, language } });
+  } catch (error) {
+    console.error('PVC create error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Paso 2 — subir muestras de entrenamiento (repetir hasta ≥ 30 minutos)
+router.post('/pvc/voices/:voiceId/samples', authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), pvcUpload.array('files', PVC_SAMPLE_MAX_FILES), async (req, res) => {
+  const voiceId = pvcVoiceId(req, res);
+  if (!voiceId) {
+    await Promise.all((req.files || []).map((f) => fs.promises.unlink(f.path).catch(() => {})));
+    return;
+  }
+  try {
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'Sube al menos un archivo de audio o vídeo' });
+    }
+    const form = new FormData();
+    for (const file of req.files) {
+      form.append('files', fs.createReadStream(file.path), {
+        filename: file.originalname || 'muestra',
+        contentType: file.mimetype,
+      });
+    }
+    form.append('remove_background_noise', String(req.body?.remove_background_noise) === 'true' ? 'true' : 'false');
+    return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/samples`, {
+      method: 'POST',
+      form,
+      timeoutMs: PVC_UPLOAD_TIMEOUT_MS,
+    });
+  } catch (error) {
+    console.error('PVC samples error:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    await Promise.all((req.files || []).map((f) => fs.promises.unlink(f.path).catch(() => {})));
+  }
+});
+
+// Paso 3 — entrenar (~5 minutos, trabajo en segundo plano en ElevenLabs)
+router.post('/pvc/voices/:voiceId/train', [
+  body('model_id').optional().isString().trim().isLength({ max: 80 }),
+], authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    const voiceId = pvcVoiceId(req, res);
+    if (!voiceId) return;
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    const { model_id } = req.body;
+    return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/train`, {
+      method: 'POST',
+      json: model_id ? { model_id } : {},
+      timeoutMs: PVC_UPLOAD_TIMEOUT_MS,
+    });
+  } catch (error) {
+    console.error('PVC train error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Paso 4 — estado (.fine_tuning.state: queued | fine_tuning | fine_tuned | failed | delayed)
+router.get('/pvc/voices/:voiceId', authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
+  try {
+    const voiceId = pvcVoiceId(req, res);
+    if (!voiceId) return;
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    const encoded = encodeURIComponent(voiceId);
+    const headers = { 'xi-api-key': ELEVENLABS_API_KEY, accept: 'application/json' };
+    const timeout = AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000);
+    // El shell en entrenamiento se lee en /v1/voices/pvc/:id; una vez
+    // entrenada, la lectura canónica es /v1/voices/:id.
+    let upstream = await fetch(`${ELEVENLABS_API_BASE}/v1/voices/pvc/${encoded}`, { headers, signal: timeout });
+    let data = await upstream.json().catch(() => ({}));
+    if (upstream.status === 404) {
+      upstream = await fetch(`${ELEVENLABS_API_BASE}/v1/voices/${encoded}`, {
+        headers,
+        signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000),
+      });
+      data = await upstream.json().catch(() => ({}));
+    }
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({ error: elevenLabsDetail(data, 'ElevenLabs request failed') });
+    }
+    return res.json(data);
+  } catch (error) {
+    console.error('PVC status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Quitar una muestra del shell
+router.delete('/pvc/voices/:voiceId/samples/:sampleId', authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
+  try {
+    const voiceId = pvcVoiceId(req, res);
+    if (!voiceId) return;
+    const sampleId = String(req.params.sampleId || '').trim();
+    if (!sampleId || sampleId.length > 120) {
+      return res.status(400).json({ error: 'sampleId inválido' });
+    }
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/samples/${encodeURIComponent(sampleId)}`, { method: 'DELETE' });
+  } catch (error) {
+    console.error('PVC delete-sample error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Verificación de identidad: captcha y verificación manual
+router.get('/pvc/voices/:voiceId/captcha', authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
+  try {
+    const voiceId = pvcVoiceId(req, res);
+    if (!voiceId) return;
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/captcha`);
+  } catch (error) {
+    console.error('PVC captcha error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/pvc/voices/:voiceId/verification', authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
+  try {
+    const voiceId = pvcVoiceId(req, res);
+    if (!voiceId) return;
+    if (!ELEVENLABS_API_KEY) {
+      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    }
+    return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/verification`, { method: 'POST', json: {} });
+  } catch (error) {
+    console.error('PVC verification error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ...existing code...
 
 // Music Generation using ElevenLabs — thin wrapper over the shared
