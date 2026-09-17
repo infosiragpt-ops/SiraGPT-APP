@@ -154,3 +154,20 @@ test('resolveEditDirective honours an explicit selection box', () => {
   assert.match(r.prompt, /x=0, y=0, width=100, height=40/);
   assert.match(r.prompt, /fuera de esa región/);
 });
+
+test('canonicalizeImageTypos: fuzzy media tokens and split create verbs', () => {
+  const { canonicalizeImageTypos, normalizeImageText, fuzzyMediaToken, osaDistanceLe } = require('../src/services/agents/image-directive');
+  const canon = (t) => canonicalizeImageTypos(normalizeImageText(t));
+  assert.equal(canon('cre aun aimgen de un gato'), 'crea un imagen de un gato');
+  assert.equal(canon('crea me una imgaen'), 'creame una imagen');
+  assert.equal(canon('genera un vidio'), 'genera un video');
+  assert.equal(canon('que es una imagen raster'), 'que es una imagen raster');
+  assert.equal(canon('quiero una moto roja'), 'quiero una moto roja');
+  assert.equal(fuzzyMediaToken('aimgen'), 'imagen');
+  assert.equal(fuzzyMediaToken('raster'), null);
+  assert.equal(fuzzyMediaToken('moto'), null);
+  assert.equal(fuzzyMediaToken('imagen'), null);
+  assert.equal(osaDistanceLe('aimgen', 'imagen', 2), 2);
+  assert.equal(osaDistanceLe('imgaen', 'imagen', 2), 1);
+  assert.equal(osaDistanceLe('foto', 'moto', 1), 1);
+});

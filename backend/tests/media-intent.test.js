@@ -335,3 +335,37 @@ test('edit intent carries the spoken target into the hint', () => {
   assert.match(hint, /cielo/);
   assert.match(hint, /target/);
 });
+
+// ── Typo-tolerant intent (prod 2026-09-17: «cre aun aimgen de un gato» went
+// to the text model and rendered an empty vector card instead of an image) ──
+test('misspelled create requests still resolve to the right media kind', () => {
+  const cases = [
+    ['cre aun aimgen de un gato', 'image'],
+    ['crea una imgaen de un perro', 'image'],
+    ['ceame una imagn de un perro', 'image'],
+    ['haz una fotto de una casa', 'image'],
+    ['quiero una ilustrasion de un dragon', 'image'],
+    ['genera un vidio de un auto', 'video'],
+    ['hazme un lgoo para mi tienda', 'image'],
+  ];
+  for (const [text, kind] of cases) {
+    const r = detectMediaIntent(text);
+    assert.equal(r.kind, kind, `${text} → ${JSON.stringify(r)}`);
+    assert.equal(r.confidence, 'high', text);
+  }
+});
+
+test('a drawing verb alone is an image request; questions about drawing are not', () => {
+  assert.equal(detectMediaIntent('dibujame un gato').kind, 'image');
+  assert.equal(detectMediaIntent('dibujame un gato').confidence, 'high');
+  assert.equal(detectMediaIntent('pintame un paisaje al atardecer').kind, 'image');
+  assert.equal(detectMediaIntent('como dibujo un gato paso a paso').confidence, 'low');
+});
+
+test('fuzzy repair never rewrites ordinary words into media nouns', () => {
+  for (const text of ['quiero una moto roja', 'escribe una carta para mi madre', 'pon una alarma a las 8', 'crea un poema sobre gatos', 'que es una imagen raster']) {
+    const r = detectMediaIntent(text);
+    if (text.includes('imagen')) { assert.equal(r.confidence, 'low'); continue; }
+    assert.equal(r.kind, null, `${text} → ${JSON.stringify(r)}`);
+  }
+});
