@@ -6,16 +6,34 @@
  * Reads `backend/tests/fixtures/document-rlcd-eval.json` (or any
  * compatible array) and scores finalizeAnswer without network.
  * Fail-open per case. No GPU.
+ *
+ * The fixture lives under tests/ and is dockerignored from the production
+ * image. NEVER require() it at module load — that crashed Lenovo boot of
+ * a5c3b55f (#725). Load only inside runEval/loadFixtures, and skip if missing.
  */
 
-const DEFAULT_FIXTURE = require('../../../tests/fixtures/document-rlcd-eval.json');
+const path = require('node:path');
+
+const DEFAULT_FIXTURE_PATH = path.join(
+  __dirname,
+  '../../../tests/fixtures/document-rlcd-eval.json',
+);
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function loadDefaultFixtures() {
+  try {
+    // eslint-disable-next-line import/no-dynamic-require, global-require
+    return asArray(require(DEFAULT_FIXTURE_PATH));
+  } catch {
+    return [];
+  }
+}
+
 function loadFixtures(rows) {
-  if (rows == null) return asArray(DEFAULT_FIXTURE);
+  if (rows == null) return loadDefaultFixtures();
   if (typeof rows === 'string') {
     try {
       // eslint-disable-next-line import/no-dynamic-require, global-require
@@ -118,8 +136,32 @@ function evaluateCase(row, { finalize } = {}) {
   }
 }
 
+function skippedReport(reason = 'fixture_missing') {
+  return {
+    n: 0,
+    passed: 0,
+    failed: 0,
+    ok: false,
+    skipped: true,
+    reason,
+    cases: [],
+  };
+}
+
 function runEval(rows, opts = {}) {
-  const fixtures = loadFixtures(rows);
+  let fixtures;
+  try {
+    fixtures = loadFixtures(rows);
+  } catch {
+    return skippedReport('fixture_missing');
+  }
+  // Default path (no rows): fixture is optional. Production images omit tests/.
+  if (rows == null && fixtures.length === 0) {
+    return skippedReport('fixture_missing');
+  }
+  if (typeof rows === 'string' && fixtures.length === 0) {
+    return skippedReport('fixture_missing');
+  }
   const cases = fixtures.map((row) => evaluateCase(row, opts));
   const passed = cases.filter((c) => c.passed).length;
   return {
@@ -127,6 +169,7 @@ function runEval(rows, opts = {}) {
     passed,
     failed: cases.length - passed,
     ok: cases.length > 0 && passed === cases.length,
+    skipped: false,
     cases,
   };
 }

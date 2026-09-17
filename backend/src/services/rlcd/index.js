@@ -20,7 +20,8 @@ const prompt = require('./prompt');
 const evidence = require('./evidence');
 const claims = require('./claims');
 const contrastive = require('./contrastive');
-const evalHarness = require('./eval-harness');
+// eval-harness is lazy: its default fixture lives under tests/ (dockerignored).
+// A top-level require here used to crash production boot when the JSON was absent.
 
 // ---------------------------------------------------------------------------
 // #722 — typed-decision ledger
@@ -506,14 +507,27 @@ function exportDocumentPairs(events, opts) {
   }
 }
 
+function getEvalHarness() {
+  // eslint-disable-next-line global-require
+  return require('./eval-harness');
+}
+
 function runDocumentEval(rows, opts = {}) {
   try {
-    return evalHarness.runEval(rows, {
+    return getEvalHarness().runEval(rows, {
       finalize: (args) => finalizeAnswer(args),
       ...opts,
     });
   } catch {
-    return { n: 0, passed: 0, failed: 0, ok: false, cases: [] };
+    return {
+      n: 0,
+      passed: 0,
+      failed: 0,
+      ok: false,
+      skipped: true,
+      reason: 'eval_unavailable',
+      cases: [],
+    };
   }
 }
 
@@ -575,5 +589,5 @@ module.exports = {
   evidence,
   claims,
   contrastive,
-  evalHarness,
+  get evalHarness() { return getEvalHarness(); },
 };
