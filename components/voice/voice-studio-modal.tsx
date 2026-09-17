@@ -21,6 +21,7 @@ import {
   BookAudio,
   Check,
   Clapperboard,
+  Copy,
   Download,
   FileAudio,
   ListChecks,
@@ -51,6 +52,8 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Progress } from "@/components/ui/progress"
 import { apiClient, type VoiceStudioJob, type VoiceStudioStatus, type VoiceStudioVoice } from "@/lib/api"
+import { resetVoices } from "@/hooks/use-voices"
+import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { SIRA_VOZ_LABEL, SIRA_VOZ_TAGLINE } from "@/lib/chat/media-composer-config"
 import { cn } from "@/lib/utils"
 
@@ -307,6 +310,345 @@ function useBlobAudio() {
   return { play, stop, playingKey }
 }
 
+// ── Clon profesional (ElevenLabs PVC, oficial) ──────────────────────────────
+// Réplica de la tarjeta "Clon de voz profesional": al menos 30 minutos de
+// audio limpio, ~5 minutos de entrenamiento y verificación de identidad cuando
+// ElevenLabs la exige. La voz entrenada aparece sola en el catálogo Voz del
+// composer (GET /elevenlabs/voices la incluye), sin cableado extra.
+
+const PVC_REQUIRED_SECONDS = 30 * 60
+const PVC_MAX_FILES = 10
+const PVC_MAX_BYTES = 25 * 1024 * 1024
+const PVC_POLL_MS = 15000
+
+const PVC_LANGUAGE_CODES: Record<string, string> = {
+  English: "en",
+  Spanish: "es",
+  German: "de",
+  French: "fr",
+  Portuguese: "pt",
+  Italian: "it",
+  Dutch: "nl",
+  Polish: "pl",
+  Turkish: "tr",
+  Hindi: "hi",
+  Arabic: "ar",
+  Russian: "ru",
+  Chinese: "zh",
+  Japanese: "ja",
+  Korean: "ko",
+  Catalan: "ca",
+  Indonesian: "id",
+  Vietnamese: "vi",
+  Thai: "th",
+  Swedish: "sv",
+  Ukrainian: "uk",
+}
+
+function pvcLanguageCode(language: string): string {
+  return PVC_LANGUAGE_CODES[language] || language.slice(0, 2).toLowerCase() || "es"
+}
+
+function loadAudioDurationSeconds(file: File): Promise<number> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const el = document.createElement("audio")
+    el.preload = "metadata"
+    const done = (value: number) => {
+      URL.revokeObjectURL(url)
+      resolve(value)
+    }
+    el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? el.duration : 0)
+    el.onerror = () => done(0)
+    el.src = url
+  })
+}
+
+function pvcTrainingState(data: Record<string, unknown> | null | undefined): string {
+  const fineTuning = (data?.fine_tuning ?? null) as { state?: unknown } | null
+  const state = fineTuning?.state
+  if (typeof state === "string") return state
+  if (state && typeof state === "object") {
+    const values = Object.values(state as Record<string, unknown>).map(String)
+    if (values.includes("failed")) return "failed"
+    if (values.length > 0 && values.every((v) => v === "fine_tuned")) return "fine_tuned"
+    if (values.includes("fine_tuning")) return "fine_tuning"
+    if (values.includes("queued")) return "queued"
+    if (values.includes("delayed")) return "delayed"
+    return values[0] || "unknown"
+  }
+  const status = (data as { status?: unknown } | null)?.status
+  return typeof status === "string" ? status : "unknown"
+}
+
+function pvcStateLabel(state: string): string {
+  switch (state) {
+    case "queued": return "En cola"
+    case "fine_tuning": return "Entrenando"
+    case "fine_tuned": return "Lista"
+    case "failed": return "Error"
+    case "delayed": return "En espera"
+    case "not_started": return "Sin iniciar"
+    default: return state
+  }
+}
+
+type PvcPhase = "datos" | "entrenando" | "lista"
+
+function ProfessionalVoicePanel({ language, languageOptions }: {
+  language: string
+  languageOptions: readonly string[]
+}) {
+  const [name, setName] = React.useState("")
+  const [voiceLanguage, setVoiceLanguage] = React.useState(language || "Spanish")
+  const [files, setFiles] = React.useState<File[]>([])
+  const [durations, setDurations] = React.useState<number[]>([])
+  const [phase, setPhase] = React.useState<PvcPhase>("datos")
+  const [pvcVoiceId, setPvcVoiceId] = React.useState<string | null>(null)
+  const [trainState, setTrainState] = React.useState("not_started")
+  const [needsVerification, setNeedsVerification] = React.useState(false)
+  const [verifying, setVerifying] = React.useState(false)
+  const [working, setWorking] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+
+  const totalSeconds = durations.reduce((acc, d) => acc + (Number(d) || 0), 0)
+  const meetsMinimum = totalSeconds >= PVC_REQUIRED_SECONDS
+
+  const addFiles = async (incoming: FileList | File[] | null) => {
+    if (!incoming || working || phase !== "datos") return
+    const room = Math.max(0, PVC_MAX_FILES - files.length)
+    const picked = Array.from(incoming).slice(0, room)
+    const accepted: File[] = []
+    for (const file of picked) {
+      const okType = /^(audio|video)\//.test(file.type)
+        || /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|mp4|mov|mkv|m4v|mpeg|mpg|wma|3gp)$/i.test(file.name)
+      if (!okType) {
+        toast.error(`«${file.name}» no es audio o vídeo`)
+        continue
+      }
+      if (file.size > PVC_MAX_BYTES) {
+        toast.error(`«${file.name}» supera los 25 MB`)
+        continue
+      }
+      accepted.push(file)
+    }
+    if (accepted.length === 0) return
+    const next = [...files, ...accepted].slice(0, PVC_MAX_FILES)
+    setFiles(next)
+    setDurations(await Promise.all(next.map(loadAudioDurationSeconds)))
+  }
+
+  const removeFile = async (index: number) => {
+    const next = files.filter((_, i) => i !== index)
+    setFiles(next)
+    setDurations(await Promise.all(next.map(loadAudioDurationSeconds)))
+  }
+
+  const startTraining = async () => {
+    if (!name.trim()) {
+      toast.error("Ponle un nombre a la voz")
+      return
+    }
+    if (!meetsMinimum) {
+      toast.error("Se requieren 30 minutos de audio")
+      return
+    }
+    setWorking(true)
+    setError(null)
+    try {
+      const created = await apiClient.createElevenLabsPvcVoice({ name: name.trim(), language: pvcLanguageCode(voiceLanguage) })
+      const id = String(created?.voice_id || "")
+      if (!id) throw new Error("ElevenLabs no devolvió voice_id")
+      setPvcVoiceId(id)
+      await apiClient.uploadElevenLabsPvcSamples(id, files)
+      await apiClient.trainElevenLabsPvcVoice(id)
+      setTrainState("queued")
+      setPhase("entrenando")
+      toast.success("Entrenamiento iniciado. Tarda unos 5 minutos.")
+    } catch (err) {
+      setError(errorMessage(err, "No se pudo iniciar el clon profesional"))
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  React.useEffect(() => {
+    if (phase !== "entrenando" || !pvcVoiceId) return
+    let cancelled = false
+    let timer: number | null = null
+    const poll = async () => {
+      try {
+        const data = await apiClient.getElevenLabsPvcVoice(pvcVoiceId)
+        if (cancelled) return
+        const state = pvcTrainingState(data)
+        setTrainState(state)
+        setNeedsVerification(Boolean((data as { requires_verification?: unknown })?.requires_verification))
+        if (state === "fine_tuned") {
+          setPhase("lista")
+          resetVoices()
+          toast.success("Voz profesional lista. Búscala en el catálogo Voz.")
+        } else if (state === "failed") {
+          setError("El entrenamiento falló en ElevenLabs. Revisa las muestras e inténtalo de nuevo.")
+        } else {
+          timer = window.setTimeout(poll, PVC_POLL_MS)
+        }
+      } catch (err) {
+        if (!cancelled) setError(errorMessage(err, "No se pudo consultar el estado"))
+      }
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [phase, pvcVoiceId])
+
+  const copyVoiceId = async () => {
+    if (!pvcVoiceId) return
+    const result = await copyTextSafe(pvcVoiceId)
+    if (result?.ok) toast.success("voice_id copiado")
+    else toast.error("No se pudo copiar")
+  }
+
+  const requestVerification = async () => {
+    if (!pvcVoiceId) return
+    setVerifying(true)
+    try {
+      await apiClient.requestElevenLabsPvcVerification(pvcVoiceId)
+      toast.success("Verificación solicitada. Revisa tu correo de ElevenLabs.")
+    } catch (err) {
+      toast.error(errorMessage(err, "No se pudo solicitar la verificación"))
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  const languageChoices = languageOptions.map((l) => ({ value: l, label: languageLabel(l) }))
+
+  if (phase !== "datos") {
+    const training = phase === "entrenando"
+    return (
+      <div className={CARD_CLASS}>
+        <SectionTitle
+          icon={Mic}
+          title={training ? "Clon profesional en entrenamiento" : "Voz profesional lista"}
+          subtitle="ElevenLabs entrena tu réplica (~5 minutos). Puedes cerrar; la voz queda en tu cuenta."
+        />
+        <div className="flex items-center gap-2 text-[13px] font-semibold text-zinc-900 dark:text-white">
+          {training && trainState !== "failed" && <Loader2 className="h-4 w-4 animate-spin" />}
+          {pvcStateLabel(trainState)}
+          {trainState === "failed" && <span className="font-normal text-red-600 dark:text-red-300">· revisa las muestras</span>}
+        </div>
+        {!training && (
+          <p className="mt-2 text-[12.5px] text-zinc-600 dark:text-white/65">
+            Búscala en el catálogo Voz del composer (disco Voice) para narrar con ella en Español u otro idioma.
+          </p>
+        )}
+        {pvcVoiceId && (
+          <div className="mt-2 flex items-center gap-2 rounded-xl bg-zinc-100 px-3 py-2 text-[12.5px] text-zinc-800 dark:bg-white/[0.06] dark:text-white/85">
+            <span className="min-w-0 flex-1 truncate font-mono">{pvcVoiceId}</span>
+            <button type="button" onClick={() => void copyVoiceId()} className="flex shrink-0 items-center gap-1 text-[12px] font-semibold underline-offset-2 hover:underline">
+              <Copy className="h-3.5 w-3.5" />Copiar ID
+            </button>
+          </div>
+        )}
+        {needsVerification && (
+          <div className="mt-2 rounded-xl border border-amber-200/70 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-400/25 dark:bg-amber-500/10 dark:text-amber-200">
+            ElevenLabs exige verificar tu identidad para esta voz.
+            <Button type="button" onClick={() => void requestVerification()} disabled={verifying} className={cn(SECONDARY_BUTTON, "ml-2")}>
+              {verifying ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}Solicitar verificación
+            </Button>
+          </div>
+        )}
+        {error && (
+          <p className="mt-2 rounded-xl border border-red-200/70 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-400/25 dark:bg-red-500/10 dark:text-red-200">{error}</p>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <AudioLines className="h-4 w-4 text-zinc-900 dark:text-white" />
+          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Evite los entornos ruidosos</p>
+          <p className="text-[12px] text-zinc-500 dark:text-white/60">Los sonidos de fondo interfieren con los resultados de calidad de grabación.</p>
+        </div>
+        <div>
+          <Mic className="h-4 w-4 text-zinc-900 dark:text-white" />
+          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Compruebe la calidad del micrófono</p>
+          <p className="text-[12px] text-zinc-500 dark:text-white/60">Pruebe unidades externas o micrófonos de auriculares para una mejor captura de audio.</p>
+        </div>
+        <div>
+          <RefreshCw className="h-4 w-4 text-zinc-900 dark:text-white" />
+          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Utilice equipos consistentes</p>
+          <p className="text-[12px] text-zinc-500 dark:text-white/60">No cambie el equipo de grabación entre muestras.</p>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label className="text-[12px] text-zinc-700 dark:text-white/75">Nombre</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Mi voz profesional…" className={FIELD_CLASS} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-[12px] text-zinc-700 dark:text-white/75">Idioma de la voz</Label>
+          <NativeSelect aria-label="Idioma de la voz profesional" value={voiceLanguage} onChange={setVoiceLanguage} options={languageChoices} />
+        </div>
+      </div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !working) inputRef.current?.click() }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); void addFiles(e.dataTransfer.files) }}
+        className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/70 px-4 py-6 text-center transition-colors hover:border-zinc-400 hover:bg-zinc-50 dark:border-white/15 dark:bg-white/[0.03] dark:hover:bg-white/[0.05]"
+      >
+        <Upload className="h-5 w-5 text-zinc-500" />
+        <p className="text-[13px] font-medium text-zinc-900 dark:text-white">Haga clic para cargar, o arrastre y suelte</p>
+        <p className="text-[11.5px] text-zinc-500 dark:text-white/55">Archivos de audio o vídeo de hasta 25 MB cada uno · máx. {PVC_MAX_FILES}</p>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="audio/*,video/*"
+          multiple
+          className="hidden"
+          onChange={(e) => { void addFiles(e.target.files); e.target.value = "" }}
+        />
+      </div>
+      {files.length > 0 && (
+        <div className="space-y-1.5">
+          {files.map((file, i) => (
+            <div key={`${file.name}-${file.size}-${i}`} className="flex items-center gap-2 rounded-xl bg-zinc-100 px-3 py-2 text-[12.5px] text-zinc-800 dark:bg-white/[0.06] dark:text-white/85">
+              <AudioLines className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{file.name} · {formatBytes(file.size)}{typeof durations[i] === "number" && durations[i] > 0 ? ` · ${formatClock(durations[i])}` : ""}</span>
+              <button type="button" onClick={() => void removeFile(i)} className="shrink-0 text-[12px] font-semibold underline-offset-2 hover:underline">Quitar</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Progress value={Math.min(100, (totalSeconds / PVC_REQUIRED_SECONDS) * 100)} className="h-1.5 bg-zinc-200 dark:bg-white/10 [&>div]:bg-zinc-950 dark:[&>div]:bg-white" />
+      <div className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-[12.5px] text-zinc-600 dark:text-white/65">
+          <span className={cn("flex h-4 w-4 items-center justify-center rounded-full border", meetsMinimum ? "border-zinc-950 bg-zinc-950 text-white dark:border-white dark:bg-white dark:text-zinc-950" : "border-zinc-300 text-transparent dark:border-white/25")}>
+            <Check className="h-3 w-3" />
+          </span>
+          Se requieren 30 minutos de audio · {formatClock(totalSeconds)} / 30:00
+        </p>
+        <Button type="button" onClick={() => void startTraining()} disabled={working || !meetsMinimum || !name.trim()} className={PRIMARY_BUTTON}>
+          {working ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}Siguiente
+        </Button>
+      </div>
+      <p className="text-[11.5px] text-zinc-500 dark:text-white/55">Plan ElevenLabs de pago con 1 espacio profesional libre · entrenamiento ~5 minutos · la voz queda en tu cuenta.</p>
+      {error && (
+        <p className="rounded-xl border border-red-200/70 bg-red-50 px-3 py-2 text-[12px] text-red-700 dark:border-red-400/25 dark:bg-red-500/10 dark:text-red-200">{error}</p>
+      )}
+    </div>
+  )
+}
+
 // ── Voices ────────────────────────────────────────────────────────────────
 
 function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, language, languageOptions, onVoicesChange }: {
@@ -327,6 +669,7 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
   const [recording, setRecording] = React.useState(false)
   const [elapsed, setElapsed] = React.useState(0)
   const [creating, setCreating] = React.useState(false)
+  const [cloneMode, setCloneMode] = React.useState<"instant" | "pro">("instant")
   const [deleting, setDeleting] = React.useState<string | null>(null)
   const [testText, setTestText] = React.useState("Hola, soy tu nueva voz en SiraGPT. ¿Qué creamos hoy?")
   const [testing, setTesting] = React.useState(false)
@@ -515,7 +858,37 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
       </div>
 
       <div className={CARD_CLASS}>
-        <p className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-white/55">Clonar una voz nueva</p>
+        <p className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-white/55">Crear voz</p>
+        <div className="mb-3 grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setCloneMode("instant")}
+            className={cn(
+              "rounded-2xl border p-3 text-left transition-colors",
+              cloneMode === "instant"
+                ? "border-zinc-950 bg-zinc-50 dark:border-white dark:bg-white/[0.06]"
+                : "border-zinc-200 hover:bg-zinc-50 dark:border-white/12 dark:hover:bg-white/[0.04]",
+            )}
+          >
+            <span className="block text-[13px] font-semibold text-zinc-950 dark:text-white">Clon de voz instantánea</span>
+            <span className="block text-[11.5px] text-zinc-500 dark:text-white/55">Tu voz local en segundos, gratis.</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setCloneMode("pro")}
+            className={cn(
+              "rounded-2xl border p-3 text-left transition-colors",
+              cloneMode === "pro"
+                ? "border-zinc-950 bg-zinc-50 dark:border-white dark:bg-white/[0.06]"
+                : "border-zinc-200 hover:bg-zinc-50 dark:border-white/12 dark:hover:bg-white/[0.04]",
+            )}
+          >
+            <span className="block text-[13px] font-semibold text-zinc-950 dark:text-white">Clon de voz profesional</span>
+            <span className="block text-[11.5px] text-zinc-500 dark:text-white/55">Réplica ElevenLabs · 30 min de audio · ~5 min</span>
+          </button>
+        </div>
+        {cloneMode === "instant" ? (
+        <>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label className="text-[12px] text-zinc-700 dark:text-white/75">Nombre</Label>
@@ -580,6 +953,10 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
             Crear voz
           </Button>
         </div>
+        </>
+        ) : (
+          <ProfessionalVoicePanel language={language} languageOptions={languageOptions} />
+        )}
       </div>
     </div>
   )

@@ -3668,6 +3668,47 @@ class ApiClient {
     return this.request('/elevenlabs/models');
   }
 
+  // ── ElevenLabs PVC — Clon de voz profesional (oficial) ───────────────────
+  // Paso 1: crear el shell. Devuelve { voice_id, ... }.
+  async createElevenLabsPvcVoice(data: { name: string; language?: string }): Promise<{ voice_id: string } & Record<string, unknown>> {
+    return this.request('/elevenlabs/pvc/voices', { method: 'POST', body: JSON.stringify(data), timeoutMs: 60000, maxRetries: 0 });
+  }
+
+  // Paso 2: subir muestras (audio o vídeo, ≤ 25 MB cada uno, ≥ 30 min en total).
+  async uploadElevenLabsPvcSamples(voiceId: string, files: File[], opts: { removeBackgroundNoise?: boolean } = {}): Promise<unknown> {
+    const formData = new FormData();
+    for (const file of files) formData.append('files', file, file.name);
+    formData.append('remove_background_noise', opts.removeBackgroundNoise ? 'true' : 'false');
+    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/samples`, { method: 'POST', body: formData, timeoutMs: 10 * 60 * 1000, maxRetries: 0 });
+  }
+
+  // Paso 3: entrenar (~5 minutos en ElevenLabs).
+  async trainElevenLabsPvcVoice(voiceId: string, opts: { modelId?: string } = {}): Promise<{ status?: string } & Record<string, unknown>> {
+    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/train`, {
+      method: 'POST',
+      body: JSON.stringify(opts.modelId ? { model_id: opts.modelId } : {}),
+      timeoutMs: 10 * 60 * 1000,
+      maxRetries: 0,
+    });
+  }
+
+  // Paso 4: estado (.fine_tuning.state: queued | fine_tuning | fine_tuned | failed | delayed).
+  async getElevenLabsPvcVoice(voiceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}`, { suppressFailureLog: true });
+  }
+
+  async deleteElevenLabsPvcSample(voiceId: string, sampleId: string): Promise<Record<string, unknown>> {
+    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/samples/${encodeURIComponent(sampleId)}`, { method: 'DELETE' });
+  }
+
+  async getElevenLabsPvcCaptcha(voiceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/captcha`);
+  }
+
+  async requestElevenLabsPvcVerification(voiceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/verification`, { method: 'POST', body: JSON.stringify({}), maxRetries: 0 });
+  }
+
   async getOfficeSoundscape(
     soundId:
       | 'coast-day'
