@@ -243,6 +243,7 @@ const ALLOWED_EVENTS = new Set([
   'rlcd.deferred',
   'rlcd.evidence_adjusted',
   'rlcd.lane_decided',
+  'rlcd.media_decided',
   'rlcd.prompt_applied',
   'rlcd.skipped',
   'rlhf.implicit_signal',

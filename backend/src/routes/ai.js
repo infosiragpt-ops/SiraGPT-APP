@@ -5627,6 +5627,20 @@ router.post(
             if (req._rlcdDecisionIds.length) {
               generateLog.info('rlcd.decisions_recorded', { count: req._rlcdDecisionIds.length });
             }
+            // RLCD media intent: typed decision with a calibrated probability.
+            // force → agentic loop with media tools; ask → clarify first.
+            req._rlcdMedia = rlcd.decideMediaIntent({
+              chatId: canPersist ? chatId : null,
+              text: prompt,
+              signature: req._rlcdSignature || null,
+            });
+            if (req._rlcdMedia.decisionId) req._rlcdDecisionIds.push(req._rlcdMedia.decisionId);
+            if (req._rlcdMedia.ask && req._rlcdMedia.question && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
+              intentTriageDecision = { action: 'ask', question: req._rlcdMedia.question, reason: 'rlcd_media_uncertain', source: 'rlcd_media', score: 1 - (req._rlcdMedia.calibrated || 0) };
+            }
+            if (req._rlcdMedia.kind) {
+              generateLog.info('rlcd.media_decided', { action: req._rlcdMedia.action, calibrated: req._rlcdMedia.calibrated, repaired: Boolean(req._rlcdMedia.repaired) });
+            }
           } catch (_) { /* RLCD is advisory */ }
 
           // Phase 3: test-time compute. Turn the orchestrator's compute plan
@@ -7230,7 +7244,7 @@ router.post(
               } catch (_) { /* RLCD is advisory */ }
               const __agenticWillRun = (
                 agenticStream.isEnabled()
-                && (shouldRunAgentic || __rlcdLane.forced === true || documentEditRequested || createDocRequested)
+                && (shouldRunAgentic || __rlcdLane.forced === true || (req._rlcdMedia && req._rlcdMedia.force === true) || documentEditRequested || createDocRequested)
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)
