@@ -260,7 +260,7 @@ function compactStatus(status) {
  * Start (or reuse) the dev server of the chat's bound project and return the
  * tokenized preview URL. Waits for readiness up to CODEX_PREVIEW_START_TIMEOUT_MS.
  */
-async function startPreviewForChat({ userId, chatId } = {}, deps = {}) {
+async function startPreviewForChat({ userId, chatId, preferredPort } = {}, deps = {}) {
   const d = resolveDeps(deps);
   const access = await assertCodexAccess({ userId, db: d.db, env: d.env });
   if (!access.ok) return access;
@@ -291,7 +291,12 @@ async function startPreviewForChat({ userId, chatId } = {}, deps = {}) {
     }
     const token = previewTokenFor({ projectId: project.id, userId: String(userId) }, d.env);
     const basePath = previewBasePath(project.id, token);
-    const out = await runner.startDev(project.id, { basePath });
+    const startOpts = { basePath };
+    const port = Number(preferredPort);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) {
+      startOpts.preferredPort = port;
+    }
+    const out = await runner.startDev(project.id, startOpts);
     const wait = await waitForPreviewReady(runner, project.id, d.env, deps.sleep);
     if (!wait.ready) {
       return fail('preview_not_ready', `El servidor de desarrollo no quedó listo: ${wait.error}`, {

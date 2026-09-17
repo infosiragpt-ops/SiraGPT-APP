@@ -5,6 +5,16 @@ levantarlo en el runner aislado (`iliagpt-runner`), devolviendo una URL de
 preview tokenizada. Antes esto solo existía detrás de botones del IDE
 (`AGENTES_CODING_V2`, apagado en producción).
 
+El preloop determinista de `runAgenticChat` intercepta
+`isGithubLocalPreviewRequest` (github.com + «dame la web en local» / «en local
+5000») **antes** del LLM: llama `project_clone_repo` y `project_preview_start`
+en el servidor. No le pide al usuario clonar en su teléfono ni responde
+«no puedo abrir el puerto 5000». Un puerto pedido (p. ej. 5000) se pasa como
+`preferredPort` al runner; si el pool asigna otro, la respuesta explica la
+URL de preview. Este camino **no** exige `AGENTES_CODING_V2`. El gate de
+acceso sigue siendo `canUseCodexAgent` (admin / allowlist /
+`CODEX_AGENT_OPEN_TO_ALL`).
+
 ## Tools del agente (`backend/src/services/agents/project-preview-tools.js`)
 
 | Tool | Qué hace |

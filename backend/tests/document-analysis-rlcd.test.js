@@ -12,7 +12,11 @@ const assert = require('node:assert/strict');
 const { describe, it, beforeEach, afterEach } = require('node:test');
 
 const rlcd = require('../src/services/rlcd');
-const { preferenceAgent, formatDocumentRlhfBlock } = require('../src/services/document-analysis-rlhf');
+const {
+  preferenceAgent,
+  formatDocumentRlhfBlock,
+  stripDocumentConfidenceFooter,
+} = require('../src/services/document-analysis-rlhf');
 const ledger = require('../src/services/agents/feedback-ledger');
 const store = require('../src/services/rlhf/preference-store');
 
@@ -96,6 +100,56 @@ describe('preference tagging', () => {
   it('preferenceAgent still tags document turns', () => {
     assert.equal(preferenceAgent({ prompt: 'hola' }), 'chat');
     assert.equal(preferenceAgent({ prompt: 'analiza el documento', files: [docx] }), 'document');
+  });
+
+  it('coding / local-preview prompts stay off the document RLCD path even with the flag on', () => {
+    enable();
+    const coding = 'dame la web en local https://github.com/infosiragpt-ops/SiraGPT-APP';
+    assert.equal(preferenceAgent({ prompt: coding, files: [docx] }), 'chat');
+    const prep = rlcd.prepareDocumentTurn({
+      prompt: coding,
+      files: [docx],
+      language: 'es',
+    });
+    assert.equal(prep.applied, false);
+    assert.equal(prep.reason, 'not_document');
+    assert.equal(prep.block, '');
+    const out = rlcd.finalizeAnswer({
+      text: 'No puedo abrir el puerto 5000.\n\nNivel de confianza: medio — no inspeccioné el repo.',
+      prompt: coding,
+      files: [docx],
+      language: 'es',
+    });
+    assert.equal(out.reason, 'not_document');
+    assert.equal(out.metadata, null);
+    assert.doesNotMatch(out.block || '', /CALIBRACION DOCUMENTAL|Nivel de confianza/);
+    assert.equal(
+      stripDocumentConfidenceFooter(out.text),
+      'No puedo abrir el puerto 5000.',
+    );
+  });
+
+  it('document summarize still gets RLCD when the flag is on', () => {
+    enable();
+    const prep = rlcd.prepareDocumentTurn({
+      prompt: 'resume el documento',
+      files: [docx],
+      language: 'es',
+      agent: 'document',
+    });
+    assert.equal(prep.applied, true);
+    assert.match(prep.block, /CALIBRACION DOCUMENTAL/);
+    const out = rlcd.finalizeAnswer({
+      text: 'El objetivo es medir X.\n<!--rlcd:{"c":0.81,"r":"aparece en metodo"}-->',
+      prompt: 'resume el documento',
+      files: [docx],
+      language: 'es',
+      agent: 'document',
+      threshold: 0.2,
+    });
+    assert.equal(out.reason, 'ok');
+    assert.equal(out.metadata.confidence, 0.81);
+    assert.doesNotMatch(out.text, /<!--rlcd/);
   });
 
   it('formatDocumentRlhfBlock unchanged when flag is off', () => {
@@ -345,6 +399,17 @@ describe('source contracts', () => {
     }
     assert.match(ai, /rlcd\.isDocumentEnabled\(\)/);
     assert.match(ai, /rlcd: \{ decisions: req\._rlcdDecisionIds\.slice\(0, 8\)/);
+    assert.match(ai, /stripDocumentConfidenceFooter/);
+    assert.match(ai, /reasonCode: 'not_document'/);
+    const master = fs.readFileSync(
+      path.join(__dirname, '../src/services/master-prompt.js'),
+      'utf8',
+    );
+    assert.match(master, /never get a document-confidence footer/);
+    assert.doesNotMatch(
+      master,
+      /Format: a direct answer first, then "Nivel de confianza: alto\/medio\/bajo"/,
+    );
   });
 });
 

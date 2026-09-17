@@ -6160,6 +6160,8 @@ router.post(
               reasonCode: (__rlcdPrep && __rlcdPrep.reason) || 'skipped',
             });
           }
+        } else if (rlcd.isDocumentEnabled()) {
+          generateLog.info('rlcd.skipped', { success: true, reasonCode: 'not_document' });
         }
       } catch (_rlcdPrepErr) { /* fail-open: no RLCD prompt */ }
 
@@ -8389,8 +8391,12 @@ router.post(
         // persisted text so the user never sees the hidden marker.
         try {
           const rlcd = require('../services/rlcd');
-          const { preferenceAgent: _rlcdAgentFin } = require('../services/document-analysis-rlhf');
-          if (rlcd.isDocumentEnabled() && _rlcdAgentFin({ files: processedFiles, prompt }) === 'document') {
+          const {
+            preferenceAgent: _rlcdAgentFin,
+            stripDocumentConfidenceFooter,
+          } = require('../services/document-analysis-rlhf');
+          const __rlcdAgentFin = _rlcdAgentFin({ files: processedFiles, prompt });
+          if (rlcd.isDocumentEnabled() && __rlcdAgentFin === 'document') {
             const __rlcdOut = rlcd.finalizeAnswer({
               text: finalContent,
               prompt,
@@ -8399,6 +8405,7 @@ router.post(
               language: (langResolution && langResolution.language) || 'es',
               predicted: req._rlcdPrep,
               calibration: req._calibration,
+              agent: __rlcdAgentFin,
             });
             if (__rlcdOut && typeof __rlcdOut.text === 'string' && __rlcdOut.text.trim()) {
               finalContent = __rlcdOut.text;
@@ -8423,6 +8430,9 @@ router.post(
                 reasonCode: (__rlcdOut && __rlcdOut.reason) || 'ok',
               });
             }
+          } else {
+            const stripped = stripDocumentConfidenceFooter(finalContent);
+            if (stripped !== finalContent) finalContent = stripped;
           }
         } catch (_rlcdFinErr) { /* fail-open: leave the answer unchanged */ }
 

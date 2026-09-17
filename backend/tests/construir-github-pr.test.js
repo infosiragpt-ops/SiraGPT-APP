@@ -153,8 +153,35 @@ describe('github-pr-intent', () => {
     });
     assert.match(ready, /workspace aislado/i);
     assert.match(ready, /conexiones/i);
+    assert.match(ready, /project_preview_start/);
+    assert.doesNotMatch(ready, /git clone|en tu máquina|en tu telefono/i);
     assert.doesNotMatch(ready, /localhost:5173 is running|ya corre/i);
     assert.doesNotMatch(ready, /DeepSeek|OpenRouter|connection_unavailable/i);
+  });
+
+  test('screenshot prompt prefers github.com over siragpt.com/agentes and reads port 5000', () => {
+    const {
+      isGithubLocalPreviewRequest,
+      extractGithubHttpsUrl,
+      extractPreferredPort,
+      buildLocalPreviewReadyMessage,
+    } = require('../src/services/agents/github-pr-intent');
+    const shot = 'quiero que podamos trabajar en https://siragpt.com/agentes del github https://github.com/infosiragpt-ops/SiraGPT-APP y dame la web en local 5000';
+    assert.equal(isGithubLocalRunRequest(shot), true);
+    assert.equal(isGithubLocalPreviewRequest(shot), true);
+    assert.equal(isGithubPrRequest(shot), false);
+    assert.deepEqual(extractOwnerRepo(shot), { owner: 'infosiragpt-ops', repo: 'SiraGPT-APP' });
+    assert.equal(extractGithubHttpsUrl(shot).url, 'https://github.com/infosiragpt-ops/SiraGPT-APP');
+    assert.equal(extractPreferredPort(shot), 5000);
+    assert.equal(extractOwnerRepo('https://siragpt.com/agentes'), null);
+    const previewMsg = buildLocalPreviewReadyMessage({
+      cloned: { repository: { fullName: 'infosiragpt-ops/SiraGPT-APP', webUrl: 'https://github.com/infosiragpt-ops/SiraGPT-APP' } },
+      preview: { ok: true, previewUrl: 'https://siragpt.com/api/codex/projects/p1/preview/tok/app/', port: 4301 },
+      preferredPort: 5000,
+    });
+    assert.match(previewMsg, /preview\/tok\/app/);
+    assert.match(previewMsg, /4301/);
+    assert.doesNotMatch(previewMsg, /No puedo abrir el puerto|git clone|Nivel de confianza/i);
   });
 });
 
@@ -365,6 +392,9 @@ describe('construir GitHub PR HTTP + wiring', () => {
     assert.match(streamSrc, /github_open_pull_request/);
     assert.match(streamSrc, /isGithubPrRequest/);
     assert.match(streamSrc, /isGithubRepoWorkRequest/);
+    assert.match(streamSrc, /project_clone_repo/);
+    assert.match(streamSrc, /project_preview_start/);
+    assert.match(streamSrc, /githubLocalPreviewTurn/);
     assert.match(streamSrc, /github_repo_connect/);
     const docs = fs.readFileSync(path.join(__dirname, '../../docs/construir-github-pr.md'), 'utf8');
     assert.match(docs, /\/conexiones/);

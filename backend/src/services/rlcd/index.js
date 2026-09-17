@@ -169,6 +169,16 @@ function isDocumentAgent(agent) {
   return String(agent || '') === 'document';
 }
 
+function resolveDocumentAgent(args = {}) {
+  if (args.agent) return String(args.agent);
+  try {
+    const { preferenceAgent } = require('../document-analysis-rlhf');
+    return preferenceAgent({ files: args.files, prompt: args.prompt });
+  } catch {
+    return '';
+  }
+}
+
 function extractThin(files) {
   return confidence.extractionChars(files) < 400;
 }
@@ -185,7 +195,7 @@ function prepareDocumentTurn(raw = {}) {
       calibration.recordSkip();
       return { applied: false, block: '', reason: 'disabled' };
     }
-    if (args.agent && !isDocumentAgent(args.agent)) {
+    if (!isDocumentAgent(resolveDocumentAgent(args))) {
       return { applied: false, block: '', reason: 'not_document' };
     }
     const language = args.language || 'es';
@@ -228,7 +238,7 @@ function finalizeAnswer(raw = {}) {
         reason: 'disabled',
       };
     }
-    if (args.agent && !isDocumentAgent(args.agent)) {
+    if (!isDocumentAgent(resolveDocumentAgent(args))) {
       return {
         text: String(args.text || ''),
         metadata: null,

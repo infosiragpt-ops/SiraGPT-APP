@@ -2,7 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { preferenceAgent, formatDocumentRlhfBlock } = require('../src/services/document-analysis-rlhf');
+const {
+  preferenceAgent,
+  formatDocumentRlhfBlock,
+  isCodingOrPreviewTurn,
+  stripDocumentConfidenceFooter,
+} = require('../src/services/document-analysis-rlhf');
 const { loadPreferenceRows } = require('../src/services/agents/feedback-durable');
 
 const docx = {
@@ -14,6 +19,14 @@ test('preferenceAgent tags document turns, not plain chat', () => {
   assert.equal(preferenceAgent({ prompt: 'hola' }), 'chat');
   assert.equal(preferenceAgent({ prompt: 'analiza el documento', files: [docx] }), 'document');
   assert.equal(preferenceAgent({ files: [docx], prompt: '' }), 'document');
+});
+
+test('preferenceAgent never tags local-preview / coding prompts as document', () => {
+  const coding = 'quiero que podamos trabajar en https://siragpt.com/agentes del github https://github.com/infosiragpt-ops/SiraGPT-APP y dame la web en local 5000';
+  assert.equal(isCodingOrPreviewTurn(coding), true);
+  assert.equal(preferenceAgent({ prompt: coding }), 'chat');
+  assert.equal(preferenceAgent({ prompt: coding, files: [docx] }), 'chat');
+  assert.equal(stripDocumentConfidenceFooter('Listo.\n\nNivel de confianza: medio — no inspeccioné el repo.'), 'Listo.');
 });
 
 test('formatDocumentRlhfBlock is empty without exemplars', () => {
