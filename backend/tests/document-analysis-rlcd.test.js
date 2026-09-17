@@ -30,6 +30,8 @@ function enable(env = {}) {
   else delete process.env.SIRAGPT_RLCD_MAX_DEFER_RATE;
   if (env.phrase != null) process.env.SIRAGPT_RLCD_PHRASE = String(env.phrase);
   else delete process.env.SIRAGPT_RLCD_PHRASE;
+  if (env.autoThreshold != null) process.env.SIRAGPT_RLCD_AUTO_THRESHOLD = String(env.autoThreshold);
+  else delete process.env.SIRAGPT_RLCD_AUTO_THRESHOLD;
 }
 
 function disable() {
@@ -37,6 +39,7 @@ function disable() {
   delete process.env.SIRAGPT_RLCD_DEFER_THRESHOLD;
   delete process.env.SIRAGPT_RLCD_MAX_DEFER_RATE;
   delete process.env.SIRAGPT_RLCD_PHRASE;
+  delete process.env.SIRAGPT_RLCD_AUTO_THRESHOLD;
 }
 
 beforeEach(() => {
@@ -178,7 +181,8 @@ describe('defer policy', () => {
     });
     assert.equal(out.deferred, true);
     assert.equal(out.reason, 'below_threshold');
-    assert.match(out.text, /suficiente evidencia|sección o página/i);
+    assert.match(out.text, /sección o página/i);
+    assert.doesNotMatch(out.text, /afirmar esto con seguridad|inventar/i);
   });
 
   it('does not defer when already honest', () => {
@@ -370,7 +374,7 @@ describe('evidence-aware confidence', () => {
     assert.equal(out.score.adjusted, true);
     assert.equal(out.score.evidence.emptyExtract, true);
     assert.equal(out.deferred, true);
-    assert.equal(out.metadata.v, 2);
+    assert.equal(out.metadata.v, 3);
     assert.ok(out.metadata.evidence);
   });
 
@@ -515,31 +519,112 @@ describe('outcome loop and contrastive pairs', () => {
 describe('eval harness fixtures', () => {
   it('scores the document RLCD fixture slice', () => {
     enable({ threshold: 0.45, maxRate: 1, phrase: '0' });
-    const path = require('node:path');
     const fixtures = require('./fixtures/document-rlcd-eval.json');
-    assert.ok(fixtures.length >= 3);
-    for (const row of fixtures) {
-      const out = rlcd.finalizeAnswer({
-        text: row.answer,
-        prompt: row.prompt,
-        files: row.files,
-        hits: row.hits,
-        language: 'es',
-        threshold: row.expect.threshold,
+    assert.ok(fixtures.length >= 8);
+    const report = rlcd.runDocumentEval(fixtures);
+    assert.equal(report.ok, true, JSON.stringify(report.cases.filter((c) => !c.passed)));
+    assert.equal(report.failed, 0);
+  });
+});
+
+describe('retrieval scores and page citations', () => {
+  it('blends RAG retrieval scores and matching page cites', () => {
+    const weak = rlcd.evidence.scoreEvidence({
+      text: 'El total es 999 millones.',
+      files: [docx],
+      hits: [{ text: 'nota al pie', score: 0.07, page: 19 }],
+    });
+    assert.equal(weak.weakRetrieval, true);
+    assert.ok(weak.quality < 0.4);
+
+    const strong = rlcd.confidence.scoreConfidence({
+      text: 'Según la página 4 el objetivo es medir X. <!--rlcd:{"c":0.74,"r":"cita"}-->',
+      files: [docx],
+      hits: [{ text: 'Objetivo: medir X.', score: 0.92, page: 4 }],
+    });
+    assert.equal(strong.evidence.pageCited, true);
+    assert.ok(strong.evidence.retrievalScore >= 0.8);
+    assert.ok(strong.confidence >= 0.74);
+    assert.deepEqual(strong.evidence.pages, [4]);
+  });
+});
+
+describe('Spanish defer UX', () => {
+  it('asks for a candidate page without scary wording', () => {
+    enable({ threshold: 0.45, maxRate: 1, phrase: '0' });
+    const out = rlcd.finalizeAnswer({
+      text: 'El total es 999. <!--rlcd:{"c":0.2,"r":"no esta"}-->',
+      prompt: 'cuál es el total',
+      files: [{ name: 'empty.pdf', extractedText: '' }],
+      hits: [{ text: 'anexo', score: 0.2, page: 12 }],
+      language: 'es',
+    });
+    assert.equal(out.deferred, true);
+    assert.match(out.text, /página 12/i);
+    assert.match(out.text, /sección o página/i);
+    assert.doesNotMatch(out.text, /afirmar esto con seguridad|inventar|no puedo afirmar/i);
+    assert.doesNotMatch(out.text, /999/);
+  });
+});
+
+describe('document gating', () => {
+  it('does not rewrite coding or local-preview turns', () => {
+    enable({ threshold: 0.9, maxRate: 1 });
+    const text = 'Preview listo en http://127.0.0.1:5173';
+    const out = rlcd.finalizeAnswer({
+      text,
+      agent: 'coding',
+      prompt: 'dame la web en local',
+    });
+    assert.equal(out.deferred, false);
+    assert.equal(out.text, text);
+    assert.equal(out.reason, 'not_document');
+    assert.equal(out.metadata, null);
+  });
+});
+
+describe('recommended threshold', () => {
+  it('stays on the configured value until there are enough outcomes', () => {
+    enable({ threshold: 0.45 });
+    const snap = rlcd.documentStats();
+    assert.equal(snap.threshold, 0.45);
+    assert.equal(snap.recommendedThreshold, 0.45);
+    assert.equal(snap.thresholdAdvice, 'insufficient_samples');
+    assert.equal(snap.autoThreshold, false);
+    assert.equal(snap.effectiveThreshold, 0.45);
+  });
+
+  it('suggests a higher threshold when high-bin answers are wrong', () => {
+    const rec = rlcd.calibration.recommendThreshold(0.45, {
+      n: 24,
+      ece: 0.22,
+      overconfidenceRate: 0.5,
+      deferRate: 0.05,
+    });
+    assert.equal(rec.reason, 'raise_overconfidence');
+    assert.ok(rec.threshold > 0.45);
+    assert.equal(rec.usable, true);
+  });
+
+  it('applies the suggested threshold only when the auto flag is on', () => {
+    enable({ threshold: 0.45, autoThreshold: '1' });
+    for (let i = 0; i < 24; i += 1) {
+      rlcd.recordFromThumb({
+        agent: 'document',
+        helpful: false,
+        response: `Hallazgo ${i}`,
+        metadata: { rlcd: { confidence: 0.92, bin: 'high', source: 'structured' } },
       });
-      if (row.expect.maxConfidence != null) {
-        assert.ok(out.score.confidence <= row.expect.maxConfidence, row.id);
-      }
-      if (row.expect.minConfidence != null) {
-        assert.ok(out.score.confidence >= row.expect.minConfidence, row.id);
-      }
-      if (row.expect.deferred != null) {
-        assert.equal(out.deferred, row.expect.deferred, row.id);
-      }
-      if (row.expect.hasInferred) {
-        assert.ok(out.score.claims && out.score.claims.inferred >= 1, row.id);
-      }
     }
+    const snap = rlcd.documentStats();
+    assert.equal(snap.autoThreshold, true);
+    assert.ok(snap.recommendedThreshold > 0.45);
+    const out = rlcd.finalizeAnswer({
+      text: 'El objetivo es medir X. <!--rlcd:{"c":0.5,"r":"ok"}-->',
+      files: [docx],
+      language: 'es',
+    });
+    assert.ok(out.decision.threshold >= snap.recommendedThreshold - 0.001);
   });
 });
 
@@ -562,5 +647,7 @@ describe('admin stats stay isolated from the ledger', () => {
     const admin = rlcd.stats({ admin: true });
     assert.ok(admin.documents.byBin);
     assert.ok(admin.documents.bySource);
+    assert.ok(typeof admin.documents.recommendedThreshold === 'number');
+    assert.ok(admin.documents.thresholdAdvice);
   });
 });

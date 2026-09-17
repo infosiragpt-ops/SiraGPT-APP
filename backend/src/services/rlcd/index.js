@@ -20,6 +20,7 @@ const prompt = require('./prompt');
 const evidence = require('./evidence');
 const claims = require('./claims');
 const contrastive = require('./contrastive');
+const evalHarness = require('./eval-harness');
 
 // ---------------------------------------------------------------------------
 // #722 — typed-decision ledger
@@ -227,6 +228,24 @@ function finalizeAnswer(raw = {}) {
         reason: 'disabled',
       };
     }
+    if (args.agent && !isDocumentAgent(args.agent)) {
+      return {
+        text: String(args.text || ''),
+        metadata: null,
+        deferred: false,
+        reason: 'not_document',
+      };
+    }
+    let threshold = args.threshold;
+    if (threshold == null && flags.isAutoThresholdEnabled(env)) {
+      try {
+        const rec = calibration.recommendThreshold(
+          flags.deferThreshold(env),
+          { ...calibration.snapshot(), minN: flags.minAutoSamples(env) },
+        );
+        if (rec && rec.usable) threshold = rec.threshold;
+      } catch { /* keep configured threshold */ }
+    }
     const score = confidence.scoreConfidence({
       text: args.text,
       prompt: args.prompt,
@@ -246,7 +265,7 @@ function finalizeAnswer(raw = {}) {
       recentDeferRate: calibration.recentDeferRate(),
       text: score.cleanedText,
       env,
-      threshold: args.threshold,
+      threshold,
       maxRate: args.maxRate,
     });
     const applied = deferPolicy.applyPolicy({
@@ -268,7 +287,7 @@ function finalizeAnswer(raw = {}) {
     }
     calibration.recordTurn({ deferred: applied.deferred, scored: true });
     const metadata = {
-      v: 2,
+      v: 3,
       confidence: score.confidence,
       rawConfidence: score.rawConfidence,
       bin: score.bin,
@@ -443,9 +462,20 @@ function recordFromRegenerate(raw = {}) {
 function documentStats({ contrastiveCount } = {}) {
   try {
     const snap = calibration.snapshot();
+    const configured = flags.deferThreshold();
+    const rec = calibration.recommendThreshold(configured, {
+      ...snap,
+      minN: flags.minAutoSamples(),
+    });
+    const auto = flags.isAutoThresholdEnabled();
     return {
       enabled: flags.isDocumentEnabled(),
-      threshold: flags.deferThreshold(),
+      threshold: configured,
+      recommendedThreshold: rec.threshold,
+      thresholdAdvice: rec.reason,
+      thresholdDelta: rec.delta,
+      autoThreshold: auto,
+      effectiveThreshold: auto && rec.usable ? rec.threshold : configured,
       maxDeferRate: flags.maxDeferRate(),
       phrase: flags.isPhraseEnabled(),
       prompt: flags.isPromptEnabled(),
@@ -463,6 +493,17 @@ function exportDocumentPairs(events, opts) {
     return contrastive.buildDocumentPairs(events, opts);
   } catch {
     return [];
+  }
+}
+
+function runDocumentEval(rows, opts = {}) {
+  try {
+    return evalHarness.runEval(rows, {
+      finalize: (args) => finalizeAnswer(args),
+      ...opts,
+    });
+  } catch {
+    return { n: 0, passed: 0, failed: 0, ok: false, cases: [] };
   }
 }
 
@@ -484,6 +525,7 @@ const documents = {
   recordFromRegenerate,
   buildJudgeScore,
   exportDocumentPairs,
+  runDocumentEval,
   stats: documentStats,
   reset: () => { try { calibration.reset(); } catch { /* optional */ } },
 };
@@ -513,6 +555,7 @@ module.exports = {
   recordFromRegenerate,
   buildJudgeScore,
   exportDocumentPairs,
+  runDocumentEval,
   documentStats,
   flags,
   confidence,
@@ -522,4 +565,5 @@ module.exports = {
   evidence,
   claims,
   contrastive,
+  evalHarness,
 };

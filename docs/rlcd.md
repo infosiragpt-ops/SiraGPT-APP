@@ -66,12 +66,15 @@ turno. El módulo `backend/src/services/rlcd/`:
 | `SIRAGPT_RLCD_MAX_DECISIONS` | 20000 | Tope de decisiones en memoria (FIFO) |
 
 Otra superficie, **independiente**: análisis documental (`SIRAGPT_RLCD_DOCUMENTS`,
-default off) — trailer de confianza, evidencia (extracto/RAG/citas), claims
-supported/inferred, defer, Brier/ECE sobre 👍/👎 de documentos. Ver
+default off) — trailer de confianza, evidencia (extracto/RAG/citas + scores
+de retrieval y páginas), claims supported/inferred, defer en español
+pidiendo sección/página, Brier/ECE sobre 👍/👎 de documentos. Ver
 `docs/rlhf-rlcd-documents.md`. `GET /api/rlcd/stats` incluye `documents`
-con ese snapshot (phase 2: `byBin`, `overconfidenceRate`, `claimSupportRate`);
+con ese snapshot (phase 3: `recommendedThreshold`, `retrieval` fields on
+evidence, `byBin`, `overconfidenceRate`, `claimSupportRate`);
 `GET /api/rlhf/stats` → `rlcd` es solo el slice documental. Export
-contrastivo: `GET /api/rlhf/export?format=rlcd`.
+contrastivo: `GET /api/rlhf/export?format=rlcd`. Eval:
+`backend/tests/fixtures/document-rlcd-eval.json`.
 
 Estado en memoria (como `routing-feedback`); `snapshot()/load()` permiten
 persistirlo. Las decisiones también quedan en `messages.metadata.rlcd`, así
@@ -86,5 +89,5 @@ guarda en el nivel superior.
 
 ```bash
 cd backend
-node --test tests/rlcd-decision-ledger.test.js tests/metrics-route.test.js
+node --test tests/rlcd-decision-ledger.test.js tests/document-analysis-rlcd.test.js tests/metrics-route.test.js
 ```

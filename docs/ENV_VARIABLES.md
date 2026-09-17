@@ -437,11 +437,13 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | `SIRAGPT_RLHF_TRAIN_SUBMIT` | off | Optional submit after prep. No-op today (no in-repo catalog fine-tune adapter). Do not treat this as a paid auto-train switch |
 | `SIRAGPT_RLHF_TRAIN_JOB_CONCURRENCY` | 1 | In-process prep workers (capped at 4) |
 | `SYSTEM_CRON_RLHF_SCHEDULE` | `0 8 * * *` | Daily backfill of Message.feedback + local RM train (UTC) |
-| `SIRAGPT_RLCD_DOCUMENTS` | **off** | Document-analysis RLCD (#721 + phase 2): confidence trailer, evidence blend, claim labels, defer, Brier/ECE on document thumbs. Independent of `SIRAGPT_RLCD_ENABLED`. `1` / `true` / `on` enables. Leave off in production. See `docs/rlhf-rlcd-documents.md` |
+| `SIRAGPT_RLCD_DOCUMENTS` | **off** | Document-analysis RLCD (#721 + phase 2 + phase 3): confidence trailer, evidence blend (extract/RAG scores/page cites), claim labels, Spanish defer, Brier/ECE on document thumbs. Independent of `SIRAGPT_RLCD_ENABLED`. `1` / `true` / `on` enables. Code default stays off (prod `.env` may already be on — do not change it from this PR). See `docs/rlhf-rlcd-documents.md` |
 | `SIRAGPT_RLCD_DEFER_THRESHOLD` | `0.45` | Document RLCD: defer when predicted confidence is below this (0.05–0.95) |
 | `SIRAGPT_RLCD_MAX_DEFER_RATE` | `0.25` | Document RLCD: cap of document turns that may defer in this process (0–1) |
 | `SIRAGPT_RLCD_PROMPT` | on (if documents on) | `0` / `off` skips the hidden confidence-trailer contract |
 | `SIRAGPT_RLCD_PHRASE` | on (if documents on) | `0` / `off` skips the compact Spanish “Confianza baja/media” line |
+| `SIRAGPT_RLCD_AUTO_THRESHOLD` | **off** | Document RLCD: apply the ECE-suggested defer threshold when there are enough labeled outcomes. Leave off unless an operator is watching `/api/rlcd/stats` → `documents` |
+| `SIRAGPT_RLCD_AUTO_THRESHOLD_MIN_N` | `20` | Minimum labeled document outcomes before auto-threshold is usable |
 
 ---
 

@@ -237,6 +237,59 @@ function hydrateFromPreferenceEvents(rows) {
   return n;
 }
 
+/**
+ * Suggest a safer defer threshold from ECE / overconfidence.
+ * Never throws. Does not mutate state — the caller decides whether
+ * to apply it (flag-gated in index.js).
+ */
+function recommendThreshold(current, snap = {}) {
+  try {
+    const base = Number(current);
+    const fallback = Number.isFinite(base) ? Math.min(0.95, Math.max(0.05, base)) : 0.45;
+    const n = Number(snap.n) || 0;
+    const ece = snap.ece;
+    const over = snap.overconfidenceRate;
+    const deferRate = snap.deferRate;
+    const minN = Number(snap.minN);
+    const need = Number.isFinite(minN) && minN > 0 ? minN : 20;
+    if (n < need) {
+      return {
+        threshold: fallback,
+        usable: false,
+        reason: 'insufficient_samples',
+        delta: 0,
+        n,
+        need,
+      };
+    }
+    let next = fallback;
+    let reason = 'hold';
+    if (over != null && over >= 0.35 && ece != null && ece >= 0.12) {
+      next = Math.min(0.7, fallback + 0.08);
+      reason = 'raise_overconfidence';
+    } else if (ece != null && ece <= 0.06 && deferRate != null && deferRate >= 0.2) {
+      next = Math.max(0.25, fallback - 0.05);
+      reason = 'lower_well_calibrated';
+    }
+    next = Math.round(Math.min(0.7, Math.max(0.25, next)) * 100) / 100;
+    return {
+      threshold: next,
+      usable: reason !== 'hold',
+      reason,
+      delta: Math.round((next - fallback) * 100) / 100,
+      n,
+      need,
+    };
+  } catch {
+    return {
+      threshold: Number.isFinite(Number(current)) ? Number(current) : 0.45,
+      usable: false,
+      reason: 'fail_open',
+      delta: 0,
+    };
+  }
+}
+
 function snapshot() {
   return metrics({ agent: 'document' });
 }
@@ -253,6 +306,7 @@ module.exports = {
   metrics,
   hydrateFromPreferenceEvents,
   snapshot,
+  recommendThreshold,
   reset,
   _reset: reset,
   MAX_EVENTS,
