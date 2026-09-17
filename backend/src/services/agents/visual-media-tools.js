@@ -232,7 +232,7 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate one or more images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
+  description: 'Generate one or more NEW images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content. Do NOT use for "la misma imagen pero vertical/horizontal" or "hazla vertical" — that is edit_image (same scene, new frame).',
   parameters: {
     type: 'object',
     properties: {
@@ -248,6 +248,17 @@ const generateImage = {
   },
   async execute(args = {}, ctx = {}) {
     const { prompt: rawPrompt, style: styleArg, aspectRatio: ratioArg, quality: qualityArg, model, count: countArg } = args || {};
+    // The model often calls this tool for "la misma imagen pero vertical".
+    // That is a reframe of the last image, not a new picture.
+    if (imageDirective.detectImageReframe(rawPrompt)) {
+      return editImage.execute({
+        instruction: rawPrompt,
+        aspectRatio: ratioArg,
+        model,
+        quality: qualityArg,
+        count: countArg,
+      }, ctx);
+    }
     // Spoken context fills the gaps: "dame una imagen vertical",
     // "una imagen orisontal para la portada", "3 imágenes estilo anime".
     // Explicit tool arguments always win over the parsed request.
