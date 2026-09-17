@@ -165,6 +165,9 @@ function createRunnerClient({
         project: projectFor(project),
         basePath: opts.basePath || null,
         preferredPort: Number.isInteger(opts.preferredPort) ? opts.preferredPort : undefined,
+        // Public build-time variables (NEXT_PUBLIC_*, VITE_*); the runner
+        // re-validates the keys before they reach the dev server.
+        env: opts.env && typeof opts.env === 'object' ? opts.env : undefined,
       })),
       devStatus: (project) => {
         const resolvedProject = projectFor(project);

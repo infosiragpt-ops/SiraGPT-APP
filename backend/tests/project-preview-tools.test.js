@@ -199,3 +199,48 @@ test('tools are registered in the agentic chat loop and never throw', async () =
   }
   assert.equal(typeof opencodeHarness.parsePublicGithubRepo, 'function');
 });
+
+test('project_preview_start: still installing after the wait budget → preview_pending (not an error), env + port forwarded', async () => {
+  const runner = makeRunner({ statuses: [
+    { running: false, ready: false },
+    { running: true, ready: false, state: 'installing', port: 5000, project: 'pX', tail: ['$ npm ci'] },
+  ] });
+  const binding = makeBinding({ 'u1:c1': { id: 'pX', name: 'SiraGPT-APP' } });
+  const ctx = { userId: 'u1', chatId: 'c1', projectTools: { db: makeDb(), runner, binding, projectService: {}, env: { ...ENV, CODEX_PREVIEW_START_TIMEOUT_MS: '600' }, sleep: noSleep } };
+  const out = await tools.projectPreviewStartTool.execute({ preferredPort: 5000, env: { NEXT_PUBLIC_API_URL: '/api', DATABASE_URL: 'nope' }, waitMs: 5000 }, ctx);
+  assert.equal(out.ok, false);
+  assert.equal(out.code, 'preview_pending');
+  assert.equal(out.pending, true);
+  assert.equal(out.status.state, 'installing');
+  assert.match(out.previewUrl, /^https:\/\/siragpt\.com\/api\/codex\/projects\/pX\/preview\//);
+  const start = runner.calls.find((c) => c[0] === 'startDev');
+  assert.equal(start[2].preferredPort, 5000);
+  assert.deepEqual(start[2].env, { NEXT_PUBLIC_API_URL: '/api' });
+});
+
+test('project_preview_status waits when asked and reports ready', async () => {
+  const runner = makeRunner({ statuses: [
+    { running: true, ready: false, state: 'starting', port: 5000, project: 'pX' },
+    { running: true, ready: true, state: 'ready', port: 5000, project: 'pX', basePath: '/api/codex/projects/pX/preview/t/app/' },
+  ] });
+  const binding = makeBinding({ 'u1:c1': { id: 'pX', name: 'x' } });
+  const out = await tools.projectPreviewStatusTool.execute({ waitMs: 5000 }, { userId: 'u1', chatId: 'c1', projectTools: { db: makeDb(), runner, binding, projectService: {}, env: ENV, sleep: noSleep } });
+  assert.equal(out.ok, true);
+  assert.equal(out.status.ready, true);
+  assert.equal(out.previewUrl, 'https://siragpt.com/api/codex/projects/pX/preview/t/app/');
+});
+
+test('RLCD outcomes: ready preview is tool_success, hard failure is failure, pending is nothing', () => {
+  const { recordRlcdOutcome } = tools._internal;
+  const rlcd = require('../src/services/rlcd');
+  rlcd.reset();
+  const id = rlcd.ledger.recordDecision({ kind: 'execution_lane', choice: 'agentic', confidence: 0.9, chatId: 'c1' });
+  rlcd.ledger.markTurn('c1', [id]);
+  recordRlcdOutcome({ chatId: 'c1' }, { ok: false, code: 'preview_pending', pending: true });
+  assert.equal(rlcd.ledger.getDecision(id).outcome, null);
+  recordRlcdOutcome({ chatId: 'c1' }, { ok: true, previewUrl: 'x', status: { ready: true } });
+  assert.equal(rlcd.ledger.getDecision(id).outcome.label, 'tool_success');
+  recordRlcdOutcome({ chatId: 'c1' }, { ok: false, code: 'preview_not_ready' });
+  assert.equal(rlcd.ledger.getDecision(id).outcome.label, 'failure');
+  rlcd.reset();
+});

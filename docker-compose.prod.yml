@@ -122,6 +122,11 @@ services:
       # Browser origins allowed to reach Next dev endpoints through the preview
       # proxy (allowedDevOrigins in the generated next.config.js wrapper).
       CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS: "${CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS:-siragpt.com,www.siragpt.com}"
+      # Cold npm ci of a large repo (SiraGPT-APP) takes ~8 min; the chat tools poll.
+      CODE_RUNNER_INSTALL_TIMEOUT_MS: "${CODE_RUNNER_INSTALL_TIMEOUT_MS:-900000}"
+      # Per-process sandbox limits: npm ci opens thousands of files, next dev forks workers.
+      CODE_RUNNER_RLIMIT_NOFILE: "${CODE_RUNNER_RLIMIT_NOFILE:-8192}"
+      CODE_RUNNER_RLIMIT_NPROC: "${CODE_RUNNER_RLIMIT_NPROC:-512}"
       CODE_RUNNER_BUILD_TIMEOUT_MS: "${CODE_RUNNER_BUILD_TIMEOUT_MS:-180000}"
       # Fail closed until the release manager has verified a real per-run OS
       # boundary. Git worktrees alone are not a hostile-process boundary.
