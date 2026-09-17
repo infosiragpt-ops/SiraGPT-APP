@@ -46,14 +46,9 @@ const nextConfig = {
   },
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
-  // Local smoke checks hit 127.0.0.1 while Next prints localhost as the
-  // primary dev origin. Allow both hostnames for /_next/* dev assets.
-  allowedDevOrigins: ['127.0.0.1'],
-
-  // Allow the Replit cross-origin dev-preview iframe to load Next.js
-  // resources without the "Cross origin request detected" warning.
-  // (*.riker.replit.dev is the Replit dev-preview domain.)
-  allowedDevOrigins: ['127.0.0.1', '127.0.0.1:3000', 'localhost:3000', '*.riker.replit.dev', '*.replit.dev'],
+  // Next matches hostnames (not origins with ports). Replit preview hosts
+  // can have multiple subdomain levels, which a single "*" does not cover.
+  allowedDevOrigins: ['127.0.0.1', 'localhost', '**.replit.dev'],
 
   // Cap webpack's peak memory during `next build`. The deploy builder is an
   // 8 GiB e2-standard-2, and this app's compile + static-generation phase can
