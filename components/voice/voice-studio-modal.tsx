@@ -349,9 +349,16 @@ function pvcLanguageCode(language: string): string {
   return PVC_LANGUAGE_CODES[language] || language.slice(0, 2).toLowerCase() || "es"
 }
 
-function loadAudioDurationSeconds(file: File): Promise<number> {
+function loadElementDurationSeconds(file: File): Promise<number> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file)
+    // Fail-closed: createObjectURL only ever mints blob: URLs; never feed
+    // anything else into a media sink (js/xss-through-dom).
+    if (!url.startsWith("blob:")) {
+      URL.revokeObjectURL(url)
+      resolve(0)
+      return
+    }
     const el = document.createElement("audio")
     el.preload = "metadata"
     const done = (value: number) => {
@@ -362,6 +369,30 @@ function loadAudioDurationSeconds(file: File): Promise<number> {
     el.onerror = () => done(0)
     el.src = url
   })
+}
+
+function loadAudioDurationSeconds(file: File): Promise<number> {
+  // Audio files decode without any DOM URL sink; only video containers fall
+  // back to the guarded media element above.
+  if (/^audio\//.test(file.type) || /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|wma)$/i.test(file.name)) {
+    return (async () => {
+      try {
+        const buf = await file.arrayBuffer()
+        const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        if (!Ctor) return 0
+        const ctx = new Ctor()
+        try {
+          const decoded = await ctx.decodeAudioData(buf)
+          return Number.isFinite(decoded.duration) ? decoded.duration : 0
+        } finally {
+          await ctx.close().catch(() => {})
+        }
+      } catch {
+        return 0
+      }
+    })()
+  }
+  return loadElementDurationSeconds(file)
 }
 
 function pvcTrainingState(data: Record<string, unknown> | null | undefined): string {
