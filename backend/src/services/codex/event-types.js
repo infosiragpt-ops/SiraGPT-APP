@@ -77,6 +77,31 @@ const VALIDATORS = {
 
   narrative_delta: (d) => isObj(d) && isStr(d.text),
 
+  // Durable live-code evidence. The backend emits the bounded git patch after
+  // every successful file write so reconnecting clients can replay exactly
+  // what changed instead of only seeing an "editing file" activity chip.
+  file_patch: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.path) &&
+    isStr(d.patch) &&
+    (d.truncated === undefined || typeof d.truncated === 'boolean'),
+
+  // Incremental editor contract requested by the live workspace surface.
+  // file_patch remains as a compatibility event for older clients.
+  file_delta: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.path) &&
+    isStr(d.hunk) &&
+    (d.truncated === undefined || typeof d.truncated === 'boolean'),
+
+  budget_status: (d) =>
+    isObj(d) &&
+    typeof d.allowed === 'boolean' &&
+    nonEmptyStr(d.reason) &&
+    optNum(d.costTodayUsd) &&
+    optNum(d.dailyBudgetUsd) &&
+    optNum(d.remainingUsd),
+
   checkpoint_created: (d) =>
     isObj(d) &&
     nonEmptyStr(d.checkpointId) &&
@@ -84,6 +109,35 @@ const VALIDATORS = {
     isStr(d.title),
 
   run_summary: (d) => isObj(d) && isObj(d.metrics) && validateMetricsShape(d.metrics),
+
+  run_audio: (d) =>
+    isObj(d) &&
+    nonEmptyStr(d.audioUrl) &&
+    d.mime === 'audio/mpeg' &&
+    isNum(d.sizeBytes) &&
+    isNum(d.characters) &&
+    optStr(d.voiceId) &&
+    optStr(d.modelId),
+
+  executive_summary: (d) =>
+    isObj(d) &&
+    ['passed', 'failed'].includes(d.status) &&
+    nonEmptyStr(d.department) &&
+    nonEmptyStr(d.title) &&
+    nonEmptyStr(d.result) &&
+    nonEmptyStr(d.impact) &&
+    isArr(d.risks) &&
+    d.risks.every(isStr) &&
+    isArr(d.nextActions) &&
+    d.nextActions.every(isStr) &&
+    isArr(d.evidence) &&
+    d.evidence.every(isStr) &&
+    nonEmptyStr(d.audioText) &&
+    optStr(d.checkpointSha) &&
+    isObj(d.diffstat) &&
+    optNum(d.diffstat.filesChanged) &&
+    optNum(d.diffstat.additions) &&
+    optNum(d.diffstat.deletions),
 
   action_required: (d) =>
     isObj(d) &&

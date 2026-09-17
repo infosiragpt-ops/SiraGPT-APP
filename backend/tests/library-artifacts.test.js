@@ -14,6 +14,7 @@ test('categorizeArtifact honours an explicit category', () => {
   assert.equal(categorizeArtifact({ category: 'music', mime: 'audio/mpeg', format: 'mp3' }), 'music');
   assert.equal(categorizeArtifact({ category: 'audio', mime: 'audio/mpeg', format: 'mp3' }), 'audio');
   assert.equal(categorizeArtifact({ category: 'mobileapp', format: 'apk' }), 'mobileapp');
+  assert.equal(categorizeArtifact({ category: 'document', mime: 'text/markdown', format: 'md' }), 'document');
 });
 
 test('categorizeArtifact distinguishes speech vs music by filename when no category', () => {

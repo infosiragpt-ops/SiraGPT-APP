@@ -20,7 +20,7 @@ describe("audit-production-allowlist config", () => {
   it("loads a non-expired allowlist with severity rank and exact advisory keys", () => {
     const file = writeConfig({
       level: "high",
-      expiresOn: "2026-07-31",
+      expiresOn: "2026-08-31",
       allowed: [{ package: "next", source: 1112653 }],
     })
 
@@ -47,12 +47,12 @@ describe("audit-production-allowlist config", () => {
   it("rejects malformed severity levels and advisory entries", () => {
     const invalidLevel = writeConfig({
       level: "severe",
-      expiresOn: "2026-07-31",
+      expiresOn: "2026-08-31",
       allowed: [{ package: "next", source: 1112653 }],
     })
     const invalidEntry = writeConfig({
       level: "high",
-      expiresOn: "2026-07-31",
+      expiresOn: "2026-08-31",
       allowed: [{ package: "next", source: "1112653" }],
     })
 

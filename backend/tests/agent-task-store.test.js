@@ -469,6 +469,34 @@ test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks s
   assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
 });
 
+test('agent task store: recoverStaleRunningTasks honors a custom errorMessage', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-stale-msg-'));
+  taskStore.writeTaskSnapshot({ taskId: 't-msg', userId: 'u', status: 'running', displayGoal: 'old' });
+  taskStore.updateTaskSnapshot('t-msg', 'u', { updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() });
+
+  const result = taskStore.recoverStaleRunningTasks({
+    staleAfterMs: 60 * 60 * 1000,
+    reason: 'worker_stalled',
+    errorMessage: 'El worker dejó de responder.',
+  });
+  assert.equal(result.count, 1);
+  const recovered = taskStore.getTaskSnapshotForUser('t-msg', 'u');
+  assert.equal(recovered.streamState.error, 'worker_stalled');
+  assert.equal(recovered.events.at(-1).message, 'El worker dejó de responder.');
+});
+
+test('agent task store: touchTaskHeartbeat refreshes updatedAt on running tasks only', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-hb-'));
+  taskStore.writeTaskSnapshot({ taskId: 't-run', userId: 'u', status: 'running', displayGoal: 'live' });
+  taskStore.updateTaskSnapshot('t-run', 'u', { updatedAt: new Date(Date.now() - 60_000).toISOString() });
+
+  const touched = taskStore.touchTaskHeartbeat('t-run', 'u');
+  assert.equal(touched.status, 'running');
+  assert.ok(Date.now() - Date.parse(touched.updatedAt) < 5_000);
+  assert.ok(Date.now() - Date.parse(touched.lastEventAt) < 5_000);
+  assert.equal(touched.lastEventAt, touched.streamState.lastEventAt);
+});
+
 test('agent task store: compactSnapshotEvents drops verbose tool payloads on completed tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-compact-'));
 
@@ -904,4 +932,92 @@ test('agent task store: pruneTaskSnapshots enforces a maxFiles size cap and pres
   const result = taskStore.pruneTaskSnapshots({ retentionMs: 365 * 24 * 60 * 60 * 1000, maxFiles: 3 });
   assert.ok(result.deletedOverflow >= 2);
   assert.ok(taskStore.readTaskSnapshot('t-cap-running'), 'running task must survive size-cap prune');
+});
+
+test('agent task store: publishes one terminal notification per task, mapped by status, never twice', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-terminal-notify-'));
+  const seen = [];
+  taskStore.__setTerminalNotifier(({ task, status }) => {
+    seen.push({ taskId: task.taskId, userId: task.userId, chatId: task.chatId, status, goal: task.displayGoal });
+  });
+  try {
+    const cases = [
+      { taskId: 'n-completed', terminal: 'completed' },
+      { taskId: 'n-error', terminal: 'error' },
+      { taskId: 'n-failed', terminal: 'failed' },
+      { taskId: 'n-cancelled', terminal: 'cancelled' },
+    ];
+    for (const entry of cases) {
+      const running = taskStore.writeTaskSnapshot({
+        taskId: entry.taskId,
+        userId: 'notify-user',
+        chatId: `chat-${entry.taskId}`,
+        displayGoal: `Objetivo ${entry.taskId}`,
+        status: 'running',
+      });
+      // A running write is not terminal → no notification yet.
+      assert.equal(seen.filter((s) => s.taskId === entry.taskId).length, 0);
+      const first = taskStore.markTaskStatus(running, entry.terminal);
+      assert.equal(first.terminalMetricRecorded, true);
+      // Repeated terminal writes (worker callback, direct finalizer, fallback)
+      // and even a contradictory status must NOT re-notify.
+      taskStore.appendTaskEvent(
+        first,
+        entry.terminal === 'completed' ? { type: 'done', stoppedReason: 'completed' } : { type: 'error', message: entry.terminal },
+        { ...(first.streamState || {}), done: true },
+      );
+      taskStore.markTaskStatus(first, entry.terminal);
+      taskStore.markTaskStatus(first, entry.terminal === 'completed' ? 'error' : 'completed');
+    }
+    assert.equal(seen.length, cases.length, 'exactly one notification per task');
+    for (const entry of cases) {
+      const hits = seen.filter((s) => s.taskId === entry.taskId);
+      assert.equal(hits.length, 1);
+      assert.equal(hits[0].status, entry.terminal);
+      assert.equal(hits[0].userId, 'notify-user');
+      assert.equal(hits[0].chatId, `chat-${entry.taskId}`);
+      assert.equal(hits[0].goal, `Objetivo ${entry.taskId}`);
+    }
+  } finally {
+    taskStore.__setTerminalNotifier(null);
+  }
+});
+
+test('agent task store: a throwing notifier never breaks the terminal transition', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-terminal-notify-throw-'));
+  taskStore.__setTerminalNotifier(() => { throw new Error('inbox down'); });
+  try {
+    const running = taskStore.writeTaskSnapshot({ taskId: 'n-throw', userId: 'notify-user', status: 'running' });
+    const done = taskStore.markTaskStatus(running, 'completed');
+    assert.equal(done.status, 'completed');
+    assert.equal(done.terminalMetricRecorded, true);
+    assert.equal(taskStore.getTaskSnapshotForUser('n-throw', 'notify-user').status, 'completed');
+  } finally {
+    taskStore.__setTerminalNotifier(null);
+  }
+});
+
+test('agent task store: terminal notification payload + env gate', () => {
+  const built = taskStore.buildTerminalNotification({
+    taskId: 't', userId: 'u', chatId: 'c', displayGoal: 'x'.repeat(500), model: 'm',
+    createdAt: '2026-09-11T10:00:00.000Z', completedAt: '2026-09-11T10:00:05.000Z',
+  }, 'completed');
+  assert.equal(built.event, 'agent.task.completed');
+  assert.equal(built.userId, 'u');
+  assert.equal(built.payload.chatId, 'c');
+  assert.equal(built.payload.goal.length, 300, 'goal excerpt capped');
+  assert.equal(built.payload.durationMs, 5000);
+  assert.equal(taskStore.buildTerminalNotification({ taskId: 't', userId: 'u' }, 'error').event, 'agent.task.failed');
+  assert.equal(taskStore.buildTerminalNotification({ taskId: 't', userId: 'u' }, 'failed').event, 'agent.task.failed');
+  assert.equal(taskStore.buildTerminalNotification({ taskId: 't', userId: 'u' }, 'cancelled').event, 'agent.task.cancelled');
+  assert.equal(taskStore.buildTerminalNotification({ taskId: 't', userId: 'u' }, 'running'), null);
+  assert.equal(taskStore.buildTerminalNotification({ taskId: '', userId: 'u' }, 'completed'), null);
+  assert.deepEqual(taskStore.TERMINAL_STATUS_TO_EVENT.error, 'agent.task.failed');
+
+  assert.equal(taskStore.terminalNotifyEnabled({ NODE_ENV: 'test', DATABASE_URL: 'postgres://x' }), false, 'tests never write inbox rows');
+  assert.equal(taskStore.terminalNotifyEnabled({ NODE_ENV: 'test', SIRAGPT_AGENT_TASK_NOTIFY: '1' }), true, 'explicit opt-in wins');
+  assert.equal(taskStore.terminalNotifyEnabled({ NODE_ENV: 'production' }), true);
+  assert.equal(taskStore.terminalNotifyEnabled({ NODE_ENV: 'production', SIRAGPT_AGENT_TASK_NOTIFY: '0' }), false, 'kill switch');
+  assert.equal(taskStore.terminalNotifyEnabled({ NODE_ENV: 'development' }), false);
+  assert.equal(taskStore.terminalNotifyEnabled({ NODE_ENV: 'development', DATABASE_URL: 'postgres://x' }), true);
 });

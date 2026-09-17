@@ -52,9 +52,22 @@ const SAMPLING_TEMPERATURES = [0.2, 0.7, 1.0, 1.2];
  * If samples is empty, returns { winner: null, candidates: [] }.
  * If all samples tie, returns the first (stable).
  */
-async function pick({ openai, userRequest, samples, sourceContext, judgeModel }) {
+async function pick({ openai, userRequest, samples, sourceContext, judgeModel, embedder }) {
   if (!Array.isArray(samples) || samples.length === 0) {
     return { winner: null, candidates: [] };
+  }
+  // Prefer the fitted reward model when one exists — it's the actual
+  // RLHF ranker. Fall through to the LLM judge when the RM is cold.
+  if (typeof embedder === 'function') {
+    try {
+      const policy = require('../rlhf/policy');
+      if (policy.hasActiveModel()) {
+        const ranked = await policy.rankSamples({
+          userRequest, prompt: userRequest, samples, embedder,
+        });
+        if (ranked && ranked.winner) return ranked;
+      }
+    } catch { /* RM path is advisory */ }
   }
   if (samples.length === 1) {
     const s = await judgeScore({ openai, userRequest, response: samples[0], sourceContext, model: judgeModel });

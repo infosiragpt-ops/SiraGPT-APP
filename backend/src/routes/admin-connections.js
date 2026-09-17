@@ -104,9 +104,9 @@ function decryptKey(stored) {
   }
 }
 
-// Known provider keys — used to normalise UI grouping. The "custom"
-// catch-all lets admins point at anything OpenAI-compatible (e.g.
-// Ollama, LM Studio, vLLM) without us pre-blessing the URL.
+// Known provider keys — used to normalise UI grouping. First-class
+// OpenAI-compatible local runtimes (Ollama, LM Studio, vLLM) keep their
+// own key; `custom` remains the catch-all for any other /v1 host.
 const KNOWN_PROVIDERS = new Set([
   'openai',
   'anthropic',
@@ -121,7 +121,17 @@ const KNOWN_PROVIDERS = new Set([
   'fireworks',
   'deepseek',
   'xai',
+  'meta',
   'fal',
+  // Music providers (production-music module): keys feed the music services
+  // through admin-connections-bridge. Without these entries the normaliser
+  // below would demote them to 'custom' and the bridge would ignore them.
+  'elevenlabs',
+  'minimax',
+  'suno',
+  'ollama',
+  'lmstudio',
+  'vllm',
   'custom',
 ]);
 
@@ -139,7 +149,14 @@ const DEFAULT_PROVIDER_LABELS = {
   fireworks: 'Fireworks AI API',
   deepseek: 'DeepSeek API',
   xai: 'xAI API',
+  meta: 'Meta Model API',
   fal: 'fal.ai Video API',
+  elevenlabs: 'ElevenLabs API (voz + música)',
+  minimax: 'MiniMax API (música)',
+  suno: 'Suno Gateway API (música)',
+  ollama: 'Ollama (local)',
+  lmstudio: 'LM Studio (local)',
+  vllm: 'vLLM',
   custom: 'Custom API',
 };
 
@@ -190,7 +207,8 @@ router.get('/', async (req, res) => {
       }
       const shaped = shapeConnection(r);
       grouped[k].connections.push(shaped);
-      if (shaped.enabled) grouped[k].enabled = true;
+      // A row without a key must not make the provider look Conectada.
+      if (shaped.enabled && shaped.apiKeySet) grouped[k].enabled = true;
     }
     res.json({ providers: Object.values(grouped), total: rows.length });
   } catch (err) {
@@ -365,6 +383,7 @@ router.post('/:id/test', async (req, res) => {
       imported: result.created + result.updated,
       created: result.created,
       updated: result.updated,
+      ...(result.note ? { note: result.note } : {}),
       models: (result.models || []).slice(0, 200).map((m) => ({
         id: m.name, name: m.name, displayName: m.displayName, type: m.type, provider: m.provider,
       })),

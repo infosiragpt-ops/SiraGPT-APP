@@ -14,6 +14,8 @@ test('repairs curated real-world misspellings from production prompts', () => {
     ['hazme un resumne del archivo', 'resumen'],
     ['agregale los intruemntos de la investigacino', 'instrumentos'],
     ['de forma profeiosnal', 'profesional'],
+    ['agrega 5 slaind y bibliografi', 'slides'],
+    ['gestion amdinistrativa', 'administrativa'],
     ['crea una presetacion en exel', 'presentación'],
   ];
   for (const [input, expected] of cases) {

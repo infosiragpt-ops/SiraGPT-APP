@@ -15,8 +15,10 @@ import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { MUSIC_MODEL_OPTIONS } from "@/lib/chat/media-composer-config"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ChatAudioPlayer } from "@/components/chat/media-preview-players"
 interface MusicStyle {
   id: string;
   name: string;
@@ -36,6 +38,37 @@ type MusicGenerationComponentProps = {
   initialStyle?: string
   initialMood?: string
   initialEffect?: string
+  initialModel?: string
+}
+
+// Radix <Select.Item /> rechaza value="" (lanza en runtime). Este centinela
+// representa "sin estilo" sin romper el dropdown.
+const NO_STYLE_VALUE = "__none"
+
+// Modelos de música (misma lista que el composer del chat). El panel usa la
+// ruta única /api/ai/generate-music, así que ambos caminos generan igual.
+const MODEL_CHOICES = MUSIC_MODEL_OPTIONS as readonly string[]
+const DEFAULT_MODEL = "Suno V4"
+
+function resolveInitialModel(initialModel: string): string {
+  if ((MODEL_CHOICES as readonly string[]).includes(initialModel)) return initialModel
+  // El composer envía el `name` del catálogo (p. ej. "suno-v4"); el panel
+  // muestra display names ("Suno V4"). Empareja de forma tolerante.
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "")
+  const needle = norm(initialModel || "")
+  if (needle) {
+    const hit = MODEL_CHOICES.find((c) => {
+      const n = norm(c)
+      return n === needle || needle.includes(n) || n.includes(needle)
+    })
+    if (hit) return hit
+    // Legado: "Mimo Max 02HD" → "MiniMax".
+    if (needle.includes("mimo")) {
+      const minimax = MODEL_CHOICES.find((c) => norm(c) === "minimax")
+      if (minimax) return minimax
+    }
+  }
+  return DEFAULT_MODEL
 }
 
 export default function MusicGenerationComponent({
@@ -44,6 +77,7 @@ export default function MusicGenerationComponent({
   initialStyle = "",
   initialMood = "",
   initialEffect = "",
+  initialModel = DEFAULT_MODEL,
 }: MusicGenerationComponentProps = {}) {
   const { user } = useAuth()
   const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
@@ -52,6 +86,7 @@ export default function MusicGenerationComponent({
   const [duration, setDuration] = React.useState([initialDuration])
   const [promptInfluence, setPromptInfluence] = React.useState([initialPromptInfluence])
   const [selectedStyle, setSelectedStyle] = React.useState<string>(initialStyle === "Auto" ? "" : initialStyle)
+  const [selectedModel, setSelectedModel] = React.useState<string>(() => resolveInitialModel(initialModel))
   const [isGenerating, setIsGenerating] = React.useState(false)
   const [generatedMusic, setGeneratedMusic] = React.useState<GeneratedMusic | null>(null)
   const [musicStyles, setMusicStyles] = React.useState<MusicStyle[]>([])
@@ -122,31 +157,41 @@ export default function MusicGenerationComponent({
 
     setIsGenerating(true)
     try {
-      const fullPrompt = selectedStyle
-        ? `${selectedStyle} style${initialMood ? `, ${initialMood} mood` : ""}${initialEffect ? `, ${initialEffect} effect` : ""}: ${cleanPrompt}`
-        : `${initialMood || initialEffect ? `${[initialMood, initialEffect].filter(Boolean).join(", ")}: ` : ""}${cleanPrompt}`
-
-      const response = await apiClient.generateMusic({
-        text: fullPrompt,
-        duration: duration[0],
-        prompt_influence: promptInfluence[0],
+      // Ruta única de generación (/api/ai/generate-music): respeta el modelo
+      // elegido (Suno V4 por defecto) y pliega estilo/mood/efecto/influencia
+      // en el servidor, igual que el composer del chat.
+      const response = await apiClient.generateMusicMessage({
+        text: cleanPrompt,
+        durationSeconds: duration[0],
+        style: selectedStyle || "Auto",
+        mood: initialMood || "Balanced",
+        effect: initialEffect || "Studio Master",
+        influence: promptInfluence[0],
+        model: selectedModel,
       })
 
-      if (response.success) {
-        setGeneratedMusic(response)
-        toast.success('Music generated successfully!')
+      if (response?.ok && response?.artifact) {
+        setGeneratedMusic({
+          audio_url: response.artifact.downloadUrl,
+          filename: response.artifact.filename,
+          duration: duration[0],
+          text_prompt: cleanPrompt,
+        })
+        toast.success(response?.model ? `Música generada con ${response.model}` : 'Music generated successfully!')
       } else {
-        toast.error(response.error || 'Failed to generate music')
+        toast.error('Failed to generate music')
       }
     } catch (error: any) {
       console.error('Music generation error:', error)
-      
-      if (error.message?.includes('402') || error.message?.includes('credits')) {
-        toast.error('Insufficient credits for music generation. Please upgrade your ElevenLabs subscription.')
+
+      if (error.message?.includes('402') || error.message?.includes('credits') || error.message?.includes('créditos')) {
+        toast.error('Sin créditos suficientes para generar música. Prueba con una duración menor o recarga créditos.')
       } else if (error.message?.includes('400')) {
         toast.error('Invalid music generation parameters. Please check your input.')
+      } else if (error.message?.includes('503') || error.message?.includes('configurado')) {
+        toast.error('El servicio de música no está configurado.')
       } else {
-        toast.error('Failed to generate music. Please try again.')
+        toast.error(error?.message || 'Failed to generate music. Please try again.')
       }
     } finally {
       setIsGenerating(false)
@@ -275,16 +320,36 @@ const downloadMusic = async () => {
             </div>
           </div>
 
+          {/* Music Model Selector */}
+          <div>
+            <Label htmlFor="music-model">Modelo de música</Label>
+            <Select value={selectedModel} onValueChange={setSelectedModel}>
+              <SelectTrigger className="mt-2" id="music-model">
+                <SelectValue placeholder="Elige un modelo" />
+              </SelectTrigger>
+              <SelectContent>
+                {MODEL_CHOICES.map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* Music Style Selector */}
           {musicStyles.length > 0 && (
             <div>
               <Label htmlFor="music-style">Estilo musical (opcional)</Label>
-              <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+              <Select
+                value={selectedStyle || NO_STYLE_VALUE}
+                onValueChange={(value) => setSelectedStyle(value === NO_STYLE_VALUE ? "" : value)}
+              >
                 <SelectTrigger className="mt-2">
                   <SelectValue placeholder="Elige un estilo musical" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Sin estilo específico</SelectItem>
+                  <SelectItem value={NO_STYLE_VALUE}>Sin estilo específico</SelectItem>
                   {musicStyles.map((style) => (
                     <SelectItem key={style.id} value={style.name}>
                       <div>
@@ -366,50 +431,22 @@ const downloadMusic = async () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <audio
-              ref={audioRef}
+            <ChatAudioPlayer
               src={`${apiClient.apiBaseURL}${generatedMusic.audio_url}`}
-              preload="metadata"
+              title={generatedMusic.text_prompt || generatedMusic.filename || "audio"}
+              durationSeconds={generatedMusic.duration}
+              variant="generated"
+              className="max-w-none"
             />
-
-            {/* Player Controls */}
-            <div className="flex items-center gap-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={togglePlayPause}
-                className="flex items-center gap-2"
-              >
-                {isPlaying ? (
-                  <Pause className="h-4 w-4" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                {isPlaying ? 'Pause' : 'Play'}
-              </Button>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={downloadMusic}
-                className="flex items-center gap-2"
-              >
-                <Download className="h-4 w-4" />
-                Download
-              </Button>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="space-y-2">
-              <Progress 
-                value={totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0} 
-                className="h-2"
-              />
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{formatTime(currentTime)}</span>
-                <span>{formatTime(totalDuration)}</span>
-              </div>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={downloadMusic}
+              className="flex items-center gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Download
+            </Button>
 
             {/* Volume Control */}
             <div className="flex items-center gap-2">

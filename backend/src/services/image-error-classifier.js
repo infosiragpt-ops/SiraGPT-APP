@@ -17,15 +17,26 @@ const MAX_MESSAGE_CHARS = 200;
 function classifyImageGenError(error) {
   const upstreamStatus = Number(error?.status || error?.statusCode) || null;
   const raw = String(error?.message || 'error desconocido');
-  const isQuota = upstreamStatus === 429 || QUOTA_RE.test(raw);
+  const isQuota = upstreamStatus === 429 || QUOTA_RE.test(raw) || (error?.attempts || []).some((attempt) => QUOTA_RE.test(String(attempt.error || '')));
 
   if (isQuota) {
     return {
       httpStatus: 429,
       code: 'image_quota_exceeded',
       message:
-        'El proveedor de imágenes alcanzó su límite de cuota. Intenta de nuevo en un momento o elige otro proveedor/modelo (por ejemplo OpenAI).',
+        'El modelo de imágenes alcanzó su límite de cuota. Intenta de nuevo en un momento o elige otro modelo.',
       isQuota: true,
+    };
+  }
+
+  if (['E_PARAMS', 'E_PROVIDER', 'image_source_required', 'image_edit_unsupported'].includes(error?.code)) {
+    return {
+      httpStatus: error.code === 'E_PROVIDER' ? 502 : (upstreamStatus || 400),
+      code: error.code,
+      message: error.code === 'E_PROVIDER'
+        ? 'El modelo seleccionado no pudo completar la imagen. Reintenta o elige otro modelo.'
+        : raw.slice(0, MAX_MESSAGE_CHARS),
+      isQuota: false,
     };
   }
 

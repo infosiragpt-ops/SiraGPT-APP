@@ -58,7 +58,10 @@ class DocumentProcessorImpl implements DocumentProcessor {
 
   async processImage(file: File): Promise<string> {
     try {
-      const worker = await createWorker("eng")
+      const { recognizeImageWithRetry } = await import("@/lib/chat/ocr-preprocess")
+      const result = await recognizeImageWithRetry(file)
+      if (result.text) return result.text
+      const worker = await createWorker("spa+eng")
       const {
         data: { text },
       } = await worker.recognize(file)

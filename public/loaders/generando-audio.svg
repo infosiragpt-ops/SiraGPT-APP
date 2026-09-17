@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="generando audio">
+  <title>SiraGPT loader · generando audio</title>
+  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 10.5v5.2h4.2L34 21V5.2l-5.8 5.3H24z"/>
+    <path d="M37.2 9.2a5.4 5.4 0 0 1 0 7.6"/>
+    <path d="M40.4 6.4a9.2 9.2 0 0 1 0 13.2"/>
+  </g>
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8">
+  <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0" dur="0.6s" repeatCount="indefinite"/>
+</rect>
+<rect x="30" y="32" width="4" height="10" fill="#38BDF8">
+  <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite"/>
+</rect>
+<rect x="40" y="32" width="4" height="10" fill="#38BDF8">
+  <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite"/>
+</rect>
+</svg>

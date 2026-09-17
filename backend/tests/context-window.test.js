@@ -36,8 +36,17 @@ describe('context limit lookup', () => {
   test('returns exact, partial, and default model context limits', () => {
     assert.equal(getContextLimit('gpt-4o'), MODEL_CONTEXT_LIMITS['gpt-4o']);
     assert.equal(getContextLimit('gpt-4o-2024-08-06'), MODEL_CONTEXT_LIMITS['gpt-4o']);
-    assert.equal(getContextLimit('unknown-model'), 8192);
-    assert.equal(getContextLimit(), 8192);
+    // Unknown hosted models get a modern floor (32k), not the 8k that made
+    // the route fit drop the whole thread behind a 12k-token system prompt.
+    assert.equal(getContextLimit('unknown-model'), 32768);
+    assert.equal(getContextLimit(), 32768);
+    // Live catalog 2026-09 + family heuristics for admin-edited ids.
+    assert.equal(getContextLimit('muse-spark-1.2-contributor'), 1000000);
+    assert.equal(getContextLimit('grok-4.5'), 256000);
+    assert.equal(getContextLimit('grok-4.7'), 256000);
+    assert.equal(getContextLimit('gemini-3.5-flash'), 1048576);
+    assert.equal(getContextLimit('claude-sonnet-5'), 1000000);
+    assert.equal(getContextLimit('sira-mini'), 8192);
   });
 
   test('returns exact, partial, and default model completion limits', () => {
@@ -88,7 +97,7 @@ describe('fitMessagesToContext', () => {
       { role: 'user', content: 'short task' },
     ];
 
-    const result = fitMessagesToContext(messages, 'unknown-model', { reservedCompletionTokens: 999999 });
+    const result = fitMessagesToContext(messages, 'sira-mini', { reservedCompletionTokens: 999999 });
 
     assert.equal(result.reservedCompletionTokens, 4096);
     assert.equal(result.budget, Math.floor(8192 * 0.8) - 4096);
@@ -131,7 +140,8 @@ describe('getKeepTail scales with model context tier', () => {
   test('small-context models keep the conservative floor of 5', () => {
     assert.equal(getKeepTail('gpt-4'), 5);
     assert.equal(getKeepTail('gpt-3.5-turbo'), 5);
-    assert.equal(getKeepTail('unknown-model'), 5);
+    assert.equal(getKeepTail('sira-mini'), 5);
+    assert.equal(getKeepTail('unknown-model'), 8);
   });
 });
 

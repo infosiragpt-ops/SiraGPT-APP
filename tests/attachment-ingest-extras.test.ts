@@ -94,11 +94,20 @@ describe("validateFile · rejection codes", () => {
     assert.equal(v.code, "empty_file")
   })
 
-  it("rejects disallowed MIMEs and extensions with 'type_not_allowed'", () => {
-    const v = validateFile(makeFile("rogue.exe", "application/x-msdownload", 10))
-    assert.equal(v.ok, false)
-    assert.equal(v.code, "type_not_allowed")
-    assert.match(v.reason!, /Tipo no permitido/)
+  it("accepts every format — unknown MIMEs, code, binaries and extension-less files", () => {
+    for (const [name, type] of [
+      ["dataset.parquet", "application/octet-stream"],
+      ["script.py", "text/x-python"],
+      ["bundle.js", "application/javascript"],
+      ["deploy.sh", "application/x-sh"],
+      ["design.psd", "image/vnd.adobe.photoshop"],
+      ["model.safetensors", ""],
+      ["Dockerfile", ""],
+      ["legacy.exe", "application/x-msdownload"],
+    ] as const) {
+      const v = validateFile(makeFile(name, type, 10))
+      assert.equal(v.ok, true, `${name} (${type || "no mime"}) must be accepted by the client policy`)
+    }
   })
 
   it("rejects Office temporary lock files before upload", () => {

@@ -176,6 +176,86 @@ test('OT-7: a merge conflict is structured and main is restored cleanly', async 
   assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'main change\n');
 });
 
+test('A1: two run worktrees edit the same project without sharing a working tree', async (t) => {
+  const fixture = gitFixture(t, 'codex-worktree-isolation-');
+  const worktreesDir = path.join(fixture.root, 'worktrees');
+  fs.mkdirSync(worktreesDir, { recursive: true });
+
+  const execAt = async (cwd, command) => {
+    try {
+      return {
+        exitCode: 0,
+        stdout: execFileSync(command[0], command.slice(1), { cwd, encoding: 'utf8' }),
+        stderr: '',
+      };
+    } catch (error) {
+      return {
+        exitCode: Number.isInteger(error.status) ? error.status : 1,
+        stdout: String(error.stdout || ''),
+        stderr: String(error.stderr || error.message || ''),
+      };
+    }
+  };
+  let baseRunner;
+  const scopedRunner = (runId) => {
+    const dir = path.join(worktreesDir, `wt-${runId}`);
+    return {
+      exec: (_projectId, command) => execAt(dir, command),
+      unscoped: () => baseRunner,
+      removeWorktree: async () => {
+        git(fixture.projectDir, ['worktree', 'remove', dir]);
+        return { ok: true, removed: true };
+      },
+    };
+  };
+  baseRunner = {
+    exec: (_projectId, command) => execAt(fixture.projectDir, command),
+    async createWorktree(_projectId, runId, baseBranch) {
+      const dir = path.join(worktreesDir, `wt-${runId}`);
+      git(fixture.projectDir, ['worktree', 'add', '-b', `run/${runId}`, dir, baseBranch]);
+      return { ok: true, dir, resumed: false };
+    },
+    forRun: (runId) => scopedRunner(runId),
+    unscoped: () => baseRunner,
+  };
+
+  const first = await startRunBranch({
+    runner: baseRunner,
+    projectId: fixture.projectId,
+    runId: 'fleet-a',
+  });
+  const second = await startRunBranch({
+    runner: baseRunner,
+    projectId: fixture.projectId,
+    runId: 'fleet-b',
+  });
+  assert.equal(first.worktree, true);
+  assert.equal(second.worktree, true);
+
+  const firstDir = path.join(worktreesDir, 'wt-fleet-a');
+  const secondDir = path.join(worktreesDir, 'wt-fleet-b');
+  fs.writeFileSync(path.join(firstDir, 'app.txt'), 'run A\n');
+  fs.writeFileSync(path.join(secondDir, 'app.txt'), 'run B\n');
+  assert.equal(fs.readFileSync(path.join(firstDir, 'app.txt'), 'utf8'), 'run A\n');
+  assert.equal(fs.readFileSync(path.join(secondDir, 'app.txt'), 'utf8'), 'run B\n');
+  assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'base\n');
+  assert.equal(git(fixture.projectDir, ['status', '--porcelain']), '');
+
+  git(firstDir, ['add', '-A']);
+  git(firstDir, ['commit', '-m', 'fleet A']);
+  const merged = await mergeRunBranch({
+    runner: scopedRunner('fleet-a'),
+    projectId: fixture.projectId,
+    runId: 'fleet-a',
+    verification: true,
+  });
+  assert.equal(merged.ok, true);
+  assert.deepEqual(merged.worktreeCleanup, { ok: true, removed: true });
+  assert.equal(fs.existsSync(firstDir), false);
+  assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'run A\n');
+  assert.equal(fs.readFileSync(path.join(secondDir, 'app.txt'), 'utf8'), 'run B\n');
+});
+
 test('OT-7: configured production-main is used as the run base and merge target', async (t) => {
   const fixture = gitFixture(t, 'codex-production-main-');
   git(fixture.projectDir, ['branch', '-m', 'production-main']);
@@ -216,6 +296,71 @@ test('OT-7: configured production-main is used as the run base and merge target'
   assert.equal(result.merge.baseBranch, 'production-main');
   assert.equal(git(fixture.projectDir, ['branch', '--show-current']).trim(), 'production-main');
   assert.equal(fs.readFileSync(path.join(fixture.projectDir, 'app.txt'), 'utf8'), 'production feature\n');
+});
+
+test('OT-7: post-merge export and cleanup failures are warnings, not duplicate-run failures', async () => {
+  const run = { id: 'cleanup-warning-1', projectId: 'project-1', prompt: 'cambio verificado' };
+  const project = { id: run.projectId };
+  const scopedCalls = [];
+  const baseCalls = [];
+  const baseRunner = {
+    async exec(_projectId, command) {
+      const text = command.join(' ');
+      baseCalls.push(text);
+      if (text === `git show-ref --verify --quiet refs/heads/run/${run.id}`) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git status --porcelain=v1 -z') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: 'main\n', stderr: '' };
+      }
+      if (text.includes(`merge --no-ff --no-edit run/${run.id}`)) {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (text === 'git rev-parse HEAD') {
+        return { exitCode: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+      }
+      throw new Error(`unexpected base command: ${text}`);
+    },
+    async exportWorkspace() {
+      throw new Error('export unavailable');
+    },
+  };
+  const runner = {
+    scope: { project: run.projectId, run: run.id },
+    unscoped: () => baseRunner,
+    async exec(_projectId, command) {
+      const text = command.join(' ');
+      scopedCalls.push(text);
+      if (text === 'git rev-parse --abbrev-ref HEAD') {
+        return { exitCode: 0, stdout: `run/${run.id}\n`, stderr: '' };
+      }
+      if (text === 'git status --porcelain' || text === 'git status --porcelain=v1 -z') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected scoped command: ${text}`);
+    },
+    async removeWorktree() {
+      throw new Error('cleanup unavailable');
+    },
+  };
+
+  const result = await checkpointService.finalizeRunCheckpoint({
+    run,
+    project,
+    verification: { ok: true, status: 'passed' },
+    deps: { runner, prisma: {} },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.merge.status, 'merged');
+  assert.equal(result.merge.cleanupWarning, true);
+  assert.equal(result.merge.exportResult.ok, false);
+  assert.equal(result.merge.worktreeCleanup.ok, false);
+  assert.ok(scopedCalls.includes('git status --porcelain=v1 -z'));
+  assert.ok(baseCalls.some((call) => call.includes(`merge --no-ff --no-edit run/${run.id}`)));
 });
 
 test('OT-7: workspace mutation after verification never reaches the base branch', async (t) => {

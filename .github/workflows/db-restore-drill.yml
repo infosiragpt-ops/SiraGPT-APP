@@ -1,0 +1,106 @@
+name: Restore drill · latest S3 backup → scratch DB
+
+# Monthly proof that the newest DB backup in S3 actually restores into a
+# working Postgres with the expected schema and data. A gzip-valid dump can
+# still be corrupt SQL — the only time to find out is BEFORE a disaster.
+#
+# Safety model (mirrors db-backup.yml):
+#   - Restores into a disposable database named siragpt_drill_<ts> on the
+#     production Postgres instance. The application database is never touched.
+#   - The scratch database is dropped after verification unless the restore
+#     itself failed (kept for post-mortem in that case).
+#   - Fails loudly (and Slacks) if no recent backup exists (>48h old) or the
+#     restored content misses tables/core data.
+#
+# Requires scripts/restore-db.sh on the VPS — i.e. run only after the release
+# carrying it has been deployed. Manual replay: Actions tab (workflow_dispatch);
+# CEO Office/Ops should supervise the first real run.
+on:
+  schedule:
+    - cron: '30 5 1 * *'
+  workflow_dispatch:
+
+# One drill at a time — serializes scratch-DB creation and keeps S3 listing
+# output readable.
+concurrency:
+  group: db-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  restore-drill:
+    name: download → restore → verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Run restore drill on VPS
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17 # v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 35m
+          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION,SLACK_WEBHOOK_URL,GITHUB_REPOSITORY,GITHUB_RUN_ID
+          script: |
+            set -uo pipefail
+
+            SLACK_MSG() {
+              if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+                curl -sS -X POST -H 'Content-Type: application/json' \
+                  --data "{\"text\":\"$1\"}" \
+                  "${SLACK_WEBHOOK_URL}" || true
+              else
+                echo "::notice::SLACK_WEBHOOK_URL not set — skipping Slack ping"
+              fi
+            }
+
+            run_drill() {
+              set -euo pipefail
+              cd /opt/siragpt
+
+              if ! command -v psql >/dev/null 2>&1; then
+                echo "Installing postgresql-client…"
+                apt-get update -y && apt-get install -y --no-install-recommends postgresql-client
+              fi
+
+              # Read the resolved runtime value without executing .env as shell
+              # (same contract as db-backup.yml).
+              BACKEND_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=backend' --format '{{.Names}}' | head -n 1 || true)"
+              if [[ -z "${BACKEND_CONTAINER}" ]]; then
+                BACKEND_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])backend([-_]|$)' | head -n 1 || true)"
+              fi
+              if [[ -z "${BACKEND_CONTAINER}" ]]; then
+                echo "::error::No running backend container was found; refusing to guess database credentials." >&2
+                exit 1
+              fi
+              DATABASE_URL="$(docker exec "${BACKEND_CONTAINER}" sh -lc 'printf "%s" "${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"')"
+              if [[ -z "${DATABASE_URL:-}" ]]; then
+                echo "::error::The running backend has no DATABASE_URL/PRISMA_DATABASE_URL." >&2
+                exit 1
+              fi
+              # Host-side psql reaches Postgres through the loopback-published port.
+              DATABASE_URL="${DATABASE_URL//@db:5432/@127.0.0.1:5432}"
+              export DATABASE_URL
+
+              bash scripts/restore-db.sh
+            }
+
+            RC=0
+            run_drill || RC=$?
+            RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+            if [[ "${RC}" != "0" ]]; then
+              SLACK_MSG ":x: siraGPT restore drill FAILED rc=${RC} — the latest DB backup is NOT verified restorable. ${RUN_URL}"
+              exit "${RC}"
+            fi
+            SLACK_MSG ":white_check_mark: siraGPT restore drill PASSED — latest DB backup restored into a scratch DB with schema + core data intact."
+        env:
+          # Passed THROUGH to the remote shell via the `envs:` field above;
+          # they never appear in logs.
+          BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
+          BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_ACCESS_KEY_ID }}
+          BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
+          BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}

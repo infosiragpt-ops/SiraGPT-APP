@@ -97,3 +97,24 @@ export function balanceAsBigInt(credits: Credits | null | undefined): bigint {
 export function isLowBalance(credits: Credits | null, threshold: bigint = BigInt(50)): boolean {
   return balanceAsBigInt(credits) < threshold
 }
+
+/** Compact Spanish credit label. Never render a raw 7-digit dump like "1000000". */
+export function formatCreditBalance(raw: string | number | bigint | null | undefined): string {
+  if (raw == null || raw === "") return "0"
+  let n: number
+  try {
+    n = typeof raw === "bigint" ? Number(raw) : Number(raw)
+  } catch {
+    return "0"
+  }
+  if (!Number.isFinite(n)) return "0"
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000) {
+    const mill = n / 1_000_000
+    const compact = mill.toLocaleString("es-PE", {
+      maximumFractionDigits: Number.isInteger(mill) ? 0 : 1,
+    })
+    return `${compact} mill.`
+  }
+  return Math.round(n).toLocaleString("es-PE")
+}

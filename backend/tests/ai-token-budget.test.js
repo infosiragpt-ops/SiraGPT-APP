@@ -23,7 +23,11 @@ test('contextWindowFor knows common models', () => {
 
 test('contextWindowFor heuristic for unknown family', () => {
     assert.equal(tokenBudget.contextWindowFor('gemini-future'), 1_000_000);
-    assert.equal(tokenBudget.contextWindowFor('totally-unknown-model'), 16_000);
+    // Shared with context-window.js so the preflight never 413s a turn the
+    // route fit already trimmed to size.
+    assert.equal(tokenBudget.contextWindowFor('totally-unknown-model'), 32_768);
+    assert.equal(tokenBudget.contextWindowFor('muse-spark-1.2-contributor'), 1_000_000);
+    assert.equal(tokenBudget.contextWindowFor('grok-4.5'), 256_000);
 });
 
 test('estimateCost reports input/output/total USD', () => {

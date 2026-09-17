@@ -72,6 +72,26 @@ before(() => {
 });
 after(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
 
+test('merge lock serializes integrations for the same project', async () => {
+  const order = [];
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const first = cp.withProjectMergeLock(null, 'p1', async () => {
+    order.push('first:start');
+    await firstGate;
+    order.push('first:end');
+  });
+  const second = cp.withProjectMergeLock(null, 'p1', async () => {
+    order.push('second:start');
+    order.push('second:end');
+  });
+  await new Promise((resolve) => { setImmediate(resolve); });
+  assert.deepEqual(order, ['first:start']);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ['first:start', 'first:end', 'second:start', 'second:end']);
+});
+
 test('git-real: commit → modify → rollback restores files byte-for-byte', { skip: !gitAvailable }, async () => {
   const runner = localRunner(root);
   const db = memCheckpointDb();
@@ -107,4 +127,72 @@ test('git-real: diff of a checkpoint shows the change + shortstat', { skip: !git
   assert.equal(diff.ok, true);
   assert.match(diff.diff, /app\.js/);
   assert.ok(diff.additions >= 1);
+});
+
+test('git-real: rollback preserves a dirty tree and explicit recovery restores it byte-for-byte', { skip: !gitAvailable }, async (t) => {
+  const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-recovery-'));
+  t.after(() => fs.rmSync(isolatedRoot, { recursive: true, force: true }));
+  const projectDir = path.join(isolatedRoot, 'projects', 'p1');
+  fs.mkdirSync(projectDir, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main'], { cwd: projectDir });
+  execFileSync('git', ['config', 'user.email', 'codex@siragpt.local'], { cwd: projectDir });
+  execFileSync('git', ['config', 'user.name', 'Codex Agent'], { cwd: projectDir });
+  fs.writeFileSync(path.join(projectDir, 'app.js'), 'const v = 1;\n');
+  execFileSync('git', ['add', '-A'], { cwd: projectDir });
+  execFileSync('git', ['commit', '-m', 'checkpoint-a'], { cwd: projectDir });
+  const checkpointSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: projectDir, encoding: 'utf8' }).trim();
+
+  fs.writeFileSync(path.join(projectDir, 'app.js'), 'const v = 2;\n');
+  execFileSync('git', ['add', '-A'], { cwd: projectDir });
+  execFileSync('git', ['commit', '-m', 'run-two'], { cwd: projectDir });
+  const runTwoSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: projectDir, encoding: 'utf8' }).trim();
+
+  fs.writeFileSync(path.join(projectDir, 'prior-draft.txt'), 'pre-existing stash remains untouched\n');
+  execFileSync('git', ['stash', 'push', '--include-untracked', '--message', 'pre-existing-user-stash'], { cwd: projectDir });
+  const preExistingStash = execFileSync('git', ['rev-parse', 'stash@{0}'], { cwd: projectDir, encoding: 'utf8' }).trim();
+
+  fs.writeFileSync(path.join(projectDir, 'app.js'), 'const v = 3; // unsaved\n');
+  fs.writeFileSync(path.join(projectDir, 'notes.txt'), 'customer draft stays local\n');
+
+  const runner = localRunner(isolatedRoot);
+  const db = memCheckpointDb();
+  db.rows.push({
+    id: 'cp-a',
+    projectId: 'p1',
+    runId: 'run-a',
+    commitSha: checkpointSha,
+    title: 'checkpoint A',
+  });
+
+  const rolledBack = await cp.rollbackCheckpoint({
+    checkpointId: 'cp-a',
+    userId: undefined,
+    deps: { runner, prisma: db },
+  });
+  assert.equal(rolledBack.ok, true);
+  assert.ok(cp.isValidRecoveryRef(rolledBack.recovery?.ref));
+  assert.equal(
+    execFileSync('git', ['rev-parse', 'stash@{0}'], { cwd: projectDir, encoding: 'utf8' }).trim(),
+    preExistingStash,
+  );
+  assert.equal(fs.readFileSync(path.join(projectDir, 'app.js'), 'utf8'), 'const v = 1;\n');
+  assert.equal(fs.existsSync(path.join(projectDir, 'notes.txt')), false);
+
+  const recovered = await cp.recoverWorkspaceChanges({
+    runner,
+    projectId: 'p1',
+    recoveryRef: rolledBack.recovery.ref,
+  });
+  assert.equal(recovered.ok, true);
+  assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: projectDir, encoding: 'utf8' }).trim(), runTwoSha);
+  assert.equal(fs.readFileSync(path.join(projectDir, 'app.js'), 'utf8'), 'const v = 3; // unsaved\n');
+  assert.equal(fs.readFileSync(path.join(projectDir, 'notes.txt'), 'utf8'), 'customer draft stays local\n');
+  assert.equal(
+    execFileSync('git', ['rev-parse', 'stash@{0}'], { cwd: projectDir, encoding: 'utf8' }).trim(),
+    preExistingStash,
+  );
+  assert.match(execFileSync('git', ['status', '--short'], { cwd: projectDir, encoding: 'utf8' }), /notes\.txt/);
+  assert.throws(
+    () => execFileSync('git', ['rev-parse', '--verify', rolledBack.recovery.ref], { cwd: projectDir, stdio: 'pipe' }),
+  );
 });

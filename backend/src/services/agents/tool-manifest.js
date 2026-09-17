@@ -617,7 +617,7 @@ function getVisualMediaManifests() {
   return {
     generate_image: {
       name: "generate_image",
-      purpose: "Generate an image from a text description using DALL-E or configured AI provider. Saves as downloadable PNG artifact.",
+      purpose: "Generate one or more images from a text description using DALL-E or configured AI provider. Saves each as a downloadable PNG artifact.",
       inputs: {
         type: "object", required: ["prompt"],
         properties: {
@@ -625,6 +625,7 @@ function getVisualMediaManifests() {
           style: { type: "string", enum: ["realistic","vivid","natural","photographic","digital-art","anime","oil-painting","line-art"] },
           aspectRatio: { type: "string", enum: ["square","wide","portrait"] },
           quality: { type: "string", enum: ["standard","hd"] },
+          count: { type: "integer", minimum: 1, maximum: 5 },
         },
       },
       outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" } } },
@@ -636,7 +637,7 @@ function getVisualMediaManifests() {
       ],
       acceptance_tests: ["returns ok:true with a non-empty downloadUrl for a simple prompt"],
       usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 10, requires_auth: true, requires_network: true },
-      examples_positive: [{ when: "user asks for an illustration", call: { prompt: "A futuristic city at sunset with flying cars", style: "vivid", aspectRatio: "wide" } }],
+      examples_positive: [{ when: "user asks for an illustration", call: { prompt: "A futuristic city at sunset with flying cars", style: "vivid", aspectRatio: "wide" } }, { when: "user asks for a vertical dog photo in words", call: { prompt: "dame una imagen vertical de un perro", aspectRatio: "portrait" } }],
       examples_negative: [{ when: "user wants a PDF document", why: "use create_document instead — generate_image only returns PNG." }],
       recovery_policy: { on_timeout: "Return ok:false. Agent may retry with a simpler prompt.", on_error: "Surface the error message. Do not fabricate an image.", max_retries: 1 },
       side_effect_level: "remote-read",
@@ -787,7 +788,7 @@ function getVisualMediaManifests() {
     },
     generate_video: {
       name: "generate_video",
-      purpose: "Generate a short video from a text description. If VIDEO_API_URL is configured, generates via API; otherwise produces a storyboard SVG with scene-by-scene breakdown.",
+      purpose: "Generate a professional short video from a text description with auto-directed prompts (camera, pacing, lighting, audio, anti-morph negative prompt) and cross-clip continuity via continuation + previousPrompt. Falls back to a storyboard SVG when no video API is configured.",
       inputs: {
         type: "object", required: ["prompt"],
         properties: {
@@ -796,6 +797,10 @@ function getVisualMediaManifests() {
           style: { type: "string" },
           duration: { type: "integer", minimum: 2, maximum: 60, default: 10 },
           aspectRatio: { type: "string", enum: ["16:9","9:16","1:1","4:3"] },
+          model: { type: "string" },
+          imageUrl: { type: "string" },
+          continuation: { type: "boolean" },
+          previousPrompt: { type: "string" },
         },
       },
       outputs: { type: "object", properties: {
@@ -803,6 +808,7 @@ function getVisualMediaManifests() {
         downloadUrl: { type: "string" },
         filename: { type: "string" },
         storyboard: { type: "boolean" },
+        continuityMode: { type: "string" },
         message: { type: "string" },
       } },
       allowed_formats: ["mp4","svg"],
@@ -822,13 +828,13 @@ function getVisualMediaManifests() {
     },
     generate_speech: {
       name: "generate_speech",
-      purpose: "Convert text into natural spoken audio (text-to-speech) via ElevenLabs and save it as a downloadable, playable MP3 artifact.",
+      purpose: "Convert text into a real downloadable MP3/WAV artifact (text-to-speech). Never produce an HTML speechSynthesis page.",
       inputs: {
         type: "object", required: ["text"],
         properties: {
           text: { type: "string", description: "Exact text to speak (up to ~5000 chars)." },
-          voiceId: { type: "string", description: "Optional ElevenLabs voice id." },
-          modelId: { type: "string", description: "Optional ElevenLabs model id (default eleven_multilingual_v2)." },
+          voiceId: { type: "string", description: "Optional voice id or neural name (es-PE-CamilaNeural)." },
+          modelId: { type: "string", description: "Optional paid-provider model id." },
         },
       },
       outputs: { type: "object", properties: {
@@ -837,14 +843,13 @@ function getVisualMediaManifests() {
         filename: { type: "string" },
         message: { type: "string" },
       } },
-      allowed_formats: ["mp3"],
-      forbidden_formats: [],
+      allowed_formats: ["mp3", "wav"],
+      forbidden_formats: ["html", "htm"],
       expected_errors: [
-        { code: "no_api_configured", description: "ELEVENLABS_API_KEY not set.", repair_hint: "Configure the ElevenLabs key." },
         { code: "empty_text", description: "No text provided to narrate." },
         { code: "no_audio", description: "The voice service returned no audio.", repair_hint: "Retry with shorter text." },
       ],
-      acceptance_tests: ["returns ok:true with an mp3 artifact when ELEVENLABS_API_KEY is configured"],
+      acceptance_tests: ["returns ok:true with an mp3 artifact without a paid vendor key (Edge neural fallback)"],
       usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 5, requires_auth: true, requires_network: true },
       examples_positive: [{ when: "user asks for a voiceover", call: { text: "Bienvenido a SiraGPT." } }],
       examples_negative: [{ when: "user wants background music", why: "use generate_music instead." }],
@@ -896,6 +901,8 @@ function getVisualMediaManifests() {
           imageUrl: { type: "string", description: "Optional source image URL (http(s), data: or /uploads path)." },
           fileId: { type: "string", description: "Optional uploaded file id; defaults to the attached / last chat image." },
           model: { type: "string", description: "Optional edit-model override (e.g. gemini-2.5-flash-image, gpt-image-1)." },
+          target: { type: "string", description: "Optional explicit edit target (e.g. 'el cielo'); the rest of the image is preserved." },
+          selection: { type: "object", description: "Optional selection scoping the edit: box 0..100, named region, label or mask ref." },
         },
       },
       outputs: { type: "object", properties: {
@@ -913,7 +920,7 @@ function getVisualMediaManifests() {
       ],
       acceptance_tests: ["returns ok:true with an edited image artifact when a source image and provider are available"],
       usage_limits: { timeout_ms_default: 60000, timeout_ms_max: 180000, max_calls_per_task: 5, requires_auth: true, requires_network: true },
-      examples_positive: [{ when: "user asks to remove a photo background", call: { instruction: "quita el fondo y déjalo transparente" } }],
+      examples_positive: [{ when: "user asks to remove a photo background", call: { instruction: "quita el fondo y déjalo transparente" } }, { when: "user asks to change one part of the image", call: { instruction: "cambia el cielo a un atardecer naranja", target: "el cielo" } }],
       examples_negative: [{ when: "user wants a brand-new image", why: "use generate_image instead." }],
       recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error message.", max_retries: 1 },
       side_effect_level: "remote-read",

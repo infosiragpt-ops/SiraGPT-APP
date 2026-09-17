@@ -5,7 +5,7 @@ import { Search, MoreHorizontal, UserPlus, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import {
   Table,
   TableBody,
@@ -117,8 +117,8 @@ export default function UsersPage() {
       return res
     } catch (err: any) {
       console.error("Failed to load users", err)
-      setError(err?.message || "Failed to load users")
-      toast.error(err?.message || "Failed to load users")
+      setError(err?.message || "No se pudieron cargar los usuarios")
+      toast.error(err?.message || "No se pudieron cargar los usuarios")
       return null
     } finally {
       setLoading(false)
@@ -224,7 +224,7 @@ export default function UsersPage() {
         setAddFormErrors({ general: err.error })
         toast.error(err.error)
       } else {
-        const msg = err?.message || "Failed to create user"
+        const msg = err?.message || "No se pudo crear el usuario"
         setAddFormErrors({ general: msg })
         toast.error(msg)
       }
@@ -307,7 +307,7 @@ export default function UsersPage() {
         setEditFormErrors({ general: err.error })
         toast.error(err.error)
       } else {
-        toast.error(err?.message || "Failed to update user")
+        toast.error(err?.message || "No se pudo actualizar el usuario")
       }
     } finally {
       setIsSaving(false)
@@ -330,7 +330,7 @@ export default function UsersPage() {
       await loadUsers({ page })
     } catch (err: any) {
       console.error("Delete user error", err)
-      toast.error(err?.message || "Failed to delete user")
+      toast.error(err?.message || "No se pudo eliminar el usuario")
     } finally {
       setIsDeleting(false)
     }
@@ -355,42 +355,36 @@ export default function UsersPage() {
       toast.success("Emails exported successfully")
     } catch (err: any) {
       console.error("Export error", err)
-      toast.error(err?.message || "Failed to export emails")
+      toast.error(err?.message || "No se pudieron exportar los correos")
     } finally {
       setIsExporting(false)
     }
   }
 
   return (
-    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <SidebarTrigger className="md:hidden" />
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold">User Management</h1>
-              <p className="text-muted-foreground text-sm sm:text-base mt-1">Manage all platform users and their permissions</p>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 flex-shrink-0">
-          <Button onClick={openAddModal} size="sm" className="text-sm">
-            <UserPlus className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-            <span className="hidden sm:inline">Add User</span>
-            <span className="sm:hidden">Add</span>
-          </Button>
-          <Button onClick={handleExport} size="sm" variant="outline" className="text-sm" disabled={isExporting}>
-            <Download className="mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-            <span className="hidden sm:inline">{isExporting ? "Exporting..." : "Export Emails"}</span>
-            <span className="sm:hidden">Export</span>
-          </Button>
-        </div>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Usuarios"
+        description="Gestiona usuarios y permisos de la plataforma"
+        actions={
+          <>
+            <Button onClick={openAddModal} size="sm" className="h-8 text-[13px]">
+              <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+              Agregar
+            </Button>
+            <Button onClick={handleExport} size="sm" variant="outline" className="h-8 text-[13px]" disabled={isExporting}>
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              {isExporting ? "Exportando…" : "Exportar"}
+            </Button>
+          </>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       {/* Filters */}
       <Card>
         <CardHeader>
-          <CardTitle>Filters</CardTitle>
+          <CardTitle>Filtros</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
@@ -398,7 +392,7 @@ export default function UsersPage() {
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search users..."
+                  placeholder="Buscar usuarios…"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-8 text-sm"
@@ -415,7 +409,7 @@ export default function UsersPage() {
                 <SelectContent>
                   {plans.map((p) => (
                     <SelectItem key={p} value={p}>
-                      {p === "All" ? "All Plans" : p}
+                      {p === "All" ? "Todos los planes" : p}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -428,12 +422,12 @@ export default function UsersPage() {
       {/* Users Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Users ({totalCount})</CardTitle>
-          <CardDescription>All registered users on the platform</CardDescription>
+          <CardTitle>Usuarios ({totalCount})</CardTitle>
+          <CardDescription>Usuarios registrados en la plataforma</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="py-8 text-center">Loading users...</div>
+            <div className="py-8 text-center">Cargando usuarios…</div>
           ) : error ? (
             <div className="py-8 text-center text-red-600">Error: {error}</div>
           ) : (
@@ -443,12 +437,12 @@ export default function UsersPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>User</TableHead>
+                    <TableHead>Usuario</TableHead>
                     <TableHead>Plan</TableHead>
-                    <TableHead>Usage</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Joined</TableHead>
-                    <TableHead>Actions</TableHead>
+                    <TableHead>Uso</TableHead>
+                    <TableHead>Estado</TableHead>
+                    <TableHead>Alta</TableHead>
+                    <TableHead>Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -481,7 +475,7 @@ export default function UsersPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="default">{user.isAdmin ? "Admin" : "Active"}</Badge>
+                        <Badge variant="default">{user.isAdmin ? "Admin" : "Activo"}</Badge>
                       </TableCell>
                       <TableCell>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "N/A"}</TableCell>
                       <TableCell>
@@ -492,9 +486,9 @@ export default function UsersPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent>
-                            <DropdownMenuItem onClick={() => openEditModal(user)}>Edit User</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openEditModal(user)}>Editar</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => confirmDeleteUser(user.id, user.name)} className="text-red-600">
-                              Delete User
+                              Eliminar
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -521,9 +515,9 @@ export default function UsersPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEditModal(user)}>Edit User</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openEditModal(user)}>Editar</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => confirmDeleteUser(user.id, user.name)} className="text-red-600">
-                            Delete User
+                            Eliminar
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -532,7 +526,7 @@ export default function UsersPage() {
                       <Badge variant={user.plan === "ENTERPRISE" ? "default" : (user.plan === "PRO" || user.plan === "PRO_MAX") ? "secondary" : "outline"}>
                         {user.plan || "FREE"}
                       </Badge>
-                      <Badge variant="default">{user.isAdmin ? "Admin" : "Active"}</Badge>
+                      <Badge variant="default">{user.isAdmin ? "Admin" : "Activo"}</Badge>
                       <span className="text-xs text-muted-foreground">
                         {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "N/A"}
                       </span>
@@ -555,14 +549,14 @@ export default function UsersPage() {
               {/* Simple pagination controls */}
               <div className="mt-4 flex items-center justify-between">
                 <div className="text-sm text-muted-foreground">
-                  Page {page} of {totalPages} — {totalCount} users
+                  Página {page} de {totalPages} · {totalCount} usuarios
                 </div>
                 <div className="flex gap-2">
                   <Button onClick={() => { if (page > 1) { setPage(page - 1); loadUsers({ page: page - 1 }) } }} disabled={page <= 1}>
-                    Previous
+                    Anterior
                   </Button>
                   <Button onClick={() => { if (page < totalPages) { setPage(page + 1); loadUsers({ page: page + 1 }) } }} disabled={page >= totalPages}>
-                    Next
+                    Siguiente
                   </Button>
                 </div>
               </div>
@@ -700,7 +694,7 @@ export default function UsersPage() {
                   }}
                   disabled={isSaving}
                 >
-                  Cancel
+                  Cancelar
                 </Button>
 
                 <Button type="submit" disabled={isSaving}>
@@ -712,7 +706,7 @@ export default function UsersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit User Modal */}
+      {/* Editar Modal */}
 
       <Dialog
         open={showEditModal}
@@ -729,7 +723,7 @@ export default function UsersPage() {
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Edit User</DialogTitle>
+            <DialogTitle>Editar</DialogTitle>
             <CardDescription>Update user details.</CardDescription>
           </DialogHeader>
 
@@ -801,7 +795,7 @@ export default function UsersPage() {
                 checked={form.isAdmin}
                 onCheckedChange={(v) => setForm({ ...form, isAdmin: !!v })}
               />
-              <Label htmlFor="isAdminEdit">Grant Admin Access</Label>
+              <Label htmlFor="isAdminEdit">Acceso de administrador</Label>
             </div>
             {editFormErrors.general && <div className="text-sm text-red-600 mt-1">{editFormErrors.general}</div>}
 
@@ -816,10 +810,10 @@ export default function UsersPage() {
                   }}
                   disabled={isSaving}
                 >
-                  Cancel
+                  Cancelar
                 </Button>
                 <Button type="submit" disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save"}
+                  {isSaving ? "Guardando…" : "Guardar"}
                 </Button>
               </div>
             </DialogFooter>
@@ -830,25 +824,26 @@ export default function UsersPage() {
       <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete user</DialogTitle>
+            <DialogTitle>Eliminar usuario</DialogTitle>
           </DialogHeader>
 
           <div className="py-4">
-            Are you sure you want to delete{" "}
-            <strong>{deleteTarget?.name ?? "this user"}</strong>? This action cannot be undone.
+            ¿Eliminar a{" "}
+            <strong>{deleteTarget?.name ?? "este usuario"}</strong>? Esta acción no se puede deshacer.
           </div>
 
           <DialogFooter>
             <div className="flex gap-2 w-full justify-end">
-              <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={isDeleting}>Cancel</Button>
+              <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={isDeleting}>Cancelar</Button>
               <Button className="bg-red-600 hover:bg-red-700" onClick={performDeleteUser} disabled={isDeleting}>
-                {isDeleting ? "Deleting..." : "Delete"}
+                {isDeleting ? "Eliminando…" : "Eliminar"}
               </Button>
             </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }
 

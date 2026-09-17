@@ -40,9 +40,9 @@ const CORE_TOOLS = Object.freeze(['web_search', 'read_url', 'read_file', 'search
 // Tool-name → capability category (a tool can match several).
 const CATEGORY_PATTERNS = Object.freeze({
   web: /^(web_search|read_url|web_extract|deep_search|browser_)/,
-  research: /^(scientific_search|github_search|x_search|deep_search|sunat_)/,
+  research: /^(scientific_search|github_search|x_search|deep_search|sunat_|github_list_repos|github_create_issue|github_publish_project|github_open_repo|github_open_pull_request|linkedin_|x_list_mentions|x_publish_post)/,
   rag: /(rag_retrieve|search_docs|search_code|get_symbol|list_files|read_file|docintel|deep_analyze|compare_documents|auto_file|memory_recall)/,
-  code: /(python_exec|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol)/,
+  code: /(python_exec|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol|project_read|project_write|project_exec|project_clone_repo|project_preview_|construir_scaffold|github_publish_project|github_open_repo|github_repo_|github_open_pull_request)/,
   generation: /(create_document|verify_artifact)/,
   media: /(image|video|audio|music|chart|diagram|svg|infograph|dashboard|organigram|mermaid|timeline|kanban|swot|eisenhower|raci|canvas|pyramid|porter|risk_matrix|funnel|radar|journey|okr|empathy|lean|scorecard|ansoff|bcg|moscow|decision_tree|concept_map|mindmap|swimlane|pestel|process_flow|comparison_table|gantt|gauge|waterfall|heatmap|treemap)/i,
   memory: /(memory_recall|session_|active_memory)/,
@@ -173,6 +173,12 @@ function selectTools(rawInput, deps = {}) {
     // specific-intent turn even though the user attached a file to edit it.
     if (signals.hasFiles && /(rag_retrieve|docintel|deep_analyze|document_edit)/.test(n)) coreSet.add(toName(t));
     if ((signals.hasMedia || /media|image|chart/.test(it)) && /(create_document|generate_image|create_chart)/.test(n)) coreSet.add(toName(t));
+    const mentionedTools = new Set(
+      (Array.isArray(signals.mentionedAppTools) ? signals.mentionedAppTools : [])
+        .map((name) => String(name || '').toLowerCase())
+        .filter(Boolean),
+    );
+    if (mentionedTools.has(n)) coreSet.add(toName(t));
   }
 
   // Score everything, then pick core + top-scored up to maxTools.

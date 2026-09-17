@@ -1358,7 +1358,11 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       const screenshotBase64 = screenshotBytes.toString('base64');
       broadcastToSession(sessionId, {
         type: 'screenshot',
-        data: { image: `data:image/png;base64,${screenshotBase64}`, step: stepCount }
+        data: {
+          image: `data:image/png;base64,${screenshotBase64}`,
+          step: stepCount,
+          url: page.url(),
+        }
       });
 
       // 2. Obtener un DOM simplificado para la IA, en lugar del screenshot

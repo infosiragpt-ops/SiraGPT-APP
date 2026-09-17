@@ -3,7 +3,6 @@ const path = require('path');
 const mime = require('mime-types');
 const { execFile, execSync } = require('child_process');
 const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, AlignmentType, BorderStyle, WidthType } = require('docx');
-const puppeteer = require('puppeteer');
 const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const axios = require('axios');
@@ -502,8 +501,9 @@ async function createPdf(filePath, content) {
         </html>
     `;
 
+    const puppeteer = (await import('puppeteer')).default;
     const browser = await puppeteer.launch({
-        headless: "new",
+        headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
     const page = await browser.newPage();

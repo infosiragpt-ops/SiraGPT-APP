@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { RefreshCw } from "lucide-react"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 
@@ -176,20 +177,18 @@ export default function AdminStatusPage() {
   }, [services])
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Estado operativo</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Snapshot consolidado para super-admin · auto-refresh 30s
-            {lastRefresh ? ` · last ${lastRefresh.toLocaleTimeString()}` : ""}
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading} className="gap-1.5">
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Recargar
-        </Button>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Estado operativo"
+        description={lastRefresh ? `Snapshot super-admin · auto 30s · ${lastRefresh.toLocaleTimeString()}` : "Snapshot super-admin · auto 30s"}
+        actions={
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading} className="h-8 gap-1.5 text-[13px]">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Recargar
+          </Button>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       <Card>
         <CardHeader>
@@ -331,6 +330,7 @@ export default function AdminStatusPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

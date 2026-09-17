@@ -4,12 +4,512 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [Unreleased] — Agent integrity
+
+### Fixed
+
+- Production backend boot no longer `require()`s
+  `backend/tests/fixtures/document-rlcd-eval.json` at import time of
+  `rlcd/eval-harness.js` (that path is dockerignored; Lenovo publish of
+  `a5c3b55f` crashed and rolled back). The fixture loads lazily inside
+  `runEval` / `runDocumentEval` and skips when missing.
+
+### Added
+
+- RLCD document analysis phase 3: retrieval-score + page-citation
+  evidence, warmer Spanish defer (ask for section/page, candidate pages
+  from RAG), expanded offline eval harness
+  (`backend/tests/fixtures/document-rlcd-eval.json`), and a
+  recommended defer threshold on `/api/rlcd` → `documents` (applied
+  only if `SIRAGPT_RLCD_AUTO_THRESHOLD` is on). Code default for
+  `SIRAGPT_RLCD_DOCUMENTS` stays off. See
+  `docs/rlhf-rlcd-documents.md`.
+- RLCD document analysis phase 2: evidence-aware confidence (extract /
+  RAG coverage + citations), per-claim supported vs inferred labels,
+  weighted regenerate outcomes, contrastive `format=rlcd` export, and
+  richer ECE/Brier admin stats. Still flag-gated
+  (`SIRAGPT_RLCD_DOCUMENTS` default off). Does not change the #722
+  ledger (`SIRAGPT_RLCD_ENABLED`). See `docs/rlhf-rlcd-documents.md`.
+- RLCD for document analysis (Reinforcement Learning for Calibrated
+  Decisions — not ICLR contrastive distillation): flag-gated confidence
+  metadata, defer/abstain, and Brier/ECE from thumbs
+  (`SIRAGPT_RLCD_DOCUMENTS` default off). Coexists with the #722
+  decision ledger (`SIRAGPT_RLCD_ENABLED` default on). See
+  `docs/rlhf-rlcd-documents.md` and `docs/rlcd.md`.
+- RLHF phase 3: backfill of historical thumbs, daily RM train cron, and
+  `/admin/rlhf` dashboard (prep jobs remain `#713`). Best-of-N stays off.
+
+### Fixed
+
+- `/agentes` «dame la web en local» + a github.com URL now clones into the
+  **server** chat workspace and starts `project_preview_*` (preview URL).
+  It no longer tells the user to clone on their phone or claims it cannot
+  open port 5000. Document RLCD (`SIRAGPT_RLCD_DOCUMENTS`) confidence
+  trailers / «Nivel de confianza» apply only to document-analysis turns.
+- `/agentes` «Conexión no disponible» as the entire assistant bubble after
+  a long think is no longer used for provider timeout, abort, GitHub OAuth
+  miss, sandbox jail, or tool failure. Those map to `E_TIMEOUT` /
+  `E_PROVIDER` / `E_GITHUB_CONNECT` / `E_SANDBOX` with Spanish retry or
+  `/conexiones` copy. Clone+run of a public/owned GitHub URL now takes the
+  CONSTRUIR `github_open_repo` pre-loop (#681) instead of falling through
+  to a second generate that looked like a dead connection.
+- `/agentes` website/app asks (“créame una web de ventas” and Spanish
+  variants) stay on the code plane (`webdev` / HTML-JS artifacts). They
+  no longer remap `.html` contracts into Document Sandbox Word. True
+  Word/PDF asks are unchanged. See `docs/software-vs-document-routing.md`.
+- Coding V2 session admission and terminal access now require the owning
+  authenticated user. WebSocket sessions use the persisted-session validator.
+  DEV executors remain unavailable in production, missing execution is an
+  explicit error, and concurrent admissions and requested resources are bounded.
+  This does not certify the unfinished sandbox/preview as production-ready.
+
+### Added
+
+- RLHF phase 2: collected thumbs steer the next chat/agent turn with a
+  compact Spanish few-shot block (`SIRAGPT_RLHF_STEERING`, default on,
+  fail-open, size-capped). Best-of-N stays behind
+  `SIRAGPT_RLHF_BEST_OF_N` (off). Ops counters on `/api/rlhf/stats` and
+  `/metrics`. Thumbs-down also feeds `routing-feedback`. See
+  `docs/rlhf-phase2-steering.md`.
+- CONSTRUIR GitHub PR slice (flag `AGENTES_CODING_V2` stays OFF): from
+  `/agentes`, connect GitHub at `/conexiones`, open a repo the user can
+  access into an isolated jailed workspace, list/read/write/exec, then
+  open a Pull Request with the user's OAuth token. Tools:
+  `github_open_repo`, `github_repo_*`, `github_open_pull_request`.
+  Injectable GitHub + sandbox in CI. See `docs/construir-github-pr.md`.
+- Phase 4f of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  API-only CI smoke that drives the coding harness through a tiny
+  todo-app fixture in the memory sandbox. Injectable `llmTurn` writes
+  `package.json` + `src/app.js`; asserts files and `status: done`.
+  Optional HITL `allow_once` on `exec`. Offline only — no real model,
+  no Docker, no Daytona, no OpenRouter. Flag stays off in production.
+  See `docs/agentes-coding-todo-smoke.md`.
+- Phase 4e of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  durable coding-sandbox workspace files for the docker driver (and
+  optional `volume`/`disk` DEV path). `/workspace` is a host bind-mount
+  under `AGENTES_CODING_SANDBOX_DATA_DIR` keyed by session id. Path
+  jail intact. `createSession` / `getSession` / `recreateSession`
+  reattach after process restart; `destroy` removes the volume.
+  Memory driver stays ephemeral (CI default, no Docker). Injectable
+  `fs` + `docker`. Volume byte/file caps are stubs. API-only —
+  UI-lock unchanged; xterm pane still needs a Luis exception. See
+  `docs/agentes-coding-sandbox.md`.
+- Phase 4d of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  production-shaped completion adapter for the coding harness
+  (`backend/src/services/agentes-coding/harness/llm.js`). Same
+  `llmTurn` contract. Injectable fakes still win in tests (no
+  network). Flag on + no inject → existing native catalog client.
+  Body `modelAlias` (`Sira Rápido` / `Sira Pro`); unknown aliases
+  → `E_PARAMS`. Spanish `E_PROVIDER` / `E_TIMEOUT`; no keys or raw
+  upstream bodies in API JSON. See `docs/agentes-coding-harness.md`.
+- Phase 4c of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  optional durable harness jobs so HITL pauses and long tool loops
+  survive process restart. Injectable memory queue/store (CI default);
+  Redis snapshot + in-repo BullMQ when the flag is on and `REDIS_URL`
+  is present. Same `/harness*` HTTP API. Worker no-ops when the flag
+  is off (Lenovo-safe). Spanish `E_HARNESS_QUEUE`. No Prisma table,
+  no new npm dep, no `/agentes` chrome. See
+  `docs/agentes-coding-jobs.md`.
+- Phase 4b of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  HITL permission gates on the coding harness (Cline-pattern
+  ask / once / always / reject). Privileged tools (`exec`, or
+  `writeFile` outside a documented safe-path allowlist) pause the
+  run as `awaiting_permission`. `GET|POST
+  /api/agentes-coding/sessions/:id/harness/:runId/permissions*`.
+  Injectable policy; session-scoped `allow_always`; reject →
+  `cancelled` + `E_PERMISSION_DENIED`. API-only — UI-lock unchanged.
+  Pattern fusion only (no Cline dump, no `/agentes` chrome). Flag
+  stays off in production. See `docs/agentes-coding-permissions.md`.
+- Phase 4a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  TypeScript/Node harness inside a coding-sandbox session
+  (`POST|GET /api/agentes-coding/sessions/:id/harness*`). Bounded
+  plan → tool → result loop over `readFile`/`writeFile`/`exec`/
+  `listFiles` only. Injectable LLM + sandbox driver; in-process step
+  store; step/token/time caps; Spanish errors (`E_HARNESS_*`,
+  `E_QUOTA`, `E_TIMEOUT`, `E_CANCELLED`). API-only — UI-lock
+  unchanged. Pattern fusion (OpenHands SDK MIT + SiraCode /
+  agent-harness contracts); no vendor dump, no `/code`, flag stays
+  off in production. See `docs/agentes-coding-harness.md`.
+- Phase 3g of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  jailed session export (zip / tar.gz, size caps, artifact metadata)
+  and a Coolify/Dokploy deploy stub (`POST|GET
+  /api/agentes-coding/sessions/:id/export`, `…/deploy`). Injectable
+  HTTP client only; deny unless `AGENTES_CODING_DEPLOY_BASE_URLS`.
+  Spanish errors (`E_EXPORT_*`, `E_DEPLOY_*`). API-only — UI-lock
+  unchanged. No Daytona, no `/code`, flag stays off in production. See
+  `docs/agentes-coding-export-deploy.md`.
+- Phase 3f of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  per-session git init / status / diff / commit-checkpoint inside the
+  jailed workspace (`POST|GET /api/agentes-coding/sessions/:id/git/*`).
+  Injectable argv-only runner (simple-git pattern) plus an in-process
+  store (isomorphic-git pattern). Spanish errors (`E_GIT_FAILED`,
+  `E_CHECKPOINT_NOT_FOUND`). API-only — UI-lock unchanged. No npm dep,
+  no Daytona, no `/code`, flag stays off in production. See
+  `docs/agentes-coding-git.md`.
+- Phase 3e of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  sandbox `exposePort` publishes a signed ephemeral preview URL plus
+  localhost-mapped port metadata for memory/docker DEV drivers
+  (`POST /api/agentes-coding/sessions/:id/preview`, `GET …/ports`,
+  `GET …/preview/:token`). Deny-by-default without a port allowlist
+  or network hook. Spanish errors (`E_PORT_DENIED`, `E_PREVIEW_EXPIRED`,
+  `E_FLAG_OFF`, …). Injectable networking — no real bind in CI. API-only
+  (UI-lock). No Daytona, no `/code`, flag stays off in production. See
+  `docs/agentes-coding-preview.md`.
+- Phase 3d of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  session terminal channel (PTY stub) over SSE+POST and an injectable
+  WebSocket attach (`/api/agentes-coding/sessions/:id/terminal*`,
+  `/api/agentes-coding/terminal?channelId=`). Path-jailed `cwd`,
+  Spanish errors, memory/SSE/WS transports. API-only — UI-lock keeps
+  the Phase 3a HTTP exec stub; no `@xterm/xterm` npm. Flag stays off
+  in production. See `docs/agentes-coding-terminal.md`.
+- Phase 1 of Coding Agents (`AGENTES_CODING_V2`): OSS catalog (Tier S
+  from a 176-repo pass: OpenSandbox, E2B, gVisor, Firecracker, Aider,
+  OpenHands, Cline HITL-only, SWE-agent/SWE-bench, mem0, xterm.js,
+  Playwright MCP, Goose) plus `/agentes` architecture, license gate,
+  and an off-by-default flag helper (`GET /api/agentes-coding/health`).
+  Default `/agentes` UX is unchanged. No monorepo dump.
+- Phase 2a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  internal `coding-sandbox` session adapter (`createSession` / `exec` /
+  `readFile` / `writeFile` / `listFiles` / `exposePort` / `destroy`)
+  with a memory driver and a Docker-compose DEV driver (injectable
+  stubs, deny-by-default network, CPU/RAM limit flags). Spanish
+  errors. `GET /api/agentes-coding/health` stays `{ ok, enabled }`.
+  No Monaco, no `/code`, no Daytona, flag stays off in production.
+  See `docs/agentes-coding-sandbox.md`.
+- Phase 3c of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  ast-grep-pattern structural edit inside a coding-sandbox session
+  (`POST /sessions/:id/struct-edit` preview + `/struct-edit/apply`
+  via `writeFile` after path-escape checks). Thin Node wrapper with
+  injectable `sg` exec — no ast-grep monorepo dump, no `--update-all`,
+  no `/code`, no new IDE chrome (API-only), flag stays off in
+  production. See `docs/agentes-coding-struct-edit.md`.
+- Phase 3b of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  Aider-pattern `repo-map` ranked file/symbol hints
+  (`name` + `path` + `score`) from a session workspace without loading
+  whole files (8 KiB headers, PageRank-lite + path heuristics).
+  `GET|POST /api/agentes-coding/sessions/:id/map` is 404 when the flag
+  is off. Optional **Mapa** hook on the Phase 3a file tree. Spanish
+  errors. No Aider dump, no tree-sitter vendor, no `/code`, flag stays
+  off in production. See `docs/agentes-coding-repomap.md`.
+- Phase 3a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  flag-gated IDE shell on `/agentes` (file tree, Monaco editor, diff
+  pane, WebSocket-ready terminal stub) wired to
+  `createSession` / `listFiles` / `readFile` / `writeFile`. The client
+  mounts chrome only when `GET /api/agentes-coding/health` reports
+  `enabled:true`. No `/code` revival, no xterm npm dep, flag stays
+  off in production. See `docs/agentes-coding-ide.md`.
+
+
+- SiraCode native `multiedit` applies a jailed batch of unique
+  `old_str` → `new_str` replacements atomically (nothing is written
+  if one edit misses). Commits use the #629 conditional mutation
+  guards (`readFileForMutation` / `writeFileIfUnchanged`) so a
+  concurrent edit is `file_changed`, not a silent overwrite.
+  Planificar stays read-only; Construir goes through composer /
+  permission-resume. Spanish errors. Not a dump of
+  anomalyco/opencode `edit.ts`.
+- SiraCode `task` is a subagent spawn stub: it queues a child job
+  via the existing agent-task APIs (`enqueueAgentTask` /
+  `createTaskRecord`). Planificar may only spawn read-only children
+  (`general` / `planificar`). No LLM loop in the stub. Not a dump
+  of `task.ts`.
+
+- SiraCode `diagnostics` summarizes workspace LSP/syntax issues with
+  the OpenCode report contract (`ERROR [line:col]`,
+  `<diagnostics file="…">` blocks, per-file cap). Optional injectable
+  runner (tests / later LSP hosts); default in-process JSON+JS syntax
+  pass. Workspace-jailed, Spanish errors. Planificar and Construir
+  can read it. Native CommonJS — not a dump of
+  `vendor/opencode/src/lsp/diagnostic.ts`. No OpenRouter.
+
+- SiraCode jailed `read` / `write` / `edit` now match the OpenCode
+  file-tool contract (1-indexed offset, unique `old_str`, size caps,
+  binary reject, symlink-aware path jail, Spanish errors). Planificar
+  stays read-only; Construir writes go through permission-resume when
+  the composer asks. Native CommonJS — not a dump of `read.ts` /
+  `write.ts` / `edit.ts`. No OpenRouter.
+
+- SiraCode grep/glob now walk the session workspace jail with the
+  OpenCode search contract (`pattern`, `path`, `include`, `limit`),
+  size/timeout caps, Spanish errors, and blocked path escape. Native
+  CommonJS walker — no ripgrep binary, no Effect LocationSearch, no
+  vendor dump. Available in Planificar (read-only) and Construir.
+
+- Hermes fusion: session memory compaction folds older MEMORY log
+  entries into a compact note when the store hits its cap, keeps USER
+  profile facts intact, and ranks retrieval as profile > recent log >
+  compacted notes. Summarizer is injectable (default is local, no
+  OpenRouter). Failures return Spanish `E_PARAMS` / `E_QUOTA` / `E_CONTENT`.
+  Native rewrite of the Hermes MEMORY/USER bounded-store idea; no
+  upstream Python dump.
+
+- Hermes fusion: memory writes now fail closed on a per-fact size cap
+  (2000 chars) and a per-user write rate-limit, with Spanish `E_PARAMS`
+  / `E_QUOTA` errors. Native rewrite of the Hermes MEMORY.md / USER.md
+  character-limit contract; chat-side fact extractors keep size-only
+  (no rate starve). No upstream Python.
+
+- `/agentes` task cancel is idempotent after an SSE drop: a reconnect
+  mid-run (or a second Stop) returns `already` + `E_CANCELLED` and does
+  not abort twice or append another cancel event. Completed/error
+  snapshots keep their real status. Native rewrite of OpenClaw
+  already-aborted / idempotent run-handle clear; no vendored runtime.
+
+- SiraCode exposes `GET /api/opencode/session/:id/summary` so `/agentes`
+  can reconnect with a bounded transcript snapshot (`lastEventId`,
+  Spanish `lastStage`, redacted message previews, tool count) instead
+  of replaying the full SSE log. Inspired by OpenCode `SessionSummary`;
+  independent local rewrite, no Effect runtime and no git-diff spill.
+
+- SiraCode truncates bulky tool results (líneas + bytes) and compacts
+  older tool messages in long turns, with a single Spanish stage
+  `Compactando contexto`. Inspired by OpenCode `Truncate.output` and
+  `SessionCompaction.prune`; independent local rewrite, no LLM spill
+  file and no Effect runtime.
+
+- Hermes fusion: optional-skill previews are sandboxed as data
+  (`<<<SKILL_REFERENCE>>>`) and each `runSkill` emits a content-free
+  `skill_run` audit line (id / ok / duration / errorCode only — no args,
+  result, or prompt). Native rewrite of Hermes skill-load +
+  scan-before-inject; no upstream Python.
+
+- SiraCode sessions now take a title from the first real user message
+  (`Nueva sesión` until then). Trivial greetings do not lock the label;
+  a caller-supplied title is kept. Inspired by OpenCode
+  `SessionPrompt.ensureTitle`; independent local rewrite, no LLM.
+
+- SiraCode `applyUnique` keeps `$&` / `$$` / `` $` `` / `$'` literal and
+  rejects overlapping hunks (`aaa` + `aa`) instead of a partial replace.
+
+- SiraCode permission resume: allowing an `ask` tool (Planificar bash or
+  composer Protegido writes) now runs it in the session workspace instead
+  of only recording the decision. `always` remembers the grant for the
+  rest of the session; `deny` stays closed. Reconnect can `GET` the
+  session to see pending cards. Inspired by OpenCode once/always/reject;
+  independent rewrite, no vendor tree.
+
+- SiraCode plan→act handoff: switching Planificar → Construir keeps the
+  approved plan on the session, emits the existing `Plan listo` stage, and
+  injects it into the next Construir turn so the loop executes instead of
+  re-planning. Hitting the step budget now stops as `Presupuesto agotado`
+  (not a silent `Listo`). One retry on transient LLM errors. Inspired by
+  OpenCode session reminders; independent rewrite, no vendor tree.
+
+### Fixed
+
+- Scheduled-agent overlap coordination recovers after transient Redis failures
+  without replacing a still-running local holder or leaking new clients.
+  Failed distributed renewal no longer reports a successful local renewal;
+  same-key acquisitions are reserved while in flight. No agent turn replay.
+
+- SiraCode text edits and patch updates compare the complete original bytes
+  before committing, so cooperating edits cannot silently lose each other's
+  changes. Patch Add is exclusive; Move refuses an existing destination.
+  Oversized/invalid UTF-8 inputs and unsupported mutation targets fail closed,
+  and edit replacement markers remain literal. Native OpenCode-inspired port;
+  no upstream runtime, new provider or production configuration changes.
+
+- `/agentes` task failures no longer collapse 503, cancel and timeout
+  into one generic banner. `presentTaskError` maps classified reasons to
+  AGENTS.md §16 codes (`E_PROVIDER` / `E_CANCELLED` / `E_TIMEOUT`) and
+  distinct Spanish labels on the terminal SSE event. Native rewrite of
+  OpenClaw's `errorKind` → `stopReason` contract; no vendored runtime.
+
+- Sira Voz `POST /voices/clone` deletes the multer temp sample before
+  flushing 201 so a loaded CI shard cannot observe the file after the
+  response (race between `res.json` and `finally`).
+
+- Hermes runtime endpoints require canonical authentication. Scheduled jobs,
+  CLI cron queries and cron tools use only the authenticated owner; absent and
+  foreign jobs are indistinguishable, and missing identity cannot inherit a
+  stored job's privileges. Static capability maps remain public.
+
+- Scheduled agent jobs no longer report success for incomplete, cancelled or
+  failed runs, including a successful synthesis with failed plan steps. Whole
+  agent turns are invoked once; ambiguous transport errors do not automatically
+  replay external effects. Native OpenClaw-inspired outcome contract; no new
+  provider, gateway, schema or interface changes.
+
+- Backend image rebuilds no longer depend on HuggingFace for
+  `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
+  seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies
+  `file://` / absolute `WHISPER_MODEL_URL` locally. Dockerfile
+  `BUNDLE_WHISPER_MODEL=1` copies a context `ggml-base.bin` (Lenovo cached
+  bin) so 429 during install is skipped.
+
+- `BUNDLE_WHISPER_MODEL` is a global Dockerfile ARG (before the first
+  `FROM`) so `FROM whisper-seed-${BUNDLE_WHISPER_MODEL}` parses as
+  `whisper-seed-0` / `whisper-seed-1` instead of the invalid `whisper-seed-`.
+
+- Production Alpine runner installs `bash` and probes `/bin/bash` as
+  `appuser` (`BASH_VERSION` + `set -euo pipefail`) so SiraCode Planificar
+  permission-resume does not `spawn /bin/bash ENOENT`. Whisper installer
+  stays POSIX `sh`. No silent `sh` fallback.
+
+- `/agentes` agent tasks no longer stay in "Pensando…" after a worker dies
+  while the API process stays up. Live runners pulse a snapshot heartbeat;
+  a runtime watchdog (OpenClaw-style no-output stall) marks stale
+  `running`/`queued` snapshots `error` with `worker_stalled` so SSE/poll
+  close instead of hanging. Boot recovery is unchanged. Disable with
+  `AGENT_TASK_RUNTIME_WATCHDOG_DISABLED=1`.
+- After an SSE drop on `/agentes`, the live job resumes from the durable
+  event log (`GET /api/agent/task/:id/events?after=` + `Last-Event-ID`)
+  instead of failing the chat. Resume keeps polling while the #579
+  snapshot heartbeat is fresh; a `worker_stalled` reap surfaces a clear
+  terminal error. Transient event-poll 5xx retries. Inspired by OpenClaw
+  `agent.wait` / recoverable transport-close (MIT); SiraGPT-owned rewrite.
+- Rejected final answers now stop as unverified rather than becoming successful
+  after repeated rejection or on the last step. Judge timeouts, invalid verdicts
+  and cancellation fail closed; bounded reviews are tied to draft and evidence.
+- Versioned ReAct checkpoints preserve consumed attempts, elapsed runtime,
+  failure/rejection counters and no-progress evidence. Invalid or exhausted
+  checkpoints cannot silently restart previous operations.
+- Trusted local read policy overrides exact builtin defaults; a read-looking
+  name or remote hint cannot authorize parallelism or suppress a mutation.
+  Uncacheable reads stay fresh. Repeated explicit no-ops are not new progress.
+- Task stream closure no longer implies success. Verification/budget failures
+  retain failed status through worker, chat, file snapshot and DB adapters;
+  late inline progress writes cannot overwrite terminal metadata. Existing
+  retry and recovery boundaries are tested without changing the interface.
+
+- The native chat agent preserves historical instructions within a bounded
+  context, treats reported tool failures as failures, keeps parallel tool
+  results paired with unique calls, and re-reads current data after a write.
+  Invalid tool groups stop before execution. Includes 57 new regression/unit
+  cases; no interface, dependency or production configuration changes.
+
 ## [Next production release] — 2026-07-22
+
+### Added
+
+- SiraCode Phase 1: native coding-agent core at `backend/src/services/sira-code/`
+  (independent rewrite inspired by anomalyco/opencode, MIT — not affiliated).
+  `/api/opencode` now serves sessions natively (create, prompt, SSE, switch
+  agent, cancel). Agents: Construir (write+bash) and Planificar (read-only;
+  bash asks permission). `/agentes` composer has a Construir | Planificar
+  tab. OPENCODE_SERVER_URL sidecar stays off. No F7 enable, no `/code` revival.
+
+- SiraComputer F7.2 (IN_PROGRESS — waiting on CI frontend + desktop-f71 +
+  desktop-f72): full Desktop
+  Control Plane on `127.0.0.1:9000` (click/type/scroll/launch/navigate/exec/
+  file/cursor/input_mode/mask; 423 Locked when human owns input),
+  authenticated same-origin `/ws/desktop/:sessionId` proxy (token scoped
+  userId/chatId, loopback noVNC only), and `DesktopScreen` RFB viewer
+  whose first frame ends the black panel. Kill switch
+  `SIRAGPT_DESKTOP_ENABLED` still fail-closed. The live computer
+  orchestrator is unchanged. F7.3 (CU-loop) is not started.
+- SiraComputer F7.1 (COMPLETED — unit provision gate green): real
+  `E2BDesktopProvider` (isolated `@e2b/desktop` require, fail-closed without
+  `E2B_API_KEY`) plus in-memory `DesktopSessionManager` warm pool
+  (`DESKTOP_POOL_MIN=2`). New `/api/desktop` routes do not talk to the
+  #484 orchestrator. Computer pane shows «Preparando escritorio…» instead
+  of the generic black-panel error while starting or when the pool is warm.
+- SiraComputer F7.0 (COMPLETED in CI): model-agnostic `DesktopProvider`
+  (`create` / `destroy` / `health` / `screenshot`) plus the `sira-desktop`
+  image (Xvfb :0, openbox, x11vnc/noVNC, xdotool, scrot, DCP on
+  `127.0.0.1:9000`). E2B and full gVisor flags stay stubs. The live
+  computer orchestrator from #484 is unchanged. Spec:
+  `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+
+### Fixed
+
+- Document recovery browser tests now distinguish bounded client/chat startup
+  from task recovery, preserving the five-second recovery assertions and all
+  desktop/mobile, reload, content and layout checks on cold CI development servers.
+
+- Document edits with a source filename before the instruction now reach the
+  source-preserving PPTX title path. Reloading a finished or failed agent task
+  preserves the original user message and stops the matching assistant bubble.
+
+- `hola` / saludos ya no entran a Extra/Max, thinking extendido ni al
+  bucle de SiraCode (Construir/Planificar), aunque esos toggles estén
+  activos. Respuesta directa, `disableAgentic`, sin test-time-compute.
+  Instrucciones permanentes en `AGENTS.md` (raíz; no sustituye `.agents/`).
+- Computer orchestrator image build no longer fails with `useradd: UID 1000`
+  is not unique` on `node:22-bookworm` (that image already owns uid 1000).
+  `compuser` is created by name; `docker exec -u compuser` is unchanged.
+- `/agentes` computer pane («Pantalla de Siragpt») no longer shows raw
+  «fetch failed». `POST /api/agent-computer/sessions` talks to a real
+  `siragpt-computer-orchestrator:8090` on the iliagpt docker network, and
+  embed URLs are `https://siragpt.com/sessions/:id/novnc/…` (not
+  `computer.siragpt.com`, which 404s). Live Caddy stays
+  `/home/user/deployments/iliagpt/Caddyfile` (`@sse` untouched); the only
+  gateway edit is `handle /sessions/*`. Desktop cap default is 2 (8 OOM'd
+  the Lenovo). `publish.sh` is not in this repo — see `deploy/iliagpt/`.
+- The `/agentes` `@` Apps picker now shows official catalog logos
+  (GitHub invertocat, LinkedIn in, X, Facebook f, and every other row
+  with a `/conexiones-logos/` mark). Connected vs Conectar stays a
+  label plus a small badge — the brand mark is no longer replaced by
+  the generic green check/link square.
+- App cards on `/conexiones` and `/gpts` use professional brand marks
+  (local Simple Icons under `public/conexiones-logos/`, Clearbit /
+  DuckDuckGo for real domains, and a generated monogram SVG for
+  invented GPT-store hosts) instead of blurry Google `sz=128` favicons
+  or blank tiles. Initials remain only after every image source fails.
+
+### Added
+
+- Sidebar nav lists **Apps** under GPTs (not in the Agentes/Empresas header).
+  It opens `/conexiones` with the full connectable-app catalog and each app's logo.
+- `/gpts` now has an Apps catalog under the GPT store so users can connect
+  third-party apps (Indeed, LinkedIn, and the rest of the pasted complementos
+  list) without leaving https://siragpt.com/gpts. Connection state is stored in
+  `settings.apps`.
+- Agent-loop hot path now calls the live #388 helpers: `retryToolWithBackoff`
+  / `isRetryableToolFailure` on tool errors (timeout, ECONNRESET, 502),
+  `repairTruncatedJson` re-invoke after a schema-repair miss, fail-closed
+  stop after three consecutive repair failures or exhausted transient
+  retries, `compactUntilTokenBudget` + 3H59 fact anchors before each
+  `callModel`, and generate-stream `startCommentHeartbeat` with inclusive
+  `honorLastEventId` replay when a seq ring exists. See
+  `docs/mejoras/benchmark-capacidades.md`.
+- Mobile downloads on `/descargas`: first-class iPhone section with the
+  Safari "Añadir a pantalla de inicio" steps and an iOS install coach
+  (Safari never fires `beforeinstallprompt`), a real Android APK download
+  backed by `/api/mobile/releases` + `/api/mobile/download` (latest public
+  GitHub QA/signed release, with a known-asset fallback), Chromium install
+  prompt wiring via `PWAInstallPrompt`, and an honest "App Store (nativa
+  Capacitor) — pendiente" status card listing the owner-only Apple steps
+  (issue #6). Google Play remains owner-gated (issue #5); no store URLs
+  are published until the listings exist.
 
 ### Changed
 
+- `AGENTS.md` raíz reescrito en telégrafo (política dura + enrutado). Guía
+  scoped en `ui/upstream/openclaw/AGENTS.md` para la Control UI vendored.
+  Doctrina adaptada a SiraGPT (núcleo chico, caché de prompt, hola directo,
+  un flujo canónico). No toca UI.
+
+- Canonical product URL is `/agentes` (https://siragpt.com/agentes). Authenticated `/` redirects to `/agentes` so guests still see marketing on `/`; `/chat` and `/chat/:id` keep query/hash/id and land on `/agentes`. Same chat chrome; per-conversation computer overlay fail-closes if isolation is missing.
+- Engine 3H60 (no UI): 32 fail-open helpers after 3H59 — tool-arg coerce/fence/enum
+  + transient retry, A-B-A-B oscillation cut, faithful compact + query prune +
+  pinned-memory recover, file-byte checkpoint / read-after-write hash / syntax
+  revert, sandbox chunk cap + abort cleanup, SSE Last-Event-ID replay +
+  comment heartbeat (no seq bump) + AbortController cancel, session
+  single-writer + seq-gap wait, credit settle on error (never charge before
+  first token). DeepSeek Flash/Pro only. See `docs/mejoras/benchmark-capacidades.md`.
+- Chat Pensando uses professional LOADERS CELESTE v2 (bouncing `#38BDF8`
+  bars + per-phase icons for search / Word / PDF / code / media). Stream
+  updates swap icon + label only; success flashes ¡Listo! then collapses;
+  failure shows the X state. See `docs/thinking-loaders.md`.
+- Chat `/chat` UX, a11y, and OCR pass: attachments stay inside the user
+  bubble at 1×, code blocks meet WCAG contrast with copy + URL linkification,
+  the conversation rail is 46rem, thinking disclosures are keyboard-accessible,
+  message actions collapse under `⋯`, DeepSeek ids render as Sira Pro / Sira
+  Rápido, the send disc uses the brand token, the sidebar keeps history +
+  credits, and client/server OCR upscales tiny banners before the model
+  answers. See `docs/chat-ux-a11y-ocr-checklist.md`.
 - Reduced the chat composer outline to a single `0.5px` hairline in light and
   dark themes, including hover and focus states.
+- Every in-progress process uses the same three bouncing celeste bars
+  (`#38BDF8`, `viewBox="10 40 45 50"`). `ThinkingIndicator` no longer
+  renders the red circular glyph.
+
+### Fixed
+
+- User chat bubbles no longer stack short words letter-by-letter (`h / o / l / a`).
+  The outgoing row is full width; the bubble is `width: max-content` with
+  `min-width: 44px`, `word-break: normal`, and `writing-mode: horizontal-tb`.
 
 ## [0.4.3 / backend 1.3.3] — Cycles 171-180 milestone — 2026-05-20
 

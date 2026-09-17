@@ -5,7 +5,12 @@ import path from "node:path"
 
 const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const source = fs.readFileSync(componentPath, "utf8")
+const composerSurface = fs.readFileSync(
+  path.join(process.cwd(), "components", "chat", "ChatComposerSurface.tsx"),
+  "utf8",
+)
 const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
+const mediaConfigSource = fs.readFileSync(path.join(process.cwd(), "lib", "chat", "media-composer-config.ts"), "utf8")
 
 describe("chat video auto-activation source contract", () => {
   it("auto-enables the video tool from normal chat intent before send", () => {
@@ -132,11 +137,16 @@ describe("chat video auto-activation source contract", () => {
       "video mode must be recognized as a prompt-required primary-send state"
     )
 
-    const needsPromptBlocks = source.match(/const needsPrompt = requiresPromptBeforePrimarySend && !hasText/g) || []
+    const needsPromptBlocks = composerSurface.match(/const needsPrompt = requiresPromptBeforePrimarySend && !hasText/g) || []
     assert.equal(
       needsPromptBlocks.length,
+      1,
+      "the shared primary action should derive a needsPrompt state"
+    )
+    assert.equal(
+      (source.match(/\{renderChatComposer\(\)\}/g) || []).length,
       2,
-      "both initial and in-chat composers should derive a needsPrompt state"
+      "both initial and in-chat composers should share that primary action"
     )
 
     // The primary button is now unconditionally Send. This is strictly stronger
@@ -144,33 +154,37 @@ describe("chat video auto-activation source contract", () => {
     // Studio can no longer take over the button in ANY empty state, so it never
     // sits next to the dictation mic as a second, indistinguishable speech
     // affordance. Voice Studio moved to the "+" menu.
-    const arrowAffordanceBlocks = source.match(/const Icon = ArrowUp/g) || []
-    assert.equal(
-      arrowAffordanceBlocks.length,
-      2,
-      "both initial and in-chat composers should always show the arrow send affordance"
+    assert.match(
+      composerSurface,
+      /composer-send-button/,
+      "the shared primary action should use the black send disc"
     )
-
-    const alwaysSendBlocks = source.match(/const action = handleSend/g) || []
-    assert.equal(
-      alwaysSendBlocks.length,
-      2,
+    assert.match(
+      composerSurface,
+      /function ComposerSendArrow/,
+      "the shared primary action should always show the white line send arrow"
+    )
+    assert.match(
+      composerSurface,
+      /onClick=\{onSend\}/,
       "the primary button must always send — never open Voice Studio"
     )
     assert.doesNotMatch(
-      source,
+      `${source}\n${composerSurface}`,
       /const action = canSend[\s\S]{0,80}openGrokVoicePanel/,
       "no composer variant should route its primary action to Voice Studio"
     )
-
-    const disabledBlocks = source.match(/disabled=\{!canSend \|\| busy\}/g) || []
-    assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
+    assert.match(
+      composerSurface,
+      /disabled=\{!canSend \|\| busy\}/,
+      "empty prompt-driven video sends should be disabled in the shared primary action"
+    )
   })
 
   it("routes active Voice mode to speech generation instead of normal chat", () => {
     assert.match(
-      source,
-      /const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"/,
+      mediaConfigSource,
+      /export const VOICE_COMPOSER_PLACEHOLDER = "Escribe el texto que quieres convertir en voz"/,
       "Voice mode should ask for narration text, not an unsupported voice-design prompt"
     )
     assert.doesNotMatch(
@@ -243,8 +257,8 @@ describe("chat video auto-activation source contract", () => {
 
   it("renders Music Style as a professional guided selector", () => {
     assert.match(
-      source,
-      /const MUSIC_STYLE_PROFILES: Record<MusicStyle,/,
+      mediaConfigSource,
+      /export const MUSIC_STYLE_PROFILES:/,
       "Music style options should carry UI labels, descriptions and accents"
     )
     assert.match(
@@ -325,13 +339,13 @@ describe("chat video auto-activation source contract", () => {
       "Voice generation should prioritize cancel over queue-send"
     )
     assert.match(
-      source,
-      /isStopButtonVisible && input\.trim\(\)\.length > 0 && !shouldPrioritizeStopButton/,
+      composerSurface,
+      /if \(hasText && !shouldPrioritizeStopButton\)/,
       "Queue send should be suppressed while Voice generation needs the stop button"
     )
     assert.match(
-      source,
-      /isStopButtonVisible && \(input\.trim\(\)\.length === 0 \|\| shouldPrioritizeStopButton\)/,
+      composerSurface,
+      /aria-label="Detener generación"/,
       "The stop button should remain available even if the composer has text during Voice generation"
     )
   })
@@ -358,9 +372,12 @@ describe("chat video auto-activation source contract", () => {
   })
 
   it("uses the working Gemini TTS provider and sends professional voice controls", () => {
-    assert.match(source, /type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs"/)
-    assert.match(source, /const VOICE_MODEL_OPTIONS: VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs"\]/)
-    assert.match(source, /useState<VoiceModel>\("Gemini 2\.5 Flash TTS"\)/)
+    assert.match(mediaConfigSource, /export type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs" \| "Sira Voz"/)
+    assert.match(mediaConfigSource, /VOICE_MODEL_OPTIONS: readonly VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs", "Sira Voz"\]/)
+    assert.match(source, /useState<VoiceModel>\(\(\) => readStoredVoiceSetting\("model", ""\) as VoiceModel\)/)
+    assert.match(source, /getAIModels\('VOICE'\)/)
+    assert.match(source, /\(model\?\.type === 'VOICE' \|\| model\?\.type === 'AUDIO'\) && model\?\.isActive === true/)
+    assert.match(source, /No hay modelos de voz activos\. Activa uno desde Administración/)
     assert.match(
       source,
       /generateSpeechMessage\(\{[\s\S]{0,420}model: selectedVoiceModel,[\s\S]{0,260}language: selectedVoiceLanguage,[\s\S]{0,260}accent: selectedVoiceAccent/,
@@ -368,5 +385,66 @@ describe("chat video auto-activation source contract", () => {
     assert.match(source, /voiceId: selectedVoiceModel === 'ElevenLabs'/)
     assert.match(apiSource, /model\?: string;/)
     assert.match(apiSource, /language\?: string;/)
+  })
+
+  it("does not clear Video mode on send, in-flight generate, or same-thread chat create", () => {
+    assert.match(
+      source,
+      /const isGeneratingVideoRef = React\.useRef\(false\)/,
+      "Video generation must survive chat creation the same way Voice/Music do",
+    )
+    assert.match(
+      source,
+      /const isVideoGenerationActiveRef = React\.useRef\(false\)/,
+      "Sticky Video mode needs a ref so chat-id effects cannot wipe the chip",
+    )
+    assert.match(
+      source,
+      /preserveVideo\?: boolean/,
+      "closeAllToolsAndConnectors must be able to keep Video mode across send/chat-create",
+    )
+    assert.match(
+      source,
+      /isGeneratingVideoRef\.current \|\| isVideoGenerationActiveRef\.current/,
+      "chat-switch effects must preserve Video mode while it is on or generating",
+    )
+    assert.match(
+      source,
+      /if \(isVideoGenerationActive \|\| chatType === 'video'\) \{[\s\S]{0,220}isGeneratingVideoRef\.current = true;[\s\S]{0,220}isVideoGenerationActiveRef\.current = true;/,
+      "video mode must be stamped before optimistic setCurrentChat / createNewChat",
+    )
+    assert.doesNotMatch(
+      source,
+      /if \(isVideoGenerationActive \|\| chatType === 'video'\) \{[\s\S]{0,180}setIsVideoGenerationActive\(false\)/,
+      "the explicit video send path must not clear videoMode",
+    )
+    assert.match(
+      source,
+      /siragpt\.composer\.videoMode/,
+      "Video mode must persist in the thread/session so the same chat keeps the chip",
+    )
+  })
+
+  it("shows Stop only while a real in-flight job can be cancelled", () => {
+    assert.match(
+      source,
+      /const isSendingForCurrentChat = Boolean\(\s*isSending && sendingChatId && currentChatId && sendingChatId === currentChatId/,
+      "null===null must not count as an in-flight send (ghost Stop on idle home)",
+    )
+    assert.match(
+      source,
+      /const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo/,
+      "idle home / placeholder must be recognized as a non-cancellable composer",
+    )
+    assert.match(
+      source,
+      /const isStopButtonVisible = !isIdlePlaceholderComposer && \(/,
+      "Stop must be gated off on the idle placeholder",
+    )
+    assert.match(
+      composerSurface,
+      /if \(!isStopButtonVisible\) \{[\s\S]{0,500}composer-send-button/,
+      "when Stop is hidden the primary action must be the send arrow",
+    )
   })
 })

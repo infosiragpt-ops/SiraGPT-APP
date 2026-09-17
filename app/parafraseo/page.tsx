@@ -69,6 +69,7 @@ export default function ParafraseoPage() {
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
+          "Cache-Control": "no-store",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({

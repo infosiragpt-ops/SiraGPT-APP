@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * opencode-config — single source of truth for connecting to an OpenCode
- * server (https://opencode.ai, MIT). OpenCode runs the coding agent as an HTTP
- * server (`opencode serve`, default 127.0.0.1:4096, OpenAPI 3.1 at /doc) that
- * any client can drive. siraGPT integrates it as the *engine* behind the
- * /code workspace — we keep our own UI and adapt the wiring; we do not vendor
- * its TUI/desktop.
+ * opencode-config — optional fail-closed sidecar (OFF by default).
+ *
+ * Phase 1 serves SiraCode natively at /api/opencode
+ * (`backend/src/services/sira-code/`). OPENCODE_SERVER_URL is ignored unless
+ * SIRAGPT_OPENCODE_SIDECAR=1. This module stays for tests and that unused
+ * fallback only.
  *
  * Mirrors `ai/cerebras-client.js`: env-driven, fail-soft. When no server URL is
  * configured, `isOpencodeConfigured()` returns false so callers degrade

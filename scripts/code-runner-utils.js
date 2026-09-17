@@ -6,6 +6,7 @@
  */
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 
 // Only boring, non-secret process settings may cross the control-plane ->
 // generated-code boundary. Project-specific HOME/cache/tmp and runtime values
@@ -30,6 +31,7 @@ const SENSITIVE_ENV_KEY_RE = /(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVAT
 // but only via these binaries (extended deliberately, per phase).
 const ALLOWED_BINS = new Set(['git', 'bun', 'bunx', 'node', 'npm', 'ls', 'cat', 'wc']);
 const INTERACTIVE_SCAFFOLD_RE = /^(?:create-next-app|create-vite|create-react-app|create-remix)(?:@.*)?$/i;
+const PREVIEW_ERROR_RE = /(?:<vite-error-overlay\b|<nextjs-portal\b|__NEXT_ERROR|failed to compile|internal server error|pre-transform error|error when starting dev server)/i;
 
 function commandRejectionReason(cmd) {
   if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((c) => typeof c === 'string')) return 'invalid_command';
@@ -46,6 +48,11 @@ function commandRejectionReason(cmd) {
 function sanitizeProjectId(raw) {
   const id = String(raw || '').trim();
   return PROJECT_ID_RE.test(id) ? id : null;
+}
+
+function sanitizeRunId(raw) {
+  const id = String(raw || '').trim();
+  return RUN_ID_RE.test(id) ? id : null;
 }
 
 function resolveProjectRelPath(relPath) {
@@ -120,6 +127,26 @@ function previewConfigMigrationMode({ status, headContent, migratedContent } = {
 
 function isAllowedCommand(cmd) {
   return commandRejectionReason(cmd) === null;
+}
+
+function buildPreflightEnabled(env = {}) {
+  const configured = String(env.CODE_RUNNER_BUILD_PREFLIGHT ?? '').trim();
+  if (configured) return configured !== '0';
+  return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+/**
+ * An open TCP port is not a usable preview. For HTML responses, reject blank
+ * documents and known Vite/Next error overlays before reporting readiness.
+ * Non-HTML custom dev servers remain compatible as long as they return 2xx.
+ */
+function previewDocumentReady({ status, contentType = '', body = '' } = {}) {
+  const code = Number(status);
+  if (!Number.isInteger(code) || code < 200 || code >= 300) return false;
+  if (!/text\/html|application\/xhtml\+xml/i.test(String(contentType))) return true;
+  const html = String(body || '').trim();
+  if (!html || PREVIEW_ERROR_RE.test(html)) return false;
+  return /<(?:html|body|main|div|script)\b/i.test(html);
 }
 
 function isSensitiveEnvKey(key) {
@@ -272,9 +299,13 @@ const IGNORED_EXPORT_DIRS = new Set([
 function shouldIgnoreExportPath(relPath) {
   const p = String(relPath || '').replaceAll('\\', '/').trim();
   if (!p) return true;
-  for (const seg of p.split('/')) {
+  const segments = p.split('/');
+  for (const seg of segments) {
     if (seg && IGNORED_EXPORT_DIRS.has(seg)) return true;
   }
+  // Excluir archivos de entorno con secretos (.env, .env.local…) del export.
+  const leaf = segments[segments.length - 1];
+  if (leaf === '.env' || /^\.env\.[A-Za-z0-9_-]+$/.test(leaf)) return true;
   return false;
 }
 
@@ -419,13 +450,176 @@ function createDevPool({ ports, now = () => Date.now() } = {}) {
   };
 }
 
+
+// ── Next.js preview under a tokenized basePath ─────────────────────────────
+// Vite takes `--base`; Next only reads basePath from next.config.* and its dev
+// bundler re-reads that file (a `conf` object passed to `next()` is ignored
+// for routing). So the runner writes a `next.config.js` wrapper that imports
+// the project's own config and adds basePath/assetPrefix/allowedDevOrigins.
+// `next.config.js` wins Next's precedence (js > mjs > ts), so a user config
+// with that exact name is moved aside to NEXT_PREVIEW_USER_BACKUP first.
+const NEXT_PREVIEW_MARKER = "SIRAGPT_NEXT_PREVIEW_WRAPPER";
+const NEXT_PREVIEW_WRAPPER = "next.config.js";
+const NEXT_PREVIEW_USER_BACKUP = "next.config.siragpt-user.js";
+const NEXT_CONFIG_CANDIDATES = ["next.config.js", "next.config.mjs", "next.config.ts", "next.config.mts", "next.config.cjs"];
+
+function normalizeNextBasePath(basePath) {
+  const raw = String(basePath || "").trim();
+  if (!raw || raw === "/") return "";
+  if (!raw.startsWith("/") || raw.includes("..") || /[\s'"`\\]/.test(raw)) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+/**
+ * Decide which files to move/write. `existing` = config filenames present in
+ * the project dir, `wrapperIsOurs` = the current next.config.js carries the
+ * marker. Returns { userConfig, rename } where `rename` is
+ * [from, to] | null.
+ */
+function planNextPreviewConfig({ existing = [], wrapperIsOurs = false, backupExists = false } = {}) {
+  const present = NEXT_CONFIG_CANDIDATES.filter((f) => existing.includes(f));
+  let userConfig = null;
+  let rename = null;
+  if (present[0] === NEXT_PREVIEW_WRAPPER) {
+    if (wrapperIsOurs) {
+      userConfig = backupExists ? NEXT_PREVIEW_USER_BACKUP : (present[1] || null);
+    } else {
+      rename = [NEXT_PREVIEW_WRAPPER, NEXT_PREVIEW_USER_BACKUP];
+      userConfig = NEXT_PREVIEW_USER_BACKUP;
+    }
+  } else {
+    userConfig = backupExists ? NEXT_PREVIEW_USER_BACKUP : (present[0] || null);
+  }
+  return { userConfig, rename };
+}
+
+function parseAllowedOriginsEnv(value) {
+  return String(value || "")
+    .split(",")
+    .map((s) => s.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))
+    .filter((s) => /^[A-Za-z0-9.-]+$/.test(s));
+}
+
+function buildNextPreviewWrapper({ basePath, userConfig = null, allowedOrigins = [] } = {}) {
+  const base = normalizeNextBasePath(basePath);
+  if (!base) throw new Error("next preview wrapper needs a basePath");
+  const origins = Array.from(new Set(["runner", "127.0.0.1", "localhost", ...parseAllowedOriginsEnv(allowedOrigins.join(","))]));
+  const safeUser = userConfig && NEXT_CONFIG_CANDIDATES.concat(NEXT_PREVIEW_USER_BACKUP).includes(userConfig) ? userConfig : null;
+  return [
+    `// ${NEXT_PREVIEW_MARKER} — generado por el runner de SiraGPT para servir el preview`,
+    "// bajo un basePath tokenizado. No forma parte de tu proyecto; se ignora en git.",
+    "'use strict';",
+    "const path = require('path');",
+    `const BASE = ${JSON.stringify(base)};`,
+    `const USER_CONFIG = ${JSON.stringify(safeUser)};`,
+    `const ORIGINS = ${JSON.stringify(origins)};`,
+    "module.exports = async (phase, ctx) => {",
+    "  let user = {};",
+    "  if (USER_CONFIG) {",
+    "    const p = path.join(__dirname, USER_CONFIG);",
+    "    if (/\\.(ts|mts)$/.test(USER_CONFIG)) {",
+    "      const { transpileConfig } = require('next/dist/build/next-config-ts/transpile-config');",
+    "      const out = await transpileConfig({ nextConfigPath: p, dir: __dirname });",
+    "      user = out && out.default ? out.default : out;",
+    "    } else if (/\\.mjs$/.test(USER_CONFIG)) {",
+    "      const mod = await import(p);",
+    "      user = mod && mod.default ? mod.default : mod;",
+    "    } else {",
+    "      const mod = require(p);",
+    "      user = mod && mod.default ? mod.default : mod;",
+    "    }",
+    "    if (typeof user === 'function') user = await user(phase, ctx);",
+    "    user = user && typeof user === 'object' ? user : {};",
+    "  }",
+    "  const allowedDevOrigins = Array.from(new Set([...(user.allowedDevOrigins || []), ...ORIGINS]));",
+    "  return { ...user, basePath: BASE, assetPrefix: BASE, allowedDevOrigins };",
+    "};",
+    "",
+  ].join("\n");
+}
+
+
+// ── Install plan / dev env / pinned port (chat "dame la web en local") ──────
+// The lockfile decides the installer: bun choked on npm lockfiles with nested
+// "overrides" and on native life-cycle scripts (SiraGPT-APP). npm ci is tried
+// with scripts first, then without them so a failing optional native build
+// (canvas, sharp) does not block a plain dev server.
+function pickInstallPlan({ hasPackageLock = false, hasBunLock = false, hasPnpmLock = false, hasYarnLock = false } = {}) {
+  const npmFlags = ["--no-audit", "--no-fund", "--loglevel=error"];
+  if (hasPackageLock && !hasBunLock) {
+    return [
+      { label: "npm ci", cmd: ["npm", "ci", ...npmFlags] },
+      { label: "npm ci --ignore-scripts", cmd: ["npm", "ci", "--ignore-scripts", ...npmFlags] },
+      { label: "npm install", cmd: ["npm", "install", "--ignore-scripts", ...npmFlags] },
+    ];
+  }
+  if (hasPnpmLock && !hasBunLock) {
+    return [
+      { label: "bun install (pnpm lock)", cmd: ["bun", "install"] },
+      { label: "npm install", cmd: ["npm", "install", "--ignore-scripts", ...npmFlags] },
+    ];
+  }
+  if (hasYarnLock && !hasBunLock) {
+    return [
+      { label: "bun install (yarn lock)", cmd: ["bun", "install"] },
+      { label: "npm install", cmd: ["npm", "install", "--ignore-scripts", ...npmFlags] },
+    ];
+  }
+  return [
+    { label: "bun install", cmd: ["bun", "install"] },
+    { label: "bun install --ignore-scripts", cmd: ["bun", "install", "--ignore-scripts"] },
+  ];
+}
+
+const DEV_ENV_KEY_RE = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_)[A-Z0-9_]{1,60}$/;
+const DEV_ENV_MAX_KEYS = 20;
+const DEV_ENV_MAX_VALUE = 2000;
+
+/** Only public build-time variables may reach the dev server from the chat. */
+function sanitizeDevEnv(input) {
+  const out = {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) return out;
+  for (const [key, value] of Object.entries(input)) {
+    if (Object.keys(out).length >= DEV_ENV_MAX_KEYS) break;
+    if (!DEV_ENV_KEY_RE.test(key) || isSensitiveEnvKey(key)) continue;
+    if (value == null) continue;
+    const str = String(value);
+    if (str.length > DEV_ENV_MAX_VALUE || /[\r\n\0]/.test(str)) continue;
+    out[key] = str;
+  }
+  return out;
+}
+
+/** A port the user asked for ("dame la web en el 5000"); null when unusable. */
+function sanitizePinnedPort(value, { reserved = [] } = {}) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1024 || n > 65535) return null;
+  if (reserved.map(Number).includes(n)) return null;
+  return n;
+}
+
 module.exports = {
+  pickInstallPlan,
+  sanitizeDevEnv,
+  sanitizePinnedPort,
+  DEV_ENV_KEY_RE,
+  NEXT_PREVIEW_MARKER,
+  NEXT_PREVIEW_WRAPPER,
+  NEXT_PREVIEW_USER_BACKUP,
+  NEXT_CONFIG_CANDIDATES,
+  normalizeNextBasePath,
+  planNextPreviewConfig,
+  parseAllowedOriginsEnv,
+  buildNextPreviewWrapper,
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
   previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
+  buildPreflightEnabled,
+  previewDocumentReady,
   ALLOWED_BINS,
   IGNORED_EXPORT_DIRS,
   shouldIgnoreExportPath,

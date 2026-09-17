@@ -2,7 +2,10 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 
-const source = readFileSync("lib/codex/codex-api.ts", "utf8")
+const source = [
+  readFileSync("lib/codex/api/core.ts", "utf8"),
+  readFileSync("lib/codex/api/projects.ts", "utf8"),
+].join("\n")
 
 describe("Codex preview startup timeout", () => {
   it("allows the backend's bounded 90-second cold-start window to finish", () => {

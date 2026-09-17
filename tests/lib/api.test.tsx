@@ -102,7 +102,7 @@ describe('api client core', () => {
   })
 
   it('rejects on 4xx without retry (via getCurrentUser)', async () => {
-    mockFetch.mockResolvedValueOnce({
+    mockFetch.mockResolvedValue({
       ok: false,
       status: 401,
       headers: new Headers(),
@@ -110,8 +110,15 @@ describe('api client core', () => {
     })
 
     await expect(api.getCurrentUser()).rejects.toThrow()
-    // Should not retry on 4xx
-    expect(mockFetch).toHaveBeenCalledTimes(1)
+    // No retry of /auth/me itself on 4xx. The only extra traffic is the
+    // shared transport's cookie-only singleFlightRefresh answering the 401
+    // before ApiClient ever sees it; with no in-memory token the ApiClient
+    // refresh path is skipped entirely.
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(String(mockFetch.mock.calls[0][0])).toContain('/auth/me')
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('Authorization')).toBeNull()
+    expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).has('Authorization')).toBe(false)
   })
 
   it('does not report expected auth/me 401 telemetry', async () => {
@@ -141,30 +148,30 @@ describe('api client core', () => {
   })
 
   it('does not report expired-token failures from protected feature calls', async () => {
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        headers: new Headers(),
-        json: () => Promise.resolve({ error: 'Invalid or expired token' }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        headers: new Headers(),
-        json: () => Promise.resolve({ error: 'Invalid or expired token' }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        headers: new Headers(),
-        json: () => Promise.resolve({ error: 'Invalid or expired token' }),
-      })
+    const unauthorized = () => ({
+      ok: false,
+      status: 401,
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+    })
+    mockFetch.mockImplementation(() => Promise.resolve(unauthorized()))
 
     api.setToken('expired-token')
     await expect(api.generateVideo({ prompt: 'test video' })).rejects.toThrow('Invalid or expired token')
 
-    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+    expect(String(mockFetch.mock.calls[0][0])).toContain('/ai/generate-video')
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer expired-token')
+    // Layered refresh on 401: the shared transport fires its cookie-only
+    // singleFlightRefresh first; when it fails, ApiClient._tryRefresh still
+    // tries Bearer-first, then falls back to cookie-only. The feature call
+    // itself is never retried.
+    expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).has('Authorization')).toBe(false)
+    expect(String(mockFetch.mock.calls[2][0])).toContain('/auth/refresh')
+    expect(new Headers(mockFetch.mock.calls[2][1].headers).get('Authorization')).toBe('Bearer expired-token')
+    expect(String(mockFetch.mock.calls[3][0])).toContain('/auth/refresh')
+    expect(new Headers(mockFetch.mock.calls[3][1].headers).has('Authorization')).toBe(false)
     expect(reportClientLog).not.toHaveBeenCalled()
   })
 

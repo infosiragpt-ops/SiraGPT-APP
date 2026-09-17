@@ -137,6 +137,21 @@ function calculateCost({ model, provider, inputTokens, outputTokens } = {}, env 
       provider: provider || null,
     };
   }
+  // SiraGPT exposes bare Cerebras models as the plan-wide FlashGPT fallback.
+  // The account uses the provider's free inference tier, so those calls must
+  // not consume the user's Cowork USD budget. Do not key this only by model:
+  // the same gpt-oss model can be paid when reached through OpenRouter.
+  if (String(provider || '').trim().toLowerCase() === 'cerebras') {
+    return {
+      cost_usd: 0,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      currency: 'USD',
+      source: 'provider-free-tier',
+      model: model || null,
+      provider: 'Cerebras',
+    };
+  }
   const pricing = getModelPricing(model);
   if (pricing) {
     const inputCost = (safeInput / 1_000_000) * pricing.input;

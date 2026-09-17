@@ -13,7 +13,7 @@ describe("getAuthRedirect", () => {
   })
 
   it("redirects non-admin users away from admin routes", () => {
-    assert.equal(getAuthRedirect({ isAdmin: false, isSuperAdmin: false }, { requireAdmin: true }), "/chat")
+    assert.equal(getAuthRedirect({ isAdmin: false, isSuperAdmin: false }, { requireAdmin: true }), "/")
   })
 
   it("allows admin users on admin routes", () => {
@@ -21,7 +21,7 @@ describe("getAuthRedirect", () => {
   })
 
   it("redirects admins away from super-admin-only routes", () => {
-    assert.equal(getAuthRedirect({ isAdmin: true, isSuperAdmin: false }, { requireSuperAdmin: true }), "/chat")
+    assert.equal(getAuthRedirect({ isAdmin: true, isSuperAdmin: false }, { requireSuperAdmin: true }), "/")
   })
 
   it("allows super admins everywhere", () => {

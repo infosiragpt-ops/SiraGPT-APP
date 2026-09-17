@@ -1,11 +1,12 @@
 'use strict';
 
-const DEFAULT_APP_URL = 'https://siragpt.com/chat';
+const DEFAULT_APP_URL = 'https://siragpt.com/agentes';
 const APP_HOSTS = new Set(['siragpt.com', 'www.siragpt.com', 'api.siragpt.com']);
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 const OAUTH_HOSTS = new Set(['accounts.google.com']);
 const EXTERNAL_PROTOCOLS = new Set(['https:', 'http:', 'mailto:', 'tel:']);
 const DEEP_LINK_PATH_PREFIXES = [
+  '/agentes',
   '/chat',
   '/apps',
   '/code',

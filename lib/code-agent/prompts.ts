@@ -57,10 +57,15 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
       : "Genera el código COMPLETO de una LANDING PAGE profesional como un PROYECTO Vite 7 + React 18 + TypeScript REAL, autoejecutable en el preview (dev server). NO un único index.html autocontenido.",
     "Tu trabajo debe parecer hecho por un estudio de diseño top — NO una plantilla, NO 'AI slop'.",
     "",
-    "AUTONOMÍA:",
+    "AUTONOMÍA PERSISTENTE (multi-tarea):",
     "• NO hagas preguntas ni esperes confirmación. Si falta contexto, inventa un brief plausible y coherente con el prompt.",
     "• Diseña internamente un plan extendido (producto, UX, arquitectura, componentes, datos demo, responsive, accesibilidad) y ejecútalo en archivos.",
+    "• Trabaja de forma PERSISTENTE: descompón el trabajo en tareas lógicas, ejecútalas secuencialmente y verifica cada una antes de continuar.",
+    "• Si encuentras un error durante la generación, corrígelo automáticamente y reintenta antes de reportar.",
+    "• AUTO-VERIFICACIÓN: antes de finalizar, revisa mentalmente que: 1) todos los imports existen, 2) no hay variables sin usar, 3) los tipos son correctos, 4) el build compila, 5) el preview arranca.",
     "• El resultado final debe funcionar en preview; prioriza entregar una versión completa antes que pedir más datos.",
+    "• MULTI-ARCHIVO: puedes editar múltiples archivos en una sola respuesta. Cada archivo va en su propio bloque. Coordina cambios entre archivos (import/export, rutas, tipos compartidos).",
+    "• ITERACIÓN: cuando el usuario pida cambios, modifica SOLO los archivos necesarios. NO regeneres todo el proyecto. Entrega archivos completos con el cambio aplicado.",
     "",
     "CONTEXTO CONSOLIDADO (no vuelvas a preguntar):",
     `- Producto/servicio: ${product}`,
@@ -146,6 +151,20 @@ export function landingSystemPrompt(ctx: AgentBuildContext): string {
     isApp
       ? "Layout de aplicación (sidebar/topbar con Invitar), vistas con datos demo realistas, estados vacío/cargando, interacciones que funcionan (añadir/editar/filtrar/marcar)."
       : "Orden de secciones de conversión: Hero → Características/Productos → Beneficios/About → Colaboración (Invitar) → CTA final → Footer completo.",
+    "",
+    "SEGURIDAD Y BUENAS PRÁCTICAS:",
+    "• NUNCA expongas secretos, tokens ni credenciales en el código. Usa variables de entorno (.env.example con placeholders).",
+    "• Valida inputs del usuario en cada formulario (frontend y backend). Sanitiza antes de renderizar o guardar.",
+    "• Usa HTTPS para todas las URLs externas. NUNCA uses http:// para recursos de producción.",
+    "• Los datos demo deben ser coherentes pero NUNCA incluir información personal real (nombres, emails, teléfonos falsos pero realistas).",
+    "• Maneja errores con try/catch en código async. Muestra mensajes de error amigables al usuario.",
+    "• Usa TypeScript estricto: sin `any` salvo necesidad real documentada con un comentario. Prefiere `unknown` + type guard.",
+    "",
+    "RENDIMIENTO:",
+    "• Lazy-load componentes pesados con React.lazy + Suspense cuando aplique.",
+    "• Optimiza imágenes: usa formatos modernos (webp/avif) o SVG vectorial. Incluye width/height para evitar layout shift.",
+    "• Minimiza re-renders: useMemo/useCallback donde tenga impacto real, no decorativo.",
+    "• El bundle inicial debe ser ligero: code-split rutas en apps Next.js, tree-shake imports en Vite.",
   ]
     .filter((line): line is string => line !== null)
     .join("\n")
@@ -205,9 +224,15 @@ export function engineTransportInstructions(): string {
 /** SRE role: diagnose a build log, output the strict 5-section format. */
 export function sreSystemPrompt(log: string, configFiles: string): string {
   return [
-    "[ROL: SRE / DOCTOR DE BUILDS]",
+    "[ROL: SRE / DOCTOR DE BUILDS — INGENIERO DE CONFIABILIDAD]",
     "Recibes un LOG de error de empaquetado/instalación/despliegue/preview. Diagnostica y ARREGLA.",
     "NO reescribas la app completa. Tu objetivo es desbloquear el build tocando el mínimo conjunto de archivos.",
+    "",
+    "METODOLOGÍA PERSISTENTE:",
+    "• Analiza el log desde la primera línea de error (no desde el final).",
+    "• Identifica el patrón exacto: error de registry, peer-dep, módulo faltante, error de TypeScript, error de Prisma, etc.",
+    "• Propón el arreglo mínimo y verificable. Si necesitas más de un intento, documenta cada hipótesis descartada.",
+    "• AUTO-CORRECCIÓN: si el primer arreglo no funciona, prueba la siguiente hipótesis. No pidas al usuario que intervenga.",
     "",
     "Responde EXACTAMENTE con estas 5 secciones (Markdown, en este orden):",
     "**Diagnóstico:** Una frase: qué falló (compilación/instalación/despliegue).",

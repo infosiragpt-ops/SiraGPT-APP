@@ -3,8 +3,10 @@
 import type React from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { apiClient } from "./api"
+import { clearAuthenticatedFetchCsrfCache } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
 import { clearAllChatDrafts } from "@/hooks/use-chat-draft"
+import { clearPersistedComposerQueues } from "@/lib/chat/composer-queue"
 
 interface User {
   id: string
@@ -121,6 +123,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!isCurrentHydration()) return { status: "cancelled" }
 
         setUser(null)
+
+      // OLA200_WAVE_F FE-064 — drop CSRF cache + refresh family so the next login cannot reuse them.
+      try { clearAuthenticatedFetchCsrfCache() } catch { /* ignore */ }
+      try {
+        window.localStorage.removeItem("siragpt:refresh-family")
+        window.localStorage.removeItem("siragpt:refresh-version")
+      } catch { /* ignore */ }
+
         if (isUnauthorizedAuthError(error)) {
           setSessionStatus("unauthenticated")
           return { status: "unauthenticated" }
@@ -290,8 +300,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSessionStatus("unauthenticated")
       apiClient.setToken(null)
       // Wipe any saved composer drafts so a different account on the
-      // same device cannot see the previous user's unsent chat text.
+      // same device cannot see the previous user's unsent chat text or tasks.
       clearAllChatDrafts()
+      clearPersistedComposerQueues()
     }
   }
 

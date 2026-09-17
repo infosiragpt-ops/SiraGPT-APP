@@ -10,10 +10,12 @@
 //   - ALTER COLUMN ... TYPE      (lossy type changes)
 //   - SET NOT NULL with no DEFAULT (back-fill missing)
 //   - Renames without an opt-in "two-phase" marker
+//   - Credential hashes or user-password mutations in migration SQL
 //
 // Exits non-zero on any unsafe operation unless the migration file
 // (or commit message via env MIGRATION_SAFETY_OVERRIDE=1) explicitly
-// acknowledges it with a header line:
+// acknowledges it with a header line. Credential findings are forbidden and
+// cannot be overridden:
 //
 //   -- migration-safety: allow-destructive reason="planned column drop, no data"
 //
@@ -43,6 +45,20 @@ const opts = {
 };
 
 const RULES = [
+  {
+    id: 'credential-hash-literal',
+    label: 'VERSIONED CREDENTIAL HASH',
+    pattern: /\$(?:2[abxy]|argon2(?:id|i|d))\$/i,
+    severity: 'forbidden',
+    hint: 'Credentials must be supplied through an audited one-shot rotation, never migration SQL.',
+  },
+  {
+    id: 'user-password-dml',
+    label: 'USER PASSWORD DML',
+    pattern: /\b(?:INSERT\s+INTO|UPDATE)\s+"?users"?\b[\s\S]*?\bpassword\b/i,
+    severity: 'forbidden',
+    hint: 'Do not create or reset user credentials from a migration.',
+  },
   {
     id: 'drop-table',
     label: 'DROP TABLE',
@@ -161,7 +177,8 @@ function main() {
     }
   }
 
-  if (findings.length && !opts.override) {
+  const hasForbiddenFinding = findings.some((finding) => finding.severity === 'forbidden');
+  if (findings.length && (!opts.override || hasForbiddenFinding)) {
     process.exit(1);
   }
 }

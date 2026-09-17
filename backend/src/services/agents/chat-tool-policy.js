@@ -24,6 +24,11 @@
  *   gate.authorize(toolName, authCtx) -> { ok: true } | { ok: false, reason }
  */
 
+const {
+  authorizeComposerTool,
+  resolveComposerPermission,
+} = require('../composer-permission');
+
 const HIGH_RISK_TOOLS = new Set([
   'host_bash',
   'host_file',
@@ -57,16 +62,40 @@ function resolvePolicy(env = process.env) {
  * @param {object} [opts]
  * @param {object} [opts.env]      — env source (default process.env)
  * @param {function} [opts.onAudit] — called when a high-risk tool is authorized
+ * @param {string} [opts.permission] — composer level (default|read|protected|workspace|full)
+ * @param {boolean} [opts.deferProtectedAsk] — when true, a Protegido write
+ *   verdict (`needsPermission`) is allowed THROUGH this gate so the agent
+ *   harness can pause on its interactive reviewer (permission_request card).
+ *   Pass true only when the harness is actually attached; otherwise the write
+ *   would run with no reviewer. Default false preserves the deny behavior.
  * @returns {{ authorize: function, policy: object, isHighRiskTool: function }}
  */
 function createChatToolGate(opts = {}) {
   const env = opts.env || process.env;
   const onAudit = typeof opts.onAudit === 'function' ? opts.onAudit : null;
   const policy = resolvePolicy(env);
+  const gatePermission = opts.permission != null
+    ? opts.permission
+    : resolveComposerPermission(opts);
+  const deferProtectedAsk = opts.deferProtectedAsk === true;
 
   function authorize(toolName, authCtx = {}) {
     if (typeof toolName !== 'string' || !toolName) {
       return { ok: false, reason: 'invalid_tool_name' };
+    }
+    const permission = authCtx.permission != null
+      ? authCtx.permission
+      : (authCtx.toolPermission != null ? authCtx.toolPermission : gatePermission);
+    const composer = authorizeComposerTool(permission, toolName, authCtx);
+    if (composer.denied) {
+      return { ok: false, reason: composer.reason || 'composer_permission_denied' };
+    }
+    if (composer.needsPermission) {
+      // Protegido write with a live reviewer: let it through so the harness
+      // confirm tier pauses on permission_request. Without a reviewer this
+      // stays denied (fail-closed).
+      if (deferProtectedAsk) return { ok: true, deferredApproval: true };
+      return { ok: false, reason: composer.reason || 'composer_permission_denied' };
     }
     // Low-risk tools: allow without ceremony.
     if (!isHighRiskTool(toolName)) {

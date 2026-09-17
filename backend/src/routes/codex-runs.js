@@ -12,6 +12,7 @@ const codexRunStore = require('../services/codex/codex-run-store');
 const { createGitHubCodexConnector } = require('../services/github-codex-connector');
 const { runAgentTaskJob } = require('../services/agents/agent-task-runner');
 const { runTests } = require('../services/agents/code-sandbox');
+const { createSSEWriter } = require('../utils/sse-writer');
 
 const router = express.Router();
 
@@ -24,7 +25,7 @@ router.post(
     body('repository').optional().isString().trim().isLength({ max: 240 }),
     body('branch').optional().isString().trim().isLength({ max: 120 }),
     body('taskId').optional().isString(),
-    body('model').optional().isString(),
+    body('model').optional().isString().isLength({ max: 200 }),
   ],
   authenticateToken,
   enforcePlanQuota({ surface: 'agent.task.create' }),
@@ -113,15 +114,19 @@ router.get(
       return res.status(404).json({ error: 'run_not_found' });
     }
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
-
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-    for (const event of row.events || []) send(event);
-    send({ type: 'snapshot', run: row });
-    res.end();
+    // Replay-only SSE con el writer backpressure-aware de producción:
+    // flush de headers + preamble `: connected` antes del primer frame
+    // (TTFT del replay), cierre limpio en desconexión del cliente y sin
+    // dejar escapar excepciones write/end hacia el error handler global.
+    const sse = createSSEWriter(res, { heartbeatMs: undefined });
+    for (const event of row.events || []) {
+      await sse.event(event);
+      if (sse.closed) break;
+    }
+    if (!(await sse.event({ type: 'snapshot', run: row }))) {
+      return;
+    }
+    sse.done();
   },
 );
 

@@ -105,9 +105,9 @@ test('selectWorkbookWorksheets applies a bounded sheet cap with env override', (
     delete process.env.SIRAGPT_XLSX_MAX_SHEETS;
     const defaultSelection = selectWorkbookWorksheets(workbook);
     assert.equal(defaultSelection.total, 8);
-    assert.equal(defaultSelection.worksheets.length, 5);
-    assert.equal(defaultSelection.skipped, 3);
-    assert.equal(defaultSelection.maxSheets, 5);
+    assert.equal(defaultSelection.worksheets.length, 8);
+    assert.equal(defaultSelection.skipped, 0);
+    assert.equal(defaultSelection.maxSheets, 20);
 
     process.env.SIRAGPT_XLSX_MAX_SHEETS = '7';
     const envSelection = selectWorkbookWorksheets(workbook);
@@ -139,7 +139,7 @@ test('selectWorkbookWorksheets fails closed on invalid caps and empty workbook s
     worksheets: [],
     total: 0,
     skipped: 0,
-    maxSheets: 5,
+    maxSheets: 20,
   });
 });
 

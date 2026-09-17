@@ -44,7 +44,10 @@ class TelegramAdapter extends ChannelAdapter {
   }
 
   async verify(req) {
-    if (!this.webhookSecret) return true; // no secret configured ⇒ accept.
+    if (!this.webhookSecret) {
+      this.metrics.inc(this.name, KINDS.VERIFY_FAIL);
+      return false;
+    }
     const got = req?.headers?.['x-telegram-bot-api-secret-token']
       ?? req?.headers?.['X-Telegram-Bot-Api-Secret-Token'];
     const ok = !!got && constantTimeEqual(got, this.webhookSecret);
@@ -142,6 +145,7 @@ class TelegramAdapter extends ChannelAdapter {
             const parsed = this.parseInbound({ body: update });
             if (!parsed) continue;
             if (this.isDuplicate(parsed)) continue;
+            if (!this.isAllowed(parsed.accessGroup || parsed.userId)) continue;
             this.metrics.inc(this.name, KINDS.INBOUND);
             try { await onUpdate(parsed); }
             catch { this.metrics.inc(this.name, KINDS.ERROR); }

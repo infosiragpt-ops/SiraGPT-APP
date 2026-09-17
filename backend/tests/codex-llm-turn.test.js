@@ -176,6 +176,75 @@ test('defaultLlmTurn: tier eco genuino va a Cerebras DIRECTO (no al ladder que c
   }
 });
 
+test('defaultLlmTurn: tier eco degrada al ladder cuando Cerebras falla (402 payment_required)', async () => {
+  // Prod repro (2026-07-31): la key Cerebras de producción devuelve
+  // `402 status code (no body)` (payment_required, cuenta sin billing). El
+  // camino eco directo mataba TODOS los runs de /code sin ningún fallback.
+  // Con Cerebras roto, el turno DEBE degradar al ladder (Anthropic→OpenRouter)
+  // para "algo antes que nada" — advertido en logs — nunca fallar el run.
+  const env = {
+    ANTHROPIC_API_KEY: 'sk-backup-ok',
+    CEREBRAS_API_KEY: 'csk-sin-billing',
+    FREE_IA_MODEL_ID: 'gpt-oss-120b',
+    NODE_ENV: 'test',
+  };
+  const cerebras = require('../src/services/ai/cerebras-client');
+  const llmProvider = require('../src/services/codex/llm-provider');
+
+  const origChatComplete = llmProvider.chatComplete;
+  const origCreate = cerebras.createCerebrasClient;
+  let ladderCalled = false;
+  cerebras.createCerebrasClient = () => ({
+    chat: {
+      completions: {
+        create: async () => {
+          const err = new Error('402 status code (no body)');
+          err.status = 402;
+          throw err;
+        },
+      },
+    },
+  });
+  llmProvider.chatComplete = async (opts) => {
+    ladderCalled = true;
+    assert.ok(opts && Array.isArray(opts.messages), 'el ladder recibe los mensajes efectivos');
+    return { content: 'desde ladder', reasoning: '', usage: { provider: 'OpenRouter', model: 'x', tokensIn: 1, tokensOut: 1 } };
+  };
+  try {
+    const turn = await defaultLlmTurn({
+      messages: [{ role: 'user', content: 'construye algo' }],
+      tools: [],
+      env,
+    });
+    assert.equal(ladderCalled, true, 'Cerebras caído → el ladder DEBE cubrir el turno');
+    assert.equal(turn.text, 'desde ladder');
+    assert.equal(turn.usage.provider, 'OpenRouter');
+  } finally {
+    llmProvider.chatComplete = origChatComplete;
+    cerebras.createCerebrasClient = origCreate;
+  }
+});
+
+test('defaultLlmTurn: createClient inyectado NUNCA degrada al ladder (el caller pidió Cerebras)', async () => {
+  const env = { CEREBRAS_API_KEY: 'csk', NODE_ENV: 'test' };
+  const llmProvider = require('../src/services/codex/llm-provider');
+  const origChatComplete = llmProvider.chatComplete;
+  let ladderCalled = false;
+  llmProvider.chatComplete = async () => { ladderCalled = true; return { content: 'x', usage: {} }; };
+  const exploding = () => ({
+    chat: { completions: { create: async () => { throw new Error('boom cerebras'); } } },
+  });
+  try {
+    await assert.rejects(
+      () => defaultLlmTurn({ messages: [{ role: 'user', content: 'hola' }], tools: [], env, createClient: exploding }),
+      /boom cerebras/,
+    );
+    assert.equal(ladderCalled, false, 'createClient inyectado es un mandato, no un hint');
+  } finally {
+    llmProvider.chatComplete = origChatComplete;
+  }
+});
+
 test('defaultLlmTurn: tier de pago cuyo anthropicTurn falla SÍ usa el ladder (failover legítimo)', async () => {
   // Con tier power, engine es 'anthropic'; si anthropicTurn revienta y NO hay
   // createClient inyectado, la degradación correcta es el ladder llm-provider

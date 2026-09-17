@@ -80,12 +80,23 @@ describe('decrypt — error paths', () => {
     assert.throws(() => encryption.decrypt('aa:bb'), /Invalid initialization vector|IV/i);
   });
 
-  it('throws on tampered ciphertext (auth-tag-free CBC: bad-pad rejection)', () => {
-    const cipher = encryption.encrypt('original');
+  it('throws on ciphertext with deterministically malformed CBC padding (not authenticated integrity)', () => {
+    const plaintext = 'original'.repeat(3);
+    const cipher = encryption.encrypt(plaintext);
     const [iv, ct] = cipher.split(':');
-    // Flip the last byte of the ciphertext to corrupt the final block.
-    const corrupted = ct.slice(0, -2) + (ct.slice(-2) === 'ff' ? '00' : 'ff');
-    assert.throws(() => encryption.decrypt(`${iv}:${corrupted}`));
+    const corrupted = Buffer.from(ct, 'hex');
+    const blockBytes = 16;
+    const paddingBytes = blockBytes - (Buffer.byteLength(plaintext) % blockBytes);
+    assert.equal(corrupted.length, blockBytes * 2);
+    assert.equal(encryption.decrypt(cipher), plaintext);
+    // CBC has no authentication tag: arbitrary corruption can leave valid padding.
+    // P2 = decrypt(C2) XOR C1. Changing C1's last byte by the known padding
+    // value makes P2's final byte exactly 0x00, which PKCS#7 must reject.
+    corrupted[corrupted.length - blockBytes - 1] ^= paddingBytes;
+    assert.notEqual(corrupted.toString('hex'), ct);
+    assert.throws(() => encryption.decrypt(`${iv}:${corrupted.toString('hex')}`), {
+      code: 'ERR_OSSL_BAD_DECRYPT',
+    });
   });
 });
 

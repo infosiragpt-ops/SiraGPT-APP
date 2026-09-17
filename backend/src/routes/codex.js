@@ -13,7 +13,9 @@
  *   POST /api/codex/projects/:id/export          → mirror src a disco  (auth)
  *   POST /api/codex/projects/:id/preview/stop    → dev server off     (auth)
  *   GET  /api/codex/projects/:id/files           → lista de archivos  (auth)
+ *   POST /api/codex/projects/:id/exec            → comando en el workspace del proyecto (auth + acceso agente)
  *   GET  /api/codex/projects/:id/file?path=      → contenido archivo  (auth)
+ *   GET  /api/codex/projects/:id/budget          → gasto/corte diario  (auth)
  *
  * Montaje: en backend/index.js DESPUÉS del router legacy codex-runs (que ya
  * ocupa POST /api/codex/runs y GET /api/codex/runs/:id). Para no sombrear ese
@@ -25,8 +27,9 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
-const { body, validationResult } = require('express-validator');
+const { body, query, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const { isCodexV2Enabled } = require('../services/codex/flags');
 const { canUseCodexAgent, publicAccess } = require('../services/codex/access-control');
 const projectService = require('../services/codex/project-service');
@@ -36,6 +39,7 @@ const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
+const observabilityMetrics = require('../services/codex/observability-metrics');
 const checkpointService = require('../services/codex/checkpoint-service');
 const {
   CodexSessionError,
@@ -43,6 +47,10 @@ const {
 } = require('../services/codex/session-service');
 const codexDb = require('../config/database');
 const publicationService = require('../services/codex/publication-service');
+const opencodeHarness = require('../services/codex/opencode-harness');
+const selfHosting = require('../services/codex/self-hosting');
+const workspaceChanges = require('../services/codex/workspace-changes');
+const companyAssociationService = require('../services/codex/company-association-service');
 const {
   STRIP_REQUEST_HEADERS,
   HOP_BY_HOP_HEADERS,
@@ -50,10 +58,35 @@ const {
 const {
   attachWebSocketProxy,
 } = require('../services/codex/preview-websocket-proxy');
+const {
+  applyPreviewFrameHeaders: applyPreviewFramePolicy,
+  filterPreviewResponseHeaders,
+  injectPreviewInteractionBridges,
+  previewTokenFor: mintPreviewToken,
+  previewNonceFromRequest,
+  previewOriginAllowed,
+  readPreviewBody,
+  stripPreviewNonce,
+  verifyPreviewToken: verifySignedPreviewToken,
+} = require('../services/code/preview-proxy');
 
 const router = express.Router();
 let sessionRunner = null;
 let sessionService = null;
+
+function sendCompanyAssociationError(res, error) {
+  if (error instanceof companyAssociationService.CompanyAssociationError) {
+    return res.status(error.status).json({
+      error: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    });
+  }
+  return res.status(500).json({
+    error: 'company_association_failed',
+    message: 'Company association request failed.',
+  });
+}
 
 function codexSessionRuntime() {
   sessionRunner = sessionRunner || createSandboxClient();
@@ -68,41 +101,12 @@ function mapSessionError(error, res) {
   return res.status(502).json({ error: 'codex_session_failed', message: String(error?.message || error) });
 }
 
-function base64urlJson(value) {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
-
-function signPreviewPayload(payload, env = process.env) {
-  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
-  const body = base64urlJson(payload);
-  const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  return `${body}.${sig}`;
-}
-
 function verifyPreviewToken(token, env = process.env) {
-  const [body, sig] = String(token || '').split('.');
-  if (!body || !sig) return null;
-  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
-  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (!payload || typeof payload !== 'object') return null;
-    if (payload.exp && Date.now() > Number(payload.exp)) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+  return verifySignedPreviewToken(token, env);
 }
 
 function previewTokenFor({ projectId, userId }, env = process.env) {
-  return signPreviewPayload({
-    projectId,
-    userId,
-    exp: Date.now() + (Number(env.CODEX_PREVIEW_TOKEN_TTL_MS) || 6 * 60 * 60 * 1000),
-  }, env);
+  return mintPreviewToken({ projectId, userId }, env);
 }
 
 function codexPreviewBasePath(projectId, token) {
@@ -192,7 +196,7 @@ async function previewWebSocketTarget(request, env = process.env) {
   }
   if (!['http:', 'https:'].includes(upstreamBase.protocol)) throw previewUpgradeError(503);
 
-  const target = new URL(String(request.url || '/'), upstreamBase);
+  const target = new URL(stripPreviewNonce(String(request.url || '/')), upstreamBase);
   target.protocol = upstreamBase.protocol === 'https:' ? 'wss:' : 'ws:';
   return {
     url: target.toString(),
@@ -203,6 +207,7 @@ async function previewWebSocketTarget(request, env = process.env) {
 function attachPreviewWebSocketProxy(server, env = process.env) {
   return attachWebSocketProxy(server, {
     shouldHandle: (request) => Boolean(previewUpgradeParts(request)),
+    isOriginAllowed: (request) => previewOriginAllowed(request.headers?.origin, env),
     resolveTarget: (request) => previewWebSocketTarget(request, env),
   });
 }
@@ -213,8 +218,7 @@ function requireCodexAgentAccess(req, res, next) {
 }
 
 function applyPreviewFrameHeaders(_req, res, next) {
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  applyPreviewFramePolicy(res);
   next();
 }
 
@@ -309,17 +313,150 @@ router.get('/agents', authenticateToken, (_req, res) => {
   }
 });
 
+// Existing localStorage mappings are never trusted or backfilled. The
+// association wizard reads these endpoints and the owner confirms each link.
+router.get(
+  '/company-associations',
+  authenticateToken,
+  [query('projectId').isString().trim().isLength({ min: 1, max: 160 })],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const state = await companyAssociationService.associationForCompany(codexDb, {
+        userId: req.user.id,
+        projectId: req.query.projectId,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(state);
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.get('/company-associations/orphans', authenticateToken, async (req, res) => {
+  try {
+    const orphans = await companyAssociationService.listOrphans(codexDb, {
+      userId: req.user.id,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(orphans);
+  } catch (error) {
+    return sendCompanyAssociationError(res, error);
+  }
+});
+
+router.post(
+  '/company-associations',
+  authenticateToken,
+  [
+    body('projectId').isString().trim().isLength({ min: 1, max: 160 }),
+    body('codexProjectId').isString().trim().isLength({ min: 1, max: 160 }),
+    body('connectorAccountIds').optional().isArray({ max: 100 }),
+    body('connectorAccountIds.*').optional().isString().trim().isLength({ min: 1, max: 160 }),
+    body('source').optional().isIn(['manual', 'created_for_company']),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const result = await companyAssociationService.associateCompany(codexDb, {
+        userId: req.user.id,
+        projectId: req.body.projectId,
+        codexProjectId: req.body.codexProjectId,
+        connectorAccountIds: req.body.connectorAccountIds,
+        source: req.body.source,
+      });
+      return res.status(201).json(result);
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.put(
+  '/company-associations/:projectId/connectors',
+  authenticateToken,
+  [
+    body('connectorAccountIds').isArray({ max: 100 }),
+    body('connectorAccountIds.*').optional().isString().trim().isLength({ min: 1, max: 160 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      return res.json(await companyAssociationService.assignCompanyConnectors(codexDb, {
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        connectorAccountIds: req.body.connectorAccountIds,
+      }));
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.post(
+  '/company-associations/:projectId/connectors/:connectorAccountId',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      return res.json(await companyAssociationService.addCompanyConnector(codexDb, {
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        connectorAccountId: req.params.connectorAccountId,
+      }));
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
+router.delete(
+  '/company-associations/:projectId/connectors/:connectorAccountId',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      return res.json(await companyAssociationService.removeCompanyConnector(codexDb, {
+        userId: req.user.id,
+        projectId: req.params.projectId,
+        connectorAccountId: req.params.connectorAccountId,
+      }));
+    } catch (error) {
+      return sendCompanyAssociationError(res, error);
+    }
+  },
+);
+
 router.post(
   '/projects',
   authenticateToken,
   requireCodexAgentAccess,
-  [body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 })],
+  [
+    body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 }),
+    body('organizationId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 160 }),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     try {
+      const organizationId = req.body.organizationId || null;
+      if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
+        userId: req.user.id,
+        organizationId,
+      }))) {
+        return res.status(404).json({ error: 'organization_not_found' });
+      }
       const project = await projectService.createProject({
         userId: req.user.id,
+        organizationId,
         name: req.body.name.trim(),
         brief: req.body.brief ?? null,
         repository: req.body.repository ?? null,
@@ -339,6 +476,240 @@ router.get('/projects', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Vínculo chat↔proyecto (MVP programación web en /agentes) ───────────────
+// Un chat abre exactamente un CodexProject durable; el chatId vive en
+// `brief` (sin migración). El match filtra por userId primero: un chatId
+// ajeno resuelve null/404, nunca proyecto de otro usuario.
+const projectChatBinding = require('../services/codex/project-chat-binding');
+
+function sendBindingError(res, err) {
+  const status = Number(err?.status) >= 400 && Number(err?.status) < 600 ? err.status : 500;
+  const code = typeof err?.code === 'string' && err.code ? err.code : 'codex_binding_failed';
+  return res.status(status).json({ error: code, message: String(err?.message || err || 'Binding failed.') });
+}
+
+router.get('/projects/by-chat/:chatId', authenticateToken, async (req, res) => {
+  try {
+    const chatId = String(req.params.chatId || '');
+    const project = await projectChatBinding.findProjectForChat({ userId: req.user.id, chatId, db: codexDb });
+    if (!project) return res.status(404).json({ error: 'project_not_found' });
+    return res.json({ project, chatId });
+  } catch (err) {
+    return sendBindingError(res, err);
+  }
+});
+
+router.post(
+  '/projects/by-chat/:chatId',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('name').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 80 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const chatId = String(req.params.chatId || '');
+      const { project, reused } = await projectChatBinding.findOrCreateProjectForChat({
+        userId: req.user.id,
+        chatId,
+        name: req.body.name ?? null,
+        db: codexDb,
+      });
+      return res.status(reused ? 200 : 201).json({ project, reused, chatId });
+    } catch (err) {
+      return sendBindingError(res, err);
+    }
+  },
+);
+
+// ── Clone desde la web (contratos OpenCode, §25) ────────────────────────────
+// POST /api/codex/projects/clone { name, repoUrl, branch? } → 201 { project, sourceControl }.
+// Clona un repo github.com HTTPS en el workspace CloudAgent (fetch --depth=1).
+// Con la cuenta GitHub del usuario conectada (OAuth guardado) el fetch va
+// autenticado — alcanza sus repos PRIVADOS y usa la rama por defecto real del
+// repo cuando no se indica `branch`. Sin cuenta conectada: solo públicos, rama
+// `main`. El token vive solo en memoria durante la petición: nunca en la
+// respuesta, la DB ni el remote del workspace. Nunca clona en máquinas de
+// usuario. Difiere de POST /projects con `repository` (self-host, allowlist).
+function githubApiService() {
+  // Lazy: keeps the router loadable without Octokit/Prisma repositories in
+  // tests that never touch the GitHub flow.
+  // eslint-disable-next-line global-require
+  return require('../services/github/github-api.service');
+}
+
+/**
+ * The user's stored GitHub OAuth token, or null when GitHub isn't connected
+ * (or the stored token is unusable). Never throws: a missing connection just
+ * degrades to the unauthenticated (public-only) path.
+ */
+async function resolveStoredGithubToken(userId) {
+  try {
+    const { accessToken } = await githubApiService().resolveUserToken(userId);
+    const token = String(accessToken || '').trim();
+    return token ? { accessToken: token } : null;
+  } catch (err) {
+    const code = String(err?.code || '');
+    if (code !== 'github_not_connected' && code !== 'github_token_invalid' && process.env.NODE_ENV !== 'test') {
+      console.warn('[codex github] stored token lookup failed:', err?.message || err);
+    }
+    return null;
+  }
+}
+
+function sendGithubFlowError(res, err) {
+  const code = String(err?.code || 'codex_github_failed');
+  const status = /^(invalid_|repository_|pull_request_sensitive_path)/.test(code) ? 400
+    : code === 'pull_request_too_large' || code === 'pull_request_file_too_large' ? 413
+      : code === 'github_auth_required' ? 401
+        : code === 'base_branch_diverged' || code === 'checkpoint_not_current' ? 409
+          : 502;
+  return res.status(status).json({
+    error: code,
+    message: String(err?.message || err || 'GitHub flow failed.').slice(0, 2_000),
+  });
+}
+
+router.post(
+  '/projects/clone',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 }),
+    body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
+    body('branch').optional().isString().trim().isLength({ min: 1, max: 128 }),
+    body('organizationId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 160 }),
+    // Etapa 6: vincular el repo clonado al chat de /agentes que lo pidió.
+    body('chatId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 64 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    const name = req.body.name.trim();
+    const repoUrl = String(req.body.repoUrl).trim();
+    const requestedBranch = req.body.branch ? String(req.body.branch).trim() : '';
+    const rawChatId = req.body.chatId ? String(req.body.chatId).trim() : '';
+    const chatId = rawChatId ? projectChatBinding.cleanChatId(rawChatId) : null;
+    if (rawChatId && !chatId) {
+      return res.status(400).json({ error: 'invalid_chat_id', message: 'chatId inválido.' });
+    }
+    let repository;
+    try {
+      repository = opencodeHarness.parsePublicGithubRepo(repoUrl);
+    } catch (err) {
+      return sendGithubFlowError(res, err);
+    }
+    try {
+      const organizationId = req.body.organizationId || null;
+      // Un chat abre exactamente un proyecto (mismo contrato que
+      // POST /projects/by-chat/:chatId). Con vínculo previo no se clona nada.
+      if (chatId) {
+        let boundProjectId = null;
+        try {
+          boundProjectId = await projectChatBinding.findProjectIdForChat({ userId: req.user.id, chatId, db: codexDb });
+        } catch (err) {
+          return sendBindingError(res, err);
+        }
+        if (boundProjectId) {
+          return res.status(409).json({
+            error: 'chat_already_bound',
+            message: 'Este chat ya tiene un proyecto vinculado.',
+            projectId: boundProjectId,
+          });
+        }
+      }
+      if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
+        userId: req.user.id,
+        organizationId,
+      }))) {
+        return res.status(404).json({ error: 'organization_not_found' });
+      }
+      // Authenticated path when the user's GitHub account is connected: reach
+      // private repos and learn the real default branch. Token stays in memory.
+      const stored = await resolveStoredGithubToken(req.user.id);
+      let meta = null;
+      if (stored) {
+        try {
+          meta = await githubApiService().getRepository(req.user.id, repository.owner, repository.repo);
+        } catch (err) {
+          if (Number(err?.status) === 404) {
+            return res.status(404).json({
+              error: 'repository_not_found',
+              message: 'El repositorio no existe o tu cuenta de GitHub no tiene acceso a él.',
+            });
+          }
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn('[codex github] repository metadata lookup failed, cloning blind:', err?.message || err);
+          }
+        }
+      }
+      const branch = requestedBranch || (meta && meta.defaultBranch) || 'main';
+      const isPrivate = Boolean(meta && meta.private);
+      const row = await codexDb.codexProject.create({
+        data: {
+          userId: req.user.id,
+          organizationId,
+          name,
+          brief: {
+            kind: isPrivate ? 'repo-private' : 'repo-public',
+            repository: {
+              url: repository.cloneUrl,
+              webUrl: repository.webUrl,
+              fullName: `${repository.owner}/${repository.repo}`,
+              private: isPrivate,
+              defaultBranch: (meta && meta.defaultBranch) || null,
+            },
+            sourceBranch: branch,
+            authenticated: Boolean(stored),
+            ...(chatId ? { chatId, source: 'agentes' } : {}),
+          },
+          status: 'provisioning',
+        },
+      });
+      try {
+        const runner = createSandboxClient();
+        const cloned = await opencodeHarness.clonePublicRepo({
+          runner,
+          projectId: row.id,
+          repoUrl: repository.cloneUrl,
+          branch,
+          accessToken: stored ? stored.accessToken : null,
+        });
+        const ready = await codexDb.codexProject.update({
+          where: { id: row.id },
+          data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
+        });
+        return res.status(201).json({
+          // `row` conserva el brief recién creado (kind/repository/chatId) aunque
+          // el update devuelva una fila parcial: la proyección pública lo necesita.
+          project: projectService.publicProject({ ...row, ...ready }),
+          ...(chatId ? { chatId } : {}),
+          sourceControl: {
+            repository: repository.webUrl,
+            fullName: `${repository.owner}/${repository.repo}`,
+            private: isPrivate,
+            defaultBranch: (meta && meta.defaultBranch) || null,
+            authenticated: cloned.authenticated === true,
+            sourceBranch: cloned.sourceBranch,
+            workBranch: cloned.workBranch,
+            commitSha: cloned.commitSha,
+          },
+        });
+      } catch (err) {
+        await codexDb.codexProject.update({
+          where: { id: row.id },
+          data: { status: 'error', error: String(err?.message || err).slice(0, 2_000) },
+        }).catch(() => null);
+        return sendGithubFlowError(res, err);
+      }
+    } catch (err) {
+      return res.status(500).json({ error: 'codex_clone_failed', message: String(err?.message || err).slice(0, 2_000) });
+    }
+  },
+);
+
 router.get('/projects/:id', authenticateToken, async (req, res) => {
   try {
     const project = await projectService.getProject({ userId: req.user.id, id: req.params.id });
@@ -349,21 +720,56 @@ router.get('/projects/:id', authenticateToken, async (req, res) => {
   }
 });
 
+router.get('/projects/:id/budget', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const runner = createSandboxClient();
+    const settingsState = await require('../services/codex/project-settings')
+      .loadProjectSettings({ runner, projectId: project.id, project });
+    if (settingsState.error) {
+      return res.status(422).json({
+        error: 'invalid_project_settings',
+        message: settingsState.error,
+      });
+    }
+    const budget = await require('../services/codex/project-budget').checkProjectBudget({
+      prisma: codexDb,
+      projectId: project.id,
+      settings: settingsState.settings,
+      env: process.env,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ budget });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_budget_failed', message: err.message });
+  }
+});
+
 // ── Modo PROACTIVO (compañía de agentes autónoma, estilo matrix.build) ──────
 // GET  /projects/:id/proactive  → estado + departamentos
 // POST /projects/:id/proactive  { enabled } → toggle; al ENCENDER dispara un
 // primer ciclo inmediato (fire-and-forget) para que el usuario vea acción ya.
 router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
   try {
-    const project = await loadOwnedProject(req, res);
+    const project = await loadOwnedProjectRecord(req, res);
     if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
+    const companyDepartments = require('../services/codex/company-departments');
     const memory = require('../services/codex/progress-ledger').readProgressContext(project);
+    const company = await require('../services/codex/company-operating-profile')
+      .loadCompanyOperatingContext({ prisma: codexDb, project });
+    const departments = companyDepartments.readDepartments(project);
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma: codexDb, projectId: project.id });
     res.setHeader('Cache-Control', 'no-store');
     return res.json({
       state: proactive.readProactiveState(project),
-      departments: proactive.DEPARTMENTS,
+      departments,
+      departmentPools: pools,
+      capacity: companyDepartments.capacitySummary(departments, pools),
       memory,
+      company,
     });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
@@ -372,8 +778,6 @@ router.get('/projects/:id/proactive', authenticateToken, async (req, res) => {
 
 router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
   try {
-    const project = await loadOwnedProject(req, res);
-    if (!project) return undefined;
     const enabled = req.body && req.body.enabled === true;
     // Enabling starts autonomous code execution immediately. Keep the same
     // isolation/access gate as manual runs; disabling remains available to
@@ -384,7 +788,10 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
         message: 'Tu cuenta no puede ejecutar APPS en producción.',
       });
     }
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
     const proactive = require('../services/codex/proactive-engine');
+    const companyDepartments = require('../services/codex/company-departments');
     const prisma = require('../config/database');
     const out = await proactive.setProactive({ prisma, projectId: project.id, userId: req.user.id, enabled });
     if (!out) return res.status(404).json({ error: 'project_not_found' });
@@ -394,11 +801,1192 @@ router.post('/projects/:id/proactive', authenticateToken, async (req, res) => {
         .then((fresh) => (fresh ? proactive.runCycle({ project: fresh, deps: { prisma } }) : null))
         .catch((err) => console.warn('[codex proactive] first cycle failed:', err?.message || err));
     }
-    return res.json({ state: out.state, departments: proactive.DEPARTMENTS });
+    const fresh = await prisma.codexProject.findFirst({ where: { id: project.id, userId: req.user.id } });
+    const departments = companyDepartments.readDepartments(fresh || project);
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma, projectId: project.id });
+    return res.json({
+      state: out.state,
+      departments,
+      departmentPools: pools,
+      capacity: companyDepartments.capacitySummary(departments, pools),
+    });
   } catch (err) {
     return res.status(500).json({ error: 'codex_proactive_failed', message: err.message });
   }
 });
+
+function sendOkrError(res, error) {
+  const progressLedger = require('../services/codex/progress-ledger');
+  if (error instanceof progressLedger.ObjectivePortfolioError) {
+    return res.status(error.status).json({
+      error: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    });
+  }
+  return res.status(500).json({
+    error: 'codex_okrs_failed',
+    message: String(error?.message || error || 'OKR operation failed.').slice(0, 2_000),
+  });
+}
+
+// ── Cartera OKR revisada por CEO Office ────────────────────────────────────
+// Objectives remain in the existing tenant-owned CodexProject brief. Every
+// review/reprioritization increments a revision and appends bounded audit
+// metadata; none of these routes can trigger a run or an external action.
+router.get('/projects/:id/okrs', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const portfolio = require('../services/codex/progress-ledger')
+      .readObjectivePortfolio(project);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ portfolio });
+  } catch (error) {
+    return sendOkrError(res, error);
+  }
+});
+
+router.put('/projects/:id/okrs/review', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    if (!Array.isArray(req.body?.objectives) || !req.body.objectives.length) {
+      return res.status(400).json({
+        error: 'okr_objectives_required',
+        message: 'objectives must contain at least one business objective.',
+      });
+    }
+    const expectedRevision = Number.parseInt(req.body?.expectedRevision, 10);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({
+        error: 'okr_revision_required',
+        message: 'expectedRevision must be a non-negative integer.',
+      });
+    }
+    const reviewerIdentity = String(
+      req.user?.name || req.user?.email || req.user?.id || 'Owner',
+    ).slice(0, 100);
+    const portfolio = await require('../services/codex/progress-ledger').reviewObjectives({
+      prisma: codexDb,
+      project,
+      objectives: req.body.objectives,
+      reviewer: `CEO Office · ${reviewerIdentity}`,
+      source: 'ceo_review',
+      decision: req.body?.decision,
+      rationale: typeof req.body?.rationale === 'string'
+        ? req.body.rationale.slice(0, 1_200)
+        : null,
+      expectedRevision,
+    });
+    return res.json({ portfolio });
+  } catch (error) {
+    return sendOkrError(res, error);
+  }
+});
+
+router.post('/projects/:id/okrs/reprioritize', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const expectedRevision = Number.parseInt(req.body?.expectedRevision, 10);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({
+        error: 'okr_revision_required',
+        message: 'expectedRevision must be a non-negative integer.',
+      });
+    }
+    const reviewerIdentity = String(
+      req.user?.name || req.user?.email || req.user?.id || 'Owner',
+    ).slice(0, 100);
+    const portfolio = await require('../services/codex/progress-ledger')
+      .reprioritizeObjectives({
+        prisma: codexDb,
+        project,
+        orderedIds: req.body?.orderedIds,
+        reviewer: `CEO Office · ${reviewerIdentity}`,
+        rationale: typeof req.body?.rationale === 'string'
+          ? req.body.rationale.slice(0, 1_200)
+          : null,
+        expectedRevision,
+      });
+    return res.json({ portfolio });
+  } catch (error) {
+    return sendOkrError(res, error);
+  }
+});
+
+router.put('/projects/:id/departments', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const department = req.body?.department ?? req.body;
+    if (!department || typeof department !== 'object' || Array.isArray(department)) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        message: 'department must be an object',
+      });
+    }
+    const service = require('../services/codex/company-departments');
+    const departments = await service.upsertDepartment({
+      prisma: codexDb,
+      project,
+      department,
+    });
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma: codexDb, projectId: project.id });
+    return res.json({
+      departments,
+      departmentPools: pools,
+      capacity: service.capacitySummary(departments, pools),
+    });
+  } catch (err) {
+    const status = err?.message === 'department_name_required' ? 400 : 500;
+    return res.status(status).json({
+      error: status === 400 ? 'validation_failed' : 'codex_departments_failed',
+      message: err.message,
+    });
+  }
+});
+
+router.delete('/projects/:id/departments/:departmentId', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const service = require('../services/codex/company-departments');
+    const departments = await service.deleteDepartment({
+      prisma: codexDb,
+      project,
+      departmentId: req.params.departmentId,
+    });
+    const pools = await require('../services/codex/department-pools')
+      .listDepartmentPools({ prisma: codexDb, projectId: project.id });
+    return res.json({
+      departments,
+      departmentPools: pools,
+      capacity: service.capacitySummary(departments, pools),
+    });
+  } catch (err) {
+    const known = {
+      department_not_found: 404,
+      cannot_delete_ceo_office: 400,
+    };
+    const status = known[err?.message] || 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_departments_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+router.get('/projects/:id/department-pools', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const departmentsService = require('../services/codex/company-departments');
+    const poolsService = require('../services/codex/department-pools');
+    const departments = departmentsService.readDepartments(project);
+    const pools = await poolsService.listDepartmentPools({ prisma: codexDb, projectId: project.id });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      departmentPools: pools,
+      capacity: departmentsService.capacitySummary(departments, pools),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_department_pools_failed', message: err.message });
+  }
+});
+
+router.put('/projects/:id/department-pools/:departmentId', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const departmentsService = require('../services/codex/company-departments');
+    const poolsService = require('../services/codex/department-pools');
+    const departments = departmentsService.readDepartments(project);
+    const department = departments.find((row) => row.id === req.params.departmentId);
+    if (!department) {
+      return res.status(404).json({ error: 'department_not_found', message: 'department_not_found' });
+    }
+    await poolsService.upsertDepartmentPool({
+      prisma: codexDb,
+      project,
+      departmentId: department.id,
+      size: req.body?.size ?? department.desiredAgents,
+      dailyBudgetUsd: Object.prototype.hasOwnProperty.call(req.body || {}, 'dailyBudgetUsd')
+        ? req.body.dailyBudgetUsd
+        : undefined,
+      enabled: req.body?.enabled !== false,
+    });
+    const pools = await poolsService.listDepartmentPools({ prisma: codexDb, projectId: project.id });
+    return res.json({
+      departmentPools: pools,
+      capacity: departmentsService.capacitySummary(departments, pools),
+    });
+  } catch (err) {
+    const status = ['invalid_department_pool_budget', 'department_pool_invalid'].includes(err?.message)
+      ? 400
+      : 500;
+    return res.status(status).json({
+      error: status === 400 ? 'validation_failed' : 'codex_department_pools_failed',
+      message: err.message,
+    });
+  }
+});
+
+// ── Recursos asignados por empresa/departamento ────────────────────────────
+// Stored in CodexProject.brief so the same authenticated user sees the same
+// assignments on every browser without leaking them across companies.
+router.get('/projects/:id/company-resources', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const service = require('../services/codex/company-resources');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ resources: service.readCompanyResources(project) });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'codex_company_resources_failed',
+      message: err.message,
+    });
+  }
+});
+
+router.put('/projects/:id/company-resources', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const service = require('../services/codex/company-resources');
+    const resources = await service.writeCompanyResources({
+      prisma: codexDb,
+      project,
+      resources: req.body,
+      expectedRevision: req.body?.expectedRevision,
+    });
+    return res.json({ resources });
+  } catch (err) {
+    const service = require('../services/codex/company-resources');
+    if (err instanceof service.CompanyResourcesError) {
+      return res.status(err.status).json({
+        error: err.code,
+        message: err.message,
+        ...(err.details ? { details: err.details } : {}),
+      });
+    }
+    return res.status(500).json({
+      error: 'codex_company_resources_failed',
+      message: err.message,
+    });
+  }
+});
+
+// ── Perfil operativo de empresa ─────────────────────────────────────────────
+// Intent belongs to the user/company; connection readiness is always derived
+// from real runtime evidence (workspace, publication, OAuth and Gmail).
+router.get('/projects/:id/company-profile', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const companyProfile = require('../services/codex/company-operating-profile');
+    const company = await companyProfile.loadCompanyOperatingContext({ prisma: codexDb, project });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ company });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_company_profile_failed', message: err.message });
+  }
+});
+
+router.patch('/projects/:id/company-profile', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const patch = req.body?.profile ?? req.body;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return res.status(400).json({
+        error: 'validation_failed',
+        message: 'profile must be an object',
+      });
+    }
+    const requestsAuto = patch.autonomy
+      && typeof patch.autonomy === 'object'
+      && Object.values(patch.autonomy).some((value) => value === 'auto');
+    if (requestsAuto && req.body?.confirmAuto !== true) {
+      return res.status(409).json({
+        error: 'company_auto_confirmation_required',
+        message: 'Explicit confirmation is required before enabling automatic external actions.',
+      });
+    }
+    const companyProfile = require('../services/codex/company-operating-profile');
+    await companyProfile.writeCompanyProfile({
+      prisma: codexDb,
+      project,
+      patch,
+    });
+    const fresh = await codexDb.codexProject.findFirst({
+      where: { id: project.id, userId: req.user.id },
+    });
+    await require('../services/codex/company-registry')
+      .ensureCompanyForCodexProject({ prisma: codexDb, codexProject: fresh || project })
+      .catch(() => null);
+    const company = await companyProfile.loadCompanyOperatingContext({
+      prisma: codexDb,
+      project: fresh || project,
+    });
+    return res.json({ company });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_company_profile_failed', message: err.message });
+  }
+});
+
+router.post(
+  '/projects/:id/business-audit',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyProfile = require('../services/codex/company-operating-profile');
+      const analyzer = require('../services/codex/business-analyzer');
+      const companyContext = await companyProfile.loadCompanyOperatingContext({
+        prisma: codexDb,
+        project,
+      });
+      const audit = await analyzer.analyzeBusiness({
+        project,
+        companyContext,
+        networkEnabled: true,
+      });
+      await analyzer.persistBusinessAudit({ prisma: codexDb, project, audit });
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.json({
+        audit,
+        company: { ...companyContext, businessAudit: audit },
+      });
+    } catch (err) {
+      return res.status(Number(err?.status) || 500).json({
+        error: err?.code || 'codex_business_audit_failed',
+        message: String(err?.message || err || 'Business audit failed.').slice(0, 2_000),
+      });
+    }
+  },
+);
+
+async function loadOwnedCompany(project) {
+  return require('../services/codex/company-registry')
+    .ensureCompanyForCodexProject({ prisma: codexDb, codexProject: project });
+}
+
+router.get('/projects/:id/business-channels', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) {
+      return res.status(409).json({
+        error: 'company_association_required',
+        message: 'Asocia primero esta Empresa con su entorno APPS.',
+      });
+    }
+    const service = require('../services/codex/business-channels');
+    const channels = await service.listBusinessChannels({
+      prisma: codexDb,
+      companyId: company.id,
+      userId: req.user.id,
+    });
+    const inbox = codexDb.inboxMessage?.findMany
+      ? await codexDb.inboxMessage.findMany({
+        where: { companyId: company.id },
+        orderBy: { receivedAt: 'desc' },
+        take: 100,
+      })
+      : [];
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ company, channels, inbox });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_business_channels_failed', message: err.message });
+  }
+});
+
+async function upsertBusinessChannelRoute(req, res) {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const service = require('../services/codex/business-channels');
+    const channel = await service.upsertBusinessChannel({
+      prisma: codexDb,
+      company,
+      channelId: req.params.channelId || null,
+      input: req.body?.channel ?? req.body,
+      env: process.env,
+    });
+    return res.json({ channel });
+  } catch (err) {
+    const known = {
+      invalid_channel_kind: 400,
+      connector_not_available: 409,
+      business_channel_not_found: 404,
+      channel_credentials_key_unavailable: 503,
+    };
+    const status = Number(err?.status) || known[err?.message] || 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_business_channels_failed' : err.message,
+      message: err.message,
+    });
+  }
+}
+
+router.put('/projects/:id/business-channels', authenticateToken, upsertBusinessChannelRoute);
+router.put('/projects/:id/business-channels/:channelId', authenticateToken, upsertBusinessChannelRoute);
+
+router.post('/projects/:id/business-channels/:channelId/pair', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const channel = await require('../services/codex/business-channels').approvePairing({
+      prisma: codexDb,
+      company,
+      channelId: req.params.channelId,
+      senderRef: req.body?.from,
+      code: req.body?.code,
+      env: process.env,
+    });
+    return res.json({ channel });
+  } catch (err) {
+    const status = err?.message === 'business_channel_not_found'
+      ? 404
+      : err?.message === 'sender_statically_allowlisted'
+        ? 409
+        : ['invalid_or_expired_pairing_code', 'invalid_pairing_sender'].includes(err?.message)
+          ? 400
+          : 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_channel_pairing_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+router.delete('/projects/:id/business-channels/:channelId/pair', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const channel = await require('../services/codex/business-channels').revokePairing({
+      prisma: codexDb,
+      company,
+      channelId: req.params.channelId,
+      senderRef: req.body?.from,
+    });
+    return res.json({ channel });
+  } catch (err) {
+    const status = err?.message === 'business_channel_not_found'
+      ? 404
+      : err?.message === 'sender_statically_allowlisted'
+        ? 409
+        : err?.message === 'invalid_pairing_sender'
+          ? 400
+          : 500;
+    return res.status(status).json({
+      error: status === 500 ? 'codex_channel_pairing_revoke_failed' : err.message,
+      message: err.message,
+    });
+  }
+});
+
+router.post(
+  '/projects/:id/business-channels/:channelId/inbox',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const company = await loadOwnedCompany(project);
+      if (!company) return res.status(409).json({ error: 'company_association_required' });
+      const result = await require('../services/codex/business-channels').recordInboundMessage({
+        prisma: codexDb,
+        company,
+        channelId: req.params.channelId,
+        message: req.body?.message ?? req.body,
+        runService: require('../services/codex/run-service'),
+        env: process.env,
+      });
+      return res.status(result.authorization.allowed ? 202 : 428).json(result);
+    } catch (err) {
+      const status = ['invalid_inbox_message'].includes(err?.message)
+        ? 400
+        : err?.message === 'business_channel_not_found'
+          ? 404
+          : 500;
+      return res.status(status).json({
+        error: status === 500 ? 'codex_channel_inbox_failed' : err.message,
+        message: err.message,
+      });
+    }
+  },
+);
+
+router.get('/projects/:id/business-channels-doctor', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const company = await loadOwnedCompany(project);
+    if (!company) return res.status(409).json({ error: 'company_association_required' });
+    const audit = await require('../services/codex/business-channels').auditChannelPolicies({
+      prisma: codexDb,
+      companyId: company.id,
+      userId: req.user.id,
+    });
+    return res.json({ audit });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_channel_doctor_failed', message: err.message });
+  }
+});
+
+function sendCompanyOperationsError(res, err) {
+  return res.status(Number(err?.status) || 500).json({
+    error: err?.code || 'codex_company_operations_failed',
+    message: String(err?.message || err || 'Company operations failed').slice(0, 2000),
+  });
+}
+
+router.get('/projects/:id/company-operations', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const snapshot = await require('../services/codex/company-operations').getOperationsSnapshot({
+      prisma: codexDb,
+      project,
+      take: req.query?.take,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ operations: snapshot });
+  } catch (err) {
+    return sendCompanyOperationsError(res, err);
+  }
+});
+
+// ── Estado de oficina: la fuente de verdad que la oficina visual lee ───────
+// One read-only projection with the seven signals the office renders: active
+// pools (capacity/budget/spend today), missions, runs, cost, evidence,
+// pending approvals and blockers. Same safe-projection rule as /activity:
+// no prompts, drafts, snapshots or credentials ever leave this endpoint.
+router.get('/projects/:id/office-state', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const state = await require('../services/codex/office-state').getOfficeState({
+      prisma: codexDb,
+      project,
+      take: req.query?.take,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ state });
+  } catch (err) {
+    return res.status(Number(err?.status) || 500).json({
+      error: err?.code || 'codex_office_state_failed',
+      message: String(err?.message || err || 'Office state failed').slice(0, 2_000),
+    });
+  }
+});
+
+// ── Actividad agregada de todos los departamentos ──────────────────────────
+// The per-run SSE stream remains the source of truth for a live coding turn.
+// This safe projection lets CEO Office render one project-wide timeline
+// without exposing prompts, snapshots, credentials or raw command output.
+router.get('/projects/:id/activity', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const activity = await require('../services/codex/project-activity').listProjectActivity({
+      prisma: codexDb,
+      projectId: project.id,
+      limit: req.query.limit,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ activity });
+  } catch (err) {
+    return res.status(500).json({ error: 'codex_activity_failed', message: err.message });
+  }
+});
+
+function sendMissionEvidenceError(res, err) {
+  return res.status(Number(err?.status) || 500).json({
+    error: err?.code || 'codex_mission_evidence_failed',
+    message: String(err?.message || err || 'Mission evidence failed').slice(0, 2_000),
+  });
+}
+
+// ── Entregables y evidencia de misión ──────────────────────────────────────
+// Durable, tenant-scoped records live in additive mission, artifact, report
+// and CEO approval tables. Legacy brief entries are imported on read. Email
+// delivery is intentionally absent: reports can only become drafts or queued
+// work after connection + permission.
+router.get('/projects/:id/mission-evidence', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const ledger = await require('../services/codex/mission-evidence-ledger')
+      .syncMissionEvidence({ prisma: codexDb, project });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ledger });
+  } catch (err) {
+    return sendMissionEvidenceError(res, err);
+  }
+});
+
+router.patch('/projects/:id/mission-evidence/:recordId/review', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const record = await require('../services/codex/mission-evidence-ledger')
+      .reviewMissionRecord({
+        prisma: codexDb,
+        project,
+        recordId: String(req.params.recordId || '').slice(0, 220),
+        status: req.body?.status,
+        note: typeof req.body?.note === 'string' ? req.body.note.slice(0, 1_000) : null,
+        reviewer: String(req.user?.name || req.user?.email || 'CEO Office').slice(0, 120),
+      });
+    return res.json({ record });
+  } catch (err) {
+    return sendMissionEvidenceError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/activity-reports',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const report = await require('../services/codex/mission-evidence-ledger')
+        .createActivityReport({
+          prisma: codexDb,
+          project,
+          companyContext,
+          days: req.body?.days,
+          requestEmail: req.body?.requestEmail === true,
+          confirmEmailQueue: req.body?.confirmEmailQueue === true,
+        });
+      return res.status(201).json({ report });
+    } catch (err) {
+      return sendMissionEvidenceError(res, err);
+    }
+  },
+);
+
+function sendSwarmError(res, error) {
+  const status = Number(error?.status) || (
+    error?.code === 'P2002' ? 409 : 500
+  );
+  return res.status(status).json({
+    error: error?.code === 'P2002'
+      ? 'codex_swarm_in_progress'
+      : (error?.code || 'codex_swarm_failed'),
+    message: String(error?.message || 'Enterprise swarm failed.').slice(0, 2_000),
+    ...(error?.details ? { details: error.details } : {}),
+  });
+}
+
+function boundedSwarmInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed)
+    ? Math.max(min, Math.min(max, parsed))
+    : fallback;
+}
+
+/** Effective swarm research concurrency. Writers stay capped by run isolation. */
+/**
+ * How many fleet tasks may run at once without starving the rest of the app of
+ * database connections.
+ *
+ * Every running task writes progress through Prisma, and Prisma's pool — shared
+ * with all HTTP traffic and background jobs — defaults to `cpus * 2 + 1` unless
+ * DATABASE_URL pins `connection_limit`. The previous fixed default of 128
+ * oversubscribed a 17-connection pool by 7.5x: transactions died with "Unable
+ * to start a transaction in the given time", the swarm job crashed, and the
+ * fleet auto-paused. Observed in production on a 300-agent fleet that paused
+ * and eventually failed with zero useful output.
+ *
+ * Half the pool goes to the fleet, half stays for user requests. Logical agent
+ * count is unaffected — 300 agents still run, just not 128 at the same instant.
+ */
+function databaseConcurrencyCeiling(env = process.env) {
+  const pinned = String(env.DATABASE_URL || '').match(/[?&]connection_limit=(\d+)/);
+  const parsed = pinned ? Number.parseInt(pinned[1], 10) : NaN;
+  let cpuCount = 4;
+  try { cpuCount = require('node:os').cpus().length || 4; } catch { /* keep default */ }
+  const pool = Number.isFinite(parsed) && parsed > 0 ? parsed : (cpuCount * 2) + 1;
+  return Math.max(4, Math.floor(pool / 2));
+}
+
+function swarmConcurrencyDefaults(env = process.env) {
+  const dbCeiling = databaseConcurrencyCeiling(env);
+  const hardMax = Math.min(
+    boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_CONCURRENCY_HARD, 256, 32, 256),
+    dbCeiling,
+  );
+  const defaultConcurrency = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_CONCURRENCY_DEFAULT,
+    dbCeiling,
+    1,
+    hardMax,
+  );
+  const defaultWriters = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_WRITERS_DEFAULT,
+    4,
+    1,
+    Math.min(32, hardMax),
+  );
+  // Logical agent capacity (10k) — research shards + writers + QA, not 10k concurrent LLMs.
+  const hardLogical = boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_LOGICAL_HARD, 10_000, 1_000, 10_000);
+  const defaultLogical = boundedSwarmInteger(
+    env.SIRAGPT_SWARM_MAX_LOGICAL_DEFAULT,
+    256,
+    8,
+    hardLogical,
+  );
+  return { hardMax, defaultConcurrency, defaultWriters, hardLogical, defaultLogical };
+}
+
+async function loadOwnedSwarm(req, res) {
+  const swarm = await codexDb.codexSwarm.findFirst({
+    where: {
+      id: req.params.swarmId,
+      projectId: req.params.id,
+      userId: req.user.id,
+    },
+  });
+  if (!swarm) {
+    res.status(404).json({ error: 'codex_swarm_not_found' });
+    return null;
+  }
+  return swarm;
+}
+
+async function commandCenterForProject(project) {
+  return require('../services/codex/enterprise-command-center-service')
+    .loadEnterpriseCommandCenter({
+      prisma: codexDb,
+      project,
+    });
+}
+
+router.get('/projects/:id/command-center', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const state = await commandCenterForProject(project);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      commandCenter: state.commandCenter,
+      company: state.company,
+    });
+  } catch (error) {
+    return sendSwarmError(res, error);
+  }
+});
+
+router.post(
+  '/projects/:id/company-operations/research-leads',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyProfile = require('../services/codex/company-operating-profile');
+      const companyContext = await companyProfile.loadCompanyOperatingContext({
+        prisma: codexDb,
+        project,
+      });
+      const result = await require('../services/codex/company-operations').researchLeads({
+        prisma: codexDb,
+        project,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+      });
+      return res.json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/company-operations/triage-inbox',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const result = await require('../services/codex/company-operations').triageInbox({
+        prisma: codexDb,
+        project,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+        maxResults: req.body?.maxResults,
+      });
+      return res.json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/company-operations/triage-social',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const result = await require('../services/codex/company-operations').triageSocialConversations({
+        prisma: codexDb,
+        project,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+        maxResults: req.body?.maxResults,
+      });
+      return res.json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.patch('/projects/:id/company-operations/leads/:leadId', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const allowedStatuses = new Set([
+      'discovered', 'qualified', 'review', 'contacted', 'replied', 'won', 'lost', 'do_not_contact',
+    ]);
+    const data = {};
+    if (typeof req.body?.email === 'string') {
+      const email = req.body.email.trim().toLowerCase().slice(0, 320);
+      if (email && (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) || /[\r\n]/.test(email))) {
+        return res.status(400).json({
+          error: 'validation_failed',
+          message: 'A valid email address is required.',
+        });
+      }
+      data.email = email || null;
+    }
+    if (typeof req.body?.contactName === 'string') data.contactName = req.body.contactName.trim().slice(0, 180) || null;
+    if (allowedStatuses.has(req.body?.status)) data.status = req.body.status;
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: 'validation_failed', message: 'No valid lead fields supplied.' });
+    }
+    const updated = await codexDb.codexCompanyLead.updateMany({
+      where: { id: req.params.leadId, projectId: project.id, userId: project.userId },
+      data,
+    });
+    if (!updated?.count) return res.status(404).json({ error: 'lead_not_found' });
+    const lead = await codexDb.codexCompanyLead.findFirst({
+      where: { id: req.params.leadId, projectId: project.id, userId: project.userId },
+    });
+    return res.json({ lead });
+  } catch (err) {
+    return sendCompanyOperationsError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/company-operations/leads/:leadId/outreach',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const companyContext = await require('../services/codex/company-operating-profile')
+        .loadCompanyOperatingContext({ prisma: codexDb, project });
+      const result = await require('../services/codex/company-operations').prepareLeadOutreach({
+        prisma: codexDb,
+        project,
+        leadId: req.params.leadId,
+        companyContext,
+        chatComplete: (args) => require('../services/codex/llm-provider').chatComplete(args),
+      });
+      const status = result.action === 'lead_not_found' ? 404 : result.action === 'lead_email_required' ? 409 : 200;
+      return res.status(status).json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/swarms',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      if (await runService.hasActiveRun({ projectId: project.id, db: codexDb })) {
+        return res.status(409).json({
+          error: 'run_in_progress',
+          message: 'Termina o detén la ejecución activa antes de iniciar el enjambre empresarial.',
+        });
+      }
+
+      const body = req.body && typeof req.body === 'object' ? req.body : {};
+      const initial = await commandCenterForProject(project);
+      const objective = String(
+        body.objective
+        || initial.company?.profile?.mission
+        || project.name,
+      ).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 4_000);
+      if (!objective) {
+        return res.status(400).json({
+          error: 'enterprise_swarm_objective_required',
+          message: 'Define un objetivo verificable para CEO Office.',
+        });
+      }
+      const concurrencyDefaults = swarmConcurrencyDefaults(process.env);
+      const logicalAgents = boundedSwarmInteger(
+        body.logicalAgents,
+        concurrencyDefaults.defaultLogical,
+        8,
+        concurrencyDefaults.hardLogical,
+      );
+      const maxConcurrency = boundedSwarmInteger(
+        body.maxConcurrency,
+        concurrencyDefaults.defaultConcurrency,
+        1,
+        concurrencyDefaults.hardMax,
+      );
+      const maxConcurrentWriters = boundedSwarmInteger(
+        body.maxConcurrentWriters,
+        concurrencyDefaults.defaultWriters,
+        1,
+        Math.min(32, maxConcurrency),
+      );
+
+      // Stop the legacy ticker before installing the durable plan. This avoids
+      // a race with the durable fleet while preserving its settings.
+      await require('../services/codex/proactive-engine').setProactive({
+        prisma: codexDb,
+        projectId: project.id,
+        userId: req.user.id,
+        enabled: false,
+      });
+
+      const { createFleetSwarm } = require('../services/codex/fleet-orchestrator');
+      const fleet = await createFleetSwarm({
+        prisma: codexDb,
+        userId: req.user.id,
+        project,
+        objective,
+        companyPlan: initial.plan,
+        explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
+        planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
+        // Full logical capacity (up to 10k). Research shards run in parallel;
+        // writers remain isolation-capped via maxConcurrentWriters / runCap.
+        logicalTasks: logicalAgents,
+        maxConcurrency,
+        maxConcurrentWriters,
+        qaEvery: body.qaEvery,
+        model: body.model ? String(body.model).slice(0, 120) : null,
+        tier: body.tier ? String(body.tier).slice(0, 80) : null,
+        env: process.env,
+      });
+      const swarm = fleet.swarm;
+      try {
+        await require('../services/codex/swarm-runner').enqueueSwarm({
+          swarmId: swarm.id,
+        });
+      } catch (queueError) {
+        const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+        const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
+        await orchestrator.cancelSwarm({
+          swarmId: swarm.id,
+          reason: 'swarm_queue_unavailable',
+        }).catch(() => {});
+        throw queueError;
+      }
+      const state = await commandCenterForProject(project);
+      return res.status(202).json({
+        swarm: state.commandCenter.swarm,
+        commandCenter: state.commandCenter,
+      });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/company-operations/actions/:actionId/approve',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const actionHash = req.body?.actionHash;
+      const actionVersion = req.body?.actionVersion;
+      const actionRecord = await codexDb.codexExternalAction.findFirst({
+        where: {
+          id: req.params.actionId,
+          projectId: project.id,
+          userId: project.userId,
+        },
+        select: { kind: true },
+      });
+      const requiresApprovalBinding = ['email_reply', 'email_send', 'email_forward', 'lead_outreach']
+        .includes(actionRecord?.kind);
+      if (requiresApprovalBinding && (!/^[a-f0-9]{64}$/i.test(String(actionHash || ''))
+        || typeof actionVersion !== 'number'
+        || !Number.isInteger(actionVersion)
+        || actionVersion !== 1)) {
+        return res.status(400).json({
+          error: 'approval_invalid',
+          message: 'actionHash and actionVersion are required for email/lead approval.',
+        });
+      }
+      const result = await require('../services/codex/company-operations').approveExternalAction({
+        prisma: codexDb,
+        project,
+        actionId: req.params.actionId,
+        actionHash: /^[a-f0-9]{64}$/i.test(String(actionHash || '')) ? String(actionHash).toLowerCase() : null,
+        actionVersion: typeof actionVersion === 'number' && Number.isInteger(actionVersion) ? actionVersion : null,
+        actorId: req.user.id,
+      });
+      const status = result.action === 'not_found'
+        ? 404
+        : ['approval_stale', 'approval_expired', 'approval_consumed', 'delivery_uncertain'].includes(result.action)
+          ? 409
+          : 200;
+      return res.status(status).json({ result });
+    } catch (err) {
+      return sendCompanyOperationsError(res, err);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/swarms/:swarmId/pause',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const swarm = await loadOwnedSwarm(req, res);
+      if (!swarm) return undefined;
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const result = await new CodexSwarmOrchestrator({ prisma: codexDb })
+        .pauseSwarm({ swarmId: swarm.id });
+      return res.json({ swarm: result.swarm, progress: result.progress });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
+
+router.post('/projects/:id/company-operations/actions/:actionId/reject', authenticateToken, async (req, res) => {
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const result = await require('../services/codex/company-operations').rejectExternalAction({
+      prisma: codexDb,
+      project,
+      actionId: req.params.actionId,
+    });
+    return res.json({ result });
+  } catch (err) {
+    return sendCompanyOperationsError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/swarms/:swarmId/resume',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const swarm = await loadOwnedSwarm(req, res);
+      if (!swarm) return undefined;
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const result = await new CodexSwarmOrchestrator({ prisma: codexDb })
+        .resumeSwarm({ swarmId: swarm.id });
+      await require('../services/codex/swarm-runner').enqueueSwarm({
+        swarmId: swarm.id,
+      });
+      return res.json({ swarm: result.swarm, progress: result.progress });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/swarms/:swarmId/cancel',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const swarm = await loadOwnedSwarm(req, res);
+      if (!swarm) return undefined;
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
+      const result = await orchestrator.cancelSwarm({
+        swarmId: swarm.id,
+        reason: String(req.body?.reason || 'cancelled_by_user').slice(0, 2_000),
+      });
+
+      const integrators = await codexDb.codexSwarmTask.findMany({
+        where: { swarmId: swarm.id, role: 'integrator' },
+        select: { result: true },
+      });
+      const planRunIds = integrators
+        .map((task) => task.result?.planRunId)
+        .filter(Boolean);
+      const linkedRuns = planRunIds.length
+        ? await codexDb.codexRun.findMany({
+          where: {
+            userId: req.user.id,
+            OR: [
+              { id: { in: planRunIds } },
+              { planRunId: { in: planRunIds } },
+            ],
+            status: { in: runService.ACTIVE_STATUSES },
+          },
+          select: { id: true },
+        })
+        : [];
+      await Promise.allSettled(linkedRuns.map((run) => (
+        runService.cancelRun({
+          userId: req.user.id,
+          runId: run.id,
+          db: codexDb,
+        })
+      )));
+      return res.json({ swarm: result.swarm, progress: result.progress });
+    } catch (error) {
+      return sendSwarmError(res, error);
+    }
+  },
+);
 
 function sendPublicationError(res, err) {
   const status = Number(err?.status) || 500;
@@ -454,9 +2042,278 @@ router.post('/projects/:id/publication/rollback', authenticateToken, requireCode
   }
 });
 
+// ── Publicación GitHub desde la web (contratos OpenCode, §25) ───────────────
+// POST /projects/:id/github/plan { repoUrl, runId, sourceBranch?, title?, body? }
+//   → 200 { plan }. Solo lee el diff (git diff + medición). Sin efectos.
+// POST /projects/:id/github/publish { ...plan, githubToken?, confirm? }
+//   → sin confirm:true → 428 { plan } (E_PLAN_GATE: publicar exige aprobación).
+//   → sin token → 428 { plan } con compareUrl para abrir el PR a mano.
+//   → con token+confirm → 201 { plan, pullRequest }. Merge siempre vía PR
+//     (pull_request_only); el token viaja solo en memoria, nunca se persiste,
+//     loguea ni devuelve.
+//   El token es `githubToken` del body o, si falta, el OAuth de la cuenta
+//   GitHub conectada del usuario — así "PR como resultado" no exige pegar
+//   tokens a mano. `plan` refleja esa disponibilidad en `status`.
+const githubPlanValidators = [
+  body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
+  body('runId').isString().withMessage('runId must be a string').bail().trim().isLength({ min: 1, max: 96 }),
+  body('sourceBranch').optional().isString().trim().isLength({ min: 1, max: 128 }),
+  body('title').optional().isString().isLength({ max: 120 }),
+  body('body').optional().isString().isLength({ max: 60_000 }),
+];
+
+router.post('/projects/:id/github/plan', authenticateToken, githubPlanValidators, async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const stored = await resolveStoredGithubToken(req.user.id);
+    const plan = await opencodeHarness.buildPublishPlan({
+      runner: createSandboxClient(),
+      projectId: project.id,
+      repoUrl: String(req.body.repoUrl).trim(),
+      sourceBranch: req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main',
+      runId: String(req.body.runId).trim(),
+      title: req.body.title ?? null,
+      body: req.body.body ?? null,
+      hasGithubToken: Boolean(stored),
+    });
+    return res.json({ plan });
+  } catch (err) {
+    return sendGithubFlowError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/github/publish',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    ...githubPlanValidators,
+    body('githubToken').optional().isString().isLength({ max: 500 }),
+    body('confirm').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const repoUrl = String(req.body.repoUrl).trim();
+      const runId = String(req.body.runId).trim();
+      const sourceBranch = req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main';
+      let token = String(req.body.githubToken || '').trim();
+      if (!token) {
+        const stored = await resolveStoredGithubToken(req.user.id);
+        token = stored ? stored.accessToken : '';
+      }
+      const runner = createSandboxClient();
+      const plan = await opencodeHarness.buildPublishPlan({
+        runner,
+        projectId: project.id,
+        repoUrl,
+        sourceBranch,
+        runId,
+        title: req.body.title ?? null,
+        body: req.body.body ?? null,
+        hasGithubToken: token.length > 0,
+      });
+      if (plan.status === 'no_changes') return res.json({ plan, pullRequest: null });
+      if (req.body.confirm !== true) {
+        return res.status(428).json({
+          error: 'confirmation_required',
+          message: 'Publicar en GitHub exige confirmación explícita (confirm:true).',
+          plan,
+        });
+      }
+      if (!token) {
+        return res.status(428).json({
+          error: 'github_auth_required',
+          message: 'Sin token se devuelve el enlace para abrir el PR a mano.',
+          plan,
+        });
+      }
+      try {
+        const published = await selfHosting.publishSelfHostedPullRequest({
+          runner,
+          projectId: project.id,
+          runId,
+          repositoryUrl: repoUrl,
+          sourceBranch,
+          title: plan.title,
+          body: plan.body,
+          env: { ...process.env, CODEX_SELF_HOST_GITHUB_TOKEN: token },
+        });
+        if (published.status === 'no_changes') return res.json({ plan, pullRequest: null });
+        return res.status(201).json({ plan, pullRequest: published.pullRequest || null, branch: published.branch });
+      } catch (err) {
+        return sendGithubFlowError(res, err);
+      }
+    } catch (err) {
+      return sendGithubFlowError(res, err);
+    }
+  },
+);
+
+// ── Etapa 7 (paridad Claude Code): «Cambios» + «Crear PR» del repo del chat ──
+// Solo para proyectos clonados desde la web (brief.kind repo-public/private):
+// la rama base y el repo salen del brief, el cliente no los elige.
+
+function repoSourceControlFromBrief(row) {
+  const brief = row && row.brief && typeof row.brief === 'object' && !Array.isArray(row.brief) ? row.brief : null;
+  if (!brief || (brief.kind !== 'repo-public' && brief.kind !== 'repo-private')) return null;
+  const repository = brief.repository && typeof brief.repository === 'object' ? brief.repository : {};
+  const repoUrl = String(repository.webUrl || repository.url || '').trim();
+  if (!repoUrl) return null;
+  return {
+    repoUrl,
+    fullName: repository.fullName || null,
+    sourceBranch: String(brief.sourceBranch || repository.defaultBranch || 'main').trim(),
+  };
+}
+
+function sendWorkspaceChangesError(res, err) {
+  if (err instanceof workspaceChanges.WorkspaceChangesError) {
+    return res.status(err.status || 400).json({
+      error: err.code,
+      message: String(err.message || '').slice(0, 2_000),
+      ...(err.details ? { details: err.details } : {}),
+    });
+  }
+  if (err && err.name === 'RunnerError') {
+    return res.status(502).json({ error: 'runner_unreachable', message: String(err.message || '').slice(0, 2_000) });
+  }
+  return sendGithubFlowError(res, err);
+}
+
+router.get('/projects/:id/changes', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const sc = repoSourceControlFromBrief(project);
+    if (!sc) return res.status(409).json({ error: 'project_not_repo', message: 'Este proyecto no está vinculado a un repositorio.' });
+    const out = await workspaceChanges.getWorkspaceChanges({
+      runner: createSandboxClient(),
+      projectId: project.id,
+      baseBranch: sc.sourceBranch,
+    });
+    return res.json({ ...out, repository: { url: sc.repoUrl, fullName: sc.fullName } });
+  } catch (err) {
+    return sendWorkspaceChangesError(res, err);
+  }
+});
+
+// POST /projects/:id/github/publish-workspace { title?, body?, confirm? }
+// Sin confirm → 428 con el plan (archivos, rama destino, si hay token) y
+// CERO mutación. Con confirm:true y OAuth guardado → deja los cambios en
+// run/agentes-<proyecto>-<fecha>, valida rutas/tamaños y abre el PR contra la
+// rama base con la cuenta del usuario. Nunca push directo a la base.
+router.post(
+  '/projects/:id/github/publish-workspace',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('title').optional({ nullable: true }).isString().isLength({ max: 120 }),
+    body('body').optional({ nullable: true }).isString().isLength({ max: 60_000 }),
+    body('confirm').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const sc = repoSourceControlFromBrief(project);
+      if (!sc) return res.status(409).json({ error: 'project_not_repo', message: 'Este proyecto no está vinculado a un repositorio.' });
+      const runner = createSandboxClient();
+      const stored = await resolveStoredGithubToken(req.user.id);
+      const title = req.body.title ? String(req.body.title) : null;
+      const prBody = req.body.body ? String(req.body.body) : null;
+      const runId = workspaceChanges.workspaceRunId(project.id);
+
+      if (req.body.confirm !== true) {
+        const changes = await workspaceChanges.getWorkspaceChanges({ runner, projectId: project.id, baseBranch: sc.sourceBranch });
+        if (!changes.files.length) {
+          return res.json({ plan: { status: 'no_changes', base: sc.sourceBranch, files: 0 }, pullRequest: null });
+        }
+        return res.status(428).json({
+          error: 'confirmation_required',
+          message: 'Crear el PR exige confirmación explícita (confirm:true).',
+          plan: {
+            status: stored ? 'ready_to_publish' : 'github_auth_required',
+            base: sc.sourceBranch,
+            branch: `run/${runId}`,
+            repository: sc.repoUrl,
+            files: changes.filesChanged,
+            additions: changes.additions,
+            deletions: changes.deletions,
+            hasGithubToken: Boolean(stored),
+            mergePolicy: 'pull_request_only',
+          },
+        });
+      }
+      if (!stored) {
+        return res.status(428).json({
+          error: 'github_auth_required',
+          message: 'Conecta tu cuenta de GitHub para crear el PR desde el chat.',
+        });
+      }
+      const prepared = await workspaceChanges.prepareWorkspaceBranch({
+        runner, projectId: project.id, baseBranch: sc.sourceBranch, runId, title, body: prBody || '',
+      });
+      if (prepared.status === 'no_changes') {
+        return res.json({ plan: { status: 'no_changes', base: sc.sourceBranch, files: 0 }, pullRequest: null });
+      }
+      const plan = await opencodeHarness.buildPublishPlan({
+        runner,
+        projectId: project.id,
+        repoUrl: sc.repoUrl,
+        sourceBranch: sc.sourceBranch,
+        runId,
+        title,
+        body: prBody,
+        hasGithubToken: true,
+      });
+      if (plan.status === 'no_changes') return res.json({ plan, pullRequest: null, branch: prepared.branch });
+      const published = await selfHosting.publishSelfHostedPullRequest({
+        runner,
+        projectId: project.id,
+        runId,
+        repositoryUrl: sc.repoUrl,
+        sourceBranch: sc.sourceBranch,
+        title: plan.title,
+        body: plan.body,
+        env: { ...process.env, CODEX_SELF_HOST_GITHUB_TOKEN: stored.accessToken },
+      });
+      if (published.status === 'no_changes') return res.json({ plan, pullRequest: null, branch: prepared.branch });
+      return res.status(201).json({
+        plan,
+        pullRequest: published.pullRequest || null,
+        branch: published.branch || prepared.branch,
+        commitSha: published.commitSha || prepared.commitSha,
+      });
+    } catch (err) {
+      return sendWorkspaceChangesError(res, err);
+    }
+  },
+);
+
 // Ownership gate compartido por las rutas de preview.
 async function loadOwnedProject(req, res) {
   const project = await projectService.getProject({ userId: req.user.id, id: req.params.id });
+  if (!project) {
+    res.status(404).json({ error: 'project_not_found' });
+    return null;
+  }
+  return project;
+}
+
+async function loadOwnedProjectRecord(req, res) {
+  const project = await codexDb.codexProject.findFirst({
+    where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+  }).catch(() => null);
   if (!project) {
     res.status(404).json({ error: 'project_not_found' });
     return null;
@@ -508,6 +2365,10 @@ router.post('/projects/:id/preview/start', authenticateToken, async (req, res) =
 });
 
 router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  // Runner state is volatile. A cached 304 can make the browser reuse a
+  // pre-deploy "ready" payload after the sidecar has restarted, leaving the
+  // iframe pointed at a dead tokenized preview.
+  res.set('Cache-Control', 'no-store');
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
@@ -576,24 +2437,40 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
       hostname: upstreamBase.hostname,
       port: upstreamBase.port || (upstreamBase.protocol === 'https:' ? 443 : 80),
       method: req.method,
-      path: req.originalUrl || req.url || '/',
+      path: stripPreviewNonce(req.originalUrl || req.url || '/'),
       headers: fwdHeaders,
     },
     (up) => {
-      const headers = {};
-      for (const [k, v] of Object.entries(up.headers)) {
-        const lk = k.toLowerCase();
-        if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
-        if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
-        if (lk.startsWith('access-control-')) continue;
-        headers[k] = v;
+      const nonce = previewNonceFromRequest(req);
+      const injectInteractions = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
+      const headers = filterPreviewResponseHeaders(up.headers);
+      if (injectInteractions) delete headers['content-length'];
+      if (injectInteractions) {
+        readPreviewBody(up).then((body) => {
+          const injected = injectPreviewInteractionBridges(body.toString('utf8'), nonce);
+          headers['content-length'] = String(Buffer.byteLength(injected));
+          res.writeHead(up.statusCode || 502, headers);
+          res.end(injected);
+        }).catch((err) => {
+          upstream.destroy();
+          if (!res.headersSent) {
+            const status = err?.code === 'preview_html_too_large' ? 413 : 502;
+            const error = err?.code === 'preview_html_too_large' ? 'preview_html_too_large' : 'runner_stream_failed';
+            res.status(status).json({ error, message: status === 413 ? 'Preview HTML exceeds the injection limit.' : 'El dev server interrumpió la respuesta.' });
+          } else {
+            try { res.end(); } catch (_) { /* already closed */ }
+          }
+        });
+        return;
       }
-      headers['cache-control'] = 'no-store';
-      headers['x-frame-options'] = 'SAMEORIGIN';
-      headers['content-security-policy'] = "frame-ancestors 'self'";
-      headers['referrer-policy'] = 'no-referrer';
       res.writeHead(up.statusCode || 502, headers);
       up.pipe(res);
+      // The iframe can navigate away mid-stream; aborting the upstream then
+      // frees the runner socket instead of letting the copy drain to a client
+      // that is already gone.
+      const onClientClose = () => upstream.destroy();
+      res.on('close', onClientClose);
+      res.on('error', onClientClose);
     },
   );
   upstream.on('error', () => {
@@ -717,6 +2594,76 @@ router.get('/projects/:id/file', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Project terminal exec (Shell del panel sobre un proyecto Codex) ─────────
+// One-shot command in the project's workspace via the sandbox sidecar — the
+// same hardened exec the agent's run_command uses (allowlist de binarios,
+// setpriv/prlimit/setsid, sin shell). Antes de esta ruta el panel llamaba
+// GET /files?command=..., que ignoraba `command` y devolvía la lista de
+// archivos: la Shell en modo workspace estaba muerta (audit P0).
+const EXEC_MAX_ARGS = 64;
+const EXEC_MAX_ARG_CHARS = 4_000;
+const EXEC_MAX_TOTAL_CHARS = 32_000;
+const EXEC_DEFAULT_TIMEOUT_MS = 30_000;
+const EXEC_MAX_TIMEOUT_MS = 120_000; // espejo del EXEC_MAX_TIMEOUT_MS del runner
+
+const execValidators = [
+  body('cmd')
+    .isArray({ min: 1, max: EXEC_MAX_ARGS })
+    .withMessage(`cmd must be an array of 1-${EXEC_MAX_ARGS} strings`),
+  body('cmd.*')
+    .isString()
+    .withMessage('each cmd item must be a string')
+    .bail()
+    .isLength({ min: 1, max: EXEC_MAX_ARG_CHARS })
+    .withMessage(`each cmd item must be 1-${EXEC_MAX_ARG_CHARS} chars`),
+  body('cmd').custom((cmd) => {
+    if (!Array.isArray(cmd)) return true;
+    const total = cmd.reduce((sum, a) => sum + String(a || '').length, 0);
+    if (total > EXEC_MAX_TOTAL_CHARS) {
+      throw new Error(`total cmd length must be <= ${EXEC_MAX_TOTAL_CHARS} chars`);
+    }
+    return true;
+  }),
+  body('run').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 64 }),
+  body('timeoutMs').optional({ nullable: true }).isInt({ min: 1_000, max: EXEC_MAX_TIMEOUT_MS }),
+];
+
+router.post(
+  '/projects/:id/exec',
+  authenticateToken,
+  requireCodexAgentAccess,
+  execValidators,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+
+    try {
+      const project = await loadOwnedProject(req, res);
+      if (!project) return undefined;
+      const cmd = req.body.cmd.map((a) => String(a));
+      const run = typeof req.body.run === 'string' && req.body.run.trim() ? req.body.run.trim() : null;
+      const timeoutMs = Number(req.body.timeoutMs) || undefined;
+      const runner = createSandboxClient();
+      const scoped = run && typeof runner.forRun === 'function' ? runner.forRun(run, project.id) : runner;
+      const out = await scoped.exec(project.id, cmd, { timeoutMs });
+      return res.json({
+        ok: Boolean(out?.ok),
+        exitCode: Number.isFinite(out?.exitCode) ? out.exitCode : null,
+        timedOut: Boolean(out?.timedOut),
+        stdout: String(out?.stdout || ''),
+        stderr: String(out?.stderr || ''),
+      });
+    } catch (err) {
+      const status = Number(err?.status) || 0;
+      // Map the sidecar's error vocabulary onto this route's contract.
+      if (status === 400) return res.status(400).json({ error: err.body?.error || 'invalid_command' });
+      if (status === 404) return res.status(404).json({ error: 'workspace_not_found' });
+      if (status === 409) return res.status(409).json({ error: err.body?.error || 'workspace_unavailable' });
+      return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    }
+  },
+);
+
 // ── Runs (feature 05) ───────────────────────────────────────────────────────
 // Create/list/detail are scoped under the project (POST/GET /projects/:id/runs)
 // so they never shadow the legacy codex-runs router, which is mounted first and
@@ -738,6 +2685,7 @@ router.post(
     body('prompt').optional({ nullable: true }).isString().isLength({ max: 20000 }),
     body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
     body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('reasoningEffort').optional({ nullable: true }).isString().isIn(['low', 'medium', 'high', 'max']),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
     body('autoExecute').optional().isBoolean(),
   ],
@@ -752,6 +2700,7 @@ router.post(
         prompt: req.body.prompt ?? null,
         model: req.body.model ?? null,
         tier: req.body.tier ?? null,
+        reasoningEffort: req.body.reasoningEffort ?? null,
         planRunId: req.body.planRunId ?? null,
         autoExecute: req.body.autoExecute === true,
       });
@@ -874,6 +2823,7 @@ router.post(
       const { runner, service } = codexSessionRuntime();
       const checkpointId = req.body?.checkpointId == null ? null : String(req.body.checkpointId).trim();
       let previousSha = null;
+      let checkpointRecoveryRef = null;
       const session = await service.rewindSession({
         projectId: req.params.projectId,
         sessionId: req.params.runId,
@@ -889,19 +2839,27 @@ router.post(
               deps: { runner },
             });
             previousSha = restored?.previousSha || null;
+            checkpointRecoveryRef = restored?.recovery?.ref || null;
             return restored?.error ? { ok: false, ...restored } : { ok: true, ...restored };
           }
           : null,
         undoCheckpointRestore: checkpointId
-          ? async () => (
-            previousSha
+          ? async () => {
+            if (checkpointRecoveryRef) {
+              return checkpointService.recoverWorkspaceChanges({
+                projectId: req.params.projectId,
+                recoveryRef: checkpointRecoveryRef,
+                runner,
+              });
+            }
+            return previousSha
               ? checkpointService.restoreWorkspaceSha({
                 projectId: req.params.projectId,
                 commitSha: previousSha,
                 deps: { runner },
               })
-              : { ok: false, error: 'previous_sha_unavailable' }
-          )
+              : { ok: false, error: 'previous_sha_unavailable' };
+          }
           : null,
       });
       return res.json({ session });
@@ -919,6 +2877,41 @@ router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, asyn
     return mapRunError(err, res);
   }
 });
+
+router.post('/runs/:id/cancel-family', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  try {
+    const result = await runService.cancelRunFamily({ userId: req.user.id, runId: req.params.id });
+    return res.json(result);
+  } catch (err) {
+    return mapRunError(err, res);
+  }
+});
+
+router.post(
+  '/runs/:id/summary-audio',
+  authenticateToken,
+  requireCodexAgentAccess,
+  requirePaidPlan({ feature: 'voice_generation' }),
+  async (req, res) => {
+    try {
+      const result = await require('../services/codex/run-summary-audio').ensureRunSummaryAudio({
+        runId: req.params.id,
+        userId: req.user.id,
+        prisma: codexDb,
+        runService,
+        eventStore,
+        tts: require('../services/ai/elevenlabs-tts'),
+      });
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.json(result);
+    } catch (err) {
+      return res.status(Number(err?.status) || 500).json({
+        error: err?.code || 'codex_summary_audio_failed',
+        message: err.message,
+      });
+    }
+  },
+);
 
 router.post(
   '/runs/:id/tool-permission',
@@ -957,6 +2950,37 @@ router.post('/checkpoints/:id/rollback', authenticateToken, async (req, res) => 
       deps: { runner: createSandboxClient() },
     });
     if (out.error) return res.status(out.status || 400).json({ error: out.error, detail: out.detail });
+    return res.json(out);
+  } catch (err) {
+    return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+  }
+});
+
+router.post('/projects/:id/workspace/recover', authenticateToken, async (req, res) => {
+  const recoveryRef = String(req.body?.recoveryRef || '').trim();
+  if (!checkpointService.isValidRecoveryRef(recoveryRef)) {
+    return res.status(400).json({ error: 'invalid_recovery_ref' });
+  }
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    const runs = await runService.listRuns({ userId: req.user.id, projectId: project.id });
+    if (runs.some((run) => runService.ACTIVE_STATUSES?.includes?.(run.status))) {
+      return res.status(409).json({ error: 'workspace_recovery_run_active' });
+    }
+    const out = await checkpointService.recoverWorkspaceChanges({
+      projectId: project.id,
+      recoveryRef,
+      runner: createSandboxClient(),
+    });
+    if (!out.ok) {
+      return res.status(out.status || 400).json({
+        error: out.error,
+        detail: out.detail,
+        files: out.files,
+        recoveryRef: out.recoveryRef,
+      });
+    }
     return res.json(out);
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
@@ -1008,6 +3032,11 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   const afterSeq = Number.parseInt(req.query.afterSeq, 10);
   const startSeq = Number.isFinite(afterSeq) ? afterSeq : 0;
 
+  // Platform telemetry (batch 2): TTFB = wall time from stream open to the
+  // first emitted event; chunk counter is per SSE event written.
+  const streamOpenedAt = Date.now();
+  let firstEventEmitted = false;
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -1027,11 +3056,22 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   }
   req.on('close', cleanup);
   res.on('close', cleanup);
+  // Some proxies/networks destroy the socket with an 'error' event and never
+  // emit 'close'; without these the heartbeat keeps writing to a dead socket
+  // until the next 25s tick (and even res.write can silently succeed on a
+  // half-open socket). Treat either event as the client going away.
+  req.on('error', cleanup);
+  res.on('error', cleanup);
 
   function write(envelope) {
     if (closed || res.writableEnded) return false;
     try {
       res.write(`data: ${JSON.stringify(envelope)}\n\n`);
+      if (!firstEventEmitted) {
+        firstEventEmitted = true;
+        observabilityMetrics.recordStreamTtfb({ mode: run?.mode || 'unknown', ttfbMs: Date.now() - streamOpenedAt });
+      }
+      observabilityMetrics.recordStreamChunk({ surface: 'codex' });
       return true;
     } catch {
       cleanup();

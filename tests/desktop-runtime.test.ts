@@ -12,7 +12,7 @@ const runtime = require(path.join(process.cwd(), "apps/desktop/runtime.cjs")) as
 }
 
 test("desktop runtime opens the authenticated chat by default", () => {
-  assert.equal(runtime.DEFAULT_APP_URL, "https://siragpt.com/chat")
+  assert.equal(runtime.DEFAULT_APP_URL, "https://siragpt.com/agentes")
   assert.equal(runtime.normaliseAppUrl("https://evil.example/path"), runtime.DEFAULT_APP_URL)
   assert.equal(runtime.normaliseAppUrl("http://127.0.0.1:3000", { allowLocalhost: true }), "http://127.0.0.1:3000/")
   assert.equal(runtime.normaliseAppUrl("http://127.0.0.1:3000"), runtime.DEFAULT_APP_URL)

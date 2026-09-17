@@ -11,6 +11,28 @@
 #     described in docs/slo.md.
 
 groups:
+  - name: siragpt.doc-sandbox
+    interval: 30s
+    rules:
+      - alert: SiraGPTDocumentFailureRate
+        expr: |
+          (sum(increase(siragpt_doc_jobs_total{status="failed"}[1h])) or vector(0))
+          / clamp_min(sum(increase(siragpt_doc_jobs_total{status=~"done|failed"}[1h])), 1) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+          service: siragpt-doc-sandbox
+        annotations:
+          summary: "Document failure rate exceeds 20% over one hour"
+          runbook: backend/src/modules/doc-sandbox/README.md
+      - alert: SiraGPTDocumentTimeout
+        expr: sum(increase(siragpt_doc_timeouts_total[5m])) > 0
+        labels:
+          severity: warning
+          service: siragpt-doc-sandbox
+        annotations:
+          summary: "A document job exceeded its deadline"
+          runbook: backend/src/modules/doc-sandbox/README.md
   # ------------------------------------------------------------------
   # Recording rules — SLIs
   # ------------------------------------------------------------------

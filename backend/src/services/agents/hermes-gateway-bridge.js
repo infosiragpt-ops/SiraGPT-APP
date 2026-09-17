@@ -6,6 +6,7 @@
  */
 
 const { createOpenClawAdapter, resolveOpenClawConfig } = require('../../orchestration/multichannel/openclaw-adapter');
+const { rejectedReceipt } = require('../../orchestration/multichannel/delivery-receipt');
 
 const DEFAULT_CHANNELS = Object.freeze([
   'telegram', 'discord', 'slack', 'whatsapp', 'signal', 'imessage', 'email', 'web',
@@ -30,7 +31,17 @@ function resolveHermesGatewayConfig(env = process.env) {
 
 function createHermesGateway(opts = {}) {
   const config = resolveHermesGatewayConfig(opts.env);
-  const openclaw = createOpenClawAdapter({ env: opts.env });
+  const openclaw = createOpenClawAdapter({
+    env: opts.env,
+    transport: opts.transport,
+    fetchImpl: opts.fetchImpl,
+  });
+  const deliveryConfig = {
+    ...openclaw.config,
+    enabled: config.enabled,
+    allowedChannels: config.channels,
+    endpoint: config.deliveryEndpoint || openclaw.config.endpoint,
+  };
 
   return {
     config,
@@ -39,17 +50,20 @@ function createHermesGateway(opts = {}) {
       return config.channels.map((channel) => ({
         channel,
         enabled: config.enabled,
-        deliveryConfigured: Boolean(config.deliveryEndpoint || config.openclaw.apiKeyConfigured),
+        // Endpoint/key presence is configuration, not a Conectada/delivered proof.
+        deliveryConfigured: Boolean(config.deliveryEndpoint && config.openclaw.apiKeyConfigured),
+        connected: false,
       }));
     },
 
     async handleInboundMessage(message = {}) {
       if (!config.enabled) {
-        return { accepted: false, reason: 'hermes_gateway_disabled' };
+        return { accepted: false, delivered: false, reason: 'hermes_gateway_disabled' };
       }
       const routed = await openclaw.handleInboundMessage(message);
       return {
         ...routed,
+        delivered: routed.delivered === true,
         gateway: 'hermes',
         continuityKey: message.continuityKey || `${message.channel}:${message.senderId || message.userId || 'anon'}`,
       };
@@ -57,35 +71,38 @@ function createHermesGateway(opts = {}) {
 
     async sendMessage(payload = {}) {
       if (!config.enabled) {
-        return { ok: false, reason: 'hermes_gateway_disabled' };
+        const receipt = rejectedReceipt('hermes_gateway_disabled', { channel: payload.channel || null });
+        return { ok: false, accepted: false, delivered: false, reason: 'hermes_gateway_disabled', receipt };
       }
       const channel = payload.channel || 'web';
       if (!config.channels.includes(channel)) {
-        return { ok: false, reason: 'channel_not_allowed', channel };
+        const receipt = rejectedReceipt('channel_not_allowed', { channel });
+        return { ok: false, accepted: false, delivered: false, reason: 'channel_not_allowed', channel, receipt };
       }
 
-      const text = String(payload.text || payload.message || '').trim();
-      if (!text) return { ok: false, reason: 'empty_message' };
-
-      if (config.deliveryEndpoint && config.openclaw.apiKeyConfigured) {
-        return {
-          ok: true,
-          mode: 'openclaw_delivery',
-          channel,
-          queued: true,
-          endpoint: config.deliveryEndpoint,
-          preview: text.slice(0, 160),
-        };
-      }
+      const receipt = await openclaw.deliverOutbound(
+        { ...payload, channel },
+        {
+          env: opts.env,
+          config: deliveryConfig,
+          transport: opts.transport,
+          fetchImpl: opts.transport
+            ? undefined
+            : (opts.fetchImpl !== undefined
+              ? opts.fetchImpl
+              : (deliveryConfig.endpoint ? globalThis.fetch : undefined)),
+        },
+      );
 
       return {
-        ok: true,
-        mode: 'siragpt_internal',
-        channel,
-        delivered: false,
-        storedForSession: true,
-        preview: text.slice(0, 160),
-        hint: 'Configure OPENCLAW_GATEWAY_URL + OPENCLAW_API_KEY for external delivery',
+        ok: receipt.delivered === true,
+        accepted: receipt.accepted === true,
+        delivered: receipt.delivered === true,
+        reason: receipt.error ? receipt.error.code : undefined,
+        channel: receipt.channel,
+        preview: receipt.preview,
+        receipt,
+        mode: receipt.delivered ? 'openclaw_delivery' : (receipt.accepted ? 'accepted_only' : 'rejected'),
       };
     },
 

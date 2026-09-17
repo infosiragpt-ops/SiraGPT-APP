@@ -113,19 +113,7 @@ export class ReconnectingEventSource {
 
   /** Build the URL for the next connect attempt, appending lastEventId */
   private buildUrl(): string {
-    const param = this.options.lastEventIdParam
-    if (!param || !this.lastEventId) return this.url
-    try {
-      const u = new URL(this.url, typeof window !== "undefined" ? window.location.origin : "http://localhost")
-      // Only append if the server hasn't already set this param.
-      if (!u.searchParams.has(param)) u.searchParams.set(param, this.lastEventId)
-      // If url was relative, return the path+search to preserve relativity.
-      if (/^https?:/i.test(this.url)) return u.toString()
-      return u.pathname + (u.search || "") + (u.hash || "")
-    } catch {
-      const sep = this.url.includes("?") ? "&" : "?"
-      return `${this.url}${sep}${encodeURIComponent(param)}=${encodeURIComponent(this.lastEventId)}`
-    }
+    return buildResumeUrl(this.url, this.lastEventId, this.options.lastEventIdParam)
   }
 
   private setState(s: SseReconnectState, info?: { attempt?: number; delay?: number }) {
@@ -210,4 +198,23 @@ export function createReconnectingEventSource(
   options: SseReconnectOptions = {},
 ): ReconnectingEventSource {
   return new ReconnectingEventSource(url, options)
+}
+
+
+export function buildResumeUrl(
+  url: string,
+  lastEventId?: string | null,
+  param: string | null | undefined = "lastEventId",
+): string {
+  const id = String(lastEventId || "").trim()
+  if (!param || !id) return url
+  try {
+    const u = new URL(url, typeof window !== "undefined" ? window.location.origin : "http://localhost")
+    if (!u.searchParams.has(param)) u.searchParams.set(param, id)
+    if (/^https?:/i.test(url)) return u.toString()
+    return u.pathname + (u.search || "") + (u.hash || "")
+  } catch {
+    const sep = url.includes("?") ? "&" : "?"
+    return `${url}${sep}${encodeURIComponent(param)}=${encodeURIComponent(id)}`
+  }
 }

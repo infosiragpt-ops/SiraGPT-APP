@@ -153,7 +153,13 @@ async function _embedRaw(texts) {
   const openai = getOpenAI();
   if (!openai) throw new Error('OPENAI_API_KEY not configured — RAG embed() unavailable');
 
-  const BATCH = 96; // well under OpenAI's 2048-input ceiling
+  const BATCH = (() => {
+    try {
+      return require('./document-extract-fastpath').embedBatchSize();
+    } catch {
+      return 128;
+    }
+  })(); // well under OpenAI's 2048-input ceiling
   const out = [];
   for (let i = 0; i < texts.length; i += BATCH) {
     const slice = texts.slice(i, i + BATCH);

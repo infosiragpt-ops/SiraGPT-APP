@@ -11,6 +11,7 @@ const sessionManager = require('../services/session-manager');
 const skillsRegistry = require('../services/skills-registry');
 const coworkEngine = require('../services/cowork-engine');
 const coworkHealth = require('../services/cowork-health');
+const { isMemoryWriteError } = require('../services/agents/memory-write-guard');
 const { createProgressStream, writeSSE, STAGES } = require('../services/cowork-progress-stream');
 const { rateLimitMiddleware } = require('../services/rate-limiter');
 
@@ -127,6 +128,12 @@ router.post('/memory', authenticateToken, memoryRateLimit, async (req, res) => {
     });
     res.json(entry);
   } catch (err) {
+    if (isMemoryWriteError(err)) {
+      if (err.retryAfterMs) {
+        res.setHeader('Retry-After', String(Math.ceil(err.retryAfterMs / 1000)));
+      }
+      return res.status(err.status || 400).json({ error: err.message, code: err.code });
+    }
     res.status(500).json({ error: err.message });
   }
 });

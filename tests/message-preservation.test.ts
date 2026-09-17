@@ -3,7 +3,27 @@ import assert from 'node:assert/strict';
 import {
   mergeChatPreservingUserMessages,
   mergeMessagesPreservingUserContent,
+  parseAgentTaskContent,
 } from '../lib/message-preservation';
+
+test('reads a persisted agent task id from the reducer meta envelope', () => {
+  const content = '```agent-task-state\n' + JSON.stringify({
+    meta: { taskId: 'task-from-meta' },
+    done: false,
+  }) + '\n```';
+
+  assert.equal(parseAgentTaskContent(content).taskId, 'task-from-meta');
+});
+
+test('prefers the legacy top-level task id when both envelope locations exist', () => {
+  const content = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-top-level',
+    meta: { taskId: 'task-from-meta' },
+    done: false,
+  }) + '\n```';
+
+  assert.equal(parseAgentTaskContent(content).taskId, 'task-top-level');
+});
 
 test('preserves a visible user message when backend refresh returns blank content by id', () => {
   const local = [
@@ -110,6 +130,61 @@ test('prefers completed agent task server content over longer pending local stat
   assert.equal(merged[1].content, incomingContent);
 });
 
+test('keeps a locally completed task with artifacts over a stale pending refresh of the same task', () => {
+  const taskId = 'task-completed-before-db-refresh';
+  const incomingContent = '```agent-task-state\n' + JSON.stringify({
+    taskId,
+    done: false,
+    status: 'running',
+    steps: [{ id: 'edit', status: 'running' }],
+  }) + '\n```';
+  const localContent = '```agent-task-state\n' + JSON.stringify({
+    taskId,
+    done: true,
+    finalText: 'Listo.',
+    artifacts: [{ id: 'artifact-1', filename: 'Informe.docx' }],
+  }) + '\n```\n\nListo.';
+
+  const merged = mergeMessagesPreservingUserContent(
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: incomingContent }],
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: localContent }],
+  );
+
+  assert.equal(merged[0].content, localContent);
+});
+
+test('does not preserve a completed local envelope over a different incoming task', () => {
+  const incomingContent = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-new',
+    done: false,
+    status: 'running',
+  }) + '\n```';
+  const localContent = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'task-old',
+    done: true,
+    finalText: 'Listo.',
+  }) + '\n```\n\nListo.';
+
+  const merged = mergeMessagesPreservingUserContent(
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: incomingContent }],
+    [{ id: 'assistant-1', role: 'ASSISTANT', content: localContent }],
+  );
+
+  assert.equal(merged[0].content, incomingContent);
+});
+
+test('parses legacy top-level task id and completed status', () => {
+  const content = '```agent-task-state\n' + JSON.stringify({
+    taskId: 'legacy-task',
+    status: 'completed',
+    finalText: 'Terminado',
+  }) + '\n```\n\nTerminado';
+
+  const parsed = parseAgentTaskContent(content);
+  assert.equal(parsed.taskId, 'legacy-task');
+  assert.equal(parsed.done, true);
+});
+
 test('re-inserts a visible user message if the backend refresh drops the turn', () => {
   const local = [
     { id: 'old-user', role: 'USER', content: 'hola' },
@@ -130,4 +205,44 @@ test('re-inserts a visible user message if the backend refresh drops the turn', 
   assert.equal(merged[2].content, 'transcribir');
   assert.deepEqual((merged[2] as any).files, [{ id: 'img-1', mimeType: 'image/png' }]);
   assert.equal(merged[3].content, 'LAS NORMAS A USAR SON VANCOUVER');
+});
+
+test('replaces empty msg-ai placeholder with persisted cmti row of the same turn', () => {
+  const turn = { idempotencyKey: 'turn-hola' };
+  const localChat = {
+    id: 'chat-1',
+    messages: [
+      { id: 'msg-user-abc', role: 'USER', content: 'hola', metadata: turn },
+      {
+        id: 'msg-ai-chat-1-xyz',
+        role: 'ASSISTANT',
+        content: '',
+        metadata: turn,
+        model: { name: 'grok-4.5', displayName: 'Grok 4.5', provider: 'xAI' },
+      },
+    ],
+  };
+  const incomingChat = {
+    id: 'chat-1',
+    messages: [
+      { id: 'cmtuser01', role: 'USER', content: 'hola', metadata: turn },
+      {
+        id: 'cmtassist01',
+        role: 'ASSISTANT',
+        content: 'Hola, Luis. ¿En qué te ayudo hoy?',
+        metadata: { ...turn, generationUsage: { model: 'grok-4.5' } },
+      },
+    ],
+  };
+
+  const merged = mergeChatPreservingUserMessages(incomingChat, localChat);
+  const assistants = merged.messages.filter((message) => String(message.role).toUpperCase() === 'ASSISTANT');
+  assert.equal(assistants.length, 1);
+  assert.equal(assistants[0].id, 'cmtassist01');
+  assert.equal(assistants[0].content, 'Hola, Luis. ¿En qué te ayudo hoy?');
+  assert.deepEqual((assistants[0] as { model?: unknown }).model, {
+    name: 'grok-4.5',
+    displayName: 'Grok 4.5',
+    provider: 'xAI',
+  });
 });

@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { AGENTS_HOME_PATH, postAuthAgentsHref } from "@/lib/agents-home-path"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { getNormalizedApiBaseUrl } from "@/lib/api"
 import { useBackendReady } from "@/lib/use-backend-ready"
@@ -19,15 +20,7 @@ import { useTranslations } from "next-intl"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 function safeAuthRedirect(raw: string | null) {
-  const value = String(raw || "").trim()
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/chat"
-  try {
-    const url = new URL(value, "https://siragpt.local")
-    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/chat"
-    return `${url.pathname}${url.search}${url.hash}` || "/chat"
-  } catch (_error) {
-    return "/chat"
-  }
+  return postAuthAgentsHref(raw)
 }
 
 function LoginPageContent() {
@@ -47,7 +40,7 @@ function LoginPageContent() {
     () => safeAuthRedirect(searchParams.get("next")),
     [searchParams],
   )
-  const registerHref = postLoginRedirect === "/chat"
+  const registerHref = postLoginRedirect === AGENTS_HOME_PATH
     ? "/auth/register"
     : `/auth/register?next=${encodeURIComponent(postLoginRedirect)}`
 
@@ -81,16 +74,25 @@ function LoginPageContent() {
     if (typeof window === "undefined") return
     const params = new URLSearchParams(window.location.search)
     const errorMsg = params.get("error")
-    if (errorMsg) {
+    const noticeMsg = params.get("notice")
+    const code = errorMsg || noticeMsg
+    if (code) {
       const friendly: Record<string, string> = {
         auth_failed:
           "No pudimos completar el inicio de sesión con Google. Inténtalo de nuevo.",
         db_unavailable:
           "Estamos teniendo problemas para conectar con la base de datos. Inténtalo de nuevo en unos segundos.",
+        google_unavailable:
+          "El inicio con Google no está disponible ahora. Prueba con email y contraseña, o inténtalo de nuevo en un minuto.",
+        oauth_state_unavailable:
+          "No pudimos iniciar el flujo de Google. Inténtalo de nuevo.",
+        invalid_state:
+          "La sesión de Google expiró. Inténtalo de nuevo.",
       }
-      toast.error(friendly[errorMsg] ?? errorMsg)
+      toast.error(friendly[code] ?? code)
       // Clean the URL so a refresh doesn't re-toast the same error
       params.delete("error")
+      params.delete("notice")
       const cleaned = params.toString()
       const target = window.location.pathname + (cleaned ? `?${cleaned}` : "")
       window.history.replaceState(null, "", target)

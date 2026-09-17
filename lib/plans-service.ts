@@ -59,6 +59,36 @@ export async function getPlan(code: PlanCode): Promise<Plan | null> {
   return data.plan
 }
 
+/**
+ * Runtime payments configuration (public, no auth). Lets /planes know
+ * whether card checkout is live and which WhatsApp number receives
+ * "Hablemos" leads WITHOUT rebuilding the frontend image.
+ */
+export interface PaymentsConfig {
+  stripeConfigured: boolean
+  checkoutAvailable: boolean
+  demoAllowed: boolean
+  whatsappNumber: string | null
+  paidPlan: {
+    code: PlanCode
+    name: string
+    priceUsd: number
+    interval: string
+    currency: string
+  }
+  contactPlan: {
+    code: PlanCode
+    name: string
+    channel: "whatsapp" | "support"
+  }
+}
+
+export async function getPaymentsConfig(signal?: AbortSignal): Promise<PaymentsConfig> {
+  const res = await fetch(`${API_ROOT}/payments/config`, { cache: "no-store", signal })
+  if (!res.ok) throw new Error(`getPaymentsConfig: ${res.status}`)
+  return (await res.json()) as PaymentsConfig
+}
+
 export function monthlyCreditsAsBigInt(plan: Plan): bigint {
   try {
     return BigInt(plan.monthlyCredits)

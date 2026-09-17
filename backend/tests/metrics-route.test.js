@@ -59,6 +59,14 @@ test('formatExposition: includes FlashGPT/free-ia fallback counters', () => {
     'free-ia counters must be scrapeable from the main /metrics endpoint');
 });
 
+test('formatExposition: includes RLHF phase-2 steering counters', () => {
+  const { formatProcessMetricsExposition } = processFormatter();
+  const text = formatProcessMetricsExposition();
+  assert.ok(/sira_rlhf_ingest_total/.test(text),
+    'rlhf counters must be scrapeable from the main /metrics endpoint');
+  assert.ok(/sira_rlhf_steering_applied_total/.test(text));
+});
+
 test('process formatter propagates cognitive exporter failures', () => {
   const { formatProcessMetricsExposition } = processFormatter();
   assert.throws(

@@ -27,11 +27,15 @@ function session(overrides: Partial<CodeChatSession> = {}): CodeChatSession {
 }
 
 describe("code agent company", () => {
-  it("normalizes company labels without exposing generic project names", () => {
-    assert.equal(agentCompanyDisplayName("Nueva app full-stack"), "SiraGPT.COM")
-    assert.equal(agentCompanyDisplayName("Sira GPT"), "SiraGPT.COM")
-    assert.equal(agentCompanyDisplayName("tesis20"), "TESIS20.COM")
-    assert.equal(agentCompanyDisplayName("nexora"), "NEXORA.COM")
+  it("shows company names exactly as typed without appending .com", () => {
+    assert.equal(agentCompanyDisplayName("  SORA  "), "SORA")
+    assert.equal(agentCompanyDisplayName("SORA"), "SORA")
+    assert.equal(agentCompanyDisplayName("tesis20.com"), "tesis20.com")
+    assert.equal(agentCompanyDisplayName("TESIS20.COM"), "TESIS20.COM")
+    assert.equal(agentCompanyDisplayName("Nueva app full-stack"), "Nueva app full-stack")
+    assert.equal(agentCompanyDisplayName("Sira GPT"), "Sira GPT")
+    assert.equal(agentCompanyDisplayName(""), "")
+    assert.equal(agentCompanyDisplayName(null), "")
   })
 
   it("derives real operational totals from sessions and workspace files", () => {
@@ -79,10 +83,14 @@ describe("code agent company", () => {
       turns: [{ id: "u1", role: "user", content: "Audita seguridad del sandbox" }],
     })
     const product = session({ id: "product", title: "Ajustar componente" })
+    const sales = session({ id: "sales", title: "Calificar leads y actualizar CRM" })
+    const customerSuccess = session({ id: "support", title: "Responder correo pendiente del cliente" })
 
     assert.equal(departmentIdForSession(root, "root"), "ceo-office")
     assert.equal(departmentIdForSession(security, "root"), "trust")
     assert.equal(departmentIdForSession(product, "root"), "product-engineering")
+    assert.equal(departmentIdForSession(sales, "root"), "sales")
+    assert.equal(departmentIdForSession(customerSuccess, "root"), "customer-success")
   })
 
   it("maps persisted Codex workers to departments and reports their real state", () => {

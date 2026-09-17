@@ -6,9 +6,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const PptxGenJS = require('pptxgenjs');
 const {
-    addRowsWorksheet,
-    createWorkbook,
-    writeWorkbookBuffer,
+    writeXlsxStream,
 } = require('../services/xlsx-safe-workbook');
 const {
     contentDispositionHeader,
@@ -227,17 +225,14 @@ router.post(
             }
 
             const wsData = [tableData.headers, ...tableData.rows];
-            const wb = createWorkbook();
-            wb.creator = 'SiraGPT';
-            wb.created = new Date();
-            addRowsWorksheet(wb, 'AI Response Data', wsData);
-
-            // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
             const finalFilename = exportFilename(filename, `ai-response-${timestamp}.xlsx`, '.xlsx');
 
-            // Write to buffer
-            const excelBuffer = await writeWorkbookBuffer(wb);
+            // Streamed build: constant peak memory even for very large tables.
+            const excelBuffer = await writeXlsxStream(
+                [{ name: 'AI Response Data', rows: wsData }],
+                { creator: 'SiraGPT', created: new Date() }
+            );
 
             // Set headers for file download
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

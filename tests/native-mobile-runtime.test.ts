@@ -11,9 +11,9 @@ describe("Native mobile runtime", () => {
 
     assert.match(
       config,
-      /CAPACITOR_SERVER_URL\?\.trim\(\)\s*\|\|\s*"https:\/\/siragpt\.com\/chat"/,
+      /CAPACITOR_SERVER_URL\?\.trim\(\)\s*\|\|\s*"https:\/\/siragpt\.com\/agentes"/,
     )
-    assert.equal(metadata.app?.webRuntimeUrl, "https://siragpt.com/chat")
+    assert.equal(metadata.app?.webRuntimeUrl, "https://siragpt.com/agentes")
     assert.match(config, /allowNavigation:\s*\["siragpt\.com",\s*"www\.siragpt\.com"\]/)
   })
 })

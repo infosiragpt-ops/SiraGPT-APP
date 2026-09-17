@@ -42,6 +42,34 @@ describe("codex-projects registry", () => {
     assert.equal(rows[0]?.id, "project:b")
   })
 
+  it("preserves optional workspace metadata across partial refreshes", () => {
+    upsertCodexProject({
+      id: "local:a",
+      name: "A",
+      kind: "local-folder",
+      displayPath: "~/Projects/A",
+      fileCount: 12,
+      isPinned: true,
+      updatedAt: 10,
+    })
+    upsertCodexProject({
+      id: "local:a",
+      name: "A renovada",
+      kind: "local-folder",
+      updatedAt: 20,
+    })
+
+    assert.deepEqual(listCodexProjects()[0], {
+      id: "local:a",
+      name: "A renovada",
+      kind: "local-folder",
+      displayPath: "~/Projects/A",
+      fileCount: 12,
+      isPinned: true,
+      updatedAt: 20,
+    })
+  })
+
   it("removes entries by id", () => {
     upsertCodexProject({ id: "local:a", name: "A", kind: "local-folder" })
     const rows = removeCodexProject("local:a")

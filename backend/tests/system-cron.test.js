@@ -97,10 +97,13 @@ describe('system-cron', () => {
         'detect-idle-orgs',
         'detect-idle-users',
         'failed-email-retry',
+        'growth-gauges',
         'hard-delete-deleted-users',
         'prune-api-usage',
         'research-saved-search-alerts',
+        'rlhf-phase3',
         'scrub-deleted-user-content',
+        'stale-run-watchdog',
         'sweep-expired-announcements',
         'sweep-expired-api-keys',
         'sweep-expired-partial-sessions',
@@ -135,6 +138,8 @@ describe('system-cron', () => {
       assert.equal(researchAlerts.schedule, '30 * * * *');
       const costArchive = res.tasks.find((t) => t.name === 'cost-tracker-archive');
       assert.equal(costArchive.schedule, '30 5 * * *');
+      const staleWatchdog = res.tasks.find((t) => t.name === 'stale-run-watchdog');
+      assert.equal(staleWatchdog.schedule, '* * * * *');
     } finally {
       mod.stop();
     }

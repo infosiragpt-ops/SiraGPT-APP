@@ -71,15 +71,29 @@ function client(): PostHogLike | null {
  * operation they need to confirm. Anything that needs delivery
  * confirmation belongs on the backend.
  */
+const PII_KEY_RE = /email|token|authorization|password|cookie|bearer|secret/i
+
+function stripPii(properties?: AnalyticsProperties): AnalyticsProperties | undefined {
+  if (!properties) return properties
+  const out: AnalyticsProperties = {}
+  for (const [key, value] of Object.entries(properties)) {
+    if (PII_KEY_RE.test(key)) continue
+    if (typeof value === "string" && /@/.test(value) && /\./.test(value)) continue
+    out[key] = value
+  }
+  return out
+}
+
 export function track(event: AnalyticsEvent, properties?: AnalyticsProperties): void {
   const ph = client()
+  const safeProperties = stripPii(properties)
   if (!ph) {
     // Dev convenience: when PostHog isn't loaded we still want to see
     // events while developing. Production with no key stays silent.
     if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
       try {
         // eslint-disable-next-line no-console
-        console.debug("[analytics]", event, properties ?? {})
+        console.debug("[analytics]", event, safeProperties ?? {})
       } catch {
         /* ignore */
       }
@@ -87,7 +101,7 @@ export function track(event: AnalyticsEvent, properties?: AnalyticsProperties): 
     return
   }
   try {
-    ph.capture(event, properties)
+    ph.capture(event, safeProperties)
   } catch {
     // Analytics failure is never user-facing.
   }

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { AdminPageHeader, AdminStatCard, AdminPageBody } from "@/components/admin/admin-chrome"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
@@ -193,42 +193,38 @@ export function AdminDashboard() {
 
   if (loading && !analytics) {
     return (
-      <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-        <div className="animate-pulse">
-          <div className="flex items-center gap-2 sm:gap-3 mb-3 sm:mb-4">
-            <SidebarTrigger className="md:hidden" />
-            <div>
-              <div className="h-6 sm:h-8 bg-muted rounded w-32 sm:w-48 mb-2"></div>
-              <div className="h-3 sm:h-4 bg-muted rounded w-48 sm:w-64"></div>
-            </div>
+      <>
+        <AdminPageHeader title="Panel" description="Cargando datos reales…" />
+        <AdminPageBody>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="admin-stat animate-pulse">
+                <div className="h-3 w-16 rounded bg-muted" />
+                <div className="mt-2 h-6 w-20 rounded bg-muted" />
+              </div>
+            ))}
           </div>
-        </div>
-      </div>
+        </AdminPageBody>
+      </>
     )
   }
 
   return (
-    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <SidebarTrigger className="md:hidden" />
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold">Panel de administración</h1>
-              <p className="text-muted-foreground text-sm sm:text-base mt-1">
-                Datos reales sincronizados con Sira GPT
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <ThemeToggle />
-          <Button size="sm" className="text-sm gap-2" onClick={loadDashboard} disabled={refreshing}>
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-            Refrescar datos
-          </Button>
-        </div>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Panel"
+        description="Datos reales sincronizados con Sira GPT"
+        actions={
+          <>
+            <ThemeToggle />
+            <Button size="sm" className="h-8 gap-1.5 text-[13px]" onClick={loadDashboard} disabled={refreshing}>
+              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              Refrescar
+            </Button>
+          </>
+        }
+      />
+      <AdminPageBody className="space-y-4">
 
       {error ? (
         <Card className="border-destructive/40 bg-destructive/5">
@@ -236,18 +232,15 @@ export function AdminDashboard() {
         </Card>
       ) : null}
 
-      <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         {stats.map((stat) => (
-          <Card key={stat.title}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
-              <stat.icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stat.value}</div>
-              <p className="mt-1 text-xs text-muted-foreground">{stat.description}</p>
-            </CardContent>
-          </Card>
+          <AdminStatCard
+            key={stat.title}
+            title={stat.title}
+            value={stat.value}
+            description={stat.description}
+            icon={stat.icon}
+          />
         ))}
       </div>
 
@@ -345,6 +338,7 @@ export function AdminDashboard() {
           </div>
         </CardContent>
       </Card>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

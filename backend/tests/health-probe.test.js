@@ -84,6 +84,21 @@ describe('Probe', () => {
     assert.ok(r.elapsedMs >= 30);
   });
 
+  it('reports at least the configured deadline for wrapper timeouts', async () => {
+    let clockReads = 0;
+    const p = new Probe({
+      name: 'clock-undershoot',
+      timeoutMs: 5,
+      ttlMs: 0,
+      now: () => (clockReads++ === 0 ? 100 : 104),
+      check: () => delay(100, 'too late'),
+    });
+
+    const r = await p.run();
+    assert.equal(r.status, STATUS.TIMEOUT);
+    assert.equal(r.elapsedMs, 5);
+  });
+
   it('aborts the check signal when a probe times out', async () => {
     let signalSeen = null;
     let abortedByTimeout = false;

@@ -38,6 +38,18 @@ describe("normalizeChatInput · pass-through", () => {
     assert.equal(normalizeChatInput(null).value, "")
     assert.equal(normalizeChatInput(123).value, "123")
   })
+
+  it("joins a one-letter-per-line stack so hola stays one word", () => {
+    const out = normalizeChatInput("h\no\nl\na")
+    assert.equal(out.value, "hola")
+    assert.equal(out.changed, true)
+  })
+
+  it("keeps real multi-word line breaks", () => {
+    const out = normalizeChatInput("hola\ncomo estas?")
+    assert.equal(out.value, "hola\ncomo estas?")
+    assert.equal(out.changed, false)
+  })
 })
 
 describe("normalizeChatInput · zero-width & BOM", () => {

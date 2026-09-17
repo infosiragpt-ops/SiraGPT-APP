@@ -29,7 +29,11 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key (format: `sk-proj-...` or `sk-svc-...`) |
+| `OPENAI_API_KEY` | Optional. Faster Whisper path only. Invalid/401 keys fall back to local Whisper. Never required for WhatsApp voice notes. |
+| `WHISPER_LANGUAGE` | Default language hint for transcription. Unset → `es`. |
+| `WHISPER_CPP_BIN` | Local whisper.cpp binary. Default `/usr/local/bin/whisper-cli` after image install. |
+| `WHISPER_CPP_MODEL` | Local ggml model path. Default `/usr/local/share/whisper/ggml-base.bin`. |
+| `LOCAL_WHISPER_MODEL` | Optional Python faster-whisper model name (`base`). |
 | `ANTHROPIC_API_KEY` | Anthropic Claude API key |
 | `GROQ_API_KEY` | Groq API key |
 | `GEMINI_API_KEY` | Google Gemini API key |
@@ -40,6 +44,7 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `GEMA4_PROVIDER` | Provider client for the free-tier fallback model. Default: `OpenAI` |
 | `GEMA4_DISPLAY_NAME` | Display name returned in the model selector policy. Default: `Gema4 31B` |
 | `GEMA4_ICON` | Icon key returned for the virtual fallback model. Default: `ChatGPTLogo` |
+| `SIRA_MINI_UPSTREAM_ID` | Ollama id for SiraGPT Mini. Default: `sira-mini`. Lenovo Ollama Mini = `sira-mini` → `gemma4:26b`, `num_ctx` 4096, `num_thread` 16. Chat uses native `POST /api/chat` with `think: false` and `keep_alive: -1` (Ollama 0.33.1 `/v1/chat/completions` ignores `think: false`). The picker always shows **SiraGPT Mini**. |
 
 ## 🗄️ Database & Cache
 
@@ -428,6 +433,24 @@ payload in the recovery record.
 | `SIRAGPT_MEMORY_EMBED_MODEL` | Memory embedding model; must return 1024 dimensions | `voyage-3-large` |
 | `VOYAGE_API_KEY` | Voyage AI key for 1024-dimension memory embeddings | (required when provider is `voyage`) |
 | `JINA_API_KEY` | Jina AI key for 1024-dimension memory embeddings | (required when provider is `jina`) |
+| `AGENTES_CODING_V2` | Coding Agents flag (`1`/`true`/`on`). Query `GET /api/agentes-coding/health`. Default OFF in production; does not change `/agentes` UX when off. CONSTRUIR MVP (HTML + zip + GitHub OAuth) works with this flag OFF: `docs/construir-mvp.md`. Existing-repo → isolated workspace → PR: `docs/construir-github-pr.md`. Phase 2a sessions: `docs/agentes-coding-sandbox.md`. Phase 3a IDE shell (only when `health.enabled`): `docs/agentes-coding-ide.md`. Phase 3b repo-map: `docs/agentes-coding-repomap.md`. Phase 3c structural edit: `docs/agentes-coding-struct-edit.md`. Phase 3d terminal channel (API-only): `docs/agentes-coding-terminal.md`. Phase 3e preview `exposePort` (API-only): `docs/agentes-coding-preview.md`. Phase 3f session git checkpoints (API-only): `docs/agentes-coding-git.md`. Phase 3g export + deploy stubs (API-only): `docs/agentes-coding-export-deploy.md`. Phase 4a harness: `docs/agentes-coding-harness.md`. Phase 4b HITL permissions (API-only): `docs/agentes-coding-permissions.md`. Phase 4c durable jobs (API-only): `docs/agentes-coding-jobs.md`. Phase 4d LLM adapter: `docs/agentes-coding-harness.md`. Phase 4e durable docker/volume workspace: `docs/agentes-coding-sandbox.md`. Phase 4f API-only todo-app CI smoke: `docs/agentes-coding-todo-smoke.md`. Do not set on Lenovo from this PR | (off) |
+| `AGENTES_CODING_HARNESS_JOBS` | Phase 4c kill switch. `0`/`false`/`off` keeps the in-process harness even if `REDIS_URL` is set. Empty ⇒ durable only when the flag is on **and** `REDIS_URL` is present on that env. Worker still no-ops when the flag is off | (empty) |
+| `AGENTES_CODING_HARNESS_LLM_TIMEOUT_MS` | Phase 4d per-completion timeout for the default harness adapter | `20000` |
+| `AGENTES_CODING_HARNESS_MODEL` | Phase 4d default brand alias when the body omits `modelAlias`. Must be `Sira Rápido` or `Sira Pro` (or their folded aliases). Never a raw model id | `Sira Rápido` |
+| `AGENTES_CODING_PREVIEW_PORTS` | Optional comma-separated port allowlist for Phase 3e `exposePort` (e.g. `5173,3000`). Empty ⇒ deny-by-default unless the session sends `previewPorts` or a network hook approves | (empty) |
+| `AGENTES_CODING_PREVIEW_SECRET` | HMAC secret for signed preview URLs. Empty ⇒ process-local generated secret (tokens die on restart). Never log the value | (generated) |
+| `AGENTES_CODING_PREVIEW_TTL_MS` | Signed preview URL TTL | `600000` |
+| `AGENTES_CODING_SG_BIN` | Optional path to the MIT `sg` / `ast-grep` binary for Phase 3c. Empty ⇒ look up `sg` then `ast-grep` on `PATH`. CI injects a runner and does not need the binary | (empty) |
+| `AGENTES_CODING_SANDBOX_DRIVER` | DEV session driver: `memory` (default, ephemeral), `docker` (bind-mounted workspace), or `volume`/`disk` (host dir, no daemon) | `memory` |
+| `AGENTES_CODING_SANDBOX_IMAGE` | Image the docker driver `docker run`s per session | `siragpt-coding-sandbox:dev` |
+| `AGENTES_CODING_SANDBOX_DATA_DIR` | Phase 4e host root for docker/volume session workspaces (`{dir}/{sessionId}/workspace`). Default is under the process temp dir (survives process restart, not a `/tmp` wipe). System paths (`/`, `/etc`) are rejected. Do not set on Lenovo from this PR | `$TMPDIR/siragpt-agentes-coding` |
+| `AGENTES_CODING_SANDBOX_MAX_VOLUME_BYTES` | Phase 4e stub cap on total durable workspace bytes | `268435456` |
+| `AGENTES_CODING_SANDBOX_MAX_VOLUME_FILES` | Phase 4e stub cap on durable workspace file count | `500` |
+| `AGENTES_CODING_EXPORT_MAX_BYTES` | Phase 3g zip/tar.gz size cap for a session export | `8388608` |
+| `AGENTES_CODING_EXPORT_MAX_FILES` | Phase 3g max files in one export | `256` |
+| `AGENTES_CODING_DEPLOY_BASE_URLS` | Comma-separated Coolify/Dokploy origins allowed for a live deploy call. Empty ⇒ stub only (record intent, no HTTP) | (empty) |
+| `AGENTES_CODING_DEPLOY_BASE_URL` | Single-origin alias of `AGENTES_CODING_DEPLOY_BASE_URLS` | (empty) |
+| `AGENTES_CODING_DEPLOY_TOKEN` | Optional bearer / API key for the injectable deploy client. Never log the value. Aliases: `COOLIFY_TOKEN`, `DOKPLOY_TOKEN` | (empty) |
 
 ## 🧰 MCP Connectors
 

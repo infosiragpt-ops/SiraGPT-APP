@@ -26,16 +26,27 @@ export interface ComposerProps {
   active?: boolean
   locale?: string
   showPlanToggle?: boolean
+  /** APPS surface uses a stronger multi-layer build placeholder + default Power tier. */
+  surface?: "code" | "apps"
   onSend: (payload: ComposerSendPayload) => void | Promise<void>
   onStop?: () => void | Promise<void>
 }
 
 const MAX_ATTACH_CHARS = 20_000
 
-export function Composer({ disabled, busy, active, locale, showPlanToggle = false, onSend, onStop }: ComposerProps) {
+export function Composer({
+  disabled,
+  busy,
+  active,
+  locale,
+  showPlanToggle = false,
+  surface = "code",
+  onSend,
+  onStop,
+}: ComposerProps) {
   const t = useTranslations("codex")
   const [prompt, setPrompt] = useState("")
-  const [tier, setTier] = useState<CodexTier>(DEFAULT_TIER)
+  const [tier, setTier] = useState<CodexTier>(surface === "apps" ? "power" : DEFAULT_TIER)
   const [planOnly, setPlanOnly] = useState(false)
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -91,7 +102,11 @@ export function Composer({ disabled, busy, active, locale, showPlanToggle = fals
           value={prompt}
           onChange={(e) => { setPrompt(e.target.value); autoResize() }}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit() } }}
-          placeholder={t("composer.placeholder")}
+          placeholder={
+            surface === "apps"
+              ? t("composer.placeholderApps")
+              : t("composer.placeholder")
+          }
           rows={1}
           disabled={disabled}
           className="max-h-40 w-full resize-none bg-transparent px-1 text-zinc-100 outline-none placeholder:text-zinc-600"

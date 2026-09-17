@@ -1,6 +1,6 @@
 /**
- * Tests for the /code model policy: slow-model detection + fast-model
- * recommendation used by the "switch to a fast model" consent alert.
+ * Tests for the /code model policy: slow-model detection + fail-closed
+ * Flash/Pro recommendation.
  */
 
 import { test } from "node:test"
@@ -15,7 +15,7 @@ test("isSlowModel flags reasoning/heavy models", () => {
 })
 
 test("isSlowModel does not flag fast models", () => {
-  for (const id of ["openai/gpt-4o-mini", "gemini-2.5-flash", "llama-3.1-8b", "claude-haiku-4-5"]) {
+  for (const id of ["deepseek-v4-flash", "deepseek-v4", "openai/gpt-4o-mini", "gemini-2.5-flash", "llama-3.1-8b", "claude-haiku-4-5"]) {
     assert.equal(isSlowModel(id), false, `${id} should be fast`)
   }
 })
@@ -26,19 +26,20 @@ test("isSlowModel handles empty/nullish", () => {
   assert.equal(isSlowModel(undefined), false)
 })
 
-test("recommendFastModel prefers the fastest available, never a slow one", () => {
+test("recommendFastModel prefers DeepSeek V4 Flash over everything else", () => {
   const models = [
     { name: "openai/gpt-5.5" },
     { name: "openai/gpt-4o-mini", provider: "OpenRouter" },
     { name: "llama-3.1-8b", provider: "Cerebras" },
+    { name: "deepseek-v4-flash", provider: "DeepSeek" },
   ]
   const pick = recommendFastModel(models)
-  assert.equal(pick?.name, "llama-3.1-8b") // Cerebras/llama is top priority
+  assert.equal(pick?.name, "deepseek-v4-flash")
 })
 
-test("recommendFastModel falls back to gpt-4o-mini when no flash model", () => {
+test("recommendFastModel is fail-closed when no Flash/Pro is present", () => {
   const pick = recommendFastModel([{ name: "openai/gpt-5.5" }, { name: "openai/gpt-4o-mini" }])
-  assert.equal(pick?.name, "openai/gpt-4o-mini")
+  assert.equal(pick, null)
 })
 
 test("recommendFastModel returns null when only slow models exist", () => {
@@ -47,4 +48,9 @@ test("recommendFastModel returns null when only slow models exist", () => {
 
 test("recommendFastModel returns null on empty input", () => {
   assert.equal(recommendFastModel([]), null)
+})
+
+test("recommendFastModel can pick Pro when Flash is absent", () => {
+  const pick = recommendFastModel([{ name: "deepseek-v4-pro", provider: "DeepSeek" }, { name: "openai/gpt-4o-mini" }])
+  assert.equal(pick?.name, "deepseek-v4-pro")
 })

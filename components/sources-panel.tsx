@@ -55,7 +55,7 @@ const MEMORY_TIER_LABEL: Record<string, string> = {
 const MEMORY_CATEGORY_LABEL: Record<string, string> = {
   identity: "Identidad",
   preference: "Preferencia",
-  project: "Proyecto",
+  project: "Empresa",
   instruction: "Instrucción",
   general: "Dato",
 }

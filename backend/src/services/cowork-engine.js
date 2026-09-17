@@ -7,6 +7,7 @@ const sessionManager = require('./session-manager');
 const skillsRegistry = require('./skills-registry');
 const skillsExecutor = require('./skills-executor');
 const contextIntelligence = require('./context-intelligence-engine');
+const { isMemoryWriteError } = require('./agents/memory-write-guard');
 
 const MAX_COWORK_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_COWORK_BLOCK_MAX_CHARS || '4000', 10);
 
@@ -92,6 +93,17 @@ function buildCoworkSystemPrompt(userId, opts = {}) {
       }
       parts.push('');
     }
+
+    try {
+      const curated = require('./agents/hermes-curated-memory');
+      const frozen = curated.getFrozenPromptBlock(userId, { chatId: opts.chatId || null });
+      if (frozen) {
+        parts.push(frozen);
+        parts.push('');
+      }
+    } catch {
+      // Curated snapshot is additive; cowork still works without it.
+    }
   }
 
   const skills = skillsRegistry.listSkills({ limit: 10 });
@@ -123,12 +135,16 @@ function processIncomingMessage(userId, content, opts = {}) {
     try {
       const memoryFacts = extractMemoryFacts(content);
       for (const fact of memoryFacts) {
-        activeMemory.createMemoryEntry(userId, fact, {
-          source: 'user_message',
-          category: 'conversation',
-          confidence: 0.6,
-          strength: 0.2,
-        });
+        try {
+          activeMemory.createMemoryEntry(userId, fact, {
+            source: 'user_message',
+            category: 'conversation',
+            confidence: 0.6,
+            strength: 0.2,
+          });
+        } catch (err) {
+          if (!isMemoryWriteError(err)) throw err;
+        }
       }
       enrichedContent.memoryOps = { factsExtracted: memoryFacts.length };
       activeMemory.autoPromote(userId);

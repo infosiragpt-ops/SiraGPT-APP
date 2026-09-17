@@ -186,6 +186,35 @@ test('event-stream: start→executing→result ordering, monotonic seq, agent_do
   assert.equal(run.steps[1].status, 'completed');
 });
 
+test('event-stream: audits tool outcomes without persisting arguments or results', async () => {
+  const registry = sampleRegistry();
+  const rows = [];
+  const prisma = {
+    agentAuditLog: {
+      create: async ({ data }) => {
+        rows.push(data);
+        return data;
+      },
+    },
+  };
+  const events = createAgentEventStream({
+    registry,
+    ctxInfo: {
+      prisma,
+      userId: 'u1',
+      workspaceId: 'w1',
+      coworkRunId: 'r1',
+    },
+  });
+  const [echo] = events.wrapTools([registry.toAgentTool('echo_tool')]);
+  await echo.execute({ text: 'secret-value' }, {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].action, 'agent.tool.completed');
+  assert.equal(rows[0].targetId, 'echo_tool');
+  assert.equal(JSON.stringify(rows[0]).includes('secret-value'), false);
+});
+
 test('event-stream: calls that never reach execute() settle from onStepDone observations', () => {
   const registry = sampleRegistry();
   const frames = [];

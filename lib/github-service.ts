@@ -46,15 +46,20 @@ async function handle<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
-function get<T>(path: string): Promise<T> {
-  return authenticatedFetch(`${baseUrl}${path}`, { credentials: "include", headers: authHeaders() }).then(handle<T>)
+function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return authenticatedFetch(`${baseUrl}${path}`, {
+    credentials: "include",
+    headers: authHeaders(),
+    signal,
+  }).then(handle<T>)
 }
-function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+function send<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return authenticatedFetch(`${baseUrl}${path}`, {
     method,
     credentials: "include",
     headers: authHeaders(),
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   }).then(handle<T>)
 }
 
@@ -83,6 +88,12 @@ export interface GithubRepo {
   stars?: number
   language?: string | null
   updatedAt?: string
+}
+
+export interface GithubBranch {
+  name: string
+  protected: boolean
+  commitSha: string | null
 }
 
 export interface ConnectedRepository {
@@ -197,6 +208,16 @@ export const githubService = {
     if (opts.perPage) p.set("per_page", String(opts.perPage))
     return get<{ items: GithubRepo[]; total: number; incompleteResults: boolean }>(`/repos/search?${p.toString()}`)
   },
+  // Ramas de un repo (selector de rama al vincular un repo a un chat de
+  // /agentes). Solo lectura por API: aquí no se clona nada.
+  listBranches: (owner: string, repo: string, opts: { perPage?: number } = {}) => {
+    const p = new URLSearchParams()
+    if (opts.perPage) p.set("per_page", String(opts.perPage))
+    const qs = p.toString()
+    return get<{ owner: string; repo: string; defaultBranch: string; branches: GithubBranch[]; count: number }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches${qs ? `?${qs}` : ""}`,
+    )
+  },
   connectRepo: (owner: string, repo: string) =>
     send<{ ok: boolean; connection: ConnectedRepository }>("POST", "/repos/connect", { owner, repo }),
   createRepo: (input: { name: string; description?: string; private?: boolean }) =>
@@ -242,9 +263,11 @@ export const githubService = {
   },
 
   // Run / live preview
-  run: (id: string, env?: Record<string, string>) => send<RunStatus & { ok: boolean }>("POST", `/connected/${id}/run`, env ? { env } : undefined),
+  run: (id: string, env?: Record<string, string>, signal?: AbortSignal) =>
+    send<RunStatus & { ok: boolean }>("POST", `/connected/${id}/run`, env ? { env } : undefined, signal),
   stop: (id: string) => send<{ ok: boolean; stopped: boolean }>("POST", `/connected/${id}/stop`),
-  runStatus: (id: string) => get<RunStatus>(`/connected/${id}/run/status`),
+  runStatus: (id: string, signal?: AbortSignal) =>
+    get<RunStatus>(`/connected/${id}/run/status`, signal),
 
   // Files
   files: (id: string) => get<{ tree: FileNode[]; truncated: boolean; count: number }>(`/connected/${id}/files`),

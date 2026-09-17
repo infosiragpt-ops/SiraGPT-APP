@@ -172,3 +172,31 @@ export function detectWorkspaceSchema(
 export function fieldLabel(field: SchemaField): string {
   return `${field.name}: ${field.type}${field.list ? "[]" : field.optional ? "?" : ""}`
 }
+
+
+/** OLA200_WAVE_F FE-076 — fail-closed parse of persisted workspace JSON. */
+export function parseWorkspaceJsonFailClosed(raw: unknown): {
+  ok: boolean
+  files?: Record<string, unknown>
+  reason?: string
+} {
+  let value: unknown = raw
+  if (typeof raw === "string") {
+    const trimmed = raw.trim()
+    if (!trimmed) return { ok: false, reason: "empty" }
+    try {
+      value = JSON.parse(trimmed)
+    } catch {
+      return { ok: false, reason: "corrupt_json" }
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "not_object" }
+  }
+  const rec = value as Record<string, unknown>
+  const files = rec.files
+  if (files != null && (typeof files !== "object" || Array.isArray(files))) {
+    return { ok: false, reason: "files_corrupt" }
+  }
+  return { ok: true, files: (files && typeof files === "object" ? files : rec) as Record<string, unknown> }
+}

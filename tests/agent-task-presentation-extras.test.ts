@@ -58,6 +58,8 @@ describe("toolToProfessionalLabel · null / unknown tools", () => {
   it("maps a known tool to its Spanish label", () => {
     assert.equal(toolToProfessionalLabel("web_search"), "Buscando fuentes")
     assert.equal(toolToProfessionalLabel("python_exec"), "Procesando datos")
+    assert.equal(toolToProfessionalLabel("docintel analyze"), "Leyendo el documento")
+    assert.equal(toolToProfessionalLabel("docintel.analyze"), "Leyendo el documento")
   })
 })
 

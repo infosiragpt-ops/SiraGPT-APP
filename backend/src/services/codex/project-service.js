@@ -35,6 +35,7 @@ function publicProject(row) {
     id: row.id,
     name: row.name,
     status: row.status,
+    organizationId: row.organizationId || null,
     workspacePath: row.workspacePath,
     previewUrl: row.previewUrl,
     error: row.error,
@@ -45,13 +46,28 @@ function publicProject(row) {
   // keep the response allowlisted instead of serializing Prisma's nested
   // secret/lease records by accident.
   if (row.database) project.database = publicProjectDatabase(row.database);
-  if (row.brief && typeof row.brief === 'object' && row.brief.kind === 'repo') {
+  const brief = row.brief && typeof row.brief === 'object' && !Array.isArray(row.brief) ? row.brief : null;
+  if (brief && brief.kind === 'repo') {
     project.kind = 'repo';
     project.sourceControl = {
-      repository: row.brief.repository?.url || null,
-      sourceBranch: row.brief.repository?.sourceBranch || null,
+      repository: brief.repository?.url || null,
+      sourceBranch: brief.repository?.sourceBranch || null,
+    };
+  } else if (brief && (brief.kind === 'repo-public' || brief.kind === 'repo-private')) {
+    // Proyecto clonado desde la web (POST /projects/clone). Solo metadatos
+    // públicos del repo: nunca el token ni el resto del brief.
+    const repository = brief.repository && typeof brief.repository === 'object' ? brief.repository : {};
+    project.kind = 'repo';
+    project.sourceControl = {
+      repository: repository.url || null,
+      webUrl: repository.webUrl || null,
+      fullName: repository.fullName || null,
+      private: brief.kind === 'repo-private' || Boolean(repository.private),
+      defaultBranch: repository.defaultBranch || null,
+      sourceBranch: brief.sourceBranch || null,
     };
   }
+  if (brief && typeof brief.chatId === 'string' && brief.chatId) project.chatId = brief.chatId;
   return project;
 }
 
@@ -138,6 +154,7 @@ async function createProject({
   name,
   brief = null,
   repository = null,
+  organizationId = null,
   runner,
   db = defaultPrisma,
   env = process.env,
@@ -171,7 +188,13 @@ async function createProject({
     })
     : (repoRequest ? { kind: 'repo', repository: { url: null, sourceBranch: null } } : brief);
   const row = await prisma.codexProject.create({
-    data: { userId, name, brief: persistedBrief, status: 'provisioning' },
+    data: {
+      userId,
+      organizationId: organizationId || null,
+      name,
+      brief: persistedBrief,
+      status: 'provisioning',
+    },
   });
   try {
     if (repositoryError) throw repositoryError;

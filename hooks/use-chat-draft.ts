@@ -3,6 +3,7 @@
 import * as React from "react"
 
 const STORAGE_PREFIX = "sira:chat-draft:"
+const NEW_CHAT_SCOPE = "__new__"
 const SAVE_DEBOUNCE_MS = 350
 const MAX_DRAFT_CHARS = 64 * 1024
 
@@ -11,8 +12,8 @@ function storageKey(
   chatId: string | null | undefined,
 ): string | null {
   if (!userId || typeof userId !== "string") return null
-  if (!chatId || typeof chatId !== "string") return null
-  return `${STORAGE_PREFIX}${userId}:${chatId}`
+  const scope = chatId && typeof chatId === "string" ? chatId : NEW_CHAT_SCOPE
+  return `${STORAGE_PREFIX}${userId}:${scope}`
 }
 
 function safeGet(key: string): string | null {
@@ -75,9 +76,10 @@ export interface ChatDraftApi {
  *     `clearAllChatDrafts()` should also be called on sign-out as a
  *     belt-and-suspenders cleanup).
  *
- * The "new chat" surface (no chatId yet) intentionally does NOT
- * persist — the draft can't be unambiguously re-attached to a specific
- * future conversation.
+ * The "new chat" surface uses one per-user `__new__` scope. It is cleared
+ * synchronously when the user sends the first turn, so a reload before send
+ * restores the prompt without leaking it into the conversation that is later
+ * created by the backend.
  *
  * Race-safety contract:
  *   - The storage key is snapshotted at `save()` time, not at flush

@@ -15,7 +15,7 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { hermes: 'toolsets.py', sira: 'backend/src/services/agents/toolset-registry.js', status: 'integrated', strategy: 'tiered tool bundles: core, research, webhook-safe, visual, enterprise' },
   { hermes: 'trajectory_compressor.py', sira: 'backend/src/services/agents/trajectory-compactor.js', status: 'integrated', strategy: 'middle-turn compression for eval/training trajectories' },
   { hermes: 'agent/context_compressor.py', sira: 'backend/src/services/sira/context-compactor.js', status: 'integrated', strategy: 'Hermes compaction preamble and tail protection via hermes-context-patterns.js' },
-  { hermes: 'hermes_state.py', sira: 'backend/src/services/agents/task-store.js, hermes-memory-bridge.js', status: 'integrated', strategy: 'durable task state + session search + active memory promotion' },
+  { hermes: 'hermes_state.py', sira: 'backend/src/services/agents/task-store.js, hermes-memory-bridge.js, memory-write-guard.js', status: 'integrated', strategy: 'durable task state + session search + active memory promotion + Spanish size/rate write guard' },
   { hermes: 'cron', sira: 'backend/src/services/agents/cron/hermes-cron-bridge.js', status: 'integrated', strategy: 'Hermes cron API over SiraGPT scheduler + agent-entry invoker' },
   { hermes: 'providers', sira: 'backend/src/services/agents/providers', status: 'integrated', strategy: 'provider adapters + hermes-cli model command' },
   { hermes: 'acp_adapter', sira: 'backend/src/services/agents/hermes-delegate-bridge.js', status: 'integrated', strategy: 'subagent orchestration and delegate_task tool' },
@@ -26,6 +26,10 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { hermes: 'website', sira: 'backend/src/routes/hermes.js, .agents/skills/technical-docs', status: 'integrated', strategy: 'integration map + health docs via /api/hermes/*' },
   { hermes: 'docker', sira: 'backend/src/services/agents/hermes-docker-bridge.js', status: 'integrated', strategy: 'Hermes backend profiles mapped to code-sandbox + env-gated remote backends' },
   { hermes: 'tests', sira: 'backend/tests, tests, e2e', status: 'integrated', strategy: 'map Hermes test lanes to Node --test suites' },
+  { hermes: 'curator', sira: 'backend/src/services/agents/hermes-skill-curator.js, hermes-skill-hygiene.js, hermes-biblioteca.js', status: 'integrated', strategy: 'deterministic skill-library review + hash/name dedupe + Biblioteca promote with revision history and restore-by-hash; never mutates bundled skills' },
+  { hermes: 'tools/memory_tool.py', sira: 'backend/src/services/agents/hermes-memory-compaction.js, hermes-curated-memory.js, hermes-tools.js', status: 'integrated', strategy: 'bounded log compaction + ranked retrieval (profile > recent log > notes); MEMORY→USER promotion with provenance; TTL on compacted notes; Spanish remember/forget aliases wired to curated stores; profile facts never folded' },
+  { hermes: 'memories', sira: 'backend/src/services/agents/hermes-memory-portability.js', status: 'integrated', strategy: 'profile + compacted-notes export/import with sha256 snapshot checksums, Spanish errors, per-user isolation, size caps; no upstream dump' },
+  { hermes: 'memories/USER.md', sira: 'backend/src/services/agents/hermes-memory-conflict.js, hermes-curated-memory.js', status: 'integrated', strategy: 'USER/MEMORY fact conflict resolution: pinned profile wins over newer log; otherwise newer wins; Spanish merge report; no upstream dump' },
 ]);
 
 const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
@@ -47,6 +51,13 @@ const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
   spike: ['repo-folder-integration'],
   'macos-computer-use': ['agent-validation'],
   'jupyter-live-kernel': ['agent-validation', 'qa-smoke-testing'],
+  'github-pr-workflow': ['pr-production-loop'],
+  'pptx-author': ['technical-docs'],
+  'code-wiki': ['technical-docs'],
+  qmd: ['technical-docs', 'biblioteca-deposit'],
+  siyuan: ['biblioteca-deposit'],
+  'concept-diagrams': ['canvas-design'],
+  'openclaw-migration': ['openclaw-import-audit'],
 });
 
 function parseSkillMarkdown(raw) {

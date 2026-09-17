@@ -111,6 +111,28 @@ describe('media route file serving', () => {
 
     assert.equal(res.headers['content-type'], 'audio/mpeg');
     assert.equal(res.headers['content-disposition'], 'inline; filename="tts_test.mp3"');
+    assert.equal(res.headers['accept-ranges'], 'bytes');
     assert.equal(res.body.toString(), 'audio-bytes');
+  });
+
+  test('streams audio ranges for seeking and rejects unsatisfiable ranges', async () => {
+    const partial = await request(elevenLabsApp)
+      .get('/api/elevenlabs/audio/tts_test.mp3')
+      .set('Range', 'bytes=2-5')
+      .buffer(true)
+      .parse(binaryParser)
+      .expect(206);
+
+    assert.equal(partial.headers['content-range'], 'bytes 2-5/11');
+    assert.equal(partial.headers['accept-ranges'], 'bytes');
+    assert.equal(partial.headers['content-type'], 'audio/mpeg');
+    assert.equal(partial.body.toString(), 'dio-');
+
+    const invalid = await request(elevenLabsApp)
+      .get('/api/elevenlabs/audio/tts_test.mp3')
+      .set('Range', 'bytes=99-100')
+      .expect(416);
+
+    assert.equal(invalid.headers['content-range'], 'bytes */11');
   });
 });

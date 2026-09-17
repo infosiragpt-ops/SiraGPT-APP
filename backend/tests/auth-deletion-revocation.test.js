@@ -65,6 +65,7 @@ function createConcurrentAuthDb({
       const releases = [];
       const tx = {
         async $queryRawUnsafe(sql, ...params) {
+          if (/to_regclass\('doc_jobs'\)/.test(sql)) return [{ relation: null }];
           if (/pg_advisory_xact_lock/i.test(sql)) {
             state.calls.push(`wait-lock:${params[0]}`);
             releases.push(await acquire(params[0]));
@@ -156,6 +157,7 @@ test('soft deletion atomically revokes sessions and unfinished 2FA challenges, t
   };
   const tx = {
     async $queryRawUnsafe(sql, ...params) {
+      if (/to_regclass\('doc_jobs'\)/.test(sql)) return [{ relation: null }];
       calls.push(/pg_advisory_xact_lock/i.test(sql)
         ? `lock:${params[0]}`
         : `lock-timeout:${params[0]}`);

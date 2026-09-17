@@ -137,7 +137,7 @@ export default function PWAInstallPrompt({
   return (
     <div
       role="dialog"
-      aria-label="Install Sira GPT app"
+      aria-label="Instalar la aplicación Sira GPT"
       className={
         className ??
         "fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 sm:bottom-6"
@@ -146,15 +146,15 @@ export default function PWAInstallPrompt({
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            Install Sira GPT
+            Instalar Sira GPT
           </p>
           <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-            Add to your home screen for faster access and an app-like experience.
+            Añádela a tu pantalla de inicio para abrirla más rápido, como una app.
           </p>
         </div>
         <button
           type="button"
-          aria-label="Dismiss"
+          aria-label="Cerrar"
           onClick={() => handleDismiss(false)}
           className="rounded p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
         >
@@ -169,14 +169,14 @@ export default function PWAInstallPrompt({
           onClick={() => handleDismiss(true)}
           className="rounded-md px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          Don&apos;t show again
+          No volver a mostrar
         </button>
         <button
           type="button"
           onClick={handleInstall}
           className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
-          Install
+          Instalar
         </button>
       </div>
     </div>

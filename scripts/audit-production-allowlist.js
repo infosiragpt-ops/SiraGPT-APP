@@ -4,6 +4,7 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { classifyAuditReport } = require('./audit-backend-production.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(__dirname, 'audit-production-allowlist.json');
@@ -21,16 +22,20 @@ function readConfig(configPath = CONFIG_PATH, now = Date.now()) {
     throw new Error('audit-production-allowlist.json must include an allowed array');
   }
 
-  const expiresOn = new Date(`${config.expiresOn}T23:59:59.999Z`);
-  if (!Number.isFinite(expiresOn.getTime())) {
-    throw new Error('audit-production-allowlist.json has an invalid expiresOn date');
-  }
   const nowMs = now instanceof Date ? now.getTime() : now;
   if (!Number.isFinite(nowMs)) {
     throw new Error('audit production allowlist received an invalid clock value');
   }
-  if (nowMs > expiresOn.getTime()) {
-    throw new Error(`production audit allowlist expired on ${config.expiresOn}`);
+  // An empty list grants no exception and must not acquire a fake expiry.
+  // Every actual exception still requires a valid, non-expired deadline.
+  if (config.allowed.length > 0) {
+    const expiresOn = new Date(`${config.expiresOn}T23:59:59.999Z`);
+    if (!Number.isFinite(expiresOn.getTime())) {
+      throw new Error('audit-production-allowlist.json has an invalid expiresOn date');
+    }
+    if (nowMs > expiresOn.getTime()) {
+      throw new Error(`production audit allowlist expired on ${config.expiresOn}`);
+    }
   }
 
   const level = config.level || 'high';
@@ -51,26 +56,31 @@ function readConfig(configPath = CONFIG_PATH, now = Date.now()) {
   };
 }
 
-function runAudit() {
-  const result = spawnSync('npm', ['audit', '--omit=dev', '--json'], {
+function runAudit({ run = spawnSync } = {}) {
+  const result = run('npm', ['audit', '--omit=dev', '--json'], {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 16 * 1024 * 1024,
+    timeout: 60000,
   });
 
-  if (!result.stdout) {
-    if (result.stderr) process.stderr.write(result.stderr);
-    throw new Error(`npm audit produced no JSON output (exit ${result.status})`);
-  }
-
+  if (!result || result.error || result.signal || ![0, 1].includes(result.status))
+    throw new Error('npm audit process failed or was interrupted');
+  if (typeof result.stdout !== 'string' || !result.stdout.trim())
+    throw new Error('npm audit produced no JSON output');
+  let report;
   try {
-    return JSON.parse(result.stdout);
-  } catch (error) {
-    process.stdout.write(result.stdout);
-    if (result.stderr) process.stderr.write(result.stderr);
-    throw new Error(`failed to parse npm audit JSON: ${error.message}`);
+    report = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('failed to parse npm audit JSON');
   }
+  // Reuse only schema/chain validation. Root/frontend findings still go
+  // through its own allowlist policy: NEVER inherit the backend patch grant.
+  const validation = classifyAuditReport(report);
+  if (result.status === 1 && validation.rawCounts.total === 0)
+    throw new Error('npm audit failed without reporting findings');
+  return report;
 }
 
 function getRank(severity) {

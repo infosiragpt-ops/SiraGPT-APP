@@ -40,7 +40,10 @@ test('plans the siraGPT project as an allowlisted local project', () => {
   assert.equal(plan.status, 'ready_for_local_bridge');
   assert.equal(plan.action.type, 'open_project');
   assert.equal(plan.action.projectId, 'siragpt');
-  assert.match(plan.action.path, /siraGPT$/);
+  // Case-insensitive: inferProjectRootFromCwd resolves the real checkout
+  // path, whose casing varies by machine (Siragpt vs siraGPT); the fallback
+  // (~/Desktop/siraGPT) only applies when no checkout is detected.
+  assert.match(plan.action.path, /siragpt$/i);
 });
 
 test('shell commands require confirmation instead of silent execution', () => {

@@ -35,15 +35,12 @@ test('inferProviderFromModelId: DeepSeek direct-API ids', () => {
   assert.equal(inferProviderFromModelId('deepseek-reasoner'), 'DeepSeek');
 });
 
-test('inferProviderFromModelId: OpenRouter slug prefixes (case-insensitive)', () => {
+test('inferProviderFromModelId: leftover OpenRouter mixer prefixes only', () => {
   const cases = [
-    'anthropic/claude-sonnet-4.6',
-    'x-ai/grok-4',
     'openrouter/auto',
     'meta-llama/llama-3.3-70b',
     'deepseek/deepseek-r1',
     'openai/gpt-oss-120b',
-    'moonshotai/kimi-k2.6',
     'qwen/qwen-2.5-72b',
     'mistralai/mistral-large',
     'cohere/command-r-plus',
@@ -51,15 +48,18 @@ test('inferProviderFromModelId: OpenRouter slug prefixes (case-insensitive)', ()
   ];
   for (const id of cases) {
     assert.equal(inferProviderFromModelId(id), 'OpenRouter', `expected OpenRouter for "${id}"`);
-    // Case-insensitive
     assert.equal(inferProviderFromModelId(id.toUpperCase()), 'OpenRouter', `expected OpenRouter for "${id.toUpperCase()}"`);
   }
+  assert.equal(inferProviderFromModelId('x-ai/grok-4'), 'xAI');
+  assert.equal(inferProviderFromModelId('x-ai/grok-4.5'), 'xAI');
 });
 
 test('inferProviderFromModelId: Google Gemini family', () => {
   assert.equal(inferProviderFromModelId('gemini-2.5-pro'), 'Gemini');
   assert.equal(inferProviderFromModelId('gemini-2.5-flash'), 'Gemini');
   assert.equal(inferProviderFromModelId('imagen-3'), 'Gemini');
+  assert.equal(inferProviderFromModelId('google/gemini-3.5-flash'), 'Gemini');
+  assert.equal(inferProviderFromModelId('google/gemini-3.5'), 'Gemini');
 });
 
 test('inferProviderFromModelId: Groq -versatile vs bare-llama Cerebras (FlashGPT)', () => {
@@ -73,12 +73,15 @@ test('inferProviderFromModelId: Groq -versatile vs bare-llama Cerebras (FlashGPT
   assert.equal(inferProviderFromModelId('gpt-oss-120b'), 'Cerebras');
 });
 
-test('inferProviderFromModelId: Anthropic direct (bare claude-*)', () => {
+test('inferProviderFromModelId: Anthropic direct (bare claude-* and anthropic/ slugs)', () => {
   assert.equal(inferProviderFromModelId('claude-opus-4-7'), 'Anthropic');
   assert.equal(inferProviderFromModelId('claude-sonnet-4-6'), 'Anthropic');
   assert.equal(inferProviderFromModelId('claude-haiku-4-5'), 'Anthropic');
-  // But slug-prefixed claude goes through OpenRouter:
-  assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('anthropic/claude-sonnet-5'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('claude-fable-5'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('Claude Sonnet 3'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('Claude Sonnet 4.6'), 'Anthropic');
 });
 
 test('inferProviderFromModelId: Groq direct (-versatile suffix)', () => {
@@ -99,6 +102,14 @@ test('inferProviderFromModelId: unknown ids fall back to OpenAI (safe)', () => {
   assert.equal(inferProviderFromModelId('gpt-5'), 'OpenAI');
   assert.equal(inferProviderFromModelId('gpt-4o-mini'), 'OpenAI');
   assert.equal(inferProviderFromModelId('something-totally-new'), 'OpenAI');
+});
+
+test('inferProviderFromModelId: local Custom/Ollama ids stay Custom', () => {
+  assert.equal(inferProviderFromModelId('moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('ollama/moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('huggingface/moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('gemma4'), 'Custom');
+  assert.equal(inferProviderFromModelId('gemma4:26b'), 'Custom');
 });
 
 test('inferProviderFromModelId: hostile non-string inputs never throw → OpenAI default', () => {
@@ -128,7 +139,7 @@ test('inferProviderFromModelId: surrounding whitespace infers same as clean form
   assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile  '), 'Groq');
   assert.equal(inferProviderFromModelId('  deepseek-chat '), 'DeepSeek');
   assert.equal(inferProviderFromModelId('  gemini-2.5-pro '), 'Gemini');
-  assert.equal(inferProviderFromModelId(' anthropic/claude-opus-4.7 '), 'OpenRouter');
+  assert.equal(inferProviderFromModelId(' anthropic/claude-opus-4.7 '), 'Anthropic');
 });
 
 test('inferProviderFromModelId: leading/trailing slashes infer same as clean form', () => {
@@ -140,8 +151,8 @@ test('inferProviderFromModelId: leading/trailing slashes infer same as clean for
   // A stray leading slash must NOT trip the "/gpt-oss" OpenRouter slug rule:
   // the clean form "gpt-oss-120b" is the bare FlashGPT/Cerebras id.
   assert.equal(inferProviderFromModelId('/gpt-oss-120b'), 'Cerebras');
-  // Internal slashes (real OpenRouter slugs) are preserved:
-  assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7/'), 'OpenRouter');
+  // Internal slashes: first-party families keep their own API; leftover mixer slugs stay OpenRouter.
+  assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7/'), 'Anthropic');
   assert.equal(inferProviderFromModelId('/openai/gpt-oss-120b'), 'OpenRouter');
 });
 
@@ -163,9 +174,26 @@ test('inferProviderFromModelId: Z.ai (GLM) and Kimi (Moonshot) direct ids', () =
   assert.equal(inferProviderFromModelId('glm-4-air'), 'Z.ai');
   assert.equal(inferProviderFromModelId('kimi-k2'), 'Kimi');
   assert.equal(inferProviderFromModelId('moonshot-v1-128k'), 'Kimi');
-  // …while aggregator slugs still go through OpenRouter.
+  // Z.ai leftover mixer slug stays OpenRouter; Kimi/Moonshot catalog slugs hit Moonshot.
   assert.equal(inferProviderFromModelId('z-ai/glm-4.6'), 'OpenRouter');
-  assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'Kimi');
+});
+
+test('inferProviderFromModelId: SiraGPT Mini / moondream / gemma4 → Custom, never DeepSeek', () => {
+  assert.equal(inferProviderFromModelId('sira-mini'), 'Custom');
+  assert.equal(inferProviderFromModelId('SiraGPT Mini'), 'Custom');
+  assert.equal(inferProviderFromModelId('moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('moondream:latest'), 'Custom');
+  assert.equal(inferProviderFromModelId('gemma4:26b'), 'Custom');
+  assert.equal(inferProviderFromModelId('deepseek-v4-flash'), 'DeepSeek');
+});
+
+test('inferProviderFromModelId: Meta Muse / Llama 4 direct ids', () => {
+  assert.equal(inferProviderFromModelId('muse-spark-1.2'), 'Meta');
+  assert.equal(inferProviderFromModelId('muse-image-1.0'), 'Meta');
+  assert.equal(inferProviderFromModelId('llama-4-scout'), 'Meta');
+  assert.equal(inferProviderFromModelId('meta-llama/Llama-4-Maverick'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'Cerebras');
 });
 
 test('listKnownProviders / KNOWN_PROVIDERS: stable canonical set', () => {

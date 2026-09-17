@@ -89,4 +89,25 @@ describe('chat-tool-policy', () => {
       { disabled: true, requiredClearances: ['admin', 'owner'] },
     );
   });
+
+  it('denies Protegido writes by default (fail-closed without a reviewer)', () => {
+    const gate = createChatToolGate({ env: {}, permission: 'protected' });
+    assert.strictEqual(gate.authorize('web_search', {}).ok, true);
+    const denied = gate.authorize('computer_write_file', {});
+    assert.strictEqual(denied.ok, false);
+    assert.strictEqual(denied.reason, 'composer_approval_required');
+  });
+
+  it('defers Protegido writes to the harness reviewer only when attached', () => {
+    const gate = createChatToolGate({ env: {}, permission: 'protected', deferProtectedAsk: true });
+    assert.strictEqual(gate.authorize('web_search', {}).ok, true);
+    // host_bash is a command, not a write: allowed in Protegido either way.
+    assert.strictEqual(gate.authorize('host_bash', {}).ok, true);
+    const deferred = gate.authorize('computer_write_file', {});
+    assert.strictEqual(deferred.ok, true);
+    assert.strictEqual(deferred.deferredApproval, true);
+    // Solo lectura still denies even with the defer flag.
+    const readGate = createChatToolGate({ env: {}, permission: 'read', deferProtectedAsk: true });
+    assert.strictEqual(readGate.authorize('computer_write_file', {}).ok, false);
+  });
 });

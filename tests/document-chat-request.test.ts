@@ -6,6 +6,7 @@ import {
   detectDocumentChatComplexity,
   detectDocumentChatFormat,
   detectDocumentChatTemplate,
+  pickLastArtifactId,
 } from "../lib/document-chat-request"
 
 describe("document chat request · clean prompt contract", () => {
@@ -29,6 +30,12 @@ describe("document chat request · clean prompt contract", () => {
     assert.equal(detectDocumentChatFormat("crea esto como SVG"), "svg")
     assert.equal(detectDocumentChatFormat("devuélvelo como Markdown"), "md")
     assert.equal(detectDocumentChatFormat("crea un CSV válido"), "csv")
+  })
+
+  it("does not default a website ask to Word", () => {
+    assert.equal(detectDocumentChatFormat("créame una web de ventas"), "html")
+    assert.equal(detectDocumentChatFormat("crea un sitio web"), "html")
+    assert.equal(detectDocumentChatFormat("rédactame un informe de ventas en Word"), "docx")
   })
 
   it("classifies templates and complexity without UI involvement", () => {
@@ -63,5 +70,25 @@ describe("document chat request · clean prompt contract", () => {
     assert.match(request.prompt, /return the downloadable file/i)
     assert.match(request.prompt, /do not stop at prose suggestions/i)
     assert.match(request.prompt, /consolidate them into one edited output file/i)
+  })
+
+  it("Word path stays docx and forwards lastArtifactId on follow-up", () => {
+    const request = buildDocumentChatRequest({
+      prompt: "ponlas rosadas y agrega un anexo en el Word",
+      chatId: "chat_1",
+      lastArtifactId: "art_docx_1",
+    })
+
+    assert.equal(request.format, "docx")
+    assert.equal(request.lastArtifactId, "art_docx_1")
+    assert.equal(request.displayPrompt, "ponlas rosadas y agrega un anexo en el Word")
+  })
+
+  it("pickLastArtifactId reads the latest assistant artifact, not an older one", () => {
+    const id = pickLastArtifactId([
+      { role: "ASSISTANT", artifacts: [{ id: "art_old" }] },
+      { role: "ASSISTANT", files: [{ artifactId: "art_word", filename: "informe.docx" }] },
+    ])
+    assert.equal(id, "art_word")
   })
 })

@@ -1,71 +1,87 @@
 "use client"
 
+/**
+ * ToolsRail — 44px left dock for /code.
+ * Common tools open as panes; "+" opens the All-tools popover.
+ * This is a Sira rail (not the unused VS Code 6-icon ActivityBar).
+ * Visible on every viewport (phones included).
+ */
+
 import * as React from "react"
-import Image from "next/image"
 import {
+  Bot,
+  FolderTree,
   GitBranch,
-  MessageSquare,
-  Play,
-  Puzzle,
+  KeyRound,
+  Monitor,
+  Plus,
+  Rocket,
   Search,
-  Sparkles,
-  Settings,
+  SquareTerminal,
+  Terminal,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import type { WorkspaceToolId } from "@/lib/code-workspace-tools"
 
-export type ActivityId = "files" | "search" | "scm" | "run" | "extensions" | "settings"
+export type ToolsRailId = WorkspaceToolId | "all-tools"
 
-type ActivityBarProps = {
-  activity: ActivityId
-  onActivityChange: (id: ActivityId) => void
-  chatOpen: boolean
-  onToggleChat: () => void
-  onComposer: () => void
+type ToolsRailProps = {
+  activeId?: ToolsRailId | null
+  openToolIds?: WorkspaceToolId[]
+  allToolsOpen?: boolean
+  onSelect: (id: WorkspaceToolId) => void
+  onOpenAllTools: () => void
 }
 
-function SiraActivityLogo({ className }: { className?: string }) {
+const RAIL_ITEMS: { id: WorkspaceToolId; label: string; icon: React.ElementType }[] = [
+  { id: "agent", label: "Agent", icon: Bot },
+  { id: "files", label: "Files", icon: FolderTree },
+  { id: "preview", label: "Preview", icon: Monitor },
+  { id: "shell", label: "Shell", icon: Terminal },
+  { id: "console", label: "Console", icon: SquareTerminal },
+  { id: "git", label: "Git", icon: GitBranch },
+  { id: "code-search", label: "Search", icon: Search },
+  { id: "publishing", label: "Publishing", icon: Rocket },
+  { id: "secrets", label: "Secrets", icon: KeyRound },
+]
+
+function RailAccent({ on }: { on: boolean }) {
   return (
-    <span className={cn("flex items-center justify-center", className)} aria-hidden="true">
-      <Image
-        src="/sira-gpt.png"
-        alt=""
-        width={18}
-        height={18}
-        className="h-[18px] w-[18px] rounded-[4px] object-contain"
-      />
-    </span>
+    <span
+      aria-hidden
+      className={cn(
+        "absolute inset-y-1.5 left-0 w-[2px] rounded-r-full transition-opacity",
+        on ? "opacity-100" : "opacity-0",
+      )}
+      style={{ backgroundColor: "hsl(var(--accent-violet, 262 83% 66%))" }}
+    />
   )
 }
 
-const ITEMS: { id: ActivityId; label: string; icon: React.ElementType }[] = [
-  { id: "files", label: "Explorador", icon: SiraActivityLogo },
-  { id: "search", label: "Buscar", icon: Search },
-  { id: "scm", label: "Control de origen", icon: GitBranch },
-  { id: "run", label: "Ejecutar", icon: Play },
-  { id: "extensions", label: "Extensiones", icon: Puzzle },
-  { id: "settings", label: "Ajustes", icon: Settings },
-]
+export function ToolsRail({
+  activeId,
+  openToolIds = [],
+  allToolsOpen = false,
+  onSelect,
+  onOpenAllTools,
+}: ToolsRailProps) {
+  const openSet = React.useMemo(() => new Set(openToolIds), [openToolIds])
 
-export function ActivityBar({
-  activity,
-  onActivityChange,
-  chatOpen,
-  onToggleChat,
-  onComposer,
-}: ActivityBarProps) {
   return (
-    <TooltipProvider delayDuration={250}>
+    <TooltipProvider delayDuration={200}>
       <nav
-        className={cn(
-          "flex h-full w-11 shrink-0 flex-col items-center gap-0.5 border-r border-border/60 bg-muted/30 py-1",
-        )}
-        aria-label="Actividades del workspace"
+        className="sira-tools-rail flex h-full w-11 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-border/60 bg-muted/30 py-1"
+        style={{ width: 44 }}
+        aria-label="Herramientas del workspace"
+        data-sira-tools-rail="1"
+        data-testid="sira-tools-rail"
       >
-        {ITEMS.map(({ id, label, icon: Icon }) => {
-          const active = activity === id
+        {RAIL_ITEMS.map(({ id, label, icon: Icon }) => {
+          const active = activeId === id
+          const opened = openSet.has(id)
           return (
             <Tooltip key={id}>
               <TooltipTrigger asChild>
@@ -74,16 +90,24 @@ export function ActivityBar({
                   variant="ghost"
                   size="icon"
                   aria-pressed={active}
+                  aria-label={label}
+                  data-rail-tool={id}
                   className={cn(
-                    "h-9 w-9 rounded-md",
+                    "relative h-9 w-9 rounded-md",
                     active
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
                   )}
-                  onClick={() => onActivityChange(id)}
+                  onClick={() => onSelect(id)}
                 >
+                  <RailAccent on={active} />
                   <Icon className="h-4 w-4" strokeWidth={1.75} />
-                  <span className="sr-only">{label}</span>
+                  {opened && !active ? (
+                    <span
+                      aria-hidden
+                      className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet,262_83%_66%))]"
+                    />
+                  ) : null}
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="right" className="text-xs">
@@ -100,38 +124,23 @@ export function ActivityBar({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-pressed={chatOpen}
+                aria-pressed={allToolsOpen}
+                aria-label="Todas las herramientas"
+                data-rail-tool="all-tools"
                 className={cn(
-                  "h-9 w-9 rounded-md",
-                  chatOpen
+                  "relative h-9 w-9 rounded-md",
+                  allToolsOpen
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:bg-muted/80 hover:text-foreground",
                 )}
-                onClick={onToggleChat}
+                onClick={onOpenAllTools}
               >
-                <MessageSquare className="h-4 w-4" strokeWidth={1.75} />
-                <span className="sr-only">Alternar chat</span>
+                <RailAccent on={allToolsOpen} />
+                <Plus className="h-4 w-4" strokeWidth={1.75} />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="right" className="text-xs">
-              Cursor Chat · ⌘L
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 rounded-md text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                onClick={onComposer}
-              >
-                <Sparkles className="h-4 w-4" strokeWidth={1.75} />
-                <span className="sr-only">Composer</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right" className="text-xs">
-              Composer · ⌘I
+              Todas las herramientas
             </TooltipContent>
           </Tooltip>
         </div>
@@ -139,3 +148,7 @@ export function ActivityBar({
     </TooltipProvider>
   )
 }
+
+/** Dead VS Code rail — kept so old imports do not crash. Prefer ToolsRail. */
+export { ToolsRail as ActivityBar }
+export type ActivityId = ToolsRailId

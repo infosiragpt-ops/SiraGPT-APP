@@ -50,6 +50,8 @@ const PROVIDER_ENV = Object.freeze({
     mistral: ['MISTRAL'],
     xai: ['XAI'],
     grok: ['XAI'],
+    meta: ['MODEL', 'META', 'LLAMA'],
+    llama: ['MODEL', 'META', 'LLAMA'],
 });
 
 /**

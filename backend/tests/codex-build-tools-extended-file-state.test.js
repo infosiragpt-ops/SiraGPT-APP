@@ -35,7 +35,7 @@ test('extended registry keeps legacy tools and exposes OT-11/9/17/5 tools', () =
   for (const legacy of ['run_command', 'read_file', 'edit_file', 'web_search']) {
     assert.equal(names.has(legacy), true);
   }
-  for (const added of ['glob', 'resolve_conflict', 'task_logs', 'task_stop', 'web_fetch', 'mcp_list_tools', 'mcp_call']) {
+  for (const added of ['glob', 'read_media', 'resolve_conflict', 'task_logs', 'task_stop', 'web_fetch', 'mcp_list_tools', 'mcp_call']) {
     assert.equal(names.has(added), true);
   }
 });
@@ -85,6 +85,27 @@ test('write_file records the new state for a follow-up edit in the same run', as
   const edited = await TOOLS.edit_file.execute({ path: 'new.txt', find: 'alpha', replace: 'beta' }, ctx);
   assert.equal(edited.isError, false);
   assert.equal(runner.files.get('new.txt'), 'beta');
+});
+
+test('write_file refuses a blind overwrite and detects a stale read', async () => {
+  const runner = statefulRunner({ 'config.json': '{"version":1}\n' });
+  const tracker = new FileStateTracker();
+  const ctx = { runner, project: 'project-write-guard', fileStateTracker: tracker };
+
+  const blind = await TOOLS.write_file.execute({ path: 'config.json', content: '{"version":2}\n' }, ctx);
+  assert.equal(blind.isError, true);
+  assert.match(blind.observation, /read-before-write/);
+
+  await TOOLS.read_file.execute({ path: 'config.json' }, ctx);
+  runner.files.set('config.json', '{"version":9}\n');
+  const stale = await TOOLS.write_file.execute({ path: 'config.json', content: '{"version":2}\n' }, ctx);
+  assert.equal(stale.isError, true);
+  assert.match(stale.observation, /cambió desde la última lectura/);
+
+  await TOOLS.read_file.execute({ path: 'config.json' }, ctx);
+  const current = await TOOLS.write_file.execute({ path: 'config.json', content: '{"version":10}\n' }, ctx);
+  assert.equal(current.isError, false);
+  assert.equal(runner.files.get('config.json'), '{"version":10}\n');
 });
 
 test('resolve_conflict only stages a path Git reports as unresolved', async () => {

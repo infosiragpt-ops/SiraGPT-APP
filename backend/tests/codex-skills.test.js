@@ -193,3 +193,59 @@ test('buildSystemPrompt injects project memory and its upkeep instruction', () =
   const p2 = buildSystemPrompt({ project: { name: 'X' }, plan: null, fileTree: '', sourcePrompt: 'x', projectNotes: '' });
   assert.ok(!p2.includes('MEMORIA DEL PROYECTO'));
 });
+
+// ── Biblioteca del usuario (skills persistidas) en use_skill ─────────────────
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const skillsPersist = require('../src/services/skills-persist');
+
+test('loadUserSkills: lee la Biblioteca del usuario, respeta el tope, ignora colisiones con builtins y nombres inválidos', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-user-skills-'));
+  skillsPersist.persistUserSkill({ userId: 'u1', name: 'estilo-marca', description: 'Tokens y voz de la marca', body: '# Marca\n'.padEnd(300, 'x'), root });
+  skillsPersist.persistUserSkill({ userId: 'u1', name: 'landing-profesional', description: 'colisiona con builtin', body: 'y'.repeat(300), root });
+  skillsPersist.persistUserSkill({ userId: 'u2', name: 'ajeno', description: 'de otro usuario', body: 'z'.repeat(300), root });
+  const mine = skills.loadUserSkills({ userId: 'u1', root });
+  assert.deepEqual(mine.map((s) => s.name), ['estilo-marca'], 'la colisión con builtin se descarta; el skill de u2 no aparece');
+  assert.equal(mine[0].source, 'biblioteca');
+  assert.equal(mine[0].description, 'Tokens y voz de la marca');
+  assert.equal(skills.loadUserSkills({ userId: '', root }).length, 0);
+  assert.equal(skills.loadUserSkills({ userId: 'nadie', root }).length, 0);
+  for (let i = 0; i < skills.MAX_USER_SKILLS + 3; i += 1) {
+    skillsPersist.persistUserSkill({ userId: 'u3', name: `skill-${i}`, description: `n${i}`, body: 'w'.repeat(300), root });
+  }
+  assert.ok(skills.loadUserSkills({ userId: 'u3', root }).length <= skills.MAX_USER_SKILLS);
+  // Un store roto nunca rompe el turno.
+  assert.deepEqual(skills.loadUserSkills({ userId: 'u1', persist: { listPersistedSkills: () => { throw new Error('disk'); } } }), []);
+});
+
+test('getSkill/formatCatalog: la Biblioteca va después del proyecto y se etiqueta; use_skill la carga con ctx.userId', async () => {
+  const ws = [{ name: 'del-proyecto', description: 'workspace', body: 'a'.repeat(300) }];
+  const mine = [{ name: 'estilo-marca', description: 'Tokens de marca', body: 'b'.repeat(300), source: 'biblioteca' }];
+  assert.equal(skills.getSkill('estilo-marca', ws, mine).source, 'biblioteca');
+  assert.equal(skills.getSkill('del-proyecto', ws, mine).name, 'del-proyecto');
+  const catalog = skills.formatCatalog(ws, mine);
+  assert.match(catalog, /- del-proyecto \(del proyecto\): workspace/);
+  assert.match(catalog, /- estilo-marca \(de tu Biblioteca\): Tokens de marca/);
+  const names = skills.listSkills(ws, [...mine, { name: 'del-proyecto', description: 'dup', body: '' }]).map((s) => s.name);
+  assert.equal(names.filter((n) => n === 'del-proyecto').length, 1, 'sin duplicados entre proyecto y Biblioteca');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-user-skills-tool-'));
+  skillsPersist.persistUserSkill({ userId: 'u9', name: 'checklist-qa', description: 'QA antes de entregar', body: '# QA\n'.padEnd(300, 'q'), root });
+  const realLoad = skills.loadUserSkills;
+  skills.loadUserSkills = (opts) => realLoad({ ...opts, root });
+  try {
+    const tool = buildTools.getTool('use_skill');
+    const runner = { exec: async () => ({ exitCode: 1, stdout: '', stderr: '' }), readFile: async () => { throw new Error('none'); } };
+    const loaded = await tool.execute({ name: 'checklist-qa' }, { runner, project: 'p1', userId: 'u9' });
+    assert.equal(loaded.isError, false);
+    assert.match(loaded.observation, /^# QA/);
+    const catalogOut = await tool.execute({}, { runner, project: 'p1', userId: 'u9' });
+    assert.match(catalogOut.observation, /checklist-qa \(de tu Biblioteca\)/);
+    const other = await tool.execute({}, { runner, project: 'p1', userId: 'someone-else' });
+    assert.ok(!other.observation.includes('checklist-qa'), 'la Biblioteca es por usuario');
+  } finally {
+    skills.loadUserSkills = realLoad;
+  }
+});

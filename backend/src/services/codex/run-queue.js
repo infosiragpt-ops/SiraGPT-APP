@@ -126,6 +126,98 @@ async function cancelQueuedCodexRun(runId) {
 
 let worker;
 let workerConnection;
+let autoscalerTimer;
+let autoscalerState;
+
+function parsePositiveIntEnv(value, fallback) {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
+/**
+ * Autoscaler config. Floor = the operator's CODEX_WORKER_CONCURRENCY (the
+ * steady-state capacity that was safe enough to configure); ceiling defaults
+ * to 8 so a queue burst can use the runner's dev-port pool (5173-5182, 10
+ * slots) and stay inside the shared runner's 2g memory budget without
+ * starving the single-VPS host. Disabled when ceiling <= floor.
+ */
+function getAutoscalerConfig(env = process.env) {
+  const floor = Math.max(1, Number.parseInt(env.CODEX_WORKER_CONCURRENCY || '2', 10) || 2);
+  const max = parsePositiveIntEnv(env.CODEX_WORKER_MAX_CONCURRENCY, 8);
+  const ceiling = Math.max(floor, max);
+  return {
+    enabled: ceiling > floor,
+    floor,
+    ceiling,
+    scaleUpThreshold: parsePositiveIntEnv(env.CODEX_AUTOSCALE_QUEUE_DEPTH, 3),
+    scaleUpStep: parsePositiveIntEnv(env.CODEX_AUTOSCALE_STEP, 2),
+    scaleDownAfterMs: Math.max(0, Number.parseInt(env.CODEX_AUTOSCALE_SCALE_DOWN_MS || '120000', 10) || 120000),
+    intervalMs: Math.max(5_000, Number.parseInt(env.CODEX_AUTOSCALE_INTERVAL_MS || '15000', 10) || 15000),
+  };
+}
+
+function clampConcurrency(value, config) {
+  return Math.min(Math.max(1, Math.trunc(value)), config.ceiling);
+}
+
+/**
+ * Pure transition for the autoscaler: given queue depth, the worker's current
+ * concurrency and the last time it grew, return the next target concurrency
+ * and whether "busy" was observed (used for the scale-down timer). Scale-up is
+ * immediate when waiting jobs exceed the threshold; scale-down returns to the
+ * floor only after a quiet period, so a bursty queue does not oscillate.
+ */
+function nextAutoscalerTarget({ depth, current, busySinceMs, now, config }) {
+  if (depth > config.scaleUpThreshold) {
+    const target = clampConcurrency(current + config.scaleUpStep, config);
+    return { target, changed: target > current, busySinceMs: now, grewNow: target > current };
+  }
+  const quietForMs = busySinceMs == null ? Infinity : now - busySinceMs;
+  if (current > config.floor && quietForMs >= config.scaleDownAfterMs) {
+    return { target: config.floor, changed: true, busySinceMs: null, grewNow: false };
+  }
+  return { target: current, changed: false, busySinceMs, grewNow: false };
+}
+
+function startCodexAutoscaler({ env = process.env, log = console } = {}) {
+  if (!worker || autoscalerTimer) return null;
+  const config = getAutoscalerConfig(env);
+  if (!config.enabled) return null;
+  autoscalerState = { busySinceMs: null, current: worker.concurrency };
+  const tick = async () => {
+    if (!worker) return;
+    try {
+      const depth = await getCodexQueue().getWaitingCount();
+      const now = Date.now();
+      const next = nextAutoscalerTarget({
+        depth,
+        current: autoscalerState.current,
+        busySinceMs: autoscalerState.busySinceMs,
+        now,
+        config,
+      });
+      autoscalerState.busySinceMs = next.busySinceMs;
+      if (next.changed) {
+        worker.concurrency = next.target;
+        autoscalerState.current = next.target;
+        log.info?.(`[codex-runs] autoscaler concurrency ${next.target} (waiting=${depth})`);
+      }
+    } catch (err) {
+      if (!isTransientRedisError(err)) {
+        log.warn?.(`[codex-runs] autoscaler tick failed: ${err?.message || err}`);
+      }
+    }
+  };
+  autoscalerTimer = setInterval(tick, config.intervalMs);
+  autoscalerTimer.unref?.();
+  return { config };
+}
+
+function stopCodexAutoscaler() {
+  if (autoscalerTimer) clearInterval(autoscalerTimer);
+  autoscalerTimer = null;
+  autoscalerState = null;
+}
 
 /**
  * Build the default BullMQ handler with the adapter id that passed boot
@@ -181,6 +273,7 @@ function startCodexWorker({ env = process.env, processor } = {}) {
   worker.on('failed', (job, err) => {
     console.error(`[codex-runs] job ${job?.id} failed:`, err?.message || err);
   });
+  startCodexAutoscaler({ env });
   return worker;
 }
 
@@ -216,6 +309,7 @@ async function getCodexQueueHealth() {
 }
 
 async function closeCodexWorker() {
+  stopCodexAutoscaler();
   const closing = [];
   if (worker) closing.push(worker.close());
   if (workerConnection) closing.push(workerConnection.quit().catch(() => workerConnection.disconnect()));
@@ -252,6 +346,10 @@ module.exports = {
   peekLiveCodexJob,
   createDefaultCodexJobHandler,
   startCodexWorker,
+  startCodexAutoscaler,
+  stopCodexAutoscaler,
+  getAutoscalerConfig,
+  nextAutoscalerTarget,
   getCodexQueueHealth,
   closeCodexWorker,
   closeCodexQueue,

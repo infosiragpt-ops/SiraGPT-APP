@@ -16,10 +16,121 @@ import type {
   AgentAction,
   AgentBuildContext,
   AgentGoal,
+  AgentIterationBudget,
   AgentSignal,
   AgentState,
+  AgentTask,
   BuildErrorVerdict,
 } from "./types"
+
+// ---- persistent task tracking -----------------------------------------------
+
+function generateTaskId(): string {
+  const uuid = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36)
+  return `task-${uuid}`
+}
+
+export function createAgentTask(title: string, detail?: string, files?: string[]): AgentTask {
+  const now = Date.now()
+  return {
+    id: generateTaskId(),
+    title,
+    status: "pending",
+    detail,
+    files,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function updateAgentTask(
+  tasks: AgentTask[],
+  taskId: string,
+  patch: Partial<Pick<AgentTask, "status" | "detail" | "files" | "title">>,
+): AgentTask[] {
+  return tasks.map((task) =>
+    task.id === taskId
+      ? { ...task, ...patch, updatedAt: Date.now() }
+      : task,
+  )
+}
+
+export function addAgentTask(tasks: AgentTask[] | undefined, task: AgentTask): AgentTask[] {
+  return [...(tasks || []), task]
+}
+
+export function activeAgentTasks(tasks: AgentTask[] | undefined): AgentTask[] {
+  return (tasks || []).filter((task) => task.status === "in_progress" || task.status === "pending")
+}
+
+export function completedAgentTaskCount(tasks: AgentTask[] | undefined): number {
+  return (tasks || []).filter((task) => task.status === "completed").length
+}
+
+/** Default autonomous-iteration budget: 20 iterations, 60 minutes. */
+export const DEFAULT_MAX_ITERATIONS = 20
+export const DEFAULT_ITERATION_TIMEOUT_MS = 60 * 60 * 1000
+
+/**
+ * Advance the iteration budget for a new autonomous turn. Returns the
+ * incremented budget, or its exhausted flagged copy when the cap is hit.
+ */
+export function advanceIterationBudget(
+  budget: AgentIterationBudget | undefined,
+  now = Date.now(),
+): AgentIterationBudget {
+  const current = budget
+    ? { ...budget }
+    : {
+        count: 0,
+        max: DEFAULT_MAX_ITERATIONS,
+        startedAt: now,
+        timeoutMs: DEFAULT_ITERATION_TIMEOUT_MS,
+      }
+  const count = current.count + 1
+  const overTime = current.timeoutMs > 0 && now - current.startedAt > current.timeoutMs
+  return { ...current, count, max: current.max, startedAt: current.startedAt, timeoutMs: current.timeoutMs, exhausted: count > current.max || overTime }
+}
+
+/** True when the budget is spent, so the FSM must stop autonomous work. */
+export function isBudgetExhausted(budget: AgentIterationBudget | undefined, now = Date.now()): boolean {
+  if (!budget) return false
+  if (budget.count >= budget.max) return true
+  return budget.timeoutMs > 0 && now - budget.startedAt > budget.timeoutMs
+}
+/** Return the next task the agent should work on, or null if none are pending. */
+export function nextPendingTask(tasks: AgentTask[] | undefined): AgentTask | null {
+  const list = tasks || []
+  const inProgress = list.find((task) => task.status === "in_progress")
+  if (inProgress) return inProgress
+  return list.find((task) => task.status === "pending") || null
+}
+
+/** Bare continuation ack: "ok", "continúa", "sigue", "dale", "next", "go". */
+const TASK_CONTINUE_RE =
+  /^(ok(?:ey)?|dale|sigue|continua|contin[uú]a|siguiente|adelante|next|go|procede|avanza|vamos)(?:\s+(?:con|con eso|con la siguiente|la siguiente tarea|el siguiente paso))?(?:\s+(?:ya|ahora|porfa(?:vor)?))?$/
+
+const CONTINUE_WORDS = new Set([
+  "ok", "okay", "dale", "sigue", "continua", "siguiente", "adelante",
+  "next", "go", "procede", "avanza", "vamos", "con", "eso", "la", "el",
+  "tarea", "paso", "ya", "ahora", "porfa", "porfavor", "de", "siguiente",
+])
+
+export function isBareTaskContinue(text: string): boolean {
+  const normalized = clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:'']+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (TASK_CONTINUE_RE.test(normalized)) return true
+  const words = normalized.split(" ").filter(Boolean)
+  if (words.length === 0) return false
+  return words.every((w) => CONTINUE_WORDS.has(w))
+}
 
 // ---- autonomous brief -------------------------------------------------------
 
@@ -56,9 +167,9 @@ function clean(text: string): string {
 }
 
 const BUILD_NOUN =
-  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma)\b/
+  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma|juegos?|videojuegos?|games?|arcade|calculadora|quiz|bot|api|servidor|backend|frontend|saas|crm|erp|pos|punto de venta|inventario|reserv[ao]|citas?|agenda|calendario|encuesta|formulario|landing page)\b/
 const BUILD_VERB =
-  /\b(cre|cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/
+  /\b(cre|cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|contr[uú]ye(?:me)?|contruir|costr[uú]ye(?:me)?|costruir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/
 const APP_GOAL_CUE =
   /\b(app|aplicaci[oó]n|dashboard|panel|crud|software|sistema|plataforma|gesti[oó]n|gestionar|administrar|manejar|registrar|punto de venta|pos|inventario|pedidos?|ordenes?|[oó]rdenes?|clientes?|productos?)\b/i
 
@@ -75,6 +186,92 @@ export function isBuildRequest(text: string): boolean {
  */
 export function hasBuildVerb(text: string): boolean {
   return BUILD_VERB.test(text.toLowerCase())
+}
+
+function normalizeCodeIntent(text: string): string {
+  return clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:'’]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+/** Educational, explanatory or explicitly negated code wording is read-only. */
+export function isCodeInformationRequest(text: string): boolean {
+  const normalized = normalizeCodeIntent(text)
+  if (!normalized) return false
+  if (
+    /^(?:como\b|que\b|cual(?:es)?\b|por que\b|explicame\b|explica\b|dime como\b|quiero saber\b|necesito saber\b|quiero aprender\b|necesito aprender\b|puedes explicarme\b|podrias explicarme\b|me explicas\b|ayudame a entender\b|ensename (?:a|como)\b|muestrame como\b|tutorial\b|guia\b|pasos para\b|how\b|what\b|why\b|show me how\b|teach me how\b)/.test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+  const isQuestion = /^[¿]/.test(clean(text)) || /\?\s*$/.test(clean(text))
+  const explicitRequestQuestion =
+    /^(?:(?:por favor|please) )?(?:puedes|podrias|can you|could you)\b/.test(normalized)
+    || /^(?:por favor|please) (?:cambia|modifica|edita|corrige|arregla|agrega|anade|incluye|elimina|borra|quita|actualiza|reemplaza|renombra|mueve|instala|configura|sube|publica|despliega|sincroniza|change|edit|update|delete|remove|publish|upload|deploy|fix|add|install|configure|rename|move|sync)\b/.test(
+      normalized,
+    )
+  if (
+    isQuestion
+    && !explicitRequestQuestion
+    && /^(?:cambia|modifica|edita|corrige|arregla|agrega|anade|incluye|elimina|borra|quita|actualiza|reemplaza|renombra|mueve|instala|configura|sube|publica|despliega|sincroniza|change|edit|update|delete|remove|publish|upload|deploy|fix|add|install|configure|rename|move|sync)\b/.test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+
+  // Negation is fail-closed: in a preview session even a terse "no hagas
+  // nada" must never fall through to the generic patch branch.
+  if (
+    /^(?:(?:por favor|please) )?(?:no\b|nunca\b|do not\b|don t\b|never\b)/.test(normalized)
+    || /^(?:quiero|necesito) que no\b/.test(normalized)
+    || /^(?:(?:por favor )?sin) (?:hacer|tocar|cambiar|modificar|editar|corregir|arreglar|agregar|anadir|incluir|eliminar|borrar|quitar|actualizar|reemplazar|renombrar|mover|instalar|configurar|subir|publicar|desplegar|sincronizar|commit|push)\b/.test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+  const mentionedMutation =
+    "(?:cambi[a-z]*|modifi[a-z]*|edit[a-z]*|corr(?:eg|ij)[a-z]*|arregl[a-z]*|agreg[a-z]*|anad[a-z]*|inclu[a-z]*|elimin[a-z]*|borr[a-z]*|quit[a-z]*|actuali[a-z]*|reempla[a-z]*|renombr[a-z]*|muev[a-z]*|mov[a-z]*|instal[a-z]*|configur[a-z]*|sub(?:e|ir|elo|ela|as|an|amos)[a-z]*|publi[a-z]*|despleg[a-z]*|sincron[a-z]*|toc[a-z]*|(?:hag[a-z]*|hacer) (?:un )?(?:commit|push)|commit|push|chang[a-z]*|updat[a-z]*|delet[a-z]*|remov[a-z]*|publish[a-z]*|upload[a-z]*|deploy[a-z]*|fix[a-z]*|add[a-z]*|install[a-z]*|renam[a-z]*|sync[a-z]*)"
+  if (
+    new RegExp(
+      `\\b(?:no|nunca|never|not|do not|don t)\\b(?: [a-z0-9_-]+){0,5} ${mentionedMutation}\\b`,
+    ).test(normalized)
+    || new RegExp(`\\bsin\\b(?: [a-z0-9_-]+){0,4} ${mentionedMutation}\\b`).test(
+      normalized,
+    )
+  ) {
+    return true
+  }
+  return /\b(?:solo|solamente|just) (?:explicame|explica|dime|explain|tell me)\b/.test(
+    normalized,
+  )
+}
+
+/** Explicit mutation of an existing project, including publish/version-control actions. */
+export function isCodeWriteRequest(text: string): boolean {
+  const normalized = normalizeCodeIntent(text)
+  if (isCodeInformationRequest(text)) return false
+
+  const writeVerb =
+    "(?:cambia(?:r|lo|la|s)?|cambies|modifica(?:r|lo|la|s)?|modifiques|edita(?:r|lo|la|s)?|edites|corrige(?:lo|la|s)?|corrijas|corregir|arregla(?:r|lo|la|s)?|arregles|agrega(?:r|lo|la|s)?|agregues|anade(?:r|lo|la|s)?|anadas|incluye(?:lo|la|s)?|incluyas|incluir|elimina(?:r|lo|la|s)?|elimines|borra(?:r|lo|la|s)?|borres|quita(?:r|lo|la|s)?|quites|actualiza(?:r|lo|la|s)?|actualices|reemplaza(?:r|lo|la|s)?|reemplaces|renombra(?:r|lo|la|s)?|renombres|mueve(?:r|lo|la|s)?|muevas|instala(?:r|lo|la|s)?|instales|configura(?:r|lo|la|s)?|configures|sube|subir|subelo|subas|publica|publicar|publicalo|publiques|despliega|desplegar|despliegues|sincroniza|sincronizar|sincronices|commit|push|change|edit|update|delete|remove|publish|upload|deploy|fix|add|install|configure|rename|move|sync)"
+  const directPrefix =
+    "(?:(?:por favor|please) )?(?:(?:puedes|podrias|quiero que|necesito que|debes|vamos a|can you|could you) )?"
+  if (new RegExp(`^${directPrefix}${writeVerb}\\b`).test(normalized)) return true
+  if (new RegExp(`^${directPrefix}(?:haz|hagas|make|do) (?:un |a )?(?:commit|push)\\b`).test(normalized)) {
+    return true
+  }
+
+  // A read/review step may precede the actual mutation in the same order:
+  // "revisa el proyecto y luego súbelo a GitHub".
+  return new RegExp(
+    `\\b(?:y(?: luego)?|despues|entonces) (?:${directPrefix})?${writeVerb}\\b`,
+  ).test(normalized)
 }
 
 /** Short social greeting: should stay instant and never open the app intake. */
@@ -126,7 +323,7 @@ export function isConversationalMessage(text: string): boolean {
   const t = raw
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
 
   // 1) Desire verb + conversational object beats the "quiero/necesito" build
   //    verb: "quiero preguntarte algo", "necesito saber si…", "quisiera
@@ -156,6 +353,186 @@ export function isConversationalMessage(text: string): boolean {
 }
 
 /**
+ * A conversational /code turn that still needs the read-only web toolchain.
+ *
+ * CEO Office deliberately keeps ordinary chat on the low-latency plain stream,
+ * but a pasted URL or an explicit request to search/read the public web is not
+ * ordinary small-talk. Those turns request deterministic server-side web
+ * grounding before the same plain stream runs. The general agent toolset stays
+ * disabled so untrusted pages cannot reach shell, files or private connectors.
+ */
+export function needsWebTools(text: string): boolean {
+  const raw = clean(text)
+  if (!raw) return false
+  if (/\bhttps?:\/\/[^\s<>"')\]]+/i.test(raw)) return true
+
+  const normalized = raw
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+
+  const webTarget =
+    /\b(?:internet|web|google|navegador|browser|sitio|website|pagina|url|enlace|link)\b/
+  const publicCodeHost =
+    /\b(?:github|gitlab|bitbucket|codeberg|sourceforge)\b/
+  const readAction =
+    /\b(?:busca|buscar|buscame|investiga|investigar|consulta|consultar|verifica|verificar|revisa|revisar|accede|acceder|abre|abrir|lee|leer|navega|navegar|raspa|scrapea|scrapear|search|browse|fetch|open|read)\b/
+  const localCodeOperation =
+    /\b(?:workspace|codigo local|repositorio local|repo local|proyecto local|mi proyecto|este proyecto|esta aplicacion|archivos? locales?|working tree|rama local)\b/
+  const codeHostWriteAction =
+    /\b(?:sube|subir|subelo|publica|publicar|publicalo|push|commit|clona|clonar|clone|sincroniza|sincronizar|despliega|desplegar|deploy)\b/
+  const publicDomain =
+    /\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)(?:\/[^\s]*)?\b/
+  const discoveryAction =
+    /\b(?:busca|buscar|buscame|investiga|investigar|research|search|googlea|googlear)\b/
+  const localCodeTarget =
+    /\b(?:codigo|code|bug|error|proyecto|project|workspace|repositorio|repo|archivo|file|componente|component)\b/
+  const freshFact =
+    /\b(?:hoy|actual|actualmente|reciente|ultimo|ultimos|noticias|clima|precio|precios|cotizacion|competidor|competidores|mercado|latest|current|today|news|weather|price|prices)\b/
+
+  if (webTarget.test(normalized) && readAction.test(normalized)) return true
+  if (
+    publicCodeHost.test(normalized)
+    && readAction.test(normalized)
+    && !localCodeOperation.test(normalized)
+    && !codeHostWriteAction.test(normalized)
+  ) {
+    return true
+  }
+  if (publicDomain.test(normalized) && readAction.test(normalized)) return true
+  if (discoveryAction.test(normalized) && !localCodeTarget.test(normalized)) return true
+  return freshFact.test(normalized) && (readAction.test(normalized) || raw.includes("?"))
+}
+
+type WebConversationTurn = Readonly<{ role: string; content: string }>
+
+const WEB_FOLLOW_UP_ACK =
+  /^(?:(?:si|yes|claro(?: que si)?|dale|ok(?:ey)?|vale|de acuerdo)(?: (?:(?:hazlo|buscalo|investigalo|consultalo|verificalo|abrelo|leelo|busca|investiga|consulta|verifica|abre|lee|procede|adelante)(?: ya| ahora)?|go ahead|do it))?|(?:hazlo|buscalo|investigalo|consultalo|verificalo|abrelo|leelo|busca|investiga|consulta|verifica|abre|lee|procede|adelante)(?: ya| ahora)?|go ahead|do it)$/
+const WEB_ACTION_OR_TARGET =
+  /\b(?:busca|buscar|busco|busque|investiga|investigar|consulta|consultar|verifica|verificar|accede|acceder|abre|abrir|lee|leer|navega|navegar|github|gitlab|bitbucket|codeberg|sourceforge|internet|web|sitio|website|url|enlace|link|repositorio|repo|search|browse|fetch|open|read)\b/
+const WEB_OFFER =
+  /\b(?:quieres|deseas|prefieres|puedo|podria|debo|hago|lo busco|lo investigo|lo consulto|lo verifico|lo abro|lo leo|shall i|should i|want me to|would you like me to)\b/
+const DEICTIC_WEB_TARGET =
+  /\b(?:su|sus|ese|esa|eso|este|esta|esto|aquel|aquella|ella|ello|dicho|dicha|anterior)\b/
+
+function normalizeWebFollowUp(text: string): string {
+  return clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function isWebFollowUpAck(text: string): boolean {
+  const normalized = normalizeWebFollowUp(text)
+    .replace(/\b(?:por favor|please)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  return WEB_FOLLOW_UP_ACK.test(normalized)
+}
+
+function normalizePublicHostname(hostname: string): string | null {
+  const normalized = hostname.toLowerCase().replace(/^www\./, "")
+  return /^(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)$/.test(
+    normalized,
+  )
+    ? normalized
+    : null
+}
+
+function lastPublicHostname(turns: ReadonlyArray<WebConversationTurn>): string | null {
+  let userTurnsWithoutTarget = 0
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (!turn || turn.role !== "user") continue
+    const content = clean(turn.content)
+    if (!content) continue
+
+    const urls = content.match(/https?:\/\/[^\s<>"')\]]+/gi) || []
+    for (let urlIndex = urls.length - 1; urlIndex >= 0; urlIndex -= 1) {
+      try {
+        const hostname = normalizePublicHostname(
+          new URL(urls[urlIndex].replace(/[.,;:!?]+$/g, "")).hostname,
+        )
+        if (hostname) return hostname
+      } catch {
+        // Keep looking for another explicit public target.
+      }
+    }
+
+    const domains = content.match(
+      /\b(?:[a-z0-9](?:[a-z0-9-]{0,62})\.)+(?:com|org|net|edu|gov|io|ai|co|pe|bo|es|mx|ar|cl|dev|app)\b/gi,
+    )
+    if (domains?.length) return normalizePublicHostname(domains[domains.length - 1])
+
+    // Do not inherit a hostname across an unrelated user topic. A single
+    // acknowledgement may bridge the immediately preceding public-web target,
+    // but arbitrary older domains are never carried into a new lookup.
+    userTurnsWithoutTarget += 1
+    if (!isWebFollowUpAck(content) || userTurnsWithoutTarget > 1) return null
+  }
+  return null
+}
+
+function resolveDeicticWebTarget(
+  request: string,
+  priorTurns: ReadonlyArray<WebConversationTurn>,
+): string {
+  if (/\bhttps?:\/\//i.test(request)) return request
+  if (!DEICTIC_WEB_TARGET.test(normalizeWebFollowUp(request))) return request
+  const hostname = lastPublicHostname(priorTurns)
+  return hostname ? `${request}\nObjetivo público referido: ${hostname}` : request
+}
+
+/**
+ * Resolve the safe public-web query for the current /code turn.
+ *
+ * This keeps multi-turn confirmations such as "sí" in read-only web mode
+ * instead of letting them fall into the code engine. Only the latest explicit
+ * web request and, when needed, one public hostname are carried forward; the
+ * full chat transcript and private workspace context never leave this scope.
+ */
+export function buildWebGroundingQuery(
+  text: string,
+  turns: ReadonlyArray<WebConversationTurn>,
+): string | null {
+  const raw = clean(text)
+  if (!raw) return null
+
+  // Resolve contextual confirmations before treating words such as "busca"
+  // as a new, targetless lookup. This preserves the previous public objective.
+  if (isWebFollowUpAck(raw)) {
+    let previousIndex = turns.length - 1
+    while (previousIndex >= 0 && !clean(turns[previousIndex]?.content || "")) previousIndex -= 1
+    const previous = previousIndex >= 0 ? turns[previousIndex] : null
+    const previousNormalized = normalizeWebFollowUp(previous?.content || "")
+    if (
+      previous
+      && previous.role === "assistant"
+      && WEB_ACTION_OR_TARGET.test(previousNormalized)
+      && WEB_OFFER.test(previousNormalized)
+    ) {
+      for (let index = previousIndex - 1; index >= 0; index -= 1) {
+        const turn = turns[index]
+        if (!turn || turn.role !== "user") continue
+        const request = clean(turn.content)
+        if (!request || !needsWebTools(request)) continue
+        const resolved = resolveDeicticWebTarget(request, turns.slice(0, index))
+        return `${resolved}\nEl usuario confirmó que se realice ahora. Responde con el resultado y no pidas otra confirmación.`
+      }
+    }
+  }
+
+  if (needsWebTools(raw)) {
+    return resolveDeicticWebTarget(raw, turns)
+  }
+
+  return null
+}
+
+/**
  * A build ORDER with no content of its own: "ok, créala", "hazlo",
  * "constrúyela ya", "procede", "adelante". The substance lives in the
  * previous conversation — briefFromConversation() recovers it so the build
@@ -167,7 +544,7 @@ export function isBareBuildCommand(text: string): boolean {
   const t = raw
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[¡!¿?.,;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -242,6 +619,24 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   const text = clean(input)
   const tier: "llm" | "deterministic" = signal.hasModel && !signal.forceDeterministic ? "llm" : "deterministic"
 
+  // 0) Autonomous multi-task execution: when there are pending/in-progress tasks
+  //    and the user sent an empty or bare-ack message ("ok", "continúa", "sigue"),
+  //    the agent works on the next task without needing a new instruction.
+  //    This fires BEFORE every other rule so a multi-step plan proceeds
+  //    sequentially without re-prompting the user each turn.
+  if (state.phase === "preview") {
+    const task = nextPendingTask(state.tasks)
+    if (task && (text === "" || isBareTaskContinue(text))) {
+      // Mejora 4: the iteration budget caps how many autonomous turns the agent
+      // may take in one run. Once the cap or the timeout is spent, stop
+      // auto-continuing so a broken loop can never run forever.
+      if (isBudgetExhausted(state.budget)) {
+        return { type: "passthrough" }
+      }
+      return { type: "work_task", taskId: task.id, instruction: task.detail || task.title }
+    }
+  }
+
   // 1) Explicit error-fix bridge always wins (user pressed "Reparar error").
   if (signal.fixErrorText) return { type: "debug", log: signal.fixErrorText }
 
@@ -267,8 +662,35 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "generate", context: seedGoal(state.context, text), tier: "deterministic" }
   }
 
-  // 6) Iterating on an already-built app.
+  // 6) Informational intent stays read-only in every app/build phase.
+  // Explicit write requests phrased as questions ("¿puedes cambiar...?") are
+  // excluded and continue to the mutation classifier below.
+  if (
+    isCodeInformationRequest(text)
+    || (isConversationalMessage(text) && !isCodeWriteRequest(text))
+  ) {
+    return { type: "passthrough" }
+  }
+
+  // 7) Iterating on an already-built app.
   if (state.phase === "preview" && !isBuildRequest(text) && text.length > 0) {
+    return { type: "patch", instruction: text }
+  }
+
+  // 7b) Multi-task instruction: user chains 2+ actions with "y luego", "después",
+  //   "también", "primero... luego...", "además". When the preview is already
+  //   running, treat each clause as a sequential patch instruction.
+  if (
+    state.phase === "preview"
+    && /\b(?:y luego|despues|despues de eso|tambien|ademas|primero.*luego|por otro lado|a continuacion|seguidamente)\b/i.test(normalizeCodeIntent(text))
+  ) {
+    return { type: "patch", instruction: text }
+  }
+
+  if (
+    (signal.mode === "app" || signal.mode === "build")
+    && isCodeWriteRequest(text)
+  ) {
     return { type: "patch", instruction: text }
   }
 
@@ -280,12 +702,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     (signal.mode === "app" && text.length > 80)
   const isStart = (signal.mode === "app" || signal.mode === "build") && isBuildSeed
 
-  // 7) Intake gate (app/build). A conversational question mid-intake gets a
-  //    CHAT answer instead of being stuffed into a slot and force-generating
-  //    (a stalled intake used to swallow "¿puedes ayudarme?" into a build).
-  if (inIntake && isConversationalMessage(text) && !isBuildRequest(text)) {
-    return { type: "passthrough" }
-  }
+  // 8) Intake/build gate.
   if (isStart || inIntake) {
     if (inIntake) {
       const idx = Math.max(0, state.intakeStep - 1) // the slot we just asked about
@@ -296,7 +713,7 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
     return { type: "generate", context: seedAutonomousBrief(state.context, text), tier }
   }
 
-  // 8) Default (e.g. app-mode follow-up that is not a build request).
+  // 9) Default (e.g. app-mode follow-up that is not a build request).
   return { type: "passthrough" }
 }
 
@@ -519,6 +936,78 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       arreglo:
         "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json`; el preview reintentará la instalación automáticamente. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
       siguientePaso: "Aplica el cambio; el preview reintentará automáticamente si es un proyecto Node, o se actualizará en vivo si es estático.",
+    }
+  }
+
+  // TypeScript compilation errors.
+  if (/TS\d{4}:|error TS\d{4}|Type error|Type '.*' is not assignable|Cannot find name '.*'|Property '.*' does not exist/i.test(text)) {
+    return {
+      matched: true,
+      category: "typescript_error",
+      diagnostico: "El compilador de TypeScript encontró un error de tipos.",
+      quePasaba: "Un archivo .ts/.tsx tiene un error de tipado: tipo incompatible, nombre no encontrado o propiedad inexistente.",
+      causaRaiz:
+        "El código generado tiene una inconsistencia de tipos: un import faltante, un tipo mal inferido, o una propiedad que no existe en la interfaz/type.",
+      arreglo:
+        "Corrige el archivo específico indicado en el error TS: añade el import faltante, ajusta el tipo, o usa el tipo correcto. Si es un `any` intencional, añade un comentario `// eslint-disable-next-line @typescript-eslint/no-explicit-any` y usa `as` con tipo correcto.",
+      siguientePaso: "Aplico el parche y reintento el build automáticamente.",
+    }
+  }
+
+  // Vite/Next config errors.
+  if (/ vite config|vite\.config|Invalid option|next\.config|ERR_UNSUPPORTED_ESM|ERR_REQUIRE_ESM/i.test(text)) {
+    return {
+      matched: true,
+      category: "config_error",
+      diagnostico: "Error de configuración del bundler (Vite/Next).",
+      quePasaba: "El archivo de configuración (vite.config.ts o next.config.mjs) tiene una opción inválida o sintaxis incorrecta.",
+      causaRaiz: "La configuración generada usa una API incompatible con la versión instalada del bundler.",
+      arreglo:
+        "Revisa vite.config.ts / next.config.mjs: usa solo opciones válidas para la versión instalada. Para Vite 7 con Tailwind v4, los plugins son `react()` y `tailwindcss()` importados de `@vitejs/plugin-react` y `@tailwindcss/vite` respectivamente. NO uses `postcss.config.js` ni `tailwind.config.js` con Tailwind v4.",
+      siguientePaso: "Corrijo la configuración y reintento el build.",
+    }
+  }
+
+  // Port already in use.
+  if (/EADDRINUSE|port.*already.*in.*use|Port \d+ is already in use/i.test(text)) {
+    return {
+      matched: true,
+      category: "port_in_use",
+      diagnostico: "El puerto del dev server ya está en uso.",
+      quePasaba: "Otro proceso (o un dev server anterior que no terminó) ocupa el puerto que el preview intenta usar.",
+      causaRaiz: "Un proceso zombie del preview anterior no liberó el puerto.",
+      arreglo:
+        "El sistema debe matar el proceso anterior y reintentar. Si persiste, cambiar el puerto en vite.config.ts (server.port) o next.config.mjs.",
+      siguientePaso: "Termino el proceso anterior y reintento automáticamente.",
+    }
+  }
+
+  // ESLint / linting errors that block the build.
+  if (/ESLint|eslint.*error|Parsing error|Unexpected token|SyntaxError/i.test(text)) {
+    return {
+      matched: true,
+      category: "syntax_lint_error",
+      diagnostico: "Error de sintaxis o lint que bloquea el build.",
+      quePasaba: "Un archivo tiene un error de sintaxis (token inesperado, JSX mal formado) o un error de ESLint configurado como error.",
+      causaRaiz: "El código generado tiene un typo, un JSX mal cerrado, o un import sin uso que ESLint rechaza.",
+      arreglo:
+        "Corrige la sintaxis en el archivo indicado: cierra todas las etiquetas JSX, verifica comas y llaves, y elimina imports sin uso. Si ESLint es muy estricto, ajusta la regla a `warn` en `.eslintrc` o añade `// eslint-disable-next-line` con justificación.",
+      siguientePaso: "Corrijo la sintaxis y reintento el build.",
+    }
+  }
+
+  // CSS/Tailwind compilation errors.
+  if (/PostCSS|tailwind|@apply|unknown utility|Cannot apply unknown utility/i.test(text)) {
+    return {
+      matched: true,
+      category: "css_tailwind_error",
+      diagnostico: "Error de compilación CSS/Tailwind.",
+      quePasaba: "Tailwind o PostCSS no puede procesar una directiva o utility class.",
+      causaRaiz:
+        "Con Tailwind v4, las directivas v3 (`@tailwind base/components/utilities`) están prohibidas. Se usa `@import \"tailwindcss\"` y `@theme inline`.",
+      arreglo:
+        "En Tailwind v4: reemplaza `@tailwind base; @tailwind components; @tailwind utilities;` por `@import \"tailwindcss\";`. Elimina `tailwind.config.js` y `postcss.config.js` si existen. Usa `@tailwindcss/vite` como plugin en vite.config.ts. Si usas `@apply`, verifica que la utility exista en Tailwind v4.",
+      siguientePaso: "Corrijo el CSS y reintento el build.",
     }
   }
 

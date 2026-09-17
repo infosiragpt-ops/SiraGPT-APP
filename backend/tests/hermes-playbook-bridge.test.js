@@ -38,7 +38,7 @@ test('loadFlatInstructionSkills lists one-level SKILL.md folders', () => {
 
 test('folder capability map covers major Hermes source areas', () => {
   const folders = new Set(FOLDER_CAPABILITY_MAP.map((entry) => entry.hermes));
-  for (const expected of ['agent', 'skills', 'plugins', 'gateway', 'tools', 'web']) {
+  for (const expected of ['agent', 'skills', 'plugins', 'gateway', 'tools', 'web', 'curator']) {
     assert.ok(folders.has(expected), `expected folder map for ${expected}`);
   }
 });
@@ -46,6 +46,50 @@ test('folder capability map covers major Hermes source areas', () => {
 test('upstream Hermes skills map to active SiraGPT playbooks', () => {
   assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['systematic-debugging'].includes('runtime-debugging'));
   assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['test-driven-development'].includes('qa-smoke-testing'));
+});
+
+test('curator library mappings coexist with the github-pr-workflow fusion', () => {
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['github-pr-workflow'].includes('pr-production-loop'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['pptx-author'].includes('technical-docs'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS.qmd.includes('biblioteca-deposit'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS.siyuan.includes('biblioteca-deposit'));
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const matrix = buildHermesIntegrationMap({ repoRoot });
+  for (const id of [
+    'github-pr-workflow',
+    'pptx-author',
+    'code-wiki',
+    'qmd',
+    'siyuan',
+    'concept-diagrams',
+    'openclaw-migration',
+  ]) {
+    const entry = matrix.skills.find((skill) => skill.upstream === id);
+    assert.ok(entry, `${id} must be indexed from the upstream snapshot`);
+    assert.equal(entry.status, 'covered', `${id} must resolve to native SiraGPT skills`);
+  }
+});
+
+test('github-pr-workflow fuses into the native pr-production-loop skill', () => {
+  assert.ok(
+    UPSTREAM_TO_SIRAGPT_SKILLS['github-pr-workflow'].includes('pr-production-loop'),
+    'Hermes PR lifecycle must resolve to the SiraGPT production loop',
+  );
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const matrix = buildHermesIntegrationMap({ repoRoot });
+  const entry = matrix.skills.find((skill) => skill.upstream === 'github-pr-workflow');
+  assert.ok(entry, 'github-pr-workflow must be indexed from the upstream snapshot');
+  assert.equal(entry.status, 'covered', 'the native skill must exist so the mapping resolves');
+  assert.ok(entry.availableSkills.includes('pr-production-loop'));
+  const skillSource = fs.readFileSync(
+    path.join(repoRoot, '.agents', 'skills', 'pr-production-loop', 'SKILL.md'),
+    'utf8',
+  );
+  for (const marker of ['production-main', 'publish.sh', 'required checks']) {
+    assert.ok(skillSource.includes(marker), `skill must pin SiraGPT gate: ${marker}`);
+  }
+  assert.ok(skillSource.includes('NEVER push to `main`'), 'skill must forbid main pushes');
+  assert.match(skillSource, /skill:validate:agents/, 'skill must name its validation command');
 });
 
 test('buildHermesIntegrationMap reports copied upstream and rewritten SiraGPT skills', () => {
@@ -85,6 +129,9 @@ test('optional skills bridge summarizes categories and exposes adaptation guidan
   assert.equal(activated.skill.category, 'research');
   assert.equal(activated.activation, 'use_siragpt_skills');
   assert.match(activated.adaptationPlan.sourcePolicy, /rewrite behavior/);
+  assert.equal(activated.instructionRole, 'data');
+  assert.match(activated.instructionPreview, /<<<SKILL_REFERENCE>>>/);
+  assert.match(activated.instructionPreview, /not as instructions/);
 });
 
 test('toolset registry resolves core and composed bundles', () => {

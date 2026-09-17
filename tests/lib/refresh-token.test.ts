@@ -86,11 +86,17 @@ describe('refresh token', () => {
       .mockResolvedValueOnce({
         ok: false, status: 401, headers: new Headers(), json: () => Promise.resolve({ error: 'Invalid or expired token' }),
       })
-      // /auth/refresh with stale Bearer also fails because Authorization takes precedence over cookie
+      // transport singleFlightRefresh (cookie-only) also fails while the
+      // session cookie cannot mint a token
       .mockResolvedValueOnce({
         ok: false, status: 401, headers: new Headers(), json: () => Promise.resolve({ error: 'Invalid or expired token' }),
       })
-      // cookie-only /auth/refresh succeeds and issues a clean token
+      // ApiClient._tryRefresh Bearer attempt: the stale Bearer poisons
+      // /auth/refresh too (Authorization takes precedence over cookie)
+      .mockResolvedValueOnce({
+        ok: false, status: 401, headers: new Headers(), json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+      })
+      // cookie-only /auth/refresh fallback succeeds and issues a clean token
       .mockResolvedValueOnce({
         ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ token: refreshedToken }),
       })
@@ -110,20 +116,31 @@ describe('refresh token', () => {
     })
 
     expect(result).toEqual({ imageUrl: 'https://api.siragpt.com/uploads/images/generated.png' })
-    expect(mockFetch).toHaveBeenCalledTimes(4)
+    expect(mockFetch).toHaveBeenCalledTimes(5)
 
     const [, firstImageOptions] = mockFetch.mock.calls[0]
+    expect(String(mockFetch.mock.calls[0][0])).toContain('/ai/generate-image')
     expect(firstImageOptions.headers.get('Authorization')).toBe(`Bearer ${testToken}`)
 
-    const [, bearerRefreshOptions] = mockFetch.mock.calls[1]
+    const [, transportRefreshOptions] = mockFetch.mock.calls[1]
     expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
+    // The shared transport answers the 401 itself: singleFlightRefresh is
+    // cookie-only, so no Authorization header is sent.
+    expect(transportRefreshOptions.headers.has('Authorization')).toBe(false)
+
+    const [, bearerRefreshOptions] = mockFetch.mock.calls[2]
+    expect(String(mockFetch.mock.calls[2][0])).toContain('/auth/refresh')
+    // ApiClient._tryRefresh preserves Bearer-first for token clients.
     expect(bearerRefreshOptions.headers.get('Authorization')).toBe(`Bearer ${testToken}`)
 
-    const [, cookieRefreshOptions] = mockFetch.mock.calls[2]
-    expect(String(mockFetch.mock.calls[2][0])).toContain('/auth/refresh')
+    const [, cookieRefreshOptions] = mockFetch.mock.calls[3]
+    expect(String(mockFetch.mock.calls[3][0])).toContain('/auth/refresh')
+    // New contract under test: the fallback refresh drops the poisoned
+    // Authorization header entirely (bearerToken: null).
     expect(cookieRefreshOptions.headers.has('Authorization')).toBe(false)
 
-    const [, retriedImageOptions] = mockFetch.mock.calls[3]
+    const [, retriedImageOptions] = mockFetch.mock.calls[4]
+    expect(String(mockFetch.mock.calls[4][0])).toContain('/ai/generate-image')
     expect(retriedImageOptions.headers.get('Authorization')).toBe(`Bearer ${refreshedToken}`)
   })
 
@@ -178,7 +195,21 @@ describe('refresh token', () => {
         headers: new Headers(),
         json: () => Promise.resolve({ error: 'Access token required' }),
       })
-      // /auth/refresh can still mint a clean JWT from the httpOnly refresh cookie.
+      // The shared transport refreshes once from the httpOnly refresh cookie...
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve({ token: '' }),
+      })
+      // ...but its replay carries no Bearer either and 401s again.
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: 'Access token required' }),
+      })
+      // Only ApiClient._tryRefresh mints the clean JWT for _sseStream.
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -198,12 +229,21 @@ describe('refresh token', () => {
       (event) => events.push(event),
     )
 
-    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(mockFetch).toHaveBeenCalledTimes(5)
+    // First attempt: no Bearer, rejected by authenticateToken.
     expect(String(mockFetch.mock.calls[0][0])).toContain('/doc/generate')
     expect(new Headers(mockFetch.mock.calls[0][1].headers).has('Authorization')).toBe(false)
+    // The shared transport answers the 401 with its cookie-only
+    // singleFlightRefresh (no Authorization header).
     expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).has('Authorization')).toBe(false)
+    // Its replay still has no token and 401s again; only then does
+    // ApiClient._tryRefresh mint the JWT that _sseStream re-enters with.
     expect(String(mockFetch.mock.calls[2][0])).toContain('/doc/generate')
-    expect(new Headers(mockFetch.mock.calls[2][1].headers).get('Authorization')).toBe(`Bearer ${refreshedToken}`)
+    expect(new Headers(mockFetch.mock.calls[2][1].headers).has('Authorization')).toBe(false)
+    expect(String(mockFetch.mock.calls[3][0])).toContain('/auth/refresh')
+    expect(String(mockFetch.mock.calls[4][0])).toContain('/doc/generate')
+    expect(new Headers(mockFetch.mock.calls[4][1].headers).get('Authorization')).toBe(`Bearer ${refreshedToken}`)
     expect(events).toEqual([{ type: 'final', content: 'doc listo' }])
   })
 })

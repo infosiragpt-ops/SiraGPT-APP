@@ -46,14 +46,9 @@ const nextConfig = {
   },
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
-  // Local smoke checks hit 127.0.0.1 while Next prints localhost as the
-  // primary dev origin. Allow both hostnames for /_next/* dev assets.
-  allowedDevOrigins: ['127.0.0.1'],
-
-  // Allow the Replit cross-origin dev-preview iframe to load Next.js
-  // resources without the "Cross origin request detected" warning.
-  // (*.riker.replit.dev is the Replit dev-preview domain.)
-  allowedDevOrigins: ['127.0.0.1', '127.0.0.1:3000', 'localhost:3000', '*.riker.replit.dev', '*.replit.dev'],
+  // Next matches hostnames (not origins with ports). Replit preview hosts
+  // can have multiple subdomain levels, which a single "*" does not cover.
+  allowedDevOrigins: ['127.0.0.1', 'localhost', '**.replit.dev'],
 
   // Cap webpack's peak memory during `next build`. The deploy builder is an
   // 8 GiB e2-standard-2, and this app's compile + static-generation phase can
@@ -64,6 +59,8 @@ const nextConfig = {
   experimental: {
     webpackMemoryOptimizations: true,
   },
+
+  transpilePackages: ['@novnc/novnc'],
 
   // Prevent Next.js from issuing a 308 redirect when the URL has a trailing
   // slash. Without this, /sira-promo/ → 308 → /sira-promo happens BEFORE
@@ -132,6 +129,41 @@ const nextConfig = {
   // NOTE: Next.js standalone may evaluate rewrites while loading .env.local.
   // Replit deployments must ignore stale localhost:5000 values from that file
   // and match scripts/start-all.cjs's BACKEND_PORT default (5050).
+  async redirects() {
+    return [
+      {
+        source: '/chat',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/chat/',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/chat/:id',
+        destination: '/agentes/:id',
+        permanent: false,
+      },
+      {
+        source: '/code',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/code/',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/code/:path*',
+        destination: '/agentes',
+        permanent: false,
+      },
+    ]
+  },
+
   async rewrites() {
     const backendBase = resolveBackendInternalUrl()
     return {
@@ -153,6 +185,11 @@ const nextConfig = {
         {
           source: '/api/:path*',
           destination: `${backendBase}/api/:path*`,
+        },
+        // F7.2 same-origin desktop viewer. Never api.siragpt.com.
+        {
+          source: '/ws/desktop/:sessionId',
+          destination: `${backendBase}/ws/desktop/:sessionId`,
         },
         // `/uploads/*` is served by Express via `express.static(uploadDir)`.
         {

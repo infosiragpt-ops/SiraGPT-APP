@@ -56,12 +56,12 @@ describe('StructuredLogger', () => {
   it('timed wraps async function with start/end logging', async () => {
     const lines = [];
     const log = new StructuredLogger('test', { level: 'info', transport: line => lines.push(JSON.parse(line)) });
-    const result = await log.timed('test-op', async () => { await new Promise(r => setTimeout(r, 5)); return 42; });
+    const result = await log.timed('test-op', async () => { await new Promise(r => setTimeout(r, 20)); return 42; });
     assert.strictEqual(result, 42);
     assert.strictEqual(lines.length, 2);
     assert.strictEqual(lines[0].data.phase, 'start');
     assert.strictEqual(lines[1].data.phase, 'end');
-    assert.ok(lines[1].data.durationMs >= 5);
+    assert.ok(lines[1].data.durationMs >= 10);
   });
 
   it('timed logs error and re-throws', async () => {

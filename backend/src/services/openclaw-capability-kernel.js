@@ -50,6 +50,12 @@ const MASSIVE_SOURCE_FUSION_PATTERNS = [
   /\b(copiar|copia(?:r)?|copy)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw)\b/i,
   /\b(merge|fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw|c[oó]digo|code)\b/i,
   /\b(c[oó]digo|code)\b.{0,80}\b(copiar\s+y\s+fusionar|copy\s+and\s+merge|fusionar(?:lo)?)\b/i,
+  /\b(todo\s+(?:este|el)\s+c[oó]digo|cada\s+(?:carpetita|carpeta)|todas?\s+las?\s+carpetas?)\b.{0,140}\b(clon(?:a|ar|es)|reescrib(?:e|ir|as)|fusion(?:a|ar|alo)|openclaw)\b/i,
+];
+
+const OPAQUE_IMPLEMENTATION_PATTERNS = [
+  /\b(lenguaje|c[oó]digo)\b.{0,50}\b(complejo|oculto|ofuscado|incomprensible)\b.{0,80}\b(solo|solamente|[uú]nicamente)\b.{0,50}\b(t[uú]|ia|inteligencia artificial|entiend(?:as|a))\b/i,
+  /\b(obfuscate|obfuscated|private language|only (?:you|the ai) (?:can )?understand)\b/i,
 ];
 
 const REPAIR_PATTERNS = [
@@ -90,6 +96,7 @@ function classifyRequest(text, opts = {}) {
   const externalRepoAdaptation = EXTERNAL_REPO_PATTERNS.some((rx) => rx.test(prompt));
   const wantsAutonomousAgent = AUTONOMOUS_AGENT_PATTERNS.some((rx) => rx.test(prompt));
   const massiveSourceFusion = MASSIVE_SOURCE_FUSION_PATTERNS.some((rx) => rx.test(prompt));
+  const opaqueImplementationRequested = OPAQUE_IMPLEMENTATION_PATTERNS.some((rx) => rx.test(prompt));
   const nativeRewriteRequired = NO_COPY_PATTERNS.some((rx) => rx.test(prompt))
     || massiveSourceFusion
     || (externalRepoAdaptation && NATIVE_REWRITE_PATTERNS.some((rx) => rx.test(prompt)));
@@ -105,6 +112,7 @@ function classifyRequest(text, opts = {}) {
     externalRepoAdaptation,
     wantsAutonomousAgent,
     massiveSourceFusion,
+    opaqueImplementationRequested,
     nativeRewriteRequired,
     highRisk,
     likelyLongRunning,
@@ -143,6 +151,7 @@ function buildCapabilityProfile({
       externalRepoAdaptation: classification.externalRepoAdaptation,
       wantsAutonomousAgent: classification.wantsAutonomousAgent,
       massiveSourceFusion: classification.massiveSourceFusion,
+      opaqueImplementationRequested: classification.opaqueImplementationRequested,
       nativeRewriteRequired: classification.nativeRewriteRequired,
       recentTurnCount: Number(recentTurnCount || 0),
       attachmentCount: Number(attachmentCount || 0),
@@ -204,6 +213,14 @@ function buildOpenClawPromptBlock(profile) {
       '- Require an integration map, deterministic tests, and a rollback-aware checkpoint before claiming that any bulk-fusion capability is live.',
     ].join('\n')
     : '';
+  const maintainabilityBlock = signals.opaqueImplementationRequested
+    ? [
+      '',
+      '### Maintainable Source Contract',
+      '- Do not invent a private language or intentionally obfuscate the implementation. Use the project standard language, documented interfaces, clear names, and reviewable tests.',
+      '- Translate the request for complexity into strong architecture, isolation, verification, and capability depth rather than unreadable syntax.',
+    ].join('\n')
+    : '';
 
   return [
     '## OpenClaw-Level Runtime Policy',
@@ -229,9 +246,10 @@ function buildOpenClawPromptBlock(profile) {
     '- High-risk external actions such as sending, posting, deleting, paying, deploying, or irreversible changes require explicit confirmation.',
     nativeAdaptationBlock,
     bulkFusionBlock,
+    maintainabilityBlock,
     '',
     '### Runtime Signals',
-    `- wantsRepair=${Boolean(signals.wantsRepair)} referencesVisualContext=${Boolean(signals.referencesVisualContext)} externalRepoAdaptation=${Boolean(signals.externalRepoAdaptation)} wantsAutonomousAgent=${Boolean(signals.wantsAutonomousAgent)} massiveSourceFusion=${Boolean(signals.massiveSourceFusion)} nativeRewriteRequired=${Boolean(signals.nativeRewriteRequired)} highRisk=${Boolean(signals.highRisk)} likelyLongRunning=${Boolean(signals.likelyLongRunning)}`,
+    `- wantsRepair=${Boolean(signals.wantsRepair)} referencesVisualContext=${Boolean(signals.referencesVisualContext)} externalRepoAdaptation=${Boolean(signals.externalRepoAdaptation)} wantsAutonomousAgent=${Boolean(signals.wantsAutonomousAgent)} massiveSourceFusion=${Boolean(signals.massiveSourceFusion)} opaqueImplementationRequested=${Boolean(signals.opaqueImplementationRequested)} nativeRewriteRequired=${Boolean(signals.nativeRewriteRequired)} highRisk=${Boolean(signals.highRisk)} likelyLongRunning=${Boolean(signals.likelyLongRunning)}`,
     `- recentTurnCount=${signals.recentTurnCount || 0} attachmentCount=${signals.attachmentCount || 0} memoryFactCount=${signals.memoryFactCount || 0}`,
     '',
     executionDossier.buildDossierPromptBlock(profile.executionDossier),
@@ -250,6 +268,7 @@ function buildOpenClawRuntimeSummary(profile) {
         externalRepoAdaptation: Boolean(profile.signals.externalRepoAdaptation),
         wantsAutonomousAgent: Boolean(profile.signals.wantsAutonomousAgent),
         massiveSourceFusion: Boolean(profile.signals.massiveSourceFusion),
+        opaqueImplementationRequested: Boolean(profile.signals.opaqueImplementationRequested),
         nativeRewriteRequired: Boolean(profile.signals.nativeRewriteRequired),
         likelyLongRunning: Boolean(profile.signals.likelyLongRunning),
         highRisk: Boolean(profile.signals.highRisk),
@@ -285,6 +304,7 @@ function buildOpenClawRuntimeSummary(profile) {
       externalRepoAdaptation: Boolean(signals.externalRepoAdaptation),
       wantsAutonomousAgent: Boolean(signals.wantsAutonomousAgent),
       massiveSourceFusion: Boolean(signals.massiveSourceFusion),
+      opaqueImplementationRequested: Boolean(signals.opaqueImplementationRequested),
       nativeRewriteRequired: Boolean(signals.nativeRewriteRequired),
       likelyLongRunning: Boolean(signals.likelyLongRunning),
       highRisk: Boolean(signals.highRisk),

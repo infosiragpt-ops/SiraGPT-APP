@@ -10,6 +10,7 @@ const skillsRegistry = require('../src/services/skills-registry');
 const {
   FOLDER_CAPABILITY_MAP,
   UPSTREAM_TO_SIRAGPT_SKILLS,
+  UPSTREAM_REFERENCE_ONLY_SKILLS,
   parseSkillMarkdown,
   loadInstructionSkills,
   buildOpenClawIntegrationMap,
@@ -37,7 +38,7 @@ test('loadInstructionSkills lists SKILL.md folders', () => {
 
 test('folder capability map covers major OpenClaw source areas', () => {
   const folders = new Set(FOLDER_CAPABILITY_MAP.map((entry) => entry.openclaw));
-  for (const expected of ['.agents', '.github', 'changelog/fragments', 'extensions', 'git-hooks', 'patches', 'security', 'src', 'test', 'ui', 'root-config']) {
+  for (const expected of ['.agents', '.claude', '.github', 'changelog/fragments', 'examples', 'extensions', 'git-hooks', 'patches', 'security', 'src', 'test', 'ui', 'root-config']) {
     assert.ok(folders.has(expected), `expected folder map for ${expected}`);
   }
 });
@@ -48,6 +49,11 @@ test('upstream skills map to active SiraGPT playbooks', () => {
   assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['channel-message-flows'].includes('channel-connector-hardening'));
   assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['verify-release'].includes('quality-gates'));
   assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['openclaw-changelog-update'].includes('technical-docs'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['auto-qa'].includes('e2e-proof-recorder'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['claw-score'].includes('agent-capability-matrix'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['openclaw-ci-limits'].includes('ci-orchestrator'));
+  assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['openclaw-live-updater'].includes('release-maintainer'));
+  assert.ok(UPSTREAM_REFERENCE_ONLY_SKILLS.includes('discord-user-post'));
 });
 
 test('buildOpenClawIntegrationMap reports copied upstream and rewritten SiraGPT skills', () => {
@@ -95,6 +101,55 @@ test('buildOpenClawIntegrationMap can audit a live external root without activat
   assert.ok(matrix.skills.some((skill) => skill.upstream === 'verify-release' && skill.availableSkills.includes('quality-gates')));
   assert.ok(matrix.public_skills.some((skill) => skill.upstream === 'weather' && skill.status === 'covered'));
   assert.ok(matrix.folders.some((folder) => folder.openclaw === 'src' && folder.upstream_file_count === 1));
+});
+
+test('buildOpenClawIntegrationMap audits an exact Git tree without checkout materialization', () => {
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-git-map-'));
+  fs.mkdirSync(path.join(dir, '.agents', 'skills', 'auto-qa'), { recursive: true });
+  fs.mkdirSync(path.join(dir, '.agents', 'skills', 'discord-user-post'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'skills', 'weather'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'future-surface'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.agents', 'skills', 'auto-qa', 'SKILL.md'), '---\nname: auto-qa\ndescription: Autonomous QA\n---\n# Auto QA\n');
+  fs.writeFileSync(path.join(dir, '.agents', 'skills', 'discord-user-post', 'SKILL.md'), '---\nname: discord-user-post\ndescription: Direct user post\n---\n# User post\n');
+  fs.writeFileSync(path.join(dir, 'skills', 'weather', 'SKILL.md'), '---\nname: weather\ndescription: Weather skill\n---\n# Weather\n');
+  fs.writeFileSync(path.join(dir, 'src', 'index.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(dir, 'future-surface', 'index.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(dir, 'LICENSE'), 'MIT License\n');
+
+  const childProcess = require('child_process');
+  childProcess.execFileSync('git', ['init', '-q', dir]);
+  childProcess.execFileSync('git', ['-C', dir, 'config', 'user.email', 'audit@example.invalid']);
+  childProcess.execFileSync('git', ['-C', dir, 'config', 'user.name', 'Audit Test']);
+  childProcess.execFileSync('git', ['-C', dir, 'add', '.']);
+  childProcess.execFileSync('git', ['-C', dir, 'commit', '-q', '-m', 'fixture']);
+  const commit = childProcess.execFileSync('git', ['-C', dir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+  fs.rmSync(path.join(dir, '.agents'), { recursive: true });
+  fs.rmSync(path.join(dir, 'skills'), { recursive: true });
+  fs.rmSync(path.join(dir, 'src'), { recursive: true });
+  fs.rmSync(path.join(dir, 'future-surface'), { recursive: true });
+
+  const matrix = buildOpenClawIntegrationMap({
+    repoRoot,
+    upstreamRepoRoot: dir,
+    upstreamCommit: commit,
+    requireGitTree: true,
+  });
+
+  assert.equal(matrix.source.commit, commit);
+  assert.equal(matrix.source.inventory_mode, 'git_tree');
+  assert.equal(matrix.source.tracked_files, 6);
+  assert.equal(matrix.source.inventory_coverage_percent, 100);
+  assert.equal(matrix.counts.upstreamSkills, 2);
+  assert.equal(matrix.counts.upstreamPublicSkills, 1);
+  assert.equal(matrix.counts.unmappedFolders, 1);
+  assert.ok(matrix.skills.some((skill) => skill.upstream === 'auto-qa' && skill.status === 'covered'));
+  assert.ok(matrix.skills.some((skill) => skill.upstream === 'discord-user-post' && skill.status === 'reference-only'));
+  assert.ok(matrix.public_skills.some((skill) => skill.upstream === 'weather' && skill.status === 'covered'));
+  assert.ok(matrix.folders.some((folder) => folder.openclaw === 'src' && folder.upstream_file_count === 1));
+  assert.ok(matrix.folders.some((folder) => folder.openclaw === 'future-surface' && folder.status === 'unknown'));
 });
 
 test('recommendAdaptedPlaybooks includes native public capabilities', () => {

@@ -484,7 +484,7 @@ function WorkspaceFolderBlock({
 
   const markWorkspaceRead = React.useCallback(() => {
     if (rows.length === 0) {
-      toast.info("Este proyecto no tiene chats para marcar.")
+      toast.info("Esta empresa no tiene chats para marcar.")
       return
     }
     rows.forEach((row) => sharedRowProps.actions.onMarkRead?.(row))
@@ -493,7 +493,7 @@ function WorkspaceFolderBlock({
 
   const archiveWorkspaceChats = React.useCallback(() => {
     if (rows.length === 0) {
-      toast.info("Este proyecto no tiene chats para archivar.")
+      toast.info("Esta empresa no tiene chats para archivar.")
       return
     }
     rows.forEach((row) => sharedRowProps.actions.onToggleArchive?.(row))
@@ -549,7 +549,7 @@ function WorkspaceFolderBlock({
             <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground/75" />
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.name}</span>
             {node.isPinned ? (
-              <Pin className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-label="Proyecto anclado" />
+              <Pin className="h-3 w-3 shrink-0 text-muted-foreground/55" aria-label="Empresa anclada" />
             ) : null}
           </button>
         )}
@@ -623,7 +623,7 @@ function WorkspaceSettingsMenu({
     toast.info(
       node.kind === "local-folder"
         ? "La carpeta ya está enlazada en APPS. Finder requiere permisos nativos del navegador."
-        : "Este proyecto vive en SiraGPT Cloud. Crea un worktree permanente para enlazarlo al disco.",
+        : "Esta empresa vive en SiraGPT Cloud. Crea un worktree permanente para enlazarla al disco.",
     )
   }, [node.kind, onRevealWorkspace])
 
@@ -632,7 +632,7 @@ function WorkspaceSettingsMenu({
       onCreatePermanentWorktree()
       return
     }
-    toast.info("El worktree permanente estará disponible cuando el proyecto tenga una carpeta local enlazada.")
+    toast.info("El worktree permanente estará disponible cuando la empresa tenga una carpeta local enlazada.")
   }, [onCreatePermanentWorktree])
 
   return (
@@ -643,14 +643,14 @@ function WorkspaceSettingsMenu({
             <button
               type="button"
               className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/70 data-[state=open]:text-foreground"
-              aria-label="Ajustes del proyecto"
+              aria-label="Ajustes de la empresa"
               onClick={(e) => e.stopPropagation()}
             >
               <Settings className="h-3.5 w-3.5" />
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">Ajustes del proyecto</TooltipContent>
+        <TooltipContent side="top">Ajustes de la empresa</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
         align="start"
@@ -661,7 +661,7 @@ function WorkspaceSettingsMenu({
       >
         <ProjectSettingsMenuItem
           icon={isPinned ? PinOff : Pin}
-          label={isPinned ? "Desanclar proyecto" : "Anclar proyecto"}
+          label={isPinned ? "Desanclar empresa" : "Anclar empresa"}
           onSelect={onTogglePin}
         />
         <ProjectSettingsMenuItem icon={FolderOpen} label="Mostrar en Finder" onSelect={revealWorkspace} />
@@ -670,7 +670,7 @@ function WorkspaceSettingsMenu({
           label="Crear un worktree permanente"
           onSelect={createPermanentWorktree}
         />
-        <ProjectSettingsMenuItem icon={Pencil} label="Cambiar el nombre del proyecto" onSelect={onRenameWorkspace} />
+        <ProjectSettingsMenuItem icon={Pencil} label="Cambiar el nombre de la empresa" onSelect={onRenameWorkspace} />
         <ProjectSettingsMenuItem icon={CheckCheck} label="Marcar todo como leído" onSelect={onMarkWorkspaceRead} />
         <ProjectSettingsMenuItem icon={Archive} label="Archivar chats" onSelect={onArchiveWorkspaceChats} />
         <DropdownMenuSeparator className="project-settings-menu__separator" />

@@ -4,10 +4,10 @@ import { describe, it } from "node:test"
 import { parseDeepLink, routeToHref } from "../lib/deep-links"
 
 describe("parseDeepLink — custom scheme", () => {
-  it("maps siragpt://chat/:id to /chat/:id", () => {
+  it("maps siragpt://chat/:id to /agentes/:id", () => {
     const r = parseDeepLink("siragpt://chat/abc123")
     assert.ok(r)
-    assert.equal(r!.path, "/chat/abc123")
+    assert.equal(r!.path, "/agentes/abc123")
     assert.equal(r!.query, "")
   })
 
@@ -38,7 +38,7 @@ describe("parseDeepLink — custom scheme", () => {
   it("preserves query string", () => {
     const r = parseDeepLink("siragpt://chat/abc?ref=push&from=ios")
     assert.ok(r)
-    assert.equal(r!.path, "/chat/abc")
+    assert.equal(r!.path, "/agentes/abc")
     assert.equal(r!.query, "ref=push&from=ios")
   })
 
@@ -112,12 +112,12 @@ describe("parseDeepLink — guards", () => {
 describe("routeToHref", () => {
   it("composes path + query + hash", () => {
     assert.equal(
-      routeToHref({ path: "/chat/abc", query: "ref=push", hash: "msg-1", raw: "" }),
-      "/chat/abc?ref=push#msg-1",
+      routeToHref({ path: "/agentes/abc", query: "ref=push", hash: "msg-1", raw: "" }),
+      "/agentes/abc?ref=push#msg-1",
     )
   })
 
   it("omits empty query and hash", () => {
-    assert.equal(routeToHref({ path: "/chat", query: "", raw: "" }), "/chat")
+    assert.equal(routeToHref({ path: "/agentes", query: "", raw: "" }), "/agentes")
   })
 })

@@ -27,6 +27,7 @@ const {
 const {
   acquireAuthUserLock,
 } = require('./auth/auth-user-lock');
+const { prepareDocumentAccountDeletion } = require('./doc-sandbox-account-lifecycle');
 
 const SYSTEM_ASSIGNMENT_PREFIX = `rbac_sys_v${SYSTEM_ASSIGNMENT_TAG_VERSION}_`;
 
@@ -651,6 +652,7 @@ function createRbacAssignmentSyncService({
         where: { id: userId },
         data: { deletedAt },
       });
+      await prepareDocumentAccountDeletion(tx, userId);
       await revokeAuthenticationState(tx, userId);
       await removeUserSystemAssignmentsInTransaction(tx, {
         userId,
@@ -687,6 +689,11 @@ function createRbacAssignmentSyncService({
           lockAlreadyHeld: true,
         });
       }
+      // The row lock serializes account deletion with document admission. If
+      // private objects still need cleanup, commit revocation and return pending.
+      const deactivated = await tx.user.update({ where: { id: userId },
+        data: { deletedAt: current.deletedAt || new Date() } });
+      const documents = await prepareDocumentAccountDeletion(tx, userId, { purge: true });
       await removeUserSystemAssignmentsInTransaction(tx, {
         userId,
         actorId,
@@ -694,6 +701,7 @@ function createRbacAssignmentSyncService({
         removeAll: true,
       });
       await revokeAuthenticationState(tx, userId);
+      if (documents.pending) return { ...deactivated, deletionPending: true };
       return tx.user.delete({ where: { id: userId } });
     });
     await invalidate(userId);

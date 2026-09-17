@@ -173,6 +173,51 @@ async function run(opts = {}) {
       }
     }
 
+    // RLHF prep-job artifacts may contain scrubbed training text derived
+    // from the deleted user. Drop the bytes (not the job row) best-effort.
+    if (prisma.rlhfTrainJob && typeof prisma.rlhfTrainJob.findMany === 'function') {
+      try {
+        const jobs = await prisma.rlhfTrainJob.findMany({
+          where: { OR: [{ createdById: u.id }, { scopeUserId: u.id }] },
+          select: { id: true, result: true },
+        });
+        if (!dryRun && jobs.length) {
+          const objectStorage = require('../services/object-storage');
+          for (const job of jobs) {
+            const priv = job.result && job.result.__private;
+            const ref = priv && (priv.ref || priv.localPath);
+            if (ref) await objectStorage.remove(ref);
+          }
+        }
+      } catch (err) {
+        logger.warn(`[scrub-pii] rlhf train jobs for user failed: ${err?.message || err}`);
+      }
+    }
+
+    // RLHF preference texts are user content. Scrub if the model exists
+    // on this Prisma client; skip silently in tests/stubs that omit it.
+    if (prisma.preferenceEvent && typeof prisma.preferenceEvent.findMany === 'function') {
+      try {
+        const prefs = await prisma.preferenceEvent.findMany({
+          where: { userId: u.id },
+          select: { id: true, promptText: true, responseText: true, notes: true, reasonCode: true, judgeScore: true },
+        });
+        for (const p of prefs) {
+          if (dryRun) continue;
+          await prisma.preferenceEvent.update({
+            where: { id: p.id },
+            data: {
+              promptText: p.promptText ? piiMask.mask(p.promptText) : p.promptText,
+              responseText: p.responseText ? piiMask.mask(p.responseText) : p.responseText,
+              notes: p.notes ? piiMask.mask(p.notes) : p.notes,
+            },
+          });
+        }
+      } catch (err) {
+        logger.warn(`[scrub-pii] preference events for ${u.id} failed: ${err?.message || err}`);
+      }
+    }
+
     // Best-effort audit row per scrubbed user.
     try {
       const { writeAuditLog } = require('../utils/audit-log');

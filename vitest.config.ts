@@ -26,8 +26,12 @@ export default defineConfig({
       interopDefault: true,
     },
   },
+  // oxc.jsx must be an OBJECT here (rolldown-vite spreads config.oxc
+  // straight into the native transform binding, which rejects esbuild-style
+  // strings like 'automatic' with [BUNDLER_INITIALIZE_ERROR]
+  // "Invalid jsx option"). runtime:'automatic' = React 17+ JSX transform.
   oxc: {
-    jsx: 'automatic',
+    jsx: { runtime: 'automatic' },
   },
   resolve: {
     alias: {

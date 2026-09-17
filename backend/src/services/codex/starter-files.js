@@ -461,6 +461,37 @@ export { Input, Textarea, Label } from './input'
 export { Badge, type BadgeProps } from './badge'
 `;
 
+  const siraInstructions = `# SiraGPT Project Instructions
+
+- Preserve a runnable build after every change.
+- Read existing files before editing them.
+- Use type_check, dev_server_check and browser_check before closing substantial work.
+- Record durable conventions here and short operational notes in .sira/notes.md.
+`;
+  const projectSettings = {
+    version: 1,
+    mode: 'auto',
+    tools: {
+      allow: [],
+      deny: [],
+      requireApproval: [],
+      mcpAllowWithoutApproval: [],
+    },
+    commands: { allow: [], deny: [] },
+    budget: { dailyUsd: null },
+    subagents: {
+      defaultModel: null,
+      defaultEffort: 'medium',
+      explorerModel: null,
+    },
+  };
+  const projectHooks = {
+    version: 1,
+    preToolUse: [],
+    postToolUse: [],
+    stop: [],
+  };
+
   return [
     { path: 'package.json', content: `${JSON.stringify(pkg, null, 2)}\n` },
     { path: 'vite.config.ts', content: viteConfig },
@@ -476,6 +507,10 @@ export { Badge, type BadgeProps } from './badge'
     { path: 'src/ui/input.tsx', content: uiInput },
     { path: 'src/ui/badge.tsx', content: uiBadge },
     { path: 'src/ui/index.ts', content: uiIndex },
+    { path: 'SIRA.md', content: siraInstructions },
+    { path: '.sira/settings.json', content: `${JSON.stringify(projectSettings, null, 2)}\n` },
+    { path: '.sira/hooks.json', content: `${JSON.stringify(projectHooks, null, 2)}\n` },
+    { path: '.sira/notes.md', content: '# Operational Notes\n' },
     { path: '.gitignore', content: 'node_modules\ndist\nserver/node_modules\nserver/*.db\n' },
   ];
 }

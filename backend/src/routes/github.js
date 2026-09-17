@@ -164,7 +164,7 @@ router.get('/callback', requireGithubOAuth, async (req, res) => {
       return res.redirect(githubConfig.postCallbackRedirect('already_linked'));
     }
 
-    await accounts.upsertForUser(userId, {
+    const account = await accounts.upsertForUser(userId, {
       githubUserId,
       login: ghUser.login,
       name: ghUser.name || null,
@@ -173,6 +173,26 @@ router.get('/callback', requireGithubOAuth, async (req, res) => {
       tokenType: tokens.tokenType,
       encryptedTokens: oauth.sealTokens(tokens),
     });
+    try {
+      const apps = require('../services/apps');
+      const prisma = require('../config/database');
+      await apps.upsertFromOAuth(prisma, {
+        userId,
+        appId: 'github',
+        sourceId: account.id,
+        accountLabel: account.login || ghUser.login || null,
+        scopes: tokens.scope,
+      });
+      await apps.auditAppEvent(prisma, {
+        userId,
+        action: 'app_connected',
+        appId: 'github',
+        connectionId: account.id,
+        metadata: { login: account.login || null },
+      });
+    } catch (syncErr) {
+      console.warn('[github] app connection sync failed:', syncErr.message);
+    }
 
     return res.redirect(githubConfig.postCallbackRedirect('connected'));
   } catch (err) {
@@ -225,6 +245,24 @@ router.get('/repos/:owner/:repo', authenticateToken, async (req, res) => {
   try {
     const details = await githubApi.getRepository(req.user.id, owner, repo);
     return res.json({ repo: details });
+  } catch (err) {
+    const n = githubApi.normalizeError(err);
+    return res.status(n.status).json(n.body);
+  }
+});
+
+// GET /api/github/repos/:owner/:repo/branches → { defaultBranch, branches[] }
+// Branch picker for the repo bound to a /agentes chat (Etapa 6). Reads GitHub
+// with the user's OAuth; nothing is cloned here.
+router.get('/repos/:owner/:repo/branches', authenticateToken, async (req, res) => {
+  const { owner, repo } = req.params;
+  if (!validName(owner) || !validName(repo)) {
+    return res.status(400).json({ error: 'Invalid owner or repo name', code: 'invalid_name' });
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const out = await githubApi.listBranches(req.user.id, owner, repo, { perPage: req.query.per_page });
+    return res.json({ owner, repo, ...out, count: out.branches.length });
   } catch (err) {
     const n = githubApi.normalizeError(err);
     return res.status(n.status).json(n.body);
@@ -1084,6 +1122,13 @@ router.get('/test', (req, res) => {
 // POST /api/github/disconnect
 router.post('/disconnect', authenticateToken, async (req, res) => {
   try {
+    try {
+      const apps = require('../services/apps');
+      const prisma = require('../config/database');
+      await apps.disconnectApp(prisma, { userId: req.user.id, appId: 'github', req });
+    } catch (syncErr) {
+      console.warn('[github] app disconnect sync failed:', syncErr.message);
+    }
     await accounts.deleteForUser(req.user.id);
     return res.json({ ok: true, disconnected: true });
   } catch (err) {

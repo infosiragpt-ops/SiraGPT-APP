@@ -15,10 +15,11 @@ type ClientLogPayload = {
   method?: string
   endpoint?: string
   extra?: Record<string, unknown> | null
+  digest?: string | null
 }
 
 const MAX_MESSAGE = 700
-const SENSITIVE_KEY_RE = /password|passwd|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|session|csrf/i
+const SENSITIVE_KEY_RE = /password|passwd|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|session|csrf|bearer|deepseek|email|prompt|completion|access_token|refresh_token|id_token|client_secret|mailto|ssn|iban|cvv|phone|card|credit[_-]?card|passport|dob|date[_-]?of[_-]?birth|address|national[_-]?id|routing[_-]?number|tax[_-]?id|driver[_-]?license|bank[_-]?account|swift|bic|ruc|dni|cpf|curp|rfc|(?:^|_|-)pin(?:$|_|-)|national[_-]?insurance|clabe|cci|cuit|cuil|nie|nif|(?:^|_|-)nss(?:$|_|-)|jwt|sessionid|set[_-]?cookie|x[_-]?csrf|auth[_-]?header/i
 
 function currentPage(): string {
   if (typeof window === "undefined") return "server"
@@ -33,6 +34,7 @@ function cleanString(value: unknown, max = MAX_MESSAGE): string | null {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[REDACTED:jwt]")
     .replace(/\b(?:sk|pk|rk|ghp|github_pat|xox[baprs])_[A-Za-z0-9._-]{8,}\b/gi, "[REDACTED:key]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED:email]")
     .slice(0, max)
 }
 
@@ -51,8 +53,25 @@ function cleanExtra(input: unknown, depth = 0): unknown {
   return out
 }
 
+const LOG_WINDOW_MS = 60_000
+const LOG_MAX_PER_WINDOW = 12
+let logWindowStart = 0
+let logWindowCount = 0
+
+function allowClientLog(): boolean {
+  const now = Date.now()
+  if (now - logWindowStart > LOG_WINDOW_MS) {
+    logWindowStart = now
+    logWindowCount = 0
+  }
+  if (logWindowCount >= LOG_MAX_PER_WINDOW) return false
+  logWindowCount += 1
+  return true
+}
+
 export function reportClientLog(payload: ClientLogPayload): void {
   if (typeof window === "undefined") return
+  if (!allowClientLog()) return
 
   const body = {
     source: payload.source || "client",
@@ -84,7 +103,12 @@ export function reportClientLog(payload: ClientLogPayload): void {
   })
 }
 
-export function reportErrorBoundary(label: string, error: Error): void {
+export function reportErrorBoundary(
+  label: string,
+  error: Error & { digest?: string },
+  extra?: { requestId?: string | null; digest?: string | null },
+): void {
+  const digest = extra?.digest || error.digest || null
   reportClientLog({
     source: "render",
     severity: "error",
@@ -92,5 +116,19 @@ export function reportErrorBoundary(label: string, error: Error): void {
     component: label,
     message: error.message,
     stack: error.stack,
+    requestId: extra?.requestId || null,
+    digest,
+    extra: digest ? { digest } : null,
   })
+}
+
+export function redactBoundaryMessage(message: unknown): string {
+  return cleanString(message, 240) || "Error desconocido"
+}
+
+
+
+/** 3H-FE-003 — nested extra PII (email/prompt) never leaves the browser. */
+export function stripPiiExtra(extra: unknown): unknown {
+  return cleanExtra(extra)
 }

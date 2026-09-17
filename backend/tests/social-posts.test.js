@@ -22,6 +22,7 @@ test("social-posts: buildSeriesPostData creates dated batch rows with references
     start,
     batchId: "batch-1",
     referenceImages: [{ name: "ref.png" }],
+    workspaceId: "workspace-a",
   });
   assert.equal(rows.length, 3);
   assert.equal(rows[0].batchId, "batch-1");
@@ -31,4 +32,18 @@ test("social-posts: buildSeriesPostData creates dated batch rows with references
   assert.equal(rows[2].scheduledAt.toISOString(), "2026-04-29T14:00:00.000Z");
   assert.deepEqual(rows[0].referenceImages, [{ name: "ref.png" }]);
   assert.equal(rows[0].config.approved, false);
+  assert.equal(rows[0].config.workspaceId, "workspace-a");
+});
+
+test("social-posts: workspace scope produces a Prisma JSON filter", () => {
+  assert.deepEqual(
+    INTERNAL.scheduledPostScopeWhere("codex-project-a"),
+    {
+      config: {
+        path: ["workspaceId"],
+        equals: "codex-project-a",
+      },
+    },
+  );
+  assert.deepEqual(INTERNAL.scheduledPostScopeWhere(null), {});
 });

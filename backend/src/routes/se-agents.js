@@ -664,7 +664,8 @@ router.get(
     if (!['sft', 'dpo'].includes(format)) {
       return res.status(400).json({ error: `unknown format '${format}' — use sft or dpo` });
     }
-    const out = preferenceExport.exportData({
+    const rlhfExport = require('../services/rlhf/export');
+    const out = await rlhfExport.exportData({
       userId: req.user.id, format, agent, scrubPii, aggressive,
     });
     const filename = safeDownloadFilename(
@@ -724,9 +725,15 @@ router.post(
  * GET /api/se-agents/feedback/stats
  * The caller's thumbs-up/down counts — useful for "X helpful answers so far" UX.
  */
-router.get('/feedback/stats', authenticateToken, (req, res) => {
+router.get('/feedback/stats', authenticateToken, handleErrors(async (req, res) => {
+  try {
+    const rlhf = require('../services/rlhf');
+    await rlhf.hydrateUser(req.user.id);
+    const durable = rlhf.stats(req.user.id);
+    if (durable.total > 0) return res.json({ ok: true, ...durable });
+  } catch { /* hydrate is best-effort */ }
   res.json({ ok: true, ...feedback.stats(req.user.id) });
-});
+}));
 
 /**
  * POST /api/se-agents/chat
