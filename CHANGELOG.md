@@ -6,6 +6,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Fixed
+
+- Production backend boot no longer `require()`s
+  `backend/tests/fixtures/document-rlcd-eval.json` at import time of
+  `rlcd/eval-harness.js` (that path is dockerignored; Lenovo publish of
+  `a5c3b55f` crashed and rolled back). The fixture loads lazily inside
+  `runEval` / `runDocumentEval` and skips when missing.
+
 ### Added
 
 - RLCD document analysis phase 3: retrieval-score + page-citation

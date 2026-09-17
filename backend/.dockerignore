@@ -10,6 +10,8 @@ node_modules
 *.jks
 *.keystore
 coverage
+# tests/ is not in the image. Production boot must not require() fixtures from
+# here (see rlcd/eval-harness.js — load is lazy / fail-open).
 tests
 uploads
 prisma/*.db*
