@@ -19,9 +19,10 @@ deleted. `scripts/postbuild-slim.js` is the gatekeeper: it runs last
 
 **What tipped it over:** Adding `pkgs.libreoffice` to `replit.nix` (~1.6 GB nix
 closure, needed at runtime for the document/PDF render pipeline). The image was
-already near the cap because a **stray duplicate project copy `siraGPT/`**
-(2.2 GB, its own gitignored `node_modules`) was NOT in the slim prune list.
-Fix was to add `siraGPT` to the prune list, freeing ~2.2 GB.
+already near the cap because stray duplicate project copies carried their own
+gitignored `node_modules` and `.next` output. Cleanup names are case-sensitive:
+audit and prune every exact duplicate name rather than assuming one spelling
+covers variants.
 
 **How to apply:** when publish hits the 8 GiB cap, do NOT remove runtime-needed
 nix deps (libreoffice + playwright-driver are both used at runtime here —
@@ -29,3 +30,16 @@ document rendering and computer-use/screenshots). Instead audit the working dir
 for large dirs that survive the build and add them to the `junk` list in
 `scripts/postbuild-slim.js`. Both `libreoffice` and `playwright-driver` are
 heavy but load-bearing — cutting them breaks features, not the right lever.
+
+Use `.replitignore` as the first boundary for generated workspace trees. Exclude
+dependency directories, build output, caches, and duplicate project copies so
+Reserved VM's automatic install starts from a clean context instead of
+overlaying npm onto stale pnpm artifacts.
+
+**Layering note:** deletion does not reclaim a separate automatic hosting layer.
+Reserved VM may still run its automatic install even when the documented
+hosting flag is disabled. Keep the flag disabled, but rely on `.replitignore`
+to prevent local dependency trees entering that layer. Never trust a retained
+tree from package presence alone: require the installed Next version to match
+the lockfile and a clean top-level `npm ls`; otherwise fall back to a clean
+install.
