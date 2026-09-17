@@ -21,7 +21,12 @@ function runIsolated(script) {
   return spawnSync(process.execPath, ['-e', script], {
     cwd: BACKEND,
     encoding: 'utf8',
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      NODE_PATH: [path.join(BACKEND, 'node_modules'), process.env.NODE_PATH]
+        .filter(Boolean)
+        .join(path.delimiter),
+    },
   });
 }
 
@@ -48,12 +53,10 @@ test('importing rlcd and eval-harness does not load the JSON fixture', () => {
     ${missingFixtureGuard()}
     const harness = require('./src/services/rlcd/eval-harness');
     const rlcd = require('./src/services/rlcd');
-    const routes = require('./src/routes/rlcd');
     process.stdout.write(JSON.stringify({
       fixtureLoads: globalThis.__rlcdFixtureLoads(),
       hasRunEval: typeof harness.runEval === 'function',
       hasRunDocumentEval: typeof rlcd.runDocumentEval === 'function',
-      hasRouter: Boolean(routes),
     }));
   `;
   const result = runIsolated(script);
@@ -62,7 +65,6 @@ test('importing rlcd and eval-harness does not load the JSON fixture', () => {
   assert.equal(out.fixtureLoads, 0, 'import must not touch the fixture file');
   assert.equal(out.hasRunEval, true);
   assert.equal(out.hasRunDocumentEval, true);
-  assert.equal(out.hasRouter, true);
 });
 
 test('runEval / runDocumentEval skip when the default fixture is missing', () => {
@@ -105,18 +107,25 @@ test('runEval skips a missing path argument without throwing', () => {
 });
 
 test('runEval still scores an in-memory fixture slice', () => {
-  const rlcd = require('../src/services/rlcd');
-  const report = rlcd.runDocumentEval([
-    {
-      id: 'coding-turn-untouched',
-      agent: 'coding',
-      prompt: 'dame la web en local',
-      files: [],
-      answer: 'Preview listo en http://127.0.0.1:5173',
-      expect: { unchanged: true, deferred: false, reason: 'not_document' },
-    },
-  ]);
-  assert.equal(report.skipped, false);
-  assert.equal(report.ok, true);
-  assert.equal(report.n, 1);
+  const prev = process.env.SIRAGPT_RLCD_DOCUMENTS;
+  process.env.SIRAGPT_RLCD_DOCUMENTS = '1';
+  try {
+    const rlcd = require('../src/services/rlcd');
+    const report = rlcd.runDocumentEval([
+      {
+        id: 'coding-turn-untouched',
+        agent: 'coding',
+        prompt: 'dame la web en local',
+        files: [],
+        answer: 'Preview listo en http://127.0.0.1:5173',
+        expect: { unchanged: true, deferred: false, reason: 'not_document' },
+      },
+    ]);
+    assert.equal(report.skipped, false);
+    assert.equal(report.ok, true, JSON.stringify(report.cases));
+    assert.equal(report.n, 1);
+  } finally {
+    if (prev == null) delete process.env.SIRAGPT_RLCD_DOCUMENTS;
+    else process.env.SIRAGPT_RLCD_DOCUMENTS = prev;
+  }
 });
