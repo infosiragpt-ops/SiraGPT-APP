@@ -198,6 +198,25 @@ async function unlinkQuiet(p) {
   try { await fs.unlink(p); } catch (_) { /* already gone */ }
 }
 
+// GPT icons end up in the PUBLIC `gpt-icons/` folder (no auth), so the
+// "any format" upload policy is deliberately narrowed here: an icon must be
+// a raster/vector image by declared type AND extension. Anything else is
+// unlinked and rejected before a row is written.
+const GPT_ICON_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'ico']);
+async function rejectNonImageIcon(req, res) {
+  const file = req.file;
+  if (!file) return false;
+  const mime = String(file.mimetype || '').split(';')[0].trim().toLowerCase();
+  const ext = path.extname(String(file.originalname || '')).replace(/^\./, '').toLowerCase();
+  if (mime.startsWith('image/') && GPT_ICON_EXTENSIONS.has(ext)) return false;
+  await unlinkQuiet(file.path);
+  res.status(400).json({
+    error: 'El icono debe ser una imagen (PNG, JPG, WEBP, GIF, SVG, AVIF, BMP o ICO).',
+    code: 'icon_not_image',
+  });
+  return true;
+}
+
 // Shape a File row for the API response — only safe, public-facing fields.
 // Never leaks path, userId, or openaiFileId.
 function knowledgeFileView(file) {
@@ -411,6 +430,7 @@ router.get('/share/:shareId', async (req, res) => {
 router.post('/', authenticateToken, upload.single('icon'), async (req, res) => {
   try {
     const userId = req.user.id;
+    if (await rejectNonImageIcon(req, res)) return;
     // Malformed/missing `gpts` is a client error (400), not a 500 — the bare
     // JSON.parse(undefined)/invalid-JSON throw used to land in the outer catch.
     if (typeof req.body.gpts !== 'string') {
@@ -522,6 +542,7 @@ router.put('/:id', authenticateToken, upload.single('icon'), async (req, res) =>
   try {
     const { id } = req.params;
     const userId = req.user.id;
+    if (await rejectNonImageIcon(req, res)) return;
     // Malformed/missing `gpts` is a client error (400), not a 500 — the bare
     // JSON.parse(undefined)/invalid-JSON throw used to land in the outer catch.
     if (typeof req.body.gpts !== 'string') {

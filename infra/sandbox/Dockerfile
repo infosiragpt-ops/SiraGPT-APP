@@ -2,7 +2,8 @@
 #
 # One EPHEMERAL container per document task (started by
 # backend/src/services/doc-agent/sandbox.js with: --network none,
-# --memory 1g, --cpus 1, auto-remove). The agent gets bash/read/write/
+# --memory 1g, --cpus 1, --pids-limit 256, --cap-drop ALL,
+# --security-opt no-new-privileges, --user sandbox, auto-remove). The agent gets bash/read/write/
 # str_replace/list tools bound to /workspace; uploads are mounted under
 # /workspace/uploads and deliverables must be written to /workspace/outputs.
 #
@@ -21,18 +22,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils grep sed gawk \
       zip unzip \
       python3 python3-pip \
+      nodejs npm \
       libreoffice --no-install-recommends \
+      poppler-utils \
+      qpdf \
+      tesseract-ocr \
       fonts-dejavu-core \
+      fonts-liberation \
+      fonts-crosextra-carlito \
+      fonts-crosextra-caladea \
     && rm -rf /var/lib/apt/lists/*
 
 # Document-manipulation libraries the skills prompt teaches the model to use.
+# Reads use the high-level libs; surgical text writes use direct XML (lxml)
+# so charts/images/macros survive. Metric-compatible fonts (Liberation for
+# Arial/Times, Carlito/Caladea for Calibri/Cambria) keep renders aligned
+# with Word. PyMuPDF covers PDF micro-edits; ocrmypdf is intentionally left
+# out (heavy) — scanned PDFs fall back to tesseract via the host pipeline.
 RUN pip3 install --no-cache-dir \
       python-docx \
       openpyxl \
       python-pptx \
       pypdf \
+      pymupdf \
+      pdfplumber \
+      pillow \
       mammoth \
       lxml
+
+# Node writers for sheet/slide generation paths (exceljs, pptxgenjs, docx).
+RUN npm install -g docx exceljs pptxgenjs
 
 # Non-root user; workspace owned by it. The runner exec's as this user.
 RUN useradd -m -u 10001 -d /workspace sandbox \

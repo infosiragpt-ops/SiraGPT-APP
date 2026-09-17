@@ -116,6 +116,43 @@ test('DocumentDeliveryPolicy answers attached-document conclusions in chat by de
   assert.equal(policy.thresholds.fileCount, 1);
 });
 
+test('DocumentDeliveryPolicy keeps image-only summaries in chat (no auto Word)', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame un resumen en un solo párrafo',
+    displayGoal: 'dame un resumen en un solo párrafo',
+    files: ['img-1'],
+    fileMetadata: [{ id: 'img-1', mimeType: 'image/png', name: 'RESULTADOS_CDD.png' }],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+});
+
+test('DocumentDeliveryPolicy auto-generates Word when an attached file is summarized', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame un resumen',
+    displayGoal: 'dame un resumen',
+    files: ['uploaded-docx-id'],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+  assert.equal(policy.thresholds.fileCount, 1);
+  assert.match(policy.reason, /Word requerido|documental expl[ií]cito/i);
+});
+
+test('DocumentDeliveryPolicy auto-generates Word for executive analysis of an attached document', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'Resumen ejecutivo. Análisis del documento adjunto.',
+    files: [{ id: 'file-docx', name: 'tesis.docx' }],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
 test('DocumentDeliveryPolicy keeps cross-document analysis with PDF/DOCX references in chat', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'Usando todos los documentos adjuntos, calcula el total real, explica la contradiccion entre PDF y DOCX e indica que cifra final debe usarse.',
@@ -277,6 +314,19 @@ test('DocumentDeliveryPolicy treats source maps over attachments as chat-only un
   });
   assert.equal(wordPolicy.mode, 'doc_required');
   assert.equal(wordPolicy.autoGenerate, true);
+});
+
+test('DocumentDeliveryPolicy keeps website/app creation in chat (not Word)', () => {
+  for (const goal of [
+    'créame una web de ventas',
+    'crea un sitio web',
+    'hazme una landing',
+    'desarrolla una app',
+  ]) {
+    const policy = buildDocumentDeliveryPolicy({ goal });
+    assert.equal(policy.mode, 'chat_only', `"${goal}" must not auto-Word`);
+    assert.equal(policy.autoGenerate, false, `"${goal}" must not auto-Word`);
+  }
 });
 
 test('DocumentDeliveryPolicy still promotes explicit generate-in-word requests', () => {

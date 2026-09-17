@@ -18,11 +18,14 @@ const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const {
   sanitizeProjectId,
+  sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
   previewConfigMigrationMode,
   isAllowedCommand,
   commandRejectionReason,
+  buildPreflightEnabled,
+  previewDocumentReady,
   shouldIgnoreExportPath,
   buildRunnerEnv,
   isControlRequestAuthorized,
@@ -47,6 +50,13 @@ test('sanitizeProjectId accepts cuid-like ids and rejects everything else', () =
   assert.equal(sanitizeProjectId(''), null);
   assert.equal(sanitizeProjectId(null), null);
   assert.equal(sanitizeProjectId('x'.repeat(65)), null);
+});
+
+test('sanitizeRunId accepts durable run ids and rejects path-like values', () => {
+  assert.equal(sanitizeRunId('run_01-HHZZ'), 'run_01-HHZZ');
+  assert.equal(sanitizeRunId('../../main'), null);
+  assert.equal(sanitizeRunId('run/branch'), null);
+  assert.equal(sanitizeRunId('x'.repeat(97)), null);
 });
 
 test('resolveProjectRelPath normalizes and blocks traversal/absolute paths', () => {
@@ -138,6 +148,21 @@ test('isAllowedCommand blocks interactive scaffolds that should be written by to
   assert.equal(isAllowedCommand(['bun', 'create', 'vite', '.']), false);
   assert.match(commandRejectionReason(['bunx', 'create-next-app@latest', '.']), /interactive_scaffold_disallowed/);
   assert.equal(commandRejectionReason(['bun', 'install']), null);
+});
+
+test('build preflight defaults on in production and remains explicitly configurable', () => {
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'production' }), true);
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'development' }), false);
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'production', CODE_RUNNER_BUILD_PREFLIGHT: '0' }), false);
+  assert.equal(buildPreflightEnabled({ NODE_ENV: 'development', CODE_RUNNER_BUILD_PREFLIGHT: '1' }), true);
+});
+
+test('preview readiness rejects status errors, blank HTML, and framework overlays', () => {
+  assert.equal(previewDocumentReady({ status: 500, contentType: 'text/html', body: '<html>ok</html>' }), false);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '   ' }), false);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '<vite-error-overlay></vite-error-overlay>' }), false);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '<html><body><div id="root"></div><script></script></body></html>' }), true);
+  assert.equal(previewDocumentReady({ status: 200, contentType: 'application/json', body: '' }), true);
 });
 
 test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () => {

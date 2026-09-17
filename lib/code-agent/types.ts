@@ -12,6 +12,27 @@ export type AgentPhase = "idle" | "intake" | "generating" | "preview" | "debuggi
 
 export type AgentGoal = "landing" | "app"
 
+/** A persistent task the agent tracks across multiple turns. */
+export type AgentTask = {
+  id: string
+  title: string
+  status: "pending" | "in_progress" | "completed" | "blocked"
+  /** Brief description of what this task involves. */
+  detail?: string
+  /** Files affected by this task. */
+  files?: string[]
+  /** Timestamp (ms) when the task was created. */
+  createdAt: number
+  /** Timestamp (ms) when the task was last updated. */
+  updatedAt: number
+  /** Structured-retry bookkeeping: execution attempts so far. */
+  attempts?: number
+  /** Earliest ms timestamp when a requeued task may run again (retry backoff). */
+  notBefore?: number
+  /** Cause of the last failure, for actionable reporting. */
+  lastError?: string
+}
+
 /** Context accumulated during the intake gate (slot-filling, goal-adaptive). */
 export interface AgentBuildContext {
   goal: AgentGoal
@@ -38,6 +59,24 @@ export interface AgentState {
   lastError?: string
   /** Which tier produced the last generation. */
   generator?: "llm" | "deterministic"
+  /** Persistent task list the agent tracks across turns. */
+  tasks?: AgentTask[]
+  /** Autonomous-iteration budget preventing infinite agent loops. */
+  budget?: AgentIterationBudget
+}
+
+/** Budget guard for the autonomous agent loop (Mejora 4). */
+export interface AgentIterationBudget {
+  /** How many autonomous iterations have run so far. */
+  count: number
+  /** Hard cap on autonomous iterations (default 20). */
+  max: number
+  /** Epoch ms when the autonomous run started. */
+  startedAt: number
+  /** Max wall-clock duration for the whole run (0 = no time limit). */
+  timeoutMs: number
+  /** True once the budget has been spent; the FSM must stop autonomous work. */
+  exhausted?: boolean
 }
 
 export function defaultAgentState(): AgentState {
@@ -60,6 +99,7 @@ export type AgentAction =
   | { type: "patch"; instruction: string }
   | { type: "debug"; log: string }
   | { type: "passthrough" }
+  | { type: "work_task"; taskId: string; instruction: string }
 
 /** Result of the deterministic build-error classifier (SRE tier-0). */
 export interface BuildErrorVerdict {

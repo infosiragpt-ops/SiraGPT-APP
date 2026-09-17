@@ -126,11 +126,23 @@ export function FalModelGallery({
     if (!open || loadedRef.current) return
     loadedRef.current = true
     setLoading(true)
-    fetch("/api/ai/fal-models")
-      .then((r) => r.json())
-      .then((j) => {
-        if (j && Array.isArray(j.models)) setModels(j.models)
-        else setError("No se pudo cargar el catálogo")
+    Promise.all([
+      fetch("/api/ai/fal-models", { headers: { "Cache-Control": "no-cache" } }).then((r) => r.json()),
+      fetch("/api/ai/models?type=VIDEO", { headers: { "Cache-Control": "no-cache" } }).then((r) => r.json()).catch(() => ({ models: [] })),
+    ])
+      .then(([j, adminVideo]) => {
+        if (!j || !Array.isArray(j.models)) {
+          setError("No se pudo cargar el catálogo")
+          return
+        }
+        const allowed = new Set(
+          (Array.isArray(adminVideo?.models) ? adminVideo.models : [])
+            .filter((m: any) => String(m?.type || "").toUpperCase() === "VIDEO" && m?.isActive !== false)
+            .map((m: any) => String(m?.name || "").trim())
+            .filter(Boolean),
+        )
+        // Video group: admin catalog only. Not in catalog / inactive = hidden.
+        setModels(j.models.filter((m: FalModel) => m.group !== "video" || allowed.has(m.id)))
       })
       .catch(() => setError("No se pudo cargar el catálogo"))
       .finally(() => setLoading(false))

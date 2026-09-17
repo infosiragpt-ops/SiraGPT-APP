@@ -93,6 +93,16 @@ test('detects a TTS/audio (narration) request and language/voice', () => {
   assert.equal(r.specs.voice, 'female');
 });
 
+test('detects "créame un audio: Juan vende papas en el mercado" as speech, not HTML', () => {
+  const r = detectMediaIntent('créame un audio: Juan vende papas en el mercado');
+  assert.equal(r.kind, 'audio');
+  assert.equal(r.tool, 'generate_speech');
+  const hint = buildMediaIntentHint(r);
+  assert.match(hint, /generate_speech/);
+  assert.match(hint, /speechSynthesis|Web Speech API/);
+  assert.match(hint, /PROHIBIDO/);
+});
+
 test('returns no intent for non-media chat', () => {
   assert.equal(detectMediaIntent('¿cuál es la capital de Francia?').kind, null);
   assert.equal(detectMediaIntent('explícame qué es una API REST').kind, null);
@@ -298,4 +308,30 @@ test('resolveImageAspectRatio: no shape described → null (keep picker default)
   assert.equal(resolveImageAspectRatio('creame una imagen de un perro'), null);
   assert.equal(resolveImageAspectRatio(''), null);
   assert.equal(resolveImageAspectRatio(null), null);
+});
+
+// ── Spoken image directives (typos, counts, edit targets) ─────────────────
+
+test('image intent tolerates chat typos and resolves the exact frame', () => {
+  const r = detectMediaIntent('dma euna imagen orisailntal de un perro para la portada');
+  assert.equal(r.kind, 'image');
+  assert.equal(r.tool, 'generate_image');
+  assert.equal(r.specs.frame, '16:9');
+  assert.equal(r.specs.aspectRatio, 'wide');
+});
+
+test('image intent understands "varias imágenes" as a multi-image request', () => {
+  const r = detectMediaIntent('hazme varias imágenes de gatos');
+  assert.equal(r.kind, 'image');
+  assert.equal(r.specs.count, 3);
+  assert.match(buildMediaIntentHint(r), /3/);
+});
+
+test('edit intent carries the spoken target into the hint', () => {
+  const intents = detectMediaIntents('en la imagen cambia el cielo a un atardecer naranja');
+  assert.equal(intents[0].tool, 'edit_image');
+  assert.match(intents[0].specs.editTarget, /cielo/);
+  const hint = buildMediaIntentHint(intents[0]);
+  assert.match(hint, /cielo/);
+  assert.match(hint, /target/);
 });

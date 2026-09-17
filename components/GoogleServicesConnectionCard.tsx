@@ -60,7 +60,12 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
 
             const data = await response.json();
 
-            // Open OAuth popup
+            // iOS Safari blocks window.open from async handlers.
+            const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+            if (mobile) {
+                window.location.href = data.authUrl;
+                return;
+            }
             const popup = window.open(
                 data.authUrl,
                 'Google Services OAuth',

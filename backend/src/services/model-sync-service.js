@@ -1,10 +1,10 @@
 const axios = require('axios');
+const { inferModelOutputType } = require('./model-output-type');
 const prisma = require('../config/database');
 const {
   getProviderCatalogDiagnostics,
   listManifestModels,
   mergeProviderModels,
-  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
 } = require('./model-catalog-manifest');
 const {
   listFalVideoModels,
@@ -59,11 +59,6 @@ class ModelSyncService {
       deepseek: { data: null, lastFetch: 0, ttl: 3600000 },
       falVideo: { data: null, lastFetch: 0, ttl: 3600000 }
     };
-    // Guards the one-time reactivation of the curated default IMAGE set so it
-    // does NOT override admin deactivations on every read. See
-    // ensureStaticCatalogModels below. Per-instance so prod (singleton) runs it
-    // once per process, while tests (fresh instances) each exercise it.
-    this._curatedImageActivationDone = false;
     this._staticCatalogSyncFlights = new Map();
   }
 
@@ -547,10 +542,10 @@ class ModelSyncService {
   /**
    * Upsert a list of normalised models into the AiModel catalog.
    *
-   * New rows are created with the model's own `isActive` flag (generic
-   * discovery always passes `false` so admins curate visibility). Existing
-   * rows only get metadata refreshed via buildModelSyncUpdateData, which
-   * deliberately omits `isActive` so a manual admin activation survives.
+   * New rows are always created inactive so discovery can never publish a
+   * model without an explicit admin decision. Existing rows only get metadata
+   * refreshed via buildModelSyncUpdateData, which deliberately omits
+   * `isActive` so a manual admin activation survives.
    */
   // Persist discovered models. Batched for speed: the previous implementation
   // ran TWO sequential DB round-trips per model (findUnique + create/update),
@@ -606,7 +601,7 @@ class ModelSyncService {
           description: model.description,
           provider: model.provider,
           type: model.type,
-          isActive: model.isActive === true,
+          isActive: false,
           icon: this.getModelIcon(model),
           lastSynced: new Date(),
           syncSource: model.syncSource || 'api',
@@ -802,14 +797,71 @@ class ModelSyncService {
    * must be the decrypted plaintext key (the route decrypts before calling).
    * Returns the fetch verdict merged with persist counts.
    */
+  /**
+   * Key verdict for music-provider connections (elevenlabs / minimax / suno).
+   * Their playable models ship in the static manifest, so nothing is
+   * imported — this only answers "is the key usable?" for the panel's
+   * Probar button and auto-discovery:
+   * - elevenlabs: real check against GET {base}/models with xi-api-key.
+   * - minimax / suno: no verified lightweight key-check endpoint exists,
+   *   so a present key is accepted without probing (fail-open, documented
+   *   in the `note`). Never throws for missing fetch.
+   */
+  async validateMusicProviderKey(conn = {}) {
+    const zeros = { created: 0, updated: 0, errors: 0, count: 0, models: [] };
+    const apiKey = cleanEnvValue(conn.apiKey || '');
+    if (!apiKey) return { ok: false, status: 0, error: 'missing_api_key', ...zeros };
+    const providerKey = String(conn.providerKey || '').toLowerCase();
+
+    if (providerKey === 'elevenlabs') {
+      const fetchImpl = conn.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+      if (typeof fetchImpl !== 'function') return { ok: false, status: 0, error: 'fetch_unavailable', ...zeros };
+      const base = String(conn.url || 'https://api.elevenlabs.io/v1').replace(/\/+$/, '');
+      const url = /\/models$/.test(base) ? base : `${base}/models`;
+      const res = await fetchImpl(url, {
+        method: 'GET',
+        headers: { Accept: 'application/json', 'xi-api-key': apiKey },
+        signal: AbortSignal.timeout(10000),
+      }).catch((error) => ({ ok: false, status: 0, text: async () => error.message }));
+      if (!res.ok) {
+        let detail = '';
+        try { detail = await res.text(); } catch (_) { /* noop */ }
+        return {
+          ok: false,
+          status: res.status || 0,
+          error: `ElevenLabs API key rejected${res.status ? ` (HTTP ${res.status})` : ''}: ${String(detail).slice(0, 180)}`.trim(),
+          ...zeros,
+        };
+      }
+      return { ok: true, error: null, ...zeros, note: 'key_validated_no_catalog_import' };
+    }
+
+    // minimax / suno: accepted without probing (see note).
+    return { ok: true, error: null, ...zeros, note: 'key_accepted_without_probe' };
+  }
+
   async syncConnectionModels(conn = {}) {
     let catalogMap = {};
     try { catalogMap = require('./admin-connections-bridge').PROVIDER_CATALOG_MAP || {}; } catch (_) { /* noop */ }
-    const providerLabel = conn.providerLabel
-      || catalogMap[String(conn.providerKey || '').toLowerCase()]
+    const providerKey = String(conn.providerKey || '').toLowerCase();
+    let catalogProviderLabel = conn.providerLabel
+      || catalogMap[providerKey]
       || conn.providerKey
       || 'Custom';
-    const providerKey = String(conn.providerKey || '').toLowerCase();
+    try {
+      const { catalogProviderForConnection } = require('./ai/custom-provider-client');
+      catalogProviderLabel = catalogProviderForConnection(providerKey, catalogProviderLabel);
+    } catch (_) { /* keep label */ }
+    const providerLabel = catalogProviderLabel;
+
+    // Music providers (production-music module): their playable models ship
+    // in the static manifest (model-catalog-manifest.js MUSIC entries), so
+    // there is nothing to import — but the per-connection "Probar" button
+    // and auto-discovery still need a verdict instead of a false-red
+    // "{url}/models" failure (MiniMax / Suno gateways expose no /models).
+    if (providerKey === 'elevenlabs' || providerKey === 'minimax' || providerKey === 'suno') {
+      return this.validateMusicProviderKey(conn);
+    }
 
     if (providerKey === 'fal') {
       const apiKey = cleanEnvValue(conn.apiKey || '');
@@ -866,6 +918,18 @@ class ModelSyncService {
     if (!res.ok) return { ...res, created: 0, updated: 0, errors: 0, count: 0 };
     if (!res.models.length) return { ok: true, error: null, created: 0, updated: 0, errors: 0, count: 0, models: [] };
 
+    if (providerKey === 'custom' || providerKey === 'ollama' || providerKey === 'lmstudio' || providerKey === 'vllm') {
+      try {
+        const { defaultCustomDisplayName, collapseSiraMiniRows, catalogProviderForConnection } = require('./ai/custom-provider-client');
+        const catalogProvider = catalogProviderForConnection(providerKey, providerLabel);
+        res.models = collapseSiraMiniRows(res.models.map((m) => ({
+          ...m,
+          provider: catalogProvider,
+          displayName: defaultCustomDisplayName(m.name, m.displayName),
+        })));
+      } catch (_) { /* keep discovered rows */ }
+    }
+
     const persisted = await this.persistModels(res.models);
     return { ok: true, error: null, ...persisted, count: res.models.length, models: res.models };
   }
@@ -884,10 +948,13 @@ class ModelSyncService {
       { providerLabel: 'xAI', providerKey: 'xai', envVar: 'XAI_API_KEY', url: 'https://api.x.ai/v1/models' },
       { providerLabel: 'Together', providerKey: 'together', envVar: 'TOGETHER_API_KEY', url: 'https://api.together.xyz/v1/models' },
       { providerLabel: 'Fireworks', providerKey: 'fireworks', envVar: 'FIREWORKS_API_KEY', url: 'https://api.fireworks.ai/inference/v1/models' },
+      { providerLabel: 'Meta', providerKey: 'meta', envVars: ['MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY'], url: 'https://api.meta.ai/v1/models' },
     ];
     const out = [];
     await Promise.all(providers.map(async (p) => {
-      const apiKey = process.env[p.envVar];
+      const apiKey = Array.isArray(p.envVars)
+        ? p.envVars.map((name) => process.env[name]).find(Boolean)
+        : process.env[p.envVar];
       if (!apiKey) return;
       const res = await this.fetchModelsFromEndpoint({
         url: p.url,
@@ -906,18 +973,19 @@ class ModelSyncService {
   }
 
   /**
-   * One-time production guard for the admin catalog.
+   * Historical one-shot marker for the admin catalog default-inactive
+   * migration. GET /admin/models used to call this on every visit.
    *
-   * Earlier builds seeded/provider-synced models as active. The SQL
-   * migration handles normal deploys, but this runtime guard covers hosts
-   * where migrations are skipped or delayed. It runs once, then preserves
-   * future manual admin activations.
+   * If the marker is missing after a catalog restore, the old body
+   * bulk-set isActive=false and unpublished every restored active.
+   * This must stay a no-op on isActive: stamp the marker if absent,
+   * never updateMany, never re-disable restored actives.
    */
   async ensureDefaultInactiveOnce() {
     const markerKey = 'ai_models_default_inactive_v1_applied';
     const markerValue = JSON.stringify({
       appliedAt: new Date().toISOString(),
-      reason: 'admin_models_default_inactive',
+      reason: 'admin_models_default_inactive_marker_only',
     });
 
     const existingMarker = await this.prisma.systemSettings.findUnique({
@@ -929,18 +997,13 @@ class ModelSyncService {
       return { applied: false, count: 0, reason: 'already_applied' };
     }
 
-    const result = await this.prisma.aiModel.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    });
-
     await this.prisma.systemSettings.upsert({
       where: { key: markerKey },
       update: { value: markerValue },
       create: { key: markerKey, value: markerValue },
     });
 
-    return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
+    return { applied: true, count: 0, reason: 'marker_stamped_without_disable' };
   }
 
   _getStaticCatalogSyncFlightKey(options = {}) {
@@ -1004,8 +1067,6 @@ class ModelSyncService {
         tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
         lastSynced: new Date(),
       };
-      const modelType = String(model.type || '').toUpperCase();
-
       if (existingNames.has(model.name)) {
         await this.prisma.aiModel.update({
           where: { name: model.name },
@@ -1020,13 +1081,9 @@ class ModelSyncService {
           data: {
             name: model.name,
             ...data,
-            // Curated IMAGE models seed ACTIVE; other IMAGE models stay inactive
-            // until an admin enables them. VIDEO/AUDIO/MUSIC rows also stay
-            // inactive on import; activating an AI Models row is the explicit
-            // user-visible publish action.
-            isActive: modelType === 'IMAGE'
-              ? DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name)
-              : false,
+            // Catalog discovery is never a publishing action. Every new row
+            // stays private until an admin explicitly activates it.
+            isActive: false,
           },
         });
       } catch (err) {
@@ -1043,27 +1100,6 @@ class ModelSyncService {
       }
       created++;
       existingNames.add(model.name);
-    }
-
-    // One-time-per-process reactivation of the curated default IMAGE set, even
-    // for rows that already existed inactive (e.g. seeded by a previous deploy
-    // or disabled long ago). These are shipped defaults the user (sole admin)
-    // explicitly wants enabled; without this, pre-existing inactive rows would
-    // never surface in the picker. Guarded by `_curatedImageActivationDone` so
-    // it runs once and does NOT silently override a deliberate admin
-    // deactivation on every subsequent /models read or /generate-image call.
-    if ((!types || types.has('IMAGE')) && !this._curatedImageActivationDone) {
-      const defaultActiveImageNames = catalogModels
-        .filter(model => String(model.type || '').toUpperCase() === 'IMAGE'
-          && DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name))
-        .map(model => model.name);
-      if (defaultActiveImageNames.length) {
-        await this.prisma.aiModel.updateMany({
-          where: { name: { in: defaultActiveImageNames }, type: 'IMAGE', isActive: false },
-          data: { isActive: true },
-        });
-      }
-      this._curatedImageActivationDone = true;
     }
 
     return { created, updated, existing: existingRows.length, count: dedupedCatalogModels.length };
@@ -1146,68 +1182,7 @@ class ModelSyncService {
   }
 
   inferModelType(modelId, apiData = {}) {
-    const id = String(modelId || '').toLowerCase();
-    const mode = String(apiData.mode || '').toLowerCase();
-    const modalities = [
-      ...(apiData.supported_output_modalities || []),
-      ...(apiData.supported_modalities || []),
-      ...(apiData.output || []),
-      ...(apiData.input || []),
-    ].map(value => String(value).toLowerCase());
-
-    if (
-      id.includes('dall-e') ||
-      id.includes('gpt-image') ||
-      id.includes('imagen') ||
-      id.includes('seedream') ||
-      id.includes('flux') ||
-      id.includes('recraft') ||
-      id.includes('ideogram') ||
-      mode.includes('image') ||
-      modalities.includes('image')
-    ) {
-      return 'IMAGE';
-    }
-
-    if (
-      id.includes('video') ||
-      id.includes('veo') ||
-      id.includes('kling') ||
-      id.includes('runway') ||
-      id.includes('pika') ||
-      id.includes('luma') ||
-      id.includes('sora') ||
-      mode.includes('video') ||
-      modalities.includes('video')
-    ) {
-      return 'VIDEO';
-    }
-
-    if (
-      id.includes('suno') ||
-      id.includes('udio') ||
-      id.includes('music') ||
-      mode.includes('music') ||
-      modalities.includes('music')
-    ) {
-      return 'MUSIC';
-    }
-
-    if (
-      id.includes('whisper') ||
-      id.includes('tts-') ||
-      id.includes('-tts') ||
-      id.includes('speech') ||
-      id.includes('eleven') ||
-      id.includes('elevenlabs') ||
-      id.includes('audio') ||
-      mode.includes('audio') ||
-      modalities.includes('audio')
-    ) {
-      return 'AUDIO';
-    }
-
-    return 'TEXT';
+    return inferModelOutputType(modelId, apiData);
   }
 
   /**

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="generando word">
+  <title>SiraGPT loader · generando word</title>
+  <rect x="22" y="2.5" width="20" height="20" rx="4.5" fill="#38BDF8"/>
+  <text x="32" y="16.8" text-anchor="middle" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="700">W</text>
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="30" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="40" y="32" width="4" height="10" fill="#38BDF8"/>
+</svg>

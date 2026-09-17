@@ -38,7 +38,8 @@ async function execute(args = {}, ctx = {}) {
   }
 
   const transcript = String(result?.transcript || '').trim();
-  if (result?.method !== 'whisper' || !transcript) {
+  const success = result?.method === 'whisper' || result?.method === 'local-whisper';
+  if (!success || !transcript) {
     const error = new Error(`audio transcription unavailable: ${result?.reasonCode || 'empty_result'}`);
     error.code = 'AUDIO_TRANSCRIPTION_UNAVAILABLE';
     throw error;

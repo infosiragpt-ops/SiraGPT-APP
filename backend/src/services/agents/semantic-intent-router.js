@@ -26,6 +26,10 @@ const {
   buildCiraCognitiveTaskEnvelope,
   validateCiraCognitiveTaskEnvelope,
 } = require('./cira-cognitive-task-envelope');
+const {
+  isSoftwareBuildRequest,
+  isExplicitDocumentRequest,
+} = require('./software-build-intent');
 const productModelRouter = require('../ai-product-os/model-router');
 const productSkillSystem = require('../ai-product-os/skill-system');
 const productPlanner = require('../ai-product-os/planner-agent');
@@ -200,9 +204,11 @@ function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
     figma: matchAny(n, [
       /\b(figma|wireframe|user flow|design system|prototipo navegable|diagrama de producto)\b/i,
     ]),
-    webdev: Boolean(tokenAnalysis?.context?.has_web_build) || matchAny(n, [
-      /\b(crea|crear|creame|haz|hazme|genera|desarrolla|programa|construye|implementa|disena|diseña)\b.*\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas)\b/i,
-      /\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas)\b.*\b(crea|crear|haz|genera|desarrolla|programa|construye|implementa|disena|diseña)\b/i,
+    webdev: Boolean(tokenAnalysis?.context?.has_web_build)
+      || isSoftwareBuildRequest(rawUserRequest)
+      || matchAny(n, [
+      /\b(crea|crear|creame|haz|hazme|genera|desarrolla|programa|construye|implementa|disena|diseña)\b.*\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas|app|software)\b/i,
+      /\b(web|website|pagina web|sitio web|landing|frontend|react|next\.?js|web app|tienda online|ecommerce|dashboard web|saas|app|software)\b.*\b(crea|crear|haz|genera|desarrolla|programa|construye|implementa|disena|diseña)\b/i,
     ]),
     video: matchAny(n, [
       /\b(video|clip|animacion|veo3|veo 3|sora)\b/i,
@@ -314,6 +320,12 @@ function confidenceForDecision(contract, intent, toolRuntimePlan, qaBoardReview)
 }
 
 function finalOutputForContract(contract, intent) {
+  // Website/app builds are code artifacts, never Office "html_file" documents.
+  // Advertising `.html` as a downloadable document made /agentes remap to Word.
+  if (intent === 'webdev') return 'web_artifact';
+  if (isSoftwareBuildRequest(contract?.raw_user_request) && !isExplicitDocumentRequest(contract?.raw_user_request)) {
+    return 'web_artifact';
+  }
   if (contract?.required_extension) {
     return `${contract.required_extension.replace('.', '')}_file`;
   }
@@ -321,7 +333,6 @@ function finalOutputForContract(contract, intent) {
     return contract.artifact_type;
   }
   if (intent === 'web_search') return 'grounded_chat_answer';
-  if (intent === 'webdev') return 'web_artifact';
   if (intent === 'agent_task') return 'validated_agentic_deliverable';
   return 'chat_answer';
 }
@@ -403,6 +414,7 @@ function isCodeDeliverableRequest(raw) {
 }
 
 function isWebAppDeliverableRequest(raw) {
+  if (isSoftwareBuildRequest(raw)) return true;
   const n = normalizeText(raw);
   return matchAny(n, [
     /\b(app web|web app|sitio web|pagina web|p[aá]gina web|landing|e-?commerce|tienda online|saas|dashboard web)\b/i,
@@ -730,6 +742,10 @@ function semanticTools(contract, structuredIntent, fileIds = []) {
 }
 
 function semanticOutputFormat(contract, finalOutput) {
+  if (finalOutput === 'web_artifact') return 'web_artifact';
+  if (isSoftwareBuildRequest(contract?.raw_user_request) && !isExplicitDocumentRequest(contract?.raw_user_request)) {
+    return 'web_artifact';
+  }
   if (contract?.required_extension) return contract.required_extension.replace(/^\./, '').toLowerCase();
   if (contract?.output_format) return String(contract.output_format).toLowerCase();
   if (finalOutput && finalOutput !== 'chat_answer') return finalOutput;
@@ -971,5 +987,8 @@ module.exports = {
     buildModelRouting,
     shouldAnswerFromExistingDocument,
     analyzeRequestTokens,
+    isWebAppDeliverableRequest,
+    isSoftwareBuildRequest,
+    isExplicitDocumentRequest,
   },
 };

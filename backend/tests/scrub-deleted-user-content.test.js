@@ -38,6 +38,20 @@ function buildPrismaStub() {
     },
     updatedMessages: [],
     updatedFiles: [],
+    preferenceEvents: {
+      'u-old': [
+        {
+          id: 'pe-1',
+          promptText: 'mail ada@example.com',
+          responseText: 'sure, ada@example.com',
+          notes: 'call +14155552671',
+          reasonCode: 'invented',
+          judgeScore: null,
+        },
+      ],
+      'u-recent': [],
+    },
+    updatedPrefs: [],
   };
 
   return {
@@ -71,6 +85,15 @@ function buildPrismaStub() {
       },
       async update({ where, data }) {
         state.updatedFiles.push({ id: where.id, data });
+        return { id: where.id, ...data };
+      },
+    },
+    preferenceEvent: {
+      async findMany({ where }) {
+        return state.preferenceEvents[where.userId] || [];
+      },
+      async update({ where, data }) {
+        state.updatedPrefs.push({ id: where.id, data });
         return { id: where.id, ...data };
       },
     },
@@ -117,6 +140,12 @@ describe('scrub-deleted-user-content', () => {
     assert.equal(m1.data.metadata.piiScrubbed, true, 'control flag preserved');
     assert.match(m1.data.files, /<EMAIL>/, 'files JSON (originalName) is scrubbed');
     assert.ok(!/dave@example\.com/.test(m1.data.files), 'raw email no longer present in files');
+
+    const pe1 = prisma._state.updatedPrefs.find((u) => u.id === 'pe-1');
+    assert.ok(pe1, 'preference_events notes/prompt must be scrubbed');
+    assert.doesNotMatch(pe1.data.promptText, /ada@example.com/);
+    assert.doesNotMatch(pe1.data.notes, /\+14155552671/);
+    assert.match(pe1.data.notes, /<PHONE>/);
   });
 
   test('dry-run does not call update', async () => {

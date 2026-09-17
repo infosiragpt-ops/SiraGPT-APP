@@ -25,7 +25,9 @@ const SETUP_PATH = require.resolve('../src/utils/stripe-setup');
 
 const stripeMock = {
   isConfigured: true,
+  plans: { PRO: {}, PRO_MAX: {}, ENTERPRISE: {} },
   createOrUpdateProducts: async () => ({}),
+  ensurePriceForPlan: async () => null,
 };
 
 const dbMock = {
@@ -101,7 +103,9 @@ after(() => {
 beforeEach(() => {
   // Reset mock state between cases.
   stripeMock.isConfigured = true;
+  stripeMock.plans = { PRO: {}, PRO_MAX: {}, ENTERPRISE: {} };
   stripeMock.createOrUpdateProducts = async () => ({});
+  stripeMock.ensurePriceForPlan = async () => null;
   dbMock.systemSettings.findUnique = async () => null;
   dbMock.systemSettings.upsert = async () => null;
 });
@@ -208,6 +212,93 @@ describe('getPriceIdForPlan', () => {
     } finally {
       delete process.env.STRIPE_PRICE_PRO;
     }
+  });
+
+  // ── Auto-provision (Stripe configured, nothing cached) ──────────
+  // A fresh deployment only sets STRIPE_SECRET_KEY. The first checkout must
+  // create the product/price in Stripe on demand and cache the id, instead
+  // of failing with "price ID is not configured".
+
+  it('auto-provisions the price in Stripe when configured and nothing is cached', async () => {
+    delete process.env.STRIPE_PRICE_PRO_MAX;
+    const ensureCalls = [];
+    const upsertCalls = [];
+    stripeMock.ensurePriceForPlan = async (plan) => {
+      ensureCalls.push(plan);
+      return { product: { id: 'prod_auto' }, price: { id: 'price_auto_pro_max' } };
+    };
+    dbMock.systemSettings.upsert = async (args) => {
+      upsertCalls.push(args);
+      return null;
+    };
+
+    muteConsole();
+    let out;
+    try {
+      out = await setup.getPriceIdForPlan('PRO_MAX');
+    } finally {
+      restoreConsole();
+    }
+
+    assert.equal(out, 'price_auto_pro_max');
+    assert.deepEqual(ensureCalls, ['PRO_MAX']);
+    assert.equal(upsertCalls.length, 1);
+    assert.equal(upsertCalls[0].where.key, 'STRIPE_PRICE_PRO_MAX');
+    assert.equal(upsertCalls[0].create.value, 'price_auto_pro_max');
+    assert.equal(upsertCalls[0].update.value, 'price_auto_pro_max');
+  });
+
+  it('still returns the auto-provisioned id when caching it in systemSettings fails', async () => {
+    delete process.env.STRIPE_PRICE_PRO_MAX;
+    stripeMock.ensurePriceForPlan = async () => ({ price: { id: 'price_auto_no_cache' } });
+    dbMock.systemSettings.upsert = async () => {
+      throw new Error('db read-only');
+    };
+
+    muteConsole();
+    let out;
+    try {
+      out = await setup.getPriceIdForPlan('PRO_MAX');
+    } finally {
+      restoreConsole();
+    }
+    assert.equal(out, 'price_auto_no_cache');
+  });
+
+  it('does not auto-provision plans the Stripe catalog does not know', async () => {
+    let called = false;
+    stripeMock.ensurePriceForPlan = async () => {
+      called = true;
+      return { price: { id: 'price_should_not_exist' } };
+    };
+    await assert.rejects(
+      () => setup.getPriceIdForPlan('NOT_A_PLAN'),
+      /not configured for plan: NOT_A_PLAN/,
+    );
+    assert.equal(called, false);
+  });
+
+  it('propagates a Stripe failure during auto-provision (no silent demo id)', async () => {
+    delete process.env.STRIPE_PRICE_PRO_MAX;
+    stripeMock.ensurePriceForPlan = async () => {
+      throw new Error('Stripe rejected the request');
+    };
+    await assert.rejects(
+      () => setup.getPriceIdForPlan('PRO_MAX'),
+      /Stripe rejected the request/,
+    );
+  });
+
+  it('prefers the cached/env id and never touches Stripe when one exists', async () => {
+    let called = false;
+    stripeMock.ensurePriceForPlan = async () => {
+      called = true;
+      return { price: { id: 'price_unexpected' } };
+    };
+    dbMock.systemSettings.findUnique = async () => ({ value: 'price_cached' });
+    const out = await setup.getPriceIdForPlan('PRO_MAX');
+    assert.equal(out, 'price_cached');
+    assert.equal(called, false);
   });
 });
 

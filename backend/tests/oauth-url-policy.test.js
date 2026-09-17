@@ -157,7 +157,7 @@ test('provider post-callback destinations are centralized and preserve status sa
   );
   assert.equal(
     getSpotifyPostCallbackURL('connected', env),
-    'https://app.example.test/chat?spotify_connected=true',
+    'https://app.example.test/agentes?spotify_connected=true',
   );
   assert.equal(
     getSpotifyPostCallbackURL('invalid_state', env),
@@ -392,7 +392,7 @@ test('production rejects attacker-controlled OAuth post-callback origins', () =>
   );
   assert.equal(
     getSpotifyPostCallbackURL('connected', env),
-    'https://app.example.test/chat?spotify_connected=true',
+    'https://app.example.test/agentes?spotify_connected=true',
   );
   assert.doesNotMatch(
     `${getGithubPostCallbackURL('connected', env)} ${getSpotifyPostCallbackURL('error', env)}`,

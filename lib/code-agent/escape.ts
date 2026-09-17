@@ -58,3 +58,18 @@ export function kebabCase(name: unknown): string {
     .join("-")
   return base || "item"
 }
+
+/** XSS-safe preview of tool stdout/stderr in /code. Never render raw HTML. */
+export function escapeToolOutput(value: unknown): string {
+  return escapeHtml(value)
+}
+
+
+/** 3H-FE-004 — refuse raw script/onerror in tool previews (XSS). */
+export function assertNoRawScript(value: unknown): boolean {
+  return !/<script\b|onerror\s*=|javascript:/i.test(String(value ?? ""))
+}
+export function safeToolPreview(value: unknown): string {
+  const escaped = escapeToolOutput(value)
+  return assertNoRawScript(value) ? escaped : escapeHtml(String(value ?? "").replace(/</g, ""))
+}

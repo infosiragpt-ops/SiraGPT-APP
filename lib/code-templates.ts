@@ -210,3 +210,13 @@ export const CODE_TEMPLATES: CodeTemplate[] = [
 export function getCodeTemplate(id: string): CodeTemplate | undefined {
   return CODE_TEMPLATES.find((t) => t.id === id)
 }
+
+
+/** OLA200_WAVE_G FE-077 — never inject real-looking API keys into scaffolds. */
+const EXAMPLE_KEY_RE = /(?:OPENROUTER_API_KEY|OPENAI_API_KEY|DEEPSEEK_API_KEY|sk-[A-Za-z0-9_-]{12,}|or-v1-[A-Za-z0-9_-]{12,})/g
+export function stripExampleApiKeys(content: string): string {
+  return String(content || "").replace(EXAMPLE_KEY_RE, "YOUR_API_KEY")
+}
+export function sanitizeCodeTemplate(template: CodeTemplate): CodeTemplate {
+  return { ...template, files: template.files.map((file) => ({ ...file, content: stripExampleApiKeys(file.content) })) }
+}

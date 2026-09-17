@@ -22,6 +22,7 @@
 // the system works identically, just without OTel spans.
 // ─────────────────────────────────────────────────────────────────
 
+const { redactPreviewUrl } = require('./preview-url-redaction');
 const { STATE } = require('./circuit-breaker');
 
 // ── Severity levels ────────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ function createErrorReporter(opts = {}) {
       return (err, req, res, next) => {
         const context = {
           module: 'express',
-          operation: `${req.method} ${req.originalUrl || req.url}`,
+          operation: `${req.method} ${redactPreviewUrl(req.originalUrl || req.url)}`,
           metadata: {
             requestId: req.id || req.requestId,
             userId: req.user?.id,

@@ -146,8 +146,9 @@ describe('agent-batch dedup', () => {
     assert.equal(calls, 1, 'runner should be invoked exactly once');
     const errors = res.events.filter((e) => e.type === 'error');
     assert.equal(errors.length, 2);
-    assert.equal(errors[0].error.message, 'boom');
-    assert.equal(errors[1].error.message, 'boom');
+    assert.equal(errors[0].error.message, 'La operación no pudo completarse.');
+    assert.equal(errors[1].error.message, 'La operación no pudo completarse.');
+    assert.equal(JSON.stringify(res.events).includes('boom'), false);
     assert.equal(errors[1].deduped, true);
     const summary = res.events.find((e) => e.type === 'batch_done').summary;
     assert.equal(summary.failed, 2);

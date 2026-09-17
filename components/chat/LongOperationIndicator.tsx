@@ -3,11 +3,23 @@
 import * as React from "react"
 import { X } from "lucide-react"
 
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
+import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
+import { mapEventToLoaderState } from "@/lib/thinking-loaders"
+import { activityTextFromEvent } from "@/lib/live-activity"
 
 export interface LongOperationIndicatorProps {
   active: boolean
   label?: string
+  event?: {
+    type?: string
+    text?: string
+    label?: string
+    tool?: string
+    name?: string
+    step?: string
+    stage?: string
+  } | null
   slowThresholdMs?: number
   onCancel?: () => void
 }
@@ -15,9 +27,12 @@ export interface LongOperationIndicatorProps {
 export function LongOperationIndicator({
   active,
   label = "Generando…",
+  event,
   slowThresholdMs = 30_000,
   onCancel,
 }: LongOperationIndicatorProps) {
+  // OLA200_WAVE_F FE-038: F4/tool label without moving the indicator.
+  const resolvedLabel = event ? activityTextFromEvent(event) : label
   const [elapsedMs, setElapsedMs] = React.useState(0)
 
   React.useEffect(() => {
@@ -44,23 +59,32 @@ export function LongOperationIndicator({
       aria-live="polite"
       className="fixed bottom-24 right-4 z-50 flex max-w-[90vw] items-center gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur sm:bottom-6 sm:max-w-sm"
     >
-      <ThinkingIndicator size="sm" className="text-primary" />
+      <ThinkingStatusLoader
+        state={mapEventToLoaderState({
+          label: resolvedLabel,
+          tool: event?.tool || event?.name,
+          text: event?.text,
+        })}
+        hideLabel
+        compact
+        density="glyph"
+        announce={false}
+      />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate font-medium text-foreground">{label}</span>
+        <span className="truncate font-medium text-foreground">{resolvedLabel}</span>
         <span className={slow ? "text-amber-600" : "text-muted-foreground"}>
           {seconds}s
           {slow && " · está tardando más de lo habitual"}
         </span>
       </div>
       {onCancel ? (
-        <button
-          type="button"
+        <AccessibleIconButton
+          label="Cancelar operación"
           onClick={onCancel}
-          className="ml-1 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="Cancelar operación"
+          className="ml-1"
         >
-          <X className="h-3.5 w-3.5" />
-        </button>
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+        </AccessibleIconButton>
       ) : null}
     </div>
   )

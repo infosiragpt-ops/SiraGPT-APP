@@ -18,6 +18,8 @@ import {
   RefreshCw, FileCode, Download, ExternalLink, X, Eye, Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
+import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
+import { fetchWithPresignRetry, isExpiredPresignUrl } from "@/lib/attachment-url"
 import dynamic from "next/dynamic"
 const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
@@ -31,18 +33,44 @@ const ShikiCodeView = dynamic(
  * focus on unmount. Body scroll is locked while the panel is mounted on
  * mobile so the underlying chat doesn't bleed through.
  */
+function useMobileDrawer(): boolean {
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return
+    const media = window.matchMedia("(max-width: 639px)")
+    const sync = () => setIsMobile(media.matches)
+    sync()
+    if (typeof media.addEventListener === "function") media.addEventListener("change", sync)
+    else media.addListener(sync)
+    return () => {
+      if (typeof media.removeEventListener === "function") media.removeEventListener("change", sync)
+      else media.removeListener(sync)
+    }
+  }, [])
+
+  return isMobile
+}
+
 function useDialogA11y(
   containerRef: React.RefObject<HTMLDivElement | null>,
   onClose: () => void,
+  isModal: boolean,
 ) {
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
+
   useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return
     const previouslyFocused = (typeof document !== "undefined"
       ? (document.activeElement as HTMLElement | null)
       : null)
 
-    // Move focus into the panel (first focusable, else the container itself)
     const node = containerRef.current
-    if (node) {
+    // The inline desktop split is part of the page, not a modal: do not steal
+    // focus, lock scrolling or trap Tab there. Those behaviours belong only
+    // to the full-screen mobile drawer.
+    if (isModal && node) {
       const focusable = node.querySelector<HTMLElement>(
         'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       )
@@ -50,18 +78,16 @@ function useDialogA11y(
     }
 
     // Lock body scroll (mobile drawer behavior)
-    const prevOverflow = typeof document !== "undefined" ? document.body.style.overflow : ""
-    if (typeof document !== "undefined") {
-      document.body.style.overflow = "hidden"
-    }
+    const prevOverflow = document.body.style.overflow
+    if (isModal) document.body.style.overflow = "hidden"
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation()
-        onClose()
+        closeRef.current()
         return
       }
-      if (e.key === "Tab" && node) {
+      if (isModal && e.key === "Tab" && node) {
         const focusables = Array.from(
           node.querySelectorAll<HTMLElement>(
             'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
@@ -84,17 +110,12 @@ function useDialogA11y(
 
     return () => {
       window.removeEventListener("keydown", onKey, true)
-      if (typeof document !== "undefined") {
-        document.body.style.overflow = prevOverflow
-      }
-      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+      if (isModal) document.body.style.overflow = prevOverflow
+      if (isModal && previouslyFocused && typeof previouslyFocused.focus === "function") {
         try { previouslyFocused.focus({ preventScroll: true }) } catch { /* noop */ }
       }
     }
-    // We intentionally only run this on mount/unmount — containerRef / onClose
-    // identity is stable enough for the lifetime of one open instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [containerRef, isModal])
 }
 
 function toFullDocument(code: string, language: string): string {
@@ -128,8 +149,9 @@ function ArtifactPanelMounted({
   const lang = (language || "").toLowerCase()
   const isMermaid = lang === "mermaid"
   const panelRef = useRef<HTMLDivElement | null>(null)
+  const isMobileDrawer = useMobileDrawer()
 
-  useDialogA11y(panelRef, close)
+  useDialogA11y(panelRef, close, isMobileDrawer)
 
   const srcDoc = useMemo(() => {
     if (isMermaid) return ""
@@ -141,6 +163,21 @@ function ArtifactPanelMounted({
   const onReset = () => setGeneration((g) => g + 1)
 
   const onDownload = async () => {
+    if (/^https?:\/\//i.test(code) && (isExpiredPresignUrl(code) || code.includes("X-Amz-"))) {
+      const res = await fetchWithPresignRetry(code)
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = fileName
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 1500)
+        return
+      }
+    }
     let blob: Blob
     if (isMermaid) {
       const svg = await renderMermaidSvg(code)
@@ -158,18 +195,22 @@ function ArtifactPanelMounted({
     setTimeout(() => URL.revokeObjectURL(url), 1500)
   }
 
+  // The artifact document is agent-controlled; opening it top-level
+  // would run it with the app's own origin. The tab instead gets a
+  // static wrapper embedding the artifact in a sandboxed,
+  // opaque-origin iframe — same contract as the inline preview.
   const onOpenNewTab = async () => {
-    let blob: Blob
+    let innerDoc: string
     if (isMermaid) {
       const svg = (await renderMermaidSvg(code)) || code
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title || "Artefacto")}</title>
+      innerDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title || "Artefacto")}</title>
 <style>html,body{margin:0;padding:24px;background:#fff;display:grid;place-items:center}</style>
 </head><body>${svg}</body></html>`
-      blob = new Blob([html], { type: "text/html" })
     } else {
-      blob = new Blob([srcDoc], { type: "text/html" })
+      innerDoc = srcDoc
     }
-    const url = URL.createObjectURL(blob)
+    const wrapper = buildTabWrapperDocument(innerDoc, escapeHtml(title || "Artefacto"))
+    const url = URL.createObjectURL(new Blob([wrapper], { type: "text/html" }))
     window.open(url, "_blank", "noopener,noreferrer")
     setTimeout(() => URL.revokeObjectURL(url), 30_000)
   }
@@ -183,19 +224,22 @@ function ArtifactPanelMounted({
     <>
       {/* Mobile backdrop — tap to close. Hidden on desktop where the
           split-pane handles layout instead of an overlay. */}
-      <div
-        aria-hidden="true"
-        data-focus-skip="true"
-        onClick={close}
-        className="fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px] sm:hidden"
-      />
+      {isMobileDrawer ? (
+        <div
+          aria-hidden="true"
+          data-focus-skip="true"
+          onClick={close}
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px]"
+        />
+      ) : null}
     <div
       ref={panelRef}
-      role="dialog"
-      aria-modal="true"
+      role={isMobileDrawer ? "dialog" : "region"}
+      aria-modal={isMobileDrawer ? true : undefined}
       aria-label={title || "Panel de artefacto"}
       tabIndex={-1}
       data-open="true"
+      data-presentation={isMobileDrawer ? "mobile-drawer" : "desktop-split"}
       className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 transition-transform duration-200 ease-out translate-x-full data-[open=true]:translate-x-0 sm:relative sm:inset-auto sm:z-auto sm:translate-x-0 sm:transition-none"
     >
       {/* Header */}
@@ -208,7 +252,7 @@ function ArtifactPanelMounted({
           <div className="mr-1 inline-flex rounded-full bg-muted p-0.5 text-xs font-medium">
             <button
               onClick={() => setView("preview")}
-              className={`grid h-6 w-14 place-items-center rounded-full transition-colors ${view === "preview" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+              className={`grid h-11 w-14 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 sm:h-7 ${view === "preview" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
                 }`}
               aria-pressed={view === "preview"}
             >
@@ -216,7 +260,7 @@ function ArtifactPanelMounted({
             </button>
             <button
               onClick={() => setView("code")}
-              className={`grid h-6 w-14 place-items-center rounded-full transition-colors ${view === "code" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
+              className={`grid h-11 w-14 place-items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 sm:h-7 ${view === "code" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"
                 }`}
               aria-pressed={view === "code"}
             >
@@ -226,7 +270,7 @@ function ArtifactPanelMounted({
           <IconButton label="Reiniciar" onClick={onReset}><RefreshCw className="h-3.5 w-3.5" /></IconButton>
           <IconButton label="Descargar" onClick={onDownload}><Download className="h-3.5 w-3.5" /></IconButton>
           <IconButton label="Abrir en nueva pestaña" onClick={onOpenNewTab}><ExternalLink className="h-3.5 w-3.5" /></IconButton>
-          <IconButton label="Cerrar" onClick={close} large><X className="h-4 w-4" /></IconButton>
+          <IconButton label="Cerrar" onClick={close}><X className="h-4 w-4" aria-hidden="true" /></IconButton>
         </div>
       </div>
 
@@ -261,22 +305,14 @@ function ArtifactPanelMounted({
   )
 }
 
-function IconButton({ label, onClick, children, large = false }: { label: string; onClick: () => void; children: React.ReactNode; large?: boolean }) {
-  // `large` enlarges the touch target on mobile (h-10 w-10) while keeping
-  // the compact desktop size (h-8 w-8). Used for the close button so it
-  // meets the 44px touch-target guideline on small screens.
-  const sizeClass = large
-    ? "h-10 w-10 sm:h-8 sm:w-8"
-    : "h-8 w-8"
+function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
+    <AccessibleIconButton
       onClick={onClick}
-      title={label}
-      aria-label={label}
-      className={`grid ${sizeClass} place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50`}
+      label={label}
     >
       {children}
-    </button>
+    </AccessibleIconButton>
   )
 }
 
@@ -313,6 +349,26 @@ async function renderMermaidSvg(code: string): Promise<string | null> {
     const { svg } = await mermaid.render(id, code)
     return svg
   } catch { return null }
+}
+
+// Static host document for "open in new tab". The agent-controlled
+// artifact is embedded via srcDoc into a sandboxed iframe with an
+// opaque origin, so scripts inside it can never touch the opener,
+// the app origin, or localStorage['auth-token'].
+function buildTabWrapperDocument(innerDoc: string, titleHtmlEscaped: string): string {
+  // \u003c keeps any "</script>" inside the artifact from closing the
+  // host document's own script block.
+  const payload = JSON.stringify(innerDoc).replace(/</g, "\\u003c")
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${titleHtmlEscaped}</title>
+<style>html,body{margin:0;height:100%;background:#fff}iframe{display:block;width:100%;height:100%;border:0}</style>
+</head><body><iframe id="frame" sandbox="allow-scripts allow-forms allow-popups allow-modals" title="${titleHtmlEscaped}"></iframe>
+<script>
+(function(){
+  var doc = ${payload};
+  var f = document.getElementById('frame');
+  f.srcdoc = doc;
+})();
+</script></body></html>`
 }
 
 function sanitizeFilename(s: string): string {

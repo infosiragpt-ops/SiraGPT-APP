@@ -20,7 +20,7 @@
 
 import * as React from "react"
 import { X } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
 import { cn } from "@/lib/utils"
 
 export type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
@@ -58,15 +58,14 @@ export const SelectedTextDisplay = ({ text, onClear }: { text: string | null; on
     <div className="px-3 pt-3">
       <div className="relative rounded-lg border bg-muted/30 p-3">
         <div className="text-xs font-semibold mb-1 text-muted-foreground">AI Rewrite</div>
-        <p className="text-sm pr-8 max-h-24 overflow-y-auto">{text}</p>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="absolute top-1 right-1 h-6 w-6 p-0 rounded-full"
+        <p className="max-h-24 overflow-y-auto pr-12 text-sm sm:pr-8">{text}</p>
+        <AccessibleIconButton
+          label="Quitar texto seleccionado"
+          className="absolute right-0 top-0 sm:right-1 sm:top-1"
           onClick={onClear}
         >
-          <X className="h-4 w-4" />
-        </Button>
+          <X className="h-4 w-4" aria-hidden="true" />
+        </AccessibleIconButton>
       </div>
     </div>
   )

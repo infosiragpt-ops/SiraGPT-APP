@@ -93,10 +93,6 @@ const DATABASE_SSL_MATERIALS = Object.freeze([
 ]);
 const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
   {
-    pattern: /^\d{14}_reset_admin_password$/,
-    reason: "data-only admin credential repair",
-  },
-  {
     pattern: /^20260520160000_add_org_pending_transfer$/,
     reason: "idempotent org pending-transfer schema migration",
   },

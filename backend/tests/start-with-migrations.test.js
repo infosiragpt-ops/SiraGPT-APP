@@ -48,7 +48,7 @@ function fakePrivateKey(label, trailingNewline = false) {
 }
 
 test("only explicitly allowlisted migrations are safe to auto-rollback", () => {
-  assert.equal(isSafeAutoRollbackMigration("20260527000000_reset_admin_password"), true);
+  assert.equal(isSafeAutoRollbackMigration("20260527000000_reset_admin_password"), false);
   assert.equal(isSafeAutoRollbackMigration("20260520160000_add_org_pending_transfer"), true);
   assert.equal(isSafeAutoRollbackMigration("20250919203030_add_model_sync_fields"), true);
   assert.equal(isSafeAutoRollbackMigration("20260526125000_add_video_model_type"), false);
@@ -426,15 +426,17 @@ test("migration wrapper contains no automatic migrate resolve path or legacy bas
     path.join(__dirname, "..", "..", ".github", "workflows", "deploy.yml"),
     "utf8",
   );
+  const reviewedPublisher = fs.readFileSync(path.join(__dirname, "..", "..", "deploy", "iliagpt", "publish-reviewed.sh"), "utf8");
 
-  for (const source of [wrapperSource, startAll, deployScript, deployWorkflow]) {
+  for (const source of [wrapperSource, startAll, deployScript, deployWorkflow, reviewedPublisher]) {
     assert.doesNotMatch(source, /PRISMA_BASELINE_(?:ON_P3005|MIGRATION)/);
     assert.doesNotMatch(source, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
   }
   assert.doesNotMatch(wrapperSource, /["']migrate["']\s*,\s*["']resolve["']/);
-  assert.match(deployWorkflow, /-e\s+SKIP_MIGRATIONS=0/);
-  assert.match(deployWorkflow, /baseline-migration-history\.js/);
-  assert.match(deployWorkflow, /deploy-production-baseline-/);
+  assert.doesNotMatch(deployWorkflow, /baseline-migration-history\.js|deploy-production-baseline-|start-with-migrations\.js|\bssh\b/);
+  assert.doesNotMatch(reviewedPublisher, /baseline-migration-history\.js|start-with-migrations\.js|prisma\s+migrate/);
+  assert.match(reviewedPublisher, /schema_changes=\$\(git diff --name-only "\$PREVIOUS" "\$TARGET"/);
+  assert.match(reviewedPublisher, /\[\[ -z \$schema_changes \]\] \|\| die/);
 
   const standardCompose = fs.readFileSync(
     path.join(__dirname, "..", "..", "docker-compose.yml"),

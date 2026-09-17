@@ -19,6 +19,7 @@ const { isLegacyFormat, extractLegacyText } = require('./legacy-format-converter
 const { readTextFile } = require('./text-encoding-detector');
 const { detectDialect, parseCSV, formatCsvBlock } = require('./csv-dialect-detector');
 const { extractFromFile: extractHtmlContent } = require('./html-content-extractor');
+const extractFastpath = require('./document-extract-fastpath');
 
 let _streamingPdf;
 let _streamingPdfTried = false;
@@ -74,6 +75,10 @@ const EXTENSION_MIME_HINTS = new Map([
   ['.tex', 'application/x-tex'],
   ['.latex', 'application/x-latex'],
   ['.zip', 'application/zip'],
+  ['.ogg', 'audio/ogg'],
+  ['.oga', 'audio/ogg'],
+  ['.opus', 'audio/opus'],
+  ['.m4a', 'audio/mp4'],
 ]);
 
 async function assertReadableDocxZip(filePath) {
@@ -98,11 +103,62 @@ function resolveProcessMimeType(file = {}) {
   return declared;
 }
 
+// ── "Any format" fallback ──────────────────────────────────────────────
+// The upload policy accepts every file type. Types without a dedicated
+// parser land in the `default` branch below: anything that is plain text
+// (source code, configs, logs, data dumps, notebooks, subtitles…) is read as
+// text so the model can actually work with it; true binaries are stored
+// opaque and described by name/type (the placeholder sentence downstream
+// services already recognise).
+const GENERIC_TEXT_MAX_BYTES = Number.parseInt(
+  process.env.SIRAGPT_GENERIC_TEXT_MAX_BYTES || String(25 * 1024 * 1024),
+  10,
+);
+
+const TEXT_LIKE_MIME_RE = /^(?:text\/|application\/(?:x-)?(?:yaml|yml|toml|ini|sql|javascript|ecmascript|typescript|json5?|ld\+json|x-ndjson|ndjson|csv|x-sh|x-shellscript|x-python(?:-code)?|x-httpd-php|x-php|graphql|x-www-form-urlencoded|x-tex|x-latex|xml|xhtml\+xml|rss\+xml|atom\+xml|x-yaml|x-toml|x-ini|x-subrip|vnd\.api\+json|problem\+json|geo\+json|x-perl|x-ruby|x-lua|x-csh|x-tcl|x-r|x-julia|dart|x-httpd-cgi|postscript)|.*\+(?:json|xml|yaml)$)/i;
+
+function isTextLikeMime(mime) {
+  const normalized = String(mime || '').split(';')[0].trim().toLowerCase();
+  return Boolean(normalized) && TEXT_LIKE_MIME_RE.test(normalized);
+}
+
+/**
+ * Byte sniff: is the head of this file plain text? No NUL bytes and fewer
+ * than 5 % non-whitespace control characters in the first 8 KiB. Encoding is
+ * resolved later by readTextFile (UTF-8 / Latin-1 / UTF-16 detection).
+ */
+async function sniffTextLike(filePath) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    if (bytesRead === 0) return false;
+    let control = 0;
+    for (let i = 0; i < bytesRead; i += 1) {
+      const b = buf[i];
+      if (b === 0) return false;
+      if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0x0c && b !== 0x1b) control += 1;
+    }
+    return control / bytesRead < 0.05;
+  } catch {
+    return false;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+function opaqueBinaryPlaceholder(originalname, mimetype) {
+  return `File "${originalname}" uploaded successfully. Content type: ${mimetype}`;
+}
+
 class FileProcessor {
-  async processFile(file) {
+  async processFile(file, options = {}) {
+    const timer = extractFastpath.createStageTimer('processFile');
     try {
       const { mimetype, path: filePath, originalname, size } = file;
       let effectiveMimeType = resolveProcessMimeType(file);
+      const processOpts = { ...options };
 
       // ── Memory-safe guard for large files ──
       // Files > MEMORY_SAFE_MAX_BYTES could OOM the process. For PDFs,
@@ -115,7 +171,7 @@ class FileProcessor {
       if (isLargeFile && (effectiveMimeType === 'application/pdf')) {
         console.warn(
           `[mem-safe] Large PDF (${(fileSize / 1024 / 1024).toFixed(1)} MB) — ` +
-          `using streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
+          `using pdftotext/streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
         );
 
         const streaming = await this.processPDFStreaming(filePath, fileSize, { detailed: true }).catch((err) => {
@@ -188,7 +244,7 @@ class FileProcessor {
 
       const _EXT_COOLDOWN_MS = Number.parseInt(process.env.EXTERNAL_PARSER_COOLDOWN_MS || '60000', 10);
 
-      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType)) {
+      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType) && extractFastpath.shouldRunExternalParsers()) {
         const now = Date.now();
         if (!FileProcessor._externalParserLastFailed || (now - FileProcessor._externalParserLastFailed) > _EXT_COOLDOWN_MS) {
           try {
@@ -214,6 +270,7 @@ class FileProcessor {
           }
         }
       }
+      timer.mark('external_parser');
 
       // ── Legacy format detection & conversion (.doc, .xls, .ppt via LibreOffice) ──
       const fileExt = path.extname(String(originalname || '')).toLowerCase();
@@ -233,7 +290,7 @@ class FileProcessor {
       switch (effectiveMimeType) {
         case 'application/pdf':
           {
-            const result = await this.processPDF(filePath, { detailed: true });
+            const result = await this.processPDF(filePath, { detailed: true, ...processOpts });
             extractedText = result.extractedText;
             ocr = result.ocr;
           }
@@ -243,12 +300,12 @@ class FileProcessor {
           extractedText = await this.processLegacyDoc(filePath, originalname);
           break;
         case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-          extractedText = await this.processWord(filePath);
+          extractedText = await this.processWord(filePath, processOpts);
           break;
 
         case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
         case 'application/vnd.ms-excel':
-          extractedText = await this.processExcel(filePath);
+          extractedText = await this.processExcel(filePath, processOpts);
           break;
 
         case 'text/plain':
@@ -310,14 +367,18 @@ class FileProcessor {
 
         case 'application/vnd.ms-powerpoint':
         case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
-          extractedText = await this.processPowerPoint(filePath);
+          extractedText = await this.processPowerPoint(filePath, processOpts);
           break;
 
         case 'audio/mpeg':
         case 'audio/wav':
         case 'audio/ogg':
+        case 'audio/opus':
+        case 'application/ogg':
         case 'audio/webm':
         case 'audio/mp4':
+        case 'audio/m4a':
+        case 'audio/x-m4a':
         case 'video/mp4':
         case 'video/mpeg':
         case 'video/quicktime':
@@ -334,17 +395,37 @@ class FileProcessor {
         case '__external_done':
           break;
 
-        default:
-          console.log(`Unsupported file type: ${mimetype}`);
-          extractedText = `File "${originalname}" uploaded successfully. Content type: ${effectiveMimeType || mimetype}`;
+        default: {
+          const typeLabel = effectiveMimeType || mimetype || 'application/octet-stream';
+          const textLike = isTextLikeMime(typeLabel) || await sniffTextLike(filePath);
+          if (textLike) {
+            console.log(`Generic text-like file (${typeLabel}): ${originalname} — reading as text`);
+            extractedText = await this.processGenericText(filePath, originalname, typeLabel, fileSize);
+          } else {
+            console.log(`Opaque binary upload (no text layer): ${originalname} (${typeLabel})`);
+            extractedText = opaqueBinaryPlaceholder(originalname, typeLabel);
+          }
+          break;
+        }
       }
 
-      console.log(`File processing complete for ${originalname}: ${String(extractedText || '').length} characters extracted`);
+      timer.mark('extract');
+      const timings = timer.snapshot();
+      extractFastpath.logExtractTiming({
+        file: originalname,
+        mime: effectiveMimeType || mimetype,
+        bytes: fileSize,
+        chars: String(extractedText || '').length,
+        totalMs: timings.totalMs,
+        stages: timings.stages,
+      });
+      console.log(`File processing complete for ${originalname}: ${String(extractedText || '').length} characters extracted in ${timings.totalMs}ms`);
 
       return {
         success: true,
         extractedText,
         ocr,
+        timings,
         fileInfo: {
           name: originalname,
           type: effectiveMimeType || mimetype,
@@ -374,9 +455,63 @@ class FileProcessor {
 
 
   async processPDF(filePath, options = {}) {
-    // Always try streaming first — it's faster, lower memory, and supports
-    // unlimited pages. Only fall back to pdf-parse if streaming module
-    // is unavailable.
+    // pdftotext (poppler) is the fast path for text-layer PDFs. Fall
+    // through to pdf.js streaming / OCR when the binary is missing or
+    // the file is a scan.
+    try {
+      const pdftotext = await extractFastpath.tryPdftotext(filePath, options);
+      if (pdftotext.used && pdftotext.pageCount > 0) {
+        let mergedText = pdftotext.text;
+        let mixedOcr = null;
+        try {
+          if (mixedPdf.mixedOcrEnabled() && mixedPdf.isMixedPdf(pdftotext.pages)) {
+            const lowTextPages = mixedPdf.findLowTextPages(pdftotext.pages);
+            const cap = mixedPdf.mixedOcrMaxPages();
+            console.log(`[fileProcessor] pdftotext mixed PDF: ${lowTextPages.length}/${pdftotext.pages.length} page(s) without text — OCR cap ${cap}`);
+            const subset = await ocrEngine.extractPdfPagesSubset(filePath, lowTextPages, { maxPages: cap });
+            const merged = mixedPdf.mergeMixedPdfText(pdftotext.pages, subset.pages);
+            if (merged.ocrPagesUsed > 0) {
+              mergedText = merged.text;
+              mixedOcr = {
+                scannedPages: lowTextPages.length,
+                ocrPagesProcessed: subset.ocr?.pagesProcessed || 0,
+                ocrPagesWithText: merged.ocrPagesUsed,
+                capped: Boolean(subset.ocr?.capped),
+              };
+            }
+          }
+        } catch (mixedErr) {
+          console.warn(`[fileProcessor] pdftotext mixed-OCR failed (keeping text layer): ${mixedErr.message}`);
+        }
+
+        const coverage = extractFastpath.coverageFromPages(pdftotext.pages);
+        const header = `PDF document — ${pdftotext.pageCount} page(s) extracted, ` +
+          `${pdftotext.totalChars} characters` +
+          (mixedOcr ? ` (+${mixedOcr.ocrPagesWithText} scanned page(s) recovered via OCR)` : '') +
+          `\n---\n`;
+        const extractedText = header + mergedText;
+        const ocr = {
+          status: mixedOcr ? 'mixed_text_and_ocr' : 'skipped',
+          confidence: null,
+          provider: mixedOcr ? 'pdftotext+ocr' : 'pdftotext',
+          reason: 'embedded_text_layer',
+          pages: pdftotext.pageCount,
+          streaming: false,
+          pageCount: pdftotext.pageCount,
+          coverage,
+          ...(mixedOcr ? { mixedOcr } : {}),
+        };
+        return options.detailed ? { extractedText, ocr } : extractedText;
+      }
+      if (pdftotext.reason && pdftotext.reason !== 'disabled') {
+        console.log(`[fileProcessor] pdftotext skipped (${pdftotext.reason}) — falling through`);
+      }
+    } catch (pdfTextErr) {
+      console.warn(`[fileProcessor] pdftotext probe failed: ${pdfTextErr.message}`);
+    }
+
+    // pdf.js streaming — lower memory, unlimited pages. Only used when
+    // pdftotext is unavailable or the PDF has no text layer.
     const streamingMod = getStreamingPdf();
     if (streamingMod) {
       try {
@@ -580,7 +715,7 @@ class FileProcessor {
     };
   }
 
-  async processWord(filePath) {
+  async processWord(filePath, options = {}) {
     try {
       await assertReadableDocxZip(filePath);
       // convertToHtml preserves document structure (headings, lists,
@@ -591,7 +726,7 @@ class FileProcessor {
       const markdown = this._htmlToMarkdown(html);
       console.log(`Word file processed: ${filePath}, html=${html.length} chars, md=${markdown.length} chars`);
       const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
-      return this._withEmbeddedImageText(filePath, header + markdown, 'docx');
+      return this._withEmbeddedImageText(filePath, header + markdown, 'docx', options);
     } catch (error) {
       // Mammoth throws verbose stack traces (jszip/openZip chain) when
       // the .docx is corrupt, truncated, or actually a different format
@@ -671,7 +806,7 @@ class FileProcessor {
     return md;
   }
 
-  async processExcel(filePath) {
+  async processExcel(filePath, options = {}) {
     try {
       const workbook = await readXlsxFile(filePath);
       const MAX_DATA_ROWS_PER_SHEET = 5000; // increased for large spreadsheets
@@ -719,7 +854,7 @@ class FileProcessor {
       }
 
       header += '\n';
-      return this._withEmbeddedImageText(filePath, header + sheetSummaries.join('\n'), 'xlsx');
+      return this._withEmbeddedImageText(filePath, header + sheetSummaries.join('\n'), 'xlsx', options);
     } catch (error) {
       throw new Error(`Excel processing failed: ${error.message}`);
     }
@@ -783,6 +918,42 @@ class FileProcessor {
         throw new Error(`Text file processing failed: ${error.message}`);
       }
     }
+  }
+
+  /**
+   * Any text-like file without a dedicated parser (source code, configs,
+   * logs, data dumps, subtitles, notebooks…). Reads through the encoding
+   * detector, caps very large files at SIRAGPT_GENERIC_TEXT_MAX_BYTES and
+   * prefixes a one-line header so the model knows what it is looking at.
+   */
+  async processGenericText(filePath, originalname, mimetype, fileSize = 0) {
+    const ext = path.extname(String(originalname || filePath || '')).replace(/^\./, '').toLowerCase();
+    const kind = ext ? `.${ext}` : (mimetype || 'text');
+    const cap = Number.isFinite(GENERIC_TEXT_MAX_BYTES) && GENERIC_TEXT_MAX_BYTES > 0 ? GENERIC_TEXT_MAX_BYTES : Infinity;
+    let text = '';
+    let truncated = false;
+    if (Number(fileSize || 0) > cap) {
+      let handle;
+      try {
+        handle = await fs.open(filePath, 'r');
+        const buf = Buffer.alloc(cap);
+        const { bytesRead } = await handle.read(buf, 0, cap, 0);
+        text = buf.subarray(0, bytesRead).toString('utf8');
+        truncated = true;
+      } finally {
+        if (handle) await handle.close().catch(() => {});
+      }
+    } else {
+      try {
+        ({ text } = await readTextFile(filePath));
+      } catch {
+        text = await fs.readFile(filePath, 'utf8');
+      }
+    }
+    const lines = text ? text.split(/\r?\n/).length : 0;
+    const header = `Text file (${kind}) — ${lines} lines, ${text.length} chars${truncated ? ` (truncated at ${Math.round(cap / (1024 * 1024))} MB)` : ''}\n---\n`;
+    console.log(`Generic text processed: ${filePath}, kind=${kind}, chars=${text.length}${truncated ? ', truncated' : ''}`);
+    return header + text;
   }
 
   async processImage(filePath, options = {}) {
@@ -859,11 +1030,13 @@ class FileProcessor {
    * OCR crash, timeout) logs a warning and returns the text unchanged.
    * Disable globally with SIRAGPT_OFFICE_IMAGE_OCR=0.
    */
-  async _withEmbeddedImageText(filePath, baseText, kind) {
+  async _withEmbeddedImageText(filePath, baseText, kind, options = {}) {
+    if (options.deferOfficeImageOcr === true) return baseText;
     try {
-      const appendix = await officeImages.extractImageAppendix(filePath);
+      const allowVision = extractFastpath.shouldAllowOfficeImageVision(baseText, options);
+      const appendix = await officeImages.extractImageAppendix(filePath, { allowVision });
       if (appendix) {
-        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars)`);
+        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars, vision=${allowVision})`);
         return `${baseText}\n\n${appendix}`;
       }
     } catch (error) {
@@ -878,7 +1051,9 @@ class FileProcessor {
     // weak local OCR falls through to the vision model whenever an OpenAI
     // key is available. Opt out explicitly with SIRAGPT_VISION_FALLBACK_ENABLED=0.
     if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED === '0') return false;
-    if (!options.openai && !process.env.OPENAI_API_KEY) return false;
+    // Any configured vision runtime qualifies (Gemini / Meta / xAI / OpenRouter /
+    // OpenAI) — see ai/vision-runtime.js. The OpenAI key alone is no longer the gate.
+    if (!options.openai && require('./ai/vision-runtime').visionRuntimeCandidates().length === 0) return false;
     const text = String(result?.text || '');
     const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
     // NaN-only fallbacks: a configured 0 is meaningful (minChars=0 → never fall
@@ -906,9 +1081,20 @@ class FileProcessor {
     const visionParser = require('./rag/vision-doc-parser');
 
     let openai = openaiClient;
+    const parseOptions = {};
     if (!openai) {
+      // Prefer a runtime that works in this deployment (Gemini first); the
+      // model id and the JSON-schema strictness follow the chosen provider.
+      const { visionRuntimeCandidates, visionClientConfig } = require('./ai/vision-runtime');
+      const explicitModel = process.env.SIRAGPT_VISION_DOC_MODEL;
+      const candidate = explicitModel
+        ? { provider: process.env.SIRAGPT_VISION_DOC_PROVIDER || 'OpenAI', model: explicitModel }
+        : (visionRuntimeCandidates()[0] || { provider: 'OpenAI', model: 'gpt-5.6-sol' });
+      const config = visionClientConfig(candidate.provider);
       const OpenAI = require('openai');
-      openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      openai = new OpenAI({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) });
+      parseOptions.model = candidate.model;
+      parseOptions.useStrictSchema = config.strictJsonSchema;
     }
 
     const buf = await fs.promises.readFile(filePath);
@@ -916,6 +1102,7 @@ class FileProcessor {
     const layout = await visionParser.parseDocumentPage({
       openai,
       image: { base64, mediaType: mimeType || 'image/png' },
+      options: parseOptions,
     });
     return this._flattenLayoutToText(layout);
   }
@@ -956,8 +1143,13 @@ class FileProcessor {
       .trim();
   }
 
-  async processPowerPoint(filePath) {
+  async processPowerPoint(filePath, options = {}) {
     try {
+      const native = await extractFastpath.extractPptxSlides(filePath);
+      if (native.ok && native.text && native.slideCount > 0) {
+        console.log(`PowerPoint file processed (per-slide): ${filePath}, slides=${native.slideCount}, length=${native.text.length}`);
+        return this._withEmbeddedImageText(filePath, native.text, 'pptx', options);
+      }
       const officeParser = require('officeparser');
       const parsed = typeof officeParser.parseOfficeAsync === 'function'
         ? await officeParser.parseOfficeAsync(filePath)
@@ -966,7 +1158,7 @@ class FileProcessor {
         ? parsed
         : (typeof parsed?.toText === 'function' ? parsed.toText() : String(parsed || ''));
       console.log(`PowerPoint file processed: ${filePath}, length: ${text.length}`);
-      return this._withEmbeddedImageText(filePath, text, 'pptx');
+      return this._withEmbeddedImageText(filePath, text, 'pptx', options);
     } catch (error) {
       console.error(`PowerPoint file processing error for ${filePath}:`, error);
       throw new Error(`PowerPoint presentation processing failed: ${error.message}`);
@@ -1036,8 +1228,8 @@ class FileProcessor {
 async processAudio(filePath, mimeType, originalName) {
     try {
       const result = await audioTranscriber.transcribe(filePath, mimeType, originalName);
-      if (result.method === 'whisper') {
-        console.log(`[fileProcessor] Audio transcribed via Whisper: ${originalName}, ${result.text?.length || 0} chars`);
+      if (result.method === 'whisper' || result.method === 'local-whisper') {
+        console.log(`[fileProcessor] Audio transcribed via ${result.method}: ${originalName}, ${result.text?.length || 0} chars`);
       }
       return result.text || '';
     } catch (error) {
@@ -1079,3 +1271,5 @@ async processAudio(filePath, mimeType, originalName) {
 
 module.exports = new FileProcessor();
 module.exports.resolveProcessMimeType = resolveProcessMimeType;
+module.exports.isTextLikeMime = isTextLikeMime;
+module.exports.sniffTextLike = sniffTextLike;

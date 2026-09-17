@@ -68,7 +68,7 @@ function cosine(a, b) {
  *   Pass the shared rag.embed() here. When null, the entry is stored
  *   without an embedding and later findExemplars calls will skip it.
  */
-async function record({ userId, runId, agent, request, response, helpful, notes, embedder }) {
+async function record({ userId, runId, agent, request, response, helpful, notes, reason, reasonCode, embedder, chatId, metadata }) {
   if (!userId || !runId) throw new Error('feedback-ledger.record: userId and runId required');
   if (typeof helpful !== 'boolean') throw new Error('feedback-ledger.record: helpful must be boolean');
 
@@ -108,7 +108,74 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
     list.splice(0, list.length - MAX_ENTRIES_PER_USER);
   }
 
+  // Durable RLHF flywheel. Fail-open: a store/prisma error must never
+  // fail the thumb the user just submitted.
+  try {
+    const store = require('../rlhf/preference-store');
+    if (store.isCollectionEnabled()) {
+      let judgeScore = null;
+      try {
+        const rlcd = require('../rlcd');
+        const tagged = rlcd.recordFromThumb({
+          agent: agent || null,
+          helpful,
+          response,
+          request: entry.request,
+          metadata,
+          source: 'explicit',
+        });
+        if (tagged && tagged.judgeScore) judgeScore = tagged.judgeScore;
+      } catch {
+        /* RLCD is fail-open */
+      }
+      await store.ingestThumb({
+        userId,
+        runId,
+        messageId: runId,
+        chatId: chatId || null,
+        agent: agent || null,
+        request: entry.request,
+        response,
+        helpful,
+        reason,
+        reasonCode,
+        notes: entry.notes,
+        embedding: embedding,
+        embedder,
+        judgeScore,
+      });
+    }
+  } catch (err) {
+    console.warn('[feedback-ledger] rlhf ingest skipped:', err.message || err);
+  }
+
   return { stored: true, total: list.length };
+}
+
+/**
+ * Load durable preference rows (from Postgres Message.feedback) into the
+ * in-memory ledger. Used so RLHF-lite survives process restart. Dedupes
+ * on runId via record().
+ */
+async function hydrateFromRows(userId, rows, embedder) {
+  if (!userId || !Array.isArray(rows) || rows.length === 0) return { stored: 0 };
+  let stored = 0;
+  for (const row of rows) {
+    if (!row || !row.runId) continue;
+    await record({
+      userId,
+      runId: String(row.runId),
+      chatId: row.chatId || null,
+      agent: row.agent || 'chat',
+      request: row.request,
+      response: row.response,
+      helpful: row.helpful === true,
+      notes: row.notes,
+      embedder,
+    });
+    stored += 1;
+  }
+  return { stored };
 }
 
 /**
@@ -121,12 +188,46 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
  * @param {number} [args.k=3]
  * @param {boolean} [args.onlyHelpful=true]
  * @param {string} [args.agent]  — filter to entries from the same specialist
+ * @param {function} [args.loader] — async (userId) => preference rows from durable store
  *
  * @returns {Promise<Array<{ runId, request, response, helpful, notes, score }>>}
  *   Sorted descending by similarity.
  */
-async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent }) {
-  const list = ledger.get(userId);
+async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent, loader }) {
+  if (typeof loader === 'function' && (!ledger.get(userId) || ledger.get(userId).length === 0)) {
+    try {
+      const rows = await loader(userId);
+      await hydrateFromRows(userId, rows, embedder);
+    } catch (err) {
+      console.warn('[feedback-ledger] durable hydrate failed:', err && err.message);
+    }
+  }
+  let list = ledger.get(userId);
+  if (!list || list.length === 0) {
+    try {
+      const store = require('../rlhf/preference-store');
+      await store.hydrateUser(userId);
+      for (const e of store.dump(userId)) {
+        const runId = e.runId || e.id;
+        if (!runId) continue;
+        let dest = ledger.get(userId);
+        if (!dest) { dest = []; ledger.set(userId, dest); }
+        if (dest.some((x) => x.runId === runId)) continue;
+        dest.push({
+          runId,
+          userId: e.userId,
+          agent: e.agent || null,
+          request: e.promptText || e.request || '',
+          response: e.responseText || e.response,
+          helpful: e.label === 'chosen' || e.helpful === true,
+          notes: e.notes || null,
+          embedding: e.promptEmbedding || e.embedding || null,
+          at: e.createdAt || Date.now(),
+        });
+      }
+      list = ledger.get(userId);
+    } catch { /* hydrate is best-effort */ }
+  }
   if (!list || list.length === 0) return [];
   if (!request || typeof embedder !== 'function') return [];
 
@@ -183,8 +284,42 @@ function stats(userId) {
   };
 }
 
+/**
+ * Insert an already-durable row into the RAM ledger without writing
+ * back to Prisma. Used on boot so findExemplars works before the first
+ * thumb of the process.
+ */
+function ingestLocal({ userId, runId, agent, request, response, helpful, notes, embedding, at }) {
+  if (!userId || !runId) return;
+  const entry = {
+    runId: String(runId),
+    userId,
+    agent: agent || null,
+    request: String(request || '').slice(0, 4000),
+    response,
+    helpful: helpful === true,
+    notes: typeof notes === 'string' ? notes.slice(0, 500) : null,
+    embedding: embedding || null,
+    at: at || nowMs(),
+  };
+  let list = ledger.get(userId);
+  if (!list) { list = []; ledger.set(userId, list); }
+  const existingIdx = list.findIndex((e) => e.runId === entry.runId);
+  if (existingIdx >= 0) list[existingIdx] = entry;
+  else list.push(entry);
+  if (list.length > MAX_ENTRIES_PER_USER) {
+    list.splice(0, list.length - MAX_ENTRIES_PER_USER);
+  }
+}
+
 function clearUser(userId) { ledger.delete(userId); }
-function _reset() { ledger.clear(); }
+function _reset() {
+  ledger.clear();
+  try {
+    require('../rlhf/preference-store')._reset();
+    require('../rlhf/trainer')._reset();
+  } catch { /* flywheel optional in unit tests that never loaded it */ }
+}
 
 /**
  * Return a shallow copy of every entry for this user. Used by the
@@ -204,7 +339,9 @@ module.exports = {
   formatExemplarsBlock,
   stats,
   clearUser,
+  ingestLocal,
   _reset,
   _dump,
   MAX_ENTRIES_PER_USER,
+  hydrateFromRows,
 };

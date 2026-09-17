@@ -27,6 +27,17 @@ function pptxSlideText(buffer) {
     .trim();
 }
 
+test('pptx content planner treats gestión administrativa as business administration', () => {
+  const plan = buildPptxContentPlan({
+    title: 'Gestion amdinistrativa',
+    prompt: 'crea una ppt profesional de gestion administrativa',
+    template: 'business',
+  });
+  assert.equal(plan.source, 'domain:business-administration');
+  assert.match(JSON.stringify(plan), /ciclo directivo/i);
+  assert.doesNotMatch(plan.thesis, /narrativa ejecutiva/i);
+});
+
 test('pptx content planner creates domain-specific slides for business administration', () => {
   const plan = buildPptxContentPlan({
     title: 'Administracion de empresas',

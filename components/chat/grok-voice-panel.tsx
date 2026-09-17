@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { cn } from "@/lib/utils"
 import { apiClient, type GrokVoiceAssistantReply, type GrokVoiceSessionSnapshot } from "@/lib/api"
+import { abortAudioStream } from "@/lib/voice/abort-audio-stream"
 
 type VoicePanelStatus = "connecting" | "idle" | "listening" | "processing" | "speaking" | "error"
 
@@ -121,7 +122,7 @@ export function GrokVoicePanel({
       setStatus("error")
       setError(cause instanceof Error ? cause.message : "No se pudo abrir el modo de voz.")
     })
-    return () => {
+    return () => { abortAudioStream({ recorder: recorderRef.current as any, stream: streamRef.current as any })
       cancelled = true
     }
   }, [ensureSession])

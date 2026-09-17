@@ -21,12 +21,11 @@ const {
   INTERNAL: {
     deleteTextFromDocxBuffer,
     extractAllQuotedReplacementPairs,
-    extractWtNodes,
     planGenericOfficeOperations,
     planSourcePreservingOperations,
     proofreadMinimalDocxBuffer,
     replaceTextInDocxBuffer,
-    replaceTextInParagraphXmlSurgical,
+    mutateParagraphTextSurgical: replaceTextInParagraphXmlSurgical,
   },
 } = require('../src/services/source-preserving-document-edit');
 
@@ -166,15 +165,14 @@ describe('docx surgical run-level edit', () => {
 
     const surgical = replaceTextInParagraphXmlSurgical(paragraphXml, 'bar', 'qux');
     assert.equal(surgical.changed, true);
-    assert.equal(surgical.count, 1);
+    assert.equal((surgical.xml.match(/qux/g) || []).length, 1);
     assert.match(surgical.xml, /<w:b\s*\/>/);
     assert.match(surgical.xml, /<w:i\s*\/>/);
     assert.match(surgical.xml, /<w:t[^>]*>qux<\/w:t>/);
     assert.match(surgical.xml, /<w:t[^>]*>Foo <\/w:t>/);
     assert.match(surgical.xml, /<w:t[^>]*> baz<\/w:t>/);
 
-    const nodes = extractWtNodes(surgical.xml);
-    assert.equal(nodes.map((n) => n.text).join(''), 'Foo qux baz');
+    assert.equal(paragraphText(surgical.xml), 'Foo qux baz');
   });
 
   it('proofreads mechanical typos without rebuilding the paragraph', async () => {

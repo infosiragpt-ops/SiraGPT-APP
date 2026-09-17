@@ -2,6 +2,8 @@
 
 const cognitiveMetrics = require('../cognitive-metrics');
 const freeIaMetrics = require('../free-ia-metrics');
+const rlhfMetrics = require('../rlhf/metrics');
+const rlcdMetrics = require('../rlcd/decision-ledger');
 const { escapePrometheusLabelValue } = require('../../utils/prometheus-labels');
 
 let lastLagMs = 0;
@@ -45,6 +47,8 @@ function requiredExporterText(name, exporter) {
 function formatProcessMetricsExposition({
   cognitiveMetrics: cognitiveExporter = cognitiveMetrics,
   freeIaMetrics: freeIaExporter = freeIaMetrics,
+  rlhfMetrics: rlhfExporter = rlhfMetrics,
+  rlcdMetrics: rlcdExporter = rlcdMetrics,
   processRef = process,
   version = packageVersion(),
 } = {}) {
@@ -71,6 +75,8 @@ function formatProcessMetricsExposition({
   lines.push(`siragpt_event_loop_lag_ms ${lastLagMs}`);
   lines.push(requiredExporterText('cognitive', cognitiveExporter));
   lines.push(requiredExporterText('Free-IA', freeIaExporter));
+  lines.push(requiredExporterText('RLHF', rlhfExporter));
+  lines.push(requiredExporterText('RLCD', rlcdExporter));
   return `${lines.join('\n')}\n`;
 }
 

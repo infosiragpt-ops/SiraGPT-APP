@@ -12,15 +12,15 @@ import { useAuth } from "@/lib/auth-context-integrated"
 type InviteState = "checking" | "redirecting" | "accepting" | "accepted" | "verification" | "error"
 
 function safeReturnPath(raw: string | null) {
-  if (!raw) return "/chat"
+  if (!raw) return "/agentes"
   try {
     const baseOrigin = typeof window !== "undefined" ? window.location.origin : "https://siragpt.com"
     const url = new URL(raw, baseOrigin)
-    if (url.origin !== baseOrigin) return "/chat"
-    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/chat"
-    return `${url.pathname}${url.search}${url.hash}` || "/chat"
+    if (url.origin !== baseOrigin) return "/agentes"
+    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/agentes"
+    return `${url.pathname}${url.search}${url.hash}` || "/agentes"
   } catch (_error) {
-    return "/chat"
+    return "/agentes"
   }
 }
 
@@ -152,7 +152,7 @@ function OrganizationInvitationPageContent() {
             <Button
               type="button"
               className="w-full bg-[#FF0000] text-white hover:bg-[#d90000]"
-              onClick={() => router.replace("/chat")}
+              onClick={() => router.replace("/agentes")}
             >
               Ir a SiraGPT
             </Button>
@@ -162,7 +162,7 @@ function OrganizationInvitationPageContent() {
               type="button"
               variant="outline"
               className="w-full"
-              onClick={() => router.replace("/chat")}
+              onClick={() => router.replace("/agentes")}
             >
               Volver a SiraGPT
             </Button>

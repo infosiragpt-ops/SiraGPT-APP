@@ -8,11 +8,25 @@ export type ChatBlocker = { title: string; url?: string }
 const CREDIT_PHRASING =
   /insufficient credits|insufficient_quota|out of credits|sin cr[eé]ditos|can only afford|quota exceeded|cuota agotada|l[ií]mite de cr[eé]ditos/i
 
+const inflightGenerate = new Set<string>()
+
+export function beginCodeGenerate(id: string): boolean {
+  const key = String(id || "").trim()
+  if (!key) return false
+  if (inflightGenerate.has(key)) return false
+  inflightGenerate.add(key)
+  return true
+}
+
+export function endCodeGenerate(id: string): void {
+  inflightGenerate.delete(String(id || "").trim())
+}
+
 export function detectBlocker(content: string): ChatBlocker | null {
   const t = content || ""
   if (!CREDIT_PHRASING.test(t)) return null
-  if (/\b402\b/.test(t) || /openrouter/i.test(t)) {
-    return { title: "OpenRouter sin créditos", url: "https://openrouter.ai/settings/credits" }
+  if (/\b402\b/.test(t) || /credits_exhausted|insufficient credits|sin cr[eé]ditos/i.test(t)) {
+    return { title: "Créditos agotados", url: "/settings" }
   }
   return { title: "Créditos o cuota agotada", url: "/settings" }
 }

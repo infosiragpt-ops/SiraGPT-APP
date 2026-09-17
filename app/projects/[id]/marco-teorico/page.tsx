@@ -213,7 +213,7 @@ export default function MarcoTeoricoPage() {
         sources: finalSources,
       })
       toast.success(t("savedAsChat"))
-      router.push(`/chat?id=${chat.id}`)
+      router.push(`/agentes?id=${chat.id}`)
     } catch (err: any) {
       toast.error(err?.message || t("saveFailed"))
     }

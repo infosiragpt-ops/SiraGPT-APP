@@ -26,7 +26,7 @@ uploaded ──► validating ──► extracting ──► chunking ──► 
 | Stage | Owner | Definition | Typical duration |
 |-------|-------|------------|------------------|
 | `uploaded` | upload route | Multer accepted bytes; `File` row exists. | <50 ms |
-| `validating` | upload route | Magic-byte sniffer (`file-type`) is checking the real content type against `ALLOWED_MIMES`. | <100 ms |
+| `validating` | upload route | Magic-byte sniffer (`file-type`) feeds `validateUploadPolicy`: every format is accepted; a KNOWN extension whose bytes disagree (`invoice.pdf` that is a Windows binary) fails `extension_mime_mismatch`, executables/active content are classified for download-only serving. | <100 ms |
 | `extracting` | upload route | `fileProcessor.processFile(file)` is running (mammoth / pdf-parse / xlsx / jszip / Tesseract OCR). Stays here until extraction returns and the row's `extractedText` is updated. | 0.1 – 30 s depending on format and OCR |
 | `chunking` | RAG worker | `setImmediate`-queued split of `extractedText` into chunks for `operationalRag.ensureIndexed`. | <1 s |
 | `embedding` | RAG worker | OpenAI embeddings call for each chunk. | 1 – 10 s for typical docs |
@@ -101,7 +101,7 @@ through `setStage` instead.
 |---------------|--------|------|
 | `uploaded` | `routes/files.js` POST `/upload` (loop entry) | Right after `prisma.file.create` |
 | `validating` | `routes/files.js` | Before `detectMime(...)` |
-| `failed` (`magic_byte_mismatch: …`) | `routes/files.js` | When detected mime is not in `ALLOWED_MIMES` |
+| `failed` (`extension_mime_mismatch: …`) | `routes/files.js` | When a known extension does not match the detected magic bytes |
 | `extracting` | `routes/files.js` | After magic-byte check passes, before `fileProcessor.processFile` |
 | `failed` (`processing: …`) | `routes/files.js` catch block | Any throw inside the upload loop after the row was created |
 | `chunking` | `scheduleDefaultRagIndex` (setImmediate entry) | Async path begins |
@@ -177,7 +177,7 @@ on-call engineer can tell at a glance which sub-system tripped:
 
 | Prefix | Stage | What probably broke |
 |--------|-------|---------------------|
-| `magic_byte_mismatch: <real mime>` | `validating` | Renamed binary; allowlist rejected the real content type |
+| `extension_mime_mismatch: <real mime>` | `validating` | Renamed binary; the known extension disagrees with the real content type |
 | `processing: <err.message>` | `extracting` | Parser library threw (corrupt DOCX, bad ZIP, OCR timeout) |
 | `rag_indexing: <err.message>` | RAG path | Embeddings call failed, vector store unreachable, etc. |
 

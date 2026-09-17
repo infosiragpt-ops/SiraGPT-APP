@@ -7,6 +7,8 @@
  * relevant to the attached file types are included to keep the prompt lean.
  */
 
+const { SURGICAL_RULES, SKILL_ORDER, buildSurgicalPromptAddition } = require('./surgical-rules');
+
 const CORE_RULES = `You are SiraGPT's document agent. You run inside SiraGPT's own document workspace, which is ALREADY fully set up — every tool you need is available right now. NEVER tell the user to install anything (Linux, Python, a sandbox, dependencies…) or that editing "requires" extra setup: just call the tools and edit the file. The infrastructure is invisible to the user.
 
 WORKSPACE LAYOUT
@@ -97,7 +99,17 @@ overwrite formula cells with computed values unless asked):
   python3 -c "import openpyxl; openpyxl.load_workbook('/workspace/outputs/FILE-editado.xlsx'); print('valid xlsx')"
 If that errors, regenerate the file with openpyxl — do NOT try to patch the
 ZIP/XML by hand.
-For CSV use python3 csv module with the original delimiter/encoding.`,
+For CSV use python3 csv module with the original delimiter/encoding.
+
+SURGICAL TEXT PATCH (preferred for TEXT-ONLY changes on files with charts,
+pivots, images or macros — openpyxl rewrites the whole workbook and can drop
+them): unpack the ZIP and patch the XML directly with lxml (text lives in
+xl/sharedStrings.xml or inline <v>), preserving the cell style attribute "s".
+After editing set fullCalcOnLoad="1" on calcPr (or recalc with
+libreoffice --headless) so cached formula values are not stale. With .xlsm
+keep vbaProject.bin byte-identical. Repack with "cd <unpacked> && zip -q -r
+<out> ." and verify the entry set matches the original (same parts, same
+order; [Content_Types].xml + xl/styles.xml + xl/workbook.xml untouched).`,
 
   pptx: `PPTX SKILL
 A .pptx is a BINARY ZIP — NEVER edit it with str_replace or hand-written XML.
@@ -119,6 +131,12 @@ FORMAT-PRESERVATION CONTRACT (surgical edits):
 - NEW SLIDES use the deck's OWN layouts: pick from prs.slide_layouts by name
   so the master's fonts/colors are inherited — never a generic hardcoded look.
 - Keep slide order, notes, media and theme untouched unless asked.
+- SURGICAL TEXT PATCH (preferred for TEXT-ONLY changes): text lives in a:t of
+  ppt/slides/slideN.xml and notesSlideN.xml — unpack, patch with lxml
+  preserving a:rPr, repack with identical parts/order. Never touch layouts,
+  masters, theme or presentation.xml (slide order lives in p:sldIdLst — edit
+  it together with rels + [Content_Types] overrides if reordering). Beware
+  autofit when lengthening text.
 
 PROFESSIONAL DESIGN RULES (when creating slides):
 - One idea per slide; title ≤ 8 words; ≤ 4 bullets of ≤ 12 words.
@@ -136,6 +154,12 @@ Use pypdf for page-level operations (merge/split/rotate/extract/metadata):
   # page ops; then:
   with open('/workspace/outputs/FILE-editado.pdf','wb') as f: writer.write(f)
   PY
+Three levels (pick the cheapest that solves the task): (a) STRUCTURAL ops
+above → total fidelity (prefer qpdf when available); (b) TEXT MICRO-EDITS →
+PyMuPDF locates the area, redacts it and inserts with the same embedded font
+(similar-length, single-line only — no paragraph reflow); (c) REWRITES → edit
+the source .docx when available, else PDF→DOCX→edit→export (warn about
+fidelity loss). Scanned PDFs: OCR first (ocrmypdf/tesseract).
 PDFs are not reliably text-editable in place. For content rewrites: extract the
 text, rebuild via a docx (python-docx) and convert:
   libreoffice --headless --convert-to pdf --outdir /workspace/outputs file.docx`,
@@ -176,9 +200,10 @@ const EXT_TO_SKILL = {
 
 /**
  * @param {string[]} fileNames attached file names
+ * @param {{ instruction?: string }} [opts] user instruction (detects "modo reformateo")
  * @returns {string} full system prompt for the document agent
  */
-function buildDocAgentSystemPrompt(fileNames = []) {
+function buildDocAgentSystemPrompt(fileNames = [], opts = {}) {
   const skillKeys = new Set();
   for (const name of fileNames) {
     const ext = String(name || '').split('.').pop().toLowerCase();
@@ -187,8 +212,14 @@ function buildDocAgentSystemPrompt(fileNames = []) {
   }
   // No recognised extension → include the two most common skills as guidance.
   if (skillKeys.size === 0) { skillKeys.add('docx'); skillKeys.add('txt'); }
-  const blocks = [CORE_RULES];
-  for (const key of skillKeys) blocks.push(SKILLS[key]);
+  // Fixed order (SKILL_ORDER) for prompt-cache stability — never vary per user.
+  const ordered = SKILL_ORDER.filter((k) => skillKeys.has(k));
+  const formats = ordered.filter((k) => ['docx', 'xlsx', 'pptx', 'pdf'].includes(k));
+  const blocks = [
+    CORE_RULES,
+    buildSurgicalPromptAddition({ instruction: opts.instruction || '', formats }),
+  ];
+  for (const key of ordered) blocks.push(SKILLS[key]);
   const list = fileNames.length
     ? `\nATTACHED FILES (in /workspace/uploads):\n${fileNames.map((n) => `- ${n}`).join('\n')}`
     : '';

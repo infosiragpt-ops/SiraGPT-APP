@@ -154,6 +154,42 @@ test('exportBuild POSTs a bounded output directory to /workspace/export-build', 
   assert.deepEqual(calls[0].body, { project: 'p1', outDir: 'dist' });
 });
 
+test('run-scoped clients route filesystem, exec, preview and cleanup to one worktree', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, removed: true }));
+  const base = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  await base.createWorktree('p1', 'run-7', 'production-main');
+  const run = base.forRun('run-7', 'p1');
+  await run.writeFiles('p1', [{ path: 'app.ts', content: 'x' }]);
+  await run.readFile('p1', 'app.ts');
+  await run.exec('p1', ['git', 'status']);
+  await run.startDev('p1');
+  await run.devStatus();
+  await run.stopDev();
+  await run.removeWorktree('p1', 'run-7');
+
+  assert.deepEqual(calls[0].body, {
+    project: 'p1',
+    run: 'run-7',
+    baseBranch: 'production-main',
+  });
+  assert.deepEqual(calls[1].body, {
+    project: 'p1',
+    files: [{ path: 'app.ts', content: 'x' }],
+    run: 'run-7',
+  });
+  assert.equal(calls[2].url, 'http://runner:4097/workspace/file?project=p1&run=run-7&path=app.ts');
+  assert.deepEqual(calls[3].body, {
+    project: 'p1',
+    cmd: ['git', 'status'],
+    run: 'run-7',
+  });
+  assert.deepEqual(calls[4].body, { project: 'p1', basePath: null, run: 'run-7' });
+  assert.equal(calls[5].url, 'http://runner:4097/status?project=p1&run=run-7');
+  assert.deepEqual(calls[6].body, { project: 'p1', run: 'run-7' });
+  assert.deepEqual(calls[7].body, { project: 'p1', run: 'run-7' });
+  assert.equal(run.unscoped(), base);
+});
+
 test('codexExportHostDir/Path default and honour env, picking the right separator', () => {
   assert.equal(codexExportHostDir({}), '.codex-workspaces');
   assert.equal(codexExportHostPath('p1', {}), '.codex-workspaces/p1');

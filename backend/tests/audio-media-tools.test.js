@@ -42,16 +42,30 @@ test('exports two tools with the react-agent tool shape', () => {
   assert.deepEqual(AUDIO_MEDIA_TOOLS.map((t) => t.name), ['generate_speech', 'generate_music']);
 });
 
-test('generate_speech without a TTS provider returns a graceful error', async () => {
+test('generate_speech without paid keys still saves an mp3 via Edge TTS', async () => {
   _internal.resetTestSeams();
   const prevEleven = process.env.ELEVENLABS_API_KEY;
   const prevOpenai = process.env.OPENAI_API_KEY;
   delete process.env.ELEVENLABS_API_KEY;
   delete process.env.OPENAI_API_KEY;
+  _internal.setEdgeTtsImpl(async (text) => {
+    assert.match(text, /Juan vende papas/);
+    return { buffer: Buffer.from('ID3EDGEMP3'), voice: 'es-PE-CamilaNeural', provider: 'edge' };
+  });
   try {
-    const r = await generateSpeech.execute({ text: 'hola mundo' }, {});
-    assert.equal(r.ok, false);
-    assert.match(r.error, /ELEVENLABS_API_KEY|OPENAI_API_KEY|no está disponible/i);
+    const { ctx, events } = collectorCtx();
+    const r = await generateSpeech.execute({ text: 'Juan vende papas en el mercado' }, ctx);
+    assert.equal(r.ok, true);
+    assert.equal(r.mime, 'audio/mpeg');
+    assert.equal(r.kind, 'speech');
+    assert.equal(r.provider, 'edge');
+    assert.match(r.downloadUrl, /^\/api\/agent\/artifact\//);
+    assert.ok(r.sizeBytes > 0);
+    const artifactEvt = events.find((e) => e.type === 'file_artifact');
+    assert.ok(artifactEvt, 'should emit a file_artifact event');
+    assert.equal(artifactEvt.artifact.format, 'mp3');
+    assert.equal(artifactEvt.artifact.mime, 'audio/mpeg');
+    assert.ok(!/speechSynthesis|text\/html/i.test(JSON.stringify(r)));
   } finally {
     if (prevEleven !== undefined) process.env.ELEVENLABS_API_KEY = prevEleven;
     if (prevOpenai !== undefined) process.env.OPENAI_API_KEY = prevOpenai;
@@ -62,6 +76,33 @@ test('generate_speech without a TTS provider returns a graceful error', async ()
 test('generate_speech with empty text is rejected', async () => {
   const r = await generateSpeech.execute({ text: '   ' }, {});
   assert.equal(r.ok, false);
+  assert.match(r.error, /vacío/i);
+});
+
+test('generate_speech description forbids HTML speechSynthesis workarounds', () => {
+  assert.match(generateSpeech.description, /generate_speech|MP3/i);
+  assert.match(generateSpeech.description, /speechSynthesis|Web Speech API/);
+  assert.match(generateSpeech.description, /PROHIBIDO/);
+});
+
+test('generate_speech returns a graceful error when every TTS path fails', async () => {
+  _internal.resetTestSeams();
+  const prevEleven = process.env.ELEVENLABS_API_KEY;
+  const prevOpenai = process.env.OPENAI_API_KEY;
+  delete process.env.ELEVENLABS_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  _internal.setEdgeTtsImpl(async () => {
+    throw new Error('Edge TTS rechazó la conexión (HTTP 403).');
+  });
+  try {
+    const r = await generateSpeech.execute({ text: 'hola mundo' }, {});
+    assert.equal(r.ok, false);
+    assert.match(r.error, /No se pudo generar el archivo de audio/i);
+  } finally {
+    if (prevEleven !== undefined) process.env.ELEVENLABS_API_KEY = prevEleven;
+    if (prevOpenai !== undefined) process.env.OPENAI_API_KEY = prevOpenai;
+    _internal.resetTestSeams();
+  }
 });
 
 test('generate_speech saves an mp3 artifact and emits file_artifact', async () => {
@@ -131,7 +172,7 @@ test('generate_speech falls back to OpenAI TTS when ElevenLabs fails', async () 
     assert.match(captured.url, /\/audio\/speech$/);
     assert.equal(captured.body.input, 'Hola con fallback.');
     assert.equal(captured.headers.authorization, 'Bearer test-openai-key');
-    assert.ok(events.some((e) => e.type === 'tool_output' && /OpenAI TTS/i.test(e.preview || '')));
+    assert.ok(events.some((e) => e.type === 'tool_output' && /Reintentando|audio/i.test(e.preview || '')));
     assert.ok(events.some((e) => e.type === 'file_artifact'));
   } finally {
     if (prevEleven !== undefined) process.env.ELEVENLABS_API_KEY = prevEleven; else delete process.env.ELEVENLABS_API_KEY;

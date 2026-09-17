@@ -192,9 +192,97 @@ const TEMPLATE_THEME_MAP = {
  * Pick the theme for a deck from the user's prompt + detected template.
  * Explicit prompt styling keywords win over the template default.
  */
-function pickPptxTheme({ template = '', prompt = '', themeId = null } = {}) {
-  if (themeId && THEMES[themeId]) return THEMES[themeId];
+const NAMED_SLIDE_COLORS = {
+  rosado: 'FFC0CB', rosada: 'FFC0CB', rosa: 'FFC0CB', pink: 'FFC0CB',
+  blanco: 'FFFFFF', blanca: 'FFFFFF', white: 'FFFFFF',
+  azul: '3B82F6', blue: '3B82F6',
+  negro: '111827', negra: '111827', black: '111827',
+  verde: '22C55E', green: '22C55E',
+  gris: 'E5E7EB', gray: 'E5E7EB', grey: 'E5E7EB',
+  rojo: 'EF4444', roja: 'EF4444', red: 'EF4444',
+  amarillo: 'FDE047', yellow: 'FDE047',
+};
+
+const COLOR_ALIAS_RES = [
+  { re: /rosad[oa]s?|\brosa\b|\bpink\b/i, hex: 'FFC0CB' },
+  { re: /blanc[oa]s?|\bwhite\b/i, hex: 'FFFFFF' },
+  { re: /\bazul(?:es)?\b|\bblue\b/i, hex: '3B82F6' },
+  { re: /negr[oa]s?|\bblack\b/i, hex: '111827' },
+  { re: /verde(?:s)?|\bgreen\b/i, hex: '22C55E' },
+  { re: /gris(?:es)?|\bgr[ae]y\b/i, hex: 'E5E7EB' },
+  { re: /roj[oa]s?|\bred\b/i, hex: 'EF4444' },
+  { re: /amarill[oa]s?|\byellow\b/i, hex: 'FDE047' },
+];
+
+function inferRequestedHex(prompt) {
   const text = String(prompt || '');
+  const hex = text.match(/#([0-9a-fA-F]{6})/);
+  if (hex) return hex[1].toUpperCase();
+  for (const alias of COLOR_ALIAS_RES) {
+    if (alias.re.test(text)) return alias.hex;
+  }
+  const names = Object.keys(NAMED_SLIDE_COLORS).sort((a, b) => b.length - a.length);
+  for (const name of names) {
+    if (new RegExp('\\b' + name + '\\b', 'i').test(text)) return NAMED_SLIDE_COLORS[name];
+  }
+  return null;
+}
+
+function isLightHex(hex) {
+  const n = parseInt(String(hex), 16);
+  if (!Number.isFinite(n)) return true;
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 160;
+}
+
+function themeFromRequestedColor(hex) {
+  const color = String(hex).replace(/^#/, '').toUpperCase();
+  const light = isLightHex(color);
+  const ink = light ? '1C1917' : 'F8FAFC';
+  const muted = light ? '57534E' : 'E2E8F0';
+  const surface = light ? 'FFFFFF' : color;
+  return {
+    id: `user-color:${color}`,
+    label: 'Color pedido',
+    description: `Paleta generada desde el color #${color} pedido por el usuario.`,
+    fonts: { display: 'Aptos Display', body: 'Aptos' },
+    palette: {
+      bg: color,
+      surface,
+      surfaceAlt: surface,
+      ink,
+      body: light ? '44403C' : 'E2E8F0',
+      muted,
+      line: light ? 'F9A8D4' : '334155',
+      accent: light ? 'BE185D' : 'F9A8D4',
+      accent2: color,
+      chipLine: light ? 'FBCFE8' : '4C1D95',
+      coverBg: color,
+      coverInk: ink,
+      coverMuted: muted,
+      sectionBg: color,
+      sectionInk: ink,
+      sectionMuted: muted,
+      inverse: light ? 'FFFFFF' : '0B1220',
+    },
+    chartColors: [color, 'BE185D', 'F472B6', '9D174D', 'FBCFE8'],
+    coverStyle: light ? 'light' : 'dark',
+    eyebrow: 'PRESENTACIÓN',
+  };
+}
+
+function pickPptxTheme({ template = '', prompt = '', themeId = null } = {}) {
+  const text = String(prompt || '');
+  const requestedHex = inferRequestedHex(text);
+  if (requestedHex) return themeFromRequestedColor(requestedHex);
+  const themeKey = String(themeId || '');
+  if (themeKey.startsWith('user-color:')) {
+    const hex = themeKey.slice('user-color:'.length);
+    if (/^[0-9A-Fa-f]{6}$/.test(hex)) return themeFromRequestedColor(hex);
+  }
+  if (themeId && THEMES[themeId]) return THEMES[themeId];
   for (const rule of PROMPT_THEME_RULES) {
     if (rule.re.test(text)) return THEMES[rule.theme];
   }
@@ -243,6 +331,8 @@ module.exports = {
   pickPptxTheme,
   listPptxThemes,
   pickChartType,
+  inferRequestedHex,
+  themeFromRequestedColor,
   // exported for tests
   looksTemporal,
   sumsToHundred,

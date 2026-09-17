@@ -33,6 +33,7 @@ import { expect, test } from "@playwright/test"
  */
 
 const ROUTES_TO_SMOKE = [
+  "/agentes",
   "/admin",
   "/auth",
   "/billing",

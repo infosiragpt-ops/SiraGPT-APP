@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient as api } from '@/lib/api'
 import { cancelTask, resolveApproval } from '@/lib/agent-task-service'
+import { serializeBranchedMessageMetadata } from '@/lib/chat/branch-metadata'
 import {
   authenticatedFetch,
   clearAuthenticatedFetchCsrfCache,
@@ -36,6 +37,35 @@ function sseResponse(content = 'done') {
     headers: new Headers(),
     body,
   }
+}
+
+function sseEvents(events: Array<Record<string, unknown>>) {
+  const encoder = new TextEncoder()
+  const payload = `${events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload))
+      controller.close()
+    },
+  })
+
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body,
+  }
+}
+
+function rawSseResponse(payload: string, headers: Headers = new Headers()) {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload))
+      controller.close()
+    },
+  })
+  return { ok: true, status: 200, headers, body }
 }
 
 function jsonError(status: number, payload: Record<string, unknown>) {
@@ -96,6 +126,115 @@ describe('generateAIStream cookie session CSRF transport', () => {
     expect(headers.has('Authorization')).toBe(false)
   })
 
+  it('delivers replacement frames through onReplace without appending them', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-replace')
+    mockFetch.mockResolvedValueOnce(sseEvents([
+      { content: 'respuesta parcial' },
+      { replace: true, content: 'respuesta saneada' },
+    ]))
+    const chunks: string[] = []
+    const replacements: string[] = []
+    const onClose = vi.fn()
+    const onError = vi.fn()
+
+    await api.generateAIStream(
+      streamData,
+      chunk => chunks.push(chunk),
+      onClose,
+      onError,
+      undefined,
+      { onReplace: content => replacements.push(content) },
+    )
+
+    expect(chunks.join('')).toBe('respuesta parcial')
+    expect(replacements).toEqual(['respuesta saneada'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('delivers duplicate_turn_replay tokens even when onReplace is present', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-replay')
+    mockFetch.mockResolvedValueOnce(sseEvents([
+      { type: 'duplicate_turn_replay', replace: true, content: 'Hola, ¿cómo estás?' },
+    ]))
+    const chunks: string[] = []
+    const replacements: string[] = []
+
+    await api.generateAIStream(
+      streamData,
+      chunk => chunks.push(chunk),
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      { onReplace: content => replacements.push(content) },
+    )
+
+    expect(replacements).toEqual(['Hola, ¿cómo estás?'])
+    expect(chunks.join('')).toBe('Hola, ¿cómo estás?')
+  })
+
+  it('flushes the buffered tail and does not close after a terminal SSE error', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-error')
+    mockFetch.mockResolvedValueOnce(rawSseResponse(
+      `data: ${JSON.stringify({ content: 'tail before failure' })}\n\n`
+        + `data: ${JSON.stringify({ type: 'error', error: 'upstream failed' })}\n\n`
+        + 'data: [DONE]\n\n',
+    ))
+
+    const { chunks, onClose, onError } = await runStream()
+
+    expect(chunks.join('')).toBe('tail before failure')
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0][0].message).toContain('upstream failed')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('captures the stream cursor and resumes after a mid-stream drop without duplicating content', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-resume')
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'X-Stream-Id': 'owned-cursor' }),
+        body: {
+          getReader: () => {
+            let readCount = 0
+            return {
+              read: async () => {
+                readCount += 1
+                if (readCount === 1) {
+                  return {
+                    done: false,
+                    value: new TextEncoder().encode('id: owned-cursor:1\ndata: {"content":"first\\n"}\n\n'),
+                  }
+                }
+                throw new TypeError('socket dropped')
+              },
+              cancel: vi.fn(),
+            }
+          },
+        },
+      })
+      .mockResolvedValueOnce(rawSseResponse(
+        'id: owned-cursor:2\ndata: {"content":"second\\n"}\n\ndata: [DONE]\n\n',
+        new Headers({ 'X-Stream-Id': 'owned-cursor' }),
+      ))
+
+    const streamPromise = runStream()
+    await vi.runAllTimersAsync()
+    const { chunks, onClose, onError } = await streamPromise
+
+    expect(chunks).toEqual(['first\n', 'second\n'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const firstHeaders = new Headers(mockFetch.mock.calls[0][1].headers)
+    const secondHeaders = new Headers(mockFetch.mock.calls[1][1].headers)
+    expect(firstHeaders.has('Last-Event-ID')).toBe(false)
+    expect(secondHeaders.get('Last-Event-ID')).toBe('owned-cursor:1')
+  })
+
   it('prepares cookie credentials and CSRF again before a transport reconnect', async () => {
     vi.useFakeTimers()
     const ensureCsrf = vi.fn().mockResolvedValue('csrf-reconnect')
@@ -117,6 +256,44 @@ describe('generateAIStream cookie session CSRF transport', () => {
       expect(options.credentials).toBe('include')
       expect(new Headers(options.headers).get('X-CSRF-Token')).toBe('csrf-reconnect')
     }
+  })
+
+  it('retries a 409 only when the server explicitly marks the turn retryable', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-turn-retry')
+    mockFetch
+      .mockResolvedValueOnce(jsonError(409, {
+        error: 'turn_in_progress',
+        code: 'turn_in_progress',
+        retryable: true,
+      }))
+      .mockResolvedValueOnce(sseResponse('owner replay'))
+
+    const streamPromise = runStream()
+    await vi.runAllTimersAsync()
+    const { chunks, onClose, onError } = await streamPromise
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(chunks).toEqual(['owner replay'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a payload-mismatch 409', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-turn-conflict')
+    mockFetch.mockResolvedValueOnce(jsonError(409, {
+      error: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+      code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
+      retryable: false,
+    }))
+
+    const { chunks, onClose, onError } = await runStream()
+
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(chunks).toEqual([])
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0][0].message).toContain('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD')
   })
 
   it('force-refreshes csrf_invalid once without consuming the provider retry budget', async () => {
@@ -273,6 +450,87 @@ describe('generateAIStream cookie session CSRF transport', () => {
       expect(options.credentials).toBe('include')
       expect(headers.get('X-CSRF-Token')).toBe('csrf-control')
     }
+  })
+
+  it('mirrors chat body and metadata turn identities into the Idempotency-Key header', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-idempotency')
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ chat: { id: 'chat-1' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { id: 'message-1' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await api.createChat({ title: 'Chat', model: 'model-a', idempotencyKey: 'create-turn-1' })
+    await api.addMessage('chat-1', {
+      role: 'USER',
+      content: 'hola',
+      metadata: JSON.stringify({ idempotencyKey: 'message-turn-1' }),
+    })
+
+    expect(new Headers(mockFetch.mock.calls[0][1].headers).get('Idempotency-Key')).toBe('create-turn-1')
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).get('Idempotency-Key')).toBe('message-turn-1')
+  })
+
+  it('copies a branched USER/ASSISTANT pair with clean metadata and a fresh identity per row', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-branch')
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { id: 'branched-user' } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: { id: 'branched-assistant' } }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    const originalTurnIdentity = {
+      idempotencyKey: 'source-turn',
+      idempotencyRequestHash: 'source-hash',
+      streamId: 'source-stream',
+      turnFingerprint: 'source-fingerprint',
+    }
+    await api.addMessage('branched-chat', {
+      role: 'USER',
+      content: 'pregunta',
+      metadata: serializeBranchedMessageMetadata(JSON.stringify({
+        ...originalTurnIdentity,
+        origin: 'user-copy',
+      })),
+    })
+    await api.addMessage('branched-chat', {
+      role: 'ASSISTANT',
+      content: 'respuesta',
+      metadata: serializeBranchedMessageMetadata({
+        ...originalTurnIdentity,
+        origin: 'assistant-copy',
+      }),
+    })
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const requestKeys = mockFetch.mock.calls.map(([, options]) => (
+      new Headers(options.headers).get('Idempotency-Key')
+    ))
+    expect(requestKeys[0]).toBeTruthy()
+    expect(requestKeys[1]).toBeTruthy()
+    expect(requestKeys[0]).not.toBe('source-turn')
+    expect(requestKeys[1]).not.toBe('source-turn')
+    expect(requestKeys[0]).not.toBe(requestKeys[1])
+
+    const bodies = mockFetch.mock.calls.map(([, options]) => JSON.parse(String(options.body)))
+    expect(bodies.map((body) => body.role)).toEqual(['USER', 'ASSISTANT'])
+    for (const body of bodies) {
+      const metadata = JSON.parse(body.metadata)
+      expect(metadata).not.toHaveProperty('idempotencyKey')
+      expect(metadata).not.toHaveProperty('idempotencyRequestHash')
+      expect(metadata).not.toHaveProperty('streamId')
+      expect(metadata).not.toHaveProperty('turnFingerprint')
+    }
+    expect(JSON.parse(bodies[0].metadata)).toMatchObject({ origin: 'user-copy' })
+    expect(JSON.parse(bodies[1].metadata)).toMatchObject({ origin: 'assistant-copy' })
   })
 
   it('protects standalone agent cancel and approval transports for cookie sessions', async () => {

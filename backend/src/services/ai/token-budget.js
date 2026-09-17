@@ -105,7 +105,14 @@ function contextWindowFor(model) {
     const bare = normalized.includes('/') ? normalized.split('/').pop() : normalized;
     const direct = CONTEXT_WINDOWS[model] || CONTEXT_WINDOWS[normalized] || CONTEXT_WINDOWS[bare];
     if (direct) return direct;
-    // family heuristic
+    // Single source of truth with the route-level fit (context-window.js):
+    // the preflight used to keep a second, smaller table and 413'd turns
+    // the fit had already trimmed to size.
+    try {
+        const { getContextLimit } = require('../context-window');
+        const shared = getContextLimit(raw);
+        if (Number.isFinite(shared) && shared > 0) return shared;
+    } catch { /* fall through to the legacy heuristic */ }
     const m = bare;
     if (m.startsWith('gpt-4')) return 128_000;
     if (m.startsWith('gpt-')) return 16_000;

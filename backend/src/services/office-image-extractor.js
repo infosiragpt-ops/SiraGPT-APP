@@ -16,6 +16,8 @@
 
 const fsp = require('fs').promises;
 const PizZip = require('pizzip');
+const { pMap } = require('../utils/p-map');
+const { officeImageOcrConcurrency } = require('./document-extract-fastpath');
 
 const MEDIA_DIR_RE = /^(word|ppt|xl)\/media\//i;
 // Formats sharp/tesseract can actually decode. EMF/WMF (Windows metafiles,
@@ -110,24 +112,24 @@ async function listEmbeddedImages(filePath, opts = {}) {
 async function extractImagesText(filePath, opts = {}) {
   const engine = opts.ocrEngine || require('./ocr-engine');
   const { images, total, skipped } = await listEmbeddedImages(filePath, opts);
-  const results = [];
-  for (const image of images) {
+  const concurrency = opts.concurrency || officeImageOcrConcurrency();
+  const results = await pMap(images, async (image) => {
     try {
       const res = await engine.extractFromImage(image.buffer, {
         mimeType: image.mimeType,
         allowVision: opts.allowVision,
       });
-      results.push({ name: image.name, path: image.path, bytes: image.bytes, text: res.text || '', ocr: res.ocr });
+      return { name: image.name, path: image.path, bytes: image.bytes, text: res.text || '', ocr: res.ocr };
     } catch (error) {
-      results.push({
+      return {
         name: image.name,
         path: image.path,
         bytes: image.bytes,
         text: '',
         ocr: { status: 'failed', reason: error?.message || 'image_ocr_failed' },
-      });
+      };
     }
-  }
+  }, { concurrency, stopOnError: false });
   return { results, total, skipped };
 }
 

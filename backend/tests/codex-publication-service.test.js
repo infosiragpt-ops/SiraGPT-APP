@@ -76,6 +76,13 @@ function fixture(t) {
 
 test('publishProject builds the exact checkpoint and atomically exposes an immutable release', async (t) => {
   const f = fixture(t);
+  f.state.project.brief = {
+    companyResources: {
+      assignments: { 'connector:gmail': 'marketing' },
+      pinned: ['connector:gmail'],
+      revision: 3,
+    },
+  };
   const result = await publishProject({
     prisma: f.prisma,
     userId: 'u1',
@@ -91,6 +98,11 @@ test('publishProject builds the exact checkpoint and atomically exposes an immut
   assert.equal(fs.lstatSync(live).isSymbolicLink(), true);
   assert.equal(fs.readFileSync(path.join(live, 'index.html'), 'utf8'), '<main>version one</main>');
   assert.equal(f.state.project.brief.publication.currentReleaseId, 'a'.repeat(40));
+  assert.deepEqual(f.state.project.brief.companyResources, {
+    assignments: { 'connector:gmail': 'marketing' },
+    pinned: ['connector:gmail'],
+    revision: 3,
+  });
 });
 
 test('publishing refuses a workspace whose HEAD differs from the selected checkpoint', async (t) => {
@@ -119,6 +131,11 @@ test('rollback re-promotes a prior immutable bundle without rebuilding', async (
     runner: f.runner,
     env: f.env,
   });
+  f.state.project.brief.companyResources = {
+    assignments: { 'connector:google_drive': 'product-engineering' },
+    pinned: [],
+    revision: 7,
+  };
 
   f.state.checkpoint = { id: 'cp2', projectId: 'p1', commitSha: 'b'.repeat(40), createdAt: new Date() };
   f.setHead(f.state.checkpoint.commitSha);
@@ -142,6 +159,11 @@ test('rollback re-promotes a prior immutable bundle without rebuilding', async (
     env: f.env,
   });
   assert.equal(fs.readFileSync(path.join(live, 'index.html'), 'utf8'), '<main>version one</main>');
+  assert.deepEqual(f.state.project.brief.companyResources, {
+    assignments: { 'connector:google_drive': 'product-engineering' },
+    pinned: [],
+    revision: 7,
+  });
 });
 
 test('copyBundle rejects symlinks in a generated bundle', async (t) => {

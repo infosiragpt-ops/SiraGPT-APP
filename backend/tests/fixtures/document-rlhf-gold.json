@@ -1,0 +1,22 @@
+[
+  {"id":"g01","prompt":"resume este documento","file":{"name":"tesis.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g02","prompt":"analiza el PDF adjunto","file":{"name":"articulo.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g03","prompt":"explica de que trata el archivo","file":{"name":"informe.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g04","prompt":"identifica el objetivo del estudio","file":{"name":"tesis.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g05","prompt":"extrae los resultados principales","file":{"name":"resultados.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g06","prompt":"dime las conclusiones","file":{"name":"paper.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g07","prompt":"cual es el metodo de investigacion","file":{"name":"capitulo.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g08","prompt":"cita este documento en APA 7","file":{"name":"fuente.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g09","prompt":"haz una sintesis critica del PDF","file":{"name":"revision.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g10","prompt":"interpreta los hallazgos","file":{"name":"hallazgos.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g11","prompt":"identifica limitaciones del estudio","file":{"name":"tesis.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g12","prompt":"dame una evaluacion academica","file":{"name":"tesis.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g13","prompt":"explica los resultados de la tabla","file":{"name":"notas.txt","mimeType":"text/plain"},"expectAgent":"document"},
+  {"id":"g14","prompt":"suma el total de norte y sur","file":{"name":"ventas.xlsx","mimeType":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},"expectAgent":"document"},
+  {"id":"g15","prompt":"calcula el promedio trimestral de sur","file":{"name":"trimestres.xlsx","mimeType":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},"expectAgent":"document"},
+  {"id":"g16","prompt":"cual es el valor del marcador de la hoja","file":{"name":"hoja.xlsx","mimeType":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},"expectAgent":"document"},
+  {"id":"g17","prompt":"del contrato dime el proveedor y del informe el uptime","file":{"name":"contrato.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g18","prompt":"cual es el importe del contrato","file":{"name":"contrato.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"},
+  {"id":"g19","prompt":"cuantas recomendaciones principales lista el informe","file":{"name":"informe.pdf","mimeType":"application/pdf"},"expectAgent":"document"},
+  {"id":"g20","prompt":"resume la metodologia y resultados","file":{"name":"capitulos.docx","mimeType":"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},"expectAgent":"document"}
+]

@@ -1,0 +1,400 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const LOOP_PATH = path.join(__dirname, '..', 'src', 'services', 'agent-runner', 'loop.js');
+const AI_PATH = path.join(__dirname, '..', 'src', 'routes', 'ai.js');
+const {
+  runAgentLoop,
+  classifyLoopError,
+  compactMessagesInPlace,
+  MAX_CONSECUTIVE_REPAIR_FAILS,
+} = require('../src/services/agent-runner/loop');
+const ad = require('../src/services/agent-runner/engine-adapter');
+
+function scriptedClient(script) {
+  let i = 0;
+  return {
+    chat: {
+      completions: {
+        create: async ({ messages } = {}) => {
+          if (i >= script.length) throw new Error('scripted client exhausted');
+          const turn = script[i++];
+          if (typeof turn.onCreate === 'function') turn.onCreate({ messages });
+          if (turn.rawCalls) {
+            return {
+              choices: [{
+                message: {
+                  content: turn.content || null,
+                  tool_calls: turn.rawCalls.map((c, idx) => ({
+                    id: c.id || `call_${i}_${idx}`,
+                    type: 'function',
+                    function: { name: c.name, arguments: c.arguments },
+                  })),
+                },
+              }],
+            };
+          }
+          if (turn.toolCalls) {
+            return {
+              choices: [{
+                message: {
+                  content: turn.content || null,
+                  tool_calls: turn.toolCalls.map((c, idx) => ({
+                    id: `call_${i}_${idx}`,
+                    type: 'function',
+                    function: { name: c.name, arguments: JSON.stringify(c.args || {}) },
+                  })),
+                },
+              }],
+            };
+          }
+          return { choices: [{ message: { content: turn.content || 'ok' } }] };
+        },
+      },
+    },
+  };
+}
+
+test('hot-path source wires live #388 helper names (3H60 overlay may coexist)', () => {
+  const loopSrc = fs.readFileSync(LOOP_PATH, 'utf8');
+  const aiSrc = fs.readFileSync(AI_PATH, 'utf8');
+  assert.match(loopSrc, /retryToolWithBackoff/);
+  assert.match(loopSrc, /isRetryableToolFailure/);
+  assert.match(loopSrc, /compactUntilTokenBudget/);
+  assert.match(loopSrc, /anchorCriticalFacts/);
+  assert.match(loopSrc, /compactPreserveFactAnchors/);
+  assert.match(loopSrc, /repairTruncatedJson/);
+  assert.match(loopSrc, /checkpointHookBeforeMutatingTool/);
+  assert.match(loopSrc, /rollbackHookOnTimedOutWrite/);
+  assert.match(loopSrc, /skipCheckpointIfUnchanged/);
+  assert.match(loopSrc, /sandboxTimeoutThenCleanup/);
+  assert.match(loopSrc, /sandboxReapOrphanWorkdirs/);
+  assert.match(loopSrc, /validateWriteThenRevertClosed/);
+  assert.match(loopSrc, /recoverPgvectorPinsClosed/);
+  assert.match(loopSrc, /retrieveMemoryBeforeGenerateClosed/);
+  assert.match(loopSrc, /retrieveMemoryForLoop/);
+  assert.match(loopSrc, /pgvectorMemoryQueryTimeout/);
+  assert.match(loopSrc, /recordFirstTokenLatencySampleP95/);
+  assert.match(loopSrc, /observeFirstToken/);
+  assert.match(loopSrc, /settleLedgerOnErrorClosed/);
+  assert.match(loopSrc, /abortNestedSubagentsOnParentHalt/);
+  assert.match(loopSrc, /inheritSubagentSteps/);
+  assert.match(loopSrc, /minRemainingSubagentBudget1/);
+  assert.match(loopSrc, /concatenateSplitToolCallFragments/);
+  assert.match(loopSrc, /dropIncompleteTrailingToolCall/);
+  assert.match(loopSrc, /refuseEditIfChecksumChangedSinceRead/);
+  assert.match(loopSrc, /refundPartialTokensOnCancel/);
+  assert.match(loopSrc, /abortIfFirstByteOver45s/);
+  assert.match(aiSrc, /startCommentHeartbeat/);
+  assert.match(aiSrc, /acquireFairGenerateLock/);
+  assert.match(aiSrc, /queueMaxWait60sThen503/);
+  assert.match(aiSrc, /dropDuplicateInFlightGenerate/);
+  assert.match(aiSrc, /rejectLastEventIdGoingBackwards/);
+  assert.match(aiSrc, /refundPartialTokensOnCancel/);
+  assert.match(aiSrc, /abortIfFirstByteOver45s/);
+  assert.match(aiSrc, /persistLastEventIdClosed/);
+  assert.match(aiSrc, /persistSseLastEventIdCursor/);
+  assert.match(aiSrc, /sira_last_event_id/);
+  assert.match(aiSrc, /retrieveMemoryForLoop/);
+  assert.match(aiSrc, /pgvectorMemoryQueryTimeout/);
+  assert.match(aiSrc, /recordFirstTokenLatencySampleP95/);
+  assert.match(aiSrc, /resumeGenerateFromPersistedIdClosed/);
+  assert.match(aiSrc, /honorLastEventId/);
+  assert.match(aiSrc, /inclusiveReplayStartFromRing/);
+  assert.match(aiSrc, /stopGenerateSseHeartbeat/);
+  assert.match(aiSrc, /sseCancelClearsHeartbeat/);
+  assert.match(aiSrc, /sseResumeDropsPriorListeners/);
+  assert.match(aiSrc, /sseResumeRejectsSeqPastHead/);
+  assert.match(loopSrc, /cancelIfThreeStreamStalls/);
+  assert.match(loopSrc, /enforceTotalTurnWall120s/);
+  assert.match(loopSrc, /remainingWallClockCut/);
+  assert.match(loopSrc, /compactKeepPinnedFactsAndLast3UserTurns/);
+  assert.match(loopSrc, /compactNeverDropSystemPrompt/);
+  assert.match(loopSrc, /crc32CheckOnCheckpointLoad/);
+  assert.match(loopSrc, /classifyToolFailure/);
+  assert.match(loopSrc, /sanitizeClientError/);
+  assert.match(aiSrc, /detectSseGap/);
+  assert.match(aiSrc, /destroySseOnClientClose/);
+  assert.match(aiSrc, /closeIfClientGone30s/);
+  assert.match(aiSrc, /flushLastSseEventBeforeClose/);
+  assert.match(aiSrc, /endSseWithErrorEventOnAbort/);
+  assert.match(aiSrc, /persistLatencyRingClosed/);
+  assert.match(loopSrc, /detectDagCycle/);
+  assert.match(loopSrc, /rejectToolCallCycleAtoBtoA/);
+  assert.match(loopSrc, /deadLetterSameToolAfterN/);
+  assert.match(loopSrc, /identicalObservationLoopCut/);
+  assert.match(loopSrc, /budgetHintEveryFiveSteps/);
+  assert.match(loopSrc, /remainingStepBudgetReminder/);
+  assert.match(loopSrc, /maxConcurrentSubagents/);
+  assert.match(loopSrc, /maxSubagentDepth/);
+  assert.match(loopSrc, /maxInflightToolsPerSession8/);
+  assert.match(loopSrc, /perToolRateLimit/);
+  assert.match(loopSrc, /capToolArgBytes/);
+  assert.match(loopSrc, /capToolArgBytes32KiB/);
+  assert.match(loopSrc, /enforceAdditionalPropertiesFalse/);
+  assert.match(loopSrc, /validateEnumArgs/);
+  assert.match(loopSrc, /validateToolResultShape/);
+  assert.match(loopSrc, /gzipToolResultOverSize/);
+  assert.match(loopSrc, /clampToolResultWithHash/);
+  assert.match(loopSrc, /redactSecretsInToolResult/);
+  assert.match(loopSrc, /redactAuthorizationBearerInToolResults/);
+  assert.match(loopSrc, /skipDuplicateWebFetchSameUrlTurn/);
+  assert.match(loopSrc, /rollbackLastFileEdit/);
+  assert.match(loopSrc, /rollbackLastNFileEdits/);
+  assert.match(loopSrc, /afterWriteTestHint/);
+  assert.match(loopSrc, /createIfMissingOrRefuseLargeOverwrite/);
+  assert.match(loopSrc, /patchContextLinesMustMatch/);
+  assert.match(loopSrc, /neverChargeIfCancelledBeforeFirstToken/);
+  assert.match(loopSrc, /mapDeepSeekHttpError/);
+  assert.match(loopSrc, /neverRetry402/);
+  assert.match(loopSrc, /neverRetry413/);
+  assert.match(aiSrc, /fairQueueStarvationBound/);
+  assert.match(aiSrc, /maxQueuedGenerate16/);
+  assert.match(aiSrc, /neverChargeIfCancelledBeforeFirstToken/);
+  assert.match(aiSrc, /skipHeartbeatIfWriteWouldBlock/);
+  assert.match(loopSrc, /coerceTrueFalseStringsToBool/);
+  assert.match(loopSrc, /coerceIntegerFromNumericString/);
+  assert.match(loopSrc, /repairEnumCaseInsensitive/);
+  assert.match(loopSrc, /repairMissingRequiredFromPriorTurn/);
+  assert.match(loopSrc, /repairSingleQuotesAndCommentsInToolJson/);
+  assert.match(loopSrc, /repairUnquotedKeysInToolJson/);
+  assert.match(loopSrc, /refuseWriteOver2MiB/);
+  assert.match(loopSrc, /refuseWriteThroughSymlink/);
+  assert.match(loopSrc, /refuseReadThroughSymlink/);
+  assert.match(loopSrc, /rejectSymlinkEscape/);
+  assert.match(loopSrc, /nfcPath/);
+  assert.match(loopSrc, /rejectNulInPath/);
+  assert.match(loopSrc, /rejectControlCharsInPaths/);
+  assert.match(loopSrc, /rejectUncAndWindowsPaths/);
+  assert.match(loopSrc, /memoryRetrieveDedupeByHash/);
+  assert.match(loopSrc, /sortMemoryHitsByScoreDesc/);
+  assert.match(loopSrc, /skipEmptyEmbeddingUpsert/);
+  assert.match(loopSrc, /skipMemoryIfVectorAllZeros/);
+  assert.match(loopSrc, /skipEmptyWhitespaceMemoryFacts/);
+  assert.match(loopSrc, /capMemoryHitsReturned8/);
+  assert.match(loopSrc, /emptyResponseRetryOnce/);
+  assert.match(loopSrc, /circuitBreakerEmptyModelTwice/);
+  assert.match(loopSrc, /allowParallelReads/);
+  assert.match(loopSrc, /maxToolsPerTurnHardCap/);
+  assert.match(loopSrc, /maxUniqueToolsPerTurn16/);
+  assert.match(loopSrc, /maxToolCallsPerMessage/);
+  assert.match(loopSrc, /formatReadWithLineNumbers/);
+  assert.match(loopSrc, /stripUtf8BomOnRead/);
+  assert.match(loopSrc, /sliceReadWindow/);
+  assert.match(loopSrc, /startBackgroundBash/);
+  assert.match(loopSrc, /resetBackgroundBash/);
+  assert.match(loopSrc, /idempotentSameCallIdInflight/);
+  assert.match(loopSrc, /rememberCallResult/);
+  assert.match(aiSrc, /closeSseThenSettleCredits/);
+  assert.match(aiSrc, /sessionLockTtl90s/);
+  assert.match(aiSrc, /stealLockIfHeartbeatExpired/);
+  assert.match(loopSrc, /rejectPrototypePollutionKeys/);
+  assert.match(loopSrc, /dropDuplicateToolCallIds/);
+  assert.match(loopSrc, /rejectToolNameStartingWithHyphen/);
+  assert.match(loopSrc, /rejectToolNameStartingWithDigit/);
+  assert.match(loopSrc, /rejectToolNameOutsideCharset/);
+  assert.match(loopSrc, /rejectToolNameWithWhitespace/);
+  assert.match(loopSrc, /rejectToolNameLongerThan64/);
+  assert.match(loopSrc, /capToolArgKeys32/);
+  assert.match(loopSrc, /rejectToolCallIfArgsIsArray/);
+  assert.match(loopSrc, /stripBidiOverrideChars/);
+  assert.match(loopSrc, /stripZeroWidthCharsFromArgs/);
+  assert.match(loopSrc, /dropNullBytesInToolArgs/);
+  assert.match(loopSrc, /stripTagCharsUPlusE0000/);
+  assert.match(loopSrc, /refuseWriteIfDestDirMissing/);
+  assert.match(loopSrc, /refuseWriteToEtcProcSys/);
+  assert.match(loopSrc, /refuseWriteToDevBoot/);
+  assert.match(loopSrc, /refuseWriteToRootMnt/);
+  assert.match(loopSrc, /refuseCheckpointOver1MiBUncompressed/);
+  assert.match(loopSrc, /capPlanTitle128Chars/);
+  assert.match(loopSrc, /refuseDuplicatePlanStepIds/);
+  assert.match(loopSrc, /refuseEmptyPlanTitle/);
+  assert.match(loopSrc, /capPlanSteps24/);
+  assert.match(loopSrc, /skipCompletedPlanStepsOnResume/);
+  assert.match(loopSrc, /stripAnsiFromSandboxOut/);
+  assert.match(loopSrc, /stderrByteCapPerCommand/);
+  assert.match(loopSrc, /stdoutByteCapPerCommand/);
+  assert.match(loopSrc, /combinedStdoutStderr96KiB/);
+  assert.match(loopSrc, /capStdoutLine8KiB/);
+  assert.match(loopSrc, /recordTokenUsageOnErrorPath/);
+  assert.match(loopSrc, /cancelDropsBufferedTokens/);
+  assert.match(aiSrc, /dropSseCommentFramesFromReplay/);
+  assert.match(aiSrc, /capReplayFrames64/);
+  assert.match(aiSrc, /dropSseEventsOlderThan2min/);
+  assert.match(aiSrc, /restoreLastSseIdOnResume/);
+  assert.match(aiSrc, /parseLastEventIdIntOnly/);
+  assert.match(aiSrc, /endSseWithEventDone/);
+});
+
+test('honorLastEventId default stays exclusive (3H32-S-002)', () => {
+  const out = ad.honorLastEventId('3', [{ seq: 2 }, { seq: 3 }, { seq: 4 }, { seq: 5 }]);
+  assert.equal(out.last, 3);
+  assert.equal(out.replay.length, 2);
+  assert.equal(out.replay[0].seq, 4);
+  assert.equal(out.inclusive, false);
+});
+
+test('honorLastEventId inclusive replay includes the Last-Event-ID seq', () => {
+  const ring = [{ seq: 2 }, { seq: 3 }, { seq: 4 }, { seq: 5 }];
+  const out = ad.honorLastEventId('3', ring, { inclusive: true });
+  assert.equal(out.last, 3);
+  assert.equal(out.inclusive, true);
+  assert.equal(out.replay.length, 3);
+  assert.equal(out.replay[0].seq, 3);
+  assert.equal(out.replay[2].seq, 5);
+});
+
+test('runAgentLoop retries ECONNRESET via retryToolWithBackoff then succeeds', async () => {
+  let attempts = 0;
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'list_files', args: { path: '.' } }] },
+    { content: 'Listo tras retry.' },
+  ]);
+  const result = await runAgentLoop({
+    client,
+    model: 'deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'lista' }],
+    tools: [],
+    executors: {
+      async list_files() {
+        attempts += 1;
+        if (attempts === 1) {
+          const err = new Error('socket hang up');
+          err.code = 'ECONNRESET';
+          throw err;
+        }
+        return '(ok)';
+      },
+    },
+    maxIterations: 5,
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.equal(attempts, 2);
+  assert.equal(result.steps[0].ok, true);
+  assert.match(result.finalText, /Listo/);
+});
+
+test('runAgentLoop stops fail-closed after transient retries exhaust', async () => {
+  let attempts = 0;
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'list_files', args: { path: '.' } }] },
+    { content: 'should-not-run' },
+  ]);
+  const result = await runAgentLoop({
+    client,
+    model: 'deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'lista' }],
+    tools: [],
+    executors: {
+      async list_files() {
+        attempts += 1;
+        const err = new Error('timeout');
+        err.code = 'ETIMEDOUT';
+        throw err;
+      },
+    },
+    maxIterations: 5,
+  });
+  assert.equal(result.stoppedReason, 'tool_retry_exhausted');
+  assert.equal(result.errorCode, 'tool_retry_exhausted');
+  assert.equal(attempts, 3);
+  assert.equal(classifyLoopError({ code: 'tool_retry_exhausted' }).retryable, false);
+});
+
+test('runAgentLoop re-invokes executor after repairTruncatedJson', async () => {
+  const seen = [];
+  const client = scriptedClient([
+    { rawCalls: [{ name: 'list_files', arguments: '{"path":"."' }] },
+    { content: 'Reparé args.' },
+  ]);
+  const result = await runAgentLoop({
+    client,
+    model: 'deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'lista' }],
+    tools: [],
+    executors: {
+      async list_files(args) {
+        seen.push(args);
+        return JSON.stringify(args);
+      },
+    },
+    maxIterations: 5,
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].path, '.');
+});
+
+test('runAgentLoop stops after max consecutive unrepairable tool args', async () => {
+  assert.equal(MAX_CONSECUTIVE_REPAIR_FAILS, 3);
+  let executed = 0;
+  const client = scriptedClient([
+    { rawCalls: [{ name: 'list_files', arguments: '%%%not-json' }] },
+    { rawCalls: [{ name: 'list_files', arguments: '%%%still-bad' }] },
+    { rawCalls: [{ name: 'list_files', arguments: '%%%again' }] },
+    { content: 'should-not-finalise' },
+  ]);
+  const result = await runAgentLoop({
+    client,
+    model: 'deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'lista' }],
+    tools: [],
+    executors: {
+      async list_files() {
+        executed += 1;
+        return 'should-not-run';
+      },
+    },
+    maxIterations: 8,
+  });
+  assert.equal(result.stoppedReason, 'tool_repair_exhausted');
+  assert.equal(result.errorCode, 'tool_repair_exhausted');
+  assert.equal(executed, 0);
+});
+
+test('compactUntilTokenBudget runs before callModel and keeps system + pins', async () => {
+  const messages = [
+    { role: 'system', content: 'SYSTEM_PIN_KEEP' },
+    { role: 'user', content: 'MUST: keep-this-anchor-xyz' },
+  ];
+  for (let i = 0; i < 40; i += 1) {
+    messages.push({ role: 'user', content: `blob-${i}- ${'x'.repeat(400)}` });
+  }
+  const before = messages.length;
+  let seenAtModel = 0;
+  const client = scriptedClient([
+    {
+      content: 'Compacté.',
+      onCreate({ messages: atModel }) {
+        seenAtModel = Array.isArray(atModel) ? atModel.length : 0;
+        assert.ok(atModel.some((m) => String(m.content).includes('SYSTEM_PIN_KEEP')));
+        assert.ok(atModel.some((m) => String(m.content).includes('keep-this-anchor-xyz')));
+      },
+    },
+  ]);
+  const result = await runAgentLoop({
+    client,
+    model: 'deepseek-v4-flash',
+    messages,
+    tools: [],
+    executors: {},
+    maxIterations: 2,
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.ok(seenAtModel > 0 && seenAtModel < before);
+  assert.ok(messages.some((m) => String(m && m.content).includes('SYSTEM_PIN_KEEP')));
+});
+
+test('compactMessagesInPlace no-ops when already under budget', () => {
+  const messages = [
+    { role: 'system', content: 'short' },
+    { role: 'user', content: 'hi' },
+  ];
+  const changed = compactMessagesInPlace(messages);
+  assert.equal(changed, false);
+  assert.equal(messages.length, 2);
+});

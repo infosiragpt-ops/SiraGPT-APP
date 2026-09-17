@@ -31,6 +31,7 @@ const NON_CANONICAL_PREFIXES = [
   "/billing",
   "/share",
   "/chat",
+  "/agentes",
   "/projects",
   "/settings",
   "/library",
@@ -87,7 +88,7 @@ export async function generateMetadata(): Promise<Metadata> {
       template: titleTemplate,
     },
     description,
-    keywords: ["IA", "ChatGPT", "Claude", "Gemini", "generación de imágenes", "asistente IA", "plataforma IA", "productividad"],
+    keywords: ["IA", "SiraGPT", "DeepSeek", "generación de imágenes", "asistente IA", "plataforma IA", "productividad"],
     authors: [{ name: "SiraGPT" }],
     creator: "SiraGPT",
     publisher: "SiraGPT",
@@ -263,7 +264,7 @@ export default async function RootLayout({
                   operatingSystem: "Web, iOS, Android",
                   url: "https://siragpt.com",
                   description:
-                    "ChatGPT, Claude, Gemini, Grok y más en una sola plataforma. Chatea, genera imágenes, analiza documentos, diseña prototipos e investiga con IA.",
+                    "Sira GPT: chat, código, documentos e investigación con IA propia. Chatea, genera archivos, diseña prototipos y trabaja con tu empresa de agentes.",
                   offers: {
                     "@type": "Offer",
                     price: "0",

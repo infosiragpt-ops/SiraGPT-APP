@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createSandboxClient } = require('./sandbox-provider');
+const { mutateProjectBrief } = require('./project-brief-store');
 
 const PROJECT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
@@ -203,12 +204,18 @@ async function loadOwnedProject(prisma, userId, projectId) {
 }
 
 async function writePublication(prisma, project, publication) {
-  const fresh = await prisma.codexProject.findUnique({ where: { id: project.id } }).catch(() => project);
-  const brief = asRecord(fresh?.brief);
-  await prisma.codexProject.update({
-    where: { id: project.id },
-    data: { brief: { ...brief, publication } },
+  const result = await mutateProjectBrief({
+    prisma,
+    projectId: project.id,
+    userId: project.userId,
+    mutate: (brief) => ({
+      ...brief,
+      publication,
+    }),
   });
+  if (!result) {
+    throw new PublicationError(404, 'project_not_found', 'Project not found');
+  }
   return publication;
 }
 

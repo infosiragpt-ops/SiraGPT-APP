@@ -25,11 +25,10 @@
 
 import * as React from "react"
 import {
-  FileText, FileSpreadsheet, Download, FileCode2,
-  Presentation as PresentationIcon, Code2, ChevronDown, ChevronUp,
+  Download, Code2, ChevronDown, ChevronUp,
   Eye, EyeOff} from "lucide-react"
 
-import { Button } from "@/components/ui/button"
+import { DOCUMENT_ACTION_CLASS, DOCUMENT_ACTION_ICON_CLASS, DOCUMENT_CARD_CLASS, DocumentArtifactIcon } from "./document-artifact-chrome"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { downloadUrlAsFile } from "@/lib/utils"
 import { toast } from "sonner"
@@ -52,15 +51,6 @@ interface DocFile {
   size?: number
   htmlPreview?: string | null    // server-rendered HTML for docx/xlsx
   pythonCode?: string
-}
-
-const FORMAT_META: Record<DocFile["format"], { label: string; accent: string; Icon: any }> = {
-  docx: { label: "Word",       accent: "bg-blue-50 text-blue-700 border-blue-200",           Icon: FileText },
-  xlsx: { label: "Excel",      accent: "bg-emerald-50 text-emerald-700 border-emerald-200",  Icon: FileSpreadsheet },
-  csv:  { label: "CSV",        accent: "bg-teal-50 text-teal-700 border-teal-200",           Icon: FileSpreadsheet },
-  pptx: { label: "PowerPoint", accent: "bg-orange-50 text-orange-700 border-orange-200",     Icon: PresentationIcon },
-  pdf:  { label: "PDF",        accent: "bg-red-50 text-red-700 border-red-200",              Icon: FileText },
-  svg:  { label: "SVG",        accent: "bg-violet-50 text-violet-700 border-violet-200",     Icon: FileCode2 },
 }
 
 function formatBytes(n?: number) {
@@ -91,7 +81,6 @@ function htmlPreviewDataUrl(html: string) {
 }
 
 function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?: (target: DocumentPreviewTarget) => void }) {
-  const meta = FORMAT_META[doc.format] || FORMAT_META.docx
   // Source for preview / download — prefer the auth-gated URL when
   // the pipeline hands one back, otherwise fall through to the
   // legacy data URL (backward compat with messages persisted before
@@ -145,7 +134,6 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
         credentials: "include",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       })
-      toast.success("Descarga iniciada")
     } catch (error) {
       console.error("[DocArtifactDisplay] download failed:", error)
       toast.error("No se pudo descargar el documento")
@@ -154,24 +142,20 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
     }
   }
 
-  const Icon = meta.Icon
+  const previewLabel = !onDocumentPreview && previewOpen ? "Ocultar documento" : "Ver documento"
   return (
-    <div className="overflow-hidden rounded-2xl border border-border/50 bg-background">
+    <div className={DOCUMENT_CARD_CLASS} data-testid="generated-document-card" aria-label={`Archivo: ${doc.filename}`} role="group">
       {/* Header card — always visible */}
       <div className="flex items-center gap-3 p-3">
-        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${meta.accent}`}>
-          <Icon className="h-5 w-5" strokeWidth={1.75} />
-        </div>
+        <DocumentArtifactIcon format={doc.format} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="truncate text-[14px] font-semibold text-foreground">
+          <div className="truncate text-sm font-semibold text-foreground" title={doc.title || doc.filename}>
             {doc.title || doc.filename}
           </div>
-          <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-            <span className={`inline-flex items-center rounded-full border px-1.5 py-[1px] text-[10.5px] font-medium uppercase tracking-wider ${meta.accent}`}>
-              {meta.label}
-            </span>
-            <span className="truncate">{doc.filename}</span>
-            {doc.size ? <span>· {formatBytes(doc.size)}</span> : null}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>{doc.format.toUpperCase()}</span>
+            {doc.size ? <span>{formatBytes(doc.size)}</span> : null}
+            {doc.title && doc.title !== doc.filename ? <span className="max-w-full truncate" title={doc.filename}>{doc.filename}</span> : null}
           </div>
           {doc.explanation && (
             <p className="mt-1.5 text-[12.5px] leading-snug text-muted-foreground/90">
@@ -181,30 +165,30 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {canPreview && (
-            <Button
-              variant="ghost" size="sm"
+            <button
+              type="button"
               onClick={preview}
-              className="h-8 px-2"
+              className={DOCUMENT_ACTION_CLASS}
+              title={`${previewLabel}: ${doc.filename}`}
+              aria-label={`${previewLabel}: ${doc.filename}`}
+              aria-expanded={!onDocumentPreview ? previewOpen : undefined}
             >
-              {!onDocumentPreview && previewOpen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              <span className="ml-1 hidden text-[11.5px] sm:inline">
-                {!onDocumentPreview && previewOpen ? "Ocultar" : "Vista previa"}
-              </span>
-            </Button>
+              {!onDocumentPreview && previewOpen ? <EyeOff className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" /> : <Eye className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />}
+            </button>
           )}
-          <Button
-            variant="default" size="sm"
+          <button
+            type="button"
             onClick={download}
             disabled={!available || isDownloading}
-            className="h-8"
+            className={DOCUMENT_ACTION_CLASS}
+            title={isDownloading ? "Descargando documento" : `Descargar ${doc.filename}`}
+            aria-label={`Descargar documento: ${doc.filename}`}
+            aria-busy={isDownloading}
           >
             {isDownloading
-              ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" />
-              : <Download className="h-3.5 w-3.5" />}
-            <span className="ml-1 hidden text-[11.5px] sm:inline">
-              {isDownloading ? "Descargando" : "Descargar"}
-            </span>
-          </Button>
+              ? <ThinkingIndicator size="sm" className="h-[18px] w-[18px]" />
+              : <Download className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />}
+          </button>
         </div>
       </div>
 

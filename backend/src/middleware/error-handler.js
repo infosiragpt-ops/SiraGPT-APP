@@ -5,6 +5,7 @@ const multer = require('multer');
 const { validationResult } = require('express-validator');
 const { logger: defaultLogger } = require('./logger');
 const { getRequestId } = require('./request-id');
+const { redactPreviewUrl } = require('../utils/preview-url-redaction');
 const { redactPayloadDeep } = require('../utils/log-redaction');
 const { redactErrorMessage } = require('../utils/secret-redactor');
 
@@ -24,7 +25,7 @@ function getRequestLogContext(req, statusCode, body = {}) {
     error: body?.error,
     message: body?.message,
     method: req.method,
-    path: req.originalUrl || req.url,
+    path: redactPreviewUrl(req.originalUrl || req.url),
     requestId: getRequestId(req),
   };
 }
@@ -314,7 +315,7 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
         ts: new Date().toISOString(),
         level: 'error',
         method: req.method || '',
-        path: (req.originalUrl || req.url || '').split('?')[0],
+        path: redactPreviewUrl((req.originalUrl || req.url || '').split('?')[0]),
         status: statusCode,
         reqId: reqId || '',
         errName: err && err.name ? String(err.name) : 'Error',
@@ -359,7 +360,7 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
 function notFoundHandler(req, res) {
   res.status(404).json({
     error: 'Route not found',
-    message: `Route not found: ${req.method} ${req.originalUrl || req.url}`,
+    message: `Route not found: ${req.method} ${redactPreviewUrl(req.originalUrl || req.url)}`,
     code: 'route_not_found',
   });
 }

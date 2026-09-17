@@ -9,8 +9,8 @@
 export const dynamic = "force-static"
 
 export const metadata = {
-  title: "Offline — Sira GPT",
-  description: "Estás sin conexión. Recupera Internet para volver a usar siraGPT.",
+  title: "Sin conexión — Sira GPT",
+  description: "Estás sin conexión. Recupera Internet para volver a usar Sira GPT.",
 }
 
 export default function OfflinePage() {
@@ -19,11 +19,9 @@ export default function OfflinePage() {
       <div className="max-w-md text-center">
         <h1 className="text-2xl font-semibold tracking-tight">Sin conexión</h1>
         <p className="mt-3 text-sm text-muted-foreground">
-          No podemos llegar a siraGPT ahora mismo. Comprueba tu conexión a Internet y vuelve a
-          intentarlo. Los chats no se pierden — se sincronizarán al volver online.
-        </p>
-        <p className="mt-2 text-xs text-muted-foreground">
-          You appear to be offline. Check your connection and try again.
+          No podemos llegar a Sira GPT ahora mismo. Comprueba tu conexión a Internet
+          y vuelve a intentarlo. Tus chats guardados en este dispositivo siguen aquí;
+          no hay sincronización automática al volver online.
         </p>
       </div>
     </main>

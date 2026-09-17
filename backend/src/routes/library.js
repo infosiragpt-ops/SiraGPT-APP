@@ -191,6 +191,7 @@ router.get('/media-library', authenticateToken, async (req, res) => {
                 }
                 if (!Array.isArray(files)) continue;
                 for (const file of files) {
+                    if (file?.deletedAt) continue;
                     if (!file || (file.type !== 'image' && file.type !== 'video')) continue;
                     if (filter && file.type !== filter) continue;
                     items.push({

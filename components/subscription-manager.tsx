@@ -24,9 +24,21 @@ import {
   X
 } from 'lucide-react'
 import { toast } from 'sonner'
+import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
 import { authenticatedFetch } from '@/lib/authenticated-fetch'
+import {
+  CONTACT_PLAN,
+  PAID_PLAN,
+  PRO_WHATSAPP_MESSAGE,
+  SALES_WHATSAPP_MESSAGE,
+  SUPPORT_FALLBACK_PATH,
+  buildWhatsAppHref,
+  describeCheckoutError,
+  planDisplayName,
+  resolveWhatsAppNumber,
+} from '@/lib/plans-catalog'
 import PlanChangeManager from './plan-change-manager'
 import AnalyticsDashboard from './analytics-dashboard'
 
@@ -48,18 +60,21 @@ export default function SubscriptionManager() {
   const [activeTab, setActiveTab] = useState('overview')
   const [upgradeLoading, setUpgradeLoading] = useState<string | null>(null)
 
-  // Start a real Stripe checkout for FREE users picking a paid plan. Mirrors
-  // the proven flow in components/UpgradeModal.tsx (createStripePayment →
-  // redirect to session.url; ENTERPRISE → WhatsApp). The "Mejora tu plan"
-  // buttons used to be inert (no onClick), which is why paying was impossible
-  // from the billing page even though the Stripe backend is live.
+  // Start a real Stripe checkout for FREE users picking Pro (same flow as
+  // /planes: createStripePayment → redirect to session.url). "Hablemos"
+  // opens WhatsApp. Only the two plans from lib/plans-catalog are offered.
+  const openWhatsAppOrSupport = (message: string) => {
+    const href = buildWhatsAppHref(resolveWhatsAppNumber(), message)
+    if (href) {
+      window.open(href, '_blank', 'noopener,noreferrer')
+    } else {
+      window.location.assign(SUPPORT_FALLBACK_PATH)
+    }
+  }
+
   const handleUpgrade = async (plan: string) => {
-    if (plan === 'ENTERPRISE') {
-      const whatsappNumber = process.env.NEXT_PUBLIC_WHATSAPP_NUMBER || ''
-      const message = encodeURIComponent(
-        'Hola 👋, me interesa el plan Enterprise de SiraGPT. ¿Podrían ayudarme?',
-      )
-      window.open(`https://wa.me/${whatsappNumber}?text=${message}`, '_blank', 'noopener,noreferrer')
+    if (plan === CONTACT_PLAN.code) {
+      openWhatsAppOrSupport(SALES_WHATSAPP_MESSAGE)
       return
     }
 
@@ -72,17 +87,17 @@ export default function SubscriptionManager() {
       // Hand off to Stripe Checkout.
       window.location.href = response.url
     } catch (err: any) {
-      const status = err?.status ?? err?.statusCode
-      const data = err?.errorData
-      if (status === 503 || /not configured/i.test(err?.message || '')) {
-        toast.error(
-          data?.message || 'El procesamiento de pagos aún no está disponible. Contacta a soporte.',
-          { duration: 6000 },
-        )
-      } else if (status === 401) {
-        toast.error('Tu sesión expiró — inicia sesión de nuevo.')
+      const info = describeCheckoutError(err)
+      if (info.kind === 'unavailable') {
+        const href = buildWhatsAppHref(info.whatsappNumber || resolveWhatsAppNumber(), PRO_WHATSAPP_MESSAGE)
+        toast.error(info.message, {
+          duration: 8000,
+          action: href
+            ? { label: 'Abrir WhatsApp', onClick: () => window.open(href, '_blank', 'noopener,noreferrer') }
+            : undefined,
+        })
       } else {
-        toast.error(err?.message || 'No pudimos iniciar el pago. Inténtalo de nuevo.')
+        toast.error(info.message)
       }
     } finally {
       setUpgradeLoading(null)
@@ -119,22 +134,29 @@ export default function SubscriptionManager() {
     PRO_MAX: {
       color: 'from-purple-500 to-pink-500',
       icon: Sparkles,
-      limit: 'Todo Pro con experiencia ampliada',
-      price: 10,
-      priceLabel: '$10',
+      limit: PAID_PLAN.tagline,
+      price: PAID_PLAN.priceUsd,
+      priceLabel: `$${PAID_PLAN.priceUsd}`,
       billingLabel: '/mes',
-      features: ['Todo lo de Pro', 'Más capacidad para trabajo frecuente', 'Prioridad superior']
+      features: [...PAID_PLAN.features]
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       icon: Zap,
-      limit: 'Solución personalizada para equipos',
+      limit: CONTACT_PLAN.tagline,
       price: Number.POSITIVE_INFINITY,
-      priceLabel: 'Enterprise',
+      priceLabel: CONTACT_PLAN.priceLabel,
       billingLabel: 'WhatsApp',
-      features: ['Acceso completo para equipos', 'Integraciones y seguridad', 'Acompañamiento directo']
+      features: [...CONTACT_PLAN.features]
     }
   }
+
+  // Only the two plans SiraGPT sells are offered for upgrade; PRO ($5) stays
+  // in planInfo so legacy subscribers still see their plan card.
+  const UPGRADE_OPTIONS: Array<{ code: 'PRO_MAX' | 'ENTERPRISE'; name: string; cta: string }> = [
+    { code: 'PRO_MAX', name: PAID_PLAN.name, cta: PAID_PLAN.cta },
+    { code: 'ENTERPRISE', name: CONTACT_PLAN.name, cta: CONTACT_PLAN.cta },
+  ]
 
   useEffect(() => {
     fetchSubscriptionData()
@@ -269,7 +291,7 @@ export default function SubscriptionManager() {
             <div className="flex items-center space-x-3">
               {currentPlanInfo?.icon && <currentPlanInfo.icon className="h-8 w-8" />}
               <div>
-                <CardTitle className="text-2xl">{currentPlan} Plan</CardTitle>
+                <CardTitle className="text-2xl">Plan {planDisplayName(currentPlan)}</CardTitle>
                 <CardDescription>
                   {subscriptionData?.status === 'active' ? 'Active subscription' : 
                    subscriptionData?.cancelAtPeriodEnd ? 'Canceling at period end' :
@@ -456,39 +478,49 @@ export default function SubscriptionManager() {
               Mejora tu plan
             </CardTitle>
             <CardDescription>
-              Accede a todo SiraGPT con una experiencia profesional y simple
+              Dos opciones, sin letra pequeña: Pro por {`$${PAID_PLAN.priceUsd}`}/mes o un plan a la medida de tu equipo.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 md:grid-cols-3">
-              {Object.entries(planInfo).filter(([plan]) => plan !== 'FREE').map(([plan, info]) => (
-                <div key={plan} className="border rounded-lg p-4 relative">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <info.icon className="h-5 w-5" />
-                    <span className="font-semibold">{plan}</span>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              {UPGRADE_OPTIONS.map(({ code, name, cta }) => {
+                const info = planInfo[code]
+                const isContact = code === 'ENTERPRISE'
+                return (
+                  <div key={code} className="border rounded-lg p-4 relative">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <info.icon className="h-5 w-5" />
+                      <span className="font-semibold">{name}</span>
+                    </div>
+                    <p className="text-2xl font-bold mb-1">
+                      {info.priceLabel}
+                      {!isContact && <span className="text-sm font-normal"> {info.billingLabel}</span>}
+                    </p>
+                    <p className="text-sm text-muted-foreground mb-4">{info.limit}</p>
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      disabled={upgradeLoading !== null}
+                      onClick={() => handleUpgrade(code)}
+                    >
+                      {upgradeLoading === code ? (
+                        <>
+                          <ThinkingIndicator size="sm" className="mr-2" />
+                          Redirigiendo…
+                        </>
+                      ) : (
+                        cta
+                      )}
+                    </Button>
                   </div>
-                  <p className="text-2xl font-bold mb-1">{info.priceLabel}<span className="text-sm font-normal">{info.billingLabel ? ` ${info.billingLabel}` : ''}</span></p>
-                  <p className="text-sm text-muted-foreground mb-4">{info.limit}</p>
-                  <Button
-                    size="sm"
-                    className="w-full"
-                    disabled={upgradeLoading !== null}
-                    onClick={() => handleUpgrade(plan)}
-                  >
-                    {upgradeLoading === plan ? (
-                      <>
-                        <ThinkingIndicator size="sm" className="mr-2" />
-                        Redirigiendo…
-                      </>
-                    ) : plan === 'ENTERPRISE' ? (
-                      'Comunícate al WhatsApp'
-                    ) : (
-                      `Elegir ${info.priceLabel}`
-                    )}
-                  </Button>
-                </div>
-              ))}
+                )
+              })}
             </div>
+            <p className="text-sm text-muted-foreground">
+              <Link href="/planes" className="font-medium text-foreground underline underline-offset-4 hover:no-underline">
+                Ver los planes en detalle
+              </Link>
+            </p>
           </CardContent>
         </Card>
       )}

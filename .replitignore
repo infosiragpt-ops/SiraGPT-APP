@@ -3,3 +3,20 @@
 
 # No need to store the pnpm store twice.
 .local
+
+# Never upload local/generated dependency and build trees. Reserved VM runs its
+# own npm install before the custom build; uploading these paths makes that
+# install layer over stale pnpm/npm layouts and can exceed the 8 GiB image cap.
+node_modules
+backend/node_modules
+.next
+.cache
+.npm
+test-results
+.playwright-cli
+.test-dist
+output
+
+# Workspace-only duplicate project copies; the active application is the root.
+SiraGPT-APP
+siraGPT

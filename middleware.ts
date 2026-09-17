@@ -27,6 +27,13 @@ const SERVER_ACTION_ID_RE = /^[a-f0-9]{40}$/
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // /code is not a product surface. Computer + Empresas live on /agentes.
+  if (pathname === '/code' || pathname.startsWith('/code/')) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/agentes'
+    return applyFrameHeaders(pathname, NextResponse.redirect(url, 307))
+  }
+
   // Short-circuit bogus / stale Server Action POSTs before Next.js's
   // runtime turns them into a "Failed to find Server Action" error.
   const nextActionHeader = request.headers.get('next-action')

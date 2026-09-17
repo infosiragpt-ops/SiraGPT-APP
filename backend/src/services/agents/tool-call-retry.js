@@ -11,29 +11,35 @@
  * so the transient-vs-terminal decision stays consistent across the stack.
  *
  * Safety / design contract:
+ *   - Retries require an explicit, server-owned `retrySafe: true` policy.
+ *     Unknown or mutating tools are attempted once, even if a remote side
+ *     effect succeeds before the connection fails.
  *   - Only THROWN errors are eligible for retry, and only when the
  *     classifier marks them retryable (network/timeout/rate-limit). A
  *     deterministic tool response that *returns* `{ error: ... }`
  *     (e.g. invalid_url, missing query, "not your session") is the tool's
  *     intentional answer and is passed straight through — never retried.
- *   - This keeps the wrapper side-effect-safe: the live tools that could
- *     mutate state (browser_click/type) fail closed by *returning*
- *     `{ ok:false }` rather than throwing, so they are never re-run.
+ *   - Stop prevents dispatch/retry and interrupts backoff. An in-flight
+ *     handler receives the original ctx.signal and must cooperate with it:
+ *     rejecting a Promise alone cannot undo a remote side effect.
  *   - Transparent on the happy path: a handler that succeeds on the first
  *     try sees zero behavioural change.
  *   - `sleep` is injectable so tests run with no real delay.
  */
 
 const { classifyTaskError } = require('../../utils/task-error-classifier');
+const { throwIfAborted, isAbortError } = require('../../utils/abort-signal');
+const { sleep: sleepReal, normalizeDelay, safeClassify } = require('../../utils/retry-with-backoff');
+
+const HARD_MAX_RETRIES = 3;
+const HARD_MAX_DELAY_MS = 30_000;
 
 const DEFAULT_MAX_RETRIES = (() => {
   const n = Number.parseInt(process.env.SIRAGPT_TOOL_CALL_MAX_RETRIES || '', 10);
-  return Number.isFinite(n) && n >= 0 ? n : 1;
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, HARD_MAX_RETRIES) : 1;
 })();
 const DEFAULT_BASE_DELAY_MS = 250;
 const DEFAULT_MAX_DELAY_MS = 8_000;
-
-const sleepReal = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function computeBackoff(attempt, baseMs, maxMs) {
   const exp = Math.min(maxMs, baseMs * 2 ** Math.max(0, attempt - 1));
@@ -48,9 +54,10 @@ function computeBackoff(attempt, baseMs, maxMs) {
  * @param {any} args
  * @param {any} ctx
  * @param {object} [opts]
- * @param {number} [opts.maxRetries]   extra attempts after the first (default 1, env SIRAGPT_TOOL_CALL_MAX_RETRIES)
+ * @param {boolean} [opts.retrySafe=false] trusted local policy; never infer from remote tool annotations
+ * @param {number} [opts.maxRetries]   extra attempts after the first (default 1, hard cap 3)
  * @param {(err:any) => {retryable:boolean, reason?:string, ttlMs?:number}} [opts.classify]
- * @param {(ms:number) => Promise<void>} [opts.sleep]
+ * @param {(ms:number, signal?:AbortSignal) => Promise<void>} [opts.sleep] injected sleepers must honor cancellation
  * @param {number} [opts.baseDelayMs]
  * @param {number} [opts.maxDelayMs]
  * @param {(info:object) => void} [opts.onRetry]
@@ -61,30 +68,45 @@ async function runToolWithRetry(handler, args, ctx, opts = {}) {
   if (typeof handler !== 'function') {
     throw new TypeError('runToolWithRetry: handler must be a function');
   }
-  const maxRetries = Number.isFinite(opts.maxRetries) ? Math.max(0, Math.floor(opts.maxRetries)) : DEFAULT_MAX_RETRIES;
+  const configuredRetries = Number.isFinite(opts.maxRetries)
+    ? Math.min(HARD_MAX_RETRIES, Math.max(0, Math.floor(opts.maxRetries)))
+    : DEFAULT_MAX_RETRIES;
+  const maxRetries = opts.retrySafe === true ? configuredRetries : 0;
   const classify = typeof opts.classify === 'function' ? opts.classify : classifyTaskError;
   const sleep = typeof opts.sleep === 'function' ? opts.sleep : sleepReal;
-  const baseMs = Number.isFinite(opts.baseDelayMs) ? opts.baseDelayMs : DEFAULT_BASE_DELAY_MS;
-  const maxMs = Number.isFinite(opts.maxDelayMs) ? opts.maxDelayMs : DEFAULT_MAX_DELAY_MS;
+  const baseMs = Math.min(HARD_MAX_DELAY_MS, normalizeDelay(opts.baseDelayMs, DEFAULT_BASE_DELAY_MS));
+  const maxMs = Math.min(HARD_MAX_DELAY_MS, normalizeDelay(opts.maxDelayMs, DEFAULT_MAX_DELAY_MS));
   const onRetry = typeof opts.onRetry === 'function' ? opts.onRetry : null;
   const label = opts.label || 'tool';
+  const signal = ctx?.signal;
 
   const maxAttempts = maxRetries + 1;
   let lastErr;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    throwIfAborted(signal);
     try {
       // eslint-disable-next-line no-await-in-loop
-      return await handler(args, ctx);
+      const result = await handler(args, ctx);
+      throwIfAborted(signal);
+      return result;
     } catch (err) {
+      throwIfAborted(signal);
       lastErr = err;
-      const verdict = classify(err) || { retryable: false };
-      if (!verdict.retryable || attempt >= maxAttempts) {
+      if (isAbortError(err) || err?.code === 'E_CANCELLED' || err?.code === 'ABORTED'
+        || err?.name === 'AbortedError' || attempt >= maxAttempts) {
+        throw err;
+      }
+      const verdict = safeClassify(classify, err);
+      if (verdict.retryable !== true) {
         throw err;
       }
       const delayMs = Number.isFinite(verdict.ttlMs) && verdict.ttlMs > 0
-        ? verdict.ttlMs
+        ? Math.ceil(verdict.ttlMs)
         : computeBackoff(attempt, baseMs, maxMs);
+      // Do not shorten a provider cooldown and retry prematurely. An
+      // excessive cooldown exhausts this small retry budget instead.
+      if (delayMs > HARD_MAX_DELAY_MS) throw err;
       if (onRetry) {
         try {
           onRetry({
@@ -99,8 +121,9 @@ async function runToolWithRetry(handler, args, ctx, opts = {}) {
           /* telemetry callback must never break the retry loop */
         }
       }
+      throwIfAborted(signal);
       // eslint-disable-next-line no-await-in-loop
-      await sleep(delayMs);
+      await sleep(delayMs, signal);
     }
   }
 
@@ -110,5 +133,5 @@ async function runToolWithRetry(handler, args, ctx, opts = {}) {
 
 module.exports = {
   runToolWithRetry,
-  _internal: { computeBackoff, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_DELAY_MS },
+  _internal: { computeBackoff, DEFAULT_MAX_RETRIES, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_DELAY_MS, HARD_MAX_RETRIES, HARD_MAX_DELAY_MS },
 };

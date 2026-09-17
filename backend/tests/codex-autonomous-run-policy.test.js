@@ -52,3 +52,27 @@ test('ordinary interactive runs preserve the current short budget', () => {
   assert.equal(resolved.verifyDevServer, false);
   assert.equal(policy.buildAutonomousRunEnv(env, resolved), env);
 });
+
+test('APPS mode marker forces deep multi-hour budget from a simple instruction', () => {
+  const run = {
+    prompt: policy.withAutoExecutePrompt(
+      `${policy.APPS_MODE_MARKER}\nCrea un software como ChatGPT`,
+    ),
+  };
+  const resolved = policy.deriveAutonomousRunPolicy({ run, env: {} });
+  assert.equal(resolved.autoExecute, true);
+  assert.equal(resolved.depth, 'deep');
+  assert.equal(resolved.timeoutMs, 4 * 60 * 60_000);
+  assert.equal(resolved.maxSteps, 120);
+  assert.equal(resolved.verifyDevServer, true);
+  assert.equal(policy.isAppsModePrompt(policy.stripAutoExecutePrompt(run.prompt)), true);
+});
+
+test('short product asks without APPS marker still escalate via deep keywords', () => {
+  const run = {
+    prompt: policy.withAutoExecutePrompt('haz un CRM completo'),
+  };
+  const resolved = policy.deriveAutonomousRunPolicy({ run, env: {} });
+  assert.equal(resolved.depth, 'deep');
+  assert.equal(resolved.maxSteps, 120);
+});

@@ -1,0 +1,244 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { editPlanSchema, type EditPlan, type InputFile, type ValidationReport } from '../types/contracts';
+import { DocumentValidationError } from './errors';
+import { assertInvocationLaunchable, cleanupInvocation, createInvocation, newValidatorInvocationId,
+  reconcileValidatorOrphans, validatorScope, validatorTimeout, type ValidatorInvocation, type ValidatorReconciliation } from './lifecycle';
+export { DocumentValidationError } from './errors';
+import { decodeValidatorResponse, type DecodedValidatorResponse, type DocumentInventory, type RecipeInventory } from './response-codec';
+export type { DocumentInventory, RecipeInventory } from './response-codec';
+
+const hash = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
+export interface ValidatorOptions {
+  /** Immutable image reference required; no implicit pull of a mutable latest tag. */
+  image: string;
+  runtime?: string;
+  dockerBinary?: string;
+  timeoutMs?: number;
+  /** Private directory mounted at the IDENTICAL absolute path in worker and Docker host. */
+  stagingRoot?: string;
+}
+export function validatorContainerArguments(name: string, inputDirectory: string, artifactDirectory: string, options: ValidatorOptions): string[] {
+  if (!/^(?:sha256:[a-f0-9]{64}|[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:[a-f0-9]{64})$/.test(options.image)) {
+    throw new DocumentValidationError('VALIDATOR_IMAGE_UNPINNED', 'La imagen del validador requiere un digest inmutable.');
+  }
+  if ([inputDirectory, artifactDirectory].some((directory) => !path.isAbsolute(directory) || /[\x00-\x1f\x7f,]/.test(directory))) {
+    throw new DocumentValidationError('VALIDATOR_PATH_INVALID', 'Ruta temporal no válida.');
+  }
+  const runtime = options.runtime ?? 'runsc';
+  if (runtime !== 'runsc') {
+    throw new DocumentValidationError('VALIDATOR_RUNTIME_UNSAFE', 'La validación documental requiere el runtime aislado runsc.');
+  }
+  return ['run', '--name', name, '--pull', 'never', '--runtime', runtime,
+    '--label', 'siragpt.role=doc-validation',
+    '--label', `siragpt.validation.scope=${validatorScope(path.dirname(path.dirname(inputDirectory)))}`,
+    '--label', `siragpt.validation.invocation=${name.replace(/^siragpt-doc-validator-/, '')}`,
+    '--network', 'none', '--read-only', '--user', '65532:65532', '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges', '--memory', '2g', '--cpus', '2', '--pids-limit', '256',
+    '--ulimit', 'nofile=256:256', '--ulimit', 'fsize=262144:262144',
+    '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=1g,uid=65532,gid=65532,mode=0700',
+    '--tmpfs', '/artifacts:rw,noexec,nosuid,nodev,size=32m,uid=65532,gid=65532,mode=0700',
+    '--mount', `type=bind,src=${inputDirectory},dst=/inputs,readonly`,
+    '--env', 'HOME=/tmp', '--env', 'LC_ALL=C.UTF-8', '--env', 'TZ=UTC',
+    '-i', options.image];
+}
+
+export async function createValidatorStagingDirectory(root?: string): Promise<string> {
+  if (root === undefined) {
+    const directory = path.join(await realpath(tmpdir()), `siragpt-validator-${newValidatorInvocationId()}`);
+    await mkdir(directory, { mode: 0o700 }); return directory;
+  }
+  if (!path.isAbsolute(root) || root === path.parse(root).root || /[\x00-\x1f\x7f,]/.test(root) || path.normalize(root) !== root) {
+    throw new DocumentValidationError('VALIDATOR_STAGING_INVALID', 'El staging debe ser una ruta absoluta privada y compartida con el host.');
+  }
+  const metadata = await Promise.all([lstat(root), realpath(root)]).catch(() => {
+    throw new DocumentValidationError('VALIDATOR_STAGING_UNAVAILABLE', 'No está disponible el staging privado del validador.');
+  });
+  const [stat, canonicalRoot] = metadata;
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 ||
+      (process.getuid && stat.uid !== process.getuid()) || canonicalRoot !== root) {
+    throw new DocumentValidationError('VALIDATOR_STAGING_UNSAFE', 'El staging debe pertenecer al worker, sin enlaces ni acceso de otros usuarios.');
+  }
+  const directory = path.join(root, `siragpt-validator-${newValidatorInvocationId()}`);
+  await mkdir(directory, { mode: 0o700 }); return directory;
+}
+
+async function runContainer(args: string[], input: unknown, options: ValidatorOptions, invocation: ValidatorInvocation, signal?: AbortSignal): Promise<unknown> {
+  const binary = options.dockerBinary ?? 'docker';
+  let launchSettled = true;
+  try {
+    if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
+    await assertInvocationLaunchable(invocation, undefined, signal);
+    // Abort events are not replayed for the listener installed below. Recheck
+    // after the filesystem await and its continuation, before starting Docker.
+    if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
+    const timeoutMs = Math.max(1, Math.min(validatorTimeout(options), invocation.deadlineAt - Date.now()));
+    return await new Promise<unknown>((resolve, reject) => {
+      launchSettled = false;
+      const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH } });
+      const chunks: Buffer[] = [];
+      let size = 0;
+      let finished = false;
+      const fail = (code: string, message: string): void => {
+        if (finished) return;
+        finished = true;
+        child.kill('SIGKILL');
+        reject(new DocumentValidationError(code, message));
+      };
+      const abort = (): void => fail('E_CANCELLED', 'Validación cancelada.');
+      const timer = setTimeout(() => fail('VALIDATOR_TIMEOUT', 'El validador superó su límite de tiempo.'), timeoutMs);
+      signal?.addEventListener('abort', abort, { once: true });
+      child.stdout.on('data', (data: Buffer) => {
+        size += data.length;
+        if (size > 32 * 1024 * 1024) { fail('VALIDATOR_OUTPUT_LIMIT', 'La salida del validador excedió el límite.'); return; }
+        chunks.push(data);
+      });
+      // Tool output may include document text. Drain it, never forward to logs.
+      child.stderr.on('data', () => undefined);
+      child.once('error', () => fail('VALIDATOR_UNAVAILABLE', 'No está disponible el ejecutor aislado de validación.'));
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        if (finished) return;
+        finished = true;
+        launchSettled = true;
+        if (code !== 0) { reject(new DocumentValidationError('VALIDATOR_RUNTIME_FAILED', 'El contenedor validador no terminó correctamente.')); return; }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown); }
+        catch { reject(new DocumentValidationError('VALIDATOR_INVALID_RESPONSE', 'El validador devolvió una respuesta inválida.')); }
+      });
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(JSON.stringify(input));
+    });
+  } finally {
+    // A killed client can leave creation uncertain. Quarantine the bind source,
+    // verify the exact container identity, and retain evidence until quiescence.
+    if (!await cleanupInvocation(invocation, options, launchSettled)) {
+      throw new DocumentValidationError('VALIDATOR_CLEANUP_PENDING', 'La limpieza del validador sigue pendiente de confirmación.');
+    }
+  }
+}
+
+export function freezePlan(inputs: InputFile[], inventories: DocumentInventory[], candidate: unknown): EditPlan {
+  const plan = editPlanSchema.parse(candidate);
+  if (!inputs.length || plan.outputName !== inputs[0]!.name ||
+      Object.keys(plan.inputHashes).length !== inputs.length || inventories.length !== inputs.length) {
+    throw new DocumentValidationError('PLAN_INPUT_MISMATCH', 'El plan no identifica exactamente los archivos originales.');
+  }
+  for (const input of inputs) {
+    const inventory = inventories.find((value) => value.id === input.id);
+    if (!inventory || hash(input.data) !== input.sha256 || inventory.sha256 !== input.sha256 ||
+        plan.inputHashes[input.id] !== input.sha256 || inventory.name !== input.name || inventory.format !== input.format) {
+      throw new DocumentValidationError('PLAN_INPUT_MISMATCH', 'El plan no coincide con el inventario independiente.');
+    }
+  }
+  const locators = new Set<string>();
+  for (const edit of plan.edits) {
+    if (edit.kind === 'text' || edit.kind === 'cell') {
+      const inventory = inventories.find((value) => value.id === edit.inputId)!;
+      if (edit.part === 'xl/sharedStrings.xml') throw new DocumentValidationError('SHARED_STRING_EDIT_UNSUPPORTED',
+        'Las cadenas compartidas requieren validación de clonación por celda de la fase 2.');
+      const unit = inventory.units.find((value) => value.part === edit.part && value.locator === edit.locator);
+      const key = JSON.stringify([edit.inputId, edit.part, edit.locator]);
+      if (!unit || unit.text !== edit.before || edit.before === edit.after || locators.has(key)) {
+        throw new DocumentValidationError('PLAN_LOCATOR', 'Cada edición debe coincidir con una unidad exacta del original.');
+      }
+      locators.add(key);
+    } else {
+      const ids = edit.kind === 'pdf_merge' ? edit.inputIds : [edit.inputId];
+      if (ids.some((id) => inventories.find((value) => value.id === id)?.format !== 'pdf')) {
+        throw new DocumentValidationError('PDF_PLAN', 'Las operaciones PDF requieren originales PDF comprobados.');
+      }
+    }
+  }
+  // Clone separates this authority from the mutable model response object.
+  return structuredClone(plan);
+}
+
+export class IndependentDocumentValidator {
+  constructor(private readonly options: ValidatorOptions) {}
+
+  async reconcileOrphans(): Promise<ValidatorReconciliation> {
+    return reconcileValidatorOrphans(this.options);
+  }
+
+  /** Executes the real image, runsc, shared input mount and Office/PDF tools.
+   * Never reaches the editor, model provider or customer documents.
+   */
+  async preflight(signal?: AbortSignal): Promise<void> {
+    const cleanup = await this.reconcileOrphans();
+    if (cleanup.pending) throw new DocumentValidationError('VALIDATOR_CLEANUP_PENDING', 'Hay validaciones anteriores cuya limpieza no se pudo confirmar.');
+    const data = Buffer.from(`SiraGPT startup probe ${randomUUID()}\n`, 'utf8');
+    const input: InputFile = { id: 'startup', name: 'readiness.txt', format: 'txt',
+      mime: 'text/plain', data, sha256: hash(data) };
+    const { response } = await this.execute([input], { command: 'preflight' }, undefined, signal);
+    if (!response.ok || !('preflight' in response) || response.preflight.inputSha256 !== input.sha256) {
+      throw new DocumentValidationError('VALIDATOR_PREFLIGHT_FAILED', 'No se pudo comprobar el validador independiente.');
+    }
+  }
+
+  private async execute(inputs: InputFile[], operation: Record<string, unknown>, output: Buffer | undefined, signal?: AbortSignal): Promise<DecodedValidatorResponse> {
+    if (inputs.length < 1 || inputs.length > 10 || new Set(inputs.map((file) => file.id)).size !== inputs.length) {
+      throw new DocumentValidationError('INPUT_LIMIT', 'Se requieren entre uno y diez archivos distintos.');
+    }
+    const staging = await createValidatorStagingDirectory(this.options.stagingRoot);
+    const inputDirectory = path.join(staging, 'inputs');
+    const artifactDirectory = path.join(staging, 'artifacts');
+    let launched = false;
+    try {
+      const invocation = await createInvocation(staging, this.options);
+      await mkdir(inputDirectory, { mode: 0o755 });
+      const files = [];
+      for (const [index, input] of inputs.entries()) {
+        if (!input.data.length || input.data.length > 50 * 1024 * 1024 || hash(input.data) !== input.sha256) {
+          throw new DocumentValidationError('INPUT_HASH_OR_SIZE', 'El original no coincide con su hash o excede el límite.');
+        }
+        const basename = `input-${index}.${input.format}`;
+        await writeFile(path.join(inputDirectory, basename), input.data, { mode: 0o444, flag: 'wx' });
+        files.push({ id: input.id, path: `/inputs/${basename}`, name: input.name });
+      }
+      if (output) {
+        if (output.length > 50 * 1024 * 1024) throw new DocumentValidationError('OUTPUT_SIZE_LIMIT', 'La salida excede el límite.');
+        await writeFile(path.join(inputDirectory, 'output'), output, { mode: 0o444, flag: 'wx' });
+      }
+      const name = invocation.name;
+      const args = validatorContainerArguments(name, inputDirectory, artifactDirectory, this.options);
+      launched = true;
+      const raw = await runContainer(args, { ...operation, inputs: files, outputPath: '/inputs/output', artifactDir: '/artifacts', inlineArtifacts: true }, this.options, invocation, signal);
+      return decodeValidatorResponse(raw);
+    } finally {
+      // Once Docker may have seen the invocation, only its identity-aware
+      // cleanup/reconciler may purge it. Keep bytes if cleanup was not proved.
+      if (!launched) await rm(staging, { recursive: true, force: true });
+    }
+  }
+
+  async inspect(inputs: InputFile[], signal?: AbortSignal): Promise<DocumentInventory[]> {
+    const { response } = await this.execute(inputs, { command: 'inspect' }, undefined, signal);
+    if (!response.ok || !('inventories' in response)) throw new DocumentValidationError('VALIDATOR_INVALID_RESPONSE', 'Falta el inventario independiente.');
+    return response.inventories;
+  }
+
+  async validate(inputs: InputFile[], output: Buffer, plan: EditPlan, signal?: AbortSignal): Promise<ValidationReport> {
+    const { response, artifacts } = await this.execute(inputs, { command: 'validate', plan: editPlanSchema.parse(plan) }, output, signal);
+    if (!response.ok || !('report' in response)) throw new DocumentValidationError('VALIDATOR_INVALID_RESPONSE', 'Falta el reporte de validación.');
+    return { passed: response.report.passed, levels: response.report.levels, originalSha256: response.report.originalSha256,
+      outputSha256: response.report.outputSha256, changes: response.report.changes, artifacts };
+  }
+
+  async inspectRecipeArchive(data: Buffer, signal?: AbortSignal): Promise<RecipeInventory> {
+    if (!data.length || data.length > 16 * 1024 * 1024) throw new DocumentValidationError('RECIPE_SIZE_LIMIT', 'La receta excede su límite.');
+    // format only determines the private staging filename; inspect_recipe sniffs
+    // the ZIP and never executes its scripts or treats it as document text.
+    const input: InputFile = { id: 'recipe', name: 'recipe.zip', format: 'txt', mime: 'application/zip', data, sha256: hash(data) };
+    const { response } = await this.execute([input], { command: 'inspect_recipe' }, undefined, signal);
+    if (!response.ok || !('recipe' in response)) throw new DocumentValidationError('VALIDATOR_INVALID_RESPONSE', 'Falta la inspección independiente de la receta.');
+    return response.recipe;
+  }
+}
+
+export async function inspectRecipeArchive(data: Buffer, options: ValidatorOptions, signal?: AbortSignal): Promise<RecipeInventory> {
+  return new IndependentDocumentValidator(options).inspectRecipeArchive(data, signal);
+}

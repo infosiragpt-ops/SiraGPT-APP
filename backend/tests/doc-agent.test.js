@@ -21,7 +21,12 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const pexec = promisify(execFile);
 
-const { createSandbox, resolveInWorkspace } = require('../src/services/doc-agent/sandbox');
+const {
+  createSandbox,
+  resolveInWorkspace,
+  _createDockerSandbox,
+} = require('../src/services/doc-agent/sandbox');
+const { createRemoteSandbox } = require('../src/services/doc-agent/remote-sandbox');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('../src/services/doc-agent/tools');
 const { buildDocAgentSystemPrompt } = require('../src/services/doc-agent/skills');
 const { runDocAgentLoop } = require('../src/services/doc-agent/loop');
@@ -164,6 +169,179 @@ test('sandbox: command timeout is enforced and reported', async () => {
   } finally {
     await sandbox.destroy();
   }
+});
+
+test('loop forwards cancellation into an in-flight provider request', async () => {
+  const controller = new AbortController();
+  let providerSignal = null;
+  const client = {
+    chat: {
+      completions: {
+        create: async (_payload, options) => {
+          providerSignal = options?.signal || null;
+          return new Promise((resolve, reject) => {
+            providerSignal.addEventListener('abort', () => {
+              const error = providerSignal.reason instanceof Error
+                ? providerSignal.reason
+                : Object.assign(new Error('aborted'), { name: 'AbortError' });
+              reject(error);
+            }, { once: true });
+            void resolve;
+          });
+        },
+      },
+    },
+  };
+  const running = runDocAgentLoop({
+    client,
+    model: 'fake',
+    messages: [{ role: 'user', content: 'edita' }],
+    tools: [],
+    executors: {},
+    signal: controller.signal,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const abortError = Object.assign(new Error('caller_cancelled'), { name: 'AbortError' });
+  controller.abort(abortError);
+  await assert.rejects(running, /caller_cancelled/);
+  assert.equal(providerSignal, controller.signal);
+});
+
+test('loop rejects when cancellation happens inside a tool instead of returning partial success', async () => {
+  const controller = new AbortController();
+  const events = [];
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'bash', args: { command: 'write partial output' } }] },
+    { content: 'must never be returned' },
+  ]);
+  const running = runDocAgentLoop({
+    client,
+    model: 'fake',
+    messages: [{ role: 'user', content: 'edita' }],
+    tools: TOOL_DEFINITIONS,
+    executors: {
+      bash: async () => {
+        controller.abort(Object.assign(new Error('cancelled while editing'), { name: 'AbortError' }));
+        return 'partial output';
+      },
+    },
+    signal: controller.signal,
+    onEvent: (event) => events.push(event),
+  });
+  await assert.rejects(running, /cancelled while editing/);
+  assert.equal(events.some((event) => event.type === 'final'), false);
+  assert.equal(events.some((event) => event.type === 'tool_result'), false);
+});
+
+test('bash executor classifies aborted and timed-out subprocesses as ERROR results', async () => {
+  const aborted = makeToolExecutors({
+    exec: async () => ({ stdout: 'partial', stderr: '', exitCode: 130, aborted: true, timedOut: false }),
+  });
+  assert.match(await aborted.bash({ command: 'edit' }), /^ERROR: sandbox command aborted/);
+
+  const timedOut = makeToolExecutors({
+    exec: async () => ({ stdout: '', stderr: '', exitCode: 124, aborted: false, timedOut: true }),
+  });
+  assert.match(await timedOut.bash({ command: 'edit' }), /^ERROR: sandbox command timed out/);
+});
+
+test('runDocumentAgent never returns or emits a partially written artifact after abort', async () => {
+  const controller = new AbortController();
+  const events = [];
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'bash', args: { command: 'printf partial > /workspace/outputs/partial.txt; sleep 30' } }] },
+    { content: 'must never complete' },
+  ]);
+  const running = runDocumentAgent({
+    files: [{ name: 'input.txt', buffer: Buffer.from('original') }],
+    instruction: 'edita el archivo',
+    client,
+    driver: 'local',
+    signal: controller.signal,
+    onEvent: (event) => events.push(event),
+  });
+  setTimeout(() => controller.abort(Object.assign(new Error('caller left'), { name: 'AbortError' })), 50);
+  await assert.rejects(running, /caller left/);
+  assert.equal(events.some((event) => event.type === 'outputs'), false);
+  assert.equal(events.some((event) => event.type === 'final'), false);
+});
+
+test('local sandbox kills an in-flight process when its parent signal aborts', async () => {
+  const controller = new AbortController();
+  const sandbox = await createSandbox({ driver: 'local', signal: controller.signal });
+  try {
+    const startedAt = Date.now();
+    const running = sandbox.exec('sleep 30', { timeoutMs: 60_000 });
+    setTimeout(() => controller.abort(Object.assign(new Error('cancelled'), { name: 'AbortError' })), 50);
+    const result = await running;
+    assert.equal(result.aborted, true);
+    assert.equal(result.exitCode, 130);
+    assert.ok(Date.now() - startedAt < 5_000, 'abort must stop the process promptly');
+  } finally {
+    await sandbox.destroy();
+  }
+});
+
+test('remote sandbox cleanup ignores an already-aborted parent signal', async () => {
+  const controller = new AbortController();
+  const calls = [];
+  const sandbox = createRemoteSandbox({
+    baseUrl: 'https://sandbox.invalid',
+    apiKey: 'test-key',
+    signal: controller.signal,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, method: options.method, signalAborted: options.signal.aborted });
+      const body = options.method === 'POST' && url.endsWith('/v1/sessions')
+        ? { sessionId: 'session-1' }
+        : {};
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    },
+  });
+  await sandbox.putFile('uploads/a.txt', Buffer.from('a'));
+  controller.abort(Object.assign(new Error('caller gone'), { name: 'AbortError' }));
+  await sandbox.destroy();
+  const cleanup = calls.find((call) => call.method === 'DELETE');
+  assert.ok(cleanup, 'destroy must still issue DELETE for an allocated remote session');
+  assert.equal(cleanup.signalAborted, false, 'cleanup needs an independent signal');
+});
+
+test('Docker cleanup ignores an already-aborted parent signal', async () => {
+  const controller = new AbortController();
+  const calls = [];
+  const sandbox = await _createDockerSandbox({
+    signal: controller.signal,
+    processRunner: async (command, args, options) => {
+      calls.push({ command, args, signal: options.signal });
+      return { stdout: 'container-id', stderr: '', exitCode: 0, timedOut: false };
+    },
+  });
+  controller.abort(Object.assign(new Error('caller gone'), { name: 'AbortError' }));
+  await sandbox.destroy();
+  const cleanup = calls.find((call) => call.args[0] === 'rm' && call.args[1] === '-f');
+  assert.ok(cleanup, 'destroy must still issue docker rm -f');
+  assert.equal(cleanup.signal, undefined, 'cleanup needs an independent signal');
+});
+
+test('an aborted Docker creation removes a container that may already exist', async () => {
+  const calls = [];
+  let invocation = 0;
+  await assert.rejects(
+    _createDockerSandbox({
+      signal: new AbortController().signal,
+      processRunner: async (command, args, options) => {
+        invocation += 1;
+        calls.push({ command, args, signal: options.signal });
+        if (invocation === 1) {
+          return { stdout: '', stderr: 'operation aborted', exitCode: 130, aborted: true };
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
+    }),
+    /docker run failed/,
+  );
+  const cleanup = calls.find((call) => call.args[0] === 'rm' && call.args[1] === '-f');
+  assert.ok(cleanup);
+  assert.equal(cleanup.signal, undefined);
 });
 
 test('tools: str_replace demands a unique match and reports misses cleanly', async () => {

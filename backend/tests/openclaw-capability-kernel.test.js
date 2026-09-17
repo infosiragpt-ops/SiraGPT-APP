@@ -87,6 +87,27 @@ test('buildCapabilityProfile detects million-line bulk source fusion requests', 
   assert.match(block, /massiveSourceFusion=true/);
 });
 
+test('buildCapabilityProfile converts all-folder opaque rewrite requests into maintainable bulk adaptation', () => {
+  const profile = kernel.buildCapabilityProfile({
+    prompt: 'Todo este codigo de cada carpetita lo clones y lo reescribas en un lenguaje complejo que solo tu lo entiendas; adapta OpenClaw a SiraGPT, no copies y pegues.',
+    toolNames: ['memory_recall', 'host_bash', 'host_file', 'run_tests'],
+  });
+
+  assert.equal(profile.signals.externalRepoAdaptation, true);
+  assert.equal(profile.signals.massiveSourceFusion, true);
+  assert.equal(profile.signals.opaqueImplementationRequested, true);
+  assert.equal(profile.signals.nativeRewriteRequired, true);
+  assert.ok(profile.executionDossier.qualityGates.includes('maintainable_standard_language'));
+  assert.ok(profile.executionDossier.qualityGates.includes('auditable_source_and_tests'));
+  assert.ok(profile.executionDossier.riskControls.some((control) => control.risk === 'intentional_code_obfuscation'));
+  assert.ok(profile.executionDossier.workPackets.some((packet) => packet.id === 'maintainable_source'));
+
+  const block = kernel.buildOpenClawPromptBlock(profile);
+  assert.match(block, /Maintainable Source Contract/);
+  assert.match(block, /Do not invent a private language/i);
+  assert.match(block, /opaqueImplementationRequested=true/);
+});
+
 test('buildCapabilityProfile does not treat ordinary code copy wording as bulk fusion', () => {
   const profile = kernel.buildCapabilityProfile({
     prompt: 'Copia este fragmento de codigo en la respuesta y explicalo breve',

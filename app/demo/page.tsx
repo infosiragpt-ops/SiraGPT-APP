@@ -12,7 +12,7 @@ import { track } from "@/lib/analytics"
  * visitor can run against /api/demo (cached results — no LLM cost, no auth).
  * The post-result CTA stashes the prompt under sessionStorage "demo-prefill"
  * (consumed by the chat composer after sign-up) and routes through
- * /auth/register?next=/chat.
+ * /auth/register?next=/agentes.
  */
 
 const DEMOS = [
@@ -93,7 +93,7 @@ export default function DemoPage() {
     } catch {
       /* private mode — the user still lands in chat, just without prefill */
     }
-    router.push("/auth/register?next=%2Fchat")
+    router.push("/auth/register?next=%2Fagentes")
   }
 
   const tryAnother = () => {

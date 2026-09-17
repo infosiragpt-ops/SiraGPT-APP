@@ -111,19 +111,44 @@ test('resumeCheckpoint re-enters mid-run: trace restored, no repeated work', asy
   assert.ok(result.steps.length >= 3, 'prior steps + the finalize step');
 });
 
-test('invalid/stale resumeCheckpoint is ignored (fresh start)', async () => {
-  const captured = [];
-  const openai = makeFakeOpenAI([nativeToolCall('finalize', { answer: 'ok' })], captured);
-  const result = await reactAgent.run(openai, {
-    query: 'simple',
-    tools: [PING_TOOL],
-    maxSteps: 4,
-    resumeCheckpoint: { v: 1, stepsCompleted: 99, messages: [{ role: 'user', content: 'x' }] }, // >= maxSteps
+for (const scenario of [
+  {
+    name: 'exhausted', reason: 'resume_budget_exhausted',
+    checkpoint: {
+      v: 1, stepsCompleted: 99, messages: [{ role: 'user', content: 'original intent' }],
+      steps: [{ step: 98, actions: [{ tool: 'ping', args: { n: 99 }, observation: { pong: 99 } }] }],
+    },
+  },
+  {
+    name: 'invalid', reason: 'invalid_resume_checkpoint',
+    checkpoint: { v: 1, stepsCompleted: 1, messages: [] },
+  },
+]) {
+  test(`${scenario.name} resumeCheckpoint stops without fresh SDK calls or repeated effects`, async () => {
+    const captured = [];
+    let effects = 0;
+    const checkpointBefore = JSON.stringify(scenario.checkpoint);
+    const emittedCheckpoints = [];
+    const openai = makeFakeOpenAI([
+      nativeToolCall('ping', { n: 100 }),
+      nativeToolCall('finalize', { answer: 'fresh work must not execute' }),
+    ], captured);
+    const result = await reactAgent.run(openai, {
+      query: 'continue original intent',
+      tools: [{ ...PING_TOOL, execute: async (args) => { effects += 1; return PING_TOOL.execute(args); } }],
+      maxSteps: 4,
+      resumeCheckpoint: scenario.checkpoint,
+      onCheckpoint: (checkpoint) => emittedCheckpoints.push(checkpoint),
+    });
+    assert.equal(result.stoppedReason, scenario.reason);
+    assert.equal(captured.length, 0, 'never restart the model with a fresh budget');
+    assert.equal(effects, 0, 'previous tool work must not be repeated');
+    assert.equal(emittedCheckpoints.length, 0, 'do not replace the saved checkpoint with fresh state');
+    assert.equal(JSON.stringify(scenario.checkpoint), checkpointBefore, 'caller-owned checkpoint remains intact');
+    assert.deepEqual(result.steps, scenario.checkpoint.steps || [], 'completed work remains visible when the checkpoint is valid but exhausted');
+    assert.notEqual(result.finalAnswer, 'fresh work must not execute');
   });
-  assert.equal(result.stoppedReason, 'finalized');
-  const sent = captured[0].messages;
-  assert.ok(!sent.some((m) => /REANUDACIÓN/i.test(String(m.content || ''))), 'no resume marker on rejected checkpoint');
-});
+}
 
 test('task-store persists runnerCheckpoint, caps size, clears on completed', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-store-cp-'));

@@ -60,7 +60,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
-import { CODE_OPEN_TOOL_EVENT, CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { CODE_OPEN_TOOL_EVENT, CODE_RUNNER_ACTIVE_EVENT, getActiveCodexProject, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService, type GithubStatus } from "@/lib/github-service"
 import { ALL_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
@@ -452,6 +453,10 @@ function copyToClipboard(value: string, success: string) {
 
 function PublishingTool() {
   const { activeFolder } = useCodeWorkspace()
+  const resolvedProjectId = React.useMemo(
+    () => getActiveCodexProject() || codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || activeFolder?.id || null,
+    [activeFolder?.id],
+  )
   // Legacy simulation kept behind a flag (set true to bring it back).
   const SHOW_LEGACY: boolean = false
   if (SHOW_LEGACY) return <LegacyPublishingTool />
@@ -464,7 +469,7 @@ function PublishingTool() {
       headerClassName="border-[#353535] bg-[#1f1f1f] [&_p]:text-[#a8b0bf] [&_h2]:text-white"
       bodyClassName="bg-[#1f1f1f] px-0 py-0"
     >
-      <RealPublishingPanel projectId={activeFolder?.id || null} />
+      <RealPublishingPanel projectId={resolvedProjectId} />
     </ToolShell>
   )
 }
@@ -1068,7 +1073,14 @@ function SecretsTool() {
       {/* Header */}
       <div className="shrink-0 border-b border-border/40 bg-background/95 backdrop-blur px-6 py-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-[20px] font-bold tracking-tight text-foreground">Secrets</h2>
+          <div>
+            <h2 className="text-[20px] font-bold tracking-tight text-foreground">Secrets</h2>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              {connectionId
+                ? "Sincronizable al deploy de Hostinger si el repo está conectado."
+                : "Guardados solo en este navegador (no es un vault cifrado)."}
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <div className="relative">
               <Button size="sm" variant="outline" className="h-8 text-[12px]" onClick={() => setShowSecretsMore(!showSecretsMore)}>
@@ -1669,26 +1681,39 @@ function ConfigRow({
 
 function DatabaseTool() {
   const { files } = useCodeWorkspace()
-  const fallback: DbTable[] = [
-    {
-      name: "users",
-      columns: ["id", "name", "role"],
-      rows: [
-        { id: "1", name: "Admin User", role: "admin" },
-        { id: "2", name: "Cliente demo", role: "member" },
-      ],
-    },
-  ]
+  const fallback: DbTable[] = []
   const [tables, setTables] = useWorkspacePersistedState<DbTable[]>("database", fallback)
-  const [environment, setEnvironment] = useWorkspacePersistedState<"development" | "production">("database-env", "development")
   const [query, setQuery] = React.useState("select * from users")
   const [selected, setSelected] = React.useState("users")
+  const [sqliteOut, setSqliteOut] = React.useState("")
+  const [sqliteBusy, setSqliteBusy] = React.useState(false)
   const table = tables.find((row) => row.name === selected) || tables[0]
   const result = React.useMemo(() => runSql(query, tables), [query, tables])
 
   // Real data model of the app being built, parsed from the workspace itself
   // (prisma/schema.prisma or the in-memory CRUD API routes emitted by codegen).
   const workspaceSchema = React.useMemo(() => detectWorkspaceSchema(files), [files])
+  const sqliteFiles = React.useMemo(
+    () => Object.keys(files).filter((path) => /\.(db|sqlite|sqlite3)$/i.test(path)),
+    [files],
+  )
+  const prismaSqlite = React.useMemo(() => {
+    const schema = files["prisma/schema.prisma"]?.content || files["schema.prisma"]?.content || ""
+    const m = schema.match(/url\s*=\s*["']file:([^"']+)["']/i)
+    return m ? m[1] : ""
+  }, [files])
+  const sqlitePath = sqliteFiles[0] || prismaSqlite
+  const querySqlite = async () => {
+    const runId = getActiveHostRunId()
+    if (!runId || !sqlitePath) {
+      setSqliteOut(runId ? "No hay un archivo SQLite en el workspace." : "Arranca la app (Ejecutar) para consultar el archivo SQLite con el runner.")
+      return
+    }
+    setSqliteBusy(true)
+    const res = await hostRunnerService.exec(runId, `python3 -c "import sqlite3,json; c=sqlite3.connect('${sqlitePath}'); print(json.dumps(c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()))"`)
+    setSqliteOut(res.output || res.error || "sin salida")
+    setSqliteBusy(false)
+  }
 
   const addRow = () => {
     if (!table) return
@@ -1730,12 +1755,12 @@ function DatabaseTool() {
 
   return (
     <ToolShell
-      eyebrow={workspaceSchema ? "Database · workspace" : "Database · local"}
-      title="Postgres workspace"
+      eyebrow={workspaceSchema ? "Database · schema" : "Database"}
+      title="Database"
       detail={
         workspaceSchema
-          ? `Modelo real detectado en ${workspaceSchema.path} (${workspaceSchema.models.length} modelo(s)). El playground de abajo es local al navegador; la base Postgres por-proyecto real aún no está disponible.`
-          : "Prototipo LOCAL en el navegador (no persiste en el servidor): modela tablas y prueba consultas simples. La base Postgres por-proyecto real aún no está disponible."
+          ? `Modelo detectado en ${workspaceSchema.path} (${workspaceSchema.models.length} modelo(s)). Sira no provisiona Postgres. Si hay un SQLite del proyecto, se puede consultar con el runner.`
+          : "Sira no provisiona una base Postgres. Este panel inspecciona el schema del proyecto y, si existe un .sqlite, consulta ese archivo."
       }
       action={<Button size="sm" className="h-8 gap-1.5" onClick={addRow}><Plus className="h-3.5 w-3.5" />Fila demo</Button>}
     >
@@ -1787,6 +1812,17 @@ function DatabaseTool() {
             <Database className="h-3.5 w-3.5" />
             Usar este modelo en el playground
           </Button>
+          {sqlitePath ? (
+            <div className="mt-3 space-y-2">
+              <Button size="sm" className="h-8 gap-1.5" disabled={sqliteBusy} onClick={() => void querySqlite()}>
+                <Play className="h-3.5 w-3.5" />
+                {sqliteBusy ? "Consultando…" : `Listar tablas de ${sqlitePath}`}
+              </Button>
+              {sqliteOut ? <pre className="max-h-40 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-[11px]">{sqliteOut}</pre> : null}
+            </div>
+          ) : (
+            <p className="mt-3 text-[11px] text-muted-foreground">No hay archivo SQLite en el workspace. Sira no crea un Postgres.</p>
+          )}
         </PanelCard>
       ) : null}
       <div className="grid min-h-[520px] gap-3 lg:grid-cols-[220px_1fr]">
@@ -1812,39 +1848,11 @@ function DatabaseTool() {
           </div>
         </PanelCard>
         <div className="space-y-3">
-          <PanelCard title="Connection" detail="Credenciales locales del workspace" icon={<Cloud className="h-4 w-4" />}>
-            <div className="grid gap-3 sm:grid-cols-[180px_1fr]">
-              <div>
-                <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Environment</p>
-                <ToolTabs
-                  value={environment}
-                  onChange={setEnvironment}
-                  items={[
-                    { id: "development", label: "Development" },
-                    { id: "production", label: "Production" },
-                  ]}
-                />
-              </div>
-              <div className="min-w-0">
-                <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">DATABASE_URL</p>
-                <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-2">
-                  <code className="min-w-0 flex-1 truncate text-[11px]">postgres://workspace:{environment}@siragpt.local/{environment}</code>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-6 w-6"
-                    aria-label="Copiar DATABASE_URL"
-                    onClick={() => copyToClipboard(`postgres://workspace:${environment}@siragpt.local/${environment}`, "DATABASE_URL copiado")}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-foreground" style={{ width: `${Math.min(100, tables.reduce((sum, row) => sum + row.rows.length, 0) * 8)}%` }} />
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">Uso local estimado a partir de filas guardadas en el navegador.</p>
+          <PanelCard title="Conexión" detail="Sin provisioner de Postgres" icon={<Cloud className="h-4 w-4" />}>
+            <p className="text-[12px] text-muted-foreground">
+              No hay DATABASE_URL de nube. Si el proyecto declara SQLite o Prisma, se inspecciona el schema.
+              Las filas de abajo son un playground del navegador, no una base remota.
+            </p>
           </PanelCard>
           <PanelCard title="SQL runner" detail="Soporta SELECT *, SELECT COUNT(*) y SHOW TABLES" icon={<Play className="h-4 w-4" />}>
             <textarea
@@ -2107,10 +2115,13 @@ function IntegrationsTool() {
             disabled={ghLoading}
             onClick={() => {
               if (connected) { openWorkspaceTool("git"); return }
-              githubService.connectUrl().then(({ url }) => { if (url) window.open(url, "_blank", "noopener") }).catch(() => {})
+              githubService.connectUrl().then(({ url }) => {
+                if (url) { window.open(url, "_blank", "noopener"); return }
+                toast.error("Falta la app OAuth de GitHub en el servidor. Luis debe entregar client id/secret.")
+              }).catch(() => toast.error("No se pudo iniciar el login de GitHub."))
             }}
           >
-            {ghLoading ? "…" : connected ? `Conectado${gh?.login ? `: ${gh.login}` : ""}` : configured ? "Conectar" : "No configurado"}
+            {ghLoading ? "…" : connected ? `Conectado${gh?.login ? `: ${gh.login}` : ""}` : configured ? "Conectar GitHub" : "Falta OAuth GitHub"}
           </Button>
         </div>
       )
@@ -2138,11 +2149,11 @@ function IntegrationsTool() {
         </div>
       )
     }
-    // Connectors without a per-workspace backend yet (Slack/Google): honest.
+    // Slack/Google need dedicated OAuth apps from Luis — do not invent keys.
     return (
       <div className="flex items-center justify-between">
         <StatusPill status="idle" />
-        <span className="text-[11px] text-muted-foreground">Próximamente</span>
+        <span className="text-[11px] text-muted-foreground">Falta OAuth de {connector.label} (Luis). No configurado.</span>
       </div>
     )
   }
@@ -2290,26 +2301,11 @@ function SecurityTool() {
     })
     return rows
   }, [files])
-  const securityRows = [
-    { label: "Package firewall", detail: "Bloqueo preventivo de paquetes vulnerables", status: "pass" as const },
-    { label: "Project Security Center", detail: "Inventario y hallazgos del proyecto actual", status: findings.some((row) => row.severity === "fail") ? "fail" as const : findings.length ? "warn" as const : "pass" as const },
-    { label: "Workspace Security Center", detail: "Revision de secretos, auth, datos y exposicion publica", status: findings.length ? "warn" as const : "pass" as const },
-  ]
   return (
-    <ToolShell eyebrow="Security" title="Security Center" detail="Escaneo rapido del workspace para detectar credenciales o patrones peligrosos.">
+    <ToolShell eyebrow="Security" title="Security Center" detail="Grep real del código (secretos, eval, dangerouslySetInnerHTML). No hay escaneo CVE ni package firewall.">
       <PanelGrid>
-        <PanelCard title="Security tools" detail="Capas que debe revisar el agente antes de publicar" icon={<Shield className="h-4 w-4" />}>
-          <div className="space-y-2">
-            {securityRows.map((row) => (
-              <div key={row.label} className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-[12px] font-medium">{row.label}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{row.detail}</p>
-                </div>
-                <StatusPill status={row.status} />
-              </div>
-            ))}
-          </div>
+        <PanelCard title="Alcance" detail="Lo que este panel sí hace" icon={<Shield className="h-4 w-4" />}>
+          <p className="text-[12px] text-muted-foreground">Revisa los archivos abiertos del workspace. No hay SBOM, firewall de paquetes ni escáner de dependencias. “Fix with Agent” manda el hallazgo al chat (DeepSeek).</p>
         </PanelCard>
         <PanelCard title="Resultados" detail={`${findings.length} hallazgos`} icon={<AlertTriangle className="h-4 w-4" />}>
           <div className="space-y-2">
@@ -2496,6 +2492,7 @@ type AgentSkill = {
 function SkillsTool() {
   const [skills, setSkills] = React.useState<AgentSkill[] | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const [pinned, setPinned] = useWorkspacePersistedState<string[]>("skills-pinned", [])
   React.useEffect(() => {
     let alive = true
     const base = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}`
@@ -2525,7 +2522,7 @@ function SkillsTool() {
     <ToolShell
       eyebrow="Agent"
       title="Agent Skills"
-      detail={skills ? `Catálogo real de ${skills.length} habilidades del agente (GET /api/cowork/skills).` : "Habilidades que el agente puede usar en este workspace."}
+      detail={skills ? `Catálogo real de ${skills.length} habilidades (GET /api/cowork/skills). Pin es local: el API no tiene enable/PATCH.` : "Habilidades que el agente puede usar en este workspace."}
     >
       {error ? (
         <p className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-3 text-[12px] text-amber-700">No se pudo cargar el catálogo de habilidades: {error}</p>
@@ -2542,13 +2539,30 @@ function SkillsTool() {
                 {rows.map((skill) => (
                   <PanelCard key={skill.id} title={skill.label} detail={skill.description} icon={<Wrench className="h-4 w-4" />}>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <StatusPill status="success" />
+                      <StatusPill status={pinned.includes(skill.id) ? "success" : "idle"} />
                       {(skill.tags || []).slice(0, 4).map((tag) => (
                         <span key={tag} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag}</span>
                       ))}
-                      {typeof skill.outputKind === "string" && skill.outputKind ? (
-                        <span className="ml-auto text-[10px] text-muted-foreground">→ {skill.outputKind}</span>
-                      ) : null}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-[11px]"
+                        onClick={() => setPinned((prev) => prev.includes(skill.id) ? prev.filter((id) => id !== skill.id) : [...prev, skill.id])}
+                      >
+                        {pinned.includes(skill.id) ? "Quitar pin" : "Pin en este workspace"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 text-[11px]"
+                        onClick={() => {
+                          window.dispatchEvent(new CustomEvent("siragpt:code-agent-request", { detail: { text: `Usa la habilidad "${skill.label}": ${skill.description}` } }))
+                          toast.success("Habilidad enviada al chat")
+                        }}
+                      >
+                        Usar en el chat
+                      </Button>
                     </div>
                   </PanelCard>
                 ))}
@@ -2568,8 +2582,11 @@ function SettingsToolPanel() {
     previewAutoRefresh: true,
     density: "compact",
   })
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent("siragpt:code-settings-changed", { detail: settings }))
+  }, [settings])
   return (
-    <ToolShell eyebrow="Workspace" title="User Settings" detail="Preferencias de editor, preview y densidad del workspace.">
+    <ToolShell eyebrow="Workspace" title="User Settings" detail="Preview auto-refresh se aplica a Preview. Autosave ya persiste el workspace. Format-on-save no tiene formatter en este entorno.">
       <PanelGrid>
         <PanelCard title="Editor" detail="Preferencias de escritura" icon={<Settings className="h-4 w-4" />}>
           <ToggleRow label="Autosave" checked={settings.autosave} onChange={() => setSettings((prev) => ({ ...prev, autosave: !prev.autosave }))} />
@@ -2713,13 +2730,17 @@ function DeveloperTool() {
 
 function GitTool() {
   const { activeFolder } = useCodeWorkspace()
+  const resolvedProjectId = React.useMemo(
+    () => getActiveCodexProject() || codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || activeFolder?.id || null,
+    [activeFolder?.id],
+  )
   return (
     <ToolShell
       eyebrow="Version control"
       title="Git"
       detail="Conecta GitHub y controla versiones reales: commit, push, pull, ramas e historial."
     >
-      <RealGitPanel projectId={activeFolder?.id || null} projectName={activeFolder?.name} />
+      <RealGitPanel projectId={resolvedProjectId} projectName={activeFolder?.name} />
     </ToolShell>
   )
 }
@@ -2776,10 +2797,11 @@ function WorkflowsTool() {
 
     // One-shot command: run it FOR REAL against the live workspace if a dev
     // server is up (the exec backend needs a run). Otherwise be honest.
-    const runId = getActiveHostRunId()
+    let runId = getActiveHostRunId()
     if (!runId) {
-      finishConsole(consoleId, row.id, "failed", [
-        { stream: "stderr", text: "No hay un servidor activo. Pulsa ▶ Ejecutar para arrancar la app y poder correr comandos reales." },
+      window.dispatchEvent(new CustomEvent("siragpt:code-run-app"))
+      finishConsole(consoleId, row.id, "success", [
+        { stream: "system", text: "No había sesión. Se pidió arrancar el runner (mismo botón Ejecutar). Reintenta el workflow en unos segundos." },
       ])
       return
     }
@@ -3078,28 +3100,41 @@ function ConsoleTool() {
 
 function VncTool() {
   const [url, setUrl] = useWorkspacePersistedState("vnc-url", "")
+  const [showFrame, setShowFrame] = React.useState(false)
   return (
-    <ToolShell eyebrow="Remote display" title="VNC" detail="Conecta una pantalla remota o preview externo por URL segura.">
-      <PanelCard title="Conexion" detail="Pega una URL de viewer o noVNC" icon={<Server className="h-4 w-4" />}>
-        <div className="flex gap-2">
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." className="h-8 text-[12px]" />
-          <Button size="sm" className="h-8" disabled={!url} onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>Abrir</Button>
+    <ToolShell eyebrow="Remote display" title="VNC" detail="Sira no provisiona un escritorio VNC. Necesitas una URL de viewer o la Computadora del departamento.">
+      <PanelCard title="Escritorio remoto" detail="Sin backend VNC embebido" icon={<Server className="h-4 w-4" />}>
+        <p className="text-[12px] text-muted-foreground">No hay noVNC empaquetado ni un display remoto por proyecto. Si ya tienes un viewer, pega la URL. Si no, abre la Computadora del departamento en el header.</p>
+        <div className="mt-3 flex gap-2">
+          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://viewer..." className="h-8 text-[12px]" aria-label="URL de noVNC o viewer remoto" />
+          <Button size="sm" className="h-8" disabled={!url} aria-label="Mostrar VNC en el panel" onClick={() => setShowFrame(true)}>Mostrar</Button>
         </div>
-        {url ? <iframe title="VNC preview" src={url} className="mt-3 h-80 w-full rounded-md border border-border/60 bg-muted" /> : null}
+        <Button
+          size="sm"
+          variant="outline"
+          className="mt-3 h-8"
+          onClick={() => window.dispatchEvent(new CustomEvent("siragpt:open-current-department-computer"))}
+        >
+          Abrir Computadora del departamento
+        </Button>
+        {showFrame && url ? <iframe title="VNC preview" src={url} className="mt-3 h-80 w-full rounded-md border border-border/60 bg-muted" sandbox="allow-scripts allow-same-origin allow-forms" /> : null}
       </PanelCard>
     </ToolShell>
   )
 }
 
 function CanvasTool() {
-  const [notes, setNotes] = useWorkspacePersistedState("canvas", "Flujo principal:\n- Usuario describe una app\n- Agente genera archivos\n- Preview muestra el resultado\n- Se publica cuando pasa validacion")
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+  }, [])
   return (
-    <ToolShell eyebrow="Design" title="Canvas" detail="Lienzo simple para planear pantallas y flujos mientras el agente trabaja.">
-      <textarea
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        className="h-[520px] w-full resize-none rounded-lg border border-border/60 bg-card p-4 font-mono text-[13px] leading-6 outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-      />
+    <ToolShell eyebrow="Preview" title="Canvas" detail="No hay un lienzo de diseño separado. Canvas abre la Preview real de la app.">
+      <PanelCard title="Vista previa" detail="El lienzo de la app es Preview" icon={<Rocket className="h-4 w-4" />}>
+        <p className="text-[12px] text-muted-foreground">Sira no tiene un whiteboard. Esta herramienta abre la Preview del workspace.</p>
+        <Button size="sm" className="mt-3 h-8" onClick={() => window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))}>
+          Abrir Preview
+        </Button>
+      </PanelCard>
     </ToolShell>
   )
 }

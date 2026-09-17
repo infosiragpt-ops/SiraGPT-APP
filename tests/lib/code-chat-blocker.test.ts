@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { detectBlocker } from '@/lib/code-chat-blocker'
 
 describe('detectBlocker', () => {
-  it('flags an OpenRouter 402 credits error with the settings/credits remediation', () => {
+  it('flags an OpenRouter 402 credits error with the internal /settings remediation', () => {
     const b = detectBlocker('402 Insufficient credits. Add more using https://openrouter.ai/settings/credits')
-    expect(b).toEqual({ title: 'OpenRouter sin créditos', url: 'https://openrouter.ai/settings/credits' })
+    // The port intentionally routes the remediation to the in-app /settings
+    // page instead of the external OpenRouter billing URL.
+    expect(b).toEqual({ title: 'Créditos agotados', url: '/settings' })
   })
 
   it('flags the "can only afford N tokens" phrasing', () => {
@@ -13,12 +15,12 @@ describe('detectBlocker', () => {
     expect(b?.url).toBe('/settings')
   })
 
-  it('flags a Spanish "sin créditos" message', () => {
-    expect(detectBlocker('Te quedaste sin créditos para seguir generando')?.title).toBe('Créditos o cuota agotada')
+  it('flags a Spanish "sin créditos" message with the exhausted-credits title', () => {
+    expect(detectBlocker('Te quedaste sin créditos para seguir generando')?.title).toBe('Créditos agotados')
   })
 
-  it('routes an OpenRouter mention to the OpenRouter remediation even without a 402', () => {
-    expect(detectBlocker('OpenRouter: out of credits')?.url).toBe('https://openrouter.ai/settings/credits')
+  it('routes an OpenRouter mention to the internal /settings remediation even without a 402', () => {
+    expect(detectBlocker('OpenRouter: out of credits')?.url).toBe('/settings')
   })
 
   it('does NOT trip on a normal mention of credits or an unrelated 402', () => {

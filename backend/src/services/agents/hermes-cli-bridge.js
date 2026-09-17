@@ -70,6 +70,75 @@ const COMMAND_HANDLERS = Object.freeze({
   },
 
   memory(ctx = {}) {
+    const action = String(ctx.action || '').toLowerCase();
+    if (action === 'export') {
+      return { command: 'memory', action, ...memoryBridge.exportSnapshot(ctx.userId) };
+    }
+    if (action === 'import') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.importSnapshot(ctx.userId, ctx.snapshot, {
+          mode: ctx.mode,
+          requireSameOwner: ctx.requireSameOwner,
+        }),
+      };
+    }
+    if (action === 'resolve') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.resolveConflicts(ctx.userId, {
+          dryRun: ctx.dryRun === true,
+          sessionUserId: ctx.sessionUserId,
+          chatId: ctx.chatId,
+        }),
+      };
+    }
+    if (action === 'pin') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.curatedPin(ctx.userId, { old_text: ctx.old_text || ctx.query }),
+      };
+    }
+    if (action === 'unpin') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.curatedUnpin(ctx.userId, { old_text: ctx.old_text || ctx.query }),
+      };
+    }
+    if (action === 'remember' || action === 'recordar') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.rememberCurated(ctx.userId, ctx.fact || ctx.content, {
+          target: ctx.target,
+          category: ctx.category,
+          actor: action,
+        }),
+      };
+    }
+    if (action === 'forget' || action === 'olvidar') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.forgetCurated(ctx.userId, ctx.query || ctx.fact),
+      };
+    }
+    if (action === 'promote') {
+      return {
+        command: 'memory',
+        action,
+        ...memoryBridge.promoteMemoryToUser(ctx.userId, {
+          old_text: ctx.old_text || ctx.query,
+          content: ctx.content || ctx.fact,
+          resolve: ctx.resolve,
+          actor: 'cli',
+        }),
+      };
+    }
     return {
       command: 'memory',
       status: memoryBridge.status(ctx.userId),

@@ -63,13 +63,16 @@ export const hostRunnerService = {
     files: Record<string, string>,
     runId: string,
     env?: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<{ runId?: string; phase?: string; devUrl?: string; error?: string; disabled?: boolean }> {
+    if (signal?.aborted) return { error: "aborted" }
     try {
       const res = await authenticatedFetch(`${baseUrl}/start`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
         body: JSON.stringify({ runId, files, env }),
+        signal,
       })
       const body = (await res.json().catch(() => ({}))) as {
         runId?: string
@@ -85,16 +88,20 @@ export const hostRunnerService = {
       }
       return body
     } catch (e) {
+      if (signal?.aborted || (e instanceof Error && e.name === "AbortError")) {
+        return { error: "aborted" }
+      }
       return { error: e instanceof Error ? e.message : "runner unreachable" }
     }
   },
 
   /** Dev-server status: { running, ready, framework, error, tail, devUrl }. */
-  async status(runId: string): Promise<HostRunStatus> {
+  async status(runId: string, signal?: AbortSignal): Promise<HostRunStatus> {
     try {
       const res = await authenticatedFetch(`${baseUrl}/${encodeURIComponent(runId)}/status`, {
         credentials: "include",
         headers: authHeaders(),
+        signal,
       })
       if (!res.ok) return { error: `HTTP ${res.status}` }
       return (await res.json().catch(() => ({}))) as HostRunStatus

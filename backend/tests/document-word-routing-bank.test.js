@@ -104,6 +104,18 @@ test('advanced document pipeline: 2000 complex Word requests still resolve to DO
   }
 });
 
+test('document delivery policy: summarizing an attached Word produces a downloadable DOCX', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame un resumen',
+    displayGoal: 'dame un resumen',
+    files: [{ id: 'file-docx', name: 'tesis.docx' }],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
 test('document delivery policy: questions about an existing Word stay in chat unless output is explicit', () => {
   const prompts = [
     '¿Cuál es el título del Word que subí?',

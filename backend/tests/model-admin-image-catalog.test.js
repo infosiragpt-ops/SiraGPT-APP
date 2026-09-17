@@ -5,7 +5,6 @@ const assert = require('node:assert');
 
 const {
   listManifestModels,
-  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
 } = require('../src/services/model-catalog-manifest');
 const { ModelSyncService } = require('../src/services/model-sync-service');
 
@@ -40,36 +39,38 @@ test('static manifest includes every image model surfaced by the chat picker', (
   assert.ok(imageModels.every(model => model.type === 'IMAGE'));
 });
 
-test('static image catalog updates metadata but preserves activation state for non-default models', async () => {
+test('static image catalog updates metadata and never publishes models automatically', async () => {
   const operations = [];
-  // seedream-4.5 is NOT in the default-active set, so updating its metadata must
-  // never touch its isActive flag (admin choice preserved).
-  const existing = new Set(['bytedance-seed/seedream-4.5']);
-  const service = new ModelSyncService({
-    prismaClient: {
-      aiModel: {
-        async findMany() {
-          return [...existing].map(name => ({ name }));
-        },
-        async update(args) {
-          operations.push({ op: 'update', args });
-          assert.strictEqual(Object.prototype.hasOwnProperty.call(args.data, 'isActive'), false);
-          return args;
-        },
-        async create(args) {
-          operations.push({ op: 'create', args });
-          // Curated default-active models seed ACTIVE; everything else inactive.
-          assert.strictEqual(args.data.isActive, DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(args.data.name));
-          existing.add(args.data.name);
-          return args;
-        },
-        async updateMany(args) {
-          operations.push({ op: 'updateMany', args });
-          return { count: 0 };
-        },
+  // Updating an existing row must never touch its isActive flag (admin choice
+  // preserved), while newly discovered rows always start inactive.
+  const storedRows = new Map([
+    ['bytedance-seed/seedream-4.5', { name: 'bytedance-seed/seedream-4.5', isActive: false }],
+  ]);
+  const prismaClient = {
+    aiModel: {
+      async findMany() {
+        return [...storedRows.values()].map(row => ({ ...row }));
+      },
+      async update(args) {
+        operations.push({ op: 'update', args });
+        assert.strictEqual(Object.prototype.hasOwnProperty.call(args.data, 'isActive'), false);
+        const current = storedRows.get(args.where.name);
+        storedRows.set(args.where.name, { ...current, ...args.data });
+        return args;
+      },
+      async create(args) {
+        operations.push({ op: 'create', args });
+        assert.strictEqual(args.data.isActive, false);
+        storedRows.set(args.data.name, { ...args.data });
+        return args;
+      },
+      async updateMany(args) {
+        operations.push({ op: 'updateMany', args });
+        return { count: 0 };
       },
     },
-  });
+  };
+  const service = new ModelSyncService({ prismaClient });
 
   const result = await service.ensureStaticCatalogModels({ types: ['IMAGE'] });
 
@@ -79,17 +80,19 @@ test('static image catalog updates metadata but preserves activation state for n
   assert.strictEqual(operations.filter(item => item.op === 'create').length, EXPECTED_IMAGE_MODELS.length - 1);
   assert.strictEqual(operations.filter(item => item.op === 'update').length, 1);
 
-  // The curated default-active IMAGE models are force-activated via updateMany,
-  // even pre-existing inactive rows, so they surface in the picker.
+  // A fresh service instance simulates a process restart. Every row now
+  // exists, so a second catalog pass only refreshes metadata and must preserve
+  // the inactive state selected by the admin.
+  const restartedService = new ModelSyncService({ prismaClient });
+  const restartedResult = await restartedService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+  assert.strictEqual(restartedResult.created, 0);
+  assert.strictEqual(restartedResult.updated, EXPECTED_IMAGE_MODELS.length);
+  assert.ok([...storedRows.values()].every(row => row.isActive === false));
+
+  // A catalog refresh must never bulk-reactivate rows after an admin disabled
+  // them, including after a process restart.
   const updateManyOps = operations.filter(item => item.op === 'updateMany');
-  assert.strictEqual(updateManyOps.length, 1);
-  const targeted = updateManyOps[0].args.where.name.in;
-  for (const name of DEFAULT_ACTIVE_IMAGE_MODEL_NAMES) {
-    if (EXPECTED_IMAGE_MODELS.includes(name)) {
-      assert.ok(targeted.includes(name), `expected updateMany to target ${name}`);
-    }
-  }
-  assert.strictEqual(updateManyOps[0].args.data.isActive, true);
+  assert.strictEqual(updateManyOps.length, 0);
 });
 
 test('concurrent create race (P2002) falls back to a metadata update', async () => {

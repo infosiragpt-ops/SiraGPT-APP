@@ -21,6 +21,7 @@ const ENDPOINTS = {
   sessions: () => '/session', // GET list · POST create  (verified 200)
   session: (id) => `/session/${encodeURIComponent(id)}`, // GET/DELETE/PATCH
   message: (id) => `/session/${encodeURIComponent(id)}/message`, // GET/POST
+  abort: (id) => `/session/${encodeURIComponent(id)}/abort`, // POST — stop in-flight turn
   file: () => '/file', // GET (file content at /file/content)
   fileContent: () => '/file/content', // GET ?path= → { type, content } (verified)
   find: () => '/find/symbol', // GET symbol search
@@ -101,6 +102,10 @@ function createOpencodeClient({ env = process.env, fetchImpl } = {}) {
       const body = { parts: [{ type: 'text', text: String(text) }] };
       if (model && model.providerID && model.modelID) body.model = model;
       return request('POST', ENDPOINTS.message(sessionId), { ...rest, body });
+    },
+    /** Stop an in-flight session turn (OpenCode POST /session/:id/abort). */
+    abortSession(sessionId, opts) {
+      return request('POST', ENDPOINTS.abort(sessionId), opts);
     },
     readFile(path, opts) { return request('GET', ENDPOINTS.file(), { ...opts, query: { path } }); },
     /** List entries under a workspace dir → { data: [{ path, type, mime }] }. */

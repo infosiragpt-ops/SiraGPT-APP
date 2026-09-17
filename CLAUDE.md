@@ -30,12 +30,31 @@ npm run type-check     # TSC completo
 ```
 
 ## Reglas para Claude
-1. **No modificar la UI/componentes visuales** — solo funcionalidad interna
+1. **No modificar la UI/componentes visuales** — solo funcionalidad interna. El UI lock
+   (`scripts/verify-ui-lock.sh`, 270 archivos) lo verifica en CI; levantarlo es decisión de Luis.
 2. **Trabajar en:** agentes, herramientas de generación, pipelines, sistema de archivos, backend
-3. **Push directo a main** en `https://github.com/SiraGPT-ORg/siraGPT`
-4. **Cada cambio debe mantener CI verde** — correr `npm test` y `npm run lint` antes de push
-5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
-6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
+3. **Nunca push a `main`.** Todo cambio = rama + PR a `production-main` en
+   `https://github.com/infosiragpt-ops/SiraGPT-APP`, esperar el check
+   "CI · required checks passed", squash-merge. Auto-merge está deshabilitado y la
+   protección exige la rama al día: tras cada fusión, `gh pr update-branch <n>` en el
+   siguiente PR y esperar su CI otra vez. No usar `--admin` con CI rojo.
+4. **Cada cambio debe mantener CI verde** — correr los tests afectados (`node --test`),
+   `git diff --check` y `bash scripts/verify-ui-lock.sh` antes de abrir el PR.
+5. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código.
+6. **Producción es la Lenovo de oficina** (túnel Cloudflare → siragpt.com), no Hostinger ni
+   un VPS nuevo. **Desde 2026-09-12 la publicación es automática**: cada squash-merge a
+   `production-main` dispara el workflow "Publish production (Lenovo)"
+   (`.github/workflows/publish-production.yml`) en el runner self-hosted de la Lenovo
+   (`deploy/lenovo-runner`, contenedor `siragpt-github-runner`), que espera el CI del push
+   y ejecuta el mismo `publish.sh` con todas sus barreras (fast-forward, sin diffs de
+   schema, rollback). Cambios de schema/migraciones siguen siendo release manual por SSH.
+   Nunca `compose down -v`, nunca `git reset --hard`, nunca mover DNS ni crear otro `.env`.
+7. **Secretos:** jamás en el chat, en commits ni en docs. Viven en Replit Secrets y en el único
+   `.env` de producción. Un secreto nuevo se pide a Luis por canal enmascarado.
+8. **Producto:** `/agentes` es la superficie canónica (`/chat` y `/code` redirigen; no revivir
+   `/code`). Modelos: solo DeepSeek V4 Flash/Pro, mostrados como "Sira Rápido" / "Sira Pro"
+   (nunca el model_id ni el proveedor); nada de OpenRouter u otros modelos. Una app cuenta como
+   "Conectada" solo con token válido + health, nunca por abrir un navegador o un catálogo.
 
 ## Visual Tools Inventory (34 tools)
 | Tool | File | Description |
@@ -1130,12 +1149,37 @@ E2E con git real en tmpdir: `codex-e2e-flow.test.js`. Golden replay: `tests/lib/
 `CODEX_WORKER_CONCURRENCY` (2) · `CODEX_RUN_TIMEOUT_MS` (15min) · `CODEX_MAX_STEPS` (24) ·
 `CODEX_MAX_TOOLS_PER_TURN` (4) · `CODEX_COST_PROMO_MULTIPLIER` · `CEREBRAS_API_KEY` (LLM).
 `logCodexConfig()` valida coherencia al boot.
+Autoscaling en caliente del worker: `CODEX_WORKER_MAX_CONCURRENCY` (8; techo, si ≤ floor
+desactiva) · `CODEX_AUTOSCALE_QUEUE_DEPTH` (3) · `CODEX_AUTOSCALE_STEP` (2) ·
+`CODEX_AUTOSCALE_SCALE_DOWN_MS` (120s) · `CODEX_AUTOSCALE_INTERVAL_MS` (15s).
 
 ### Gotchas
 - vitest forks pool cuelga aquí → usar `--pool=threads`.
 - Tests e2e/integración deben `delete process.env.REDIS_URL` o el publish abre una conexión ioredis
   que mantiene vivo el proceso (cuelga node --test).
 - git-real tests: `git config core.autocrlf false` en el repo temporal (Windows CRLF rompe la comparación byte-a-byte).
+
+## Paridad con Claude Code web — etapas publicadas (2026-09-11)
+
+Diagnóstico completo (14 dimensiones, brechas P0/P1/P2 con evidencia) en la página
+"Paridad con Claude Code" del 11-sep-2026. Cinco etapas backend, sin UI, ya en `production-main`:
+
+| PR | Etapa | Qué cambia |
+|---|---|---|
+| #690 | Base segura + modelo | `codex/deepseek-turn.js`: DeepSeek V4 con tool-calling NATIVO para todos los tiers (power → v4-pro, resto → v4-flash); ladder `deepseek → anthropic → openrouter → cerebras` con `exclude`. Runner heredado `github/workspace-runner.service.js` OFF en producción (`SIRAGPT_WORKSPACE_RUN_ENABLED=1` opt-in). |
+| #691 | Sesión = repo | `POST /api/codex/projects/clone` clona repos PRIVADOS con el OAuth GitHub del usuario (`-c http.<github>.extraheader`, remote limpio), rama por defecto real, 404 sin acceso; `github/plan` y `github/publish` usan el OAuth guardado si no llega `githubToken`. |
+| #692 | Aviso al terminar | `agents/task-store` publica `agent.task.{completed\|failed\|cancelled}` una vez por tarea; `user-notifications` crea la fila de bandeja con `metadata.actionUrl → /agentes/<chatId>`. `SIRAGPT_AGENT_TASK_NOTIFY`. |
+| #693 | CI del PR | Tool `github_checks` (`codex/github-checks.js`): checks de la rama `run/<id>`, una `ref` o un `pr`, pasos fallidos de Actions, con la cuenta del usuario. |
+| #694 | Memoria y Biblioteca | `codex/user-memory.js` inyecta la memoria Hermes del usuario en el system prompt de codex (`CODEX_USER_MEMORY*`); `use_skill` alcanza los skills de la Biblioteca del usuario. |
+| #697 | Repo vinculado al chat | `POST /api/codex/projects/clone` acepta `chatId` (brief.chatId, 409 `chat_already_bound`); `GET /api/github/repos/:owner/:repo/branches`; `publicProject` expone `sourceControl` + `chatId`. UI: `components/agentes/coding-repo-picker.tsx` («Vincular repositorio» → repo + rama → «Abrir en este chat», chip `owner/repo · rama`) montado en `coding-ide-shell.tsx`. Primer levantamiento parcial del UI lock para `/agentes` (re-baseline solo de los archivos tocados). Visible con `AGENTES_CODING_V2=1`. |
+| #700 | Cambios y Crear PR | `codex/workspace-changes.js` (cambios del workspace vs rama base, untracked inline, cap; `prepareWorkspaceBranch` → `run/agentes-<proyecto>-<fecha>` + commit). `GET /api/codex/projects/:id/changes` y `POST /api/codex/projects/:id/github/publish-workspace` (428 plan → `confirm` → PR con el OAuth del usuario; repo/base del brief; exige allowlist `CODEX_SELF_HOST_GIT_HOSTS`). UI: pestaña «Cambios» (`components/agentes/coding-changes-pane.tsx`) en el shell: lista de archivos, diff por archivo, «Crear PR» → «Confirmar y abrir PR». |
+
+Pendiente que requiere a Luis: GitHub App (claves en `.env` prod + Replit), cierre del catálogo
+de modelos por código, runner aislado gVisor en la Lenovo, `MCP_ALLOWED_HOSTS`, encender
+`AGENTES_CODING_V2=1` en producción para exponer el shell de IDE. El UI lock se levanta por
+etapas para `/agentes` (Luis lo autorizó el 2026-09-12): cada PR re-baselinea solo los archivos
+que toca. Siguiente etapa: montar el flujo de codex (selector de repo, Cambios, PR) en el chat cuando codex esté encendido, no solo bajo `AGENTES_CODING_V2`; sesiones paralelas visibles. Envs nuevas documentadas en
+`docs/ENV_VARIABLES.md`.
 
 ## Codex Agent — Claude Code parity + Agent SDK (added 2026-07-02)
 
@@ -1272,8 +1316,42 @@ e2e real (servicio+BD y HTTP+auth) + UI en navegador (create→publish→running
 - Un seeder de arranque reescribe la password de `admin@example.com` a `password`
   en cada reinicio del backend (credencial local estable: `admin@example.com` / `password`).
 
+## Planes y pagos — solo dos planes (added 2026-09-12)
+
+Decisión de producto de Luis: la página de planes es **`/planes`** (pantalla
+completa, botón «Atrás» arriba a la izquierda, estilo Claude) y ofrece SOLO dos
+planes. No revivir tiers ni el plan de $5 en la UI.
+
+| Plan | Precio | Código backend | Acción |
+|---|---|---|---|
+| **Pro** | $10 USD/mes | `PRO_MAX` (ya costaba $10 en stripe.js / payments.js / proration / feature-cost-estimator; `PRO` $5 queda como tier legado para suscriptores existentes) | `POST /api/payments/stripe` → Stripe Checkout → `/payment/success` (`verify-session` activa el plan aunque no haya webhook) |
+| **Hablemos** | a medida | `ENTERPRISE` | Abre WhatsApp con mensaje prellenado (`wa.me/<SIRAGPT_WHATSAPP_NUMBER>`), fallback `/support` |
+
+- **Fuente única de verdad**: `lib/plans-catalog.ts` (copy, precios, `PLAN_DISPLAY_NAMES`
+  —`PRO_MAX` se muestra como «Pro»—, `buildWhatsAppHref`, `describeCheckoutError`).
+  La consumen `app/planes/page.tsx`, `components/landing/PricingSection.tsx`,
+  `components/subscription-manager.tsx` (billing) y `components/UpgradeModal.tsx`,
+  que ahora es un shim: cualquier `open=true` (sidebar, error de cuota en el chat,
+  evento `open-upgrade-modal`) navega a `/planes`.
+- **Backend**: `GET /api/payments/config` (público) → `{ stripeConfigured,
+  checkoutAvailable, whatsappNumber, paidPlan, contactPlan }`; la página lo lee en
+  runtime, así que habilitar ventas en prod solo requiere el `.env` del backend.
+  `stripe-setup.getPriceIdForPlan` **auto-provisiona** producto + precio en Stripe
+  (`stripeService.ensurePriceForPlan`, idempotente por `metadata.plan`) cuando solo
+  hay `STRIPE_SECRET_KEY`, y lo cachea en `systemSettings`. Sin clave, `POST /stripe`
+  responde 503 en español con `code: STRIPE_NOT_CONFIGURED` + número de WhatsApp.
+- **Env de producción (Luis)**: `STRIPE_SECRET_KEY` (obligatoria para cobrar),
+  `STRIPE_WEBHOOK_SECRET` (renovaciones/cancelaciones; endpoint
+  `/api/payments/stripe/webhook`), `SIRAGPT_WHATSAPP_NUMBER` (dígitos con código de
+  país), opcional `NEXT_PUBLIC_WHATSAPP_NUMBER` en el build del frontend, y
+  `FRONTEND_URL=https://siragpt.com`. Detalle en `docs/ENV_VARIABLES.md`.
+- **Tests**: `backend/tests/payments-public-config.test.js`,
+  `backend/tests/stripe-setup.test.js` (auto-provisión), `tests/plans-catalog.test.ts`.
+
 ## Conexiones externas
-- Repo: https://github.com/SiraGPT-ORg/siraGPT
+- Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
-- Branch: main (push directo)
-- CI: GitHub Actions (automatic cancel on newer commit)
+- Rama de producción: `production-main` (solo vía PR + squash-merge; nunca push a `main`)
+- CI: GitHub Actions, check requerido "CI · required checks passed" (frontend, backend en 4
+  shards, seguridad, licencias, UI lock, visual regression, e2e-critical, desktop)
+- Producción: https://siragpt.com (health en `/api/health`; `api.siragpt.com` es 404)

@@ -8,6 +8,11 @@ import {
   friendlyFailureLabel as friendlyFailureLabelVocab,
 } from "@/lib/file-processing-vocab"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import {
+  buildFileProcessingStatusUrl,
+  decideProcessingStatusPoll,
+  resolveProcessingPollGiveUp,
+} from "@/lib/file-processing-status-client"
 
 // Re-export the vocab so existing import sites
 // (`from "@/hooks/use-file-processing-status"`) keep working.
@@ -57,7 +62,6 @@ const INITIAL: FileProcessingStatus = {
   pending: false,
 }
 
-const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const POLL_INTERVAL_MS = 2_000
 const MAX_POLLS = 900 // 30 minutes ceiling — OCR-heavy batches can legitimately take longer.
 
@@ -80,6 +84,7 @@ export function useFileProcessingStatus(
     let cancelled = false
     let polls = 0
     let timer: ReturnType<typeof setTimeout> | null = null
+    const abort = new AbortController()
     setState({
       fileId,
       stage: null,
@@ -94,42 +99,48 @@ export function useFileProcessingStatus(
       polls += 1
       try {
         const resp = await authenticatedFetch(
-          `${API_ROOT}/files/${encodeURIComponent(fileId)}/processing-status`,
-          { headers: authHeader(), credentials: "include" },
+          buildFileProcessingStatusUrl(fileId),
+          { headers: authHeader(), credentials: "include", signal: abort.signal },
         )
         if (cancelled) return
-        if (!resp.ok) {
-          // 404 means legacy row (no state machine columns yet) or
-          // file removed; either way, stop polling and surface the
-          // last-known state. 401/403 means we shouldn't retry.
-          setState((prev) => ({
-            ...prev,
-            loading: false,
-            pending: false,
-            isTerminal: true,
-            stage: prev.stage,
-          }))
+        const decision = decideProcessingStatusPoll(resp.status, polls)
+        if (decision === "stop") {
+          setState((prev) => {
+            const next = resolveProcessingPollGiveUp(prev.stage)
+            return {
+              ...prev,
+              loading: false,
+              pending: false,
+              isTerminal: true,
+              stage: next.stage,
+              error: prev.error || next.error,
+            }
+          })
           return
         }
-        const data = await resp.json() as {
-          fileId: string
-          stage: FileProcessingStage
-          error: string | null
-          stageAt: string | null
-          isTerminal: boolean
+        if (decision === "retry") {
+          // 5xx / 429 / early 404 / other non-OK — keep polling.
+        } else {
+          const data = await resp.json() as {
+            fileId: string
+            stage: FileProcessingStage
+            error: string | null
+            stageAt: string | null
+            isTerminal: boolean
+          }
+          if (cancelled) return
+          const isTerminal = data.isTerminal || TERMINAL.has(data.stage)
+          setState({
+            fileId: data.fileId,
+            stage: data.stage,
+            error: data.error,
+            stageAt: data.stageAt,
+            isTerminal,
+            loading: !isTerminal,
+            pending: false,
+          })
+          if (isTerminal) return
         }
-        if (cancelled) return
-        const isTerminal = data.isTerminal || TERMINAL.has(data.stage)
-        setState({
-          fileId: data.fileId,
-          stage: data.stage,
-          error: data.error,
-          stageAt: data.stageAt,
-          isTerminal,
-          loading: !isTerminal,
-          pending: false,
-        })
-        if (isTerminal) return
       } catch {
         // Transient network error — keep polling on the same cadence
         // until the ceiling so a flaky connection doesn't permanently
@@ -142,14 +153,18 @@ export function useFileProcessingStatus(
         // best-effort background enhancement, not a prerequisite for using
         // the document. Resolve to a usable terminal state so the UI stops
         // showing an in-progress spinner once the worker is clearly wedged.
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          pending: false,
-          isTerminal: true,
-          stage: prev.stage && !TERMINAL.has(prev.stage) ? "ready" : prev.stage,
-          timedOut: true,
-        }))
+        setState((prev) => {
+          const next = resolveProcessingPollGiveUp(prev.stage)
+          return {
+            ...prev,
+            loading: false,
+            pending: false,
+            isTerminal: true,
+            stage: next.stage,
+            error: prev.error || next.error,
+            timedOut: true,
+          }
+        })
         return
       }
       timer = setTimeout(tick, POLL_INTERVAL_MS)
@@ -160,6 +175,7 @@ export function useFileProcessingStatus(
 
     return () => {
       cancelled = true
+      abort.abort()
       if (timer) clearTimeout(timer)
     }
   }, [fileId])

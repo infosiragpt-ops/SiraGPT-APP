@@ -1,11 +1,13 @@
 "use client"
 
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
+
 import { useEffect, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Download, ExternalLink, FileText } from 'lucide-react'
+import { Download, ExternalLink } from 'lucide-react'
 import { apiClient } from '@/lib/api'
 import { toast } from 'sonner'
 
@@ -18,7 +20,27 @@ interface AdminStripeInvoice {
   hostedInvoiceUrl?: string
   invoicePdf?: string
   created: string | Date
+  customerEmail?: string | null
   user?: { id: string; name: string | null; email: string } | null
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  paid: 'Pagada',
+  open: 'Abierta',
+  draft: 'Borrador',
+  void: 'Anulada',
+  uncollectible: 'Incobrable',
+}
+
+function dash(value?: string | null) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text || null
+}
+
+function statusLabel(status?: string) {
+  const key = String(status || '').trim().toLowerCase()
+  if (!key) return null
+  return STATUS_LABEL[key] || status!.toUpperCase()
 }
 
 export default function AdminInvoicesPage() {
@@ -35,7 +57,7 @@ export default function AdminInvoicesPage() {
       setInvoices(res.invoices || [])
     } catch (e) {
       console.error(e)
-      toast.error('Failed to load invoices')
+      toast.error('No se pudieron cargar las facturas')
     } finally {
       setLoading(false)
     }
@@ -53,30 +75,52 @@ export default function AdminInvoicesPage() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (e: any) {
-      toast.error(e.message || 'Download failed')
+      toast.error(e.message || 'No se pudo descargar')
     }
   }
 
+  const renderEmail = (inv: AdminStripeInvoice) => {
+    const email = dash(inv.customerEmail) || dash(inv.user?.email)
+    if (!email) {
+      return <span className="text-muted-foreground">—</span>
+    }
+    return (
+      <span
+        className="select-all whitespace-nowrap font-mono text-[13px] text-foreground/90"
+        title={email}
+      >
+        {email}
+      </span>
+    )
+  }
+
+  const renderUser = (inv: AdminStripeInvoice) => {
+    const name = dash(inv.user?.name)
+    if (!name) {
+      return <span className="text-muted-foreground">—</span>
+    }
+    return <span className="text-sm">{name}</span>
+  }
+
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2"><FileText className="h-6 w-6"/>Invoices</h1>
-          <p className="text-muted-foreground">All Stripe invoices across the platform</p>
-        </div>
-        <Button variant="outline" onClick={load}>Refresh</Button>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Facturas"
+        description="Facturas de Stripe de la plataforma"
+        actions={<Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={load}>Actualizar</Button>}
+      />
+      <AdminPageBody className="space-y-3">
 
       <Card>
         <CardHeader>
-          <CardTitle>Invoices</CardTitle>
+          <CardTitle>Facturas</CardTitle>
           <CardDescription>Total: {invoices.length}</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="p-8">Loading…</div>
+            <div className="p-8">Cargando…</div>
           ) : invoices.length === 0 ? (
-            <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">No invoices found</div>
+            <div className="rounded-lg border p-8 text-center text-sm text-muted-foreground">No hay facturas</div>
           ) : (
             <>
             {/* Desktop/tablet table; phones get the card list below. */}
@@ -84,12 +128,13 @@ export default function AdminInvoicesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Invoice #</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>User</TableHead>
-                    <TableHead>Actions</TableHead>
+                    <TableHead>Fecha</TableHead>
+                    <TableHead>Factura</TableHead>
+                    <TableHead>Estado</TableHead>
+                    <TableHead>Importe</TableHead>
+                    <TableHead>Usuario</TableHead>
+                    <TableHead>Correo</TableHead>
+                    <TableHead>Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -99,20 +144,12 @@ export default function AdminInvoicesPage() {
                       <TableCell className="font-mono">{inv.number || inv.id}</TableCell>
                       <TableCell>
                         <Badge variant={(inv.status || '').toUpperCase() === 'PAID' ? 'default' : 'secondary'}>
-                          {(inv.status || '').toUpperCase() || 'UNKNOWN'}
+                          {statusLabel(inv.status) || '—'}
                         </Badge>
                       </TableCell>
                       <TableCell>${Number(inv.amountPaid ?? 0).toFixed(2)} {inv.currency?.toUpperCase?.()}</TableCell>
-                      <TableCell>
-                        {inv.user ? (
-                          <div className="flex flex-col text-sm">
-                            <span>{inv.user.name || inv.user.email}</span>
-                            <span className="text-muted-foreground">{inv.user.email}</span>
-                          </div>
-                        ) : (
-                          <span className="text-muted-foreground">Unknown</span>
-                        )}
-                      </TableCell>
+                      <TableCell>{renderUser(inv)}</TableCell>
+                      <TableCell>{renderEmail(inv)}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Button size="sm" variant="outline" onClick={() => download(inv.id)}>
@@ -138,16 +175,17 @@ export default function AdminInvoicesPage() {
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-mono text-xs">{inv.number || inv.id}</span>
                     <Badge variant={(inv.status || '').toUpperCase() === 'PAID' ? 'default' : 'secondary'}>
-                      {(inv.status || '').toUpperCase() || 'UNKNOWN'}
+                      {statusLabel(inv.status) || '—'}
                     </Badge>
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2 text-sm">
                     <span className="font-medium">${Number(inv.amountPaid ?? 0).toFixed(2)} {inv.currency?.toUpperCase?.()}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">{new Date(inv.created).toLocaleString()}</span>
                   </div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {inv.user ? (inv.user.name || inv.user.email) : 'Unknown'}
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {dash(inv.user?.name) || '—'}
                   </div>
+                  <div className="mt-0.5">{renderEmail(inv)}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" onClick={() => download(inv.id)}>
                       <Download className="h-3 w-3 mr-1"/> PDF
@@ -165,6 +203,7 @@ export default function AdminInvoicesPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

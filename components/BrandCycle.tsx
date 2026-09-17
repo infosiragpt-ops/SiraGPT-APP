@@ -850,16 +850,16 @@ const BRANDS: Brand[] = [
 
 // ========================= LOADER BARS =========================
 
-const LoaderBars = ({ color }: { color: string }) => (
-  <svg viewBox="10 40 45 50" xmlns="http://www.w3.org/2000/svg" className="h-8 w-14" style={{ color }} aria-label="Loading">
-    <rect x="20" y="50" width="4" height="10" fill="currentColor">
-      <animateTransform attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0s" dur="0.6s" repeatCount="indefinite" />
+const LoaderBars = ({ color: _color }: { color: string }) => (
+  <svg version="1.1" id="L9" viewBox="10 40 45 50" xmlns="http://www.w3.org/2000/svg" className="h-8 w-14" aria-label="Pensando">
+    <rect x="20" y="50" width="4" height="10" fill="#38BDF8">
+      <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0" dur="0.6s" repeatCount="indefinite" />
     </rect>
-    <rect x="30" y="50" width="4" height="10" fill="currentColor">
-      <animateTransform attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite" />
+    <rect x="30" y="50" width="4" height="10" fill="#38BDF8">
+      <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite" />
     </rect>
-    <rect x="40" y="50" width="4" height="10" fill="currentColor">
-      <animateTransform attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite" />
+    <rect x="40" y="50" width="4" height="10" fill="#38BDF8">
+      <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite" />
     </rect>
   </svg>
 )

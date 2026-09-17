@@ -131,6 +131,7 @@ test('agentic execution profile: voice (text-to-speech) goal is not gated on doc
   assert.ok(profile.requiredTools.includes('generate_speech'));
   assert.ok(!profile.requiredTools.includes('create_document'));
   assert.ok(!profile.requiredTools.includes('verify_artifact'));
+  assert.ok(profile.qualityGates.some((gate) => /speechSynthesis|Web Speech API/i.test(gate)));
 
   // A single successful generate_speech call satisfies the gate — no
   // verify_artifact required.

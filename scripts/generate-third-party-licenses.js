@@ -25,7 +25,11 @@ const ROOT = path.resolve(__dirname, '..');
 const BACKEND = path.join(ROOT, 'backend');
 const OUTPUT = path.join(ROOT, 'THIRD_PARTY_LICENSES.md');
 
-const FORBIDDEN_PATTERNS = ['GPL', 'AGPL', 'LGPL', 'CDDL', 'EPL', 'MPL-1.1', 'NPOSL'];
+const { FORBIDDEN_PATTERNS } = require('./oss-license-policy');
+// Forbidden families live in scripts/oss-license-policy.js (single source of
+// truth shared with the Agentes de codificación OSS catalog): copyleft /
+// network-copyleft (GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL) plus FSL, SSPL and
+// Sustainable-Use licenses, which never revert in time for production use.
 
 // Platform-suffixed native binary packages (sharp, esbuild, swc, rollup, etc.)
 // resolve as optionalDependencies keyed by os/cpu in npm. Locally on macOS

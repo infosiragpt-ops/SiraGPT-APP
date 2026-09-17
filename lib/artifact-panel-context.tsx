@@ -65,3 +65,17 @@ export function ArtifactPanelProvider({ children }: { children: React.ReactNode 
     </ArtifactPanelContext.Provider>
   )
 }
+
+const downloadInflight = new Map<string, Promise<unknown>>()
+
+export function beginArtifactDownload<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const id = String(key || "").trim()
+  if (!id) return run()
+  const existing = downloadInflight.get(id)
+  if (existing) return existing as Promise<T>
+  const pending = Promise.resolve().then(run).finally(() => {
+    downloadInflight.delete(id)
+  })
+  downloadInflight.set(id, pending)
+  return pending
+}

@@ -24,9 +24,11 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const sandbox = require('./code-sandbox');
-const { saveArtifact, EXTENSION_TO_MIME, INTERNAL } = require('./task-tools');
+const { saveArtifact, EXTENSION_TO_MIME, INTERNAL, ARTIFACT_DIR } = require('./task-tools');
 
 const { previewText, validateAgentArtifactBuffer } = INTERNAL;
+
+const imageDirective = require('./image-directive');
 
 // ── Lazy imports (avoid circular deps / unnecessary loads) ─────────────
 
@@ -48,6 +50,12 @@ function getImageEngine() {
   return imageEngineMod;
 }
 
+let videoDirectorMod;
+function getVideoDirector() {
+  if (!videoDirectorMod) videoDirectorMod = require('../video-prompt-director');
+  return videoDirectorMod;
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────────
 
 function ensureDir(p) {
@@ -67,7 +75,7 @@ function emitEvent(ctx, type, data) {
   }
 }
 
-function finalizeArtifact({ filename, buffer, mime, ctx }) {
+function finalizeArtifact({ filename, buffer, mime, ctx, imageMetadata }) {
   const b64 = buffer.toString('base64');
   return saveArtifact({
     filename,
@@ -75,6 +83,7 @@ function finalizeArtifact({ filename, buffer, mime, ctx }) {
     mime,
     ownerUserId: ctx?.userId,
     chatId: ctx?.chatId,
+    imageMetadata,
   });
 }
 
@@ -223,7 +232,7 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate an image from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The model is routed to its provider automatically and, if that provider fails or has no API key, the engine fails over to the next configured one. The resulting image is saved as a downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
+  description: 'Generate one or more images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
   parameters: {
     type: 'object',
     properties: {
@@ -232,11 +241,30 @@ const generateImage = {
       aspectRatio: { type: 'string', enum: ['square', 'wide', 'portrait'], description: 'Aspect ratio hint. Default: "square". wide → landscape, portrait → vertical.' },
       quality: { type: 'string', enum: ['standard', 'hd'], description: 'Quality level. Default: "standard".' },
       model: { type: 'string', description: 'Optional image model id, e.g. "gpt-image-2", "imagen-4.0-generate-001", "fal-ai/flux/schnell", "google/gemini-2.5-flash-image", "grok-2-image". Only pass it when the user asked for a specific model; omit to use the best configured provider.' },
+      count: { type: 'integer', minimum: 1, maximum: 5, description: 'Optional number of image variants to generate (1..5). Defaults to the count stated in the prompt, or 1.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, style = 'vivid', aspectRatio = 'square', quality = 'standard', model }, ctx = {}) {
+  async execute(args = {}, ctx = {}) {
+    const { prompt: rawPrompt, style: styleArg, aspectRatio: ratioArg, quality: qualityArg, model, count: countArg } = args || {};
+    // Spoken context fills the gaps: "dame una imagen vertical",
+    // "una imagen orisontal para la portada", "3 imágenes estilo anime".
+    // Explicit tool arguments always win over the parsed request.
+    const directive = imageDirective.resolveGenerationDirective(rawPrompt, {
+      style: styleArg,
+      aspectRatio: ratioArg,
+      quality: qualityArg,
+    });
+    const prompt = directive.prompt;
+    const style = directive.style;
+    const aspectRatio = directive.aspectRatio;
+    const quality = directive.quality;
+    // Explicit count wins; otherwise the spoken count; always 1..5.
+    const parsedCount = Number.parseInt(countArg, 10);
+    const count = Number.isFinite(parsedCount)
+      ? Math.min(5, Math.max(1, parsedCount))
+      : directive.count;
     emitEvent(ctx, 'tool_call', { tool: 'generate_image', preview: prompt });
 
     try {
@@ -254,15 +282,17 @@ const generateImage = {
       const styleDesc = styleHints[style] || 'Vivid colors, striking composition.';
       const enhancedPrompt = `${styleDesc} ${prompt}`;
 
-      emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: 'Generando imagen…', partial: true });
+      emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: count > 1 ? `Generando ${count} imágenes…` : 'Generando imagen…', partial: true });
 
       const engine = getImageEngine();
       const result = await engine.generateImage({
         prompt: enhancedPrompt,
-        model: model || ctx.imageModel || undefined,
+        model: ctx.imageModel || model || undefined,
+        provider: ctx.imageProvider || undefined,
+        failover: false,
         aspectRatio,
-        quality,
-        n: 1,
+        quality: ctx.imageQuality || quality,
+        n: count,
         signal: ctx.signal,
       });
 
@@ -272,38 +302,58 @@ const generateImage = {
         return { ok: false, error: msg, attempts: result.attempts };
       }
 
-      const buffer = Buffer.from(result.images[0].b64, 'base64');
-      const filename = `image_${crypto.randomBytes(4).toString('hex')}.png`;
-
-      const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
-
-      emitEvent(ctx, 'file_artifact', {
-        artifact: {
+      // Every image becomes its own downloadable artifact (back-compat: the
+      // first artifact is also exposed at the top level).
+      const artifacts = [];
+      for (let index = 0; index < result.images.length; index += 1) {
+        const buffer = Buffer.from(result.images[index].b64, 'base64');
+        const filename = `image_${crypto.randomBytes(4).toString('hex')}${result.images.length > 1 ? `_${index + 1}` : ''}.png`;
+        const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
+          model: result.model, provider: result.provider, aspectRatio, quality: ctx.imageQuality || quality,
+        } });
+        artifacts.push({
           id: artifact.id,
           filename: artifact.filename,
-          format: 'png',
-          mime: 'image/png',
           sizeBytes: artifact.sizeBytes,
           downloadUrl: artifact.downloadUrl,
-        },
-      });
+        });
+        emitEvent(ctx, 'file_artifact', {
+          artifact: {
+            id: artifact.id,
+            filename: artifact.filename,
+            format: 'png',
+            mime: 'image/png',
+            sizeBytes: artifact.sizeBytes,
+            downloadUrl: artifact.downloadUrl,
+            fileId: `artifact:${artifact.id}`, model: result.model, provider: result.provider, aspectRatio,
+          },
+        });
+      }
 
+      const first = artifacts[0];
+      const totalKB = artifacts.reduce((sum, a) => sum + (a.sizeBytes || 0), 0) / 1024;
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_image',
         ok: true,
-        preview: `Imagen lista: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+        preview: artifacts.length > 1
+          ? `${artifacts.length} imágenes listas (${Math.round(totalKB)} KB en total)`
+          : `Imagen lista: ${first.filename} (${Math.round(first.sizeBytes / 1024)} KB)`,
       });
 
       return {
         ok: true,
-        id: artifact.id,
-        filename: artifact.filename,
-        sizeBytes: artifact.sizeBytes,
-        downloadUrl: artifact.downloadUrl,
+        id: first.id,
+        filename: first.filename,
+        sizeBytes: first.sizeBytes,
+        downloadUrl: first.downloadUrl,
         mime: 'image/png',
         prompt: enhancedPrompt,
         provider: result.provider,
         model: result.model,
+        frame: directive.frame,
+        requestedImages: count,
+        deliveredImages: artifacts.length,
+        images: artifacts,
       };
     } catch (err) {
       const msg = err?.message || String(err);
@@ -317,118 +367,15 @@ const generateImage = {
 // Tool 1b: edit_image (img2img — transform an existing image)
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Resolve the source image for edit_image into a Buffer. */
-async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
-  const prisma = ctx.prisma || (() => { try { return require('../../config/database'); } catch { return null; } })();
-
-  async function bufferFromFileRecord(record) {
-    if (!record || !record.path) return null;
-    try {
-      const buf = await fs.promises.readFile(record.path);
-      return buf && buf.length
-        ? { buffer: buf, mimeType: record.mimeType || 'image/png', source: record.originalName || record.filename }
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  // 1. Explicit URL (http(s), data: or a local /uploads path).
-  const url = String(imageUrl || '').trim();
-  if (url) {
-    const dataMatch = url.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
-    if (dataMatch) {
-      return { buffer: Buffer.from(dataMatch[2], 'base64'), mimeType: dataMatch[1], source: 'data-url' };
-    }
-    if (/^https?:\/\//i.test(url)) {
-      try {
-        // SSRF guard: the URL is an LLM-produced tool argument — block
-        // private / loopback / cloud-metadata targets with the same vetting
-        // the harness web_fetch tool uses, and refuse redirects (an
-        // approved host could otherwise bounce us to an internal one).
-        // eslint-disable-next-line global-require
-        const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
-        assertSafeUrl(url);
-        const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
-        if (resp && resp.ok) {
-          const buf = Buffer.from(await resp.arrayBuffer());
-          if (buf.length) {
-            return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
-          }
-        }
-      } catch { /* unsafe or unreachable URL → fall through to other sources */ }
-    }
-    const uploadsMatch = url.match(/\/uploads\/(.+)$/);
-    if (uploadsMatch) {
-      try {
-        // Containment check: the captured segment is attacker-influenced —
-        // resolve it and require it to stay inside the uploads root so
-        // "/uploads/../../etc/passwd" cannot escape.
-        const uploadsRoot = path.resolve(__dirname, '../../../uploads');
-        const local = path.resolve(uploadsRoot, uploadsMatch[1]);
-        if (local === uploadsRoot || !local.startsWith(uploadsRoot + path.sep)) return null;
-        const buf = await fs.promises.readFile(local);
-        if (buf.length) return { buffer: buf, mimeType: 'image/png', source: url };
-      } catch { /* fall through */ }
-    }
-  }
-
-  // 2. Explicit fileId (ownership-checked).
-  if (fileId && prisma && ctx.userId) {
-    try {
-      const record = await prisma.file.findFirst({ where: { id: String(fileId), userId: ctx.userId } });
-      const resolved = await bufferFromFileRecord(record);
-      if (resolved) return resolved;
-    } catch { /* fall through */ }
-  }
-
-  // 3. Image attached to THIS message (toolContext.fileIds).
-  if (prisma && ctx.userId && Array.isArray(ctx.fileIds) && ctx.fileIds.length) {
-    try {
-      const records = await prisma.file.findMany({
-        where: { id: { in: ctx.fileIds.map(String) }, userId: ctx.userId },
-      });
-      const image = records.find((r) => String(r.mimeType || '').startsWith('image/'));
-      const resolved = await bufferFromFileRecord(image);
-      if (resolved) return resolved;
-    } catch { /* fall through */ }
-  }
-
-  // 4. Most recent image in the chat (uploaded or generated via the
-  //    dedicated image route, which persists files on the message). The
-  //    fileId embedded in message.files is NOT trusted: the file record
-  //    must belong to the requesting user (same ownership filter as the
-  //    fileId branches above).
-  if (prisma && ctx.chatId && ctx.userId) {
-    try {
-      const messages = await prisma.message.findMany({
-        where: { chatId: ctx.chatId, files: { not: null } },
-        orderBy: { timestamp: 'desc' },
-        take: 10,
-      });
-      for (const message of messages) {
-        let files;
-        try {
-          files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
-        } catch { continue; }
-        if (!Array.isArray(files)) continue;
-        const image = files.find((f) => f && (f.type === 'image' || String(f.type || '').startsWith('image/')) && (f.fileId || f.id));
-        if (!image) continue;
-        const record = await prisma.file.findFirst({
-          where: { id: String(image.fileId || image.id), userId: ctx.userId },
-        });
-        const resolved = await bufferFromFileRecord(record);
-        if (resolved) return resolved;
-      }
-    } catch { /* fall through */ }
-  }
-
-  return null;
+// Shared with /ai/generate-image; #730 artifact history support stays canonical.
+async function resolveEditSourceImage(args, ctx = {}) {
+  const prisma = ctx.prisma || (!args.imageUrl && (() => { try { return require('../../config/database'); } catch { return null; } })());
+  return require('../media/image-source').resolveImageSource(args, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
 }
 
 const editImage = {
   name: 'edit_image',
-  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, etc. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
+  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, reframe the SAME scene to another orientation ("la misma imagen pero vertical", "hazla horizontal"). The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Spoken targeting is understood ("en la imagen cambia el cielo a un atardecer", "cambia solo los ojos a verde"): the instruction is scoped to the detected target and everything else is preserved. An explicit `target` and/or `selection` (box 0..100, named region, label or mask ref) scopes the edit to a specific part. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "la misma imagen pero vertical", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
   parameters: {
     type: 'object',
     properties: {
@@ -436,11 +383,16 @@ const editImage = {
       imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
       fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
+      target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
+      selection: { type: 'object', description: 'Optional rectangular selection: { x, y, width, height } in 0..100 (fractions 0..1 also accepted). Pixels outside it are protected. Invalid selections return an error.' },
+      aspectRatio: { type: 'string', description: 'Optional output frame for reframes: square|wide|portrait or 1:1|3:4|16:9|9:16.' },
+      quality: { type: 'string', enum: ['standard', 'hd', '512px', '1K', '2K', '4K'], description: 'Requested rendering quality; supported output dimensions depend on the selected model.' },
+      count: { type: 'integer', minimum: 1, maximum: 5, description: 'Number of variants to edit from the same source (1 to 5).' },
     },
     required: ['instruction'],
     additionalProperties: false,
   },
-  async execute({ instruction, imageUrl, fileId, model } = {}, ctx = {}) {
+  async execute({ instruction, imageUrl, fileId, model, target, selection, aspectRatio, quality, count } = {}, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
 
     try {
@@ -450,18 +402,38 @@ const editImage = {
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
       const source = await resolveEditSourceImage({ imageUrl, fileId }, ctx);
       if (!source) {
-        const msg = 'No encontré ninguna imagen para editar. Pide al usuario que adjunte la imagen o genera una primero con generate_image.';
+        const msg = 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.';
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
         return { ok: false, error: msg };
       }
 
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Aplicando la edición a la imagen…', partial: true });
       const engine = getImageEngine();
+      // Scope the provider instruction to the spoken/explicit target and
+      // selection so "cambia esto" / "solo los ojos" edits one part and
+      // preserves everything else.
+      const reframe = imageDirective.detectImageReframe(cleanInstruction);
+      const editDirective = reframe
+        ? imageDirective.resolveReframeDirective(cleanInstruction, aspectRatio)
+        : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
+      const ratio = aspectRatio || editDirective.frame || (reframe && reframe.frame);
+      const { prepareEditCanvas, finishEditCanvas } = require('../media/image-edit-canvas');
+      const canvas = (reframe || selection) ? await prepareEditCanvas({
+        imageBuffer: source.buffer, operation: reframe ? 'reframe' : 'edit',
+        aspectRatio: ratio, selection,
+      }) : null;
       const result = await engine.editImage({
-        prompt: cleanInstruction,
-        imageBuffer: source.buffer,
-        mimeType: source.mimeType,
-        model,
+        prompt: editDirective.prompt,
+        imageBuffer: canvas?.imageBuffer || source.buffer,
+        mimeType: canvas?.mimeType || source.mimeType,
+        maskBuffer: canvas?.maskBuffer,
+        model: ctx.imageModel || model || undefined,
+        provider: ctx.imageProvider || undefined,
+        quality: ctx.imageQuality || quality || undefined,
+        background: editDirective.operation === 'remove-background' ? 'transparent' : undefined,
+        n: count || 1,
+        failover: false,
+        aspectRatio: ratio,
         signal: ctx.signal,
       });
 
@@ -471,25 +443,31 @@ const editImage = {
         return { ok: false, error: msg, attempts: result.attempts };
       }
 
-      const buffer = Buffer.from(result.images[0].b64, 'base64');
-      const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
-      const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
-
-      emitEvent(ctx, 'file_artifact', {
-        artifact: {
-          id: artifact.id,
-          filename: artifact.filename,
-          format: 'png',
-          mime: 'image/png',
-          sizeBytes: artifact.sizeBytes,
-          downloadUrl: artifact.downloadUrl,
-        },
-      });
+      const artifacts = [];
+      for (const image of result.images) {
+        const raw = Buffer.from(image.b64, 'base64');
+        const buffer = canvas ? await finishEditCanvas(raw, canvas) : raw;
+        const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
+        const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
+          parentFileId: source.fileId || null,
+          rootFileId: source.metadata?.rootFileId || source.fileId,
+          version: (Number(source.metadata?.version) || 1) + 1,
+          model: result.model, provider: result.provider, aspectRatio: ratio, quality: ctx.imageQuality || quality,
+        } });
+        artifacts.push(artifact);
+        emitEvent(ctx, 'file_artifact', {
+          artifact: { id: artifact.id, fileId: `artifact:${artifact.id}`, filename: artifact.filename, format: 'png', mime: 'image/png', sizeBytes: artifact.sizeBytes,
+            downloadUrl: artifact.downloadUrl, parentFileId: source.fileId || null, version: (Number(source.metadata?.version) || 1) + 1,
+            model: result.model, provider: result.provider, aspectRatio: ratio,
+          },
+        });
+      }
+      const artifact = artifacts[0];
 
       emitEvent(ctx, 'tool_output', {
         tool: 'edit_image',
         ok: true,
-        preview: `Imagen editada: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+        preview: `Imagen editada: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
       });
 
       return {
@@ -501,8 +479,12 @@ const editImage = {
         mime: 'image/png',
         instruction: cleanInstruction,
         sourceImage: source.source,
+        parentFileId: source.fileId || null,
+        images: artifacts,
         provider: result.provider,
         model: result.model,
+        editTarget: editDirective.target,
+        editSelection: editDirective.selection,
       };
     } catch (err) {
       const msg = err?.message || String(err);
@@ -1991,7 +1973,7 @@ ${chartHtml ? `<div class="charts-grid">${chartHtml}</div>` : ''}
 
 const generateVideo = {
   name: 'generate_video',
-  description: 'Generate a video from a text prompt using an AI video model (Veo, Runway, Pika, or similar). The video generation is launched asynchronously; the agent checks back for the result. Use for promotional videos, explainer animations, social media clips, or any short-form video content.',
+  description: 'Generate a professional video from a text prompt using an AI video model (Veo, Kling, Sora via fal.ai or a similar provider). The prompt is automatically directed with cinematic camera, pacing, lighting and audio cues plus a negative prompt that suppresses morphing/flicker. Pass continuation:true with previousPrompt when this clip must continue the previous shot — same character, wardrobe, location, style and locked capture settings — so consecutive videos keep visual continuity.',
   parameters: {
     type: 'object',
     properties: {
@@ -2001,11 +1983,13 @@ const generateVideo = {
       style: { type: 'string', description: 'Style hint: "cinematic", "realistic", "animated", "claymation", "retro", "3d-render".' },
       model: { type: 'string', description: 'Optional fal.ai video model (e.g. "fal-ai/veo3/fast", "fal-ai/kling-video/v2.5-turbo/pro/text-to-video", "fal-ai/sora-2/text-to-video"). Only pass it when the user asked for a specific model; omit for the default (Veo 3 fast).' },
       imageUrl: { type: 'string', description: 'Optional source image URL to animate (image-to-video). Use the URL of an image the user attached or one generated earlier in this chat.' },
+      continuation: { type: 'boolean', description: 'Set true when this clip continues the previous shot (sequel). Forces strict visual continuity and locks capture settings.' },
+      previousPrompt: { type: 'string', description: 'Original prompt of the previous video clip, used as continuity anchor when continuation is true or history is unavailable.' },
     },
     required: ['prompt'],
     additionalProperties: false,
   },
-  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style, model, imageUrl }, ctx = {}) {
+  async execute({ prompt, title, duration = 8, aspectRatio = '16:9', style, model, imageUrl, continuation = null, previousPrompt = null }, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'generate_video', preview: prompt });
 
     try {
@@ -2022,6 +2006,42 @@ const generateVideo = {
         };
         const styleDesc = styleMap[style] || '';
         if (styleDesc) enhancedPrompt = `${styleDesc} ${prompt}`;
+      }
+
+      // Professional direction + continuity via the shared prompt director.
+      let continuityMode = 'none';
+      let settingsLocked = [];
+      let directedNegativePrompt = null;
+      try {
+        const director = getVideoDirector();
+        const history = [];
+        const prior = ctx?.previousVideoPrompt || previousPrompt;
+        if (prior) history.push({ prompt: String(prior) });
+        if (Array.isArray(ctx?.videoHistory)) {
+          for (const h of ctx.videoHistory) {
+            if (h && (h.prompt || h.originalPrompt)) {
+              history.push({ prompt: h.originalPrompt || h.prompt, enhancedPrompt: h.enhancedPrompt || null });
+            }
+          }
+        }
+        const directed = director.directVideoPrompt({
+          prompt: enhancedPrompt,
+          aspectRatio,
+          durationSeconds: duration,
+          endpoint: model || '',
+          history: history.length ? history : null,
+          continuation: typeof continuation === 'boolean' ? continuation : null,
+          professionalize: true,
+        });
+        enhancedPrompt = directed.prompt;
+        continuityMode = directed.continuityMode;
+        settingsLocked = directed.settingsLocked || [];
+        directedNegativePrompt = directed.negativePrompt;
+        if (continuityMode === 'strict' && directed.settings.aspect_ratio) {
+          aspectRatio = directed.settings.aspect_ratio;
+        }
+      } catch {
+        // Director is best-effort: keep the style-enhanced prompt on failure.
       }
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: 'Iniciando generación de video…', partial: true });
@@ -2098,6 +2118,9 @@ const generateVideo = {
               downloadUrl: artifact.downloadUrl,
               mime: 'video/mp4',
               prompt: enhancedPrompt,
+              originalPrompt: prompt,
+              continuityMode,
+              settingsLocked,
               duration,
               aspectRatio,
             };
@@ -2117,6 +2140,9 @@ const generateVideo = {
             operationId,
             status: 'queued',
             prompt: enhancedPrompt,
+            originalPrompt: prompt,
+            continuityMode,
+            settingsLocked,
             duration,
             aspectRatio,
             message: 'La generación de video está en proceso. El resultado aparecerá automáticamente cuando esté listo.',
@@ -2133,6 +2159,9 @@ const generateVideo = {
           ok: true,
           status: 'submitted',
           prompt: enhancedPrompt,
+          originalPrompt: prompt,
+          continuityMode,
+          settingsLocked,
           ...pick(result, ['videoUrl', 'downloadUrl', 'operationId', 'jobId']),
         };
       }
@@ -2180,6 +2209,7 @@ const generateVideo = {
             prompt: enhancedPrompt,
             aspectRatio: falAspect,
             duration: secs,
+            negativePrompt: directedNegativePrompt,
             imageUrl: sourceImageUrl,
             resolution: '720p',
             audio: true,
@@ -2220,6 +2250,9 @@ const generateVideo = {
                 model: endpoint,
                 generationType: sourceImageUrl ? 'image-to-video' : 'text-to-video',
                 prompt: enhancedPrompt,
+                originalPrompt: prompt,
+                continuityMode,
+                settingsLocked,
                 duration: secs,
                 aspectRatio: falAspect,
               };
@@ -2337,6 +2370,8 @@ const generateVideo = {
           storyboard: true,
           scenes: scenes.length,
           prompt: enhancedPrompt,
+          originalPrompt: prompt,
+          continuityMode,
           duration,
           aspectRatio,
           message: 'No se configuró VIDEO_API_URL. Se generó un storyboard como alternativa.',

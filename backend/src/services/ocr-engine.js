@@ -347,6 +347,40 @@ class OcrEngine {
   }
 
   /**
+   * Tiny banners (URL strips, stamps, 610×94 screenshots) need a 4×
+   * upscale before Tesseract; large photos stay at the default max side.
+   */
+  pickImageOcrMaxSide(width, height, options = {}) {
+    const w = Number(width) || 0;
+    const h = Number(height) || 0;
+    const minSide = Math.min(w, h);
+    const maxSide = Math.max(w, h);
+    const area = w * h;
+    const cap = Number(options.cap) > 0 ? Number(options.cap) : 4000;
+    const fallback = Number(options.defaultMaxSide) > 0 ? Number(options.defaultMaxSide) : 3000;
+    if (minSide > 0 && (minSide < 400 || maxSide < 800 || area < 120_000)) {
+      return Math.min(cap, Math.max(Math.round(maxSide * 4), 1600));
+    }
+    return fallback;
+  }
+
+  isSmallOcrImage(width, height) {
+    const w = Number(width) || 0;
+    const h = Number(height) || 0;
+    if (w <= 0 || h <= 0) return false;
+    return Math.min(w, h) < 400 || Math.max(w, h) < 800 || (w * h) < 120_000;
+  }
+
+  async resolveImageOcrMaxSide(input, fallback = 3000) {
+    try {
+      const meta = await sharp(input).metadata();
+      return this.pickImageOcrMaxSide(meta.width, meta.height, { defaultMaxSide: fallback });
+    } catch {
+      return fallback;
+    }
+  }
+
+  /**
    * Returns an ordered list of lazy variant factories. Each factory
    * produces a preprocessed image buffer on demand so callers that
    * early-exit (e.g. a clean screenshot accepted on variant 1) never
@@ -356,12 +390,17 @@ class OcrEngine {
    */
   createImageVariantFactories(input, options = {}) {
     const maxSide = options.maxSide || 3000;
-    const makeBase = () => sharp(input)
-      .rotate()
-      .resize(maxSide, maxSide, { fit: 'inside', withoutEnlargement: false })
-      .greyscale();
+    const makeBase = (angle = 0) => {
+      let pipeline = sharp(input).rotate();
+      if (angle) {
+        pipeline = pipeline.rotate(angle, { background: '#ffffff' });
+      }
+      return pipeline
+        .resize(maxSide, maxSide, { fit: 'inside', withoutEnlargement: false })
+        .greyscale();
+    };
 
-    return [
+    const factories = [
       // 1. Normalize + sharpen (best for well-lit documents / screenshots)
       { name: 'normalize_sharpen', make: () => makeBase().normalize().sharpen().png().toBuffer() },
       // 2. High contrast — linear stretch (best for faded text)
@@ -373,10 +412,24 @@ class OcrEngine {
       // 5. Inverted — white text on black (important for some diagrams)
       { name: 'inverted_normalized', make: () => makeBase().negate({ alpha: false }).normalize().sharpen().png().toBuffer() },
     ];
+
+    if (options.deskew !== false) {
+      factories.push(
+        { name: 'deskew_plus_3', make: () => makeBase(3).normalize().sharpen().png().toBuffer() },
+        { name: 'deskew_minus_3', make: () => makeBase(-3).normalize().sharpen().png().toBuffer() },
+      );
+    }
+
+    return factories;
   }
 
   createImageVariants(filePath) {
     return this.createImageVariantFactories(filePath, { maxSide: 3000 });
+  }
+
+  async createImageVariantsForInput(input, options = {}) {
+    const maxSide = options.maxSide || await this.resolveImageOcrMaxSide(input, 3000);
+    return this.createImageVariantFactories(input, { ...options, maxSide });
   }
 
   createPdfPageVariants(pageBuffer, config = this.config) {
@@ -449,13 +502,23 @@ class OcrEngine {
   }
 
   async runLocalImageOcr(filePath, options = {}) {
-    const variantFactories = this.createImageVariants(filePath);
+    const variantFactories = await this.createImageVariantsForInput(filePath);
     const worker = await createWorker(options.language || this.defaultLanguage);
 
     try {
-      return await this.recognizeBestVariant(worker, variantFactories, this.config, {
+      const first = await this.recognizeBestVariant(worker, variantFactories, this.config, {
         maxVariants: variantFactories.length,
       });
+      if (first?.quality?.accepted) return first;
+
+      const enlargedFactories = await this.createImageVariantsForInput(filePath, { maxSide: 4000 });
+      const second = await this.recognizeBestVariant(worker, enlargedFactories, this.config, {
+        maxVariants: enlargedFactories.length,
+      });
+      if (this.scoreQuality(second.quality) > this.scoreQuality(first.quality)) {
+        return { ...second, retriedEnlarged: true };
+      }
+      return { ...first, retriedEnlarged: true };
     } finally {
       await worker.terminate();
     }

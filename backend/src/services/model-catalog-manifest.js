@@ -82,10 +82,10 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
   {
     id: 'deepseek-v4-flash',
     name: 'deepseek-v4-flash',
-    displayName: 'DeepSeek V4 Flash',
+    displayName: 'Sira Rápido',
     provider: 'DeepSeek',
     type: 'TEXT',
-    description: 'DeepSeek V4 Flash for low-latency chat, paraphrasing, drafting and high-throughput assistance.',
+    description: 'Sira Rápido for low-latency chat, paraphrasing, drafting and high-throughput assistance.',
     contextLength: 1000000,
     maxTokens: 384000,
     reasoning: true,
@@ -96,10 +96,10 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
   {
     id: 'deepseek-v4-pro',
     name: 'deepseek-v4-pro',
-    displayName: 'DeepSeek V4 Pro',
+    displayName: 'Sira Pro',
     provider: 'DeepSeek',
     type: 'TEXT',
-    description: 'DeepSeek V4 Pro for professional reasoning, code, document generation and complex Spanish workflows.',
+    description: 'Sira Pro for professional reasoning, code, document generation and complex Spanish workflows.',
     contextLength: 1000000,
     maxTokens: 384000,
     reasoning: true,
@@ -389,6 +389,18 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openai', 'audio', 'text-to-speech', 'voice', 'hd', 'professional'],
   },
   {
+    // Sira Voz — VoiceStudio (AGPL-3.0, github.com/debpalash/VoiceStudio) running
+    // as a private container on the production host. Cloning, dubbing,
+    // transcription and audiobooks, 100 % local and free for every plan.
+    id: 'sira-voz',
+    name: 'sira-voz',
+    displayName: 'Sira Voz',
+    provider: 'VoiceStudio',
+    type: 'AUDIO',
+    description: 'Sira Voz: clona voces, dobla vídeos, transcribe y crea audiolibros. 100 % local, gratis, +600 idiomas (VoiceStudio, open source).',
+    tags: ['voicestudio', 'local', 'free', 'audio', 'text-to-speech', 'voice-clone', 'dubbing', 'audiobook', 'multilingual'],
+  },
+  {
     id: 'gemini-2.5-flash-tts',
     name: 'gemini-2.5-flash-tts',
     displayName: 'Gemini 2.5 Flash TTS',
@@ -416,32 +428,46 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openrouter', 'elevenlabs', 'audio', 'text-to-speech', 'voice', 'fast'],
   },
   // ── MUSIC models ───────────────────────────────────────────────────────
+  // Honest provider map: OpenRouter only exposes Lyria for music. Suno runs
+  // through a Suno-compatible gateway (SUNO_API_KEY), MiniMax through its
+  // official API (MINIMAX_API_KEY), ElevenLabs through its own API.
+  // Admin → AI Models publishes these rows; the /agentes music picker only
+  // offers rows with type MUSIC + isActive (see mediaModelOptions).
   {
     id: 'suno-v4',
     name: 'suno-v4',
     displayName: 'Suno V4',
-    provider: 'OpenRouter',
+    provider: 'Suno',
     type: 'MUSIC',
-    description: 'Suno V4 via OpenRouter: generación de música completa con voz y letra desde texto.',
-    tags: ['openrouter', 'suno', 'music', 'text-to-music', 'generative'],
+    description: 'Suno V4 via Suno-compatible gateway: canciones completas con voz y letra (requiere SUNO_API_KEY; gateway de terceros, sin API oficial de Suno).',
+    tags: ['suno', 'music', 'text-to-music', 'generative'],
   },
   {
     id: 'suno-v3.5',
     name: 'suno-v3.5',
     displayName: 'Suno V3.5',
-    provider: 'OpenRouter',
+    provider: 'Suno',
     type: 'MUSIC',
-    description: 'Suno V3.5 via OpenRouter: generación de canciones completas con letra.',
-    tags: ['openrouter', 'suno', 'music', 'text-to-music'],
+    description: 'Suno V3.5 via Suno-compatible gateway: generación de canciones completas con letra (requiere SUNO_API_KEY).',
+    tags: ['suno', 'music', 'text-to-music'],
   },
   {
-    id: 'udio-130',
-    name: 'udio-130',
-    displayName: 'Udio 130',
+    id: 'minimax-music',
+    name: 'minimax-music',
+    displayName: 'MiniMax',
+    provider: 'MiniMax',
+    type: 'MUSIC',
+    description: 'MiniMax Music API oficial: generación de música de alta calidad con letra optimizada (requiere MINIMAX_API_KEY).',
+    tags: ['minimax', 'music', 'text-to-music', 'instrumental'],
+  },
+  {
+    id: 'lyria-3-pro',
+    name: 'google/lyria-3-pro-preview',
+    displayName: 'Lyria 3 Pro',
     provider: 'OpenRouter',
     type: 'MUSIC',
-    description: 'Udio 130 via OpenRouter: generación de música instrumental y con voz de alta calidad.',
-    tags: ['openrouter', 'udio', 'music', 'text-to-music', 'instrumental'],
+    description: 'Google Lyria 3 Pro via OpenRouter: generación musical por streaming (requiere OPENROUTER_API_KEY). Único modelo musical en OpenRouter.',
+    tags: ['openrouter', 'lyria', 'music', 'text-to-music'],
   },
 ]);
 

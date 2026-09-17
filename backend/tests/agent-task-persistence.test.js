@@ -174,3 +174,39 @@ test('upsertAgentTask does not downgrade terminal rows with later running writes
   assert.equal(prisma._rows.get('terminal-task').status, 'completed');
   assert.equal(prisma._rows.get('terminal-task').goal, 'done');
 });
+
+test('appendAgentTaskEvent records verification failure before a later completed snapshot write', async (t) => {
+  // Adapter contract test, not a real-Postgres durability/concurrency claim.
+  const prisma = makePrismaMock();
+  const eventWrites = [];
+  prisma.agentTaskEvent = { upsert: async ({ create }) => { eventWrites.push(create); return create; } };
+  const { persistence, restore } = loadPersistenceWithPrisma(prisma);
+  t.after(restore);
+  const task = { taskId: 'verify-failed', userId: 'user-1', status: 'running' };
+  const event = { type: 'done', seq: 1, stoppedReason: 'verification_failed:missing_evidence' };
+  await persistence.appendAgentTaskEvent(task, event);
+  const first = prisma._rows.get(task.taskId);
+  assert.equal(first.status, 'failed');
+  assert.ok(first.failedAt);
+  assert.equal(first.completedAt, null);
+  assert.equal(eventWrites[0].payload.stoppedReason, event.stoppedReason);
+
+  await persistence.upsertAgentTask({ ...task, status: 'completed', state: first.state });
+  const after = prisma._rows.get(task.taskId);
+  assert.equal(after.status, 'failed');
+  assert.equal(after.completedAt, null);
+});
+
+test('appendAgentTaskEvent does not turn an existing failure/cancel into success on generic done', async (t) => {
+  const prisma = makePrismaMock();
+  prisma.agentTaskEvent = { upsert: async ({ create }) => create };
+  const { persistence, restore } = loadPersistenceWithPrisma(prisma);
+  t.after(restore);
+  for (const status of ['failed', 'cancelled']) {
+    const task = { taskId: status, userId: 'user-1', status };
+    await persistence.appendAgentTaskEvent(task, { type: 'done', seq: 1 });
+    assert.equal(prisma._rows.get(status).status, status);
+  }
+  await persistence.appendAgentTaskEvent({ taskId: 'explicit-cancel', userId: 'user-1', status: 'running' }, { type: 'done', seq: 1, stoppedReason: 'cancelled_by_user' });
+  assert.equal(prisma._rows.get('explicit-cancel').status, 'cancelled');
+});

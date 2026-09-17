@@ -3,6 +3,8 @@
 
 import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
+import { isLiveComputerUsePrompt } from "./computer-login-handoff"
+import { isSoftwareBuildRequest } from "./software-build-intent"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -181,6 +183,9 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
     'For every file deliverable, verify row counts, sheet names, paragraph/page counts, headers, and non-empty content before finalizing.',
     'For uploaded document editing, never mutate the source file. Copy/reconstruct into a new artifact, apply only requested edits, and preserve document structure, logos, tables, formulas, sheet names, headers, footers, slide layouts, and visual hierarchy whenever possible.',
     'Separate verified evidence from assumptions and keep citations/DOIs/URLs/years intact.',
+    'Audio y canciones: si el usuario ya dio el texto («créame un audio con lo siguiente: …»), genera el audio de inmediato con generate_speech — sin preguntar. Si pide una canción o audio SIN dar la letra/el texto, haz UNA sola pregunta corta antes de crear (por ejemplo: «¿Escribo yo la letra sobre ese tema, o me pasas el texto exacto? ¿Algún estilo o voz?») y luego créala.',
+    'El entregable de voz es SIEMPRE un archivo MP3/WAV descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API o un reproductor en el navegador.',
+    'Ediciones iterativas de audio/canción: cuando el usuario pida cambios («hazla más alegre», «cambia el final», «más corta»), edita la pieza ANTERIOR de esta conversación — conserva letra, voz y estilo salvo lo que pida cambiar — y vuelve a generar el audio con la versión revisada. Nunca respondas que no puedes generar audio: cada chat tiene generate_speech disponible.',
   ].join('\n'),
   web_search: [
     'Ground the answer in real sources. Prefer recent, authoritative, citable references when the user asks for academic, scientific, legal, market, or current information.',
@@ -333,18 +338,18 @@ const createMediaGenerationPattern = (objectPattern: string) =>
     'i'
   )
 
-const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
 const VIDEO_DURATION_SECONDS_RE =
-  /\b(1[0-5]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
+  /\b(30|2[0-9]|1[0-9]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
 
 export type RequestedVideoAspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
-export type RequestedVideoResolution = '480p' | '720p'
+export type RequestedVideoResolution = '480p' | '720p' | '1080p'
 
 const VIDEO_RATIO_TOKEN_RE =
   /\b(16:9|9:16|1:1|4:3|3:4|21:9|16x9|9x16|1x1|4x3|3x4|21x9)\b/i
 
 const VIDEO_RESOLUTION_TOKEN_RE =
-  /\b(480|720)\s*p\b/i
+  /\b(480|720|1080)\s*p\b/i
 
 export function extractRequestedVideoDurationSeconds(
   prompt: string,
@@ -379,6 +384,7 @@ export function extractRequestedVideoResolution(prompt: string): RequestedVideoR
   const match = normalized.match(VIDEO_RESOLUTION_TOKEN_RE)
   if (match?.[1] === '480') return '480p'
   if (match?.[1] === '720') return '720p'
+  if (match?.[1] === '1080') return '1080p'
 
   if (/\b(?:sd|baja resolucion|resolucion baja|ligero|liviano)\b/.test(normalized)) return '480p'
   if (/\b(?:hd|alta resolucion|resolucion alta|calidad alta)\b/.test(normalized)) return '720p'
@@ -448,9 +454,10 @@ export function isImageOnlyAttachmentTurn(files: any[] = []): boolean {
 }
 
 export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
-  return (Array.isArray(conversationHistory) ? conversationHistory : []).some((message) =>
-    parseFilesFromMessage(message).some(isDocumentLikeAttachment)
-  )
+  return (Array.isArray(conversationHistory) ? conversationHistory : []).some((item) => {
+    if (isDocumentLikeAttachment(item)) return true
+    return parseFilesFromMessage(item).some(isDocumentLikeAttachment)
+  })
 }
 
 export function shouldEditExistingDocument(
@@ -459,6 +466,14 @@ export function shouldEditExistingDocument(
 ): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
+  // Describing an edit or explicitly preserving the original does not grant
+  // editing authority. Keep genuinely mixed read/edit requests conservative.
+  const command = normalized.replace(/^[¿¡]\s*/, '').replace(/^(?:por favor\s*[, :]?\s*)+/, '')
+  const readOnly = /^(?:explica\b|describe\b|dime\s+(?:si|como|que)\b|no\s+(?:edites|reescribas)\b)/.test(command)
+    || (/^(?:resume|analiza|revisa)\b/.test(command)
+      && /\b(?:sin (?:editar|modificar|cambiar)|no (?:edites|modifiques|cambies))\b/.test(command))
+  const asksForMutation = /(?:[,;.]|\by\b|\bluego\b|\bdespues\b)\s*(?:cambia|edita|modifica|corrige|reemplaza|reescribe|elimina|agrega)\b/.test(command)
+  if (readOnly && !asksForMutation) return false
   const hasDocumentContext = hasDocumentAttachmentContext(conversationHistory)
   if (
     hasDocumentContext
@@ -523,12 +538,13 @@ export function shouldUseExistingDocumentFileContext(
     || shouldEditExistingDocument(prompt, conversationHistory)
 }
 
-const ROUTING_PATTERNS = {
+export const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
   urlReference: /\bhttps?:\/\/\S+|\bwww\.\S+/i,
-  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
-  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
+  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(ofertas?|descuentos?|rebajas?|promociones?|precios?|cu[aá]nto cuesta|d[oó]nde comprar)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
+  computerRequest: /\b(abre|abrir|usa|usar|enciende|prende|entra a|abre me)\b[\s\S]{0,40}\b(tu\s+)?(computadora|ordenador|pc|navegador|browser|escritorio virtual)\b|\btu computadora\b/i,
+  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r|me|nos)?|b[uú]sca(me|nos)|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|svg|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|software|app|aplicacion|aplicaci[oó]n|runtime|debug|bug|corrige(r)?|arregla(r)?|fix|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
@@ -551,8 +567,8 @@ const ROUTING_PATTERNS = {
   video: createMediaGenerationPattern(VIDEO_OBJECT_RE_FRAGMENT),
   musicGeneration: createMediaGenerationPattern(MUSIC_OBJECT_RE_FRAGMENT),
   voiceGeneration: createMediaGenerationPattern(VOICE_OBJECT_RE_FRAGMENT),
-  webdev: /\b(website|webpage|pagina web|sitio web|landing page|portfolio|html|css|javascript|react|next\.?js|frontend|web app|tienda online|ecommerce|e-commerce)\b/i,
-  webdevBuildAction: /\b(crea(r|me)?|build|make|design|disena(r|me)?|diseña(r|me)?|desarrolla(r)?|programa(r)?|genera(r)?|haz|construye|implementa(r)?|maqueta(r)?)\b/i,
+  webdev: /\b(website|webpage|pagina web|sitio web|landing page|landing|portfolio|html|css|javascript|react|next\.?js|frontend|web app|tienda online|ecommerce|e-commerce|software|app|(?:una|un|mi)\s+web|web\s+(?:de|para|app))\b/i,
+  webdevBuildAction: /\b(crea(r|me)?|build|make|design|disena(r|me)?|diseña(r|me)?|desarrolla(r)?|programa(r)?|genera(r)?|haz|construye|implementa(r)?|maqueta(r)?|quiero|necesito|arma(r|me)?)\b/i,
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
 }
 
@@ -651,6 +667,7 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   const asksForLongRunningAgent = ROUTING_PATTERNS.longRunningAgent.test(normalized)
 
   if (ROUTING_PATTERNS.gmail.test(normalized)) return 'gmail'
+  if (isLiveComputerUsePrompt(text)) return 'agent_task'
   if (ROUTING_PATTERNS.googleServices.test(normalized)) return 'google_services'
 
   if (
@@ -666,8 +683,12 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.architecturePlan.test(normalized)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(normalized)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(normalized)) return 'math'
-  if (ROUTING_PATTERNS.doc.test(normalized)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
+  if (isSoftwareBuildRequest(normalized)
+    || (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized))) {
+    return 'webdev'
+  }
+  if (ROUTING_PATTERNS.doc.test(normalized) || OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return 'doc'
   if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(normalized) || ROUTING_PATTERNS.voiceGeneration.test(normalized)) return 'agent_task'
   // "describe esta imagen / ¿qué ves? / transcribe la foto" is image
@@ -675,7 +696,6 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   // pattern hijack it into the image generator.
   if (ROUTING_PATTERNS.image.test(normalized) && !IMAGE_ANALYSIS_PROMPT_RE.test(normalized)) return 'image'
   if (ROUTING_PATTERNS.figma.test(normalized)) return 'figma'
-  if (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized)) return 'webdev'
   return null
 }
 
@@ -966,7 +986,17 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     }
     return true
   }
+  // Live computer-use (shop / book / DMV / "abre tu computadora") must run
+  // the durable agent-task loop so F7 computer_* tools and the overlay fire.
+  if (isLiveComputerUsePrompt(prompt)) return true
+
   if (isLightweightConversationalPrompt(normalized)) return false
+
+  // Word / PPT / Excel creation must use the durable agent-task (BullMQ)
+  // so the job survives leaving the page.
+  if (OUTPUT_FORMAT_REQUEST_RE.test(normalized) || ROUTING_PATTERNS.doc.test(normalized)) {
+    return true
+  }
 
   // No-file interactive prompts (research, deliverables, code, data work,
   // long questions, etc.) run through the RELIABLE inline /generate agentic
@@ -1082,6 +1112,11 @@ export function isAmbiguousPrompt(prompt: string): boolean {
   return false
 }
 
+/** True when the user explicitly asks the agent to use its computer/browser. */
+export function isComputerRequestPrompt(prompt: string): boolean {
+  return ROUTING_PATTERNS.computerRequest.test(normalizePrompt(prompt))
+}
+
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
 
@@ -1093,10 +1128,25 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   // through to the lightweight chat path below.
   if (isAmbiguousPrompt(prompt)) return 'ambiguous'
 
+  // Live computer / overlay browser (shop, book, DMV, "abre tu computadora").
+  // Must beat lightweight chat, google_services ("agenda") and web_search cop-outs.
+  if (isLiveComputerUsePrompt(prompt)) return 'agent_task'
+
   if (isLightweightConversationalPrompt(lc)) return 'text'
 
   if (ROUTING_PATTERNS.gmail.test(lc)) return 'gmail'
+
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
+
+  // "Abre tu computadora y …" — the user is explicitly asking for the
+  // agent computer. Route to the agentic runtime (tools + steps) instead
+  // of the plain model, which would truthfully answer it has no browser.
+  if (ROUTING_PATTERNS.computerRequest.test(lc)) return 'agent_task'
+
+  // Media generation wins over research keywords: «créame un audio con lo
+  // siguiente: Juan vende papas en el mercado» must create audio, not fall
+  // into web_search because "mercado" smells like market research.
+  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
 
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
   const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(lc)
@@ -1121,15 +1171,17 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.architecturePlan.test(lc)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(lc)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(lc)) return 'math'
-  if (ROUTING_PATTERNS.doc.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
+  if (isSoftwareBuildRequest(lc)
+    || (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc))) {
+    return 'webdev'
+  }
+  if (ROUTING_PATTERNS.doc.test(lc) || OUTPUT_FORMAT_REQUEST_RE.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
-  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
   // Image ANALYSIS questions ("describe esta imagen") are vision chat, not
   // generation — same gate as signalIntentFromText.
   if (ROUTING_PATTERNS.image.test(lc) && !IMAGE_ANALYSIS_PROMPT_RE.test(lc)) return 'image'
   if (ROUTING_PATTERNS.figma.test(lc)) return 'figma'
-  if (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc)) return 'webdev'
 
   return null
 }
@@ -1182,12 +1234,25 @@ export class AIService {
         const requiredExtension = String(data.contract?.required_extension || '').toLowerCase()
         const outputFormat = String(data.semanticProfile?.output_format || data.finalOutput || '').toLowerCase()
         const requiredTools = Array.isArray(data.contract?.required_tools) ? data.contract.required_tools : []
+        const pipeline = String(data.contract?.pipeline || '')
+        const routed = normalizeRoutingIntent(data.intent)
+        // Code / website builds advertise `.html` on the contract. That is a
+        // code artifact, not a Document Sandbox Word/PDF. Remapping to `doc`
+        // produced Web_de_ventas.docx with "verificaciones técnicas".
+        if (
+          routed === 'webdev'
+          || pipeline === 'CodePipeline'
+          || outputFormat === 'web_artifact'
+          || isSoftwareBuildRequest(prompt)
+        ) {
+          return routed === 'doc' ? 'webdev' : routed
+        }
         const isDownloadableDocument =
-          /\.(docx|xlsx|pptx|pdf|csv|svg|html|md)$/.test(requiredExtension)
-          || /\b(docx|xlsx|pptx|pdf|csv|svg|html|markdown|md)_?(file|document)?\b/.test(outputFormat)
-          || (requiredTools.includes('create_document') && /\.(docx|xlsx|pptx|pdf|csv|svg|html|md)$/.test(requiredExtension))
+          /\.(docx|xlsx|pptx|pdf|csv|svg)$/.test(requiredExtension)
+          || /\b(docx|xlsx|pptx|pdf|csv|svg)_?(file|document)?\b/.test(outputFormat)
+          || (requiredTools.includes('create_document') && /\.(docx|xlsx|pptx|pdf|csv|svg)$/.test(requiredExtension))
         if (isDownloadableDocument) return 'doc'
-        return normalizeRoutingIntent(data.intent)
+        return routed
       }
       return null
     } catch (error: any) {
@@ -1204,6 +1269,10 @@ export class AIService {
     conversationHistory: any[] = [],
     signal?: AbortSignal
   ): Promise<ChatIntent> {
+
+    if (isLiveComputerUsePrompt(prompt)) {
+      return 'agent_task';
+    }
 
     if (shouldEditExistingDocument(prompt, conversationHistory)) {
       return 'agent_task';

@@ -8,6 +8,8 @@ const {
   verifyClaims,
   buildCorrectionInstruction,
   normalizeExecuted,
+  isReadOnlyQaIntent,
+  shouldFailOpenVerification,
 } = require('../src/services/agents/completion-claim-verifier');
 
 test('detects first-person past-tense completion claims (ES)', () => {
@@ -72,6 +74,31 @@ test('normalizeExecuted accepts arrays of strings, tool objects, and Sets', () =
   const s = new Set(['x']);
   assert.equal(normalizeExecuted(s), s);
   assert.equal(normalizeExecuted(null).size, 0);
+});
+
+test('isReadOnlyQaIntent: summarize / explain / image Q&A vs tool-claiming asks', () => {
+  assert.equal(isReadOnlyQaIntent('dame un resumen en un solo párrafo'), true);
+  assert.equal(isReadOnlyQaIntent('explica esta imagen'), true);
+  assert.equal(isReadOnlyQaIntent('analiza esta tabla'), true);
+  assert.equal(isReadOnlyQaIntent('crea un word con el resumen'), false);
+  assert.equal(isReadOnlyQaIntent('investiga en la web y dame un resumen'), false);
+  assert.equal(isReadOnlyQaIntent('hola'), false);
+});
+
+test('shouldFailOpenVerification: paragraph summary without side-effect claims', () => {
+  const query = 'dame un resumen en un solo párrafo';
+  const paragraph = 'La tabla de competencia digital docente resume los puntajes CDD1 por dimensión y muestra un compromiso profesional alto.';
+  assert.equal(shouldFailOpenVerification({ query, answer: paragraph, executedTools: [] }), true);
+  assert.equal(shouldFailOpenVerification({
+    query,
+    answer: 'Creé el documento PDF con el resumen solicitado.',
+    executedTools: [],
+  }), false);
+  assert.equal(shouldFailOpenVerification({
+    query: 'crea un word con el resumen',
+    answer: paragraph,
+    executedTools: [],
+  }), false);
 });
 
 test('English claims are detected too', () => {

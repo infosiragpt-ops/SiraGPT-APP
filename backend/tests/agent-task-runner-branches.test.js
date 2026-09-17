@@ -22,6 +22,18 @@ process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'fake-key';
 
 const runner = require('../src/services/agents/agent-task-runner');
 
+test('source-preserving delivery accepts only literal passed=true', () => {
+  assert.equal(runner.isValidatedSourcePreservingDeliverable({
+    artifact: { id: 'valid' }, validation: { passed: true },
+  }), true);
+  for (const passed of ['true', 1, {}, null, undefined, false]) {
+    assert.equal(runner.isValidatedSourcePreservingDeliverable({
+      artifact: { id: 'rejected' }, validation: { passed },
+    }), false, `passed=${String(passed)} must be rejected`);
+  }
+  assert.equal(runner.isValidatedSourcePreservingDeliverable({ validation: { passed: true } }), false);
+});
+
 // ─── classifyTaskError edge cases ──────────────────────────────────────────
 
 test('classifyTaskError: numeric statusCode is normalised via String() and routed', () => {
@@ -64,7 +76,19 @@ test('classifyTaskError: rate-limit ttl jitter stays within bounds', () => {
     const res = runner.classifyTaskError({ message: 'too many requests', statusCode: 429 });
     assert.equal(res.reason, 'rate-limited');
     assert.ok(res.ttlMs >= 10_000 && res.ttlMs <= 20_000, `ttlMs out of jitter band: ${res.ttlMs}`);
+    assert.match(res.userMessage, /demasiadas solicitudes/);
   }
+});
+
+test('classifyTaskError: Retry-After header replaces jitter with the hinted wait', () => {
+  const res = runner.classifyTaskError({
+    message: 'too many requests',
+    statusCode: 429,
+    headers: { 'retry-after': '20' },
+  });
+  assert.equal(res.reason, 'rate-limited');
+  assert.equal(res.ttlMs, 20_000);
+  assert.match(res.userMessage, /20 segundos/);
 });
 
 test('classifyTaskError: generic 5xx (numeric) is retryable as server-error', () => {

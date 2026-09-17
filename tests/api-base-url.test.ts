@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { afterEach, beforeEach, describe, it } from "node:test"
 
-import { DEFAULT_API_BASE_URL, getNormalizedApiBaseUrl } from "../lib/api-base-url"
+import { DEFAULT_API_BASE_URL, getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "../lib/api-base-url"
 
 const ORIGINAL_API_URL = process.env.NEXT_PUBLIC_API_URL
 
@@ -57,5 +57,32 @@ describe("getNormalizedApiBaseUrl", () => {
       getNormalizedApiBaseUrl(),
       "https://abc-xyz.trycloudflare.com/api",
     )
+  })
+})
+
+describe("getSameOriginApiBaseUrl", () => {
+  const originalNodeEnv = process.env.NODE_ENV
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv
+  })
+
+  it("uses the browser origin on siragpt.com and never api.siragpt.com", () => {
+    process.env.NEXT_PUBLIC_API_URL = "https://api.siragpt.com/api"
+    assert.equal(getSameOriginApiBaseUrl(undefined, "https://siragpt.com"), "https://siragpt.com/api")
+    assert.doesNotMatch(getSameOriginApiBaseUrl(undefined, "https://siragpt.com"), /api\.siragpt\.com/)
+  })
+
+  it("does not use localhost:5000 in production when the env is unset", () => {
+    process.env.NODE_ENV = "production"
+    delete process.env.NEXT_PUBLIC_API_URL
+    const base = getSameOriginApiBaseUrl(undefined, "")
+    assert.equal(base, "/api")
+    assert.doesNotMatch(base, /localhost:5000/)
+  })
+
+  it("rewrites a baked api.siragpt.com env to /api without a window", () => {
+    process.env.NEXT_PUBLIC_API_URL = "https://api.siragpt.com/api"
+    assert.equal(getSameOriginApiBaseUrl(), "/api")
   })
 })

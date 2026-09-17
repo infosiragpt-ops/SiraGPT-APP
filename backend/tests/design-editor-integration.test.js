@@ -13,7 +13,10 @@ const path = require('node:path');
 const { Document, Packer, Paragraph } = require('docx');
 const PizZip = require('pizzip');
 
-const { generateSourcePreservingDocumentEdit } = require('../src/services/source-preserving-document-edit');
+const {
+  generateSourcePreservingDocumentEdit,
+  INTERNAL: { validateDocxOperationCriteria },
+} = require('../src/services/source-preserving-document-edit');
 const { isVisualAvailable } = require('../src/services/document-visual-embed');
 
 let savedKey;
@@ -59,6 +62,10 @@ describe('design layer ↔ editor integration', () => {
     assert.match(zip.file('word/document.xml').asText(), /<w:drawing>/);
     assert.ok(zip.file('word/media/image1.png'), 'chart image embedded');
     assert.match(zip.file('word/document.xml').asText(), /Capítulo IV/); // preserved
+    const criterion = res.validation.details.operationCriteria.find((item) => item.id === 'visual_inserted');
+    assert.equal(criterion?.passed, true);
+    assert.ok(criterion.details.afterDrawings > criterion.details.beforeDrawings);
+    assert.ok(criterion.details.afterMediaParts > criterion.details.beforeMediaParts);
   });
 
   it('inserts a native table into the DOCX via insert_table (markdown → w:tbl)', async () => {
@@ -69,6 +76,33 @@ describe('design layer ↔ editor integration', () => {
     assert.match(xml, /<w:tbl>/);
     assert.match(xml, /Materiales/);
     assert.match(xml, /Capítulo III/); // preserved
+    const criterion = res.validation.details.operationCriteria.find((item) => item.id === 'native_table_inserted');
+    assert.equal(criterion?.passed, true);
+    assert.ok(criterion.details.afterTables > criterion.details.beforeTables);
+    assert.ok(criterion.details.afterRows > criterion.details.beforeRows);
+  });
+
+  it('fails closed when an insert operation produces no structural change', async () => {
+    const file = await writeDocx(['Documento sin cambios.']);
+    const unchanged = fs.readFileSync(file);
+
+    const visual = validateDocxOperationCriteria(
+      unchanged,
+      [{ kind: 'insert_visual' }],
+      { beforeBuffer: unchanged },
+    );
+    assert.equal(visual.passed, false);
+    assert.equal(visual.checks[0].id, 'visual_inserted');
+    assert.equal(visual.checks[0].passed, false);
+
+    const table = validateDocxOperationCriteria(
+      unchanged,
+      [{ kind: 'insert_table', tableKind: 'table' }],
+      { beforeBuffer: unchanged },
+    );
+    assert.equal(table.passed, false);
+    assert.equal(table.checks[0].id, 'native_table_inserted');
+    assert.equal(table.checks[0].passed, false);
   });
 
   it('does not insert a visual/table for an unrelated edit request', async () => {

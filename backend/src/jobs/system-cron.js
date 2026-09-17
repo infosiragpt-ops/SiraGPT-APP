@@ -99,6 +99,15 @@ const DETECT_IDLE_ORGS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_ORGS_SCHED
 // SystemSettings table. Flags users whose User.lastActiveAt is older
 // than 90d (or null) into SystemSettings `user_idle:<userId>`.
 const DETECT_IDLE_USERS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_USERS_SCHEDULE || '30 6 * * *';
+// Growth gauges («1.000 clientes» KPI family). Default 07:30 UTC — runs
+// after the idle-user detector (06:30) so both passes read the same
+// nightly User-table state, and before the audit-archive sweep (07:15's
+// SystemSettings sibling already ran at 07:00; this job only reads).
+const GROWTH_GAUGES_SCHEDULE = process.env.SYSTEM_CRON_GROWTH_GAUGES_SCHEDULE || '30 7 * * *';
+// RLHF phase 3 — backfill Message.feedback into preference_events, then
+// maybe retrain the in-process reward model. Default 08:00 UTC, after the
+// 07:xx SystemSettings sweeps so we don't contend on that table.
+const RLHF_PHASE3_SCHEDULE = process.env.SYSTEM_CRON_RLHF_SCHEDULE || '0 8 * * *';
 // Ratchet 45 — daily SystemSettings drift cleanup. Default 07:00 UTC, runs
 // after the idle-org (06:00) and idle-user (06:30) detectors so the same
 // pass that *writes* fresh flag rows precedes the orphan sweep — we only
@@ -121,6 +130,10 @@ const PENDING_TRANSFER_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PENDING_TRANSFER
 // but each search carries its own daily/weekly nextRunAt so provider traffic
 // remains bounded and manual searches are never executed in the background.
 const RESEARCH_ALERT_SCHEDULE = process.env.SYSTEM_CRON_RESEARCH_ALERT_SCHEDULE || '30 * * * *';
+// Proactive stale-run watchdog (Plataforma Alertas Proactivas). Scans every
+// minute for AgentTask/CodexRun rows stuck non-terminal past the stall
+// threshold; per-run cooldown inside the job keeps channel noise bounded.
+const STALE_RUN_WATCHDOG_SCHEDULE = process.env.SYSTEM_CRON_STALE_RUN_WATCHDOG_SCHEDULE || '* * * * *';
 
 let _state = null;
 
@@ -823,6 +836,45 @@ function start(opts = {}) {
     meta: detectIdleUsersMeta,
   });
 
+  // Growth gauges — daily «1.000 clientes» KPI refresh (07:30 UTC).
+  let growthGaugesRunning = false;
+  const growthGaugesMeta = {};
+  const growthGaugesTask = cron.schedule(
+    GROWTH_GAUGES_SCHEDULE,
+    async () => {
+      if (growthGaugesRunning) {
+        logger.warn?.('[system-cron] skip growth-gauges — previous run still active');
+        return;
+      }
+      growthGaugesRunning = true;
+      const finish = recordRun(growthGaugesMeta, 'growth-gauges');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./growth-gauges');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] growth-gauges retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] growth-gauges done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] growth-gauges failed: ${err && err.message}`);
+      } finally {
+        growthGaugesRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'growth-gauges',
+    schedule: GROWTH_GAUGES_SCHEDULE,
+    task: growthGaugesTask,
+    meta: growthGaugesMeta,
+  });
+
   // Ratchet 45 — SystemSettings drift cleanup (07:00 UTC).
   let staleSystemSettingsRunning = false;
   const staleSystemSettingsMeta = {};
@@ -972,6 +1024,76 @@ function start(opts = {}) {
     schedule: RESEARCH_ALERT_SCHEDULE,
     task: researchAlertsTask,
     meta: researchAlertsMeta,
+  });
+
+  let staleRunWatchdogRunning = false;
+  const staleRunWatchdogMeta = {};
+  const staleRunWatchdogTask = cron.schedule(
+    STALE_RUN_WATCHDOG_SCHEDULE,
+    async () => {
+      if (staleRunWatchdogRunning) return;
+      staleRunWatchdogRunning = true;
+      const finish = recordRun(staleRunWatchdogMeta, 'stale-run-watchdog');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./stale-run-watchdog');
+        const res = await job.scanStaleRuns({ env: process.env });
+        if (res.skipped) logger.info?.(`[system-cron] stale-run-watchdog skipped: ${res.skipped}`);
+        else if (res.alerted > 0 || res.notifiedUsers > 0) logger.warn?.(`[system-cron] stale-run-watchdog: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] stale-run-watchdog failed: ${err && err.message}`);
+      } finally {
+        staleRunWatchdogRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'stale-run-watchdog',
+    schedule: STALE_RUN_WATCHDOG_SCHEDULE,
+    task: staleRunWatchdogTask,
+    meta: staleRunWatchdogMeta,
+  });
+
+  let rlhfPhase3Running = false;
+  const rlhfPhase3Meta = {};
+  const rlhfPhase3Task = cron.schedule(
+    RLHF_PHASE3_SCHEDULE,
+    async () => {
+      if (rlhfPhase3Running) {
+        logger.warn?.('[system-cron] skip rlhf-phase3 — previous run still active');
+        return;
+      }
+      rlhfPhase3Running = true;
+      const finish = recordRun(rlhfPhase3Meta, 'rlhf-phase3');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./rlhf-phase3');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] rlhf-phase3 retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] rlhf-phase3 done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] rlhf-phase3 failed: ${err && err.message}`);
+      } finally {
+        rlhfPhase3Running = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'rlhf-phase3',
+    schedule: RLHF_PHASE3_SCHEDULE,
+    task: rlhfPhase3Task,
+    meta: rlhfPhase3Meta,
   });
 
   for (const t of tasks) {

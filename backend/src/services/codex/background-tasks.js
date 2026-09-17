@@ -428,6 +428,71 @@ function createBackgroundTaskService({
       return controlImpl({ runner, project, op: 'logs', taskId, tailBytes });
     },
 
+    async watch({
+      runner,
+      project,
+      taskId,
+      onComplete,
+      pollMs = 1_000,
+      signal = null,
+    }) {
+      if (!TASK_ID_RE.test(String(taskId || ''))) throw new Error('taskId inválido');
+      if (!taskRegistry.has(taskKey(project, taskId))) {
+        const error = new Error('tarea background no confiable o perteneciente a otro proceso');
+        error.code = 'BACKGROUND_TASK_UNTRUSTED';
+        throw error;
+      }
+      const terminal = new Set(['completed', 'failed', 'stopped', 'timed_out', 'lost']);
+      const interval = boundedInteger(pollMs, 1_000, 250, 10_000);
+      let failures = 0;
+      while (!signal?.aborted) {
+        try {
+          const current = await controlImpl({
+            runner,
+            project,
+            op: 'logs',
+            taskId,
+            tailBytes: 8_000,
+          });
+          failures = 0;
+          if (terminal.has(current?.task?.status)) {
+            taskRegistry.delete(taskKey(project, taskId));
+            if (typeof onComplete === 'function') {
+              await Promise.resolve(onComplete(current)).catch(() => {});
+            }
+            return current;
+          }
+        } catch (error) {
+          failures += 1;
+          if (failures >= 5) {
+            const current = {
+              task: { taskId, status: 'lost' },
+              log: '',
+              error: String(error?.message || error).slice(0, 500),
+            };
+            if (typeof onComplete === 'function') {
+              await Promise.resolve(onComplete(current)).catch(() => {});
+            }
+            return current;
+          }
+        }
+        await new Promise((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (signal) signal.removeEventListener('abort', finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, interval);
+          if (typeof timer.unref === 'function') timer.unref();
+          if (signal) signal.addEventListener('abort', finish, { once: true });
+        });
+      }
+      return { task: { taskId, status: 'stopped' }, log: '' };
+    },
+
     stop({ runner, project, taskId }) {
       if (!TASK_ID_RE.test(String(taskId || ''))) throw new Error('taskId inválido');
       const identity = taskRegistry.get(taskKey(project, taskId));

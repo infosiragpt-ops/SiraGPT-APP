@@ -18,6 +18,10 @@ test('no allowlist → returns the full curated catalog', () => {
   const names = all.map((m) => m.name);
   assert.ok(names.includes('gpt-4o'));
   assert.ok(names.includes('openai/gpt-5.5'));
+  const pro = all.find((m) => m.name === 'deepseek/deepseek-v4-pro');
+  assert.ok(pro);
+  assert.equal(pro.displayName, 'Sira Pro');
+  assert.equal(/deepseek/i.test(String(pro.displayName)), false);
 });
 
 test('VISIBLE_MODELS_ALLOWLIST restricts the catalog to listed names', () => {
@@ -73,12 +77,14 @@ test('curateVisibleTextModels surfaces admin-activated TEXT models even when not
   const out = curateVisibleTextModels([
     { id: 'custom-1', name: 'CustomCorp/llama-99b', displayName: 'Llama 99B', provider: 'OpenRouter', type: 'TEXT', isActive: true },
     { id: 'off-1', name: 'CustomCorp/off', type: 'TEXT', isActive: false },
+    { id: 'unset-1', name: 'CustomCorp/unset', type: 'TEXT' },
     { id: 'img-1', name: 'SomeImage', type: 'IMAGE', isActive: true },
     { id: '__virtual_x__', name: 'VirtualOne', type: 'TEXT' },
   ], {}); // no allowlist
   const names = out.map((m) => m.name);
   assert.ok(names.includes('CustomCorp/llama-99b'), 'active uncatalogued TEXT model is surfaced');
   assert.ok(!names.includes('CustomCorp/off'), 'inactive model stays hidden');
+  assert.ok(!names.includes('CustomCorp/unset'), 'rows without an explicit active state stay hidden');
   assert.ok(!names.includes('SomeImage'), 'non-TEXT model is not surfaced by the TEXT curator');
   assert.ok(!names.includes('VirtualOne'), 'virtual rows are excluded');
   const passthrough = out.find((m) => m.name === 'CustomCorp/llama-99b');
@@ -86,18 +92,20 @@ test('curateVisibleTextModels surfaces admin-activated TEXT models even when not
   assert.strictEqual(passthrough.id, 'custom-1');
 });
 
-test('passthrough still respects VISIBLE_MODELS_ALLOWLIST when set', () => {
+test('allowlist set must not hide an extra isActive TEXT admin model', () => {
   const models = [
     { id: 'c1', name: 'CustomCorp/llama-99b', type: 'TEXT', isActive: true },
+    { id: 'ds-pro', name: 'deepseek-v4-pro', type: 'TEXT', isActive: true },
+    { id: 'claude', name: 'claude-sonnet-5', type: 'TEXT', isActive: true },
+    { id: 'off-1', name: 'CustomCorp/off', type: 'TEXT', isActive: false },
   ];
-  assert.deepStrictEqual(
-    curateVisibleTextModels(models, { VISIBLE_MODELS_ALLOWLIST: 'gpt-4o' }).map((m) => m.name),
-    [],
-  );
-  assert.deepStrictEqual(
-    curateVisibleTextModels(models, { VISIBLE_MODELS_ALLOWLIST: 'customcorp/llama-99b' }).map((m) => m.name),
-    ['CustomCorp/llama-99b'],
-  );
+  const names = curateVisibleTextModels(models, {
+    VISIBLE_MODELS_ALLOWLIST: 'deepseek-v4-flash,deepseek-v4-pro',
+  }).map((m) => m.name);
+  assert.ok(names.includes('deepseek/deepseek-v4-pro'), 'allowlist may still filter the curated showcase');
+  assert.ok(names.includes('CustomCorp/llama-99b'), 'admin-activated TEXT model stays visible even when allowlist is set');
+  assert.ok(names.includes('claude-sonnet-5'), 'extra isActive TEXT admin model is not hidden by the allowlist');
+  assert.ok(!names.includes('CustomCorp/off'), 'inactive model stays hidden');
 });
 
 test('curateVisibleAdminMediaModels hides image rows that are inactive, virtual, or not allowed', () => {
@@ -132,6 +140,8 @@ test('grok catalog entry uses the valid OpenRouter id (not the 400-ing x-ai/grok
   const names = listVisibleTextModelDefinitions({}).map((m) => m.name);
   assert.ok(names.includes('x-ai/grok-4.20'), 'expected the corrected grok id in the catalog');
   assert.ok(!names.includes('x-ai/grok-4.2'), 'x-ai/grok-4.2 is NOT a valid OpenRouter model id');
+  const grok = listVisibleTextModelDefinitions({}).find((m) => m.name === 'x-ai/grok-4.20');
+  assert.equal(grok.provider, 'xAI');
 });
 
 test('legacy grok ids still resolve via the allowlist alias path', () => {

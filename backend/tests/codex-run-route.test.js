@@ -20,6 +20,13 @@ const restoreRunService = mockResolvedModule(require.resolve('../src/services/co
   RunServiceError,
   createRun: async (args) => { calls.push(['createRun', args]); return createImpl(args); },
   cancelRun: async (args) => { calls.push(['cancelRun', args]); return { id: args.runId, status: 'cancelled' }; },
+  cancelRunFamily: async (args) => {
+    calls.push(['cancelRunFamily', args]);
+    return {
+      runs: [{ id: args.runId, status: 'cancelled' }],
+      cancelledRunIds: [args.runId],
+    };
+  },
   getRun: async (args) => { calls.push(['getRun', args]); return args.runId === 'run-1' ? { id: 'run-1', projectId: 'p1', status: 'done' } : null; },
   listRuns: async (args) => { calls.push(['listRuns', args]); return [{ id: 'run-1', projectId: args.projectId, status: 'done' }]; },
 });
@@ -75,6 +82,23 @@ test('POST /projects/:id/runs forwards backend-owned auto execution', async () =
   assert.equal(call.autoExecute, true);
 });
 
+test('POST /projects/:id/runs forwards model, tier and reasoning effort', async () => {
+  const res = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({
+      mode: 'plan',
+      prompt: 'planifica una app',
+      model: 'claude-sonnet-4-5',
+      tier: 'power',
+      reasoningEffort: 'max',
+    });
+  assert.equal(res.status, 201);
+  const call = calls.find((c) => c[0] === 'createRun')[1];
+  assert.equal(call.model, 'claude-sonnet-4-5');
+  assert.equal(call.tier, 'power');
+  assert.equal(call.reasoningEffort, 'max');
+});
+
 test('createRun service errors are mapped to their HTTP status', async () => {
   createImpl = async () => { throw new RunServiceError('run_in_progress', 'busy', 409); };
   const res = await request(app()).post('/api/codex/projects/p1/runs').send({ mode: 'plan' });
@@ -87,6 +111,16 @@ test('POST /runs/:id/cancel calls the service', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.run.status, 'cancelled');
   assert.deepEqual(calls.find((c) => c[0] === 'cancelRun')[1], { userId: 'u-1', runId: 'run-1' });
+});
+
+test('POST /runs/:id/cancel-family calls the atomic family service', async () => {
+  const res = await request(app()).post('/api/codex/runs/plan-1/cancel-family');
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.cancelledRunIds, ['plan-1']);
+  assert.deepEqual(calls.find((c) => c[0] === 'cancelRunFamily')[1], {
+    userId: 'u-1',
+    runId: 'plan-1',
+  });
 });
 
 test('GET /projects/:id/runs/:runId 404s when the run is not in that project', async () => {

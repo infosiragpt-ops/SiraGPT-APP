@@ -1,4 +1,5 @@
 - [Next.js chunk timeout prewarm](nextjs-chunk-prewarm.md) — global-error.js (and other lazy chunks) compile on first demand; Replit proxy times out during that compile; fix: scripts/prewarm-chunks.js polls / then fetches chunks proactively at startup.
+- [Installed Next.js drift](installed-next-drift.md) — verify installed version against manifest and lockfile before treating hydration/config errors as source-code bugs.
 - [Inline style tags hydration mismatch](inline-style-hydration.md) — `<style jsx global>` (styled-jsx) and raw `<style>` in SSR'd client components cause structural server→client mismatch; move all @keyframes to globals.css.
 - [spawn EIO in production](spawn-eio-production.md) — spawn() can throw synchronously (EIO) in prod Nix env; always wrap Promise executor with try-catch in commandExists-style helpers.
 - [Orphaned task log dedup](orphaned-task-dedup.md) — P2003 (foreign-key userId missing) fires per concurrent upsert call; use process-level Set to log once per taskId lifetime.
@@ -50,6 +51,7 @@
 - [OpenClaw agentic already integrated](openclaw-agentic-state.md) — OpenClaw tools/skills/agentic loop already live: agentic-chat-stream isEnabled() defaults true, buildDefaultTools wires broad real toolset; map "covered", don't re-port.
 - [Document chunk persistence](docintel-chunk-persistence.md) — createMany must whitelist DocumentChunk columns; raw `...chunk` spread throws Unknown argument sectionLevel and hangs analysis; stored chunks keep sectionPath in metadata.
 - [Deploy promote frontend gating](deploy-promote-frontend-gating.md) — Reserved VM promote health-checks frontend port 3000, not backend; backend-only deltas can't fail promote → a "waiting for ready" fail is transient, just republish.
+- [GCE VM provisioning failure](gce-vm-provisioning-failure.md) — image push can succeed while VM creation fails with no app logs; retry before changing startup code, then treat repeats as platform trouble.
 - [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
 - [Filter config override](filter-config-override.md) — FILTERS_CONFIG.enabled overrides each filter module's own enabled flag; change both or they silently disagree.
 - [Post-deploy warmup window](post-deploy-warmup-window.md) — frontend live ~90s before backend; /api/* gives raw 500; gate auth actions on HEAD /api/health/ready (204/503) via useBackendReady.
@@ -77,4 +79,5 @@
 - [Agent task stale banner root cause](agent-task-stale-banner.md) — step_start only fires via onStepStart AFTER first LLM reply; emit a pre-loop step_start before reactAgent.run() and close it in onStepStart.
 - [user_memories confidence column](user-memory-confidence.md) — confidence column missing from schema/DB; raw SQL in upsert+recall silently failed; fix: ADD COLUMN IF NOT EXISTS migration + schema update.
 - [React 18.3 window.reportError false crash](react18-reporterror-crash.md) — React 18.3+ uses window.reportError() for recoverable hydration errors; Replit crash detector sees it; fix: override in layout head + EOF-reload guard.
+- [Frontend API mutation transport](frontend-api-mutation-transport.md) — state-changing /api calls must use authenticatedFetch/coworkApi (CSRF); raw fetch 403s; cowork decision enum is allow|deny not approve.
 - [/code agent rail merge fragility](code-agent-rail-merge-fragility.md) — the 5-step rail + Worked Summary live in per-turn agentLabel/agentPhases set across sendPrompt/buildApp/runEngine in ai-code-chat-panel.tsx; merges taking the origin side silently drop them (compiles fine, rail never renders).

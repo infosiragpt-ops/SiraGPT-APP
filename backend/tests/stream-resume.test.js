@@ -10,9 +10,15 @@ const { describe, test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const streamResume = require('../src/services/ai/stream-resume');
+const NOOP_REDIS = {
+  async get() { return null; },
+  async set() { return 'OK'; },
+  async del() { return 0; },
+};
 
 beforeEach(() => {
   streamResume._resetForTests();
+  streamResume._setInjectedRedis(NOOP_REDIS);
 });
 
 describe('parseLastEventId', () => {
@@ -43,6 +49,11 @@ describe('generateStreamId', () => {
 });
 
 describe('open / append / load (memory fallback)', () => {
+  test('uses a bounded configurable lease that active owners can renew indefinitely', () => {
+    assert.ok(streamResume.DEFAULT_TTL_SECONDS >= 5 * 60);
+    assert.ok(streamResume.DEFAULT_TTL_SECONDS <= 60 * 60);
+  });
+
   test('open without streamId mints a new session', async () => {
     const session = await streamResume.open({});
     assert.ok(session.streamId);
@@ -64,6 +75,15 @@ describe('open / append / load (memory fallback)', () => {
     const second = await streamResume.open({ streamId: first.streamId });
     assert.equal(second.isResume, true);
     assert.deepEqual(second.record.chunks, ['partial']);
+  });
+
+  test('openExisting does not create a missing explicit resume record', async () => {
+    const result = await streamResume.openExisting({ streamId: 'expired-cursor' });
+    assert.equal(result.isResume, true);
+    assert.equal(result.found, false);
+    assert.equal(result.record, null);
+    assert.equal(result.storeError, false);
+    assert.equal(await streamResume.load('expired-cursor'), null);
   });
 
   test('complete marks the record terminal', async () => {
@@ -104,6 +124,30 @@ describe('open / append / load (memory fallback)', () => {
     const record = await streamResume.load(streamId);
     assert.deepEqual(record.chunks, []);
   });
+
+  test('touch keeps a silent detached owner reconnectable past the old five-minute TTL', async () => {
+    let now = 0;
+    streamResume._setNowForTests(() => now);
+    const session = await streamResume.open({ streamId: 'silent-owner', ttlSeconds: 300 });
+
+    now = 290_000;
+    assert.equal(await streamResume.touch(session.streamId), true);
+    now = 310_000; // past the original five-minute expiry
+
+    const resumed = await streamResume.openExisting({ streamId: session.streamId });
+    assert.equal(resumed.found, true);
+    assert.equal(resumed.record.complete, false);
+  });
+
+  test('terminal records still expire after the bounded default lease', async () => {
+    let now = 0;
+    streamResume._setNowForTests(() => now);
+    const session = await streamResume.open({ streamId: 'terminal-owner' });
+    await streamResume.complete(session.streamId);
+
+    now = (streamResume.DEFAULT_TTL_SECONDS * 1000) + 1;
+    assert.equal(await streamResume.load(session.streamId), null);
+  });
 });
 
 describe('injected redis backend', () => {
@@ -141,5 +185,59 @@ describe('injected redis backend', () => {
     assert.equal(pos, 1);
     const record = await streamResume.load(session.streamId);
     assert.deepEqual(record.chunks, ['hi']);
+  });
+
+  test('openExisting reports Redis failure without creating or dispatching a session', async () => {
+    const calls = [];
+    const flaky = {
+      async get() { calls.push('get'); throw new Error('redis unavailable'); },
+      async set() { calls.push('set'); throw new Error('redis unavailable'); },
+      async del() { calls.push('del'); throw new Error('redis unavailable'); },
+    };
+    streamResume._setInjectedRedis(flaky);
+
+    const result = await streamResume.openExisting({ streamId: 'valid-owned-cursor' });
+    assert.equal(result.found, false);
+    assert.equal(result.record, null);
+    assert.equal(result.storeError, true);
+    assert.deepEqual(calls, ['get']);
+  });
+
+  test('memory-first lookup preserves the local tail while Redis is stale', async () => {
+    const key = 'sira:sse-resume:owner-stream';
+    const fake = {
+      store: new Map(),
+      async get(k) { return this.store.get(k) || null; },
+      async set(k, value) { this.store.set(k, value); return 'OK'; },
+      async del(k) { this.store.delete(k); return 1; },
+    };
+    streamResume._setInjectedRedis(fake);
+    const owner = await streamResume.open({ streamId: 'owner-stream' });
+    await streamResume.append(owner.streamId, 'durable-prefix');
+    fake.store.set(key, JSON.stringify({
+      chunks: ['durable-prefix'],
+      complete: false,
+      error: null,
+    }));
+
+    let releaseRedisWrite;
+    const redisWriteGate = new Promise(resolve => { releaseRedisWrite = resolve; });
+    fake.set = async (k, value) => {
+      await redisWriteGate;
+      fake.store.set(k, value);
+      return 'OK';
+    };
+
+    const pendingAppend = streamResume.append(owner.streamId, 'local-tail');
+    await new Promise(resolve => setImmediate(resolve));
+    const reopened = await streamResume.open({ streamId: owner.streamId });
+    assert.equal(reopened.isResume, true);
+    assert.deepEqual(reopened.record.chunks, ['durable-prefix', 'local-tail']);
+    const resumed = await streamResume.openExisting({ streamId: owner.streamId });
+    assert.equal(resumed.found, true);
+    assert.deepEqual(resumed.record.chunks, ['durable-prefix', 'local-tail']);
+
+    releaseRedisWrite();
+    await pendingAppend;
   });
 });

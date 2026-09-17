@@ -244,7 +244,7 @@ function buildApplicationMenu(win) {
     {
       label: 'Archivo',
       submenu: [
-        { label: 'Nuevo chat', accelerator: 'CmdOrCtrl+N', click: () => navigateMain('https://siragpt.com/chat?new=1') },
+        { label: 'Nuevo chat', accelerator: 'CmdOrCtrl+N', click: () => navigateMain('https://siragpt.com/agentes?new=1') },
         { type: 'separator' },
         isMac ? { role: 'close' } : { role: 'quit' },
       ],

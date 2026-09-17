@@ -70,19 +70,58 @@ describe("resolveWebFetchConfig", () => {
 
 describe("isPrivateOrReservedAddress", () => {
   test("IPv4 private ranges blocked", () => {
-    for (const ip of ["10.0.0.1", "127.0.0.1", "169.254.169.254", "172.16.0.1", "192.168.1.1", "0.0.0.0"]) {
+    for (const ip of [
+      "10.0.0.1",
+      "100.64.0.1",
+      "100.100.100.200",
+      "100.127.255.254",
+      "168.63.129.16",
+      "127.0.0.1",
+      "169.254.169.254",
+      "172.16.0.1",
+      "192.168.1.1",
+      "0.0.0.0",
+    ]) {
+      assert.equal(isPrivateOrReservedAddress(ip), true, `${ip} must be blocked`);
+    }
+  });
+
+  test("IPv4 multicast and documentation/reserved ranges blocked", () => {
+    for (const ip of [
+      "192.0.2.5",
+      "198.51.100.7",
+      "203.0.113.5",
+      "224.0.0.1",
+      "225.1.2.3",
+      "239.255.255.250",
+      "240.0.0.1",
+    ]) {
       assert.equal(isPrivateOrReservedAddress(ip), true, `${ip} must be blocked`);
     }
   });
 
   test("IPv4 public addresses allowed", () => {
-    for (const ip of ["8.8.8.8", "1.1.1.1", "203.0.113.5"]) {
+    for (const ip of ["8.8.8.8", "1.1.1.1", "93.184.216.34"]) {
       assert.equal(isPrivateOrReservedAddress(ip), false, `${ip} should NOT be blocked`);
     }
   });
 
   test("IPv6 loopback / link-local / ULA blocked", () => {
-    for (const ip of ["::1", "fe80::1", "fc00::1", "fd00::1"]) {
+    for (const ip of [
+      "::1",
+      "0:0:0:0:0:0:0:1",
+      "fe80::1",
+      "fe90::1",
+      "febf::1",
+      "fec0::1",
+      "fc00::1",
+      "fd00::1",
+      "ff05::1",
+      "2001:db8::1",
+      "3fff::1",
+      "0:0:0:0:0:ffff:7f00:1",
+      "0:0:0:0:0:ffff:a9fe:a9fe",
+    ]) {
       assert.equal(isPrivateOrReservedAddress(ip), true);
     }
   });
@@ -188,6 +227,21 @@ describe("resolveAndAssertSafe", () => {
       () => resolveAndAssertSafe("mixed.example.com", fakeLookup),
       { code: "web_fetch_resolved_blocked" },
     );
+  });
+
+  test("rejects expanded IPv6 loopback and mapped metadata DNS answers", async () => {
+    for (const address of [
+      "0:0:0:0:0:0:0:1",
+      "0:0:0:0:0:ffff:7f00:1",
+      "0:0:0:0:0:ffff:a9fe:a9fe",
+    ]) {
+      const fakeLookup = async () => [{ address, family: 6 }];
+      await assert.rejects(
+        () => resolveAndAssertSafe("expanded-ipv6.example.com", fakeLookup),
+        { code: "web_fetch_resolved_blocked" },
+        address,
+      );
+    }
   });
 
   test("passes when all records are public", async () => {

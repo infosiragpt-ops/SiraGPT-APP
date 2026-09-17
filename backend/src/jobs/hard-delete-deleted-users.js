@@ -105,7 +105,11 @@ async function run(opts = {}) {
           metadata: { email: c.email, deletedAt: c.deletedAt },
         });
       }
-      await hardDeleteUser({ userId: c.id, actorId: null });
+      const result = await hardDeleteUser({ userId: c.id, actorId: null });
+      if (result?.deletionPending) {
+        logger.warn('[hard-delete] document cleanup remains pending');
+        continue;
+      }
       deleted += 1;
     } catch (err) {
       logger.error(`[hard-delete] purge failed id=${c.id}: ${err?.message || err}`);

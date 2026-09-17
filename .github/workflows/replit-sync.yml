@@ -1,5 +1,6 @@
-# Mirror every commit on `main` to the Replit project so the
-# Replit IDE always shows the latest code. Replit's GitHub
+# Mirror every commit on `production-main` (what siragpt.com actually
+# runs) to the Replit project's `main` so the Replit IDE always shows
+# the latest deployed code. `main` on GitHub is a stale legacy branch. Replit's GitHub
 # integration (Version Control → Connect with GitHub) can also do
 # this UI-side; this workflow is the fallback / parallel push for
 # repos that prefer an explicit git remote.
@@ -11,19 +12,25 @@
 #        REPLIT_REMOTE_URL  — the https://...replit.com/repls/<id>.git URL
 #                             shown under "Version Control" in the Replit IDE
 #        REPLIT_TOKEN       — the personal access token from step 1
-#   3. That's it — every push to `main` triggers this workflow which
-#      mirrors the same SHA to the Replit remote.
+#   3. That's it — every push to `production-main` triggers this workflow
+#      which mirrors the same SHA to the Replit remote's `main`. It can
+#      also be run by hand (workflow_dispatch) with an optional ref.
 #
 # The job is a no-op when REPLIT_REMOTE_URL / REPLIT_TOKEN are not
 # set, so adding this workflow to a fork without the secrets is
 # safe.
 
-name: Replit · mirror main
+name: Replit · mirror production-main
 
 on:
   push:
-    branches: [main]
-  workflow_dispatch: {}
+    branches: [production-main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to mirror (defaults to production-main)'
+        required: false
+        default: 'production-main'
 
 permissions:
   contents: read
@@ -50,6 +57,7 @@ jobs:
         if: steps.gate.outputs.skip != '1'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.ref || 'production-main' }}
           fetch-depth: 0
 
       - name: Mirror push
@@ -63,5 +71,6 @@ jobs:
           # appears in `git remote -v` output.
           AUTHED_URL="${REPLIT_REMOTE_URL/https:\/\//https:\/\/x-access-token:${REPLIT_TOKEN}@}"
           git remote add replit "$AUTHED_URL"
-          git push replit main --force-with-lease
-          echo "✓ mirrored $(git rev-parse --short HEAD) to Replit"
+          # The Replit repl only knows `main`; publish the deployed SHA there.
+          git push replit HEAD:refs/heads/main --force
+          echo "✓ mirrored $(git rev-parse --short HEAD) (production-main) to Replit main"

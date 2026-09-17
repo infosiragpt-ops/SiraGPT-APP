@@ -33,6 +33,7 @@ let Ajv = null;
 try { Ajv = require('ajv'); } catch (_) { Ajv = null; }
 const ajv = Ajv ? new Ajv({ allErrors: true, strict: false, coerceTypes: true }) : null;
 const validatorCache = new Map();
+const { recordSkillRun } = require('./skill-prompt-sandbox');
 
 const SKILLS_DISABLED = ['0', 'off', 'false', 'no'].includes(
   String(process.env.SIRAGPT_SKILLS_IN_CHAT || '').trim().toLowerCase()
@@ -192,6 +193,19 @@ function describeParams(paramsSchema) {
   return `args: {${fields.join(', ')}}`;
 }
 
+function emitSkillRun(ctx, extra) {
+  recordSkillRun({
+    skillId: extra.skillId || null,
+    ok: extra.ok === true,
+    durationMs: extra.durationMs,
+    userId: ctx?.userId,
+    clearance: ctx?.clearance,
+    policyMode: policyModeForClearance(ctx?.clearance),
+    error: extra.error,
+    pluginSkill: extra.pluginSkill === true,
+  }, ctx?.audit);
+}
+
 /**
  * Execute a skill by id under the clearance-derived policy. Returns a flat
  * result object; never throws (errors become { ok:false, error }).
@@ -199,15 +213,31 @@ function describeParams(paramsSchema) {
 async function runSkill(skillId, args, ctx = {}, d = null, pluginSkills = null) {
   throwIfAborted(ctx?.signal);
   const id = String(skillId || '').trim();
-  if (!id) return { ok: false, error: 'missing_skill_id' };
+  if (!id) {
+    const outcome = { ok: false, error: 'missing_skill_id' };
+    emitSkillRun(ctx, outcome);
+    return outcome;
+  }
   const allowed = normalizeAllowedSkillIds(ctx.allowedSkillIds);
-  if (allowed && !allowed.has(id)) return { ok: false, skillId: id, error: `skill_not_allowed: ${id}` };
+  if (allowed && !allowed.has(id)) {
+    const outcome = { ok: false, skillId: id, error: `skill_not_allowed: ${id}` };
+    emitSkillRun(ctx, outcome);
+    return outcome;
+  }
   const D = deps(d);
   const map = buildSkillsCatalog(d, pluginSkills).skills;
-  if (!D || !map) return { ok: false, error: 'skills_subsystem_unavailable' };
+  if (!D || !map) {
+    const outcome = { ok: false, error: 'skills_subsystem_unavailable' };
+    emitSkillRun(ctx, { ...outcome, skillId: id });
+    return outcome;
+  }
 
   const skill = map.get(id);
-  if (!skill) return { ok: false, error: `unknown_skill: ${id}` };
+  if (!skill) {
+    const outcome = { ok: false, error: `unknown_skill: ${id}` };
+    emitSkillRun(ctx, { ...outcome, skillId: id });
+    return outcome;
+  }
 
   // Policy gate (capabilities + per-call budget + timeout via wrapSkill).
   let wrapped;
@@ -219,16 +249,24 @@ async function runSkill(skillId, args, ctx = {}, d = null, pluginSkills = null) 
     const { skills: wrappedList, hidden } = D.wrapSkillsWithPolicy([skill], pol);
     if (!wrappedList || wrappedList.length === 0) {
       const reason = (hidden && hidden[0] && hidden[0].reason) || 'denied_by_policy';
-      return { ok: false, error: `skill_denied: ${reason}` };
+      const outcome = { ok: false, error: `skill_denied: ${reason}` };
+      emitSkillRun(ctx, { ...outcome, skillId: id, pluginSkill: skill.__pluginSkill === true });
+      return outcome;
     }
     wrapped = wrappedList[0];
   } catch (polErr) {
-    return { ok: false, error: `policy_error: ${polErr && polErr.message ? polErr.message : 'unknown'}` };
+    const outcome = { ok: false, error: `policy_error: ${polErr && polErr.message ? polErr.message : 'unknown'}` };
+    emitSkillRun(ctx, { ...outcome, skillId: id, pluginSkill: skill.__pluginSkill === true });
+    return outcome;
   }
 
   // Re-validate args (lost when routed behind a single tool).
   const validation = validateArgs(skill.params, args);
-  if (!validation.ok) return { ok: false, error: `invalid_args: ${validation.error}` };
+  if (!validation.ok) {
+    const outcome = { ok: false, error: `invalid_args: ${validation.error}` };
+    emitSkillRun(ctx, { ...outcome, skillId: id, pluginSkill: skill.__pluginSkill === true });
+    return outcome;
+  }
 
   try {
     const startedAt = Date.now();
@@ -236,12 +274,16 @@ async function runSkill(skillId, args, ctx = {}, d = null, pluginSkills = null) 
     throwIfAborted(ctx?.signal);
     const result = await wrapped.execute(args || {}, ctx);
     throwIfAborted(ctx?.signal);
-    try { ctx.onEvent?.({ type: 'skill_result', skillId: id, ok: true, durationMs: Date.now() - startedAt }); } catch (_) { /* noop */ }
+    const durationMs = Date.now() - startedAt;
+    try { ctx.onEvent?.({ type: 'skill_result', skillId: id, ok: true, durationMs }); } catch (_) { /* noop */ }
+    emitSkillRun(ctx, { ok: true, skillId: id, durationMs, pluginSkill: skill.__pluginSkill === true });
     return { ok: true, skillId: id, result };
   } catch (e) {
     if (isAbortError(e)) throw createAbortError();
-    try { ctx.onEvent?.({ type: 'skill_result', skillId: id, ok: false, error: e && e.message ? e.message : String(e) }); } catch (_) { /* noop */ }
-    return { ok: false, skillId: id, error: e && e.message ? e.message : String(e) };
+    const error = e && e.message ? e.message : String(e);
+    try { ctx.onEvent?.({ type: 'skill_result', skillId: id, ok: false, error }); } catch (_) { /* noop */ }
+    emitSkillRun(ctx, { ok: false, skillId: id, error, pluginSkill: skill.__pluginSkill === true });
+    return { ok: false, skillId: id, error };
   }
 }
 

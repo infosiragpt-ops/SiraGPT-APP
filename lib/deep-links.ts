@@ -7,7 +7,7 @@
  * for web `window.open` handoffs.
  *
  * Supported schemes:
- *   siragpt://chat/:id          → /chat/:id
+ *   siragpt://chat/:id          → /agentes/:id
  *   siragpt://artifact/:id      → /artifact/:id
  *   siragpt://document/:id      → /documents/:id
  *   siragpt://settings          → /settings
@@ -80,7 +80,8 @@ function parseCustomScheme(url: URL, raw: string): DeepLinkRoute | null {
 
   switch (host) {
     case "chat":
-      return { path: tail ? `/chat/${tail}` : "/chat", query, hash, raw }
+    case "agentes":
+      return { path: tail ? `/agentes/${tail}` : "/agentes", query, hash, raw }
     case "artifact":
     case "artifacts":
       return { path: tail ? `/artifact/${tail}` : "/artifacts", query, hash, raw }

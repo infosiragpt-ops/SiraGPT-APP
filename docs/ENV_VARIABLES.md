@@ -18,7 +18,55 @@
 | `GROQ_API_KEY` | Groq Cloud | Llama 3.3 70B, DeepSeek R1 Distill | `llama-3.3-70b-versatile` |
 | `CEREBRAS_API_KEY` | Cerebras Inference | Ultra-fast inference | `llama-3.3-70b` |
 | `MISTRAL_API_KEY` | Mistral La Plateforme | Mistral Large, Small, Codestral | `mistral-large-latest` |
-| `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek Chat, DeepSeek Reasoner | `deepseek-chat` |
+| `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek V4 Flash / Pro (alias Sira Rápido / Sira Pro); also the codex coding agent's native tool-calling engine | `deepseek-v4-flash` |
+
+### Codex coding agent — DeepSeek native engine
+
+When `DEEPSEEK_API_KEY` is set the codex agent loop (`/api/codex`, builds behind
+`/agentes` and `/apps`) drives every step with DeepSeek V4 through native
+function calling (`backend/src/services/codex/deepseek-turn.js`). Power tier →
+`deepseek-v4-pro`, other tiers → `deepseek-v4-flash`. A failing DeepSeek step
+degrades to Claude (eligible tiers) and then to the prompted provider ladder
+(`deepseek → anthropic → openrouter → cerebras`), never to a failed run.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | API base URL (OpenAI-compatible) |
+| `CODEX_DEEPSEEK_DISABLED` | unset | `1` skips the native DeepSeek engine (ladder rung stays) |
+| `CODEX_DEEPSEEK_TIERS` | `eco,standard,power` | Run tiers served by DeepSeek; a tier carved out falls back to the previous engine for that tier |
+| `CODEX_DEEPSEEK_MODEL` | unset | Model for every tier (overridden by the two below) |
+| `CODEX_DEEPSEEK_MODEL_POWER` | `deepseek-v4-pro` | Model for the Power tier |
+| `CODEX_DEEPSEEK_MODEL_STANDARD` | `deepseek-v4-flash` | Model for Eco/Estándar |
+| `CODEX_DEEPSEEK_MAX_TOKENS` | `8192` | Output budget per step |
+| `CODEX_DEEPSEEK_TEMPERATURE` | `0.2` | Sampling temperature (ignored while thinking is enabled) |
+| `CODEX_DEEPSEEK_THINKING` | unset | `1` forces V4 thinking on, `0` off; default: Pro thinks, Flash only on high effort |
+| `CODEX_USER_MEMORY` | unset | `0` stops injecting the user's Hermes memory (durable facts + curated block) into the codex system prompt |
+| `CODEX_USER_MEMORY_MAX_CHARS` | `3000` | Cap of the injected memory block |
+| `CODEX_USER_MEMORY_LIMIT` | `12` | Facts requested from the memory store per run |
+| `CODEX_LLM_PROVIDER` | unset | Force a single ladder rung: `deepseek` \| `anthropic` \| `openrouter` \| `cerebras` |
+
+### /agentes task notifications
+
+When a long `/agentes` task reaches a terminal state, `agents/task-store`
+publishes `agent.task.completed | failed | cancelled` once per task through
+the trigger registry: an inbox notification (rendered by the existing
+notification center, linking to the chat) plus the user's webhooks.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_AGENT_TASK_NOTIFY` | unset | `0` disables the terminal notification everywhere; `1` forces it on (even under `NODE_ENV=test`). Default: on in production or whenever `DATABASE_URL` is set, off in tests |
+
+### GitHub workspace "▶ Run" (legacy host runner)
+
+`backend/src/services/github/workspace-runner.service.js` runs a cloned
+repository's dev server inside the backend process' own filesystem and
+network namespace. It is **disabled by default when `NODE_ENV=production`**;
+use the sandboxed codex runner instead.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_WORKSPACE_RUN_ENABLED` | unset | `1` opts a production host in (only where running third-party repos next to the DB/Redis is acceptable) |
+| `SIRAGPT_WORKSPACE_RUN_DISABLED` | unset | `1` kill switch in every environment (wins over the opt-in) |
 
 ### Free-Tier Fallback Model
 
@@ -89,6 +137,19 @@
 | `R2_SECRET_ACCESS_KEY` | R2 S3-compatible secret key |
 | `R2_BUCKET_NAME` | R2 bucket name for artifacts |
 | `R2_ENDPOINT` | R2 endpoint override (auto-resolved from ACCOUNT_ID) |
+
+---
+
+## Business Channels
+
+| Variable | Purpose |
+|----------|---------|
+| `CHANNEL_CREDENTIALS_KEY` | Preferred dedicated 32-byte key, encoded as 64 hexadecimal characters, for channel credential encryption; legacy installations fall back to `ENCRYPTION_KEY` |
+| `CHANNEL_PAIRING_PEPPER` | Dedicated high-entropy HMAC pepper for stable, non-reversible sender pairing codes; required in production |
+
+`CHANNEL_PAIRING_PEPPER` must contain at least 32 characters, be generated
+independently, and must not reuse `JWT_SECRET`, `ENCRYPTION_KEY`,
+`CHANNEL_CREDENTIALS_KEY`, or another signing key.
 
 ---
 
@@ -327,6 +388,24 @@ only normal local boot may skip or use `MIGRATION_NONFATAL=1`.
 
 ---
 
+## Payments (Stripe) + sales WhatsApp
+
+`/planes` sells exactly two plans: **Pro** ($10 USD/mes, backend plan code
+`PRO_MAX`, Stripe Checkout) and **Hablemos** (WhatsApp). The page reads
+`GET /api/payments/config` at runtime, so enabling sales in production only
+needs the backend `.env` — no frontend rebuild.
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `STRIPE_SECRET_KEY` | yes (to sell) | `sk_live_…` / `sk_test_…`. Without it checkout answers 503 and `/planes` degrades to WhatsApp activation. |
+| `STRIPE_WEBHOOK_SECRET` | recommended | Signs `POST /api/payments/stripe/webhook` (renewals, cancellations, failed invoices). The first purchase is fulfilled by `POST /api/payments/verify-session` even without it. |
+| `STRIPE_PRICE_PRO_MAX` | no | Override the Stripe price id. If absent the backend **auto-provisions** the product + $10/month price on the first checkout (`stripe-setup.getPriceIdForPlan` → `stripeService.ensurePriceForPlan`, idempotent by `metadata.plan`) and caches it in `systemSettings`. |
+| `STRIPE_PRICE_PRO` / `STRIPE_PRICE_ENTERPRISE` | no | Same override for the legacy $5 tier and the contact-only tier. |
+| `SIRAGPT_WHATSAPP_NUMBER` | yes (Hablemos) | Sales number, digits with country code (`51999123456`). Served by `GET /api/payments/config`; wins over the build-time value. |
+| `NEXT_PUBLIC_WHATSAPP_NUMBER` | no | Build-time fallback baked into the Next.js bundle (landing pricing, sidebar WhatsApp button). |
+| `FRONTEND_URL` | yes | Base for Stripe `success_url` / `cancel_url` (`/payment/success`, `/payment/cancel`). Must be `https://siragpt.com` in production. |
+| `ALLOW_STRIPE_DEMO` | dev only | `true` + `NODE_ENV!=production` simulates paid sessions without keys. Never in production. |
+
 ## General
 
 | Variable | Default | Purpose |
@@ -336,6 +415,35 @@ only normal local boot may skip or use `MIGRATION_NONFATAL=1`.
 | `SIRAGPT_RESEARCH_EMAIL` | — | Email for polite User-Agent in scientific search |
 | `IDEMPOTENCY_ENABLED` | `false` | Enable Stripe-style replay protection |
 | `MAINTENANCE_MODE_ENABLED` | `false` | Enable 503 maintenance mode |
+
+## RLHF flywheel
+
+Collects thumbs + regenerates into `preference_events`, fits an in-process Bradley-Terry reward model, and exports SFT/DPO JSONL. Phase 2 injects a compact few-shot block from those preferences at generate time. See `docs/rlhf-flywheel.md`, `docs/rlhf-phase2-steering.md`, and `docs/rlhf-phase3-feedback-rlaif.md`. Prisma persist is fail-open (in-memory only when the client is not ready). Best-of-N at generation time stays **off** unless explicitly enabled. RLAIF stays **off** unless explicitly enabled.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_RLHF_ENABLED` | on | `0` / `false` / `off` stops collecting preference events |
+| `SIRAGPT_RLHF_STEERING` | on | `0` / `false` / `off` skips few-shot preference injection at generate time |
+| `SIRAGPT_RLCD_ENABLED` | on | RLCD ledger (#722): registra decisiones tipadas (`intent_triage` / `execution_lane` / `model_route` / `compute_mode`) y une resultados. `0` / `false` / `off` apaga el ledger. See `docs/rlcd.md` |
+| `SIRAGPT_RLCD_LANE_STEERING` | on | RLCD ledger: la probabilidad calibrada puede forzar el bucle agéntico en turnos de código |
+| `SIRAGPT_RLCD_LANE_THRESHOLD` | 0.6 | RLCD ledger: umbral de probabilidad calibrada para forzar el carril agéntico |
+| `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Size cap for the injected preference block |
+| `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost). Leave off in production |
+| `SIRAGPT_RLHF_RLAIF` | off | `1` / `true` / `on` allows synthetic HHH labels; abstains on mid scores. Leave off in production |
+| `SIRAGPT_RLHF_RLAIF_MAX_PER_USER` | 8 | Cap of synthetic rows per user per window |
+| `SIRAGPT_RLHF_RLAIF_WINDOW_MS` | 3600000 | RLAIF rate-limit window (milliseconds) |
+| `SIRAGPT_RLHF_AUTO_TRAIN` | on | `0` disables the cooldown retrainer after new labels. Local Bradley-Terry RM only — never enqueues a phase-3 job |
+| `SIRAGPT_RLHF_TRAIN_JOBS` | off | `1` / `true` / `on` enables admin SFT/DPO prep jobs (`POST /api/rlhf/jobs`). Leave off in production until an admin wants a JSONL artifact |
+| `SIRAGPT_RLHF_TRAIN_SUBMIT` | off | Optional submit after prep. No-op today (no in-repo catalog fine-tune adapter). Do not treat this as a paid auto-train switch |
+| `SIRAGPT_RLHF_TRAIN_JOB_CONCURRENCY` | 1 | In-process prep workers (capped at 4) |
+| `SYSTEM_CRON_RLHF_SCHEDULE` | `0 8 * * *` | Daily backfill of Message.feedback + local RM train (UTC) |
+| `SIRAGPT_RLCD_DOCUMENTS` | **off** | Document-analysis RLCD (#721 + phase 2 + phase 3): confidence trailer, evidence blend (extract/RAG scores/page cites), claim labels, Spanish defer, Brier/ECE on document thumbs. Independent of `SIRAGPT_RLCD_ENABLED`. `1` / `true` / `on` enables. Code default stays off (prod `.env` may already be on — do not change it from this PR). See `docs/rlhf-rlcd-documents.md` |
+| `SIRAGPT_RLCD_DEFER_THRESHOLD` | `0.45` | Document RLCD: defer when predicted confidence is below this (0.05–0.95) |
+| `SIRAGPT_RLCD_MAX_DEFER_RATE` | `0.25` | Document RLCD: cap of document turns that may defer in this process (0–1) |
+| `SIRAGPT_RLCD_PROMPT` | on (if documents on) | `0` / `off` skips the hidden confidence-trailer contract |
+| `SIRAGPT_RLCD_PHRASE` | on (if documents on) | `0` / `off` skips the compact Spanish “Confianza baja/media” line |
+| `SIRAGPT_RLCD_AUTO_THRESHOLD` | **off** | Document RLCD: apply the ECE-suggested defer threshold when there are enough labeled outcomes. Leave off unless an operator is watching `/api/rlcd/stats` → `documents` |
+| `SIRAGPT_RLCD_AUTO_THRESHOLD_MIN_N` | `20` | Minimum labeled document outcomes before auto-threshold is usable |
 
 ---
 

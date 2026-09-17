@@ -1,14 +1,8 @@
 "use client"
 
 /**
- * NewTabPane — Replit-style "Nueva pestaña" picker for /code.
- *
- * Clicking the + in the tab strip opens this full pane over the main area:
- * a search input, a quick-access grid (Agent · Preview · Shell · Publishing),
- * an "Ir a pestaña existente" section with the tabs already open, and the
- * tool catalog below (Sugerido · Avanzado · Archivos). Picking a tool calls
- * onSelectTool; picking an open tab calls onJumpToOpen. Fully keyboard
- * driven: type to search, ↑↓ to move, Enter to open, Esc to close.
+ * NewTabPane — compact All-tools popover for /code (attached to the rail +).
+ * Same Sugerido / Avanzado / Archivos catalog and handleSelectTool wiring.
  */
 
 import * as React from "react"
@@ -19,6 +13,7 @@ import { cn } from "@/lib/utils"
 import {
   TOOL_SECTIONS,
   WORKSPACE_TOOLS,
+  toolReadiness,
   type WorkspaceTool,
   type WorkspaceToolId,
 } from "@/lib/code-workspace-tools"
@@ -27,7 +22,6 @@ type Props = {
   open: boolean
   onClose: () => void
   onSelectTool: (id: WorkspaceToolId) => void
-  /** Focus a tab that is already open (drives "Ir a pestaña existente"). */
   onJumpToOpen: (id: WorkspaceToolId) => void
   openToolIds: WorkspaceToolId[]
 }
@@ -44,7 +38,6 @@ type PaneSection = {
   items: PaneItem[]
 }
 
-// Large quick-access tiles shown while the search is empty (Replit's grid).
 const QUICK_TOOL_IDS: WorkspaceToolId[] = ["agent", "preview", "shell", "publishing"]
 
 function itemKey(item: PaneItem): string {
@@ -64,6 +57,7 @@ export function NewTabPane({ open, onClose, onSelectTool, onJumpToOpen, openTool
   const { files, openFile, createFile } = useCodeWorkspace()
   const [query, setQuery] = React.useState("")
   const [cursor, setCursor] = React.useState(0)
+  const panelRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
     if (open) {
@@ -124,8 +118,6 @@ export function NewTabPane({ open, onClose, onSelectTool, onJumpToOpen, openTool
       const items = section.toolIds
         .map((id) => WORKSPACE_TOOLS[id])
         .filter((tool): tool is WorkspaceTool => Boolean(tool))
-        // Replit's "Suggested" hides what's already open (it lives above,
-        // under "Jump to existing tab") — mirror that.
         .filter((tool) => section.id !== "suggested" || !openSet.has(tool.id))
         .map((tool) => ({ kind: "tool" as const, tool }))
       if (items.length > 0) {
@@ -168,8 +160,6 @@ export function NewTabPane({ open, onClose, onSelectTool, onJumpToOpen, openTool
     [createFile, onClose, onJumpToOpen, onSelectTool, openFile],
   )
 
-  // Esc closes; arrows + Enter drive the highlighted row (list-level so it
-  // works while the search input keeps focus).
   const onKeyDown = React.useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -198,6 +188,20 @@ export function NewTabPane({ open, onClose, onSelectTool, onJumpToOpen, openTool
     [cursor, flatItems, onClose, pick],
   )
 
+  React.useEffect(() => {
+    if (!open) return
+    const onDoc = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (panelRef.current?.contains(target)) return
+      const rail = (event.target as HTMLElement | null)?.closest?.("[data-sira-tools-rail], [data-testid='workspace-top-bar']")
+      if (rail) return
+      onClose()
+    }
+    document.addEventListener("mousedown", onDoc)
+    return () => document.removeEventListener("mousedown", onDoc)
+  }, [open, onClose])
+
   if (!open) return null
 
   const quickTools = q
@@ -208,13 +212,13 @@ export function NewTabPane({ open, onClose, onSelectTool, onJumpToOpen, openTool
 
   return (
     <div
-      className="absolute inset-0 z-50 flex flex-col bg-background"
+      ref={panelRef}
+      className="ntp-all-tools-popover absolute left-1 top-1 z-50 flex max-h-[min(720px,calc(100%-12px))] w-[min(420px,calc(100%-12px))] flex-col overflow-hidden rounded-2xl border border-border/60 bg-background/95 shadow-2xl shadow-black/20 backdrop-blur-md"
       role="dialog"
-      aria-label="Nueva pestaña"
+      aria-label="Todas las herramientas"
+      data-ntp-popover="1"
       onKeyDown={onKeyDown}
     >
-      {/* Scoped entrance animation — inline keyframes keep it safe under the
-          curated Tailwind build (no reliance on animate-* utilities). */}
       <style>{`
         @keyframes ntp-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
         @media (prefers-reduced-motion: reduce) { .ntp-enter { animation: none !important; } }
@@ -224,102 +228,90 @@ export function NewTabPane({ open, onClose, onSelectTool, onJumpToOpen, openTool
         className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[hsl(var(--accent-violet)/0.85)] to-transparent"
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div
-          className="ntp-enter mx-auto flex w-full max-w-[760px] flex-col px-6 pb-6 pt-8"
-          style={{ animation: "ntp-enter 0.18s ease-out" }}
-        >
-          <div className="flex items-center gap-2.5 rounded-xl border border-border/70 bg-background px-3.5 py-3 shadow-sm transition-shadow focus-within:border-foreground/25 focus-within:shadow-md focus-within:ring-2 focus-within:ring-foreground/5">
-            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar herramientas y archivos…"
-              className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted-foreground"
-              aria-label="Buscar herramientas y archivos"
-            />
-            <kbd className="hidden shrink-0 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:block">
-              Esc
-            </kbd>
-          </div>
-
-          {quickTools.length > 0 ? (
-            <div className="grid grid-cols-2 gap-2.5 pt-5 sm:grid-cols-4">
-              {quickTools.map((tool) => {
-                const Icon = tool.icon
-                return (
-                  <button
-                    key={tool.id}
-                    type="button"
-                    onClick={() => pick({ kind: "tool", tool })}
-                    className="group flex flex-col items-center gap-2 rounded-xl border border-border/60 bg-card/60 px-3 py-4 text-center shadow-sm transition-all hover:-translate-y-px hover:border-foreground/20 hover:bg-muted/40 hover:shadow"
-                  >
-                    <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-border/60 bg-background text-muted-foreground shadow-sm transition-colors group-hover:text-foreground">
-                      <Icon className="h-[18px] w-[18px]" />
-                    </span>
-                    <span className="text-[12.5px] font-semibold text-foreground">{tool.label}</span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : null}
-
-          {flatItems.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 px-1 py-14 text-center">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-muted/30 text-muted-foreground">
-                <Search className="h-4 w-4" />
-              </span>
-              <p className="text-[13px] font-medium text-foreground">Sin resultados</p>
-              <p className="text-[12px] text-muted-foreground">
-                Prueba con otro nombre de herramienta o archivo.
-              </p>
-            </div>
-          ) : (
-            sections.map((section) => (
-              <section key={section.id} className="pt-6">
-                <p className="px-1 pb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                  {section.label}
-                </p>
-                <ul className="overflow-hidden rounded-xl border border-border/50 bg-card/40">
-                  {section.items.map((item, itemIdx) => {
-                    flatIndex += 1
-                    const index = flatIndex
-                    const highlighted = index === cursor
-                    return (
-                      <PaneRow
-                        key={`${section.id}:${itemKey(item)}`}
-                        item={item}
-                        highlighted={highlighted}
-                        first={itemIdx === 0}
-                        onHover={() => setCursor(index)}
-                        onSelect={() => pick(item)}
-                      />
-                    )
-                  })}
-                </ul>
-              </section>
-            ))
-          )}
+      <div className="ntp-enter min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3" style={{ animation: "ntp-enter 0.16s ease-out" }}>
+        <div className="flex items-center gap-2.5 rounded-xl border border-border/50 bg-muted/45 px-3 py-2.5 shadow-sm transition-shadow focus-within:border-foreground/20 focus-within:bg-muted/65 focus-within:shadow-md">
+          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar herramientas y archivos…"
+            className="min-w-0 flex-1 bg-transparent text-[13.5px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+            aria-label="Buscar herramientas y archivos"
+          />
+          <kbd className="hidden shrink-0 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:block">
+            Esc
+          </kbd>
         </div>
+
+        {quickTools.length > 0 ? (
+          <div className="grid grid-cols-4 gap-1.5 pt-3">
+            {quickTools.map((tool) => {
+              const Icon = tool.icon
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  onClick={() => pick({ kind: "tool", tool })}
+                  className="group flex flex-col items-center gap-1.5 rounded-lg border border-border/60 bg-card/60 px-1.5 py-2 text-center transition-colors hover:border-foreground/20 hover:bg-muted/50"
+                >
+                  <span className="flex h-8 w-8 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-colors group-hover:text-foreground">
+                    <Icon className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="text-[11px] font-medium text-foreground">{tool.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+
+        {flatItems.length === 0 ? (
+          <div className="flex flex-col items-center gap-1.5 px-1 py-10 text-center">
+            <p className="text-[13px] font-medium text-foreground">Sin resultados</p>
+            <p className="text-[12px] text-muted-foreground">Prueba con otro nombre de herramienta o archivo.</p>
+          </div>
+        ) : (
+          sections.map((section) => (
+            <section key={section.id} className="pt-3">
+              <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {section.label}
+              </p>
+              <ul className="overflow-hidden rounded-lg border border-border/50 bg-card/40">
+                {section.items.map((item, itemIdx) => {
+                  flatIndex += 1
+                  const index = flatIndex
+                  const highlighted = index === cursor
+                  return (
+                    <PaneRow
+                      key={`${section.id}:${itemKey(item)}`}
+                      item={item}
+                      highlighted={highlighted}
+                      first={itemIdx === 0}
+                      onHover={() => setCursor(index)}
+                      onSelect={() => pick(item)}
+                    />
+                  )
+                })}
+              </ul>
+            </section>
+          ))
+        )}
       </div>
 
-      <footer className="flex shrink-0 items-center justify-center gap-4 border-t border-border/50 bg-background/95 px-6 py-2.5 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-medium">↑</kbd>
-          <kbd className="rounded border border-border/60 bg-muted/40 px-1 py-0.5 text-[10px] font-medium">↓</kbd>
-          navegar
-        </span>
-        <span className="flex items-center gap-1.5">
-          <kbd className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium">↵</kbd>
-          abrir
-        </span>
-        <span className="flex items-center gap-1.5">
-          <kbd className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium">Esc</kbd>
-          cerrar
-        </span>
+      <footer className="flex shrink-0 items-center justify-center gap-3 border-t border-border/50 bg-muted/20 px-3 py-1.5 text-[10px] text-muted-foreground">
+        <span>↑↓ navegar</span>
+        <span>↵ abrir</span>
+        <span>Esc cerrar</span>
       </footer>
     </div>
+  )
+}
+
+function ProntoPill() {
+  return (
+    <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+      Pronto
+    </span>
   )
 }
 
@@ -338,7 +330,6 @@ function PaneRow({
 }) {
   const ref = React.useRef<HTMLLIElement>(null)
 
-  // Keep the keyboard cursor visible while navigating long sections.
   React.useEffect(() => {
     if (highlighted) ref.current?.scrollIntoView({ block: "nearest" })
   }, [highlighted])
@@ -351,6 +342,7 @@ function PaneRow({
     : item.kind === "file"
       ? "Abrir archivo del workspace"
       : "Crear un archivo nuevo"
+  const pronto = isToolish && toolReadiness(item.tool) === "pronto"
 
   return (
     <li ref={ref} className={cn(!first && "border-t border-border/40")}>
@@ -359,45 +351,45 @@ function PaneRow({
         onClick={onSelect}
         onMouseMove={onHover}
         className={cn(
-          "relative flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors",
+          "relative flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors",
           highlighted ? "bg-muted/70" : "hover:bg-muted/40",
         )}
       >
-        {/* Left accent for the keyboard cursor — reads as "selected", not hovered. */}
         <span
           aria-hidden
           className={cn(
-            "absolute inset-y-1.5 left-0 w-[3px] rounded-r-full transition-opacity",
+            "absolute inset-y-1 left-0 w-[2px] rounded-r-full transition-opacity",
             highlighted ? "opacity-100" : "opacity-0",
           )}
           style={{ backgroundColor: "hsl(var(--accent-violet, 262 83% 66%))" }}
         />
         <span
           className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors",
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors",
             highlighted
               ? "border-foreground/15 bg-background text-foreground shadow-sm"
               : "border-border/60 bg-muted/40 text-muted-foreground",
           )}
         >
-          <Icon className="h-4 w-4" />
+          <Icon className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2">
-            <span className="truncate text-[13.5px] font-medium text-foreground">{title}</span>
+          <span className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-medium text-foreground">{title}</span>
             {item.kind === "open-tab" ? (
-              <span className="shrink-0 rounded-full border border-border/60 bg-muted/40 px-2 py-px text-[10px] font-medium text-muted-foreground">
+              <span className="shrink-0 rounded-full border border-border/60 bg-muted/40 px-1.5 py-px text-[9px] font-medium text-muted-foreground">
                 Abierta
               </span>
             ) : null}
+            {pronto ? <ProntoPill /> : null}
           </span>
-          <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
             {description}
           </span>
         </span>
         <ArrowUpRight
           className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-opacity",
+            "h-3 w-3 shrink-0 text-muted-foreground transition-opacity",
             highlighted ? "opacity-100" : "opacity-0",
           )}
         />
