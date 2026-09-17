@@ -8,10 +8,10 @@ import { readComposerFastMode, writeComposerFastMode } from "@/lib/chat/composer
 import { cn } from "@/lib/utils"
 
 export const EFFORT_LEVELS = [
-  { value: "Bajo", label: "Low" },
-  { value: "Medio", label: "Medium" },
-  { value: "Extra", label: "High" },
-  { value: "Max", label: "Extra high" },
+  { value: "Bajo", label: "Low", description: "Respuestas rápidas para preguntas sencillas." },
+  { value: "Medio", label: "Medium", description: "Equilibrio entre rapidez y profundidad." },
+  { value: "Extra", label: "High", description: "Más análisis antes de responder." },
+  { value: "Max", label: "Extra high", description: "Máxima profundidad; puede tardar más." },
 ] as const
 
 /**
@@ -44,6 +44,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort, disabled = fa
   const active = EFFORT_LEVELS[activeIndex]
   const titleId = React.useId()
   const valueId = React.useId()
+  const descriptionId = React.useId()
   const trackRef = React.useRef<HTMLDivElement | null>(null)
   const draggingRef = React.useRef(false)
   const [dragging, setDragging] = React.useState(false)
@@ -70,6 +71,9 @@ export function EffortSection({ selectedEffort, setSelectedEffort, disabled = fa
         <span className="effort-title" id={titleId}>Esfuerzo</span>
         <span className="effort-level" id={valueId}>{active.label}</span>
       </div>
+      <span className="effort-description" id={descriptionId} data-testid="composer-effort-description">
+        {active.description}
+      </span>
       <div
         ref={trackRef}
         className="effort-track"
@@ -80,6 +84,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort, disabled = fa
         role="slider"
         tabIndex={disabled ? -1 : 0}
         aria-labelledby={`${titleId} ${valueId}`}
+        aria-describedby={descriptionId}
         aria-valuemin={0}
         aria-valuemax={EFFORT_LEVELS.length - 1}
         aria-valuenow={activeIndex}

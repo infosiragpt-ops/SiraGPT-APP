@@ -395,6 +395,7 @@ test("context and effort open as separate professional popovers with real data",
   await expect(effortMenu.getByText("Más inteligente", { exact: true })).toBeVisible()
   await expect(effortMenu.getByText("Modo rápido", { exact: true })).toBeVisible()
   await expect(effortMenu.getByText("Respuestas más rápidas, mayor uso de los límites.", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByTestId("composer-effort-description")).toHaveText("Máxima profundidad; puede tardar más.")
 
   const effortGeometry = await effortMenu.evaluate((element) => {
     const rect = element.getBoundingClientRect()
@@ -403,7 +404,8 @@ test("context and effort open as separate professional popovers with real data",
   expect(effortGeometry.width).toBeGreaterThanOrEqual(312)
   expect(effortGeometry.width).toBeLessThanOrEqual(334)
   expect(effortGeometry.height).toBeGreaterThanOrEqual(145)
-  expect(effortGeometry.height).toBeLessThanOrEqual(194)
+  // The per-level description row adds one line under the header (≈216 px measured in CI).
+  expect(effortGeometry.height).toBeLessThanOrEqual(224)
   expect(effortGeometry.radius).toBe("16px")
 
   const slider = effortMenu.getByRole("slider", { name: /Esfuerzo/ })

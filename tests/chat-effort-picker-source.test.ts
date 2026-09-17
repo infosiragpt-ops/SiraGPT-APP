@@ -93,6 +93,9 @@ describe("composer effort picker source contract", () => {
     assert.doesNotMatch(effortMenu, /effort-caption|caption:/, "the compact reference has no descriptive caption")
     assert.match(effortMenu, /<span className="effort-title" id=\{titleId\}>Esfuerzo<\/span>/, "the title labels the slider")
     assert.match(effortMenu, /<span className="effort-level" id=\{valueId\}>\{active\.label\}<\/span>/, "the header names the level in text — never color alone (WCAG 1.4.1)")
+    assert.match(effortMenu, /description: "Máxima profundidad; puede tardar más\."/)
+    assert.match(effortMenu, /className="effort-description" id=\{descriptionId\}/, "the active effort explains its trade-off")
+    assert.match(effortMenu, /aria-describedby=\{descriptionId\}/, "the slider exposes the active effort explanation to assistive tech")
   })
 
   it("supports real dragging, not just stop clicks", () => {
