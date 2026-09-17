@@ -12,6 +12,7 @@ tipadas que ya toma cada turno de `/api/ai/generate`:
 | `execution_lane` | `agentic` / `plain` | `detectCodeTaskIntent().confidence` (o su complemento) |
 | `model_route` | modelo seleccionado | `routing.recommendedScore` |
 | `compute_mode` | `direct` / `extended` / … | distancia de `difficulty.score` a los umbrales 0.35 / 0.65 |
+| `media_intent` | `force:image` / `ask:image` / `chat` (idem video, music, audio) | 0.9 alta / 0.55 media / 0.25 baja, −0.15 si el texto fue reparado de erratas, −0.05 si solo hay sustantivo |
 
 Hasta ahora ninguna de esas confianzas se comprobaba contra el resultado del
 turno. El módulo `backend/src/services/rlcd/`:
@@ -40,6 +41,29 @@ turno. El módulo `backend/src/services/rlcd/`:
    `calibrated('execution_lane', codeConfidence) ≥ SIRAGPT_RLCD_LANE_THRESHOLD`
    (0.6). Si esos turnos forzados acaban en 👎 / fallos, la probabilidad
    calibrada baja y deja de forzar sola.
+
+### Intención de medios (imágenes, vídeo, audio)
+
+Caso real (2026-09-17): «cre aun aimgen de un gato» iba al modelo de texto.
+Ahora el detector es tolerante a erratas (capa difusa en
+`image-directive.canonicalizeImageTypos`) y la decisión es RLCD:
+`decideMediaIntent` registra `media_intent` con confianza cruda derivada del
+detector y decide por probabilidad calibrada:
+
+- `calibrated ≥ SIRAGPT_RLCD_MEDIA_FORCE_THRESHOLD` (0.6) → **force**: el turno
+  entra al bucle agéntico con los tools de medios aunque las heurísticas no
+  lo hubieran hecho.
+- `≥ SIRAGPT_RLCD_MEDIA_ASK_THRESHOLD` (0.35) → **ask**: se pregunta al usuario
+  («¿Quieres que genere una imagen…?») reutilizando el corto-circuito de
+  clarificación del triage (`source: rlcd_media`).
+- por debajo → chat normal.
+
+Resultados: `react-agent` registra `tool_success` / `failure` cuando
+`generate_image`, `edit_image`, `generate_video`, `generate_music` o
+`generate_speech` producen (o no) el artefacto; los 👍/👎 y «Regenerar» se
+unen igual que en el resto de decisiones. Si una forma de pedirlo lleva a
+fallos repetidos, ese bin de confianza pierde la fuerza y pasa a preguntar.
+`SIRAGPT_RLCD_MEDIA_STEERING=0` deja solo el registro.
 
 ## Telemetría
 

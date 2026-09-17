@@ -462,10 +462,27 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   }
   try {
     const result = await tool.execute(args, ctx);
+    recordMediaToolOutcome(name, result, ctx);
     return { result };
   } catch (e) {
+    recordMediaToolOutcome(name, { error: e && e.message }, ctx);
     return { error: `tool_execution_failed: ${e.message}` };
   }
+}
+
+// RLCD: a media tool that produced (or failed to produce) the artifact is
+// the ground truth for the turn's media_intent decision.
+const MEDIA_TOOL_NAMES = new Set(['generate_image', 'edit_image', 'generate_video', 'generate_music', 'generate_speech']);
+function recordMediaToolOutcome(name, result, ctx) {
+  try {
+    if (!MEDIA_TOOL_NAMES.has(String(name || '')) || !ctx || !ctx.chatId) return;
+    // eslint-disable-next-line global-require
+    require('./rlcd').recordOutcome({
+      chatId: String(ctx.chatId),
+      outcome: isReportedToolFailure(result) ? 'failure' : 'tool_success',
+      source: 'media_tool',
+    });
+  } catch (_) { /* advisory */ }
 }
 
 // Tool handlers use both thrown exceptions and structured failure envelopes.

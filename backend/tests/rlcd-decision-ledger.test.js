@@ -168,7 +168,7 @@ test('generate route, thumbs, mount and /metrics are wired', () => {
   const ai = read('src/routes/ai.js');
   assert.match(ai, /rlcd\.recordTurnDecisions\(\{/);
   assert.match(ai, /rlcd\.decideExecutionLane\(\{/);
-  assert.match(ai, /\(shouldRunAgentic \|\| __rlcdLane\.forced === true \|\| documentEditRequested \|\| createDocRequested\)/);
+  assert.match(ai, /\(shouldRunAgentic \|\| __rlcdLane\.forced === true \|\| \(req\._rlcdMedia && req\._rlcdMedia\.force === true\) \|\| documentEditRequested \|\| createDocRequested\)/);
   assert.match(ai, /outcome: 'regenerated', source: 'regenerate'/);
   assert.match(ai, /source: 'faithfulness'/);
   assert.match(ai, /outcome: 'constraint_violation', source: 'constraints'/);
@@ -187,4 +187,60 @@ test('generate route, thumbs, mount and /metrics are wired', () => {
   assert.match(formatProcessMetricsExposition(), /sira_rlcd_decisions_total/);
   const routeSrc = read('src/routes/rlcd.js');
   assert.match(routeSrc, /router\.get\('\/stats', authenticateToken/);
+});
+
+test('media intent is a calibrated decision: force / ask / none, weaker when the text was typo-repaired', () => {
+  ledger.reset();
+  const clean = rlcd.decideMediaIntent({ chatId: 'm1', text: 'crea una imagen de un gato' });
+  assert.equal(clean.kind, 'image');
+  assert.equal(clean.action, 'force');
+  assert.equal(clean.raw, 0.9);
+  assert.equal(clean.repaired, false);
+  const typo = rlcd.decideMediaIntent({ chatId: 'm2', text: 'cre aun aimgen de un gato' });
+  assert.equal(typo.kind, 'image');
+  assert.equal(typo.repaired, true);
+  assert.equal(typo.raw, 0.75);
+  assert.equal(typo.action, 'force');
+  const bare = rlcd.decideMediaIntent({ chatId: 'm3', text: 'una imagen' });
+  assert.equal(bare.action, 'ask');
+  assert.match(bare.question, /¿Quieres que genere una imagen/);
+  const question = rlcd.decideMediaIntent({ chatId: 'm4', text: 'que es una imagen raster' });
+  assert.equal(question.action, 'none');
+  assert.equal(rlcd.decideMediaIntent({ chatId: 'm5', text: 'hola' }).kind, null);
+  // every decision is joinable by chat for outcomes
+  assert.equal(ledger.recordOutcome({ chatId: 'm2', outcome: 'tool_success', source: 'media_tool' }), 1);
+  assert.equal(ledger.getDecision(typo.decisionId).outcome.label, 'tool_success');
+  assert.equal(ledger.getDecision(typo.decisionId).kind, 'media_intent');
+});
+
+test('media intent learns: repeated failures of typo-repaired generations demote force → ask → none', () => {
+  ledger.reset();
+  let last = null;
+  for (let i = 0; i < 12; i += 1) {
+    last = rlcd.decideMediaIntent({ chatId: `t${i}`, text: 'cre aun aimgen de un gato' });
+    ledger.recordOutcome({ decisionIds: [last.decisionId], outcome: 'failure', source: 'media_tool' });
+  }
+  assert.ok(last.calibrated < 0.6, `calibrated=${last.calibrated}`);
+  assert.notEqual(last.action, 'force');
+  const clean = rlcd.decideMediaIntent({ chatId: 'x', text: 'crea una imagen de un gato' });
+  assert.equal(clean.action, 'force', 'a different confidence bin is unaffected');
+  const off = rlcd.decideMediaIntent({ chatId: 'y', text: 'una imagen', env: { SIRAGPT_RLCD_MEDIA_STEERING: '0' } });
+  assert.equal(off.action, 'none');
+  assert.ok(off.decisionId, 'still recorded when steering is off');
+  ledger.reset();
+});
+
+test('generate route, agentic gate and tool executor are wired for media decisions', () => {
+  const ai = read('src/routes/ai.js');
+  assert.match(ai, /rlcd\.decideMediaIntent\(\{/);
+  assert.match(ai, /\(req\._rlcdMedia && req\._rlcdMedia\.force === true\)/);
+  assert.match(ai, /source: 'rlcd_media'/);
+  const obs = read('src/services/ai/generate-request-observability.js');
+  assert.match(obs, /'rlcd\.media_decided',/);
+  const react = read('src/services/react-agent.js');
+  assert.match(react, /recordMediaToolOutcome\(name, result, ctx\)/);
+  assert.match(react, /MEDIA_TOOL_NAMES = new Set\(\['generate_image', 'edit_image', 'generate_video', 'generate_music', 'generate_speech'\]\)/);
+  const acs = require('../src/services/agentic-chat-stream');
+  assert.equal(acs.shouldUseAgenticChat({ prompt: 'cre aun aimgen de un gato', history: [], files: [] }), true);
+  assert.equal(acs.shouldUseAgenticChat({ prompt: 'hola', history: [], files: [] }), false);
 });

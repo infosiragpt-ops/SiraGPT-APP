@@ -40,6 +40,8 @@ const TYPO_REPLACEMENTS = [
   [/\bimajen\b/g, 'imagen'],
   [/\bimasgen\b/g, 'imagen'],
   [/\bimgen\b/g, 'imagen'],
+  [/\blgoo\b/g, 'logo'],
+  [/\bfotto\b/g, 'foto'],
   [/\bimgagen\b/g, 'imagen'],
   [/\bimangen\b/g, 'imagen'],
   [/\bimagne\b/g, 'imagen'],
@@ -60,11 +62,94 @@ const TYPO_REPLACEMENTS = [
   [/\bgeenracion\b/g, 'generacion'],
 ];
 
+// ── Fuzzy layer: mangled media nouns / create verbs ──────────────────────
+// "cre aun aimgen de un gato" must still be an image request. Only tokens
+// close (optimal string alignment distance, transpositions count 1) to ONE
+// media lexicon word are rewritten; real words in STOP_WORDS never are.
+const FUZZY_LEXICON = [
+  'imagen', 'imagenes', 'foto', 'fotos', 'fotografia', 'fotografias', 'ilustracion', 'ilustraciones',
+  'dibujo', 'dibujos', 'logo', 'logotipo', 'poster', 'afiche', 'retrato', 'pintura', 'sticker',
+  'avatar', 'icono', 'portada', 'wallpaper', 'render', 'video', 'videos', 'videoclip', 'animacion',
+  'cancion', 'canciones', 'musica', 'melodia', 'audio', 'narracion', 'locucion', 'podcast',
+  'crea', 'creame', 'genera', 'generame', 'dibuja', 'dibujame', 'hazme', 'disena', 'diseñame',
+  'elabora', 'produce', 'quiero', 'necesito', 'dame', 'ponme',
+  'horizontal', 'vertical', 'cuadrada', 'realista', 'caricatura', 'anime', 'acuarela',
+];
+const FUZZY_STOP_WORDS = new Set([
+  'para', 'pero', 'como', 'este', 'esta', 'esto', 'con', 'los', 'las', 'del', 'que', 'una', 'uno',
+  'unos', 'unas', 'por', 'sobre', 'entre', 'hasta', 'desde', 'cuando', 'donde', 'gato', 'gata',
+  'perro', 'casa', 'auto', 'coche', 'tema', 'texto', 'todo', 'toda', 'nada', 'vida', 'ver', 'dato',
+  'datos', 'sino', 'aun', 'aqui', 'algo', 'mira', 'fuera', 'cara', 'foto', 'video', 'audio', 'logo',
+  'crea', 'dame', 'haz', 'pon', 'seria', 'serie', 'poema', 'canta', 'cuenta', 'idea', 'ideas',
+  // English media words are already recognised as-is by the lexicons; never
+  // rewrite them into their Spanish neighbours ("image" → "imagen" broke
+  // English reframe follow-ups).
+  'image', 'images', 'photo', 'photos', 'picture', 'pictures', 'drawing', 'drawings', 'illustration',
+  'illustrations', 'artwork', 'video', 'videos', 'song', 'songs', 'music', 'audio', 'voice', 'render',
+  'poster', 'sticker', 'avatar', 'icon', 'icons', 'cover', 'scene', 'same', 'make', 'create', 'generate',
+  'draw', 'design', 'build', 'want', 'need', 'give',
+]);
+const FUZZY_LEXICON_SET = new Set(FUZZY_LEXICON);
+
+/** Optimal string alignment distance, bounded by `max` (returns max+1 beyond). */
+function osaDistanceLe(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const rows = [];
+  for (let i = 0; i <= a.length; i += 1) { rows[i] = [i]; }
+  for (let j = 1; j <= b.length; j += 1) rows[0][j] = j;
+  for (let i = 1; i <= a.length; i += 1) {
+    let rowMin = Infinity;
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(rows[i - 1][j] + 1, rows[i][j - 1] + 1, rows[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, rows[i - 2][j - 2] + 1);
+      rows[i][j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+  }
+  return rows[a.length][b.length];
+}
+
+function sortedLetters(s) {
+  return s.split('').sort().join('');
+}
+
+function fuzzyMediaToken(token) {
+  // Precision first: 4-letter tokens are too close to real words ("moto"
+  // vs "foto"), so they only go through the curated TYPO_REPLACEMENTS.
+  if (token.length < 5 || FUZZY_STOP_WORDS.has(token) || FUZZY_LEXICON_SET.has(token)) return null;
+  const max = token.length >= 6 ? 2 : 1;
+  let hit = null;
+  for (const word of FUZZY_LEXICON) {
+    if (Math.abs(word.length - token.length) > max) continue;
+    const d = osaDistanceLe(token, word, max);
+    if (d > max) continue;
+    // Distance 2 only for scrambled spellings of the same letters
+    // ("aimgen" → "imagen"); "raster" must never become "poster".
+    if (d === 2 && sortedLetters(token) !== sortedLetters(word)) continue;
+    if (hit && hit !== word) return null; // ambiguous → leave it
+    hit = word;
+  }
+  return hit;
+}
+
+// Split / merged create verbs: "cre aun" → "crea un", "crea me" → "creame".
+const SPLIT_FIXES = [
+  [/\bcre a?un(a|as|os)?\b/g, (m, suf) => `crea un${suf || ''}`],
+  [/\bcrea a?un(a|as|os)?\b/g, (m, suf) => `crea un${suf || ''}`],
+  [/\bgener a?un(a|as|os)?\b/g, (m, suf) => `genera un${suf || ''}`],
+  [/\b(crea|genera|dibuja|haz|disena) me\b/g, (m, v) => `${v}me`],
+  [/\bha z(me)?\b/g, (m, me) => `haz${me || ''}`],
+];
+
 function canonicalizeImageTypos(normalizedText) {
   let out = ` ${String(normalizedText || '')} `;
   for (const [re, replacement] of TYPO_REPLACEMENTS) {
     out = out.replace(re, ` ${replacement} `);
   }
+  for (const [re, fn] of SPLIT_FIXES) out = out.replace(re, fn);
+  out = out.replace(/[a-z]{4,}/g, (token) => fuzzyMediaToken(token) || token);
   return out.replace(/\s+/g, ' ').trim();
 }
 
@@ -668,6 +753,8 @@ function resolveEditDirective(instruction, opts = {}) {
 
 module.exports = {
   IMAGE_FRAMES,
+  fuzzyMediaToken,
+  osaDistanceLe,
   normalizeImageText,
   canonicalizeImageTypos,
   fixKnownTypos,

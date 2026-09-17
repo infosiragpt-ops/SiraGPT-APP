@@ -65,6 +65,7 @@ const IMAGE_NOUNS = /\b(imagen(?:es)?|imagenes|fotos?|fotografias?|fotografia|il
 // A create / transform verb makes the intent unambiguous. Bilingual stems.
 const CREATE_VERB = /\b(cr[ée]a(?:me|r|las?|los?)?|cre[ée]me|gener(?:a|ame|ar|en?|alas?)|haz(?:me|melo|lo|los|las)?|hag(?:a|ame|amos)|elabor(?:a|ame|ar)|dibuj(?:a|ame|ar)|dise[nñ](?:a|ame|ar|o)|compon(?:e|me|er|gas)|produce|produce?me|prepar(?:a|ame)|construy(?:e|eme)|quiero|necesito|dame|ponme|pon|crea\b|make|create|generate|draw|compose|produce|design|build|render|i want|i need|give me)\b/;
 const QUESTION_START = /^[\s¿?]*(?:que|what|como|how|por que|why|cual|cuanto|cuando)\b/;
+const DRAW_VERB_ONLY = /\b(?:dibuj(?:a|ame|amelo|ar)|pint(?:a|ame)|ilustr(?:a|ame)|draw(?:\s+me)?|sketch|paint(?:\s+me)?)\b/;
 const MEDIA_IDEATION_OR_LEARNING = /\b(?:ideas?|consejos?|tips?|sugerencias?|guiones?|guion|scripts?|storyboards?|tutorial(?:es)?|aprender|aprende|ensename|explicame)\b.{0,50}\b(?:videos?|videoclips?|clips?|reels?)\b|\b(?:videos?|videoclips?|clips?|reels?)\b.{0,50}\b(?:ideas?|consejos?|tips?|sugerencias?|guiones?|guion|scripts?|storyboards?|tutorial(?:es)?|aprender)\b/;
 
 // ── Word-number maps (ES + EN), common values only ───────────────────────
@@ -379,6 +380,9 @@ function detectMediaIntent(text) {
   else if (MUSIC_NOUNS.test(norm)) kind = 'music';
   else if (AUDIO_NOUNS.test(norm)) kind = 'audio';
   else if (IMAGE_NOUNS.test(norm)) kind = 'image';
+  // "dibújame un gato" / "píntame un paisaje": a drawing verb alone is an
+  // image request even without a media noun.
+  else if (DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm)) kind = 'image';
 
   if (!kind) return empty;
 
@@ -398,6 +402,9 @@ function detectMediaIntent(text) {
     hasCreateVerb,
     specs,
     reason: hasCreateVerb ? 'create-verb+noun' : 'noun-only',
+    // True when the typo-tolerant canonicalisation rewrote the text (fuzzy
+    // media tokens / split verbs): a weaker signal for the RLCD decision.
+    repaired: norm !== normalize(raw).replace(/\s+/g, ' ').trim(),
   };
 }
 
@@ -444,6 +451,7 @@ function detectMediaIntents(text, opts = {}) {
     kinds.push('image-edit');
   }
 
+  if (!kinds.length && DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm)) kinds.push('image');
   if (!kinds.length) return [];
 
   const hasCreateVerb = CREATE_VERB.test(norm);
@@ -458,6 +466,7 @@ function detectMediaIntents(text, opts = {}) {
     hasCreateVerb,
     specs: buildSpecsForKind(kind, norm, raw),
     reason: kind === 'image-edit' ? 'edit-verb+image-ref' : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+    repaired: norm !== normalize(raw).replace(/\s+/g, ' ').trim(),
   }));
 }
 

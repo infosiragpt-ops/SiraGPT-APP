@@ -38,6 +38,9 @@ const DIRECT_FIXES = new Map(Object.entries({
   intrumneto: 'instrumento',
   instumento: 'instrumento', instumentos: 'instrumentos',
   intuemtno: 'instrumento',
+  aimgen: 'imagen', imagne: 'imagen', imgaen: 'imagen', ymagen: 'imagen', iamgen: 'imagen', imajen: 'imagen',
+  vidio: 'video', vidoe: 'video', bideo: 'video', fotto: 'foto', fotp: 'foto', ilustracion: 'ilustración',
+  cancio: 'canción', cansion: 'canción', musca: 'música',
   cuestionaro: 'cuestionario',
   analsis: 'análisis', analisi: 'análisis',
   profeisonal: 'profesional', profeiosnal: 'profesional', profesinal: 'profesional',
@@ -64,6 +67,8 @@ const DOMAIN_VOCAB = [
   'cuestionario', 'encuesta', 'columna', 'celda', 'fórmula', 'moneda',
   'porcentaje', 'profesional', 'traducir', 'traduce', 'corrige', 'reemplaza',
   'elimina', 'agrega', 'genera', 'crea', 'busca', 'explica', 'compara',
+  'foto', 'fotos', 'fotografía', 'video', 'videos', 'ilustración', 'dibujo', 'logotipo', 'póster',
+  'retrato', 'canción', 'música', 'audio', 'animación', 'dibuja', 'diseña', 'genérame', 'créame',
 ];
 
 // Common short words we must never "repair" into vocab (precision guard).

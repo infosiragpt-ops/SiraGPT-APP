@@ -130,6 +130,91 @@ function decideExecutionLane({ chatId, heuristicAgentic, codeConfidence, isCodeT
   return out;
 }
 
+function isMediaSteeringEnabled(env = process.env) {
+  if (!isEnabled(env)) return false;
+  const v = String(env.SIRAGPT_RLCD_MEDIA_STEERING ?? '').trim().toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off');
+}
+
+function mediaForceThreshold(env = process.env) {
+  const n = Number(env.SIRAGPT_RLCD_MEDIA_FORCE_THRESHOLD);
+  return Number.isFinite(n) && n > 0 && n < 1 ? n : 0.6;
+}
+
+function mediaAskThreshold(env = process.env) {
+  const n = Number(env.SIRAGPT_RLCD_MEDIA_ASK_THRESHOLD);
+  return Number.isFinite(n) && n > 0 && n < 1 ? n : 0.35;
+}
+
+const MEDIA_KIND_LABEL = { image: 'una imagen', video: 'un video', music: 'una canción', audio: 'un audio', 'image-edit': 'la edición de la imagen' };
+
+/**
+ * Raw confidence that the user wants a media generation, from the
+ * deterministic detector. Fuzzy-repaired text ("cre aun aimgen") is a
+ * weaker signal than a clean match; a bare noun is weaker than a verb+noun.
+ */
+function rawMediaConfidence(intent) {
+  if (!intent || !intent.kind) return null;
+  let raw = intent.confidence === 'high' ? 0.9 : intent.confidence === 'medium' ? 0.55 : 0.25;
+  if (intent.repaired) raw -= 0.15;
+  if (intent.reason === 'noun-only') raw -= 0.05;
+  return Math.max(0.05, Math.min(0.98, raw));
+}
+
+/**
+ * Media-intent decision (RLCD). Turns the detector's label into a typed
+ * decision with a calibrated probability and three actions:
+ *   force → route the turn into the agentic loop with the media tools;
+ *   ask   → the certainty is middling: ask the user before generating;
+ *   none  → plain chat.
+ * The probability is calibrated against what happened after earlier media
+ * decisions (tool success/failure, thumbs, regenerate), so a detector that
+ * over-fires on some phrasing loses its force over time — and vice versa.
+ */
+function decideMediaIntent({ chatId, text, intent = null, hasImageAttachment = false, signature = null, env = process.env } = {}) {
+  const out = { kind: null, tool: null, action: 'none', force: false, ask: false, question: null, raw: null, calibrated: null, decisionId: null, repaired: false };
+  if (!isEnabled(env)) return out;
+  try {
+    let detected = intent;
+    if (!detected) {
+      // eslint-disable-next-line global-require
+      const { detectMediaIntents } = require('../agents/media-intent');
+      detected = (detectMediaIntents(String(text || ''), { hasImageAttachment: Boolean(hasImageAttachment) }) || [])[0] || null;
+    }
+    if (!detected || !detected.kind) return out;
+    const raw = rawMediaConfidence(detected);
+    const cal = ledger.calibrated('media_intent', raw);
+    out.kind = detected.kind;
+    out.tool = detected.tool || null;
+    out.raw = raw;
+    out.calibrated = cal.calibrated;
+    out.repaired = Boolean(detected.repaired);
+    if (isMediaSteeringEnabled(env)) {
+      if (cal.calibrated >= mediaForceThreshold(env)) {
+        out.action = 'force';
+        out.force = true;
+      } else if (cal.calibrated >= mediaAskThreshold(env)) {
+        out.action = 'ask';
+        out.ask = true;
+        const label = MEDIA_KIND_LABEL[detected.kind] || 'ese contenido';
+        const subject = String(text || '').trim().slice(0, 120);
+        out.question = `¿Quieres que genere ${label}${subject ? ` a partir de «${subject}»` : ''}? Responde «sí» para crearla o dime qué necesitas.`;
+      }
+    }
+    const id = ledger.recordDecision({
+      kind: 'media_intent',
+      choice: out.action === 'none' ? 'chat' : `${out.action}:${detected.kind}`,
+      confidence: raw,
+      signature,
+      chatId,
+      meta: { tool: out.tool, repaired: out.repaired, detectorConfidence: detected.confidence || null, calibrated: cal.calibrated },
+    });
+    out.decisionId = id;
+    if (chatId && id) ledger.appendTurn(chatId, [id]);
+  } catch { /* fail-open */ }
+  return out;
+}
+
 function recordOutcome(args) {
   if (!isEnabled()) return 0;
   return ledger.recordOutcome(args);
@@ -149,6 +234,8 @@ function ledgerStats({ admin = false } = {}) {
     enabled: isEnabled(),
     laneSteering: isLaneSteeringEnabled(),
     laneThreshold: laneThreshold(),
+    mediaSteering: isMediaSteeringEnabled(),
+    mediaThresholds: { force: mediaForceThreshold(), ask: mediaAskThreshold() },
     decisions: s.decisions,
     outcomes: s.outcomes,
     kinds: ledger.DECISION_KINDS,
@@ -563,6 +650,11 @@ module.exports = {
   signatureFor,
   recordTurnDecisions,
   decideExecutionLane,
+  decideMediaIntent,
+  isMediaSteeringEnabled,
+  mediaForceThreshold,
+  mediaAskThreshold,
+  rawMediaConfidence,
   recordOutcome,
   recordThumb,
   stats,
