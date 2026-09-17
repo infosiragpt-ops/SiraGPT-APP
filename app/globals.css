@@ -1448,6 +1448,32 @@ details[open] > summary .think-chevron,
   animation: none;
 }
 
+/* Visible knob (dial): a white dot riding the active stop. It is a sibling
+   of .effort-track-line (which clips its children), so nothing cuts it, and
+   it resolves the same shared --effort-x by inheritance. */
+.effort-knob {
+  position: absolute;
+  top: 50%;
+  left: var(--effort-x);
+  width: var(--effort-thumb-w);
+  height: var(--effort-thumb-w);
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: hsl(0 0% 100%);
+  border: 1px solid hsl(260 30% 40% / 0.14);
+  box-shadow:
+    0 1px 2px hsl(260 30% 24% / 0.18),
+    0 3px 8px hsl(260 30% 24% / 0.14);
+  pointer-events: none;
+  transition: left 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.effort-track[data-dragging="true"] .effort-knob {
+  box-shadow:
+    0 1px 2px hsl(260 30% 24% / 0.2),
+    0 5px 14px hsl(260 30% 24% / 0.2);
+  transition: none;
+}
+
 /* Specificity (0,3,0) beats the global [tabindex]:focus-visible rule (0,2,0),
    whose dark --ring would otherwise win by source order. */
 .effort-section .effort-track:focus-visible {
