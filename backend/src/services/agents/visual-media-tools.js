@@ -24,7 +24,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const sandbox = require('./code-sandbox');
-const { saveArtifact, EXTENSION_TO_MIME, INTERNAL, listArtifactsByOwner, ARTIFACT_DIR } = require('./task-tools');
+const { saveArtifact, EXTENSION_TO_MIME, INTERNAL, ARTIFACT_DIR } = require('./task-tools');
 
 const { previewText, validateAgentArtifactBuffer } = INTERNAL;
 
@@ -385,22 +385,9 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
       return { buffer: Buffer.from(dataMatch[2], 'base64'), mimeType: dataMatch[1], source: 'data-url' };
     }
     if (/^https?:\/\//i.test(url)) {
-      try {
-        // SSRF guard: the URL is an LLM-produced tool argument — block
-        // private / loopback / cloud-metadata targets with the same vetting
-        // the harness web_fetch tool uses, and refuse redirects (an
-        // approved host could otherwise bounce us to an internal one).
-        // eslint-disable-next-line global-require
-        const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
-        assertSafeUrl(url);
-        const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
-        if (resp && resp.ok) {
-          const buf = Buffer.from(await resp.arrayBuffer());
-          if (buf.length) {
-            return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
-          }
-        }
-      } catch { /* unsafe or unreachable URL → fall through to other sources */ }
+      // Explicit remote URL: never fall through to another image if this
+      // target is blocked or unreachable (SSRF / leftover artifacts).
+      return bufferFromImageUrl(url, ctx);
     }
     const uploadsMatch = url.match(/\/uploads\/(.+)$/);
     if (uploadsMatch) {
@@ -446,45 +433,43 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
   if (prisma && ctx.chatId && ctx.userId) {
     try {
       const messages = await prisma.message.findMany({
-        where: { chatId: ctx.chatId, files: { not: null } },
+        where: { chatId: ctx.chatId },
         orderBy: { timestamp: 'desc' },
         take: 10,
+        select: { files: true, content: true },
       });
       for (const message of messages) {
         let files;
         try {
           files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
-        } catch { continue; }
-        if (!Array.isArray(files)) continue;
-        const image = files.find((f) => f && (f.type === 'image' || String(f.type || f.mime || f.mimeType || '').startsWith('image/')));
-        if (!image) continue;
-        if (image.fileId || image.id) {
-          const record = await prisma.file.findFirst({
-            where: { id: String(image.fileId || image.id), userId: ctx.userId },
-          });
-          const resolved = await bufferFromFileRecord(record);
-          if (resolved) return resolved;
+        } catch { files = null; }
+        if (Array.isArray(files)) {
+          const image = files.find((f) => f && (f.type === 'image' || String(f.type || f.mime || f.mimeType || '').startsWith('image/')));
+          if (image) {
+            if (image.fileId || image.id) {
+              const record = await prisma.file.findFirst({
+                where: { id: String(image.fileId || image.id), userId: ctx.userId },
+              });
+              const resolved = await bufferFromFileRecord(record);
+              if (resolved) return resolved;
+            }
+            const fromUrl = await bufferFromImageUrl(image.url || image.downloadUrl, ctx);
+            if (fromUrl) return fromUrl;
+          }
         }
-        const fromUrl = await bufferFromImageUrl(image.url || image.downloadUrl, ctx);
-        if (fromUrl) return fromUrl;
-      }
-    } catch { /* fall through */ }
-  }
-
-  // 5. Latest generated artifact in this chat (generate_image saves to
-  //    /api/agent/artifact/:id, not always prisma.file).
-  if (ctx.userId && ctx.chatId) {
-    try {
-      const latest = listArtifactsByOwner(ctx.userId, { categories: ['image'], max: 200 })
-        .find((row) => String(row.chatId) === String(ctx.chatId));
-      if (latest && latest.id) {
-        const fromArtifact = await bufferFromArtifactId(latest.id, ctx.userId);
-        if (fromArtifact) return fromArtifact;
+        const fromContent = await bufferFromArtifactRefInText(message.content, ctx.userId);
+        if (fromContent) return fromContent;
       }
     } catch { /* fall through */ }
   }
 
   return null;
+}
+
+async function bufferFromArtifactRefInText(text, ownerUserId) {
+  const match = String(text || '').match(/\/api\/agent\/artifact\/([a-f0-9]+)/i);
+  if (!match || !ownerUserId) return null;
+  return bufferFromArtifactId(match[1], ownerUserId);
 }
 
 async function bufferFromArtifactId(id, ownerUserId) {
