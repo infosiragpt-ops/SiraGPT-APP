@@ -549,6 +549,29 @@ test('editImage validates inputs', async () => {
   assert.equal((await engine.editImage({ prompt: 'x', imageBuffer: Buffer.alloc(0) })).ok, false);
 });
 
+test('editImage OpenAI uses portrait size when reframing vertical', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const edits = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onEdit: async (payload) => {
+      edits.push(payload);
+      return { data: [{ b64_json: 'PORTRAIT_EDIT' }] };
+    },
+  }));
+  try {
+    const result = await engine.editImage({
+      prompt: 'reframe vertical',
+      imageBuffer: Buffer.from('img'),
+      provider: 'openai',
+      aspectRatio: '3:4',
+    });
+    assert.equal(result.ok, true);
+    assert.equal(edits[0].size, '1024x1536');
+  } finally {
+    restoreEnv();
+  }
+});
+
 // ── Multi-image batching (1..5) ───────────────────────────────────────────
 
 test('generateImage clamps n to 1..5', async () => {
