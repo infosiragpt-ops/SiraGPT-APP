@@ -20,8 +20,8 @@ acceso sigue siendo `canUseCodexAgent` (admin / allowlist /
 | Tool | Qué hace |
 |------|----------|
 | `project_clone_repo { repoUrl, branch?, name? }` | Clona `https://github.com/owner/repo` en el proyecto Codex ligado al chat (uno por chat; si ya existe se reutiliza). Repos privados usan el GitHub conectado del usuario (Apps → GitHub); sin él → `github_auth_required`. |
-| `project_preview_start` | `bun install` + dev server (Next / Vite / `npm run dev`) en el runner y espera hasta `CODEX_PREVIEW_START_TIMEOUT_MS` (90 s). Devuelve `previewUrl` absoluta (`https://siragpt.com/api/codex/projects/:id/preview/:token/app/`). Reutiliza un servidor vivo. |
-| `project_preview_status` | Estado (`installing / starting / ready / error`) + últimas líneas de log + `previewUrl`. |
+| `project_preview_start { preferredPort?, env?, waitMs? }` | Instala según el lockfile (`package-lock.json` → `npm ci`, luego `--ignore-scripts`, luego `npm install`; `bun.lock`/sin lock → `bun install`) y arranca el dev server (Next / Vite / `npm run dev`) en el runner. Espera hasta `waitMs` (90 s por defecto, máx. 150 s). Si sigue instalando devuelve **`preview_pending`** (no es error): el agente avisa y consulta `project_preview_status` después. `preferredPort` (p. ej. 5000) se fija en el runner si está libre. `env` solo admite `NEXT_PUBLIC_*`/`VITE_*`/`PUBLIC_*`/`REACT_APP_*` (p. ej. `NEXT_PUBLIC_API_URL=/api` para que un frontend full-stack hable con la API de producción por el mismo origen). Devuelve `previewUrl` absoluta. |
+| `project_preview_status { waitMs? }` | Estado (`installing / building / starting / ready / error`) + últimas líneas de log + `previewUrl`. Con `waitMs` espera a que quede listo tras un `preview_pending`. |
 | `project_preview_stop` | Para el dev server. |
 
 La lógica vive en `backend/src/services/codex/chat-preview.service.js` y es la
@@ -45,6 +45,24 @@ vía `import()`, `.js/.cjs` vía `require`) y añade `basePath`, `assetPrefix` y
 Helpers puros en `scripts/code-runner-utils.js` (`planNextPreviewConfig`,
 `buildNextPreviewWrapper`); test `backend/tests/code-runner-next-preview.test.js`.
 
+## Repos grandes (SiraGPT-APP)
+
+`bun install` no sirve para SiraGPT-APP (lockfile npm con `overrides` anidados y
+scripts nativos) y `npm ci` en frío tarda ~8 min. Por eso el instalador se elige
+por lockfile, el timeout de instalación es de 15 min (`CODE_RUNNER_INSTALL_TIMEOUT_MS`),
+los límites por proceso del sandbox son 8192 fd / 512 procesos
+(`CODE_RUNNER_RLIMIT_NOFILE` / `CODE_RUNNER_RLIMIT_NPROC`; con 256 fd `npm ci`
+moría con `EMFILE`) y el tool devuelve `preview_pending` mientras instala. El
+workspace persiste por proyecto: solo la primera vez es lenta. Un full-stack como
+SiraGPT-APP levanta su **frontend** en el runner; su backend (puerto 5000 real,
+Postgres, Redis) no cabe en el sandbox, así que el frontend se apunta a la API de
+producción con `env: { NEXT_PUBLIC_API_URL: "/api" }` (mismo origen, cookies del
+propio usuario).
+
+RLCD: un preview listo registra `tool_success` para las decisiones del turno
+(carril agéntico, modelo…); un fallo duro registra `failure`; `preview_pending`
+no cuenta.
+
 ## Runner (compose)
 
 - `CODE_RUNNER_BUILD_PREFLIGHT=0`: un preview de desarrollo no necesita
@@ -52,6 +70,7 @@ Helpers puros en `scripts/code-runner-utils.js` (`planNextPreviewConfig`,
   `pids_limit: 512` moría con `spawn EAGAIN`.
 - `pids_limit: 2048`.
 - `CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS=siragpt.com,www.siragpt.com`.
+- `CODE_RUNNER_INSTALL_TIMEOUT_MS=900000`, `CODE_RUNNER_RLIMIT_NOFILE=8192`, `CODE_RUNNER_RLIMIT_NPROC=512`.
 
 Puerto: lo asigna el pool del runner (`CODE_RUNNER_DEV_PORT_POOL`); un puerto
 pedido por el usuario (p. ej. 5000) no se puede fijar — la URL de preview es

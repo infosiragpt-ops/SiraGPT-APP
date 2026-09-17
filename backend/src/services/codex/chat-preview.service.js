@@ -227,8 +227,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForPreviewReady(runner, projectId, env = process.env, sleeper = sleep) {
-  const timeoutMs = Math.max(1000, Number(env.CODEX_PREVIEW_START_TIMEOUT_MS) || 90_000);
+async function waitForPreviewReady(runner, projectId, env = process.env, sleeper = sleep, waitMs = null) {
+  const timeoutMs = Math.max(1000, Number(waitMs) || Number(env.CODEX_PREVIEW_START_TIMEOUT_MS) || 90_000);
   const intervalMs = Math.max(250, Number(env.CODEX_PREVIEW_START_POLL_MS) || 1000);
   const deadline = Date.now() + timeoutMs;
   let last = null;
@@ -240,7 +240,31 @@ async function waitForPreviewReady(runner, projectId, env = process.env, sleeper
     await sleeper(intervalMs);
   }
   const tail = Array.isArray(last?.tail) ? last.tail.slice(-3).join(' | ') : '';
-  return { ready: false, status: last, error: last?.error || tail || 'El preview no quedó listo a tiempo.' };
+  // Still installing/building/starting when the wait budget ran out: that is
+  // not a failure — the caller reports `preview_pending` and polls later.
+  const pending = Boolean(last && last.running !== false && !last.error && /^(installing|building|starting)$/.test(String(last.state || '')));
+  return { ready: false, pending, status: last, error: last?.error || tail || 'El preview no quedó listo a tiempo.' };
+}
+
+const DEV_ENV_KEY_RE = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_)[A-Z0-9_]{1,60}$/;
+function sanitizeDevEnv(input) {
+  const out = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [key, value] of Object.entries(input)) {
+    if (Object.keys(out).length >= 20) break;
+    if (!DEV_ENV_KEY_RE.test(key) || value == null) continue;
+    const str = String(value);
+    if (str.length > 2000 || /[\r\n\0]/.test(str)) continue;
+    out[key] = str;
+  }
+  return out;
+}
+
+function clampWaitMs(value, env = process.env) {
+  const n = Number(value);
+  const fallback = Number(env.CODEX_PREVIEW_START_TIMEOUT_MS) || 90_000;
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.max(5_000, Math.min(150_000, Math.floor(n)));
 }
 
 function compactStatus(status) {
@@ -260,7 +284,7 @@ function compactStatus(status) {
  * Start (or reuse) the dev server of the chat's bound project and return the
  * tokenized preview URL. Waits for readiness up to CODEX_PREVIEW_START_TIMEOUT_MS.
  */
-async function startPreviewForChat({ userId, chatId, preferredPort } = {}, deps = {}) {
+async function startPreviewForChat({ userId, chatId, preferredPort, env: devEnv, waitMs } = {}, deps = {}) {
   const d = resolveDeps(deps);
   const access = await assertCodexAccess({ userId, db: d.db, env: d.env });
   if (!access.ok) return access;
@@ -275,8 +299,13 @@ async function startPreviewForChat({ userId, chatId, preferredPort } = {}, deps 
     const liveToken = /\/preview\/([^/]+)\/app\/$/.exec(liveBase)?.[1];
     const livePayload = liveToken ? verifyPreviewToken(decodeURIComponent(liveToken), d.env) : null;
     const fresh = Number(livePayload?.exp || 0) - d.now() > 10 * 60 * 1000;
-    if (live?.running && livePayload && livePayload.projectId === project.id && fresh) {
-      const wait = live.ready ? { ready: true, status: live } : await waitForPreviewReady(runner, project.id, d.env, deps.sleep);
+    const wantedPort = Number(preferredPort);
+    const hasWantedPort = Number.isInteger(wantedPort) && wantedPort > 0 && wantedPort <= 65535;
+    const extraEnv = sanitizeDevEnv(devEnv);
+    const budgetMs = clampWaitMs(waitMs, d.env);
+    const portMatches = !hasWantedPort || live?.port === wantedPort;
+    if (live?.running && livePayload && livePayload.projectId === project.id && fresh && portMatches && Object.keys(extraEnv).length === 0) {
+      const wait = live.ready ? { ready: true, status: live } : await waitForPreviewReady(runner, project.id, d.env, deps.sleep, budgetMs);
       if (wait.ready) {
         return {
           ok: true,
@@ -292,12 +321,20 @@ async function startPreviewForChat({ userId, chatId, preferredPort } = {}, deps 
     const token = previewTokenFor({ projectId: project.id, userId: String(userId) }, d.env);
     const basePath = previewBasePath(project.id, token);
     const startOpts = { basePath };
-    const port = Number(preferredPort);
-    if (Number.isInteger(port) && port > 0 && port <= 65535) {
-      startOpts.preferredPort = port;
-    }
+    if (hasWantedPort) startOpts.preferredPort = wantedPort;
+    if (Object.keys(extraEnv).length) startOpts.env = extraEnv;
     const out = await runner.startDev(project.id, startOpts);
-    const wait = await waitForPreviewReady(runner, project.id, d.env, deps.sleep);
+    const wait = await waitForPreviewReady(runner, project.id, d.env, deps.sleep, budgetMs);
+    if (!wait.ready && wait.pending) {
+      return fail('preview_pending', `El proyecto sigue en fase «${wait.status?.state || 'installing'}» (instalar dependencias de un repo grande puede tardar varios minutos). No es un error: consulta project_preview_status más tarde o dile al usuario que vuelva en unos minutos.`, {
+        pending: true,
+        project: { id: project.id, name: project.name || null },
+        previewUrl: absolutePreviewUrl(basePath, d.env),
+        basePath,
+        port: Number.isInteger(out?.port) ? out.port : null,
+        status: compactStatus(wait.status),
+      });
+    }
     if (!wait.ready) {
       return fail('preview_not_ready', `El servidor de desarrollo no quedó listo: ${wait.error}`, {
         project: { id: project.id, name: project.name || null },
@@ -321,12 +358,17 @@ async function startPreviewForChat({ userId, chatId, preferredPort } = {}, deps 
   }
 }
 
-async function previewStatusForChat({ userId, chatId } = {}, deps = {}) {
+async function previewStatusForChat({ userId, chatId, waitMs } = {}, deps = {}) {
   const d = resolveDeps(deps);
   const project = await d.binding.findProjectForChat({ userId, chatId, db: d.db, projects: d.projectService }).catch(() => null);
   if (!project || !project.id) return fail('no_project', 'Este chat aún no tiene proyecto vinculado.');
   try {
-    const status = await d.runner.devStatus(project.id);
+    let status = await d.runner.devStatus(project.id);
+    const n = Number(waitMs);
+    if (Number.isFinite(n) && n > 0 && status && !status.ready && status.running !== false && !status.error) {
+      const wait = await waitForPreviewReady(d.runner, project.id, d.env, deps.sleep, Math.max(5_000, Math.min(150_000, n)));
+      status = wait.status || status;
+    }
     const basePath = String(status?.basePath || '');
     return {
       ok: true,
@@ -357,5 +399,5 @@ module.exports = {
   previewStatusForChat,
   stopPreviewForChat,
   assertCodexAccess,
-  _internal: { publicOrigin, absolutePreviewUrl, previewBasePath, waitForPreviewReady, compactStatus, resolveDeps },
+  _internal: { publicOrigin, absolutePreviewUrl, previewBasePath, waitForPreviewReady, compactStatus, resolveDeps, sanitizeDevEnv, clampWaitMs },
 };

@@ -52,6 +52,24 @@ function chatScope(ctx) {
   return { userId, chatId };
 }
 
+/**
+ * RLCD: a preview that came up is a positive implicit outcome for this turn's
+ * decisions (execution lane, model…); a hard failure is negative. `pending`
+ * and access errors are not evidence either way.
+ */
+function recordRlcdOutcome(ctx, result) {
+  try {
+    const chatId = ctx && ctx.chatId != null ? String(ctx.chatId) : '';
+    if (!chatId || !result) return;
+    let outcome = null;
+    if (result.ok && (!result.status || result.status.ready !== false)) outcome = 'tool_success';
+    else if (!result.ok && ['preview_not_ready', 'clone_failed', 'runner_unreachable', 'dev_pool_exhausted'].includes(String(result.code))) outcome = 'failure';
+    if (!outcome) return;
+    // eslint-disable-next-line global-require
+    require('../rlcd').recordOutcome({ chatId, outcome, source: 'preview_tool' });
+  } catch (_) { /* advisory */ }
+}
+
 function withPreviewHint(result) {
   if (!result || !result.ok || !result.previewUrl) return result;
   return {
@@ -77,6 +95,7 @@ async function cloneRepo(args, ctx) {
       next: 'Llama project_preview_start para instalar dependencias y arrancar el servidor de desarrollo; devuelve previewUrl.',
     };
   }
+  recordRlcdOutcome(ctx, out);
   return out;
 }
 
@@ -104,11 +123,13 @@ const projectCloneRepoTool = {
 
 const projectPreviewStartTool = {
   name: 'project_preview_start',
-  description: 'Install dependencies and start the dev server of this chat\'s project in the sandboxed runner, then return previewUrl (the user\'s "web en local"). Reuses a running server. Waits up to ~90 s; if it returns preview_not_ready, read status.tail, fix the project (project_read/project_write/project_exec) and retry. Fails with no_project until project_clone_repo ran. preferredPort is a hint (e.g. 5000); the runner may assign another host port — still share previewUrl.',
+  description: 'Install dependencies (npm ci / bun by lockfile) and start the dev server of this chat\'s project in the sandboxed runner, then return previewUrl (the user\'s "web en local"). Reuses a running server. Waits up to waitMs (default 90 s, max 150 s). Result codes: ok → share previewUrl and port; preview_pending → the install/build is still running (big repos take minutes): tell the user it is installing and call project_preview_status later (or with waitMs) — do NOT treat it as an error; preview_not_ready → read status.tail, fix the project (project_read/project_write/project_exec) and retry; no_project → run project_clone_repo first. If the user asked for a port (e.g. "en el 5000") pass preferredPort. For full-stack repos whose frontend expects an API base, pass env such as {"NEXT_PUBLIC_API_URL":"/api"} (same-origin production API through the preview proxy); only NEXT_PUBLIC_*/VITE_*/PUBLIC_* keys are accepted.',
   parameters: {
     type: 'object',
     properties: {
-      preferredPort: { type: 'integer', description: 'Puerto pedido por el usuario (p. ej. 5000). El runner puede ignorarlo y asignar el suyo.' },
+      preferredPort: { type: 'integer', description: 'Puerto pedido por el usuario (p. ej. 5000). Se fija en el runner si está libre.' },
+      env: { type: 'object', description: 'Variables públicas de build para el dev server, p. ej. {"NEXT_PUBLIC_API_URL":"/api"}. Solo NEXT_PUBLIC_*, VITE_*, PUBLIC_*, REACT_APP_*.', additionalProperties: { type: 'string' } },
+      waitMs: { type: 'integer', minimum: 5000, maximum: 150000, description: 'Cuánto esperar a que quede listo antes de devolver preview_pending. Default 90000.' },
     },
     additionalProperties: false,
   },
@@ -118,11 +139,15 @@ const projectPreviewStartTool = {
       if (scope.error) return scope.error;
       const svc = serviceFromCtx(ctx);
       const preferredPort = Number(args && args.preferredPort);
-      return withPreviewHint(await svc.startPreviewForChat({
+      const out = withPreviewHint(await svc.startPreviewForChat({
         userId: scope.userId,
         chatId: scope.chatId,
         preferredPort: Number.isInteger(preferredPort) ? preferredPort : undefined,
+        env: args && args.env && typeof args.env === 'object' ? args.env : undefined,
+        waitMs: Number(args && args.waitMs) || undefined,
       }, depsFromCtx(ctx)));
+      recordRlcdOutcome(ctx, out);
+      return out;
     } catch (err) {
       return { ok: false, code: 'internal', message: String((err && err.message) || err) };
     }
@@ -131,14 +156,22 @@ const projectPreviewStartTool = {
 
 const projectPreviewStatusTool = {
   name: 'project_preview_status',
-  description: 'Current state of this chat\'s project dev server (installing / building / starting / ready / error) with the last log lines and previewUrl when running.',
-  parameters: { type: 'object', properties: {}, additionalProperties: false },
-  execute: async (_args, ctx) => {
+  description: 'Current state of this chat\'s project dev server (installing / building / starting / ready / error) with the last log lines and previewUrl when running. Pass waitMs (up to 150000) to wait for it to become ready after a preview_pending.',
+  parameters: {
+    type: 'object',
+    properties: {
+      waitMs: { type: 'integer', minimum: 5000, maximum: 150000, description: 'Esperar hasta este tiempo a que el servidor quede listo.' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args, ctx) => {
     try {
       const scope = chatScope(ctx);
       if (scope.error) return scope.error;
       const svc = serviceFromCtx(ctx);
-      return withPreviewHint(await svc.previewStatusForChat({ userId: scope.userId, chatId: scope.chatId }, depsFromCtx(ctx)));
+      const out = withPreviewHint(await svc.previewStatusForChat({ userId: scope.userId, chatId: scope.chatId, waitMs: Number(args && args.waitMs) || undefined }, depsFromCtx(ctx)));
+      if (out && out.ok && out.status && out.status.ready) recordRlcdOutcome(ctx, out);
+      return out;
     } catch (err) {
       return { ok: false, code: 'internal', message: String((err && err.message) || err) };
     }
@@ -166,5 +199,5 @@ module.exports = {
   projectPreviewStartTool,
   projectPreviewStatusTool,
   projectPreviewStopTool,
-  _internal: { chatScope, depsFromCtx, withPreviewHint },
+  _internal: { chatScope, depsFromCtx, withPreviewHint, recordRlcdOutcome },
 };

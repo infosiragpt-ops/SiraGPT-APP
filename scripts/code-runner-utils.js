@@ -538,7 +538,71 @@ function buildNextPreviewWrapper({ basePath, userConfig = null, allowedOrigins =
   ].join("\n");
 }
 
+
+// ── Install plan / dev env / pinned port (chat "dame la web en local") ──────
+// The lockfile decides the installer: bun choked on npm lockfiles with nested
+// "overrides" and on native life-cycle scripts (SiraGPT-APP). npm ci is tried
+// with scripts first, then without them so a failing optional native build
+// (canvas, sharp) does not block a plain dev server.
+function pickInstallPlan({ hasPackageLock = false, hasBunLock = false, hasPnpmLock = false, hasYarnLock = false } = {}) {
+  const npmFlags = ["--no-audit", "--no-fund", "--loglevel=error"];
+  if (hasPackageLock && !hasBunLock) {
+    return [
+      { label: "npm ci", cmd: ["npm", "ci", ...npmFlags] },
+      { label: "npm ci --ignore-scripts", cmd: ["npm", "ci", "--ignore-scripts", ...npmFlags] },
+      { label: "npm install", cmd: ["npm", "install", "--ignore-scripts", ...npmFlags] },
+    ];
+  }
+  if (hasPnpmLock && !hasBunLock) {
+    return [
+      { label: "bun install (pnpm lock)", cmd: ["bun", "install"] },
+      { label: "npm install", cmd: ["npm", "install", "--ignore-scripts", ...npmFlags] },
+    ];
+  }
+  if (hasYarnLock && !hasBunLock) {
+    return [
+      { label: "bun install (yarn lock)", cmd: ["bun", "install"] },
+      { label: "npm install", cmd: ["npm", "install", "--ignore-scripts", ...npmFlags] },
+    ];
+  }
+  return [
+    { label: "bun install", cmd: ["bun", "install"] },
+    { label: "bun install --ignore-scripts", cmd: ["bun", "install", "--ignore-scripts"] },
+  ];
+}
+
+const DEV_ENV_KEY_RE = /^(NEXT_PUBLIC_|VITE_|PUBLIC_|REACT_APP_|EXPO_PUBLIC_)[A-Z0-9_]{1,60}$/;
+const DEV_ENV_MAX_KEYS = 20;
+const DEV_ENV_MAX_VALUE = 2000;
+
+/** Only public build-time variables may reach the dev server from the chat. */
+function sanitizeDevEnv(input) {
+  const out = {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) return out;
+  for (const [key, value] of Object.entries(input)) {
+    if (Object.keys(out).length >= DEV_ENV_MAX_KEYS) break;
+    if (!DEV_ENV_KEY_RE.test(key) || isSensitiveEnvKey(key)) continue;
+    if (value == null) continue;
+    const str = String(value);
+    if (str.length > DEV_ENV_MAX_VALUE || /[\r\n\0]/.test(str)) continue;
+    out[key] = str;
+  }
+  return out;
+}
+
+/** A port the user asked for ("dame la web en el 5000"); null when unusable. */
+function sanitizePinnedPort(value, { reserved = [] } = {}) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1024 || n > 65535) return null;
+  if (reserved.map(Number).includes(n)) return null;
+  return n;
+}
+
 module.exports = {
+  pickInstallPlan,
+  sanitizeDevEnv,
+  sanitizePinnedPort,
+  DEV_ENV_KEY_RE,
   NEXT_PREVIEW_MARKER,
   NEXT_PREVIEW_WRAPPER,
   NEXT_PREVIEW_USER_BACKUP,

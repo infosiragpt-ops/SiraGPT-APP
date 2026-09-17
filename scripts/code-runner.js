@@ -75,6 +75,9 @@ const {
   controlTokenForEnv,
   projectIdentity,
   sandboxCommand,
+  pickInstallPlan,
+  sanitizeDevEnv,
+  sanitizePinnedPort,
   NEXT_PREVIEW_MARKER,
   NEXT_PREVIEW_WRAPPER,
   NEXT_PREVIEW_USER_BACKUP,
@@ -121,7 +124,9 @@ const GID_SPAN = boundedPositiveEnv("CODE_RUNNER_GID_SPAN", UID_SPAN, 1, 1_000_0
 const CACHE_ROOT = process.env.RUNNER_CACHE_ROOT || "/runner-cache";
 const HOME_ROOT = process.env.RUNNER_HOME_ROOT || "/runner-home";
 const TMP_ROOT = process.env.RUNNER_TMP_ROOT || "/runner-tmp";
-const INSTALL_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_INSTALL_TIMEOUT_MS", 180_000, 1_000, 30 * 60_000);
+// Large repos (SiraGPT-APP) need ~8 min for a cold npm ci; the chat tools poll
+// /status meanwhile, so a generous default costs nothing on small starters.
+const INSTALL_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_INSTALL_TIMEOUT_MS", 900_000, 1_000, 30 * 60_000);
 const BUILD_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_BUILD_TIMEOUT_MS", 180_000, 1_000, 30 * 60_000);
 const DEV_READY_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_DEV_READY_TIMEOUT_MS", 90_000, 5_000, 30 * 60_000);
 const EXEC_DEFAULT_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_EXEC_TIMEOUT_MS", 30_000, 1_000, 30 * 60_000);
@@ -137,8 +142,11 @@ const SANDBOX_LIMITS = Object.freeze({
   // instantiating llhttp WebAssembly. RSS remains hard-capped by the container
   // cgroup; this limit only prevents unbounded virtual mappings.
   addressSpaceBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_AS_BYTES", 64 * 1024 * 1024 * 1024, 256 * 1024 * 1024, 64 * 1024 * 1024 * 1024),
-  maxProcesses: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NPROC", 128, 8, 4096),
-  maxOpenFiles: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NOFILE", 256, 32, 65_536),
+  // npm ci of a large repo opens thousands of files and next dev forks workers;
+  // 128 procs / 256 fds made SiraGPT-APP die with EMFILE. Container hard limits
+  // (pids_limit, nofile) still cap the whole runner.
+  maxProcesses: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NPROC", 512, 8, 4096),
+  maxOpenFiles: boundedPositiveEnv("CODE_RUNNER_RLIMIT_NOFILE", 8192, 32, 65_536),
   maxFileBytes: boundedPositiveEnv("CODE_RUNNER_RLIMIT_FSIZE_BYTES", 512 * 1024 * 1024, 1024 * 1024, 16 * 1024 * 1024 * 1024),
   cpuSeconds: boundedPositiveEnv("CODE_RUNNER_RLIMIT_CPU_SECONDS", 7200, 30, 7 * 24 * 60 * 60),
 });
@@ -934,7 +942,9 @@ function prepareNextPreviewConfig(projectId, cwd, basePath, entry) {
   return { base, userConfig: plan.userConfig, renamed: Boolean(plan.rename) };
 }
 
-async function startDev(projectId = null, runId = null, basePath = null) {
+async function startDev(projectId = null, runId = null, basePath = null, opts = {}) {
+  const pinnedPort = sanitizePinnedPort(opts && opts.port, { reserved: [CTRL_PORT] });
+  const extraEnv = sanitizeDevEnv(opts && opts.env);
   if (!projectId) {
     const error = new Error("legacy workspace-root execution is disabled; provide a project id");
     error.code = "legacy_root_run_disabled";
@@ -957,6 +967,8 @@ async function startDev(projectId = null, runId = null, basePath = null) {
     existing
     && existing.state === "ready"
     && (existing.basePath || null) === normBase
+    && (pinnedPort == null || existing.port === pinnedPort)
+    && JSON.stringify(existing.extraEnv || {}) === JSON.stringify(extraEnv)
     && (await probeReady(existing.port, existing.basePath))
   ) {
     devPool.touch(key);
@@ -964,7 +976,13 @@ async function startDev(projectId = null, runId = null, basePath = null) {
     return { port: existing.port, project: projectId, reused: true };
   }
 
-  const alloc = devPool.allocate(key, key === ROOT_KEY ? { pinnedPort: DEV_PORT } : {});
+  if (pinnedPort != null && existing && existing.port !== pinnedPort) {
+    // The user asked for a specific port: release the old slot so the
+    // allocation below can pin the new one.
+    killEntryProc(existing);
+    devPool.release(key);
+  }
+  const alloc = devPool.allocate(key, key === ROOT_KEY ? { pinnedPort: DEV_PORT } : (pinnedPort != null ? { pinnedPort } : {}));
   if (!alloc) {
     const err = new Error("dev pool exhausted: all slots are busy starting");
     err.code = "dev_pool_exhausted";
@@ -990,6 +1008,7 @@ async function startDev(projectId = null, runId = null, basePath = null) {
     render: { status: "pending" },
   };
   entry.basePath = normBase;
+  entry.extraEnv = extraEnv;
   entry.startedAt = Date.now();
   entry.lastUsedAt = Date.now();
   lastStartedKey = key;
@@ -1029,35 +1048,51 @@ async function runDev(entry, projectId, cwd) {
   const isCompositeDev = /\bconcurrently\b/.test(devScript);
   entry.framework = isNext ? "next" : isCompositeDev ? "custom" : deps.vite ? "vite" : hasDevScript ? "custom" : "vite";
 
-  pushLog(entry, "$ bun install");
-  const install = spawnSandboxed(projectId, ["bun", "install"], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { NODE_ENV: "development", CI: "1" },
+  // Installer by lockfile, with fallbacks (see pickInstallPlan).
+  const plan = pickInstallPlan({
+    hasPackageLock: existsSync(`${cwd}/package-lock.json`),
+    hasBunLock: existsSync(`${cwd}/bun.lock`) || existsSync(`${cwd}/bun.lockb`),
+    hasPnpmLock: existsSync(`${cwd}/pnpm-lock.yaml`),
+    hasYarnLock: existsSync(`${cwd}/yarn.lock`),
   });
-  entry.proc = install;
-  pipe(entry, install.stdout, "[install]");
-  pipe(entry, install.stderr, "[install]");
-  const installResult = await waitForExit(install, INSTALL_TIMEOUT_MS);
-  const code = installResult.exitCode;
-  if (stale()) return;
-  if (installResult.timedOut) {
+  const installDeadline = Date.now() + INSTALL_TIMEOUT_MS;
+  let installed = false;
+  let lastInstallLabel = plan[0].label;
+  let lastInstallCode = null;
+  for (const attempt of plan) {
+    const remaining = installDeadline - Date.now();
+    if (remaining <= 1000) break;
+    lastInstallLabel = attempt.label;
+    pushLog(entry, `$ ${attempt.cmd.join(" ")}`);
+    const install = spawnSandboxed(projectId, attempt.cmd, {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { NODE_ENV: "development", CI: "1" },
+    });
+    entry.proc = install;
+    pipe(entry, install.stdout, "[install]");
+    pipe(entry, install.stderr, "[install]");
+    const installResult = await waitForExit(install, remaining);
+    if (stale()) return;
     entry.proc = null;
+    if (installResult.timedOut) {
+      entry.state = "error";
+      entry.preflight.install = { status: "failed", reason: "timeout" };
+      entry.error = `${attempt.label} timed out after ${INSTALL_TIMEOUT_MS}ms`;
+      return;
+    }
+    lastInstallCode = installResult.exitCode;
+    if (installResult.exitCode === 0) { installed = true; break; }
+    pushLog(entry, `[runner] ${attempt.label} failed (exit ${installResult.exitCode}); trying the next installer`);
+  }
+  if (!installed) {
     entry.state = "error";
-    entry.preflight.install = { status: "failed", reason: "timeout" };
-    entry.error = `bun install timed out after ${INSTALL_TIMEOUT_MS}ms`;
+    entry.preflight.install = { status: "failed", exitCode: lastInstallCode };
+    entry.error = `${lastInstallLabel} failed (exit ${lastInstallCode})`;
     return;
   }
-  if (code !== 0) {
-    entry.proc = null;
-    entry.state = "error";
-    entry.preflight.install = { status: "failed", exitCode: code };
-    entry.error = `bun install failed (exit ${code})`;
-    return;
-  }
-  entry.proc = null;
-  entry.preflight.install = { status: "passed" };
+  entry.preflight.install = { status: "passed", installer: lastInstallLabel };
 
   const buildScript = String((pkg.scripts && pkg.scripts.build) || "").trim();
   if (buildPreflightEnabled(process.env) && buildScript) {
@@ -1142,6 +1177,10 @@ async function runDev(entry, projectId, cwd) {
       // vite starters ignore both — harmless.
       VITE_BASE: entry.basePath || "/",
       API_PORT: String(port + 1000),
+      // Public build-time variables the chat asked for (NEXT_PUBLIC_*, VITE_*…),
+      // e.g. NEXT_PUBLIC_API_URL=/api so a full-stack frontend talks to the
+      // same-origin production API through the preview proxy.
+      ...(entry.extraEnv || {}),
     },
   });
   entry.proc = devProc;
@@ -1571,7 +1610,7 @@ Bun.serve({
         return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
       }
       try {
-        const out = await startDev(id, runId, body && body.basePath);
+        const out = await startDev(id, runId, body && body.basePath, { port: body && (body.port ?? body.preferredPort), env: body && body.env });
         return Response.json({
           ok: true,
           port: out.port,
