@@ -208,7 +208,7 @@ test('gVisor smoke exercises the authenticated lifecycle and the real full-stack
   assert.match(runner, /node_modules\/vite\/bin\/vite\.js/);
   assert.match(runner, /node_modules\/next\/dist\/bin\/next/);
   assert.doesNotMatch(runner, /cmd = \["bun", "run", "dev"\]/);
-  assert.match(runner, /probeReady\(port, basePath = null\)/);
+  assert.match(runner, /probeReady\(port, basePath = null, framework = null\)/);
   assert.match(runner, /previewDocumentReady\(\{ status: r\.status, contentType, body \}\)/);
   assert.match(runner, /npm", "run", "build"/);
   assert.match(runner, /ready:\s*entry\.state === "ready" && renderAdmitted/);

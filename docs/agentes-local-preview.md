@@ -70,7 +70,11 @@ no cuenta.
   `pids_limit: 512` moría con `spawn EAGAIN`.
 - `pids_limit: 2048`.
 - `CODE_RUNNER_PREVIEW_ALLOWED_ORIGINS=siragpt.com,www.siragpt.com`.
-- `CODE_RUNNER_INSTALL_TIMEOUT_MS=900000`, `CODE_RUNNER_RLIMIT_NOFILE=8192`, `CODE_RUNNER_RLIMIT_NPROC=512`.
+- `CODE_RUNNER_INSTALL_TIMEOUT_MS=900000`, `CODE_RUNNER_RLIMIT_NOFILE=16384`, `CODE_RUNNER_RLIMIT_NPROC=4096`.
+- `CODE_RUNNER_RLIMIT_AS_BYTES=274877906944` (256 GiB): webpack + V8 de un Next grande mapean ~80 GiB *virtuales* (RSS ~2 GiB); con 64 GiB V8 moría con `Check failed: (result.ptr) != nullptr`.
+- `CODE_RUNNER_DEV_HEAP_MB=4096` → `NODE_OPTIONS=--max-old-space-size` para el dev server (`next dev` lanza `next-server` como hijo y solo hereda `NODE_OPTIONS`).
+- `mem_limit: 6g` (pico observado ~2.7 GiB).
+- Next sirve el basePath **sin barra final**; con `skipTrailingSlashRedirect` la URL con barra devuelve un 200 vacío. Por eso la `previewUrl` de proyectos Next va sin barra y el probe de readiness del runner también.
 
 Puerto: lo asigna el pool del runner (`CODE_RUNNER_DEV_PORT_POOL`); un puerto
 pedido por el usuario (p. ej. 5000) no se puede fijar — la URL de preview es
