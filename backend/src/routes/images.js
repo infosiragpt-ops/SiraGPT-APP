@@ -46,6 +46,30 @@ const prisma = require('../config/database');
 
 const router = express.Router();
 
+const imageWorkspace = require('../services/media/image-workspace-assets').createImageWorkspaceService({ prisma });
+
+// Editing existing pixels and notes is an owned-file operation; it never
+// invokes a provider or the generation credit middleware.
+router.post('/assets/:fileId', authenticateToken, async (req, res, next) => {
+  try {
+    const result = await imageWorkspace.edit({ ...req.body, userId: req.user.id, fileId: req.params.fileId });
+    return res.status(req.body.operation === 'comment' ? 200 : 201).json(result);
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    return next(error);
+  }
+});
+
+router.post('/assets/:fileId/hide', authenticateToken, async (req, res, next) => {
+  try {
+    const result = await imageWorkspace.hide({ ...req.body, userId: req.user.id, fileId: req.params.fileId });
+    return res.json(result);
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    return next(error);
+  }
+});
+
 // Copy provider asset URLs into R2 so they don't expire, returning stable app
 // URLs served by the /uploads R2 fallback ("images/" is a public prefix). On
 // any failure we keep the original provider URL so generation never appears to

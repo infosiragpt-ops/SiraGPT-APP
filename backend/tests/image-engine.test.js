@@ -204,7 +204,7 @@ test('generateImage retries dall-e without response_format when OpenAI rejects i
   }
 });
 
-test('generateImage falls back to the configured image model for chat model ids', async () => {
+test('generateImage rejects a selected chat model instead of replacing it', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x' });
   const calls = [];
   _internal.setOpenAIFactory(fakeOpenAIFactory({
@@ -215,17 +215,15 @@ test('generateImage falls back to the configured image model for chat model ids'
   }));
   try {
     const result = await engine.generateImage({ prompt: 'a product photo', model: 'gpt-4o' });
-    assert.equal(result.ok, true);
-    assert.equal(result.provider, 'openai');
-    assert.equal(result.model, 'gpt-image-2');
-    assert.equal(calls[0].model, 'gpt-image-2');
-    assert.equal(result.images[0].b64, 'IMG_FROM_DEFAULT_IMAGE_MODEL');
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'E_PARAMS');
+    assert.equal(calls.length, 0);
   } finally {
     restoreEnv();
   }
 });
 
-test('generateImage fails over to the next configured provider', async () => {
+test('generateImage reports failure without changing the selected provider', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
   let geminiCalled = false;
   _internal.setOpenAIFactory((config) => ({
@@ -241,19 +239,17 @@ test('generateImage fails over to the next configured provider', async () => {
   }));
   try {
     const result = await engine.generateImage({ prompt: 'a bird', model: 'gpt-image-2' });
-    assert.equal(result.ok, true);
-    assert.equal(result.provider, 'gemini');
-    assert.equal(result.images[0].b64, 'FROM_GEMINI');
-    assert.equal(geminiCalled, true);
-    assert.equal(result.attempts.length, 2);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'E_PROVIDER');
+    assert.equal(geminiCalled, false);
+    assert.equal(result.attempts.length, 1);
     assert.equal(result.attempts[0].ok, false);
-    assert.equal(result.attempts[1].ok, true);
   } finally {
     restoreEnv();
   }
 });
 
-test('generateImage aborts a hung provider attempt and fails over', async () => {
+test('generateImage aborts a hung selected provider without fallback', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
   let openAiAborted = false;
   _internal.setOpenAIFactory((config) => ({
@@ -282,11 +278,10 @@ test('generateImage aborts a hung provider attempt and fails over', async () => 
       model: 'gpt-image-2',
       timeoutMs: 20,
     });
-    assert.equal(result.ok, true);
-    assert.equal(result.provider, 'gemini');
-    assert.equal(result.images[0].b64, 'FROM_GEMINI_AFTER_TIMEOUT');
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'E_PROVIDER');
     assert.equal(openAiAborted, true);
-    assert.equal(result.attempts.length, 2);
+    assert.equal(result.attempts.length, 1);
     assert.match(result.attempts[0].error, /timed out|aborted/);
   } finally {
     restoreEnv();
@@ -319,16 +314,16 @@ test('generateImage returns NO_PROVIDER when nothing is configured', async () =>
   }
 });
 
-test('generateImage skips an unconfigured requested provider and records it', async () => {
+test('generateImage rejects missing credentials for the selected provider', async () => {
   setEnv({ GEMINI_API_KEY: 'g-x' });
   _internal.setOpenAIFactory(fakeOpenAIFactory({
     onGenerate: async () => ({ data: [{ b64_json: 'G' }] }),
   }));
   try {
-    // fal requested but FAL_KEY missing → failover lands on gemini.
+    // A missing key cannot authorize silently switching to another provider.
     const result = await engine.generateImage({ prompt: 'x', model: 'fal-ai/flux/schnell' });
-    assert.equal(result.ok, true);
-    assert.equal(result.provider, 'gemini');
+    assert.equal(result.ok, false);
+    assert.equal(result.attempts.length, 1);
     assert.equal(result.attempts[0].provider, 'fal');
     assert.match(result.attempts[0].error, /api key missing/);
   } finally {
@@ -383,7 +378,7 @@ test('generateImage via fal downloads the generated image as base64', async () =
   }
 });
 
-test('generateImage reports ALL_PROVIDERS_FAILED with per-provider detail', async () => {
+test('generateImage records internal error detail and exposes a safe provider error', async () => {
   setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
   _internal.setOpenAIFactory(fakeOpenAIFactory({
     onGenerate: async () => { throw new Error('quota exceeded'); },
@@ -391,9 +386,10 @@ test('generateImage reports ALL_PROVIDERS_FAILED with per-provider detail', asyn
   try {
     const result = await engine.generateImage({ prompt: 'x' });
     assert.equal(result.ok, false);
-    assert.equal(result.code, 'ALL_PROVIDERS_FAILED');
-    assert.match(result.error, /quota exceeded/);
-    assert.equal(result.attempts.length, 2);
+    assert.equal(result.code, 'E_PROVIDER');
+    assert.doesNotMatch(result.error, /quota exceeded/);
+    assert.match(result.attempts[0].error, /quota exceeded/);
+    assert.equal(result.attempts.length, 1);
   } finally {
     restoreEnv();
   }
@@ -482,7 +478,7 @@ test('editImage prefers Gemini and returns the edited image', async () => {
   }
 });
 
-test('editImage falls back to OpenAI when Gemini fails', async () => {
+test('editImage reports a failed selected/default provider without substitution', async () => {
   setEnv({ GEMINI_API_KEY: 'g-x', OPENAI_API_KEY: 'sk-x' });
   _internal.setGoogleGenAIFactory(() => ({
     models: { generateContent: async () => { throw new Error('gemini down'); } },
@@ -492,16 +488,16 @@ test('editImage falls back to OpenAI when Gemini fails', async () => {
   }));
   try {
     const result = await engine.editImage({ prompt: 'add a hat', imageBuffer: Buffer.from('img') });
-    assert.equal(result.ok, true);
-    assert.equal(result.provider, 'openai');
-    assert.equal(result.images[0].b64, 'OPENAI_EDIT');
-    assert.equal(result.attempts.length, 2);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'E_PROVIDER');
+    assert.equal(result.attempts.length, 1);
+    assert.equal(result.attempts[0].provider, 'gemini');
   } finally {
     restoreEnv();
   }
 });
 
-test('editImage with an OpenRouter image model falls back to OpenAI when Gemini is quota-limited', async () => {
+test('editImage cannot switch an OpenRouter selection to another API when credentials are absent', async () => {
   setEnv({ GEMINI_API_KEY: 'g-x', OPENAI_API_KEY: 'sk-x' });
   _internal.setGoogleGenAIFactory(() => ({
     models: { generateContent: async () => { throw new Error('RESOURCE_EXHAUSTED quota exceeded'); } },
@@ -520,13 +516,10 @@ test('editImage with an OpenRouter image model falls back to OpenAI when Gemini 
       model: 'google/gemini-3.1-flash-image-preview',
       provider: 'openrouter',
     });
-    assert.equal(result.ok, true);
-    assert.equal(result.provider, 'openai');
-    assert.equal(result.model, 'gpt-image-1');
-    assert.equal(result.images[0].b64, 'OPENAI_EDIT_AFTER_OPENROUTER_SELECTION');
-    assert.equal(result.attempts[0].provider, 'gemini');
-    assert.match(result.attempts[0].error, /quota/i);
-    assert.equal(edits[0].model, 'gpt-image-1');
+    assert.equal(result.ok, false);
+    assert.equal(result.attempts.length, 1);
+    assert.equal(result.attempts[0].provider, 'openrouter');
+    assert.equal(edits.length, 0);
   } finally {
     restoreEnv();
   }
@@ -570,6 +563,52 @@ test('editImage OpenAI uses portrait size when reframing vertical', async () => 
   } finally {
     restoreEnv();
   }
+});
+
+test('editImage sends count, quality and the real PNG mask to the pinned OpenAI model', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
+  const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({ onEdit: async (payload) => {
+    calls.push(payload); return { data: [{ b64_json: 'ONE' }, { b64_json: 'TWO' }] };
+  } }));
+  try {
+    const result = await engine.editImage({ model: 'gpt-image-2', provider: 'openai', prompt: 'erase selection',
+      imageBuffer: Buffer.from('original'), maskBuffer: Buffer.from('mask'), aspectRatio: '16:9', quality: '2K', n: 2 });
+    assert.equal(result.ok, true); assert.equal(result.images.length, 2);
+    assert.equal(calls.length, 1); assert.equal(calls[0].model, 'gpt-image-2');
+    assert.equal(calls[0].n, 2); assert.equal(calls[0].quality, 'high'); assert.equal(calls[0].size, '1536x1024');
+    assert.ok(calls[0].mask);
+  } finally { restoreEnv(); }
+});
+
+test('OpenRouter edit uses its own API, preserves model and transmits original image bytes', async () => {
+  setEnv({ OPENROUTER_API_KEY: 'or-x', OPENAI_API_KEY: 'sk-x', GEMINI_API_KEY: 'g-x' });
+  const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({ onChat: async (payload, opts, config) => {
+    calls.push({ payload, config }); return { choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,RURJVA==' } }] } }] };
+  } }));
+  try {
+    const result = await engine.editImage({ model: 'openai/gpt-image-2', provider: 'openrouter', prompt: 'keep scene', imageBuffer: Buffer.from('beach'), aspectRatio: '3:4', quality: '2K', n: 2 });
+    assert.equal(result.ok, true); assert.equal(result.images.length, 2);
+    assert.equal(result.model, 'openai/gpt-image-2'); assert.equal(result.provider, 'openrouter');
+    assert.equal(calls.length, 2);
+    for (const { payload, config } of calls) {
+      assert.equal(config.baseURL, 'https://openrouter.ai/api/v1'); assert.equal(payload.model, 'openai/gpt-image-2');
+      assert.equal(payload.messages[0].content[1].image_url.url, `data:image/png;base64,${Buffer.from('beach').toString('base64')}`);
+      assert.equal(payload.image_config.aspect_ratio, '3:4');
+    }
+  } finally { restoreEnv(); }
+});
+
+test('OpenRouter model errors cannot trigger a different image model within the same API', async () => {
+  setEnv({ OPENROUTER_API_KEY: 'or-x' }); const models = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({ onChat: async (payload) => {
+    models.push(payload.model); const error = new Error('no endpoints'); error.status = 404; throw error;
+  } }));
+  try {
+    const result = await engine.generateImage({ model: 'openai/gpt-image-2', prompt: 'beach' });
+    assert.equal(result.ok, false); assert.equal(result.code, 'E_PROVIDER'); assert.deepEqual(models, ['openai/gpt-image-2']);
+  } finally { restoreEnv(); }
 });
 
 // ── Multi-image batching (1..5) ───────────────────────────────────────────
@@ -668,4 +707,41 @@ test('isBatchSizeError ignores quota/auth/moderation failures', () => {
   assert.equal(isBatchSizeError(Object.assign(new Error('incorrect api key'), { status: 401 })), false);
   assert.equal(isBatchSizeError(new Error('content policy violation: blocked')), false);
   assert.equal(isBatchSizeError(new Error('openai is down')), false);
+});
+
+test('remove background requests native transparency and rejects opaque provider results', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-test' });
+  const sharp = require('sharp');
+  let opaque = false; const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({ onEdit: async (payload) => {
+    calls.push(payload);
+    const bytes = await sharp({ create: { width: 4, height: 4, channels: 4, background: opaque ? '#ff0000ff' : '#ff000080' } }).png().toBuffer();
+    return { data: [{ b64_json: bytes.toString('base64') }] };
+  } }));
+  try {
+    const spec = { model: 'gpt-image-2', provider: 'openai', prompt: 'remove background', imageBuffer: Buffer.from('source'), background: 'transparent' };
+    assert.equal((await engine.editImage(spec)).ok, true);
+    assert.equal(calls[0].background, 'transparent'); assert.equal(calls[0].output_format, 'png');
+    opaque = true;
+    const failed = await engine.editImage(spec);
+    assert.equal(failed.ok, false); assert.equal(failed.code, 'E_PROVIDER');
+    const unsupported = await engine.editImage({ ...spec, provider: 'openrouter', model: 'openai/gpt-image-2' });
+    assert.equal(unsupported.code, 'E_PARAMS'); assert.equal(calls.length, 2);
+  } finally { restoreEnv(); }
+});
+
+test('prefixed Grok image catalog identifiers remain on their own API', () => {
+  assert.deepEqual(engine.resolveImageModelRoute('x-ai/grok-2-image'), { provider: 'xai', model: 'grok-2-image' });
+});
+
+test('editImage aborts the actual provider request when its deadline expires', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-test' }); let providerAborted = false;
+  _internal.setOpenAIFactory(fakeOpenAIFactory({ onEdit: async (_payload, opts) => new Promise((_, reject) => {
+    opts.signal.addEventListener('abort', () => { providerAborted = true; reject(opts.signal.reason); }, { once: true });
+  }) }));
+  try {
+    const result = await engine.editImage({ model: 'gpt-image-2', prompt: 'edit', imageBuffer: Buffer.from('source'), timeoutMs: 20 });
+    assert.equal(result.ok, false); assert.equal(result.code, 'E_PROVIDER'); assert.equal(providerAborted, true);
+    assert.equal(result.attempts.length, 1);
+  } finally { restoreEnv(); }
 });

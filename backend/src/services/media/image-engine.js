@@ -10,11 +10,9 @@
  *
  * The engine routes a model id to its provider (gpt-image-* → OpenAI,
  * imagen-* or gemini-* → Gemini, fal-ai prefixes → fal.ai, grok-* → xAI,
- * any vendor/slug → OpenRouter) and — when the chosen provider fails or has no
- * API key — fails over to the next CONFIGURED provider so "crea una imagen"
- * produces a result with whichever image model the deployment has available.
- * Every attempt is recorded in `attempts` so callers can surface what
- * actually happened (provider used, fallbacks taken).
+ * any vendor/slug → OpenRouter). A selected model stays pinned to its own
+ * API. Failure or missing credentials never substitutes a different model.
+ * Attempts are retained for internal diagnostics.
  *
  * Provider quirks honored here (mined from the battle-tested
  * /api/ai/generate-image route):
@@ -23,8 +21,7 @@
  *   - dall-e-* needs response_format:'b64_json' and the legacy sizes.
  *   - Google's OpenAI-compatible images endpoint REJECTS response_format.
  *   - OpenRouter generates images via chat.completions with
- *     modalities:['image','text']; some models intermittently 404 → one
- *     retry against a broadly-available fallback model.
+ *     modalities:['image','text'] and its original model id.
  *   - fal.ai uses its own SDK with an image_size enum.
  *   - xAI images.generate supports model/prompt/n/response_format only.
  *
@@ -43,10 +40,6 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   openrouter: process.env.SIRAGPT_IMAGE_MODEL_OPENROUTER || 'google/gemini-3.1-flash-image-preview',
   xai: process.env.SIRAGPT_IMAGE_MODEL_XAI || 'grok-2-image',
 };
-
-// Production-validated OpenRouter image model used as the in-provider retry
-// when the requested model has no endpoint for image output modalities.
-const OPENROUTER_FALLBACK_MODEL = 'google/gemini-3.1-flash-image-preview';
 
 const EDIT_MODEL_BY_PROVIDER = {
   gemini: process.env.SIRAGPT_IMAGE_EDIT_MODEL_GEMINI || 'gemini-2.5-flash-image',
@@ -86,7 +79,7 @@ function isProviderConfigured(provider) {
   return providerApiKey(provider).length > 0;
 }
 
-/** Configured providers in failover order (env-overridable). */
+/** Configured providers in default preference order (env-overridable). */
 function listConfiguredProviders() {
   const order = String(process.env.SIRAGPT_IMAGE_FAILOVER_ORDER || '')
     .split(',')
@@ -109,6 +102,7 @@ function resolveImageModelRoute(model) {
   if (low.startsWith('fal-ai/') || low.startsWith('fal/')) return { provider: 'fal', model: m };
   if (/^(gpt-image|dall-e|chatgpt-image)/.test(low)) return { provider: 'openai', model: m };
   if (/^(imagen-|gemini)/.test(low)) return { provider: 'gemini', model: m };
+  if (/^(x-ai|xai)\//.test(low) && /grok/.test(low)) return { provider: 'xai', model: m.replace(/^(x-ai|xai)\//i, '') };
   if (/grok/.test(low) && !low.includes('/')) return { provider: 'xai', model: m };
   if (low.includes('/')) return { provider: 'openrouter', model: m };
   return null;
@@ -389,23 +383,7 @@ async function generateWithOpenRouter({ model, prompt, ratio, quality, n, signal
     return images.slice(0, n);
   };
 
-  const useModel = model || DEFAULT_MODEL_BY_PROVIDER.openrouter;
-  try {
-    return await callOnce(useModel);
-  } catch (err) {
-    const msg = String((err && err.message) || '').toLowerCase();
-    const status = err && (err.status || err.statusCode);
-    const recoverable =
-      status === 404 ||
-      msg.includes('no endpoints') ||
-      msg.includes('output modalities') ||
-      msg.includes('did not return an image') ||
-      msg.includes('not a valid model');
-    if (recoverable && useModel !== OPENROUTER_FALLBACK_MODEL) {
-      return await callOnce(OPENROUTER_FALLBACK_MODEL);
-    }
-    throw err;
-  }
+  return callOnce(model || DEFAULT_MODEL_BY_PROVIDER.openrouter);
 }
 
 async function generateWithFal({ model, prompt, ratio, n, signal, timeoutMs }) {
@@ -532,7 +510,7 @@ async function attemptProviderImages(provider, { model, prompt, ratio, quality, 
 // ── Public: generateImage ─────────────────────────────────────────────────
 
 /**
- * Generate image(s) with automatic provider routing + failover.
+ * Generate image(s) with provider routing and a pinned model.
  *
  * @param {object} spec
  * @param {string} spec.prompt        required
@@ -542,7 +520,7 @@ async function attemptProviderImages(provider, { model, prompt, ratio, quality, 
  * @param {string} [spec.quality]     '512px'|'1K'|'2K'|'4K' or 'standard'|'hd'
  * @param {number} [spec.n]           1..5 (default 1)
  * @param {AbortSignal} [spec.signal]
- * @param {boolean} [spec.failover]   default true — try other configured providers on failure
+ * @param {boolean} [spec.failover]   legacy option; provider substitution is never allowed
  * @returns {Promise<{ok:boolean, images?:Array<{b64:string,mime:string}>, provider?:string, model?:string, attempts:Array, error?:string}>}
  */
 async function generateImage(spec = {}) {
@@ -553,29 +531,26 @@ async function generateImage(spec = {}) {
   const quality = normalizeQuality(spec.quality);
   const n = Math.min(Math.max(Number.parseInt(spec.n, 10) || 1, 1), MAX_IMAGES_PER_REQUEST);
   const timeoutMs = Number(spec.timeoutMs) || DEFAULT_TIMEOUT_MS;
-  const allowFailover = spec.failover !== false;
-
-  // Build the attempt plan: requested provider/model first, then the rest
-  // of the configured chain with each provider's default model.
+  // A selection is binding, including when its credentials/provider fail.
+  // With no selection choose one configured default; never silently substitute.
   const plan = [];
   const requestedProvider = String(spec.provider || '').trim().toLowerCase();
   const route = requestedProvider && PROVIDERS.includes(requestedProvider)
     ? { provider: requestedProvider, model: spec.model || null }
     : resolveImageModelRoute(spec.model);
-  if (route) plan.push({ provider: route.provider, model: route.model || null, requested: true });
-  if (allowFailover || plan.length === 0) {
-    for (const provider of listConfiguredProviders()) {
-      if (plan.some((p) => p.provider === provider)) continue;
-      plan.push({ provider, model: null, requested: false });
-      if (!allowFailover) break; // only one attempt when failover is disabled
-    }
+  if (route) plan.push({ provider: route.provider, model: route.model || null });
+  else if (spec.model || spec.provider) {
+    return { ok: false, code: 'E_PARAMS', error: 'El modelo de imagen seleccionado no está disponible.', attempts: [] };
+  } else {
+    const provider = listConfiguredProviders()[0];
+    if (provider) plan.push({ provider, model: null });
   }
 
   if (!plan.length) {
     return {
       ok: false,
       code: 'NO_PROVIDER',
-      error: 'No hay ningún proveedor de imágenes configurado (OPENAI_API_KEY, GEMINI_API_KEY, FAL_KEY, OPENROUTER_API_KEY o XAI_API_KEY).',
+      error: 'No hay un modelo de imagen disponible en este momento. Reintenta más tarde.',
       attempts: [],
     };
   }
@@ -615,18 +590,24 @@ async function generateImage(spec = {}) {
     }
   }
 
-  const detail = attempts.map((a) => `${a.provider}: ${a.error}`).join(' | ');
-  return { ok: false, code: 'ALL_PROVIDERS_FAILED', error: `No se pudo generar la imagen. ${detail}`.trim(), attempts };
+  return { ok: false, code: 'E_PROVIDER', error: 'No se pudo generar con el modelo seleccionado. Reintenta o elige otro modelo.', attempts };
 }
 
 // ── Edit adapters ─────────────────────────────────────────────────────────
 
-async function editWithGemini({ model, prompt, imageBuffer, mimeType, timeoutMs }) {
+async function editWithGemini({ model, prompt, imageBuffer, mimeType, timeoutMs, signal, aspectRatio, quality }) {
   const ai = createGoogleGenAIClient();
   const useModel = model || EDIT_MODEL_BY_PROVIDER.gemini;
   const response = await withTimeout(
     ai.models.generateContent({
       model: useModel,
+      config: {
+        abortSignal: signal, responseModalities: ['TEXT', 'IMAGE'],
+        imageConfig: {
+          ...(aspectRatio ? { aspectRatio: normalizeAspectRatio(aspectRatio) } : {}),
+          ...(!/^gemini-2\./.test(useModel) && quality ? { imageSize: normalizeQuality(quality) === '512px' ? '1K' : normalizeQuality(quality) } : {}),
+        },
+      },
       contents: [
         { text: prompt },
         { inlineData: { mimeType: mimeType || 'image/png', data: imageBuffer.toString('base64') } },
@@ -642,14 +623,16 @@ async function editWithGemini({ model, prompt, imageBuffer, mimeType, timeoutMs 
   throw new Error('Gemini no devolvió una imagen editada.');
 }
 
-async function editWithOpenAI({ model, prompt, imageBuffer, mimeType, signal, timeoutMs, aspectRatio }) {
+async function editWithOpenAI({ model, prompt, imageBuffer, mimeType, signal, timeoutMs, aspectRatio, quality, n = 1, maskBuffer, background }) {
   const client = createOpenAIClient({ apiKey: providerApiKey('openai') });
   let imageFile = imageBuffer;
+  let maskFile = maskBuffer;
   try {
     // eslint-disable-next-line global-require
     const { toFile } = require('openai');
     if (typeof toFile === 'function') {
       imageFile = await toFile(imageBuffer, 'source.png', { type: mimeType || 'image/png' });
+      if (maskBuffer) maskFile = await toFile(maskBuffer, 'mask.png', { type: 'image/png' });
     }
   } catch { /* unit tests and runtimes without File still pass a Buffer */ }
   const useModel = model || EDIT_MODEL_BY_PROVIDER.openai;
@@ -659,23 +642,63 @@ async function editWithOpenAI({ model, prompt, imageBuffer, mimeType, signal, ti
       image: imageFile,
       prompt,
       model: useModel,
-      n: 1,
+      n,
       size,
-      quality: 'auto',
+      quality: quality ? gptImageQualityFor(normalizeQuality(quality)) : 'auto',
+      ...(background === 'transparent' ? { background: 'transparent', output_format: 'png' } : {}),
+      ...(maskFile ? { mask: maskFile } : {}),
     }, { signal }),
     timeoutMs,
     `openai-edit:${useModel}`
   );
-  const b64 = response?.data?.[0]?.b64_json || stripImageDataUrl(response?.data?.[0]?.url);
-  if (!b64) throw new Error('OpenAI no devolvió una imagen editada.');
-  return [b64];
+  const images = (response?.data || []).map((item) => item.b64_json || stripImageDataUrl(item.url)).filter(Boolean);
+  if (!images.length) throw new Error('No se recibió una imagen editada.');
+  return images;
 }
 
-const EDITORS = { gemini: editWithGemini, openai: editWithOpenAI };
+async function editWithOpenRouter({ model, prompt, imageBuffer, mimeType, signal, timeoutMs, aspectRatio, quality }) {
+  const client = createOpenAIClient({ apiKey: providerApiKey('openrouter'), baseURL: 'https://openrouter.ai/api/v1' });
+  const response = await withTimeout(client.chat.completions.create({
+    model,
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: prompt },
+      { type: 'image_url', image_url: { url: `data:${mimeType || 'image/png'};base64,${imageBuffer.toString('base64')}` } },
+    ] }],
+    modalities: ['image', 'text'], stream: false,
+    image_config: {
+      ...(aspectRatio ? { aspect_ratio: normalizeAspectRatio(aspectRatio) } : {}),
+      ...(quality ? { image_size: openRouterImageSizeFor(normalizeQuality(quality)) } : {}),
+    },
+  }, { signal }), timeoutMs, 'image-edit');
+  const images = extractOpenRouterImageBase64s(response);
+  if (!images.length) throw new Error('No se recibió una imagen editada.');
+  return images;
+}
+
+const EDITORS = { gemini: editWithGemini, openai: editWithOpenAI, openrouter: editWithOpenRouter };
+
+function resolveEditRoute(spec = {}) {
+  const requested = String(spec.provider || '').trim().toLowerCase();
+  if (requested) return { provider: requested, model: spec.model || EDIT_MODEL_BY_PROVIDER[requested] || null };
+  if (spec.model) return resolveImageModelRoute(spec.model);
+  const provider = ['gemini', 'openai', 'openrouter'].find(isProviderConfigured);
+  return provider ? { provider, model: EDIT_MODEL_BY_PROVIDER[provider] || DEFAULT_MODEL_BY_PROVIDER[provider] } : null;
+}
+
+function canEditImage(spec = {}) {
+  const route = resolveEditRoute(spec);
+  if (!route || !EDITORS[route.provider]) return false;
+  if (spec.background === 'transparent' && route.provider !== 'openai') return false;
+  // Image generation-only endpoints cannot be repurposed as editors.
+  if (route.provider === 'openai' && !/^(?:gpt-image|chatgpt-image)/i.test(route.model || '')) return false;
+  if (route.provider === 'gemini' && !/^gemini.*image/i.test(route.model || '')) return false;
+  return true;
+}
 
 /**
  * Edit an existing image with a natural-language instruction (img2img).
- * Tries Gemini first (fast/cheap), then OpenAI — only configured providers.
+ * Uses the selected provider only. With no selection, chooses one configured
+ * editor before making any request; errors never change that selection.
  *
  * @param {object} spec
  * @param {string} spec.prompt       edit instruction (required)
@@ -692,18 +715,12 @@ async function editImage(spec = {}) {
   }
   const timeoutMs = Number(spec.timeoutMs) || DEFAULT_TIMEOUT_MS;
 
-  const plan = [];
-  const requested = String(spec.provider || '').trim().toLowerCase();
-  if (requested && EDITORS[requested]) {
-    plan.push({ provider: requested, model: spec.model || null });
-  } else if (spec.model) {
-    const route = resolveImageModelRoute(spec.model);
-    if (route && EDITORS[route.provider]) plan.push({ provider: route.provider, model: route.model });
-  }
-  for (const provider of ['gemini', 'openai']) {
-    if (plan.some((p) => p.provider === provider)) continue;
-    plan.push({ provider, model: null });
-  }
+  const route = resolveEditRoute(spec);
+  if (!route) return { ok: false, code: 'NO_PROVIDER', error: 'No hay un modelo de edición disponible.', attempts: [] };
+  if (spec.background === 'transparent' && !canEditImage(spec)) return { ok: false, code: 'E_PARAMS', error: 'El modelo seleccionado no admite transparencia real. Elige un modelo de edición compatible.', attempts: [] };
+  if (!canEditImage(spec)) return { ok: false, code: 'image_edit_unsupported', error: 'El modelo seleccionado no permite esta edición. Elige un modelo compatible.', attempts: [] };
+  const plan = [route];
+  const n = Math.min(Math.max(Number.parseInt(spec.n, 10) || 1, 1), MAX_IMAGES_PER_REQUEST);
 
   const attempts = [];
   for (const step of plan) {
@@ -712,16 +729,29 @@ async function editImage(spec = {}) {
       continue;
     }
     const model = step.model || EDIT_MODEL_BY_PROVIDER[step.provider];
+    const attemptSignal = createAttemptSignal(spec.signal, timeoutMs, `${step.provider}:edit`);
     try {
-      const b64s = await EDITORS[step.provider]({
-        model,
-        prompt,
-        imageBuffer: spec.imageBuffer,
-        mimeType: spec.mimeType,
-        signal: spec.signal,
-        timeoutMs,
-        aspectRatio: spec.aspectRatio,
-      });
+      const b64s = [];
+      // All requested variants use the same pinned model and the SAME source.
+      while (b64s.length < n) {
+        if (attemptSignal.signal.aborted) throw attemptSignal.signal.reason || new Error('aborted');
+        const batch = await EDITORS[step.provider]({
+          model, prompt, imageBuffer: spec.imageBuffer, mimeType: spec.mimeType,
+          signal: attemptSignal.signal, timeoutMs, aspectRatio: spec.aspectRatio,
+          quality: spec.quality, maskBuffer: spec.maskBuffer, background: spec.background,
+          n: step.provider === 'openai' ? n - b64s.length : 1,
+        });
+        if (!batch?.length) throw new Error('No se recibió una imagen editada.');
+        b64s.push(...batch.slice(0, n - b64s.length));
+      }
+      if (spec.background === 'transparent') {
+        for (const b64 of b64s) {
+          const image = require('sharp')(Buffer.from(b64, 'base64'), { limitInputPixels: 40 * 1024 * 1024 });
+          if ((await image.metadata()).format !== 'png' || (await image.stats()).isOpaque) {
+            throw new Error('El resultado no contiene transparencia real.');
+          }
+        }
+      }
       attempts.push({ provider: step.provider, model, ok: true });
       return {
         ok: true,
@@ -736,6 +766,8 @@ async function editImage(spec = {}) {
         return { ok: false, code: 'ABORTED', error: 'edit aborted', attempts };
       }
       attempts.push({ provider: step.provider, model, ok: false, error: (err && err.message) || String(err) });
+    } finally {
+      attemptSignal.cleanup();
     }
   }
 
@@ -743,17 +775,17 @@ async function editImage(spec = {}) {
     return {
       ok: false,
       code: 'NO_PROVIDER',
-      error: 'La edición de imágenes requiere GEMINI_API_KEY u OPENAI_API_KEY configuradas.',
+      error: 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.',
       attempts,
     };
   }
-  const detail = attempts.map((a) => `${a.provider}: ${a.error}`).join(' | ');
-  return { ok: false, code: 'ALL_PROVIDERS_FAILED', error: `No se pudo editar la imagen. ${detail}`.trim(), attempts };
+  return { ok: false, code: 'E_PROVIDER', error: 'No se pudo editar con el modelo seleccionado. Reintenta o elige otro modelo.', attempts };
 }
 
 module.exports = {
   generateImage,
   editImage,
+  canEditImage,
   resolveImageModelRoute,
   listConfiguredProviders,
   isProviderConfigured,

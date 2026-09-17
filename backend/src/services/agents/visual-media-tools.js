@@ -75,7 +75,7 @@ function emitEvent(ctx, type, data) {
   }
 }
 
-function finalizeArtifact({ filename, buffer, mime, ctx }) {
+function finalizeArtifact({ filename, buffer, mime, ctx, imageMetadata }) {
   const b64 = buffer.toString('base64');
   return saveArtifact({
     filename,
@@ -83,6 +83,7 @@ function finalizeArtifact({ filename, buffer, mime, ctx }) {
     mime,
     ownerUserId: ctx?.userId,
     chatId: ctx?.chatId,
+    imageMetadata,
   });
 }
 
@@ -231,7 +232,7 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate one or more images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The model is routed to its provider automatically and, if that provider fails or has no API key, the engine fails over to the next configured one. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
+  description: 'Generate one or more images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content.',
   parameters: {
     type: 'object',
     properties: {
@@ -286,9 +287,11 @@ const generateImage = {
       const engine = getImageEngine();
       const result = await engine.generateImage({
         prompt: enhancedPrompt,
-        model: model || ctx.imageModel || undefined,
+        model: ctx.imageModel || model || undefined,
+        provider: ctx.imageProvider || undefined,
+        failover: false,
         aspectRatio,
-        quality,
+        quality: ctx.imageQuality || quality,
         n: count,
         signal: ctx.signal,
       });
@@ -305,7 +308,9 @@ const generateImage = {
       for (let index = 0; index < result.images.length; index += 1) {
         const buffer = Buffer.from(result.images[index].b64, 'base64');
         const filename = `image_${crypto.randomBytes(4).toString('hex')}${result.images.length > 1 ? `_${index + 1}` : ''}.png`;
-        const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
+        const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
+          model: result.model, provider: result.provider, aspectRatio, quality: ctx.imageQuality || quality,
+        } });
         artifacts.push({
           id: artifact.id,
           filename: artifact.filename,
@@ -320,6 +325,7 @@ const generateImage = {
             mime: 'image/png',
             sizeBytes: artifact.sizeBytes,
             downloadUrl: artifact.downloadUrl,
+            fileId: `artifact:${artifact.id}`, model: result.model, provider: result.provider, aspectRatio,
           },
         });
       }
@@ -330,8 +336,8 @@ const generateImage = {
         tool: 'generate_image',
         ok: true,
         preview: artifacts.length > 1
-          ? `${artifacts.length} imágenes listas (${Math.round(totalKB)} KB en total, ${result.model} vía ${result.provider})`
-          : `Imagen lista: ${first.filename} (${Math.round(first.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+          ? `${artifacts.length} imágenes listas (${Math.round(totalKB)} KB en total)`
+          : `Imagen lista: ${first.filename} (${Math.round(first.sizeBytes / 1024)} KB)`,
       });
 
       return {
@@ -361,156 +367,10 @@ const generateImage = {
 // Tool 1b: edit_image (img2img — transform an existing image)
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Resolve the source image for edit_image into a Buffer. */
-async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
-  const prisma = ctx.prisma || (() => { try { return require('../../config/database'); } catch { return null; } })();
-
-  async function bufferFromFileRecord(record) {
-    if (!record || !record.path) return null;
-    try {
-      const buf = await fs.promises.readFile(record.path);
-      return buf && buf.length
-        ? { buffer: buf, mimeType: record.mimeType || 'image/png', source: record.originalName || record.filename }
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  // 1. Explicit URL (http(s), data: or a local /uploads path).
-  const url = String(imageUrl || '').trim();
-  if (url) {
-    const dataMatch = url.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
-    if (dataMatch) {
-      return { buffer: Buffer.from(dataMatch[2], 'base64'), mimeType: dataMatch[1], source: 'data-url' };
-    }
-    if (/^https?:\/\//i.test(url)) {
-      // Explicit remote URL: never fall through to another image if this
-      // target is blocked or unreachable (SSRF / leftover artifacts).
-      return bufferFromImageUrl(url, ctx);
-    }
-    const uploadsMatch = url.match(/\/uploads\/(.+)$/);
-    if (uploadsMatch) {
-      try {
-        // Containment check: the captured segment is attacker-influenced —
-        // resolve it and require it to stay inside the uploads root so
-        // "/uploads/../../etc/passwd" cannot escape.
-        const uploadsRoot = path.resolve(__dirname, '../../../uploads');
-        const local = path.resolve(uploadsRoot, uploadsMatch[1]);
-        if (local === uploadsRoot || !local.startsWith(uploadsRoot + path.sep)) return null;
-        const buf = await fs.promises.readFile(local);
-        if (buf.length) return { buffer: buf, mimeType: 'image/png', source: url };
-      } catch { /* fall through */ }
-    }
-  }
-
-  // 2. Explicit fileId (ownership-checked).
-  if (fileId && prisma && ctx.userId) {
-    try {
-      const record = await prisma.file.findFirst({ where: { id: String(fileId), userId: ctx.userId } });
-      const resolved = await bufferFromFileRecord(record);
-      if (resolved) return resolved;
-    } catch { /* fall through */ }
-  }
-
-  // 3. Image attached to THIS message (toolContext.fileIds).
-  if (prisma && ctx.userId && Array.isArray(ctx.fileIds) && ctx.fileIds.length) {
-    try {
-      const records = await prisma.file.findMany({
-        where: { id: { in: ctx.fileIds.map(String) }, userId: ctx.userId },
-      });
-      const image = records.find((r) => String(r.mimeType || '').startsWith('image/'));
-      const resolved = await bufferFromFileRecord(image);
-      if (resolved) return resolved;
-    } catch { /* fall through */ }
-  }
-
-  // 4. Most recent image in the chat (uploaded or generated via the
-  //    dedicated image route, which persists files on the message). The
-  //    fileId embedded in message.files is NOT trusted: the file record
-  //    must belong to the requesting user (same ownership filter as the
-  //    fileId branches above).
-  if (prisma && ctx.chatId && ctx.userId) {
-    try {
-      const messages = await prisma.message.findMany({
-        where: { chatId: ctx.chatId },
-        orderBy: { timestamp: 'desc' },
-        take: 10,
-        select: { files: true, content: true },
-      });
-      for (const message of messages) {
-        let files;
-        try {
-          files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
-        } catch { files = null; }
-        if (Array.isArray(files)) {
-          const image = files.find((f) => f && (f.type === 'image' || String(f.type || f.mime || f.mimeType || '').startsWith('image/')));
-          if (image) {
-            if (image.fileId || image.id) {
-              const record = await prisma.file.findFirst({
-                where: { id: String(image.fileId || image.id), userId: ctx.userId },
-              });
-              const resolved = await bufferFromFileRecord(record);
-              if (resolved) return resolved;
-            }
-            const fromUrl = await bufferFromImageUrl(image.url || image.downloadUrl, ctx);
-            if (fromUrl) return fromUrl;
-          }
-        }
-        const fromContent = await bufferFromArtifactRefInText(message.content, ctx.userId);
-        if (fromContent) return fromContent;
-      }
-    } catch { /* fall through */ }
-  }
-
-  return null;
-}
-
-async function bufferFromArtifactRefInText(text, ownerUserId) {
-  const match = String(text || '').match(/\/api\/agent\/artifact\/([a-f0-9]+)/i);
-  if (!match || !ownerUserId) return null;
-  return bufferFromArtifactId(match[1], ownerUserId);
-}
-
-async function bufferFromArtifactId(id, ownerUserId) {
-  const { materializeArtifactSource } = require('./artifact-local-source');
-  const source = await materializeArtifactSource({
-    id: String(id).replace(/[^a-f0-9]/gi, ''),
-    artifactDir: ARTIFACT_DIR,
-    ownerUserId,
-  });
-  if (!source.ok) return null;
-  try {
-    const buf = await fs.promises.readFile(source.sourcePath);
-    if (!buf || !buf.length) return null;
-    return { buffer: buf, mimeType: source.metadata?.mime || 'image/png', source: `artifact:${id}` };
-  } finally {
-    try { await source.cleanup(); } catch { /* temp from R2 */ }
-  }
-}
-
-async function bufferFromImageUrl(rawUrl, ctx = {}) {
-  const url = String(rawUrl || '').trim();
-  if (!url) return null;
-  const artifactMatch = url.match(/\/api\/agent\/artifact\/([a-f0-9]+)/i);
-  if (artifactMatch && ctx.userId) {
-    const fromArtifact = await bufferFromArtifactId(artifactMatch[1], ctx.userId);
-    if (fromArtifact) return fromArtifact;
-  }
-  if (/^https?:\/\//i.test(url)) {
-    try {
-      const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
-      assertSafeUrl(url);
-      const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
-      if (resp && resp.ok) {
-        const buf = Buffer.from(await resp.arrayBuffer());
-        if (buf.length) {
-          return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
-        }
-      }
-    } catch { /* unsafe or unreachable */ }
-  }
-  return null;
+// Shared with /ai/generate-image; #730 artifact history support stays canonical.
+async function resolveEditSourceImage(args, ctx = {}) {
+  const prisma = ctx.prisma || (!args.imageUrl && (() => { try { return require('../../config/database'); } catch { return null; } })());
+  return require('../media/image-source').resolveImageSource(args, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
 }
 
 const editImage = {
@@ -524,13 +384,15 @@ const editImage = {
       fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
       target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
-      selection: { type: 'object', description: 'Optional selection scoping the edit: { x, y, width, height } in 0..100 (fractions 0..1 also accepted), { kind: "region", region: "top-left"|"center"|… }, { kind: "label", label } or { kind: "mask", ref }. Invalid selections are ignored safely.' },
+      selection: { type: 'object', description: 'Optional rectangular selection: { x, y, width, height } in 0..100 (fractions 0..1 also accepted). Pixels outside it are protected. Invalid selections return an error.' },
       aspectRatio: { type: 'string', description: 'Optional output frame for reframes: square|wide|portrait or 1:1|3:4|16:9|9:16.' },
+      quality: { type: 'string', enum: ['standard', 'hd', '512px', '1K', '2K', '4K'], description: 'Requested rendering quality; supported output dimensions depend on the selected model.' },
+      count: { type: 'integer', minimum: 1, maximum: 5, description: 'Number of variants to edit from the same source (1 to 5).' },
     },
     required: ['instruction'],
     additionalProperties: false,
   },
-  async execute({ instruction, imageUrl, fileId, model, target, selection, aspectRatio } = {}, ctx = {}) {
+  async execute({ instruction, imageUrl, fileId, model, target, selection, aspectRatio, quality, count } = {}, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
 
     try {
@@ -540,7 +402,7 @@ const editImage = {
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
       const source = await resolveEditSourceImage({ imageUrl, fileId }, ctx);
       if (!source) {
-        const msg = 'No encontré ninguna imagen para editar. Pide al usuario que adjunte la imagen o genera una primero con generate_image.';
+        const msg = 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.';
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
         return { ok: false, error: msg };
       }
@@ -552,14 +414,26 @@ const editImage = {
       // preserves everything else.
       const reframe = imageDirective.detectImageReframe(cleanInstruction);
       const editDirective = reframe
-        ? imageDirective.resolveReframeDirective(cleanInstruction)
+        ? imageDirective.resolveReframeDirective(cleanInstruction, aspectRatio)
         : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
+      const ratio = aspectRatio || editDirective.frame || (reframe && reframe.frame);
+      const { prepareEditCanvas, finishEditCanvas } = require('../media/image-edit-canvas');
+      const canvas = (reframe || selection) ? await prepareEditCanvas({
+        imageBuffer: source.buffer, operation: reframe ? 'reframe' : 'edit',
+        aspectRatio: ratio, selection,
+      }) : null;
       const result = await engine.editImage({
         prompt: editDirective.prompt,
-        imageBuffer: source.buffer,
-        mimeType: source.mimeType,
-        model,
-        aspectRatio: aspectRatio || editDirective.frame || editDirective.aspectRatio || (reframe && reframe.frame),
+        imageBuffer: canvas?.imageBuffer || source.buffer,
+        mimeType: canvas?.mimeType || source.mimeType,
+        maskBuffer: canvas?.maskBuffer,
+        model: ctx.imageModel || model || undefined,
+        provider: ctx.imageProvider || undefined,
+        quality: ctx.imageQuality || quality || undefined,
+        background: editDirective.operation === 'remove-background' ? 'transparent' : undefined,
+        n: count || 1,
+        failover: false,
+        aspectRatio: ratio,
         signal: ctx.signal,
       });
 
@@ -569,25 +443,31 @@ const editImage = {
         return { ok: false, error: msg, attempts: result.attempts };
       }
 
-      const buffer = Buffer.from(result.images[0].b64, 'base64');
-      const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
-      const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx });
-
-      emitEvent(ctx, 'file_artifact', {
-        artifact: {
-          id: artifact.id,
-          filename: artifact.filename,
-          format: 'png',
-          mime: 'image/png',
-          sizeBytes: artifact.sizeBytes,
-          downloadUrl: artifact.downloadUrl,
-        },
-      });
+      const artifacts = [];
+      for (const image of result.images) {
+        const raw = Buffer.from(image.b64, 'base64');
+        const buffer = canvas ? await finishEditCanvas(raw, canvas) : raw;
+        const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
+        const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
+          parentFileId: source.fileId || null,
+          rootFileId: source.metadata?.rootFileId || source.fileId,
+          version: (Number(source.metadata?.version) || 1) + 1,
+          model: result.model, provider: result.provider, aspectRatio: ratio, quality: ctx.imageQuality || quality,
+        } });
+        artifacts.push(artifact);
+        emitEvent(ctx, 'file_artifact', {
+          artifact: { id: artifact.id, fileId: `artifact:${artifact.id}`, filename: artifact.filename, format: 'png', mime: 'image/png', sizeBytes: artifact.sizeBytes,
+            downloadUrl: artifact.downloadUrl, parentFileId: source.fileId || null, version: (Number(source.metadata?.version) || 1) + 1,
+            model: result.model, provider: result.provider, aspectRatio: ratio,
+          },
+        });
+      }
+      const artifact = artifacts[0];
 
       emitEvent(ctx, 'tool_output', {
         tool: 'edit_image',
         ok: true,
-        preview: `Imagen editada: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB, ${result.model} vía ${result.provider})`,
+        preview: `Imagen editada: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024)} KB)`,
       });
 
       return {
@@ -599,6 +479,8 @@ const editImage = {
         mime: 'image/png',
         instruction: cleanInstruction,
         sourceImage: source.source,
+        parentFileId: source.fileId || null,
+        images: artifacts,
         provider: result.provider,
         model: result.model,
         editTarget: editDirective.target,

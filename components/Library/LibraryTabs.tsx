@@ -18,6 +18,9 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 import { ThinkingIndicator } from '@/components/ui/thinking-indicator';
 import { projectsService, type Project } from '@/lib/projects-service';
 import ResearchLibrary from './ResearchLibrary';
+import dynamic from 'next/dynamic';
+import { imageAssetFromFile } from '@/lib/image-workspace';
+const ImageWorkspace = dynamic(() => import('@/components/images/ImageWorkspace'), { ssr: false });
 
 type MediaType = 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp';
 
@@ -37,6 +40,10 @@ interface MediaItem {
     mime?: string;
     sizeBytes?: number;
     source?: string;
+    fileId?: string;
+    model?: string;
+    provider?: string;
+    parentFileId?: string;
 }
 
 type FilterType = 'all' | 'references' | MediaType;
@@ -222,6 +229,7 @@ const MediaLibrary: React.FC = () => {
     // user lands back in the conversation they built it in. Items with no
     // originating chat (rare) fall back to the in-place preview modal.
     const handleItemClick = (item: MediaItem) => {
+        if (item.type === 'image') { openMediaModal(item); return; }
         if (item.chatId) {
             router.push(`/agentes?id=${encodeURIComponent(item.chatId)}`);
             return;
@@ -276,6 +284,7 @@ const MediaLibrary: React.FC = () => {
             ((item.prompt || '') + ' ' + (item.filename || '')).toLowerCase().includes(q)
         );
     }, [mediaItems, searchQuery]);
+    const imageAssets = useMemo(() => mediaItems.filter(item => item.type === 'image').map(item => imageAssetFromFile(item, item.chatId, item.messageId)), [mediaItems]);
 
     const emptyMessage = useMemo(() => {
         if (searchQuery) return 'Ningún elemento coincide con tu búsqueda.';
@@ -391,10 +400,10 @@ const MediaLibrary: React.FC = () => {
                 {visibleItems.length > 0 ? (
                     visibleItems.map((item) => (
                         <div
-                            key={`${item.messageId}-${item.type}-${item.timestamp}`}
+                            key={`${item.messageId}-${item.fileId || item.url || item.id}-${item.type}-${item.timestamp}`}
                             className="library-card group cursor-pointer aspect-square"
                             onClick={() => handleItemClick(item)}
-                            title={item.chatId ? 'Abrir el chat donde se creó' : (item.prompt || item.filename)}
+                            title={item.type === 'image' ? 'Abrir imagen' : item.chatId ? 'Abrir el chat donde se creó' : (item.prompt || item.filename)}
                         >
                             {item.type === 'image' && (
                                 // eslint-disable-next-line @next/next/no-img-element -- generated images are arbitrary external/CDN URLs; next/image's loader/domain allow-list doesn't fit them.
@@ -485,7 +494,16 @@ const MediaLibrary: React.FC = () => {
                 </div>
             )}
 
-            {showModal && selectedMedia && (
+            {showModal && selectedMedia?.type === 'image' && (
+                <ImageWorkspace
+                    key={selectedMedia.fileId || selectedMedia.url}
+                    assets={imageAssets}
+                    initialAssetId={imageAssetFromFile(selectedMedia, selectedMedia.chatId, selectedMedia.messageId).id}
+                    onClose={closeMediaModal}
+                    onChanged={() => fetchMediaItems(currentPage, filterType)}
+                />
+            )}
+            {showModal && selectedMedia && selectedMedia.type !== 'image' && (
                 <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4">
                     <div className="relative bg-[#1e1e1e] rounded-xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden">
                         <button
@@ -497,15 +515,6 @@ const MediaLibrary: React.FC = () => {
                         </button>
 
                         <div className="p-4 pt-12 text-white overflow-y-auto max-h-[90vh]">
-                            {selectedMedia.type === 'image' && selectedMedia.url && (
-                                // eslint-disable-next-line @next/next/no-img-element -- generated images are arbitrary external/CDN URLs; next/image's loader/domain allow-list doesn't fit them.
-                                <img
-                                    src={selectedMedia.url}
-                                    alt={selectedMedia.prompt || 'Imagen generada'}
-                                    className="max-w-full max-h-[calc(90vh-10rem)] object-contain mx-auto rounded-lg"
-                                />
-                            )}
-
                             {selectedMedia.type === 'video' && selectedMedia.status === 'completed' && selectedMedia.video_url && (
                                 <video
                                     controls
@@ -603,12 +612,12 @@ const MediaLibrary: React.FC = () => {
                                             rel="noopener noreferrer"
                                             download={
                                                 selectedMedia.filename ||
-                                                `generated-${selectedMedia.type}-${selectedMedia.messageId}.${selectedMedia.type === 'image' ? 'png' : 'mp4'}`
+                                                `generated-${selectedMedia.type}-${selectedMedia.messageId}.mp4`
                                             }
                                             className="mt-4 inline-flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
                                         >
                                             <Download className="w-5 h-5" />
-                                            Descargar {selectedMedia.type === 'image' ? 'imagen' : 'video'}
+                                            Descargar video
                                         </a>
                                     )
                                 )}

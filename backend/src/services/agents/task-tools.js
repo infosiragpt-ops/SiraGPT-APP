@@ -185,7 +185,7 @@ function safeFolderCode(folderCode) {
   }
 }
 
-function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category, folderCode, brandLabel, kind }) {
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category, folderCode, brandLabel, kind, imageMetadata }) {
   try {
     const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
     const policy = requireDurableArtifactStorage();
@@ -200,6 +200,15 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   assertArtifactSizeWithinLimit(ext, buf);
   const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
   const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
+  // Version lineage lives with the existing artifact; it cannot override
+  // ownership, storage paths or identity supplied by the artifact system.
+  const imageVersion = imageMetadata ? {
+    parentFileId: imageMetadata.parentFileId || null,
+    rootFileId: imageMetadata.rootFileId || `artifact:${id}`,
+    version: imageMetadata.version || 1,
+    model: imageMetadata.model, provider: imageMetadata.provider,
+    aspectRatio: imageMetadata.aspectRatio, quality: imageMetadata.quality,
+  } : {};
   const stored = `${id}-${clean}`;
   // When a folder code is supplied (professional document cycle) the binary
   // is grouped under ARTIFACT_DIR/<safeCode>/. The metadata JSON stays FLAT
@@ -238,6 +247,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
       storedRelPath,
       storageRef,
       createdAt: new Date().toISOString(),
+      ...imageVersion,
     }, { pretty: 2 });
   } catch (err) {
     // Remove the orphan artifact so subsequent listings don't show a
@@ -265,6 +275,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     brandLabel: brandLabel || null,
     kind: kind || null,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
+    ...imageVersion,
   };
 }
 

@@ -213,6 +213,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
+import { imageAssetsFromMessages, type WorkspaceImage } from '@/lib/image-workspace'
+const ImageWorkspace = dynamic(() => import('./images/ImageWorkspace'), { ssr: false })
 import { ErrorBoundary } from "./error-boundary"
 import { Virtuoso } from "react-virtuoso"
 // Optional media studios are several large client bundles. They are loaded
@@ -2783,10 +2785,10 @@ const ActiveToolsDisplay = ({
     if (!isImageGenerationActive) return;
     const imageOptions = mediaModelOptions.image;
     if (!imageOptions.length) {
-      if (selectedImageModel) setSelectedImageModel("");
+      // Keep the existing choice during a catalog refresh; sending validates it.
       return;
     }
-    if (!imageOptions.some((option: any) => option.name === selectedImageModel)) {
+    if (!selectedImageModel) {
       setSelectedImageModel(imageOptions[0].name);
     }
   }, [isImageGenerationActive, mediaModelOptions.image, selectedImageModel, setSelectedImageModel]);
@@ -5121,6 +5123,8 @@ type ChatMessageListProps = {
   onToggleSplitView: (content: any) => void
   onDocumentPreview: (target: DocumentPreviewTarget) => void
   onAttachmentPreview: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void
+  onImagePreview: (asset: WorkspaceImage) => void
+  focusImageMessage?: { id: string; request: number } | null
   onOpenSources: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void
 }
 
@@ -5140,6 +5144,8 @@ const ChatMessageList = React.memo(function ChatMessageList({
   onToggleSplitView,
   onDocumentPreview,
   onAttachmentPreview,
+  onImagePreview,
+  focusImageMessage,
   onOpenSources,
 }: ChatMessageListProps) {
   const { stableMessages, streamingMessage } = React.useMemo(() => {
@@ -5162,11 +5168,25 @@ const ChatMessageList = React.memo(function ChatMessageList({
 
     return { stableMessages: stable, streamingMessage: streaming }
   }, [isStreaming, rawMessages])
+  const imageMessageScrollRef = React.useRef<import('react-virtuoso').VirtuosoHandle>(null)
+  React.useEffect(() => {
+    if (!focusImageMessage) return
+    const index = stableMessages.findIndex(message => message.id === focusImageMessage.id)
+    if (index < 0) return
+    imageMessageScrollRef.current?.scrollToIndex({ index, align: 'center', behavior: 'auto' })
+    const frame = requestAnimationFrame(() => {
+      const element = Array.from(document.querySelectorAll<HTMLElement>('[data-message-id]')).find(node => node.dataset.messageId === focusImageMessage.id)
+      element?.scrollIntoView({ block: 'center', behavior: 'auto' })
+      element?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusImageMessage, stableMessages])
 
   return (
     <>
       {radixViewport && stableMessages.length > 40 ? (
         <Virtuoso
+          ref={imageMessageScrollRef}
           data={stableMessages}
           customScrollParent={radixViewport}
           computeItemKey={(_, message) => message.id}
@@ -5183,6 +5203,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
                 onToggleSplitView={onToggleSplitView}
                 onDocumentPreview={onDocumentPreview}
                 onAttachmentPreview={onAttachmentPreview}
+                onImagePreview={onImagePreview}
                 onOpenSources={onOpenSources}
               />
             </ErrorBoundary>
@@ -5201,6 +5222,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
               onToggleSplitView={onToggleSplitView}
               onDocumentPreview={onDocumentPreview}
               onAttachmentPreview={onAttachmentPreview}
+                onImagePreview={onImagePreview}
               onOpenSources={onOpenSources}
             />
           </ErrorBoundary>
@@ -5225,6 +5247,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
               onToggleSplitView={onToggleSplitView}
               onDocumentPreview={onDocumentPreview}
               onAttachmentPreview={onAttachmentPreview}
+                onImagePreview={onImagePreview}
             />
           </ErrorBoundary>
         </div>
@@ -5569,7 +5592,7 @@ function ChatInterfaceContent() {
     const models = await refreshImageModels();
     const requestedName = String(candidate || '').trim();
     const requested = models.find((model: any) => model?.name === requestedName);
-    return requested || models[0] || null;
+    return requestedName ? requested || null : models[0] || null;
   }, [refreshImageModels]);
   const providerForSelectedImageModel = React.useCallback((modelName: string) => {
     const selected = imageModelsForComposer.find((model: any) => model?.name === modelName);
@@ -5724,9 +5747,7 @@ function ChatInterfaceContent() {
       if (IMAGE_ASPECT_RATIO_OPTIONS.some(option => option.value === detail.aspectRatio)) {
         setSelectedImageAspectRatio(detail.aspectRatio);
       }
-      setSelectedImageQuality("2K");
-      setSelectedImageCount(1);
-      setUploadedFiles([{
+      setUploadedFiles(previous => [...previous.filter(file => (file.fileId || file.id) !== detail.fileId), {
         id: detail.fileId,
         fileId: detail.fileId,
         name: "Zona marcada para editar",
@@ -6956,6 +6977,20 @@ But first, you need to connect your Spotify account securely using the button be
   const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
+  const [imageWorkspaceTarget, setImageWorkspaceTarget] = React.useState<WorkspaceImage | null>(null);
+  const [imageMessageFocus, setImageMessageFocus] = React.useState<{ id: string; request: number } | null>(null);
+  const workspaceImages = React.useMemo(() => imageAssetsFromMessages(currentChat?.messages || [], currentChat?.id), [currentChat?.messages, currentChat?.id]);
+  const openImageWorkspace = React.useCallback((asset: WorkspaceImage) => setImageWorkspaceTarget(asset), []);
+  const focusImageMessage = React.useCallback((asset: WorkspaceImage) => {
+    setImageWorkspaceTarget(null);
+    if (asset.messageId) setImageMessageFocus({ id: asset.messageId, request: Date.now() });
+  }, []);
+  React.useEffect(() => {
+    setImageWorkspaceTarget(null);
+    const params = new URLSearchParams(window.location.search);
+    const messageId = params.get('message');
+    if (params.get('id') === currentChat?.id && messageId) setImageMessageFocus({ id: messageId, request: Date.now() });
+  }, [currentChat?.id]);
   const [sourcesPanelData, setSourcesPanelData] = React.useState<{ sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string } | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
   const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
@@ -10334,12 +10369,12 @@ REWRITTEN TEXT:`;
         } catch { /* client OCR is best-effort before the model answers */ }
       }
     }
-    const buildImageEditPrompt = (rawPrompt: string) => {
-      const editFile = filesToSend.find((file: any) => file?.editRegion);
-      if (!editFile?.editRegion) return rawPrompt;
-      const region = editFile.editRegion;
-      return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
-    };
+    const markedImage = filesToSend.find((file: any) => file?.editRegion);
+    const imageEditTarget = markedImage ? {
+      fileId: String(markedImage.fileId || markedImage.id),
+      operation: 'edit' as const,
+      selection: { kind: 'box', ...markedImage.editRegion },
+    } : undefined;
     setInput("");
     setSelectedMentionIds([]);
     setMentionMenuOpen(false);
@@ -10816,7 +10851,7 @@ REWRITTEN TEXT:`;
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
-          await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
+          await handleImageGeneration(msg, collectUploadFileIds(filesToSend), imageModelForSendOverride, imageEditTarget);
           markQueuedSendSucceeded();
           return;
         }
@@ -10984,14 +11019,17 @@ REWRITTEN TEXT:`;
 
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
         const pins = appPins.pinnedAppIds
+        const imageSettings = selectedImageModel ? { imageModel: selectedImageModel, imageProvider: providerForSelectedImageModel(selectedImageModel), imageQuality: selectedImageQuality } : {}
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, {
             initialIntent: pipelineIntent,
+            ...imageSettings,
             idempotencyKey,
             pinnedAppIds: pins,
           });
         } else {
           await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+            ...imageSettings,
             idempotencyKey,
             mentionedApps: mentionPayload.mentionedApps,
             pinnedAppIds: pins,
@@ -11016,7 +11054,7 @@ REWRITTEN TEXT:`;
             await runContextPipeline('text');
             break;
           }
-          await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
+          await handleImageGeneration(msg, collectUploadFileIds(filesToSend), undefined, imageEditTarget);
           break;
         case 'video':
           isGeneratingVideoRef.current = true;
@@ -11434,7 +11472,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string) => {
+  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string, editTarget?: { fileId: string; operation: 'edit'; selection: { kind: string; x: number; y: number; width: number; height: number } }) => {
     let imageModelForRequest = (requestedModel || selectedImageModel || '').trim();
     let activeImageModel: any = null;
     try {
@@ -11519,7 +11557,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...baseChat, messages: updatedMessages };
       });
 
-      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio; quality?: ImageQuality; imageCount?: ImageGenerationCount } = {
+      const payload: Parameters<typeof apiClient.generateImage>[0] = {
         prompt,
         chatId: activeChatId,
         provider: imageProviderForRequest,
@@ -11532,6 +11570,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (files && files[0]) {
         payload.fileId = files[0];
       }
+      if (editTarget) Object.assign(payload, editTarget);
       setUploadedFiles([]);
       attachmentHashesRef.current.clear();
       const imageRequestStartedAt = Date.now();
@@ -11587,18 +11626,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const errorCode = error?.code || errorData?.code;
 
       if (status === 403 && errorCode === 'image_model_inactive') {
-        let fallbackModel: any = null;
-        try {
-          fallbackModel = await resolveFreshActiveImageModel();
-        } catch (refreshError: any) {
-          console.warn('No se pudo refrescar el catalogo de modelos de imagen:', refreshError?.message || refreshError);
-        }
-        const inactiveMessage = fallbackModel?.name
-          ? `El modelo seleccionado ya no esta activo. Cambie a ${brandModelLabel(fallbackModel)}; vuelve a enviar la imagen.`
-          : 'El modelo seleccionado ya no esta activo. Activa un modelo de imagen en Admin Models antes de generar.';
-        if (fallbackModel?.name) {
-          setSelectedImageModel(fallbackModel.name);
-        }
+        const inactiveMessage = 'El modelo seleccionado ya no está activo. Elige otro modelo en Imágenes y vuelve a enviar.';
         toast.error(inactiveMessage);
 
         const updateChatWithInactiveModelError = (prevChat: any) => {
@@ -14241,6 +14269,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onToggleSplitView={handleToggleSplitView}
                         onDocumentPreview={handleDocumentPreview}
                         onAttachmentPreview={handleAttachmentPreview}
+                        onImagePreview={openImageWorkspace}
+                        focusImageMessage={imageMessageFocus}
                         onOpenSources={handleOpenSources}
                       />
                       <div
@@ -14618,6 +14648,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               )}
             </div>
           </>
+        )}
+        {imageWorkspaceTarget && (
+          <ImageWorkspace
+            key={`${imageWorkspaceTarget.chatId}:${imageWorkspaceTarget.id}`}
+            assets={workspaceImages.some(image => image.id === imageWorkspaceTarget.id) ? workspaceImages : [...workspaceImages, imageWorkspaceTarget]}
+            initialAssetId={imageWorkspaceTarget.id}
+            selectedModel={selectedImageModel ? { name: selectedImageModel, provider: providerForSelectedImageModel(selectedImageModel) } : undefined}
+            onClose={() => setImageWorkspaceTarget(null)}
+            onChanged={async () => { if (currentChatIdRef.current === imageWorkspaceTarget.chatId) await selectChat(imageWorkspaceTarget.chatId || ''); }}
+            onViewChat={focusImageMessage}
+          />
         )}
         {previewUsesOverlay && documentPreviewUrl && (
           <DocumentPreview

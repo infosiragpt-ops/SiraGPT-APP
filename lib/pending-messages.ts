@@ -24,6 +24,10 @@ export interface PendingRetryOptions {
 export interface PendingAIRequestEnvelope {
   provider: string
   model: string
+  /** Image picker settings are independent of the conversation model. */
+  imageModel?: string
+  imageProvider?: string
+  imageQuality?: string
   reasoningEffort?: string
   permission?: string
   regenerate?: boolean

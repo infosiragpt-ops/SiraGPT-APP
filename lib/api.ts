@@ -2005,7 +2005,7 @@ class ApiClient {
   // the server cursor when content was already rendered. Mid-stream
   // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[] },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
@@ -2544,7 +2544,7 @@ class ApiClient {
     }
   }
   async generateImage(
-    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; quality?: string; imageCount?: number },
+    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; operation?: 'generate' | 'edit' | 'reframe'; background?: 'transparent'; aspectRatio?: string; quality?: string; imageCount?: number; selection?: { kind?: string; x: number; y: number; width: number; height: number }; maskDataUrl?: string },
     options: { signal?: AbortSignal } = {},
   ) {
     const timeoutMs = 210000;
@@ -4047,6 +4047,18 @@ class ApiClient {
   async getMediaLibrary(params?: { page?: number; limit?: number; type?: 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp' }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
+  }
+
+  async saveImageAsset(fileId: string, data: { chatId: string; messageId?: string; operation: 'annotate' | 'comment' | 'resize'; sourceImageDataUrl?: string; comments?: Array<{ id: string; text: string; x: number; y: number }>; width?: number; height?: number }) {
+    return this.request(`/images/assets/${encodeURIComponent(fileId)}`, {
+      method: 'POST', body: JSON.stringify(data), maxRetries: 0,
+    }) as Promise<{ files: any[]; messageId: string; chatId: string }>;
+  }
+
+  async hideImageAsset(fileId: string, data: { chatId: string; messageId: string }) {
+    return this.request(`/images/assets/${encodeURIComponent(fileId)}/hide`, {
+      method: 'POST', body: JSON.stringify(data), maxRetries: 0,
+    });
   }
 
   async getResearchLibrary(params?: { page?: number; limit?: number; search?: string; collectionId?: string; organizationId?: string }) {
