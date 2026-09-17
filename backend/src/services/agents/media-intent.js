@@ -402,6 +402,9 @@ function detectMediaIntent(text) {
     hasCreateVerb,
     specs,
     reason: hasCreateVerb ? 'create-verb+noun' : 'noun-only',
+    // True when the typo-tolerant canonicalisation rewrote the text (fuzzy
+    // media tokens / split verbs): a weaker signal for the RLCD decision.
+    repaired: norm !== normalize(raw).replace(/\s+/g, ' ').trim(),
   };
 }
 
@@ -448,6 +451,7 @@ function detectMediaIntents(text, opts = {}) {
     kinds.push('image-edit');
   }
 
+  if (!kinds.length && DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm)) kinds.push('image');
   if (!kinds.length) return [];
 
   const hasCreateVerb = CREATE_VERB.test(norm);
@@ -462,6 +466,7 @@ function detectMediaIntents(text, opts = {}) {
     hasCreateVerb,
     specs: buildSpecsForKind(kind, norm, raw),
     reason: kind === 'image-edit' ? 'edit-verb+image-ref' : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+    repaired: norm !== normalize(raw).replace(/\s+/g, ' ').trim(),
   }));
 }
 

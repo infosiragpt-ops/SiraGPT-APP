@@ -650,6 +650,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   }
   if (isGithubRepoWorkRequest(text)) return true;
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
+  // Typo-tolerant media detection (canonicalised text): «cre aun aimgen de
+  // un gato» must reach the loop where generate_image lives.
+  try {
+    if (detectMediaIntent(text).confidence === 'high') return true;
+  } catch (_) { /* detector is best-effort */ }
   // Auto web-search routing: send freshness / live-data / factual-lookup
   // questions into the agentic loop (which owns web_search) even when the
   // user uses no explicit search verb. This is what lets the assistant

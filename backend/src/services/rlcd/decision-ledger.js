@@ -26,7 +26,7 @@ const PRIOR_WEIGHT = Number(process.env.SIRAGPT_RLCD_PRIOR_WEIGHT) || 5;
 const MAX_DECISIONS = Number(process.env.SIRAGPT_RLCD_MAX_DECISIONS) || 20000;
 const MAX_CHATS = 5000;
 
-const DECISION_KINDS = Object.freeze(['intent_triage', 'execution_lane', 'model_route', 'compute_mode']);
+const DECISION_KINDS = Object.freeze(['intent_triage', 'execution_lane', 'model_route', 'compute_mode', 'media_intent']);
 
 const OUTCOME_LABELS = Object.freeze({
   success: 1,
@@ -137,6 +137,18 @@ function markTurn(chatId, ids) {
   try {
     if (!chatId || !Array.isArray(ids) || !ids.length) return;
     lastByChat.set(String(chatId), ids.filter((id) => decisions.has(id)));
+    evictIfNeeded();
+  } catch { /* never throws */ }
+}
+
+/** Add decisions to the current turn of `chatId` without dropping earlier ones. */
+function appendTurn(chatId, ids) {
+  try {
+    if (!chatId || !Array.isArray(ids) || !ids.length) return;
+    const key = String(chatId);
+    const current = lastByChat.get(key) || [];
+    const merged = Array.from(new Set([...current, ...ids])).filter((id) => decisions.has(id));
+    lastByChat.set(key, merged);
     evictIfNeeded();
   } catch { /* never throws */ }
 }
@@ -358,6 +370,7 @@ module.exports = {
   PRIOR_WEIGHT,
   recordDecision,
   markTurn,
+  appendTurn,
   bindMessage,
   recordOutcome,
   calibrated,
