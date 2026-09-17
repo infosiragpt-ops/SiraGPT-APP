@@ -2785,7 +2785,7 @@ const ActiveToolsDisplay = ({
     if (!isImageGenerationActive) return;
     const imageOptions = mediaModelOptions.image;
     if (!imageOptions.length) {
-      if (selectedImageModel) setSelectedImageModel("");
+      // Keep the existing choice during a catalog refresh; sending validates it.
       return;
     }
     if (!selectedImageModel) {
