@@ -132,6 +132,20 @@ test('generate_image surfaces engine failure with attempts', async () => {
   assert.ok(fail, 'should emit a failing tool_output event');
 });
 
+test('generate_image does not invent a new scene for "la misma imagen pero vertical"', async () => {
+  const prisma = {
+    file: { findMany: async () => [], findFirst: async () => null },
+    message: { findMany: async () => [] },
+  };
+  const r = await tool('generate_image').execute(
+    { prompt: 'ahora la misma imagen pero vertical porfavor' },
+    fakeCtx({ prisma })
+  );
+  assert.equal(engineCalls.generate.length, 0, 'must not call generateImage');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /No encontré la imagen/);
+});
+
 // ── edit_image ────────────────────────────────────────────────────────────
 
 test('edit_image edits from an explicit data: URL', async () => {
