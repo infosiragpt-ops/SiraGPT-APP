@@ -190,7 +190,7 @@ test('tools are registered in the agentic chat loop and never throw', async () =
   const fs = require('node:fs');
   const path = require('node:path');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agentic-chat-stream.js'), 'utf8');
-  assert.match(src, /projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool\]/);
+  assert.match(src, /projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool/);
   for (const tool of [tools.projectCloneRepoTool, tools.projectPreviewStartTool, tools.projectPreviewStatusTool, tools.projectPreviewStopTool]) {
     assert.match(tool.name, /^[a-z][a-z0-9_]*$/);
     const out = await tool.execute({ repoUrl: 'https://github.com/a/b' }, { userId: 'u1', chatId: 'c1', projectTools: { previewService: { cloneRepoForChat: async () => { throw new Error('boom'); }, startPreviewForChat: async () => { throw new Error('boom'); }, previewStatusForChat: async () => { throw new Error('boom'); }, stopPreviewForChat: async () => { throw new Error('boom'); } } } });

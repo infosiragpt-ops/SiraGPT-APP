@@ -86,3 +86,21 @@ Dentro de `iliagpt-backend` (ver receta en memoria): `cloneRepoForChat` +
 `startPreviewForChat` con un repo público Next (`infosiragpt-ops/dolarnet`)
 debe devolver `ok:true` y `status.ready:true` en < 90 s; `GET <basePath>` en
 `http://127.0.0.1:5000` responde 308 → 200 con assets bajo el prefijo.
+
+
+## Del chat al pull request (tipo Factory)
+
+Tools en `backend/src/services/agents/project-changes-tools.js`, servicio
+`backend/src/services/codex/chat-changes.service.js` (mismas primitivas que las
+rutas del PR #700, cuya UI nunca se monta en producción):
+
+| Tool | Qué hace |
+|------|----------|
+| `project_changes { path?, maxDiffChars? }` | Diff del proyecto del chat contra su rama base (archivos con estado y ±, diff unificado acotado a ~20 KB; `path` para un archivo completo). |
+| `project_open_pull_request { title, body?, branch?, approved }` | Commit a `run/<id>`, **sincroniza con la base remota** (`fetch --depth=1` + `rebase --onto`; si hay conflicto → `base_branch_diverged`), plan de publicación (bloquea `.env`, secretos, >240 archivos, >1,5 MB) y **abre el PR** contra la rama base del repo (`production-main` en SiraGPT-APP) con el OAuth de GitHub del usuario. Exige `approved:true`. Nunca hace merge ni push a la base. |
+| `project_pull_request_checks { pr?, ref? }` | Estado de los checks de CI del PR (cuenta GitHub del usuario) con los pasos fallidos. |
+
+Requisitos: el usuario debe tener GitHub conectado en Apps → GitHub
+(`/conexiones`) con permiso de escritura en el repo (scope `repo`); sin
+conexión el tool devuelve `github_auth_required`. El gate del agente de código
+aplica igual que al clonar. Resultados RLCD: PR abierto → `tool_success`.

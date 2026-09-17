@@ -44,6 +44,7 @@
   const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
   const { projectReadTool, projectWriteTool, projectExecTool } = require('./agents/project-workspace-tools');
   const { projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool } = require('./agents/project-preview-tools');
+  const { projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool } = require('./agents/project-changes-tools');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { prepareAgentPluginLifecycle } = require('./agents/agent-plugin-lifecycle');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
@@ -2743,7 +2744,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    *   lean. Calling with no args keeps the legacy base toolset.
    */
   function buildDefaultTools(opts = {}) {
-    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool, projectReadTool, projectWriteTool, projectExecTool, projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool];
+    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool, projectReadTool, projectWriteTool, projectExecTool, projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool, projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool];
     const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
 
     // Phase C: expose the real, policy-gated filesystem skills (openalex,

@@ -402,5 +402,7 @@ module.exports = {
   previewStatusForChat,
   stopPreviewForChat,
   assertCodexAccess,
+  storedGithubToken,
+  resolveDeps,
   _internal: { publicOrigin, absolutePreviewUrl, previewBasePath, waitForPreviewReady, compactStatus, resolveDeps, sanitizeDevEnv, clampWaitMs },
 };
