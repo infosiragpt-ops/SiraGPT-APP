@@ -63,6 +63,46 @@ function canonicalText(text) {
   return canonicalizeImageTypos(normalizeImageText(text));
 }
 
+const SAME_IMAGE_REF = /\b(?:(?:la|esta|esa|the)\s+misma\s+(?:imagen|foto|fotografia|ilustracion)|same\s+(?:image|photo|picture)|that\s+same\s+(?:image|photo|picture)|the\s+same\s+(?:image|photo|picture))\b/;
+const HAZLA_ORIENTATION = /\b(?:hazla|ponla|pasala|vuelvela|make it|make this)\s+(?:a\s+|en\s+)?(?:vertical|horizontal|cuadrad[oa]|portrait|landscape|square)\b/;
+
+/**
+ * "la misma imagen pero vertical" — keep the scene, change only the frame.
+ * Not a new generation. Returns the detected frame or null.
+ */
+function detectImageReframe(text) {
+  const norm = canonicalText(text);
+  if (!norm) return null;
+  const frame = detectImageFrame(text);
+  if (!frame) return null;
+  if (SAME_IMAGE_REF.test(norm) || HAZLA_ORIENTATION.test(norm)) return frame;
+  return null;
+}
+
+function resolveReframeDirective(text) {
+  const detected = detectImageReframe(text) || detectImageFrame(text);
+  const ratio = detected && detected.frame ? detected.frame : '3:4';
+  const orientation = detected && detected.orientation ? detected.orientation : 'portrait';
+  const composition = (IMAGE_FRAMES[ratio] && IMAGE_FRAMES[ratio].prompt) || 'vertical portrait composition';
+  const prompt = [
+    `Professionally reframe THIS exact photograph to a ${composition} (${ratio}).`,
+    'Keep the same scene, subjects, location, lighting, weather, colors, camera style and identity.',
+    'Do not invent a different place, person, animal or subject.',
+    'Crop or extend the canvas only as needed for the new aspect ratio.',
+    'Photorealistic continuity with the source image.',
+  ].join(' ');
+  return {
+    prompt,
+    instruction: String(text || '').trim(),
+    operation: 'reframe',
+    frame: ratio,
+    orientation,
+    aspectRatio: TOOL_ORIENTATION_FOR_FRAME[ratio] || 'portrait',
+    scope: 'whole',
+    confidence: 'high',
+  };
+}
+
 /** Fix known chat typos inside an original-cased string (for prompts). */
 function fixKnownTypos(originalText) {
   let out = String(originalText == null ? '' : originalText);
@@ -633,4 +673,6 @@ module.exports = {
   normalizeImageSelection,
   resolveGenerationDirective,
   resolveEditDirective,
+  detectImageReframe,
+  resolveReframeDirective,
 };

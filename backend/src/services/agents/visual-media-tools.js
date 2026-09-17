@@ -24,7 +24,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const sandbox = require('./code-sandbox');
-const { saveArtifact, EXTENSION_TO_MIME, INTERNAL } = require('./task-tools');
+const { saveArtifact, EXTENSION_TO_MIME, INTERNAL, ARTIFACT_DIR } = require('./task-tools');
 
 const { previewText, validateAgentArtifactBuffer } = INTERNAL;
 
@@ -385,22 +385,9 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
       return { buffer: Buffer.from(dataMatch[2], 'base64'), mimeType: dataMatch[1], source: 'data-url' };
     }
     if (/^https?:\/\//i.test(url)) {
-      try {
-        // SSRF guard: the URL is an LLM-produced tool argument — block
-        // private / loopback / cloud-metadata targets with the same vetting
-        // the harness web_fetch tool uses, and refuse redirects (an
-        // approved host could otherwise bounce us to an internal one).
-        // eslint-disable-next-line global-require
-        const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
-        assertSafeUrl(url);
-        const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
-        if (resp && resp.ok) {
-          const buf = Buffer.from(await resp.arrayBuffer());
-          if (buf.length) {
-            return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
-          }
-        }
-      } catch { /* unsafe or unreachable URL → fall through to other sources */ }
+      // Explicit remote URL: never fall through to another image if this
+      // target is blocked or unreachable (SSRF / leftover artifacts).
+      return bufferFromImageUrl(url, ctx);
     }
     const uploadsMatch = url.match(/\/uploads\/(.+)$/);
     if (uploadsMatch) {
@@ -446,23 +433,32 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
   if (prisma && ctx.chatId && ctx.userId) {
     try {
       const messages = await prisma.message.findMany({
-        where: { chatId: ctx.chatId, files: { not: null } },
+        where: { chatId: ctx.chatId },
         orderBy: { timestamp: 'desc' },
         take: 10,
+        select: { files: true, content: true },
       });
       for (const message of messages) {
         let files;
         try {
           files = typeof message.files === 'string' ? JSON.parse(message.files) : message.files;
-        } catch { continue; }
-        if (!Array.isArray(files)) continue;
-        const image = files.find((f) => f && (f.type === 'image' || String(f.type || '').startsWith('image/')) && (f.fileId || f.id));
-        if (!image) continue;
-        const record = await prisma.file.findFirst({
-          where: { id: String(image.fileId || image.id), userId: ctx.userId },
-        });
-        const resolved = await bufferFromFileRecord(record);
-        if (resolved) return resolved;
+        } catch { files = null; }
+        if (Array.isArray(files)) {
+          const image = files.find((f) => f && (f.type === 'image' || String(f.type || f.mime || f.mimeType || '').startsWith('image/')));
+          if (image) {
+            if (image.fileId || image.id) {
+              const record = await prisma.file.findFirst({
+                where: { id: String(image.fileId || image.id), userId: ctx.userId },
+              });
+              const resolved = await bufferFromFileRecord(record);
+              if (resolved) return resolved;
+            }
+            const fromUrl = await bufferFromImageUrl(image.url || image.downloadUrl, ctx);
+            if (fromUrl) return fromUrl;
+          }
+        }
+        const fromContent = await bufferFromArtifactRefInText(message.content, ctx.userId);
+        if (fromContent) return fromContent;
       }
     } catch { /* fall through */ }
   }
@@ -470,9 +466,56 @@ async function resolveEditSourceImage({ imageUrl, fileId }, ctx = {}) {
   return null;
 }
 
+async function bufferFromArtifactRefInText(text, ownerUserId) {
+  const match = String(text || '').match(/\/api\/agent\/artifact\/([a-f0-9]+)/i);
+  if (!match || !ownerUserId) return null;
+  return bufferFromArtifactId(match[1], ownerUserId);
+}
+
+async function bufferFromArtifactId(id, ownerUserId) {
+  const { materializeArtifactSource } = require('./artifact-local-source');
+  const source = await materializeArtifactSource({
+    id: String(id).replace(/[^a-f0-9]/gi, ''),
+    artifactDir: ARTIFACT_DIR,
+    ownerUserId,
+  });
+  if (!source.ok) return null;
+  try {
+    const buf = await fs.promises.readFile(source.sourcePath);
+    if (!buf || !buf.length) return null;
+    return { buffer: buf, mimeType: source.metadata?.mime || 'image/png', source: `artifact:${id}` };
+  } finally {
+    try { await source.cleanup(); } catch { /* temp from R2 */ }
+  }
+}
+
+async function bufferFromImageUrl(rawUrl, ctx = {}) {
+  const url = String(rawUrl || '').trim();
+  if (!url) return null;
+  const artifactMatch = url.match(/\/api\/agent\/artifact\/([a-f0-9]+)/i);
+  if (artifactMatch && ctx.userId) {
+    const fromArtifact = await bufferFromArtifactId(artifactMatch[1], ctx.userId);
+    if (fromArtifact) return fromArtifact;
+  }
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
+      assertSafeUrl(url);
+      const resp = await fetch(url, { redirect: 'error', ...(ctx.signal ? { signal: ctx.signal } : {}) });
+      if (resp && resp.ok) {
+        const buf = Buffer.from(await resp.arrayBuffer());
+        if (buf.length) {
+          return { buffer: buf, mimeType: resp.headers?.get?.('content-type') || 'image/png', source: url };
+        }
+      }
+    } catch { /* unsafe or unreachable */ }
+  }
+  return null;
+}
+
 const editImage = {
   name: 'edit_image',
-  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, etc. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Spoken targeting is understood ("en la imagen cambia el cielo a un atardecer", "cambia solo los ojos a verde"): the instruction is scoped to the detected target and everything else is preserved. An explicit `target` and/or `selection` (box 0..100, named region, label or mask ref) scopes the edit to a specific part. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
+  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, reframe the SAME scene to another orientation ("la misma imagen pero vertical", "hazla horizontal"). The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Spoken targeting is understood ("en la imagen cambia el cielo a un atardecer", "cambia solo los ojos a verde"): the instruction is scoped to the detected target and everything else is preserved. An explicit `target` and/or `selection` (box 0..100, named region, label or mask ref) scopes the edit to a specific part. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "la misma imagen pero vertical", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
   parameters: {
     type: 'object',
     properties: {
@@ -482,11 +525,12 @@ const editImage = {
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
       target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
       selection: { type: 'object', description: 'Optional selection scoping the edit: { x, y, width, height } in 0..100 (fractions 0..1 also accepted), { kind: "region", region: "top-left"|"center"|… }, { kind: "label", label } or { kind: "mask", ref }. Invalid selections are ignored safely.' },
+      aspectRatio: { type: 'string', description: 'Optional output frame for reframes: square|wide|portrait or 1:1|3:4|16:9|9:16.' },
     },
     required: ['instruction'],
     additionalProperties: false,
   },
-  async execute({ instruction, imageUrl, fileId, model, target, selection } = {}, ctx = {}) {
+  async execute({ instruction, imageUrl, fileId, model, target, selection, aspectRatio } = {}, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
 
     try {
@@ -506,12 +550,16 @@ const editImage = {
       // Scope the provider instruction to the spoken/explicit target and
       // selection so "cambia esto" / "solo los ojos" edits one part and
       // preserves everything else.
-      const editDirective = imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
+      const reframe = imageDirective.detectImageReframe(cleanInstruction);
+      const editDirective = reframe
+        ? imageDirective.resolveReframeDirective(cleanInstruction)
+        : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
       const result = await engine.editImage({
         prompt: editDirective.prompt,
         imageBuffer: source.buffer,
         mimeType: source.mimeType,
         model,
+        aspectRatio: aspectRatio || editDirective.frame || editDirective.aspectRatio || (reframe && reframe.frame),
         signal: ctx.signal,
       });
 

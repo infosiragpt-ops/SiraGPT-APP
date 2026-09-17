@@ -283,6 +283,9 @@ const IMPLICIT_EDIT_OP = /\b(?:quit(?:a|ale|ar)|elimin(?:a|ale|ar)|borr(?:a|ale|
 function detectImageEditIntent(text, opts = {}) {
   const norm = canonicalNorm(text);
   if (!norm) return false;
+  try {
+    if (getImageDirective().detectImageReframe(text)) return true;
+  } catch { /* parser optional */ }
   if (!EDIT_VERB.test(norm)) return false;
   if (IMPLICIT_EDIT_OP.test(norm)) return true;
   if (EXISTING_IMAGE_REF.test(norm)) return true;

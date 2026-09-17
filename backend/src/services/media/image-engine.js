@@ -642,19 +642,25 @@ async function editWithGemini({ model, prompt, imageBuffer, mimeType, timeoutMs 
   throw new Error('Gemini no devolvió una imagen editada.');
 }
 
-async function editWithOpenAI({ model, prompt, imageBuffer, mimeType, signal, timeoutMs }) {
+async function editWithOpenAI({ model, prompt, imageBuffer, mimeType, signal, timeoutMs, aspectRatio }) {
   const client = createOpenAIClient({ apiKey: providerApiKey('openai') });
-  // eslint-disable-next-line global-require
-  const { toFile } = require('openai');
-  const imageFile = await toFile(imageBuffer, 'source.png', { type: mimeType || 'image/png' });
+  let imageFile = imageBuffer;
+  try {
+    // eslint-disable-next-line global-require
+    const { toFile } = require('openai');
+    if (typeof toFile === 'function') {
+      imageFile = await toFile(imageBuffer, 'source.png', { type: mimeType || 'image/png' });
+    }
+  } catch { /* unit tests and runtimes without File still pass a Buffer */ }
   const useModel = model || EDIT_MODEL_BY_PROVIDER.openai;
+  const size = aspectRatio ? gptImageSizeFor(normalizeAspectRatio(aspectRatio)) : '1024x1024';
   const response = await withTimeout(
     client.images.edit({
       image: imageFile,
       prompt,
       model: useModel,
       n: 1,
-      size: '1024x1024',
+      size,
       quality: 'auto',
     }, { signal }),
     timeoutMs,
@@ -714,6 +720,7 @@ async function editImage(spec = {}) {
         mimeType: spec.mimeType,
         signal: spec.signal,
         timeoutMs,
+        aspectRatio: spec.aspectRatio,
       });
       attempts.push({ provider: step.provider, model, ok: true });
       return {
