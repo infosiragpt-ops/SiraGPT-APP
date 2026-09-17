@@ -4,6 +4,19 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { isGrokImageModelName } = require('../src/services/model-output-type');
 const { resolveImageGenerationFileId } = require('../src/services/media/image-input-selection');
+const { resolveImageOperation } = require('../src/services/media/image-input-selection');
+
+test('new generations are explicit and same-scene follow-ups require a source', () => {
+  assert.equal(resolveImageOperation({ prompt: 'crea otra imagen de una ciudad' }), 'generate');
+  assert.equal(resolveImageOperation({ prompt: 'ahora la misma imagen pero vertical porfavor' }), 'reframe');
+  assert.equal(resolveImageOperation({ prompt: 'la misma, en vertical' }), 'reframe');
+  assert.equal(resolveImageOperation({ prompt: 'ahora 9:16' }), 'reframe');
+  assert.equal(resolveImageOperation({ operation: 'edit', fileId: 'beach', prompt: 'ahora la misma imagen pero vertical porfavor' }), 'reframe');
+  assert.equal(resolveImageOperation({ prompt: 'quita el fondo' }), 'edit');
+  assert.equal(resolveImageOperation({ prompt: 'cambia el cielo', fileId: 'chosen' }), 'edit');
+  assert.equal(resolveImageOperation({ operation: 'generate', prompt: 'otra imagen' }), 'generate');
+  assert.throws(() => resolveImageOperation({ operation: 'unknown' }), { code: 'E_PARAMS' });
+});
 
 test('repeated Grok generations in the same chat never become edits of a historical image', async () => {
   const history = new Map([['chat-with-images', 'previous-generated-image']]);

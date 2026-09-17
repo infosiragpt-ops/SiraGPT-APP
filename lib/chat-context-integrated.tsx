@@ -724,6 +724,9 @@ interface PaginationInfo {
   pages: number
 }
 interface AddMessageOptions {
+  imageModel?: string
+  imageProvider?: string
+  imageQuality?: string
   idempotencyKey?: string
   streamId?: string
   reusePending?: boolean
@@ -742,7 +745,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     content?: string,
     files?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[] }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
@@ -1313,6 +1316,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         : {
             provider: catalogModel.provider,
             model: catalogModel.name,
+            ...(options?.imageModel ? { imageModel: options.imageModel } : {}),
+            ...(options?.imageProvider ? { imageProvider: options.imageProvider } : {}),
+            ...(options?.imageQuality ? { imageQuality: options.imageQuality } : {}),
             reasoningEffort: selectedEffort,
             ...composerGenerateFlags(),
             ...((lightweightTurn || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),
@@ -2577,7 +2583,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[] }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !isAuthenticated || !chatModel) return;
@@ -2715,7 +2721,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               break;
             default:
-              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey });
+              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality });
               break;
           }
         } catch (error) {

@@ -63,7 +63,7 @@ function canonicalText(text) {
   return canonicalizeImageTypos(normalizeImageText(text));
 }
 
-const SAME_IMAGE_REF = /\b(?:(?:la|esta|esa|the)\s+misma\s+(?:imagen|foto|fotografia|ilustracion)|same\s+(?:image|photo|picture)|that\s+same\s+(?:image|photo|picture)|the\s+same\s+(?:image|photo|picture))\b/;
+const SAME_IMAGE_REF = /\b(?:(?:la|esta|esa|the)\s+misma(?:\s+(?:imagen|foto|fotografia|ilustracion))?|same\s+(?:image|photo|picture)|that\s+same\s+(?:image|photo|picture)|the\s+same\s+(?:image|photo|picture))\b/;
 const HAZLA_ORIENTATION = /\b(?:hazla|ponla|pasala|vuelvela|make it|make this)\s+(?:a\s+|en\s+)?(?:vertical|horizontal|cuadrad[oa]|portrait|landscape|square)\b/;
 
 /**
@@ -75,12 +75,12 @@ function detectImageReframe(text) {
   if (!norm) return null;
   const frame = detectImageFrame(text);
   if (!frame) return null;
-  if (SAME_IMAGE_REF.test(norm) || HAZLA_ORIENTATION.test(norm)) return frame;
+  if (SAME_IMAGE_REF.test(norm) || HAZLA_ORIENTATION.test(norm) || /^(?:ahora|ahora en|now|now in)\s+(?:formato\s+)?(?:vertical|horizontal|\d+:\d+)(?:\s+(?:por favor|porfavor|please))?[.!]?$/i.test(norm)) return frame;
   return null;
 }
 
-function resolveReframeDirective(text) {
-  const detected = detectImageReframe(text) || detectImageFrame(text);
+function resolveReframeDirective(text, aspectRatio) {
+  const detected = (aspectRatio && detectImageFrame(aspectRatio)) || detectImageReframe(text) || detectImageFrame(text);
   const ratio = detected && detected.frame ? detected.frame : '3:4';
   const orientation = detected && detected.orientation ? detected.orientation : 'portrait';
   const composition = (IMAGE_FRAMES[ratio] && IMAGE_FRAMES[ratio].prompt) || 'vertical portrait composition';
@@ -88,7 +88,8 @@ function resolveReframeDirective(text) {
     `Professionally reframe THIS exact photograph to a ${composition} (${ratio}).`,
     'Keep the same scene, subjects, location, lighting, weather, colors, camera style and identity.',
     'Do not invent a different place, person, animal or subject.',
-    'Crop or extend the canvas only as needed for the new aspect ratio.',
+    'Extend ONLY the transparent canvas outside the source photograph. Never crop, stretch or replace the existing photograph.',
+    'Complete the surrounding scene naturally without borders, blank margins or duplicate subjects. The protected original area stays unchanged.',
     'Photorealistic continuity with the source image.',
   ].join(' ');
   return {

@@ -202,7 +202,7 @@ test('edit_image returns clear guidance when no source image exists', async () =
   };
   const r = await tool('edit_image').execute({ instruction: 'quita el fondo' }, fakeCtx({ prisma }));
   assert.equal(r.ok, false);
-  assert.match(r.error, /No encontré ninguna imagen/);
+  assert.match(r.error, /No encontré la imagen/);
   assert.equal(engineCalls.edit.length, 0);
 });
 
@@ -242,7 +242,9 @@ test('edit_image scopes "cambia el cielo" to the target and preserves the rest',
 });
 
 test('edit_image honours an explicit selection box', async () => {
-  const dataUrl = `data:image/png;base64,${Buffer.from('source-image').toString('base64')}`;
+  const png = await require('sharp')({ create: { width: 32, height: 32, channels: 4, background: 'red' } }).png().toBuffer();
+  const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+  engineEditResult = { ok: true, images: [{ b64: png.toString('base64') }], model: 'gpt-image-2', provider: 'openai' };
   const r = await tool('edit_image').execute(
     {
       instruction: 'cambia el color',
@@ -377,4 +379,22 @@ test('generate_video resolves a cataloged fal model and builds its payload', asy
     delete process.env.FAL_KEY;
     delete require.cache[require.resolve('@fal-ai/client')];
   }
+});
+
+test('image picker context overrides inferred tool model and survives artifact metadata', async () => {
+  const ctx = fakeCtx({ imageModel: 'openai/gpt-image-2', imageProvider: 'openrouter', imageQuality: '4K', prisma: { chat: { findFirst: async () => ({ id: 'chat-1' }) }, message: { findMany: async () => [] } } });
+  const generated = await tool('generate_image').execute({ prompt: 'beach', model: 'other-model', quality: 'standard' }, ctx);
+  assert.equal(generated.ok, true);
+  assert.equal(engineCalls.generate[0].model, ctx.imageModel);
+  assert.equal(engineCalls.generate[0].provider, ctx.imageProvider);
+  assert.equal(engineCalls.generate[0].quality, ctx.imageQuality);
+  const meta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${generated.id}.json`), 'utf8'));
+  assert.equal(meta.model, ctx.imageModel); assert.equal(meta.version, 1);
+  engineEditResult = { ok: true, images: [{ b64: Buffer.from('next-pixels').toString('base64') }], provider: 'openrouter', model: ctx.imageModel, attempts: [] };
+  const edited = await tool('edit_image').execute({ instruction: 'cambia el cielo', fileId: `artifact:${generated.id}`, model: 'wrong' }, ctx);
+  assert.equal(edited.ok, true, edited.error);
+  assert.equal(engineCalls.edit[0].model, ctx.imageModel); assert.equal(engineCalls.edit[0].provider, ctx.imageProvider);
+  const editMeta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${edited.id}.json`), 'utf8'));
+  assert.equal(editMeta.parentFileId, `artifact:${generated.id}`);
+  assert.equal(editMeta.rootFileId, `artifact:${generated.id}`); assert.equal(editMeta.version, 2);
 });

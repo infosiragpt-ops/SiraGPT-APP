@@ -876,7 +876,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-image-zoom {
-  image-rendering: pixelated;
+  image-rendering: auto;
 }
 
 .chat-code-block,

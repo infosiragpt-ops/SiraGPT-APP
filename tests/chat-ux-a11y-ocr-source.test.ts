@@ -13,7 +13,7 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(message, /msg-user-stack/)
     assert.match(message, /--img-natural-width/)
     assert.match(css, /max-width: min\(100%, var\(--img-natural-width/)
-    assert.match(css, /\.chat-image-zoom \{\s*image-rendering: pixelated;/)
+    assert.match(css, /\.chat-image-zoom \{\s*image-rendering: auto;/)
   })
 
   it("uses WCAG code tokens, copy live region, language label, and URL links", () => {

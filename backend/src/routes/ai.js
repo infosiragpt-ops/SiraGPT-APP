@@ -260,7 +260,9 @@ const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(m
 // ACTIVE is also accepted here — covering OpenAI, Gemini, OpenRouter and fal.ai.
 const VERIFIED_CHAT_IMAGE_MODEL_NAMES = DEFAULT_ACTIVE_IMAGE_MODEL_NAMES;
 const { isGrokImageModelName, isActiveGrokImageModel, normalizeCatalogModelType } = require('../services/model-output-type');
-const { resolveImageGenerationFileId } = require('../services/media/image-input-selection');
+const { resolveImageOperation } = require('../services/media/image-input-selection');
+const { resolveImageSource } = require('../services/media/image-source');
+const { prepareEditCanvas, finishEditCanvas } = require('../services/media/image-edit-canvas');
 
 function isVerifiedChatImageModelName(name) {
   return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
@@ -7408,6 +7410,9 @@ router.post(
                   },
                   toolContext: {
                     userId,
+                    imageModel: typeof req.body?.imageModel === 'string' ? req.body.imageModel : undefined,
+                    imageProvider: typeof req.body?.imageProvider === 'string' ? toImageEngineProvider(req.body.imageProvider) : undefined,
+                    imageQuality: req.body?.imageQuality,
                     permission: (req.body && (req.body.permission || req.body.toolPermission)) || 'default',
                     requestedOrganizationId: __requestedOrgIdForAi,
                     activeOrganizationId: __orgIdForAi,
@@ -10328,7 +10333,7 @@ async function cropImageToAspectRatio(imageBuffer, aspectRatio) {
 }
 
 // Helper function to save a base64 encoded image to the filesystem
-async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') {
+async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1', { preservePixels = false } = {}) {
   if (!base64Data) {
     throw new Error('No base64 data provided to save.');
   }
@@ -10349,7 +10354,8 @@ async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') 
 
 
   const rawImageBuffer = Buffer.from(stripImageDataUrl(base64Data), 'base64');
-  const imageBuffer = await cropImageToAspectRatio(rawImageBuffer, aspectRatio);
+  const imageBuffer = preservePixels ? await sharp(rawImageBuffer).png().toBuffer() : await cropImageToAspectRatio(rawImageBuffer, aspectRatio);
+  const { width, height } = await sharp(imageBuffer).metadata();
   await fs.writeFile(filepath, imageBuffer);
 
 
@@ -10367,7 +10373,7 @@ async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1') 
   });
 
   console.log("Image saved locally and record created. URL:", imageUrl);
-  return { imageUrl, fileId: newFile.id };
+  return { imageUrl, fileId: newFile.id, width, height };
 
 }
 
@@ -10376,6 +10382,10 @@ router.post(
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
+    body('fileId').optional().isString().isLength({ min: 1, max: 160 }),
+    body('operation').optional().isIn(['generate', 'edit', 'reframe']),
+    body('background').optional().isIn(['transparent']),
+    body('maskDataUrl').optional().isString().isLength({ max: 8 * 1024 * 1024 + 32 }),
     body('provider').trim().notEmpty().withMessage('Provider is required'),
     body('model').trim().notEmpty().withMessage('Model is required'),
     body('aspectRatio').optional().isIn(Object.keys(IMAGE_ASPECT_RATIOS)).withMessage('Invalid image aspect ratio'),
@@ -10424,7 +10434,14 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection } = req.body;
+      let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      const operation = resolveImageOperation({ operation: requestedOperation, prompt, fileId, selection: editSelection, maskDataUrl });
+      if (operation === 'generate' && (fileId || editSelection || maskDataUrl)) {
+        return res.status(400).json({ error: 'Para trabajar sobre una imagen existente, elige editar.', code: 'E_PARAMS' });
+      }
+      if (background && (operation !== 'edit' || editSelection || maskDataUrl)) {
+        return res.status(400).json({ error: 'Quitar el fondo requiere editar la imagen completa.', code: 'E_PARAMS' });
+      }
       const honoredImagePick = honorPickerModel(model, { provider });
       if (honoredImagePick.model) {
         model = honoredImagePick.model;
@@ -10465,68 +10482,32 @@ router.post(
       const quotaCap = checkPaidTokenCap(req.user);
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
-      let imagePath;
-      let imageMimeType = 'image/png';
-      fileId = await resolveImageGenerationFileId({
-        fileId,
-        chatId,
-        generationOnly: grokImageRequested,
-        findPreviousImageFileId: async (historyChatId) => {
-          const lastMessage = await prisma.message.findFirst({
-            where: {
-              chatId: historyChatId,
-              role: 'ASSISTANT',
-              files: { not: null },
-            },
-            orderBy: { timestamp: 'desc' },
-          });
-          if (!lastMessage?.files) return undefined;
-          const parsed = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
-          const files = Array.isArray(parsed) ? parsed : [];
-          return files.find(f => f && f.type === 'image' && f.fileId)?.fileId;
-        },
-      });
-
-      let userMessageFiles = undefined;
-      if (fileId) {
-        const inputFileRecord = await prisma.file.findFirst({
-          where: { id: fileId, userId: userId }
-        });
-        if (inputFileRecord) {
-          imageMimeType = inputFileRecord.mimeType || imageMimeType;
-          // ✅ Check if this is a generated image - more precise detection to avoid false positives
-          const isGeneratedImage = (
-            // Check if filename starts with 'generated-' (our specific pattern)
-            inputFileRecord.filename?.startsWith('generated-') ||
-            // Check if path contains our specific generated images directory
-            (inputFileRecord.path?.includes('/uploads/images/') && inputFileRecord.filename?.startsWith('generated-')) ||
-            // Additional check: if file was created via our save function, it will have specific timestamp pattern
-            (inputFileRecord.filename?.match(/^generated-\d{13}-[a-z0-9]{9}\.png$/))
-          );
-
-          if (isGeneratedImage) {
-            console.log('🚫 Detected generated image as fileId - treating as image editing, not user upload');
-            imagePath = inputFileRecord.path; // Use for editing but don't attach to user message
-          } else {
-            // ✅ Construct URL from available data for real user uploads
-            const fileUrl = publicUploadUrl(`/uploads/${userId}/${inputFileRecord.filename}`);
-
-            userMessageFiles = JSON.stringify([{
-              id: inputFileRecord.id,
-              name: inputFileRecord.originalName,
-              filename: inputFileRecord.filename,
-              type: inputFileRecord.mimeType,
-              url: fileUrl, // ✅ Construct URL from available data
-              path: inputFileRecord.path
-            }]);
-            console.log('📎 Real user upload file prepared for user message display');
-            imagePath = inputFileRecord.path; // Use for editing AND attach to user message
-          }
-        }
-        if (!inputFileRecord) {
-          return res.status(404).json({ error: 'Input image file not found.' });
-        }
+      // Validate the conversation BEFORE reading history or spending quota.
+      let preValidatedChat = null;
+      if (chatId) {
+        preValidatedChat = await prisma.chat.findFirst({ where: { id: chatId, userId, deletedAt: null } });
+        if (!preValidatedChat) return res.status(404).json({ error: 'No se encontró la conversación.', code: 'E_PARAMS' });
       }
+      const sourceImage = operation === 'generate' ? null : await resolveImageSource({ fileId }, {
+        prisma, userId, chatId, signal: requestAbortController.signal, requireChatOwnership: true,
+      });
+      if (operation !== 'generate' && !sourceImage) {
+        return res.status(400).json({
+          error: 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.',
+          code: 'image_source_required',
+        });
+      }
+      let userMessageFiles;
+      if (sourceImage?.record && !sourceImage.metadata?.operation && !/^(?:generated-|image-)/.test(sourceImage.record.filename || '')) {
+        const input = sourceImage.record;
+        userMessageFiles = JSON.stringify([{ id: input.id, fileId: input.id, name: input.originalName, filename: input.filename, type: input.mimeType, url: publicUploadUrl(`/uploads/${userId}/${input.filename}`) }]);
+      }
+      // Existing composition is the default for an edit. Reframes alone change
+      // the canvas, and the user's current spoken ratio may override defaults.
+      if (operation === 'edit' && sourceImage?.metadata?.aspectRatio) aspectRatio = normalizeImageAspectRatio(sourceImage.metadata.aspectRatio);
+      const editCanvas = sourceImage ? await prepareEditCanvas({
+        imageBuffer: sourceImage.buffer, operation, aspectRatio, selection: editSelection, maskDataUrl,
+      }) : null;
 
       if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
         await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
@@ -10546,7 +10527,7 @@ router.post(
         // Grok images use their own xAI API. A catalog discovery prefix is
         // not permission to route this selection through another provider.
         provider = 'xAI';
-        if (imagePath) {
+        if (sourceImage) {
           return res.status(400).json({
             error: 'Este modelo permite crear imágenes nuevas. La edición de imágenes con este modelo aún no está disponible.',
             code: 'image_edit_unsupported',
@@ -10558,39 +10539,28 @@ router.post(
       if (activeGrokImage) IMAGE_CAPABLE_PROVIDERS.add('xAI');
       if (!IMAGE_CAPABLE_PROVIDERS.has(provider)) {
         return res.status(400).json({
-          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa uno de los modelos disponibles en Imágenes.`,
+          error: 'El modelo seleccionado no admite esta operación. Elige un modelo disponible en Imágenes.',
           code: 'image_provider_unsupported',
-          provider: provider || null,
-          supported: Array.from(IMAGE_CAPABLE_PROVIDERS),
         });
       }
       if (!isVerifiedChatImageModelName(model) && !activeGrokImage) {
         return res.status(400).json({
-          error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Elige uno de los modelos de imagen disponibles en el selector.`,
+          error: 'El modelo seleccionado no está disponible para generar imágenes. Elige uno de los modelos de Imágenes.',
           code: 'image_model_unverified',
-          model,
-          supported: Array.from(VERIFIED_CHAT_IMAGE_MODEL_NAMES),
         });
       }
       if (adminModel && normalizeCatalogModelType(adminModel).type === 'IMAGE' && !adminModel.isActive) {
         return res.status(403).json({
-          error: `El modelo "${adminModel.displayName || model}" no esta activo. Activalo en Admin > AI Models antes de usarlo.`,
+          error: 'El modelo seleccionado no está activo. Elige un modelo disponible en Imágenes.',
           code: 'image_model_inactive',
-          model,
         });
       }
 
-      // Pre-validar la existencia del chat ANTES de empezar a generar.
-      // Esto evita gastar 30-120 s en una imagen para luego descubrir que
-      // el chatId es inválido y tener que responder 404 — algo imposible
-      // de hacer después porque ya habremos enviado los headers como 200
-      // para sobrevivir al timeout del proxy (ver bloque siguiente).
-      let preValidatedChat = null;
-      if (chatId) {
-        preValidatedChat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-        if (!preValidatedChat) {
-          return res.status(404).json({ error: 'Chat not found' });
-        }
+      if (background === 'transparent' && !imageEngine.canEditImage({ model, provider: toImageEngineProvider(provider), background })) {
+        return res.status(400).json({ error: 'El modelo seleccionado no admite quitar el fondo con transparencia real. Elige un modelo de edición compatible.', code: 'E_PARAMS' });
+      }
+      if (sourceImage && !imageEngine.canEditImage({ model, provider: toImageEngineProvider(provider) })) {
+        return res.status(400).json({ error: 'El modelo seleccionado no permite esta edición. Elige un modelo compatible.', code: 'image_edit_unsupported' });
       }
 
       // Con un chat válido podemos persistir el resultado, así que a partir
@@ -10648,27 +10618,20 @@ router.post(
       });
 
       const generateSingleImage = async () => {
-        if (imagePath) {
-          const sourceImageBuffer = await fs.readFile(imagePath);
-          // Scope the edit to the spoken/explicit target ("cambia el cielo",
-          // "solo los ojos") plus an optional selection box — everything
-          // else is preserved. Unlike generation, no framing suffix is
-          // appended: an edit must keep the original composition.
-          let editPrompt = imagePrompt;
-          try {
-            // eslint-disable-next-line global-require
-            const imageDirective = require('../services/agents/image-directive');
-            editPrompt = imageDirective.resolveEditDirective(prompt, {
-              target: typeof editTarget === 'string' ? editTarget : undefined,
-              selection: editSelection !== undefined ? editSelection : undefined,
+        if (sourceImage) {
+          const imageDirective = require('../services/agents/image-directive');
+          const editPrompt = operation === 'reframe'
+            ? imageDirective.resolveReframeDirective(prompt, aspectRatio).prompt
+            : imageDirective.resolveEditDirective(prompt, {
+              target: typeof editTarget === 'string' ? editTarget : undefined, selection: editSelection,
             }).prompt;
-          } catch (_) { /* best-effort: fall back to the framed prompt */ }
           const result = await imageEngine.editImage({
             prompt: editPrompt,
-            imageBuffer: sourceImageBuffer,
-            mimeType: imageMimeType,
-            model,
-            provider: toImageEngineProvider(provider),
+            imageBuffer: editCanvas.imageBuffer,
+            mimeType: editCanvas.mimeType,
+            maskBuffer: editCanvas.maskBuffer,
+            model, provider: toImageEngineProvider(provider), aspectRatio, quality, n: imageCount, background,
+            failover: false,
             signal: requestAbortController.signal,
             timeoutMs: imageProviderAttemptTimeoutMs(),
           });
@@ -10695,7 +10658,7 @@ router.post(
           n: imageCount,
           signal: requestAbortController.signal,
           timeoutMs: imageProviderAttemptTimeoutMs(),
-          failover: !grokImageRequested,
+          failover: false,
         });
         if (!result.ok || !result.images?.length) {
           const err = new Error(result.error || 'Image provider did not return any image data.');
@@ -10713,9 +10676,7 @@ router.post(
       };
 
       imageResults = await Promise.race([
-        imagePath
-          ? Promise.all(Array.from({ length: imageCount }, () => generateSingleImage()))
-          : generateSingleImage(),
+        generateSingleImage(),
         timeoutPromise,
       ]).finally(() => { clearTimeout(imageTimeoutTimer); });
       imageResults = imageResults.flat().filter((item) => item && (item.b64 || typeof item === 'string'));
@@ -10741,23 +10702,33 @@ router.post(
         const imageResult = typeof imageResults[index] === 'string'
           ? { b64: imageResults[index], provider, model }
           : imageResults[index];
-        const { imageUrl, fileId: newFileId } = await saveBase64Image(imageResult.b64, userId, prompt, aspectRatio);
+        const persistedB64 = editCanvas
+          ? (await finishEditCanvas(Buffer.from(imageResult.b64, 'base64'), editCanvas)).toString('base64')
+          : imageResult.b64;
+        const { imageUrl, fileId: newFileId, width, height } = await saveBase64Image(persistedB64, userId, prompt, aspectRatio, { preservePixels: Boolean(editCanvas) });
         generatedFiles.push({
           type: 'image',
           url: imageUrl,
           prompt,
           fileId: newFileId,
+          parentFileId: sourceImage?.fileId || null,
+          rootFileId: sourceImage?.metadata?.rootFileId || sourceImage?.fileId || newFileId,
+          version: sourceImage ? (Number(sourceImage.metadata?.version) || 1) + 1 : 1,
+          operation, width, height,
           aspectRatio,
           index: index + 1,
           count: imageResults.length,
           model: imageResult.model || model,
           provider: imageResult.provider || provider,
           quality,
+          requestedQuality: quality,
+          ...(background ? { background } : {}),
         });
       }
 
       const primaryImageUrl = generatedFiles[0].url;
 
+      let messageId = null;
       if (chatId && preValidatedChat) {
         await prisma.message.create({
           data: {
@@ -10769,7 +10740,7 @@ router.post(
           }
         });
 
-        await prisma.message.create({
+        const savedImageMessage = await prisma.message.create({
           data: {
             chatId,
             role: 'ASSISTANT',
@@ -10779,6 +10750,7 @@ router.post(
           }
         });
 
+        messageId = savedImageMessage.id;
         await prisma.chat.update({
           where: { id: chatId },
           data: {
@@ -10805,6 +10777,7 @@ router.post(
       if (!clientDisconnected && !res.writableEnded) {
         res.end(JSON.stringify({
           imageUrl: primaryImageUrl,
+          files: generatedFiles, messageId, chatId,
           imageUrls: generatedFiles.map((file) => file.url),
           aspectRatio,
           quality,

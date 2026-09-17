@@ -74,6 +74,22 @@ describe("pending-messages · save / clear / get round-trip", () => {
     assert.equal(getForChat("chat-1")?.content, "hola")
   })
 
+  it("preserves the independent image picker across reload and retry", () => {
+    const imagePick = { imageModel: "openai/gpt-image-2", imageProvider: "OpenRouter", imageQuality: "2K" }
+    const pending = save("ahora la misma imagen vertical", "chat-1", undefined, undefined, "image-turn", {
+      provider: "OpenAI", model: "chat-model", ...imagePick,
+    })
+    const payload = buildPendingGeneratePayload({
+      pending: getForChat("chat-1"),
+      fallbackEnvelope: { provider: "Other", model: "other-chat", imageModel: "different-image" },
+      prompt: pending.content, chatId: pending.chatId, streamId: "stream", idempotencyKey: pending.idempotencyKey,
+    })
+    assert.equal(payload.model, "chat-model")
+    assert.equal(payload.imageModel, imagePick.imageModel)
+    assert.equal(payload.imageProvider, imagePick.imageProvider)
+    assert.equal(payload.imageQuality, imagePick.imageQuality)
+  })
+
   it("saving twice for the same chat REPLACES the previous draft", () => {
     save("first attempt", "chat-1", undefined, undefined, "same-turn")
     save("second attempt", "chat-1", undefined, undefined, "same-turn")

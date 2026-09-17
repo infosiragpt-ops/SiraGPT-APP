@@ -99,7 +99,9 @@ import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
-import { parseMessageFilesForRender } from "@/lib/chat/message-rendering"
+import { contentWithoutHiddenImages, parseMessageFilesForRender } from "@/lib/chat/message-rendering"
+import { imageAssetsFromMessages, type WorkspaceImage } from "@/lib/image-workspace"
+const ImageWorkspace = dynamic(() => import('./images/ImageWorkspace'), { ssr: false })
 import { getAudioMediaMeta, isAudioComposerFile, isVideoComposerFile, resolveComposerMediaSrc } from "@/lib/chat/composer-files"
 import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
@@ -1007,7 +1009,7 @@ const GeneratedImageCard = ({
     );
 };
 
-const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, children }: {
+const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onImagePreview, onOpenSources, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
@@ -1020,6 +1022,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
+    onImagePreview?: (asset: WorkspaceImage) => void;
     onOpenSources?: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void;
     children?: React.ReactNode;
 }) => {
@@ -1579,11 +1582,18 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const parsedFiles: any[] = useMemo(() => {
         return parseMessageFilesForRender(message.files)
     }, [message.files])
+    const visibleMessageContent = useMemo(() => contentWithoutHiddenImages(message.content, message.files), [message.content, message.files])
+    const viewerImages = useMemo(() => imageAssetsFromMessages([message]), [message])
+    const openImage = (url: string) => {
+        const asset = viewerImages.find(item => item.url === url)
+        if (asset && onImagePreview) onImagePreview(asset)
+        else setSelectedImage(url)
+    }
 
     const hasRenderableUserFiles = useMemo(() => {
         return Array.isArray(parsedFiles) && parsedFiles.some(isRenderableImageAttachment);
     }, [parsedFiles]);
-    const hasContent = useMemo(() => message.content && message.content.trim() !== "", [message.content]);
+    const hasContent = visibleMessageContent.trim() !== "";
 
     // Detect if this assistant message includes a structured Gmail payload to avoid duplicate markdown
     const hasGmailEntry = useMemo(() => {
@@ -2022,8 +2032,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             content = content.replace(/```mermaid[\s\S]*?```/g, '').trim();
         }
 
-        return content;
-    }, [message.content, isPPTMessage, pptEntry, parsedFiles]);
+        return contentWithoutHiddenImages(content, message.files);
+    }, [message.content, message.files, isPPTMessage, pptEntry, parsedFiles]);
 
     const hasFigmaDiagram = useMemo(() => {
         return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f.type === 'figma');
@@ -2169,7 +2179,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     // Check if this is an image-only message
     const isImageOnlyMessage = () => {
-        return isImageOnlyMessageForRender(message, parsedFiles);
+        return isImageOnlyMessageForRender({ ...message, content: visibleMessageContent }, parsedFiles);
     };
 
     // Check if this message contains computer use extracted data
@@ -3097,24 +3107,21 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     "Failed to load image" because this branch did not have
                     the file.path fallback. */}
                 {((message.role === "ASSISTANT" && Array.isArray(parsedFiles) && parsedFiles.length > 0 && parsedFiles.some(isRenderableImageAttachment)) ||
-                    (message.role === "ASSISTANT" && message.content.startsWith('http') &&
-                        (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')))) && (
+                    (message.role === "ASSISTANT" && visibleMessageContent.startsWith('http') &&
+                        (visibleMessageContent.includes('oaidalleapiprodscus') || visibleMessageContent.includes('dalle') || visibleMessageContent.includes('/api/images/')))) && (
                         <div className="mt-4 flex flex-wrap items-start gap-3">
                             {Array.isArray(parsedFiles) && parsedFiles.filter(isRenderableImageAttachment).map((file: any, index: number) => {
                                 const src = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
 
-                                const handleDownloadImage = () => {
+                                const handleDownloadImage = async () => {
                                     try {
-                                        const a = document.createElement('a');
-                                        a.href = src;
-                                        a.download = file.name || `image-${index}.png`;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        document.body.removeChild(a);
-                                        toast.success('Image downloaded successfully!');
+                                        const response = await authenticatedFetch(src, { credentials: 'include' });
+                                        if (!response.ok) throw new Error('download failed');
+                                        const { downloadBlob } = await import('@/lib/utils');
+                                        downloadBlob(await response.blob(), file.name || `imagen-${index + 1}.png`);
+                                        toast.success('Descarga iniciada');
                                     } catch (error) {
-                                        console.error('Image download failed:', error);
-                                        toast.error('Failed to download image');
+                                        toast.error('No se pudo descargar la imagen');
                                     }
                                 };
 
@@ -3135,7 +3142,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     file={file}
                                                     src={src}
                                                     index={index}
-                                                    onOpen={setSelectedImage}
+                                                    onOpen={openImage}
                                                     onLoad={() => {
                                                         const imgKey = `file-${index}`;
                                                         if (!imageLoadedRef.current.has(imgKey)) {
@@ -3168,8 +3175,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 );
                             })}
                             {/* Handle direct image URLs in content - don't show base64 or long URLs */}
-                            {message.role === "ASSISTANT" && message.content.startsWith('http') &&
-                                (message.content.includes('oaidalleapiprodscus') || message.content.includes('dalle') || message.content.includes('/api/images/')) && (
+                            {message.role === "ASSISTANT" && visibleMessageContent.startsWith('http') &&
+                                (visibleMessageContent.includes('oaidalleapiprodscus') || visibleMessageContent.includes('dalle') || visibleMessageContent.includes('/api/images/')) && (
                                     <div className="relative inline-block group">
                                         {imageLoading['content-image'] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
@@ -3182,11 +3189,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                             </div>
                                         ) : (
                                             <img
-                                                src={message.content}
+                                                src={visibleMessageContent}
                                                 alt="Generated image"
                                                 className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain cursor-pointer hover:opacity-90 transition-opacity"
                                                 loading="lazy"
-                                                onClick={() => setSelectedImage(message.content)}
+                                                onClick={() => setSelectedImage(visibleMessageContent)}
                                                 onLoad={(e) => {
                                                     const imgKey = 'content-image';
                                                     // Only update state if image wasn't already loaded
@@ -3247,6 +3254,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         <article
             className={cn("flex", message.role === "USER" ? "msg--user" : "msg--assistant")}
             data-message-id={message.id}
+            tabIndex={-1}
             aria-label={message.role === 'USER' ? tMessageActions("userMessage") : tMessageActions("assistantResponse")}
         >
             {/* {message.role === "ASSISTANT" && (
@@ -3580,36 +3588,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 </div>
             )}
 
-            {/* Image Lightbox Modal - ChatGPT style */}
+            {/* Fallback for message surfaces outside the canonical chat host. */}
             {selectedImage && (
-                <div 
-                    className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
-                    onClick={() => setSelectedImage(null)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Escape') {
-                            setSelectedImage(null);
-                        }
-                    }}
-                >
-                    <button
-                        onClick={() => setSelectedImage(null)}
-                        className="absolute top-4 right-4 z-10 text-white hover:text-gray-300 transition-colors bg-black/50 rounded-full p-2 hover:bg-black/70"
-                        aria-label="Close image viewer"
-                    >
-                        <X className="h-6 w-6" />
-                    </button>
-                    <div 
-                        className="max-w-[90vw] max-h-[90vh] flex items-center justify-center"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <img
-                            src={selectedImage}
-                            alt="Full size image"
-                            className="chat-image-zoom max-w-full max-h-[90vh] object-contain rounded-lg"
-                            onClick={(e) => e.stopPropagation()}
-                        />
-                    </div>
-                </div>
+                <ImageWorkspace
+                    assets={viewerImages.length ? viewerImages : [{ id: selectedImage, url: selectedImage, name: 'Imagen.png' }]}
+                    initialAssetId={viewerImages.find(item => item.url === selectedImage)?.id || selectedImage}
+                    onClose={() => setSelectedImage(null)}
+                />
             )}
         </article>
     );
