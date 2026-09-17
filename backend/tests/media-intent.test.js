@@ -312,6 +312,15 @@ test('resolveImageAspectRatio: no shape described → null (keep picker default)
 
 // ── Spoken image directives (typos, counts, edit targets) ─────────────────
 
+test('image intent from "cre aun aimgen de un gato" is generate_image', () => {
+  const intents = detectMediaIntents('cre aun aimgen de un gato');
+  assert.equal(intents.length, 1);
+  assert.equal(intents[0].kind, 'image');
+  assert.equal(intents[0].tool, 'generate_image');
+  assert.equal(intents[0].hasCreateVerb, true);
+  assert.equal(intents[0].confidence, 'high');
+});
+
 test('image intent tolerates chat typos and resolves the exact frame', () => {
   const r = detectMediaIntent('dma euna imagen orisailntal de un perro para la portada');
   assert.equal(r.kind, 'image');
