@@ -400,3 +400,37 @@ describe("preserveOrphanAssistantMessages - keeps the live stream placeholder", 
     assert.ok(!merged.some((m) => (m as any).id === "msg-ai-chat-2"))
   })
 })
+
+describe("image placeholder sentinel", () => {
+  it("never grafts [GENERATING_IMAGE] over the persisted image turn nor keeps it as an orphan", () => {
+    const local = {
+      id: "chat-1",
+      messages: [
+        { id: "msg-user-1", role: "USER", content: "crea una imagen de un perro" },
+        { id: "msg-assistant-generating-1", role: "ASSISTANT", content: "[GENERATING_IMAGE]" },
+      ],
+    }
+    const incoming = {
+      id: "chat-1",
+      messages: [
+        { id: "u1", role: "USER", content: "crea una imagen de un perro" },
+        { id: "a1", role: "ASSISTANT", content: "", files: [{ id: "f1", url: "/uploads/dog.png", mimeType: "image/png" }] },
+      ],
+    }
+    const merged = mergeChatPreservingUserMessages(incoming as any, local as any)
+    const assistants = merged.messages.filter((m: any) => m.role === "ASSISTANT")
+    assert.equal(assistants.length, 1, "the placeholder must not survive as a second card")
+    assert.equal(assistants[0].id, "a1")
+    assert.equal(assistants[0].content, "", "placeholder text must not be grafted onto the persisted image")
+  })
+
+  it("still keeps a real local assistant answer the server has not echoed yet", () => {
+    const local = { id: "chat-2", messages: [
+      { id: "msg-user-1", role: "USER", content: "hola" },
+      { id: "msg-assistant-1", role: "ASSISTANT", content: "Hola, ¿en qué te ayudo?" },
+    ] }
+    const incoming = { id: "chat-2", messages: [{ id: "u1", role: "USER", content: "hola" }] }
+    const merged = mergeChatPreservingUserMessages(incoming as any, local as any)
+    assert.equal(merged.messages.filter((m: any) => m.role === "ASSISTANT").length, 1)
+  })
+})
