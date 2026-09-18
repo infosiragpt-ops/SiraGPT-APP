@@ -1348,6 +1348,36 @@ planes. No revivir tiers ni el plan de $5 en la UI.
 - **Tests**: `backend/tests/payments-public-config.test.js`,
   `backend/tests/stripe-setup.test.js` (auto-provisión), `tests/plans-catalog.test.ts`.
 
+## Jev tier steering — escalación flash↔pro (added 2026-09-18)
+
+Consumidor del veredicto `model_family` del juez de turno RLCD × Jev
+(PR #744 lo calculaba — incl. el bit `actions.modelFamily.steer` — pero nadie
+lo aplicaba). Jev sigue sin ir al picker como modelo de conversación; aquí
+dirige el tier del turno.
+
+- **Módulo**: `backend/src/services/ai/jev-router.js` — PURO y síncrono, cero
+  llamadas de red (reusa el fan-out único por turno de
+  `rlcd/jev-turn-judge.js`). `refineRoutingWithJevJudgement(routing, judged,
+  ctx)`: familia `reasoning`/`coding` ⇒ escala flash→pro (preservando la forma
+  del id: `deepseek-v4-flash`→`deepseek-v4-pro`, slug openrouter ídem);
+  `fast_cheap` ⇒ veta una escalación heurística al tier pro; `balanced`/
+  `vision` ⇒ sin opinión. Nunca toca escalaciones a modelos ajenos a los
+  tiers Sira. Fail-open por forma (judgement ausente/deforme ⇒ no-op).
+- **Cableado**: `routes/ai.js`, tras el juez RLCD y justo antes del bloque que
+  aplica el re-ruteo inteligente. Las guardas existentes no cambian: el picker
+  siempre gana, plan gate y provider inference deciden el modelo final.
+  Telemetría: `routing.jev_tier_steering {family, applied, reasonCode, steer,
+  probability}`.
+- **Activación**: el bit `steer` ya gobierna todo — requiere el juez RLCD
+  activo (`TYPESAFE_API_KEY` + `SIRAGPT_RLCD_JEV`) y
+  `SIRAGPT_RLCD_JEV_MODEL_STEERING=1` con confianza ≥
+  `SIRAGPT_RLCD_JEV_MODEL_CONFIDENCE` (0.7) y usuario sin modelo elegido.
+  Con steering apagado el veredicto se loguea como advisory (shadow natural).
+  Override opcional del target: `SIRAGPT_JEV_PRO_TARGET`.
+- **Tests**: `backend/tests/jev-router.test.js` — 16 tests offline (tiers,
+  mapeo de familias, escalación/veto/advisory/guardas/no-op ante judgement
+  deforme). Registrado en `backend/package.json`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

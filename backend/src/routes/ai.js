@@ -5799,6 +5799,42 @@ router.post(
             }
           } catch (_ttcErr) { /* fail-open: no directive */ }
 
+          // Jev tier steering: apply the RLCD turn judge's model_family
+          // verdict (already computed above, no extra network call) to the
+          // Sira flash↔pro tier routing — reasoning/coding escalates a flash
+          // turn to the pro tier, fast_cheap vetoes a heuristic pro
+          // escalation. Only acts when actions.modelFamily.steer is true
+          // (SIRAGPT_RLCD_JEV_MODEL_STEERING on, confidence over threshold,
+          // no user-picked model); otherwise it logs the verdict as advisory.
+          // Application still goes through the same guards below (picker
+          // wins, plan gate, provider inference). Fail-open.
+          try {
+            if (req._rlcdJudge && cognitiveDecision && cognitiveDecision.routing) {
+              const jevRouter = require('../services/ai/jev-router');
+              const __jevRefined = jevRouter.refineRoutingWithJevJudgement(
+                cognitiveDecision.routing,
+                req._rlcdJudge,
+                {
+                  currentModel: actualModel,
+                  hasImages: __hasImagesForRoute,
+                  reachableModelIds: __reachableModelIds,
+                },
+              );
+              if (__jevRefined && __jevRefined.routing) cognitiveDecision.routing = __jevRefined.routing;
+              if (__jevRefined && __jevRefined.steering && __jevRefined.steering.family) {
+                generateLog.info('routing.jev_tier_steering', {
+                  family: __jevRefined.steering.family,
+                  applied: __jevRefined.steering.applied === true,
+                  reasonCode: __jevRefined.steering.reason || null,
+                  steer: __jevRefined.steering.steer === true,
+                  probability: __jevRefined.steering.probability,
+                });
+              }
+            }
+          } catch (jevErr) {
+            generateLog.warnError('routing.jev_tier_steering_failed', jevErr);
+          }
+
           // Apply intelligent re-routing only when the orchestrator says so AND
           // it's safe: no images (the vision path owns its own model choice),
           // a real provider can be inferred, and the target is plan-eligible.
