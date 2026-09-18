@@ -1,5 +1,6 @@
 "use client";
 
+import { OfficeFileIcon } from "@/components/office-file-icon"
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -1033,7 +1034,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                 <div className="flex items-center justify-between p-3 border-b border-border/40 bg-white dark:bg-zinc-900">
                     <div className="flex items-center gap-2">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src="/icons/Word.png" alt="Word" className="h-5 w-5" />
+                        <OfficeFileIcon kind="word" size={20} className="h-5 w-5" title="Word" />
                         <h3 className="font-semibold text-sm text-foreground">Word Document</h3>
                     </div>
                     <div className="flex items-center gap-1">
