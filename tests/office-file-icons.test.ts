@@ -3,7 +3,7 @@ import { describe, it } from "node:test"
 import fs from "node:fs"
 import path from "node:path"
 
-import { officeKindFor, officeKindForMime, officeKindForName, officeKindLabel } from "../components/office-file-icon"
+import { officeKindFor, officeKindForMime, officeKindForName, officeKindLabel } from "../lib/office-file-kind"
 
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
@@ -42,6 +42,7 @@ describe("Office file icons (Microsoft 365 2026 style)", () => {
     const icon = source("components/office-file-icon.tsx")
     assert.match(icon, /data-office-icon=\{kind\}/)
     assert.match(icon, /viewBox="0 0 32 32"/)
-    for (const kind of ["word", "excel", "powerpoint", "pdf"]) assert.match(icon, new RegExp(`\\b${kind}: \\{`))
+    const kinds = source("lib/office-file-kind.ts")
+    for (const kind of ["word", "excel", "powerpoint", "pdf"]) assert.match(kinds, new RegExp(`\\b${kind}: \\{`))
   })
 })
