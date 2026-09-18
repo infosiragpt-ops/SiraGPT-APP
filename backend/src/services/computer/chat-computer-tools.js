@@ -47,7 +47,7 @@ function buildNavigateTool({ userId, conversationId, env }) {
   return {
     name: 'computer_navigate',
     description:
-      'Abre una URL http(s) en el navegador REAL de la computadora de ESTE chat. Úsala primero para ofertas, reservas, DMV, seguro o cualquier sitio en vivo. Cada chat TIENE una computadora en vivo.',
+      'Abre una URL http(s) en el navegador REAL de la computadora de ESTE chat. Úsala primero para ofertas, reservas, DMV, seguro o cualquier sitio en vivo. Cada chat TIENE una computadora en vivo. Si no te dieron una URL, localiza primero el sitio oficial con web_search y navega al resultado.',
     parameters: {
       type: 'object',
       properties: {
@@ -97,12 +97,15 @@ function buildNavigateTool({ userId, conversationId, env }) {
           });
           return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
         } catch (err) {
+          const detail = err && err.message ? String(err.message).slice(0, 160) : undefined;
+          const dnsish = /ENOTFOUND|EAI_AGAIN|getaddrinfo|NXDOMAIN|not known|could not resolve|failed to resolve|name resolution|net::ERR_NAME/i.test(detail || '');
           return {
             ok: false,
             error: 'navigate_failed',
             message: 'No se pudo abrir la página en el navegador de este chat.',
-            detail: err && err.message ? String(err.message).slice(0, 160) : undefined,
+            detail,
             url,
+            ...(dnsish ? { fallback: 'El sitio no resolvió por DNS. Localiza el sitio oficial con web_search y reintenta computer_navigate con la URL encontrada; si no existe, dilo con lo que sí verificaste.' } : {}),
           };
         }
       } catch (err) {

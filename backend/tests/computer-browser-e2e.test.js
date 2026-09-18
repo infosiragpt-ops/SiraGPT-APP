@@ -222,7 +222,6 @@ test('techo de pasos del loop: 25 aunque se pidan más', () => {
 });
 
 /* ── 9. observación acotada y a prueba de fallos ────────────────────────── */
-
 test('snapshot gigante se capa a ~8KiB con marcador; fallo CDP nunca lanza', async () => {
   const big = await persistent.observe(
     { sessionId: 'sess-e2e', userId: 'u1', conversationId: 'chat-northwind' },
@@ -238,4 +237,36 @@ test('snapshot gigante se capa a ~8KiB con marcador; fallo CDP nunca lanza', asy
   );
   assert.equal(broken.ok, false);
   assert.match(String(broken.error || broken.text), /cdp down/);
+});
+
+/* ── 10. buscar primero: sin URL el agente localiza, nunca la pide ─────── */
+
+test('search-first: la tool ordena localizar el sitio con web_search cuando no hay URL', () => {
+  assert.match(navigateTool().description, /web_search/);
+});
+
+test('search-first: el prompt agéntico prohíbe pedir la URL pudiendo buscarla', () => {
+  // Patrón contrato-por-lectura (igual que computer-login-handoff.test.js).
+  const fs = require('fs');
+  const path = require('path');
+  const stream = fs.readFileSync(path.join(__dirname, '../src/services/agentic-chat-stream.js'), 'utf8');
+  assert.match(stream, /localízalo TÚ con `web_search`/);
+  assert.match(stream, /nunca le pidas al usuario la URL/);
+});
+
+test('DNS sin resolver → navigate_failed con fallback a web_search, no callejón', async () => {
+  persistent.openUrlInChrome = async () => { throw new Error('getaddrinfo ENOTFOUND northwind.example'); };
+  const out = await navigateTool().execute({ url: 'https://northwind.example/pricing' }, chatCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'navigate_failed');
+  assert.match(out.fallback, /web_search/);
+  assert.match(out.fallback, /reintenta computer_navigate/);
+});
+
+test('fallo no-DNS (timeout) → navigate_failed sin fallback inventado', async () => {
+  persistent.openUrlInChrome = async () => { throw new Error('docker exec timed out after 12000ms'); };
+  const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'navigate_failed');
+  assert.equal(out.fallback, undefined);
 });
