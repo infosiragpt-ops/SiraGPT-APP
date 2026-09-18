@@ -77,6 +77,28 @@ use the sandboxed codex runner instead.
 | `GEMA4_DISPLAY_NAME` | `Gema4 31B` | Public display name returned by `/api/ai/models` |
 | `GEMA4_ICON` | `ChatGPTLogo` | Icon key returned with the virtual fallback model |
 
+### Jev tier router (internal escalation judge)
+
+TypeSafe Jev (a System One *decision* model served through OpenRouter — it
+returns a typed choice, never chat prose, so it is NEVER shown in the model
+picker) can judge, per chat turn, whether the request needs the pro tier.
+Its verdict refines the reasoning-orchestrator routing decision in
+`/api/ai/generate` (`backend/src/services/ai/jev-router.js`): it may escalate
+a flash-tier turn to the pro tier or veto a heuristic pro escalation. The
+existing apply guards are unchanged — the user's picker always wins, plan
+eligibility and provider inference still gate the final model. Fail-open:
+any error, timeout or unparseable answer leaves the turn untouched.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_JEV_ROUTER` | *(off)* | `on`/`1` activates the judge on turns where its verdict can apply; `shadow` runs it on every eligible flash-tier turn and only logs (`routing.jev_judged`) — recommended first step in production |
+| `SIRAGPT_JEV_MODEL_ID` | `typesafe/jev-latest` | Jev model slug on OpenRouter (`typesafe/jev-1.13` pins the version) |
+| `SIRAGPT_JEV_TIMEOUT_MS` | `1200` | Hard latency budget for the judge call (clamped 250–10000) |
+| `SIRAGPT_JEV_MIN_CONFIDENCE` | `0.6` | Minimum reported confidence to apply an escalation (verdicts without confidence pass) |
+| `SIRAGPT_JEV_PRO_TARGET` | *(derived)* | Override the pro-tier target id; by default the flash id's tier token is swapped (`deepseek-v4-flash` → `deepseek-v4-pro`) |
+
+Requires `OPENROUTER_API_KEY`. Without it the flag is inert.
+
 ### Embedding Providers
 
 | Variable | Provider | Purpose |

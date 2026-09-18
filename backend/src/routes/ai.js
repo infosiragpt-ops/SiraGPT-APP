@@ -5681,6 +5681,40 @@ router.post(
             }
           } catch (_ttcErr) { /* fail-open: no directive */ }
 
+          // Jev tier judge (SIRAGPT_JEV_ROUTER=on|shadow): a calibrated
+          // decision-model pass that refines the heuristic routing for the
+          // Sira flash↔pro tiers — it can propose escalating a flash turn to
+          // the pro tier or veto a heuristic pro escalation. Application
+          // still goes through the same guards below (picker wins, plan
+          // gate, provider inference); `shadow` only logs. Fail-open.
+          try {
+            const jevRouter = require('../services/ai/jev-router');
+            if (jevRouter.isJevRouterEnabled() && cognitiveDecision && cognitiveDecision.routing) {
+              const __jevRefined = await jevRouter.refineRoutingWithJev(cognitiveDecision.routing, {
+                prompt,
+                contextChars: __ctxChars,
+                attachmentsCount: processedFiles.length,
+                hasImages: __hasImagesForRoute,
+                pickerLocked: String(model || '').trim().length > 0,
+                currentModel: actualModel,
+                reachableModelIds: __reachableModelIds,
+                language: (langResolution && langResolution.language) || 'es',
+              });
+              if (__jevRefined && __jevRefined.routing) cognitiveDecision.routing = __jevRefined.routing;
+              if (__jevRefined && __jevRefined.jev) {
+                generateLog.info('routing.jev_judged', {
+                  ok: __jevRefined.jev.ok === true,
+                  tier: __jevRefined.jev.tier || null,
+                  applied: __jevRefined.jev.applied === true,
+                  reasonCode: __jevRefined.jev.reason || null,
+                  durationMs: __jevRefined.jev.latencyMs || null,
+                });
+              }
+            }
+          } catch (jevErr) {
+            generateLog.warnError('routing.jev_failed', jevErr);
+          }
+
           // Apply intelligent re-routing only when the orchestrator says so AND
           // it's safe: no images (the vision path owns its own model choice),
           // a real provider can be inferred, and the target is plan-eligible.

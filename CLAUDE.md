@@ -1348,6 +1348,35 @@ planes. No revivir tiers ni el plan de $5 en la UI.
 - **Tests**: `backend/tests/payments-public-config.test.js`,
   `backend/tests/stripe-setup.test.js` (auto-provisión), `tests/plans-catalog.test.ts`.
 
+## Jev tier router — juez interno de escalación (added 2026-09-18)
+
+TypeSafe **Jev** (`typesafe/jev-latest` vía OpenRouter) es un *decision model*
+System One: devuelve una elección tipada, nunca prosa, así que **jamás va en el
+picker** (la regla "solo Sira Rápido / Sira Pro" sigue intacta). Se usa como
+juez interno por turno: ¿este turno necesita el tier pro?
+
+- **Módulo**: `backend/src/services/ai/jev-router.js` — cliente OpenRouter con
+  timeout duro + parser robusto (palabra suelta / JSON / shape `answers[]` /
+  prosa con last-mention-wins) + `refineRoutingWithJev` que refina la decisión
+  del reasoning-orchestrator: puede escalar flash→pro o vetar una escalación
+  heurística al tier pro. Nunca toca escalaciones a otros modelos.
+- **Cableado**: `routes/ai.js`, justo antes del bloque que aplica el re-ruteo
+  inteligente. Las guardas existentes no cambian: el picker siempre gana, plan
+  gate y provider inference deciden el modelo final. Fail-open total (error/
+  timeout/respuesta inparseable ⇒ turno intacto). Telemetría:
+  `routing.jev_judged {ok, tier, applied, reasonCode, durationMs}`.
+- **Modos** (`SIRAGPT_JEV_ROUTER`): off (default) · `on` (aplica solo cuando
+  puede: sin modelo explícito del picker, modelo actual = tier flash, sin
+  imágenes) · `shadow` (juzga y loguea en todos los turnos flash elegibles,
+  nunca muta — primer paso recomendado en prod para calibrar).
+- **Envs**: `SIRAGPT_JEV_ROUTER`, `SIRAGPT_JEV_MODEL_ID`,
+  `SIRAGPT_JEV_TIMEOUT_MS` (1200), `SIRAGPT_JEV_MIN_CONFIDENCE` (0.6),
+  `SIRAGPT_JEV_PRO_TARGET`. Requiere `OPENROUTER_API_KEY`. Detalle en
+  `docs/ENV_VARIABLES.md`.
+- **Tests**: `backend/tests/jev-router.test.js` — 31 tests offline (config,
+  tiers, parser, timeout/abort, escalación/veto/shadow/guardas/fail-open).
+  Registrado en `backend/package.json`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
