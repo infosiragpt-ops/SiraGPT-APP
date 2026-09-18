@@ -40,6 +40,7 @@ test('non-health routes are 404 while the flag is off', async () => {
   delete process.env.AGENTES_CODING_V2;
   const app = buildApp();
   for (const path of [
+    '/api/agentes-coding/capabilities',
     '/api/agentes-coding/sessions',
     '/api/agentes-coding/sandbox',
     '/api/agentes-coding/projects',
