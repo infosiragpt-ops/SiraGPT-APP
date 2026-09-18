@@ -78,6 +78,9 @@ function baseDeps(overrides = {}) {
         outputs: [{ name: 'informe-editado.docx', buffer: Buffer.from('edited'), valid: true }],
       };
     },
+    // Deterministic path declines by default so legacy tests exercise the
+    // LLM loop; dedicated tests cover the deterministic-first branch.
+    tryDeterministicEdit: async () => null,
     resolveDocAgentCandidates: () => [],
     createFailoverClient,
     defaultCreateClient: () => { throw new Error('ladder client must not be created'); },

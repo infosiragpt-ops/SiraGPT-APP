@@ -3308,7 +3308,101 @@ function updatePptxAppSlideCount(appXml = '', slideCount = 0) {
   return appXml.replace(/<\/Properties>\s*$/i, `<Slides>${slideCount}</Slides></Properties>`);
 }
 
-function buildPptxSlideXml(blocks = []) {
+// Design DNA: sample the deck's own visual language so appended slides look
+// authored, not bolted on. Pure regex over the first slide (+ canvas size) —
+// every field may be null and buildPptxSlideXml falls back to the neutral
+// defaults, so an unsamplable deck behaves exactly as before.
+const PPTX_SCHEME_TEXT = Object.freeze({ dk1: '000000', lt1: 'FFFFFF', dk2: '1F3864', lt2: 'EEECE1' });
+
+function pptxRunColor(attrs = '', inner = '') {
+  const srgb = /<a:srgbClr\b[^>]*\bval="([0-9A-Fa-f]{6})"/.exec(inner)?.[1]
+    || /<a:srgbClr\b[^>]*\bval="([0-9A-Fa-f]{6})"/.exec(attrs)?.[1];
+  if (srgb) return srgb.toUpperCase();
+  const scheme = /<a:schemeClr\b[^>]*\bval="([A-Za-z0-9]+)"/.exec(inner)?.[1];
+  return (scheme && PPTX_SCHEME_TEXT[scheme]) || null;
+}
+
+function pptxRunStyle(shapeXml = '') {
+  const m = /<a:rPr\b([^>]*)(?:\/>|>([\s\S]*?)<\/a:rPr>)/.exec(shapeXml);
+  if (!m) return { sz: null, b: null, color: null, font: null };
+  const attrs = m[1] || '';
+  const inner = m[2] || '';
+  const sz = Number((/\bsz="(\d+)"/.exec(attrs) || [])[1]);
+  const font = (/<a:latin\b[^>]*\btypeface="([^"]+)"/.exec(inner) || [])[1] || null;
+  return {
+    sz: Number.isFinite(sz) && sz > 0 ? sz : null,
+    b: /\bb="(?:1|true)"/.test(attrs) ? true : (/\bb="(?:0|false|off)"/.test(attrs) ? false : null),
+    color: pptxRunColor(attrs, inner),
+    font: font && !font.startsWith('+') ? font : null,
+  };
+}
+
+function pptxShapeBox(shapeXml = '') {
+  const xfrm = (/<a:xfrm\b[^>]*>([\s\S]*?)<\/a:xfrm>/.exec(shapeXml) || [])[1] || '';
+  const off = (/<a:off\b[^>]*>/.exec(xfrm) || [])[0] || '';
+  const ext = (/<a:ext\b[^>]*>/.exec(xfrm) || [])[0] || '';
+  const num = (tag, attr) => {
+    const v = Number((new RegExp(`\\b${attr}="(\\d+)"`).exec(tag) || [])[1]);
+    return Number.isFinite(v) ? v : null;
+  };
+  return { x: num(off, 'x'), y: num(off, 'y'), cx: num(ext, 'cx'), cy: num(ext, 'cy') };
+}
+
+function pptxSlideBackground(slideXml = '', canvas = null) {
+  const bgFill = /<p:bg\b[\s\S]*?<a:srgbClr\b[^>]*\bval="([0-9A-Fa-f]{6})"/.exec(slideXml)?.[1];
+  if (bgFill) return bgFill.toUpperCase();
+  // Generated decks often paint a full-canvas rect instead of p:bg.
+  // Tolerate writer rounding (PptxGenJS emits 12191695 for a 12192000 canvas).
+  const canvasMatch = (box) => box.x === 0 && box.y === 0
+    && Math.abs(box.cx - canvas.cx) <= Math.max(5000, canvas.cx * 0.001)
+    && Math.abs(box.cy - canvas.cy) <= Math.max(5000, canvas.cy * 0.001);
+  if (canvas && canvas.cx && canvas.cy) {
+    for (const m of String(slideXml).matchAll(/<p:sp\b[^>]*>[\s\S]*?<\/p:sp>/g)) {
+      const shape = m[0];
+      if (/<a:t>/.test(shape)) continue;
+      if (!canvasMatch(pptxShapeBox(shape))) continue;
+      const fill = /<a:solidFill\b[^>]*>[\s\S]*?<a:srgbClr\b[^>]*\bval="([0-9A-Fa-f]{6})"/.exec(shape)?.[1];
+      if (fill) return fill.toUpperCase();
+    }
+  }
+  return null;
+}
+
+function extractPptxSlideDesign(zip) {
+  const blank = () => ({ sz: null, b: null, color: null, font: null, box: { x: null, y: null, cx: null, cy: null } });
+  const design = { bg: null, title: blank(), body: blank() };
+  try {
+    const names = typeof pptxSlideFileNames === 'function' ? pptxSlideFileNames(zip) : [];
+    const slideXml = (names.length && zip.file(names[0])?.asText())
+      || zip.file('ppt/slides/slide1.xml')?.asText()
+      || '';
+    if (!slideXml) return design;
+    const presXml = zip.file('ppt/presentation.xml')?.asText() || '';
+    const sldSz = (/<p:sldSz\b[^>]*>/.exec(presXml) || [])[0] || '';
+    const canvas = {
+      cx: Number((/\bcx="(\d+)"/.exec(sldSz) || [])[1]) || null,
+      cy: Number((/\bcy="(\d+)"/.exec(sldSz) || [])[1]) || null,
+    };
+    design.bg = pptxSlideBackground(slideXml, canvas);
+    const textShapes = [...String(slideXml).matchAll(/<p:sp\b[^>]*>[\s\S]*?<\/p:sp>/g)]
+      .map((m) => m[0])
+      .filter((shape) => /<a:t>[\s\S]*\S[\s\S]*<\/a:t>/.test(shape));
+    const [titleShape, bodyShape] = textShapes;
+    if (titleShape) {
+      const style = pptxRunStyle(titleShape);
+      design.title = { ...style, box: pptxShapeBox(titleShape) };
+    }
+    if (bodyShape) {
+      const style = pptxRunStyle(bodyShape);
+      design.body = { ...style, box: pptxShapeBox(bodyShape) };
+    }
+  } catch {
+    // Sampling never breaks the edit — defaults apply.
+  }
+  return design;
+}
+
+function buildPptxSlideXml(blocks = [], design = {}) {
   const content = nonPageBreakBlocks(blocks);
   const title = content.find((item) => /heading/.test(item.kind))?.text || 'Contenido agregado';
   const body = content
@@ -3316,23 +3410,51 @@ function buildPptxSlideXml(blocks = []) {
     .map((item) => String(item.text || '').trim())
     .filter(Boolean)
     .slice(0, 10);
+  // Deck DNA with neutral fallbacks (previous hard-coded look): sampled
+  // sizes/colors/fonts/geometry win, anything missing keeps the default.
+  const titleStyle = design.title || {};
+  const bodyStyle = design.body || {};
+  const runProperties = (style, defaultSize, defaultBold) => {
+    const size = style.sz || defaultSize;
+    const bold = (style.b ?? defaultBold) ? ' b="1"' : '';
+    const fill = style.color ? `<a:solidFill><a:srgbClr val="${style.color}"/></a:solidFill>` : '';
+    const latin = style.font ? `<a:latin typeface="${xmlEscape(style.font)}"/>` : '';
+    return `<a:rPr lang="es-ES" sz="${size}"${bold}>${fill}${latin}</a:rPr>`;
+  };
+  const boxAttributes = (box, fallback) => {
+    const b = box || {};
+    const parts = [b.x ?? fallback.x, b.y ?? fallback.y, b.cx ?? fallback.cx, b.cy ?? fallback.cy];
+    if (!parts.every(Number.isFinite)) return fallback.raw;
+    return `<a:off x="${parts[0]}" y="${parts[1]}"/><a:ext cx="${parts[2]}" cy="${parts[3]}"/>`;
+  };
+  const titleBox = boxAttributes(titleStyle.box, {
+    x: 685800, y: 457200, cx: 7772400, cy: 914400,
+    raw: '<a:off x="685800" y="457200"/><a:ext cx="7772400" cy="914400"/>',
+  });
+  const bodyBox = boxAttributes(bodyStyle.box, {
+    x: 685800, y: 1524000, cx: 10668000, cy: 4572000,
+    raw: '<a:off x="685800" y="1524000"/><a:ext cx="10668000" cy="4572000"/>',
+  });
   const bodyParagraphs = body.length
-    ? body.map((line) => `<a:p><a:r><a:rPr lang="es-ES" sz="1800"/><a:t>${xmlEscape(line)}</a:t></a:r></a:p>`).join('')
-    : '<a:p><a:r><a:rPr lang="es-ES" sz="1800"/><a:t>Contenido agregado por SiraGPT.</a:t></a:r></a:p>';
+    ? body.map((line) => `<a:p><a:r>${runProperties(bodyStyle, 1800, false)}<a:t>${xmlEscape(line)}</a:t></a:r></a:p>`).join('')
+    : `<a:p><a:r>${runProperties(bodyStyle, 1800, false)}<a:t>Contenido agregado por SiraGPT.</a:t></a:r></a:p>`;
+  const background = design.bg
+    ? `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${design.bg}"/></a:solidFill></p:bgPr></p:bg>`
+    : '';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld>
+  <p:cSld>${background}
     <p:spTree>
       <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
       <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
       <p:sp>
         <p:nvSpPr><p:cNvPr id="2" name="Título SiraGPT"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr>
-        <p:spPr><a:xfrm><a:off x="685800" y="457200"/><a:ext cx="7772400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
-        <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r><a:rPr lang="es-ES" sz="3000" b="1"/><a:t>${xmlEscape(title)}</a:t></a:r></a:p></p:txBody>
+        <p:spPr><a:xfrm>${titleBox}</a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/><a:p><a:r>${runProperties(titleStyle, 3000, true)}<a:t>${xmlEscape(title)}</a:t></a:r></a:p></p:txBody>
       </p:sp>
       <p:sp>
         <p:nvSpPr><p:cNvPr id="3" name="Contenido SiraGPT"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr>
-        <p:spPr><a:xfrm><a:off x="685800" y="1524000"/><a:ext cx="10668000" cy="4572000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:spPr><a:xfrm>${bodyBox}</a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
         <p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>${bodyParagraphs}</p:txBody>
       </p:sp>
     </p:spTree>
@@ -3372,7 +3494,7 @@ function appendToPptxBuffer(buffer, blocks) {
   zip.file('ppt/presentation.xml', presentationXml);
   zip.file('ppt/_rels/presentation.xml.rels', relsXml);
   zip.file('[Content_Types].xml', contentTypesXml);
-  zip.file(newSlidePath, buildPptxSlideXml(blocks));
+  zip.file(newSlidePath, buildPptxSlideXml(blocks, extractPptxSlideDesign(zip)));
 
   const firstSlideRels = zip.file('ppt/slides/_rels/slide1.xml.rels')?.asText();
   const rels = firstSlideRels && firstSlideRels.includes('slideLayout')
@@ -8561,6 +8683,8 @@ module.exports = {
     analyzeDocumentStructure,
     analyzeTableForFill,
     appendToPptxBuffer,
+    buildPptxSlideXml,
+    extractPptxSlideDesign,
     detectCronogramaAnexo3Plan,
     loadRecentAssistantArtifactSourceFiles,
     loadRecentGeneratedArtifactSourceFiles,
