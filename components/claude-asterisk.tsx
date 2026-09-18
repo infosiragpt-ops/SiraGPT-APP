@@ -30,6 +30,7 @@ export function ClaudeAsterisk({ size = 20, active = true, color, className, tit
       aria-hidden={title ? undefined : true}
       aria-label={title}
       data-claude-asterisk={active ? "active" : "idle"}
+      data-claude-asterisk-weight="fine"
       className={["claude-asterisk", active ? "claude-asterisk--active" : "claude-asterisk--idle", className].filter(Boolean).join(" ")}
       style={{ display: "inline-block", flexShrink: 0, color: fill }}
     >
@@ -38,11 +39,11 @@ export function ClaudeAsterisk({ size = 20, active = true, color, className, tit
           <path
             key={deg}
             transform={`rotate(${deg} 20 20)`}
-            // one arm: rounded outer tip, gentle taper towards the centre
-            d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+            // one arm, Claude weight: slim rounded blade, gentle taper to the hub
+            d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
           />
         ))}
-        <circle cx="20" cy="20" r="3.1" />
+        <circle cx="20" cy="20" r="2.1" />
       </g>
     </svg>
   )
