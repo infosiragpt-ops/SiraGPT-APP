@@ -22,6 +22,19 @@ describe("academic search intent", () => {
     assert.equal(isAcademicResearchPrompt("resume este artículo científico"), false)
   })
 
+  it("never captures live-data or news questions, nor everyday 'fuentes/documentos/estudios' (2026-09-18 live misroute)", () => {
+    assert.equal(isAcademicResearchPrompt("¿Cuál es el precio del bitcoin hoy y qué ha pasado esta semana? Dame cifras actuales con fuentes."), false)
+    assert.equal(isAcademicResearchPrompt("dame las últimas noticias sobre la inflación con fuentes"), false)
+    assert.equal(isAcademicResearchPrompt("muestra los documentos de la reunión de ayer"), false)
+    assert.equal(isAcademicResearchPrompt("quiero fuentes sobre la inflación en Perú"), false)
+    assert.equal(isAcademicResearchPrompt("necesito un estudio de mercado para mi tienda"), false)
+    // academic qualifiers or academic nouns still route to the indexes
+    assert.equal(isAcademicResearchPrompt("muestra estudios científicos sobre automedicación"), true)
+    assert.equal(isAcademicResearchPrompt("necesito referencias bibliográficas sobre liderazgo"), true)
+    assert.equal(isAcademicResearchPrompt("busca papers sobre transformers"), true)
+    assert.equal(isAcademicResearchPrompt("busca artículos en arxiv sobre el precio del bitcoin hoy"), true, "an explicit index wins over the live-data veto")
+  })
+
   it("lets a custom GPT own academic research and artifact delivery", () => {
     const prompt = "Busca artículos científicos, verifica DOI y crea Word y PDF"
     assert.equal(shouldUseDedicatedAcademicSearch(prompt), true)
