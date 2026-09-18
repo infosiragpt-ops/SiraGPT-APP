@@ -267,6 +267,18 @@ function isVerifiedChatImageModelName(name) {
   return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
 }
 
+/** The image engine can infer a provider for this model id (OpenAI, Gemini, fal.ai, xAI, OpenRouter). */
+function isRoutableImageModelName(name) {
+  try { return Boolean(imageEngine.resolveImageModelRoute(name)); } catch { return false; }
+}
+
+/** Admin-activated IMAGE row the engine can route: accepted like a verified model. */
+function isActiveRoutableImageModel(adminModel, name) {
+  if (!adminModel || adminModel.isActive !== true) return false;
+  if (normalizeCatalogModelType(adminModel).type !== 'IMAGE') return false;
+  return isRoutableImageModelName(name);
+}
+
 function hasEnv(name) {
   return String(process.env[name] || '').trim().length > 0;
 }
@@ -929,8 +941,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     __dbg(`after-main-findMany count=${models.length}`);
 
     if (type === 'IMAGE') {
+      // Every admin-activated image model the engine can route is offered;
+      // the static verified list only guarantees the seeded defaults.
       models = curateVisibleAdminMediaModels(models, 'IMAGE', {
         allowedNames: VERIFIED_CHAT_IMAGE_MODEL_NAMES,
+        isRoutable: isRoutableImageModelName,
       });
     }
 
@@ -10799,7 +10814,7 @@ router.post(
           code: 'image_provider_unsupported',
         });
       }
-      if (!isVerifiedChatImageModelName(model) && !activeGrokImage) {
+      if (!isVerifiedChatImageModelName(model) && !activeGrokImage && !isActiveRoutableImageModel(adminModel, model)) {
         return res.status(400).json({
           error: 'El modelo seleccionado no está disponible para generar imágenes. Elige uno de los modelos de Imágenes.',
           code: 'image_model_unverified',
