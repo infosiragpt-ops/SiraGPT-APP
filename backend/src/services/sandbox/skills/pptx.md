@@ -57,13 +57,31 @@ for slide in prs.slides:
 ## Add a slide that matches the deck
 ```python
 # Pick the layout by NAME from the deck's own master — never index blindly.
-layout = next(l for l in prs.slide_layouts if 'Title and Content' in l.name or 'Título y contenido' in l.name)
+names = [l.name for l in prs.slide_layouts]
+layout = next((l for l in prs.slide_layouts if 'Title and Content' in l.name or 'Título y contenido' in l.name), prs.slide_layouts[0])
 slide = prs.slides.add_slide(layout)
 slide.shapes.title.text = 'Nuevo título'
 body = slide.placeholders[1]
 tf = body.text_frame
 tf.text = 'Primer punto'
 p = tf.add_paragraph(); p.text = 'Segundo punto'; p.level = 0
+```
+
+## Single-layout decks (PptxGenJS / platform-generated)
+These decks ship ONE layout (`DEFAULT`) with NO placeholders — `layouts[6]`
+and any 'Title and Content' lookup FAIL. Fall back to `layouts[0]` and build
+title + body with text boxes sized from the slide canvas:
+```python
+from pptx.util import Inches
+slide = prs.slides.add_slide(prs.slide_layouts[0])
+W, H = prs.slide_width, prs.slide_height
+title_box = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), W - Inches(1.4), Inches(0.8))
+title_box.text_frame.text = 'Nuevo título'
+body_box = slide.shapes.add_textbox(Inches(0.9), Inches(1.8), W - Inches(1.8), H - Inches(2.6))
+tf = body_box.text_frame
+tf.text = 'Primer punto'
+p = tf.add_paragraph(); p.text = 'Segundo punto'; p.level = 0
+assert len(prs.slides) == expected_count, 'slide was not added'
 ```
 
 ## Speaker notes
