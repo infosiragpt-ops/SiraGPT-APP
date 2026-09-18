@@ -73,7 +73,11 @@ Step identity prefers `step_id`.
 - `ThinkingStatusLoader` — in-progress always mounts `PensandoBars` +
   the kit Spanish label. Terminal states keep check / X.
 - `ClaudeThinkingTimeline` header and `kind` `loader|sunburst` → the
-  same bars. The Claude sunburst is **retired** for live Pensando.
+  same glyph. Since 2026-09-18 the live Pensando glyph is the **Claude asterisk**
+  (`components/claude-asterisk.tsx`, think accent `--think-accent` #D97757, slow
+  rotation + breathing, frozen under reduced motion); the celeste 3×3 dot matrix
+  and the old sunburst are **retired** for live Pensando. Collapsed rows read
+  «Pensó durante N s» on every flow (chat, agent loop, agentic steps).
 - `ThinkingTrace` / `AgentTrace` / `ThinkingPlaceholder` emit
   `kind: "loader"` + `loaderState`. They never force `kind: "sunburst"`.
 - RunTrace live header uses the **kit label** (`Generando presentación…`
