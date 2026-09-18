@@ -128,6 +128,23 @@ test('DocumentDeliveryPolicy keeps image-only summaries in chat (no auto Word)',
   assert.equal(policy.autoGenerate, false);
 });
 
+test('DocumentDeliveryPolicy keeps short-scoped summaries of an attached file in chat', () => {
+  for (const goal of [
+    'dame un resumen en un solo párrafo',
+    'resume el documento en 3 líneas',
+    'hazme un resumen breve',
+    'resumen corto de este archivo',
+    'resúmelo en una frase',
+  ]) {
+    const policy = buildDocumentDeliveryPolicy({ goal, displayGoal: goal, files: [{ id: 'file-docx', name: 'tesis.docx' }] });
+    assert.equal(policy.mode, 'chat_only', goal);
+    assert.equal(policy.autoGenerate, false, goal);
+  }
+  // an explicit file format still wins over the brevity cue
+  const word = buildDocumentDeliveryPolicy({ goal: 'dame un resumen en un solo párrafo en Word', files: [{ id: 'file-docx', name: 'tesis.docx' }] });
+  assert.equal(word.mode, 'doc_required');
+});
+
 test('DocumentDeliveryPolicy auto-generates Word when an attached file is summarized', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'dame un resumen',

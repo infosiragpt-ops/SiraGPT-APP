@@ -944,6 +944,25 @@ const ragRetrieve = {
 // question against uploaded docs and we need citations + a
 // "don't hallucinate" guarantee, not just the raw passages.
 
+/** 4xx/5xx/network errors from the picked provider — anything but a bad question. */
+function isSelfRagProviderError(err) {
+  const status = Number((err && (err.status || err.statusCode)) || 0);
+  if (status >= 400) return true;
+  const msg = String((err && err.message) || err || '');
+  return /model.*not found|not found|unauthori|forbidden|rate.?limit|quota|timeout|ECONN|ENOTFOUND|fetch failed|insufficient/i.test(msg);
+}
+
+// Test seam: inject the failover client factory without require-cache tricks.
+const selfRagDeps = { failoverClientFactory: null };
+
+function selfRagFailoverClient() {
+  try {
+    if (typeof selfRagDeps.failoverClientFactory === 'function') return selfRagDeps.failoverClientFactory();
+    // eslint-disable-next-line global-require
+    return require('../memory-llm-client').createMemoryLlmClient();
+  } catch { return null; }
+}
+
 const selfRagAnswer = {
   name: 'self_rag_answer',
   description: "Answer a grounded question using the Self-RAG reflection-token loop (Asai et al. ICLR 2024). Produces the final answer directly with per-segment ISREL/ISSUP/ISUSE critique scores and citations. Prefer this over rag_retrieve when the user wants a concrete answer grounded on their uploaded PDFs/docs; use rag_retrieve when you only need raw chunks to combine with other data.",
@@ -1011,17 +1030,31 @@ const selfRagAnswer = {
 
     try {
       const runner = safeBeamSize > 1 ? engine.inferBeam : engine.infer;
-      const out = await runner({
-        openai: ctx.openai,
+      const runWith = (openai, model) => runner({
+        openai,
         input: question,
         retrieve: retrieveFn,
         k: safeK,
-        model: 'gpt-4o-mini',
+        model,
         retrieveMode,
         hardConstraints,
         maxSegments: safeMaxSegments,
         beamSize: safeBeamSize,
       });
+      // The picked model rides its own client first (feature engines follow
+      // the picker). A hard-coded `gpt-4o-mini` on a non-OpenAI client was
+      // «404 The requested model was not found» in production. On a provider
+      // error the answer moves to the failover ladder instead of failing the
+      // step.
+      let out;
+      try {
+        out = await runWith(ctx.openai, ctx.model || 'gpt-4o-mini');
+      } catch (primaryErr) {
+        const fallback = selfRagFailoverClient();
+        if (!fallback || !isSelfRagProviderError(primaryErr)) throw primaryErr;
+        ctx.onEvent?.({ type: 'tool_call', tool: 'self_rag_answer', preview: `Reintentando con otro proveedor (${previewText(primaryErr.message, 80)})` });
+        out = await runWith(fallback, undefined);
+      }
 
       // Build the user-visible text from the engine's segments.
       // Every retrieved-and-supported segment becomes its own
@@ -2157,6 +2190,7 @@ module.exports = {
   EXTENSION_TO_MIME,
   get VISUAL_MEDIA_TOOLS() { return getVisualMediaTools(); },
   INTERNAL: {
+    selfRagDeps,
     pythonExec,
     bashExec,
     webSearch,

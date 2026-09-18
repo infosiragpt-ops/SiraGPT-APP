@@ -3220,6 +3220,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       userEmail: user.email,
       clearance: user.clearance || 'authenticated',
       openai,
+      // The picked model, so tools that call the LLM (self_rag_answer…) use
+      // the client's own model instead of a hard-coded OpenAI id.
+      model: runtimeModelProfile.runtimeModel,
       signal: controller.signal,
       chatId,
       taskId,

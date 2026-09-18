@@ -16,6 +16,9 @@ const WORD_SOURCE_TO_OTHER_FORMAT_RE = /\b(?:convierte|convertir|exporta(?:r|me)
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
 const DOCUMENT_SYNTHESIS_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir)\b/i;
+// «en un solo párrafo», «en 3 líneas», «breve», «corto»: the user scoped the
+// answer to the chat. A summary that short is never a Word deliverable.
+const BREVITY_RE = /\b(?:(?:en\s+)?(?:un|1)\s+(?:solo|[uú]nico)\s+p[aá]rrafo|(?:en\s+)?(?:una|1)\s+(?:sola\s+)?(?:frase|oraci[oó]n|l[ií]nea)|(?:en\s+)?(?:\d{1,2}|dos|tres|cuatro|cinco|pocas?|unas\s+pocas)\s+(?:l[ií]neas?|frases?|oraciones|palabras|p[aá]rrafos?)|breve(?:mente)?|cort[oa]|r[aá]pid[oa]|resumid[oa])\b/i;
 const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|exportes?|exportar|prepares?|preparar|descargues?|descargar)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivos?|documentos?|word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|entregables?)|responde(?:r)?\s+(?:solo|solamente)?\s*(?:en\s+)?(?:el\s+)?chat|solo\s+en\s+chat|sin\s+(?:archivos?|documentos?|descarga|entregables?))\b/i;
 // Read/inquiry intents about a previously-shared document. Matches
 // phrases like "cuál es el título del word", "de qué trata el
@@ -233,6 +236,12 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   // an attachment, transform phrasings like "resume el word" are read/answer
   // intent, not an edit, and must fall through to the inquiry short-circuit
   // below (otherwise they wrongly auto-generate a brand-new document).
+  // «resume el documento en 3 líneas» / «dame un resumen en un solo párrafo»:
+  // a summary the user scoped that short is a chat answer, never a Word —
+  // decided before the source-preserving heuristic can claim the file.
+  if (Array.isArray(files) && files.length > 0 && DOCUMENT_SYNTHESIS_RE.test(requestText) && BREVITY_RE.test(requestText) && !explicitFileFormat) {
+    return 'chat_only';
+  }
   if (Array.isArray(files) && files.length > 0 && isSourcePreservingEdit(requestText, files)) return 'doc_required';
   // Read/inquiry intent about a doc the user already shared in a
   // prior turn must short-circuit BEFORE the WORDISH/SHEET/DECK/PDF
