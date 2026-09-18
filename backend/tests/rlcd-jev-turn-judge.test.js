@@ -32,7 +32,7 @@ function answer({ lane = 'chat_only', laneP = 0.8, needs = 0.1, depth = 1.2, fam
 
 test('buildQuestions: five questions with satisfaction only when a previous answer exists; state is structured', () => {
   const q = judge.buildQuestions({ hasPreviousAnswer: false });
-  assert.deepEqual(Object.keys(q), ['lane', 'needs_context', 'depth', 'model_family']);
+  assert.deepEqual(Object.keys(q), ['lane', 'needs_context', 'depth', 'model_family', 'web_need', 'web_source', 'web_freshness']);
   assert.deepEqual(Object.keys(q.lane.criteria), Object.keys(judge.LANES));
   assert.equal(q.depth.criteria.length, 5);
   assert.ok(judge.buildQuestions({ hasPreviousAnswer: true }).satisfaction);

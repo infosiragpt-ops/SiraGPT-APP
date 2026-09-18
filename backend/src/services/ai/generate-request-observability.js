@@ -251,6 +251,8 @@ const ALLOWED_EVENTS = new Set([
   'rlcd.jev_compute',
   'rlcd.jev_lane',
   'rlcd.rag_filtered',
+  'rlcd.web_search_judged',
+  'rlcd.web_filtered',
   'rlcd.jev_faithfulness',
   'rlcd.prompt_applied',
   'rlcd.skipped',

@@ -293,6 +293,18 @@ async function judgeTurnWithJev({ chatId, text, history = [], previousAnswer = n
       meta: { source: 'jev', lane: judgement.lane.choice, needsContext: judgement.needsContext, model: judgement.model, latencyMs: judgement.latencyMs },
     });
     if (idT) out.decisionIds.push(idT);
+    if (actions.webSearch) {
+      const w = actions.webSearch;
+      const idW = ledger.recordDecision({
+        kind: 'web_search_intent',
+        choice: `${w.need}:${w.force ? 'force' : (w.suggest ? 'suggest' : 'advisory')}:${w.source}`,
+        confidence: w.need === 'no_web' ? 1 - (actions.raw.webSearch || 0) : (actions.raw.webSearch || 0),
+        signature,
+        chatId,
+        meta: { source: 'jev', need: w.need, tool: w.tool, freshness: w.freshness, model: judgement.model, latencyMs: judgement.latencyMs },
+      });
+      if (idW) out.decisionIds.push(idW);
+    }
     if (judgement.depth && judgement.depth.label) {
       const idC = ledger.recordDecision({
         kind: 'compute_mode',
@@ -333,6 +345,10 @@ function applyJevLane(lane, judged, { heuristicAgentic = false, chatId = null, s
     const a = judge.applyTurnJudgement(judged.judgement, { heuristicAgentic, ledger, env });
     let choice = 'agree';
     if (a.forceAgentic && !lane.agentic) { lane.agentic = true; lane.forced = true; lane.reason = 'jev'; choice = 'force_agentic'; }
+    // A turn that REQUIRES current web sources needs the tool loop: the plain
+    // stream cannot search. Same guard as the lane force (never overrides a
+    // heuristic agentic veto — that path is off by default).
+    else if (a.webSearch && a.webSearch.force && !lane.agentic) { lane.agentic = true; lane.forced = true; lane.reason = 'jev_web'; choice = 'force_agentic_web'; }
     else if (a.vetoAgentic && lane.agentic && lane.forced !== true) { lane.agentic = false; lane.vetoed = true; lane.reason = 'jev_veto'; choice = 'veto_agentic'; }
     const pAgent = Number(judged.judgement.lane.probabilities.tools_agent) || 0;
     const id = ledger.recordDecision({

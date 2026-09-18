@@ -860,6 +860,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // agentic loop used to drop it entirely, so a selected GPT didn't follow
       // its own instructions. Injected at the TOP of extraSystem for primacy.
       customGptPersona = '',
+      // RLCD × Jev web-search judgement for this turn: { need, tool, freshness,
+      // force, suggest }. force → the loop opens with the search tool; suggest →
+      // the model is told the answer needs current sources; freshness → default
+      // recency window when the model omits it.
+      webSearchIntent = null,
       // Per-GPT tool capability toggles (null = legacy GPT → no gating).
       customGptCapabilities = null,
       // Semantic skill-plan ids from the preflight router. These are advisory
@@ -1601,6 +1606,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
       : null;
+    // Jev said the turn REQUIRES current web sources: open with the search tool
+    // it picked (web / academic / X / GitHub) unless a media intent already won.
+    const jevWebTool = webSearchIntent && webSearchIntent.force && availableToolNames.has(webSearchIntent.tool) ? webSearchIntent.tool : null;
+    if (!initialToolChoice && jevWebTool) initialToolChoice = jevWebTool;
+    // Jev's freshness window becomes the default when the model omits it.
+    if (webSearchIntent && webSearchIntent.freshness) {
+      for (const tool of tools) {
+        if (!tool || tool.name !== 'web_search' || typeof tool.execute !== 'function' || tool.__jevFreshness) continue;
+        const inner = tool.execute;
+        tool.execute = (args, ctx) => inner({ ...(args || {}), freshness: (args && args.freshness) || webSearchIntent.freshness }, ctx);
+        tool.__jevFreshness = webSearchIntent.freshness;
+      }
+    }
     // Document merge ("combina estos 2 words en 1"): force document_edit as
     // the FIRST tool call — its deterministic merge fast-path produces the
     // fused .docx without depending on the model choosing the right tool.
@@ -1868,6 +1886,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Memoria persistente: el índice del usuario ya está en el system prompt. Abre un tema con `memory_read_topic`, busca con `memory_search` (grep primero), recupera lo hablado en otros chats con `chat_history_search`, busca en Drive/Gmail del usuario con `connector_search`, y guarda hechos nuevos y duraderos con `memory_write` en esta misma conversación (nunca secretos ni detalles efímeros). Si el usuario pide olvidar algo, usa `memory_forget`.',
+      webSearchIntent && webSearchIntent.suggest
+        ? `Jev (juez de turno) estima que esta petición necesita fuentes actuales (${webSearchIntent.need === 'web_required' ? 'imprescindible' : 'recomendable'}): busca con \`${webSearchIntent.tool}\`${webSearchIntent.freshness ? ` usando freshness=${webSearchIntent.freshness}` : ''} antes de afirmar datos que cambian con el tiempo, y cita las URLs.`
+        : '',
       'Para continuidad entre conversaciones (el usuario dice "lo que hablamos antes", "retoma", "¿en qué quedamos?", "mis chats", "la sesión de ayer"): usa `session_list` para ver sus sesiones recientes, `session_search` para encontrar un tema concreto, y `session_history` para abrir una sesión por su id y leer el hilo completo antes de continuar. Solo accedes a sesiones del propio usuario.',
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
