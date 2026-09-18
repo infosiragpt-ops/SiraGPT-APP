@@ -5799,38 +5799,40 @@ router.post(
             }
           } catch (_ttcErr) { /* fail-open: no directive */ }
 
-          // Jev tier judge (SIRAGPT_JEV_ROUTER=on|shadow): a calibrated
-          // decision-model pass that refines the heuristic routing for the
-          // Sira flash↔pro tiers — it can propose escalating a flash turn to
-          // the pro tier or veto a heuristic pro escalation. Application
-          // still goes through the same guards below (picker wins, plan
-          // gate, provider inference); `shadow` only logs. Fail-open.
+          // Jev tier steering: apply the RLCD turn judge's model_family
+          // verdict (already computed above, no extra network call) to the
+          // Sira flash↔pro tier routing — reasoning/coding escalates a flash
+          // turn to the pro tier, fast_cheap vetoes a heuristic pro
+          // escalation. Only acts when actions.modelFamily.steer is true
+          // (SIRAGPT_RLCD_JEV_MODEL_STEERING on, confidence over threshold,
+          // no user-picked model); otherwise it logs the verdict as advisory.
+          // Application still goes through the same guards below (picker
+          // wins, plan gate, provider inference). Fail-open.
           try {
-            const jevRouter = require('../services/ai/jev-router');
-            if (jevRouter.isJevRouterEnabled() && cognitiveDecision && cognitiveDecision.routing) {
-              const __jevRefined = await jevRouter.refineRoutingWithJev(cognitiveDecision.routing, {
-                prompt,
-                contextChars: __ctxChars,
-                attachmentsCount: processedFiles.length,
-                hasImages: __hasImagesForRoute,
-                pickerLocked: String(model || '').trim().length > 0,
-                currentModel: actualModel,
-                reachableModelIds: __reachableModelIds,
-                language: (langResolution && langResolution.language) || 'es',
-              });
+            if (req._rlcdJudge && cognitiveDecision && cognitiveDecision.routing) {
+              const jevRouter = require('../services/ai/jev-router');
+              const __jevRefined = jevRouter.refineRoutingWithJevJudgement(
+                cognitiveDecision.routing,
+                req._rlcdJudge,
+                {
+                  currentModel: actualModel,
+                  hasImages: __hasImagesForRoute,
+                  reachableModelIds: __reachableModelIds,
+                },
+              );
               if (__jevRefined && __jevRefined.routing) cognitiveDecision.routing = __jevRefined.routing;
-              if (__jevRefined && __jevRefined.jev) {
-                generateLog.info('routing.jev_judged', {
-                  ok: __jevRefined.jev.ok === true,
-                  tier: __jevRefined.jev.tier || null,
-                  applied: __jevRefined.jev.applied === true,
-                  reasonCode: __jevRefined.jev.reason || null,
-                  durationMs: __jevRefined.jev.latencyMs || null,
+              if (__jevRefined && __jevRefined.steering && __jevRefined.steering.family) {
+                generateLog.info('routing.jev_tier_steering', {
+                  family: __jevRefined.steering.family,
+                  applied: __jevRefined.steering.applied === true,
+                  reasonCode: __jevRefined.steering.reason || null,
+                  steer: __jevRefined.steering.steer === true,
+                  probability: __jevRefined.steering.probability,
                 });
               }
             }
           } catch (jevErr) {
-            generateLog.warnError('routing.jev_failed', jevErr);
+            generateLog.warnError('routing.jev_tier_steering_failed', jevErr);
           }
 
           // Apply intelligent re-routing only when the orchestrator says so AND
