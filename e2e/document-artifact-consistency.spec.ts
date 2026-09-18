@@ -245,10 +245,15 @@ for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["mo
       await card.scrollIntoViewIfNeeded()
       const icon = card.getByRole("img", { name: logo[fixture.format], exact: true })
       await expect(icon).toBeVisible()
-      const image = await icon.evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, naturalWidth: (element as HTMLImageElement).naturalWidth }))
+      // The glyph is an inline SVG (components/office-file-icon.tsx), not a
+      // raster: it must be a 40×40 box tagged with its Office kind and carry
+      // the badge letter so it renders (no empty <svg>).
+      const image = await icon.evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, tag: element.tagName.toLowerCase(), kind: element.getAttribute("data-office-icon"), hasBadge: element.querySelector("text") != null && element.querySelectorAll("rect").length >= 5 }))
       expect(image.width).toBe(40)
       expect(image.height).toBe(40)
-      expect(image.naturalWidth).toBeGreaterThan(0)
+      expect(image.tag).toBe("svg")
+      expect(image.kind).toBeTruthy()
+      expect(image.hasBadge).toBe(true)
       await expect(card.getByRole("button", { name: `Ver documento: ${fixture.filename}`, exact: true })).toBeVisible()
       await expect(card.locator("button")).toHaveCount(fixture.edition === "original" ? 2 : 3)
       if (name === "desktop") await verifyDownload(page, card, fixture)

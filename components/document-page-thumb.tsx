@@ -4,6 +4,8 @@ import * as React from "react"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { cn } from "@/lib/utils"
+import { OfficeFileIcon } from "@/components/office-file-icon"
+import type { OfficeKind } from "@/lib/office-file-kind"
 import {
   detectPageThumbKind,
   renderDocumentFirstPage,
@@ -26,6 +28,14 @@ interface DocumentPageThumbProps {
   progress?: number | null
   label?: string
   className?: string
+}
+
+/** Page-thumb kind → Microsoft 365 2026 glyph shown as the card's badge. */
+const KIND_OFFICE: Partial<Record<PageThumbKind, OfficeKind>> = {
+  pdf: "pdf",
+  docx: "word",
+  xlsx: "excel",
+  pptx: "powerpoint",
 }
 
 const KIND_LABEL: Record<PageThumbKind, string> = {
@@ -54,6 +64,7 @@ function PageShell({
         : kind === "pdf"
           ? "from-red-50 to-white dark:from-red-950/30"
           : "from-sky-50 to-white dark:from-sky-950/30"
+  const office = KIND_OFFICE[kind]
   return (
     <div
       className={cn(
@@ -63,6 +74,17 @@ function PageShell({
       )}
     >
       {children}
+      {office ? (
+        // The official-style file-type badge (Word / Excel / PowerPoint / PDF),
+        // anchored bottom-left like Claude's file chips so the page preview
+        // still reads as a page but the app is recognisable at a glance.
+        <span
+          className="pointer-events-none absolute bottom-1.5 left-1.5 z-10 inline-flex items-center justify-center rounded-md bg-white/95 p-[3px] shadow-[0_2px_6px_rgba(15,23,42,0.25)] ring-1 ring-black/5 dark:bg-zinc-900/95 dark:ring-white/10"
+          data-office-badge={office}
+        >
+          <OfficeFileIcon kind={office} size={22} title={KIND_LABEL[kind]} />
+        </span>
+      ) : null}
     </div>
   )
 }

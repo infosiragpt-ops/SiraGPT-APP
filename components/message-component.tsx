@@ -98,6 +98,7 @@ import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+import { OfficeFileIcon, officeKindForMime, officeKindForName, officeKindLabel } from "@/components/office-file-icon"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { contentWithoutHiddenImages, parseMessageFilesForRender } from "@/lib/chat/message-rendering"
 import { imageAssetsFromMessages, type WorkspaceImage } from "@/lib/image-workspace"
@@ -369,19 +370,10 @@ const extractRenderableAgentTaskContent = (content: string) => {
     return raw;
 };
 
-const getDocumentChipIcon = (name: string) => {
-    const extension = name.split('.').pop()?.toLowerCase();
-    if (extension === 'doc' || extension === 'docx') {
-        return <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
-    }
-    if (extension === 'xls' || extension === 'xlsx' || extension === 'csv') {
-        return <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
-    }
-    if (extension === 'ppt' || extension === 'pptx') {
-        return <img src="/icons/Bigger P powerpoint.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
-    }
-    if (extension === 'pdf') {
-        return <img src="/icons/pdf.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+const getDocumentChipIcon = (name: string, mime?: string) => {
+    const kind = officeKindForName(name) || officeKindForMime(mime);
+    if (kind) {
+        return <OfficeFileIcon kind={kind} size={32} className="h-8 w-8 shrink-0" />;
     }
     return (
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
@@ -806,7 +798,7 @@ const MessageDocChipsInner = ({
                         </>
                     ) : (
                         <>
-                            {getDocumentChipIcon(att.name)}
+                            {getDocumentChipIcon(att.name, (att as any)?.mimeType || (att as any)?.type)}
                             <span className="flex min-w-0 flex-col">
                                 <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
                                 <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
@@ -2995,12 +2987,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     ['docx', 'doc', 'pdf', 'html', 'htm', 'xlsx', 'xls', 'pptx', 'ppt', 'csv', 'odt', 'ods', 'odp', 'rtf'].includes(extension)
                                 );
                                 const getFileIcon = () => {
-                                    if (fileNameLower.endsWith('.pdf')) {
-                                        return <img src="/icons/pdf.png" alt="PDF" loading="lazy" decoding="async" className="h-10 w-10" />;
-                                    } else if (fileNameLower.endsWith('.docx') || fileNameLower.endsWith('.doc')) {
-                                        return <img src="/icons/Word.png" alt="Word" loading="lazy" decoding="async" className="h-10 w-10" />;
-                                    } else if (isPowerPoint) {
-                                        return <PresentationIcon className="h-10 w-10 text-orange-600" />;
+                                    const officeKind = officeKindForName(fileNameLower) || (isPowerPoint ? 'powerpoint' : null);
+                                    if (officeKind) {
+                                        return <OfficeFileIcon kind={officeKind} size={40} className="h-10 w-10" title={officeKindLabel(officeKind)} />;
                                     }
                                     return <FileText className="h-10 w-10 text-primary" />;
                                 };
