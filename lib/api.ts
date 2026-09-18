@@ -3251,6 +3251,22 @@ class ApiClient {
     return this.request('/rlhf/stats');
   }
 
+  async getRlcdStats() {
+    return this.request('/rlcd/stats');
+  }
+
+  async getRlcdDecisions(params?: { limit?: number; kind?: string }) {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.kind) q.set('kind', params.kind);
+    const qs = q.toString();
+    return this.request(`/rlcd/decisions${qs ? `?${qs}` : ''}`);
+  }
+
+  async postRlcdPersist() {
+    return this.request('/rlcd/persist', { method: 'POST' });
+  }
+
   async postRlhfTrain(scope?: string) {
     return this.request('/rlhf/train', {
       method: 'POST',

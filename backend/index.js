@@ -1875,6 +1875,17 @@ async function startServer() {
         5000,
     );
 
+    // RLCD ledger persistence: restore bins/counters from system_settings,
+    // flush periodically and on shutdown (registered inside start()). No
+    // migration: reuses the SystemSettings key/value table. Fail-open.
+    try {
+        require('./src/services/rlcd/persistence')
+            .start({ prisma, shutdownRegistry, logger })
+            .catch((err) => logger.warn(`[rlcd] persistence start failed: ${err && err.message}`));
+    } catch (err) {
+        logger.warn(`[rlcd] persistence unavailable: ${err && err.message}`);
+    }
+
     shutdownRegistry.register('workspace_runner_stop', async () => {
         await workspaceRunner.stopAll();
     }, 5000);

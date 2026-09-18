@@ -286,7 +286,25 @@ function ledgerStats({ admin = false } = {}) {
     reliability: s.reliability.map((r) => ({ kind: r.kind, samples: r.samples, ece: r.ece, brier: r.brier, accuracy: r.accuracy })),
   };
   if (!admin) return base;
-  return { ...base, outcomesUnmatched: s.outcomesUnmatched, pending: s.pending, byKind: s.byKind, byOutcome: s.byOutcome, lane: s.lane, reliabilityBins: s.reliability };
+  // eslint-disable-next-line global-require
+  const persistence = require('./persistence');
+  // eslint-disable-next-line global-require
+  const config = require('./config');
+  return {
+    ...base,
+    outcomesUnmatched: s.outcomesUnmatched,
+    pending: s.pending,
+    byKind: s.byKind,
+    byOutcome: s.byOutcome,
+    lane: s.lane,
+    reliabilityBins: s.reliability,
+    config: config.describe(),
+    persistence: persistence.status(),
+  };
+}
+
+function recentDecisions(opts = {}) {
+  return ledger.recentDecisions(opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -702,7 +720,10 @@ module.exports = {
   rawMediaConfidence,
   recordOutcome,
   recordThumb,
+  recentDecisions,
   stats,
+  get persistence() { return require('./persistence'); },
+  get config() { return require('./config'); },
   toPrometheusText: ledger.toPrometheusText,
   snapshot: ledger.snapshot,
   load: ledger.load,
