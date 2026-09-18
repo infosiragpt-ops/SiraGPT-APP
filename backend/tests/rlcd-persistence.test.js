@@ -39,7 +39,7 @@ test.beforeEach(() => { ledger.reset(); persistence.resetForTests(); });
 
 test('config.describe: single reviewable place, env overrides are flagged', () => {
   const d = config.describe({});
-  assert.deepEqual(Object.keys(d.kinds), ['intent_triage', 'execution_lane', 'model_route', 'compute_mode', 'media_intent']);
+  assert.deepEqual(Object.keys(d.kinds), ['intent_triage', 'execution_lane', 'model_route', 'compute_mode', 'media_intent', 'tool_risk', 'skill_route', 'rag_filter']);
   assert.equal(d.thresholds.laneThreshold.value, 0.6);
   assert.equal(d.thresholds.mediaAsk.value, 0.35);
   assert.equal(d.flags.jev.value, false, 'jev is off without a key');

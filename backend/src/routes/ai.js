@@ -3893,6 +3893,39 @@ router.post(
         generateLog.warnError('rag.rerank_failed', rerankErr);
       }
 
+      // RLCD × Jev RAG filter (fase 2c): score every retrieved hit against
+      // the question, drop the irrelevant ones and re-render the evidence
+      // block with the essential passage first. Fail-open, ≤1.5 s.
+      try {
+        if (operationalRagContext && Array.isArray(operationalRagContext.hits) && operationalRagContext.hits.length >= 3) {
+          const ragFilter = require('../services/rlcd/jev-rag-filter');
+          if (ragFilter.isRagFilterEnabled()) {
+            const __filtered = await ragFilter.filterHits({
+              query: prompt,
+              hits: operationalRagContext.hits,
+              chatId: canPersist ? chatId : null,
+              ledger: require('../services/rlcd').ledger,
+            });
+            if (__filtered && Array.isArray(__filtered.hits) && __filtered.hits.length) {
+              const __before = operationalRagContext.hits.length;
+              operationalRagContext.hits = __filtered.hits;
+              operationalRagContext.contextBlock = operationalRag.buildEvidenceBlock({
+                query: prompt,
+                collection: operationalRagContext.collection,
+                docs: operationalRagContext.docs,
+                hits: __filtered.hits,
+                graphAnswer: operationalRagContext.graphAnswer || null,
+                retrievalMeta: operationalRagContext.retrievalMeta || {},
+              });
+              if (__filtered.decisionId) req._rlcdRagDecisionId = __filtered.decisionId;
+              generateLog.info('rlcd.rag_filtered', { before: __before, after: __filtered.hits.length, dropped: __filtered.dropped, latencyMs: __filtered.latencyMs });
+            }
+          }
+        }
+      } catch (ragFilterErr) {
+        generateLog.warnError('rag.rerank_failed', ragFilterErr);
+      }
+
       const evidenceBlock = operationalRagContext?.contextBlock
         ? `\n\n${operationalRagContext.contextBlock}`
         : '';
@@ -5634,13 +5667,64 @@ router.post(
           // faithfulness) are joined later by messageId / chat.
           try {
             const rlcd = require('../services/rlcd');
+            req._rlcdSignature = rlcd.signatureFor({ intent: cognitiveDecision.intent, difficulty: cognitiveDecision.difficulty, model: actualModel });
+            // Fase 2a — Jev turn judge: one calibrated fan-out per turn (lane,
+            // missing context, depth, model family, satisfaction with the
+            // previous answer). Runs BEFORE this turn's decisions are recorded
+            // so the satisfaction outcome lands on the previous turn. It may
+            // add or veto a clarification and adjust compute when the user did
+            // not pick a reasoning effort. Never overrides a picked model.
+            req._rlcdJudge = null;
+            try {
+              const __hist = Array.isArray(__conversationHistoryForUnderstanding) ? __conversationHistoryForUnderstanding : [];
+              const __prevAnswer = [...__hist].reverse().find((m) => m && m.role === 'assistant');
+              const __files = (typeof processedFiles !== 'undefined' && Array.isArray(processedFiles)) ? processedFiles : [];
+              const __judged = await rlcd.judgeTurnWithJev({
+                chatId: canPersist ? chatId : null,
+                text: prompt,
+                history: __hist.slice(-4),
+                previousAnswer: __prevAnswer ? __prevAnswer.content : null,
+                hasImage: __files.some((file) => file && isImageMime(file.mimeType || file.type)),
+                hasDocs: __files.some((file) => file && !isImageMime(file.mimeType || file.type)),
+                fileNames: __files.map((file) => file && (file.originalName || file.name || file.filename)).filter(Boolean),
+                userPickedModel: String(model || '').trim().length > 0,
+                userSetEffort: Boolean(req.body && req.body.reasoningEffort),
+                heuristicAsk: Boolean(intentTriageDecision && intentTriageDecision.action === 'ask'),
+                signature: req._rlcdSignature || null,
+              });
+              if (__judged) {
+                req._rlcdJudge = __judged;
+                const __a = __judged.actions;
+                generateLog.info('rlcd.turn_judged', { lane: __judged.judgement.lane.choice, laneP: __judged.judgement.lane.probability, needsContext: __judged.judgement.needsContext, depth: __judged.judgement.depth && __judged.judgement.depth.label, family: __judged.judgement.modelFamily && __judged.judgement.modelFamily.choice, satisfaction: __judged.satisfactionOutcome, latencyMs: __judged.judgement.latencyMs });
+                if (__a.ask && __judged.question && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
+                  intentTriageDecision = { action: 'ask', question: __judged.question, reason: 'jev_needs_context', source: 'rlcd_jev', score: __a.calibrated.ask };
+                  generateLog.info('rlcd.jev_ask', { calibrated: __a.calibrated.ask, needsContext: __judged.judgement.needsContext });
+                } else if (__a.vetoAsk && intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.source !== 'rlcd_media') {
+                  generateLog.info('rlcd.jev_ask', { vetoed: true, previousReason: intentTriageDecision.reason, needsContext: __judged.judgement.needsContext });
+                  intentTriageDecision = { ...intentTriageDecision, action: 'execute', vetoedBy: 'rlcd_jev' };
+                }
+                if (__a.computeLevel && cognitiveDecision) {
+                  const __ro = require('../services/reasoning-orchestrator');
+                  const __plan = __a.computeLevel === 'minimal'
+                    ? { mode: 'direct', samples: 1, reasoningEffort: 'low', reflection: false }
+                    : __ro.computeForEffort(__a.computeLevel);
+                  if (__plan) {
+                    cognitiveDecision.compute = __plan;
+                    generateLog.info('rlcd.jev_compute', { level: __a.computeLevel, depth: __judged.judgement.depth && __judged.judgement.depth.label, confidence: __judged.judgement.depth && __judged.judgement.depth.confidence });
+                  }
+                }
+              }
+            } catch (_) { /* judge is advisory */ }
             req._rlcdDecisionIds = rlcd.recordTurnDecisions({
               chatId: canPersist ? chatId : null,
               triage: intentTriageDecision,
               cognitive: cognitiveDecision,
               model: actualModel,
             });
-            req._rlcdSignature = rlcd.signatureFor({ intent: cognitiveDecision.intent, difficulty: cognitiveDecision.difficulty, model: actualModel });
+            if (req._rlcdJudge && req._rlcdJudge.decisionIds.length) {
+              req._rlcdDecisionIds.push(...req._rlcdJudge.decisionIds);
+              if (canPersist && chatId) rlcd.ledger.appendTurn(chatId, req._rlcdJudge.decisionIds);
+            }
             if (req._rlcdDecisionIds.length) {
               generateLog.info('rlcd.decisions_recorded', { count: req._rlcdDecisionIds.length });
             }
@@ -7274,11 +7358,21 @@ router.post(
                   req._rlcdDecisionIds = [...(req._rlcdDecisionIds || []), __rlcdLane.decisionId];
                   if (canPersist && chatId) rlcd.ledger.markTurn(chatId, req._rlcdDecisionIds);
                 }
+                // Fase 2a — Jev's lane opinion (force when the heuristics missed
+                // a tool task; veto only behind SIRAGPT_RLCD_JEV_LANE_VETO).
+                if (req._rlcdJudge) {
+                  const __jevLaneId = rlcd.applyJevLane(__rlcdLane, req._rlcdJudge, { heuristicAgentic: shouldRunAgentic, chatId: canPersist ? chatId : null, signature: req._rlcdSignature || null });
+                  if (__jevLaneId) req._rlcdDecisionIds = [...(req._rlcdDecisionIds || []), __jevLaneId];
+                  if (__rlcdLane.reason === 'jev' || __rlcdLane.reason === 'jev_veto') {
+                    generateLog.info('rlcd.jev_lane', { reason: __rlcdLane.reason, agentic: Boolean(__rlcdLane.agentic), heuristicAgentic: Boolean(shouldRunAgentic), laneChoice: req._rlcdJudge.judgement.lane.choice });
+                  }
+                }
                 generateLog.info('rlcd.lane_decided', { agentic: Boolean(__rlcdLane.agentic), forced: Boolean(__rlcdLane.forced), calibrated: __rlcdLane.calibrated == null ? null : __rlcdLane.calibrated });
               } catch (_) { /* RLCD is advisory */ }
               const __agenticWillRun = (
                 agenticStream.isEnabled()
                 && (shouldRunAgentic || __rlcdLane.forced === true || (req._rlcdMedia && req._rlcdMedia.force === true) || documentEditRequested || createDocRequested)
+                && !(__rlcdLane.vetoed === true && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)
@@ -7862,6 +7956,39 @@ router.post(
                 }
               } catch (_) { /* noop */ }
             }
+            // RLCD × Jev grounded-answer check (fase 2c): calibrated verdict on
+            // whether the answer is supported by the sources; scores the
+            // turn's decisions and warns the user only when confidently
+            // unsupported and the heuristic gate stayed silent.
+            try {
+              const jevFaith = require('../services/rlcd/jev-faithfulness');
+              if (jevFaith.isFaithfulnessEnabled()) {
+                const __sources = faithGate.buildGroundingContext({
+                  evidenceBlock,
+                  uploadedFileContext: uploadedFileContextForTurn,
+                  documentEnrichmentBlock,
+                  memoryBlock,
+                  activeMemoryBlock,
+                  crossChatBlock,
+                  webSearchBlock,
+                });
+                if (__sources.length) {
+                  const __jf = await jevFaith.checkAnswer({ question: prompt, answer: fullResponseContent, sources: __sources, language: (langResolution && langResolution.language) || 'es' });
+                  if (__jf) {
+                    generateLog.info('rlcd.jev_faithfulness', { verdict: __jf.verdict, supported: __jf.supported, invented: __jf.invented, coverage: __jf.coverage, latencyMs: __jf.latencyMs });
+                    if (__jf.outcome) {
+                      const __ids = [...(Array.isArray(req._rlcdDecisionIds) ? req._rlcdDecisionIds : []), ...(req._rlcdRagDecisionId ? [req._rlcdRagDecisionId] : [])];
+                      if (__ids.length) { try { require('../services/rlcd').recordOutcome({ decisionIds: __ids, outcome: __jf.outcome, source: 'jev_faithfulness' }); } catch (_) { /* advisory */ } }
+                      try { require('../services/routing-feedback').recordOutcome({ intent: req._cognitiveDecision && req._cognitiveDecision.intent, difficulty: req._cognitiveDecision && req._cognitiveDecision.difficulty, model: actualModel, outcome: __jf.outcome }); } catch (_) { /* advisory */ }
+                    }
+                    if (__jf.verdict === 'low' && __jf.footer && __faith.action !== 'annotate' && !res.writableEnded) {
+                      res.write(`data: ${JSON.stringify({ content: __jf.footer })}\n\n`);
+                      fullResponseContent = `${fullResponseContent}${__jf.footer}`;
+                    }
+                  }
+                }
+              }
+            } catch (_) { /* advisory */ }
             if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
               res.write(`data: ${JSON.stringify({ content: __faith.footer })}\n\n`);
               fullResponseContent = `${fullResponseContent}${__faith.footer}`;
