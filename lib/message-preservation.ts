@@ -22,6 +22,17 @@ const asText = (value: unknown) =>
 
 const hasText = (value: unknown) => asText(value).trim().length > 0;
 
+/**
+ * Optimistic placeholder sentinels the composer inserts while a job runs
+ * ("[GENERATING_IMAGE]", "[GENERATING_PPT]", "[PROCESSING_GMAIL]", …). They
+ * are never real content: a server refresh must not treat them as richer
+ * than the persisted turn (that grafted "Generando…" onto the finished
+ * image and showed the card twice) nor keep them as orphans once the server
+ * has the turn.
+ */
+const PLACEHOLDER_SENTINEL_RE = /^\s*\[(?:GENERATING|PROCESSING|THESIS_GENERATING)[A-Z_]*\]/;
+export const isPlaceholderSentinel = (value: unknown) => PLACEHOLDER_SENTINEL_RE.test(asText(value));
+
 const AGENT_TASK_STATE_RE = /^```agent-task-state\s*\n([\s\S]*?)\n```\s*/;
 
 export type AgentTaskContentInfo = {
@@ -101,6 +112,7 @@ const shouldPreserveLocalAssistantContent = (incomingContent: unknown, localCont
   const incomingText = asText(incomingContent);
   const localText = asText(localContent);
   if (!hasText(localText)) return false;
+  if (isPlaceholderSentinel(localText)) return false;
 
   const incomingTask = parseAgentTaskContent(incomingText);
   const localTask = parseAgentTaskContent(localText);
@@ -695,7 +707,7 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
     if (!local) return false;
     // Skip orphans whose id already exists incoming (paranoid dedupe).
     if (local.id && incomingIds.has(String(local.id))) return false;
-    if (hasText(local.content) || hasFiles(local.files)) return true;
+    if ((hasText(local.content) && !isPlaceholderSentinel(local.content)) || hasFiles(local.files)) return true;
     // An EMPTY placeholder is the live stream's landing spot. Drop it only
     // once the server has an assistant row for the same turn; otherwise a
     // refresh racing the first token deletes the message the chunks are
