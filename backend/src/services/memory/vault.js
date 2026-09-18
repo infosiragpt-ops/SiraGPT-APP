@@ -127,6 +127,11 @@ function toEntry(row) {
   };
 }
 
+// cross-chat-retrieval.js stores RAW conversation turns in the same table
+// (source `chat:<id>`, importance 0.1) for similarity recall. They are not
+// facts about the user and must never surface in the index or the tools.
+const VAULT_ROW_WHERE = Object.freeze({ NOT: { source: { startsWith: 'chat:' } } });
+
 const BASE_SELECT = { id: true, userId: true, content: true, category: true, importanceScore: true, confidence: true, source: true, createdAt: true, updatedAt: true, contentHash: true };
 
 async function listRows(userId, { topic = null, limit = 500 } = {}) {
@@ -134,7 +139,7 @@ async function listRows(userId, { topic = null, limit = 500 } = {}) {
   if (!db || !userId) return [];
   try {
     return await db.userMemory.findMany({
-      where: { userId, ...(topic ? { category: normalizeTopic(topic) } : {}) },
+      where: { userId, ...VAULT_ROW_WHERE, ...(topic ? { category: normalizeTopic(topic) } : {}) },
       select: BASE_SELECT,
       orderBy: [{ importanceScore: 'desc' }, { updatedAt: 'desc' }],
       take: Math.max(1, Math.min(2000, limit)),
@@ -221,6 +226,7 @@ async function grep(userId, query, { limit = 10, topic = null } = {}) {
     rows = await db.userMemory.findMany({
       where: {
         userId,
+        ...VAULT_ROW_WHERE,
         ...(topic ? { category: normalizeTopic(topic) } : {}),
         ...(termList.length ? { OR: termList.map((t) => ({ content: { contains: t, mode: 'insensitive' } })) } : {}),
       },
@@ -408,7 +414,7 @@ async function importLegacy(userId) {
   try {
     const db = prisma();
     if (!db) return { imported: 0 };
-    const count = await db.userMemory.count({ where: { userId } });
+    const count = await db.userMemory.count({ where: { userId, ...VAULT_ROW_WHERE } });
     if (count > 0) return { imported: 0 };
     // eslint-disable-next-line global-require
     const legacy = require('../memory-document');

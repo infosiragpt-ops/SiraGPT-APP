@@ -147,6 +147,22 @@ test('recordFacts (extractor sink) and importLegacy (one-time, only into an empt
   }
 });
 
+test('cross-chat raw turns (source chat:<id>) never surface in the index, topics, grep or stats', async () => {
+  await vault.write(U, { text: 'Prefiere respuestas breves', topic: 'preference' });
+  // rows written by cross-chat-retrieval.indexTurn share the table
+  await db.userMemory.create({ data: { userId: U, content: '¡Hola, Luis! ¿En qué te ayudo hoy? 😊', category: 'chat_turn_assistant', importanceScore: 0.1, confidence: 0.7, contentHash: 'h1', source: 'chat:cm123' } });
+  await db.userMemory.create({ data: { userId: U, content: 'cuanto es 1 mas 1 respuestas', category: 'chat_turn_user', importanceScore: 0.1, confidence: 0.7, contentHash: 'h2', source: 'chat:cm123' } });
+  assert.equal((await vault.list(U)).length, 1);
+  assert.equal((await vault.stats(U)).total, 1);
+  const block = await vault.buildIndexBlock(U);
+  assert.doesNotMatch(block, /Hola, Luis/); assert.match(block, /Prefiere respuestas breves/);
+  assert.equal((await vault.grep(U, 'respuestas')).length, 1, 'grep skips raw turns even when terms match');
+  assert.equal((await vault.readTopic(U, 'knowledge')).entries.length, 0);
+  assert.equal((await vault.importLegacy('fresh')).imported, 0);
+  await vault.clear(U);
+  assert.equal(await db.userMemory.count({ where: { userId: U } }), 0, 'privacy wipe still removes everything');
+});
+
 test('fails soft when the database is down', async () => {
   vault.setDeps({ prisma: { userMemory: { findMany: async () => { throw new Error('boom'); }, findUnique: async () => { throw new Error('boom'); } } }, log: { warn() {}, info() {} } });
   assert.deepEqual(await vault.list(U), []);
