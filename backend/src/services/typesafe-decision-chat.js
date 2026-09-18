@@ -80,7 +80,14 @@ function uniqueOptions(list) {
 
 function questionLine(text) {
   const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
-  const q = lines.find((l) => /[?？]\s*$/.test(l) || /^¿/.test(l));
+  const q = lines.find((l) => /[?？]\s*$/.test(l) || /^¿/.test(l) || /[?？]/.test(l));
+  if (q && /[?？]/.test(q) && !/[?？]\s*$/.test(q)) {
+    // "¿A o B? Somos 3 personas." → keep the question sentence only; the
+    // rest still travels in the state as context.
+    const cut = q.slice(0, q.search(/[?？]/) + 1);
+    const start = cut.lastIndexOf('¿');
+    return (start >= 0 ? cut.slice(start) : cut).trim();
+  }
   return q || lines[0] || String(text || '').trim();
 }
 
@@ -118,6 +125,14 @@ function detectChoice(text) {
     if (parts.length >= 2 && parts.length <= 12 && parts.every((p) => p.split(/\s+/).length <= 6)) {
       const opts = uniqueOptions(parts);
       if (opts.length >= 2) return { instructions: q, options: opts };
+    }
+    // 4) long either/or ("¿Debería desplegar el viernes por la tarde o el lunes
+    //    por la mañana?"): exactly two sides, each up to 14 words → a Choice
+    //    between the two alternatives instead of a meaningless yes/no.
+    const sides = tail.split(/\s+(?:o|u|or)\s+/i).map(cleanOption).filter(Boolean);
+    if (sides.length === 2 && sides.every((p) => p.split(/\s+/).length <= 14)) {
+      const opts = uniqueOptions(sides);
+      if (opts.length === 2) return { instructions: q, options: opts };
     }
   }
   return null;
