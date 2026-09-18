@@ -455,6 +455,18 @@ function attachFallbackCharge(req, {
 /**
  * Middleware factory.
  */
+/**
+ * Admins and super-admins have unlimited credits: the product owner must
+ * never be blocked by the ledger on their own platform. Plan ENTERPRISE
+ * (pay-as-you-go / custom) is also unmetered here — its budget is null in
+ * the plan catalog.
+ */
+function hasUnlimitedCredits(user) {
+  if (!user) return false;
+  if (user.isAdmin === true || user.isSuperAdmin === true) return true;
+  return String(user.plan || '').toUpperCase() === 'ENTERPRISE';
+}
+
 function chargeCredits(spec = {}) {
   const {
     feature,
@@ -475,6 +487,15 @@ function chargeCredits(spec = {}) {
       if (!amount || amount <= 0) {
         // Zero-cost features (e.g. internal admin previews) bypass the
         // ledger so the route still runs.
+        return next();
+      }
+      if (hasUnlimitedCredits(req.user)) {
+        // Administrators are never metered: no reservation, no 402, no
+        // refund bookkeeping (refundLastCharge skips when nothing was
+        // charged). The feature still runs exactly as for paying users.
+        req._chargedCredits = null;
+        req._creditsUnlimited = true;
+        res.set('x-sira-credits', 'unlimited');
         return next();
       }
       const clientIdempotencyKey = pickIdempotencyKey(req);
@@ -624,6 +645,7 @@ async function refundLastCharge(req, reason, {
 
 module.exports = chargeCredits;
 module.exports.chargeCredits = chargeCredits;
+module.exports.hasUnlimitedCredits = hasUnlimitedCredits;
 module.exports.spendCredits = spendCredits;
 module.exports.refundCharge = refundCharge;
 module.exports.refundLastCharge = refundLastCharge;
