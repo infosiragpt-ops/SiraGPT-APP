@@ -47,6 +47,9 @@ const PROVIDER_ENV_MAP = Object.freeze({
   fireworks: 'FIREWORKS_API_KEY',
   fal: 'FAL_KEY',
   meta: 'MODEL_API_KEY',
+  // TypeSafe AI (Jev decision model). Read lazily per request by
+  // services/providers/typesafe.js — same mechanism as the chat providers.
+  typesafe: 'TYPESAFE_API_KEY',
   // Music providers (production-music module): admin-managed keys feed the
   // music services, which read these env vars lazily per request — same
   // mechanism as the chat providers above. ELEVENLABS_API_KEY also serves
@@ -84,6 +87,7 @@ const PROVIDER_CATALOG_MAP = Object.freeze({
   fireworks: 'Fireworks',
   fal: 'fal.ai',
   meta: 'Meta',
+  typesafe: 'TypeSafe',
   elevenlabs: 'ElevenLabs',
   minimax: 'MiniMax',
   suno: 'Suno',
@@ -105,6 +109,7 @@ const PROVIDER_PROBE = Object.freeze({
   together:   { url: 'https://api.together.xyz/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fireworks:  { url: 'https://api.fireworks.ai/inference/v1/models',                auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   meta:       { url: 'https://api.meta.ai/v1/models',                               auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  typesafe:   { url: 'https://api.typesafe.ai/v1/models',                           auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fal:        { url: 'https://api.fal.ai/v1/models?limit=1',                         auth: (k) => ({ Authorization: /^key\s+/i.test(k) ? k : `Key ${k}` }) },
   // ElevenLabs authenticates with xi-api-key (not Bearer). GET /v1/models is
   // a lightweight key check — it lists TTS models, not music, but a 200

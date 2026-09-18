@@ -122,6 +122,7 @@ const KNOWN_PROVIDERS = new Set([
   'deepseek',
   'xai',
   'meta',
+  'typesafe',
   'fal',
   // Music providers (production-music module): keys feed the music services
   // through admin-connections-bridge. Without these entries the normaliser
@@ -150,6 +151,7 @@ const DEFAULT_PROVIDER_LABELS = {
   deepseek: 'DeepSeek API',
   xai: 'xAI API',
   meta: 'Meta Model API',
+  typesafe: 'TypeSafe AI API (Jev, decisiones)',
   fal: 'fal.ai Video API',
   elevenlabs: 'ElevenLabs API (voz + música)',
   minimax: 'MiniMax API (música)',

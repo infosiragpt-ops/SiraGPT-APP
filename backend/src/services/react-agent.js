@@ -475,12 +475,16 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
 const MEDIA_TOOL_NAMES = new Set(['generate_image', 'edit_image', 'generate_video', 'generate_music', 'generate_speech']);
 function recordMediaToolOutcome(name, result, ctx) {
   try {
-    if (!MEDIA_TOOL_NAMES.has(String(name || '')) || !ctx || !ctx.chatId) return;
+    const toolName = String(name || '');
+    const isMedia = MEDIA_TOOL_NAMES.has(toolName);
+    // run_skill outcomes score the turn's skill_route decision (fase 2b).
+    const isSkill = toolName === 'run_skill' || toolName === 'run_skill_pipeline';
+    if ((!isMedia && !isSkill) || !ctx || !ctx.chatId) return;
     // eslint-disable-next-line global-require
     require('./rlcd').recordOutcome({
       chatId: String(ctx.chatId),
       outcome: isReportedToolFailure(result) ? 'failure' : 'tool_success',
-      source: 'media_tool',
+      source: isMedia ? 'media_tool' : 'skill',
     });
   } catch (_) { /* advisory */ }
 }

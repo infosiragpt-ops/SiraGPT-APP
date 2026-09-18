@@ -45,6 +45,7 @@
   const { projectReadTool, projectWriteTool, projectExecTool } = require('./agents/project-workspace-tools');
   const { projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool } = require('./agents/project-preview-tools');
   const { projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool } = require('./agents/project-changes-tools');
+  const { decideWithJevTool } = require('./agents/typesafe-decision-tool');
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { prepareAgentPluginLifecycle } = require('./agents/agent-plugin-lifecycle');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
@@ -1263,10 +1264,32 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const allowedSkillSet = Array.isArray(customGptAgentPolicy.allowedSkillIds)
       ? new Set(customGptAgentPolicy.allowedSkillIds)
       : null;
-    const runtimeRecommendedSkillIds = Array.from(new Set([
+    let runtimeRecommendedSkillIds = Array.from(new Set([
       ...(customGptAgentPolicy.recommendedSkillIds || []),
       ...inferRecommendedSkills(userQuery, customGptSkillPlan?.selectedSkillIds || []),
     ])).filter((skillId) => !allowedSkillSet || allowedSkillSet.has(skillId));
+    // RLCD × Jev skill picker (fase 2b): one Choice over the visible skill
+    // catalogue; Jev's picks go first as RECOMENDADA. Fail-open, ≤1.5 s.
+    try {
+      const skillPicker = require('./rlcd/jev-skill-picker');
+      if (skillPicker.isSkillPickerEnabled()) {
+        const skillRunnerMod = require('./agents/skill-runner');
+        const descriptors = typeof skillRunnerMod.listSkillDescriptors === 'function'
+          ? skillRunnerMod.listSkillDescriptors({ clearance: (opts && opts.clearance) || null, ...(allowedSkillSet ? { allowedSkillIds: Array.from(allowedSkillSet) } : {}) })
+          : [];
+        const picked = await skillPicker.pickSkills({
+          query: userQuery,
+          descriptors,
+          history: Array.isArray(history) ? history.slice(-2) : [],
+          chatId: toolContext.chatId || null,
+          ledger: require('./rlcd').ledger,
+        });
+        if (picked && picked.recommended.length) {
+          runtimeRecommendedSkillIds = Array.from(new Set([...picked.recommended, ...runtimeRecommendedSkillIds]))
+            .filter((skillId) => !allowedSkillSet || allowedSkillSet.has(skillId));
+        }
+      }
+    } catch (_) { /* advisory */ }
     const runtimeSkillPolicy = {
       ...customGptAgentPolicy,
       recommendedSkillIds: runtimeRecommendedSkillIds,
@@ -1494,6 +1517,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           coworkRunId: toolContext.coworkRunId || null,
           // Protegido reviewer: the event stream pauses write-side tools on
           // permission_request when this is 'protected'.
+          // RLCD × Jev tool guard reads the user's request to judge each call.
+          userQuery: typeof userQuery === 'string' ? userQuery : null,
           composerPermission: toolContext.permission
             || toolContext.toolPermission
             || toolContext.composerPermission
@@ -2749,7 +2774,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    *   lean. Calling with no args keeps the legacy base toolset.
    */
   function buildDefaultTools(opts = {}) {
-    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool, projectReadTool, projectWriteTool, projectExecTool, projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool, projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool];
+    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool, projectReadTool, projectWriteTool, projectExecTool, projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool, projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool, decideWithJevTool];
     const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
 
     // Phase C: expose the real, policy-gated filesystem skills (openalex,

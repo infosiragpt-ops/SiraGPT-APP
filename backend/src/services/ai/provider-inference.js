@@ -31,6 +31,7 @@ const KNOWN_PROVIDERS = Object.freeze([
   'Cerebras',
   'Meta',
   'xAI',
+  'TypeSafe',
   'Custom',
   'OpenAI',
 ]);
@@ -88,6 +89,7 @@ function providerConnectionReady(provider, env = process.env) {
   if (/^mistral$/i.test(p)) return has('MISTRAL_API_KEY');
   if (/^(xai|x-ai|grok)$/i.test(p)) return has('XAI_API_KEY');
   if (/^(meta|llama)$/i.test(p)) return has('MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY');
+  if (/^typesafe$/i.test(p)) return has('TYPESAFE_API_KEY');
   if (/^cerebras$/i.test(p)) return has('CEREBRAS_API_KEY');
   if (/^(z\.ai|zai)$/i.test(p)) return has('ZAI_API_KEY');
   return has(`${p.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`);
@@ -96,6 +98,11 @@ function providerConnectionReady(provider, env = process.env) {
 function inferProviderFromModelId(modelId) {
   const m = normaliseModelId(modelId).toLowerCase();
   if (!m) return 'OpenAI';
+
+  // TypeSafe AI (System One / Jev): `typesafe/jev-latest`, `typesafe/jev-1.13`,
+  // bare `jev-*`. A decision model, not chat completions — ai-service branches
+  // to the decision adapter before any OpenAI-shaped client is touched.
+  if (m.startsWith('typesafe/') || m.startsWith('typesafe:') || /^jev(-|$)/.test(m)) return 'TypeSafe';
 
   // 0) Local SiraGPT Mini (Custom/Ollama). Never infer OpenAI/DeepSeek —
   //    that silent swap sent Mini turns to Sira Rápido.

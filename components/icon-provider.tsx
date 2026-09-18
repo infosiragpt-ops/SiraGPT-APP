@@ -85,6 +85,7 @@ export const iconMap: { [key: string]: IconConfig } = {
     SeedreamLogo: { type: 'svg', component: Palette },
     QwenLogo: { type: 'png', imagePath: '/icons/qwen.svg', preserveColor: true },
     MetaLogo: { type: 'png', imagePath: '/icons/meta.svg', preserveColor: true },
+    TypeSafeLogo: { type: 'png', imagePath: '/icons/typesafe.svg', preserveColor: true },
     MistralLogo: { type: 'png', imagePath: '/icons/mistral.svg', preserveColor: true },
     NvidiaLogo: { type: 'png', imagePath: '/icons/nvidia.svg', preserveColor: true },
     PoolsideLogo: { type: 'png', imagePath: '/icons/poolside.svg', preserveColor: true },

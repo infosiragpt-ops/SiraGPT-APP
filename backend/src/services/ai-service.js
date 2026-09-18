@@ -536,6 +536,39 @@ class AIService {
         }
     }
 
+    /**
+     * TypeSafe Jev turn. Emits the same `text_delta` frames as a chat
+     * completion so the SSE consumer, persistence and usage accounting stay
+     * untouched, and returns the rendered card as the assistant content.
+     */
+    async streamTypeSafeDecision({ model, messages, res, signal, userPrompt = '', onProviderFailure = null }) {
+        // eslint-disable-next-line global-require
+        const decisionChat = require('./typesafe-decision-chat');
+        const textOf = (m) => {
+            if (!m) return '';
+            if (typeof m.content === 'string') return m.content;
+            if (Array.isArray(m.content)) {
+                return m.content.map((p) => (p && typeof p.text === 'string' ? p.text : '')).filter(Boolean).join('\n');
+            }
+            return '';
+        };
+        const turns = (Array.isArray(messages) ? messages : []).filter((m) => m && m.role !== 'system');
+        const last = turns.length ? turns[turns.length - 1] : null;
+        const prompt = String(userPrompt || '').trim() || textOf(last);
+        const history = (last && last.role === 'user' ? turns.slice(0, -1) : turns)
+            .map((m) => ({ role: m.role, content: textOf(m) }))
+            .filter((m) => m.content);
+        const out = await decisionChat.runDecisionTurn({ text: prompt, history, model, signal });
+        if (out.error) {
+            console.warn(`[typesafe] decision turn failed: ${out.error.code || ''} ${out.error.message || ''}`);
+            if (typeof onProviderFailure === 'function' && out.error.code !== 'typesafe_invalid_request') {
+                try { onProviderFailure({ code: 'provider_failure', provider: 'TypeSafe', model, reason: out.error.code }); } catch { /* advisory */ }
+            }
+        }
+        await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'text_delta', content: out.text })}\n\n`);
+        return out.text;
+    }
+
     async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null }) {
         // The route hands us a client for the provider it resolved. When an
         // image turn has to leave a text-only model, `provider` changes below;
@@ -578,6 +611,13 @@ class AIService {
 
         provider = normalizeChatProvider(provider, model);
         model = normalizeModelForProvider(provider, model);
+        if (/^typesafe$/i.test(String(provider || ''))) {
+            // TypeSafe Jev: a System One decision model. It has no chat
+            // completions endpoint, so the whole turn is served by the
+            // decision adapter (state + typed questions → calibrated
+            // probabilities) and rendered as a deterministic Markdown card.
+            return await this.streamTypeSafeDecision({ model, messages, res, signal, userPrompt, onProviderFailure });
+        }
         let fullResponseContent = '';
         let hasStreamedAnyContent = false;
         const normalizedTemperature = normalizeTemperature(temperature);

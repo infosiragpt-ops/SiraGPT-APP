@@ -25,6 +25,7 @@ export const MODEL_PROVIDER_ORDER = [
   "Moonshot AI",
   "Qwen",
   "Meta",
+  "TypeSafe",
   "Mistral AI",
   "NVIDIA",
   "Poolside",
@@ -59,6 +60,7 @@ export function resolveModelProviderName(model: ModelIconInput | null | undefine
   if (has(searchable, /groq\/|\bgroq\b/)) return "Groq"
   if (has(searchable, /nvidia\/|nvidia|nemotron/)) return "NVIDIA"
   if (has(searchable, /poolside\/|poolside|laguna/)) return "Poolside"
+  if (has(searchable, /typesafe\/|\btypesafe\b|\bjev\b/)) return "TypeSafe"
   if (has(searchable, /meta-llama\/|meta\/|llama/)) return "Meta"
   if (has(searchable, /mistralai\/|mistral|codestral/)) return "Mistral AI"
   if (has(searchable, /\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/)) return "Z.ai"
@@ -126,6 +128,8 @@ export function resolveModelAttributionName(model: ModelIconInput | null | undef
       return "Qwen"
     case "MetaLogo":
       return "Meta"
+    case "TypeSafeLogo":
+      return "TypeSafe"
     case "MistralLogo":
       return "Mistral AI"
     case "NvidiaLogo":
@@ -209,6 +213,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (has(searchable, /groq\/|\bgroq\b/)) return "MessageSquare"
   if (has(searchable, /nvidia|nemotron/)) return "NvidiaLogo"
   if (has(searchable, /poolside|laguna/)) return "PoolsideLogo"
+  if (has(searchable, /typesafe\/|\btypesafe\b|\bjev\b/)) return "TypeSafeLogo"
   if (has(searchable, /llama|meta-llama|meta\/|muse[-\s]?spark|muse[-\s]?image/)) return "MetaLogo"
   if (has(searchable, /mistral|codestral/)) return "MistralLogo"
   if (has(searchable, /fal\.ai|fal-ai\//)) return "FalLogo"
@@ -222,6 +227,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (provider.includes("qwen") || provider.includes("alibaba")) return "QwenLogo"
   if (provider.includes("moonshot") || provider.includes("kimi")) return "KimiLogo"
   if (provider.includes("meta")) return "MetaLogo"
+  if (provider.includes("typesafe")) return "TypeSafeLogo"
   if (provider.includes("mistral")) return "MistralLogo"
   if (provider.includes("nvidia")) return "NvidiaLogo"
   if (provider.includes("poolside")) return "PoolsideLogo"

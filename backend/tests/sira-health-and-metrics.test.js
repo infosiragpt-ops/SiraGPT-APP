@@ -502,6 +502,7 @@ describe("checkModelProvidersConfigured", () => {
       MODEL_API_KEY: process.env.MODEL_API_KEY,
       META_API_KEY: process.env.META_API_KEY,
       LLAMA_API_KEY: process.env.LLAMA_API_KEY,
+      TYPESAFE_API_KEY: process.env.TYPESAFE_API_KEY,
     };
     try {
       for (const k of Object.keys(originals)) delete process.env[k];

@@ -452,6 +452,7 @@ function checkModelProvidersConfigured(env = process.env) {
     kimi: providerConnectionReady('Kimi', env),
     cerebras: providerConnectionReady('Cerebras', env),
     meta: providerConnectionReady('Meta', env),
+    typesafe: providerConnectionReady('TypeSafe', env),
   };
   const configured = Object.values(providers).filter(Boolean).length;
   return {

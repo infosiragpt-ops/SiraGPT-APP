@@ -151,7 +151,7 @@ test('project_pull_request_checks delegates to github-checks with the repo and t
 
 test('tools are registered in the agentic loop and the coding tool selector', () => {
   const acs = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agentic-chat-stream.js'), 'utf8');
-  assert.match(acs, /projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool\]/);
+  assert.match(acs, /projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool, decideWithJevTool\]/);
   const sel = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agents', 'tool-selector.js'), 'utf8');
   assert.match(sel, /project_open_pull_request/);
   for (const t of [tools.projectChangesTool, tools.projectOpenPullRequestTool, tools.projectPullRequestChecksTool]) {
