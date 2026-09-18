@@ -15,6 +15,25 @@ const apiKeysService = require('../services/api-keys-service');
 // Lazy require to keep the auth module's import graph cheap for tests that
 // stub the email service. Resolved on first auto-revoke event.
 let _emailService = null;
+
+/**
+ * Administrators own the platform: they are never gated by plan or credits.
+ * Every plan check downstream reads `req.user.plan`, so an admin /
+ * super-admin is presented as the top tier (ENTERPRISE = unlimited pool,
+ * every model whitelisted, unmetered credits via chargeCredits). The
+ * billing plan they actually pay for is preserved in `billingPlan`.
+ */
+function applyAdminEntitlements(user) {
+  if (!user || typeof user !== 'object') return user;
+  if (user.isAdmin !== true && user.isSuperAdmin !== true) return user;
+  if (user.plan !== 'ENTERPRISE') {
+    user.billingPlan = user.plan || 'FREE';
+    user.plan = 'ENTERPRISE';
+  }
+  user.unlimitedCredits = true;
+  return user;
+}
+
 function getEmailService() {
   if (_emailService) return _emailService;
   try {
@@ -278,7 +297,7 @@ async function tryAuthenticateApiKey(req, res, rawToken) {
       return true;
     }
 
-    req.user = row.user;
+    req.user = applyAdminEntitlements(row.user);
     req.token = rawToken;
     req.apiKey = {
       id: row.id,
@@ -466,7 +485,7 @@ const authenticateToken = async (req, res, next) => {
       }
     }
 
-    req.user = session.user;
+    req.user = applyAdminEntitlements(session.user);
     req.token = token;
     // NOTE: do NOT assign to req.session — that name is owned by
     // express-session and overwriting it breaks res.json() (touch()
@@ -575,7 +594,7 @@ const optionalAuth = async (req, res, next) => {
       return next();
     }
 
-    req.user = validated.user;
+    req.user = applyAdminEntitlements(validated.user);
     req.token = token;
     req.userSession = validated.session;
     return next();
@@ -600,6 +619,7 @@ const requireSuperAdmin = (req, res, next) => {
 };
 
 module.exports = {
+  applyAdminEntitlements,
   authenticateToken,
   optionalAuth,
   requireAdmin,
