@@ -50,6 +50,28 @@ const MODEL_FAMILIES = Object.freeze({
   vision: 'Modelo con visión: la petición depende de entender una imagen adjunta',
 });
 
+const WEB_NEEDS = Object.freeze({
+  no_web: 'Se responde bien con conocimiento general o con lo que ya hay en el chat/adjuntos',
+  web_recommended: 'Buscar en la web mejoraría la respuesta (datos que cambian, precios, versiones, fuentes citables)',
+  web_required: 'Sin buscar en la web la respuesta sería una suposición (noticias, hechos recientes, datos en vivo, una URL concreta)',
+});
+const WEB_SOURCES = Object.freeze({
+  general: 'Web general (buscador)',
+  news: 'Noticias y actualidad',
+  academic: 'Literatura científica / académica (papers, revistas)',
+  social: 'Redes sociales y conversación pública (X/Twitter)',
+  code: 'Repositorios y código (GitHub)',
+});
+const WEB_FRESHNESS = Object.freeze({
+  any: 'Cualquier fecha sirve',
+  day: 'Solo lo de las últimas 24 horas',
+  week: 'Solo lo de la última semana',
+  month: 'Solo lo del último mes',
+  year: 'Solo lo del último año',
+});
+const WEB_SOURCE_TOOL = Object.freeze({ general: 'web_search', news: 'web_search', academic: 'scientific_search', social: 'x_search', code: 'github_search' });
+const WEB_FRESHNESS_PARAM = Object.freeze({ day: 'pd', week: 'pw', month: 'pm', year: 'py' });
+
 function buildQuestions({ hasPreviousAnswer = false } = {}) {
   const q = {
     lane: {
@@ -81,6 +103,27 @@ function buildQuestions({ hasPreviousAnswer = false } = {}) {
       type: 'choice',
       instructions: '¿Qué familia de modelo serviría mejor este mensaje al menor coste razonable?',
       criteria: { ...MODEL_FAMILIES },
+    },
+    web_need: {
+      type: 'choice',
+      instructions: {
+        tarea: '¿Necesita el asistente buscar en la web para responder bien a este mensaje?',
+        notas: [
+          'Elige web_required solo si sin datos externos actuales la respuesta sería inventada.',
+          'Preguntas de conocimiento estable, cálculo, redacción o sobre los adjuntos no necesitan web.',
+        ],
+      },
+      criteria: { ...WEB_NEEDS },
+    },
+    web_source: {
+      type: 'choice',
+      instructions: 'Si hubiera que buscar, ¿qué tipo de fuente respondería mejor?',
+      criteria: { ...WEB_SOURCES },
+    },
+    web_freshness: {
+      type: 'choice',
+      instructions: 'Si hubiera que buscar, ¿qué antigüedad máxima deberían tener las fuentes?',
+      criteria: { ...WEB_FRESHNESS },
     },
   };
   if (hasPreviousAnswer) {
@@ -132,6 +175,9 @@ async function judgeTurn({ text, history = [], previousAnswer = null, hasImage =
     const depth = typesafe.summarizeAnswer(res.answers.depth);
     const fam = typesafe.summarizeAnswer(res.answers.model_family);
     const sat = hasPreviousAnswer ? typesafe.summarizeAnswer(res.answers.satisfaction) : null;
+    const webNeed = typesafe.summarizeAnswer(res.answers.web_need);
+    const webSource = typesafe.summarizeAnswer(res.answers.web_source);
+    const webFresh = typesafe.summarizeAnswer(res.answers.web_freshness);
     if (!lane || !lane.value) return null;
     const depthIdx = depth && depth.value != null ? Math.max(0, Math.min(DEPTH_LABELS.length - 1, Math.round(depth.value))) : null;
     return {
@@ -140,6 +186,16 @@ async function judgeTurn({ text, history = [], previousAnswer = null, hasImage =
       depth: depth ? { score: depth.value, normalized: depth.normalized, label: depthIdx == null ? null : DEPTH_LABELS[depthIdx], confidence: depth.confidence, probabilities: depth.probabilities } : null,
       modelFamily: fam ? { choice: fam.value, confidence: fam.confidence, probability: Number(fam.probabilities[fam.value]) || 0, probabilities: fam.probabilities } : null,
       satisfaction: sat ? sat.value : null,
+      webSearch: webNeed && webNeed.value ? {
+        need: webNeed.value,
+        probability: Number(webNeed.probabilities[webNeed.value]) || 0,
+        probabilities: webNeed.probabilities,
+        confidence: webNeed.confidence,
+        source: webSource && webSource.value ? webSource.value : 'general',
+        sourceProbability: webSource && webSource.value ? Number(webSource.probabilities[webSource.value]) || 0 : 0,
+        freshness: webFresh && webFresh.value ? webFresh.value : 'any',
+        freshnessProbability: webFresh && webFresh.value ? Number(webFresh.probabilities[webFresh.value]) || 0 : 0,
+      } : null,
       model: res.model,
       latencyMs: res.latencyMs,
       usage: res.usage,
@@ -172,6 +228,7 @@ function applyTurnJudgement(j, { userPickedModel = false, userSetEffort = false,
     trivial: null,
     modelFamily: null,
     satisfaction: null,
+    webSearch: null,
     raw: {},
     calibrated: {},
   };
@@ -216,6 +273,30 @@ function applyTurnJudgement(j, { userPickedModel = false, userSetEffort = false,
     out.modelFamily = { ...j.modelFamily, steer: !userPickedModel && c.flags.jevModelSteering.value && j.modelFamily.confidence >= t.jevModelConfidence.value };
   }
 
+  // Web search: whether, where and how fresh ------------------------------
+  if (j.webSearch && j.webSearch.need) {
+    const w = j.webSearch;
+    const pRequired = Number(w.probabilities.web_required) || 0;
+    const pRecommended = Number(w.probabilities.web_recommended) || 0;
+    const pWeb = pRequired + pRecommended;
+    out.raw.webSearch = pWeb;
+    out.calibrated.webSearch = cal('web_search_intent', pWeb);
+    const enabled = c.flags.jevWebSearch.value;
+    const tool = WEB_SOURCE_TOOL[w.source] || 'web_search';
+    const freshness = WEB_FRESHNESS_PARAM[w.freshness] || null;
+    out.webSearch = {
+      need: w.need,
+      source: w.source,
+      freshness,
+      tool,
+      probability: pWeb,
+      // force: the loop starts with the search tool (needs the agentic lane);
+      // suggest: the model is told the turn likely needs current sources.
+      force: enabled && w.need === 'web_required' && cal('web_search_intent', pRequired) >= t.jevWebForce.value,
+      suggest: enabled && w.need !== 'no_web' && out.calibrated.webSearch >= t.jevWebSuggest.value,
+    };
+  }
+
   // Satisfaction → outcome for the previous turn ---------------------------
   if (j.satisfaction != null) {
     if (j.satisfaction >= t.jevSatisfied.value) out.satisfaction = 'liked';
@@ -244,4 +325,4 @@ function clarifyQuestion(j) {
   return CLARIFY_TEMPLATES[lane] || CLARIFY_TEMPLATES.clarify;
 }
 
-module.exports = { LANES, DEPTH_LEVELS, DEPTH_LABELS, MODEL_FAMILIES, buildQuestions, buildState, judgeTurn, applyTurnJudgement, clarifyQuestion, CLARIFY_TEMPLATES };
+module.exports = { LANES, DEPTH_LEVELS, DEPTH_LABELS, MODEL_FAMILIES, WEB_NEEDS, WEB_SOURCES, WEB_FRESHNESS, WEB_SOURCE_TOOL, WEB_FRESHNESS_PARAM, buildQuestions, buildState, judgeTurn, applyTurnJudgement, clarifyQuestion, CLARIFY_TEMPLATES };

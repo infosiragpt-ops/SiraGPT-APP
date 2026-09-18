@@ -1199,7 +1199,24 @@ const web_search = {
     // Use the aggregating/relevance-ranked path for chat. The legacy
     // first-non-empty search() path can be fooled by a broad academic provider
     // returning unrelated papers before the general-web providers answer.
-    const { results, provider, providers, cached, attempts } = await webSearch.searchMany(query, { maxResults, locale, freshness });
+    const searched = await webSearch.searchMany(query, { maxResults, locale, freshness });
+    const { provider, providers, cached, attempts } = searched;
+    let results = searched.results;
+    // RLCD × Jev: score every hit against the question, drop the irrelevant
+    // ones and put the essential source first. Fail-open: any error keeps
+    // the provider order.
+    let jev = null;
+    try {
+      // eslint-disable-next-line global-require
+      const webFilter = require('../rlcd/jev-web-filter');
+      // eslint-disable-next-line global-require
+      const rlcd = require('../rlcd');
+      const filtered = await webFilter.filterResults({ query, results, chatId: args?.chatId || null, ledger: rlcd.ledger });
+      if (filtered) {
+        results = filtered.results;
+        jev = { dropped: filtered.dropped, scores: filtered.scores, latencyMs: filtered.latencyMs };
+      }
+    } catch (_) { /* filter is best-effort */ }
     // Zero results is NOT an error, but weaker models (the free default
     // llama-3.1-8b) tend to hallucinate sources, stall, or re-run the same
     // query when they get an empty list with no guidance. A directive note
@@ -1215,6 +1232,7 @@ const web_search = {
       cached,
       count: results.length,
       results,
+      ...(jev ? { jev } : {}),
       ...(note ? { note } : {}),
       // Slim attempt trace — useful when the model needs to explain why
       // a query returned nothing ("DDG timed out, Wikipedia 0 hits").

@@ -5720,6 +5720,10 @@ router.post(
                   generateLog.info('rlcd.jev_ask', { vetoed: true, previousReason: intentTriageDecision.reason, needsContext: __judged.judgement.needsContext });
                   intentTriageDecision = { ...intentTriageDecision, action: 'execute', vetoedBy: 'rlcd_jev' };
                 }
+                if (__a.webSearch) {
+                  req._rlcdWebSearch = __a.webSearch;
+                  generateLog.info('rlcd.web_search_judged', { need: __a.webSearch.need, source: __a.webSearch.source, freshness: __a.webSearch.freshness, tool: __a.webSearch.tool, force: __a.webSearch.force, suggest: __a.webSearch.suggest, probability: __a.webSearch.probability });
+                }
                 if (__a.computeLevel && cognitiveDecision) {
                   const __ro = require('../services/reasoning-orchestrator');
                   const __plan = __a.computeLevel === 'minimal'
@@ -7596,6 +7600,7 @@ router.post(
                     ? Math.min(160, Math.max(1, Math.round(Number(req.body.coworkBudget.maxSteps))))
                     : undefined,
                   toolCallMode: __toolCallMode,
+                  webSearchIntent: req._rlcdWebSearch || null,
                   turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision
                   // (intent/difficulty) lets the agentic loop hand the model a

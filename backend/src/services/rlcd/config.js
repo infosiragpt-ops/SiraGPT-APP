@@ -76,6 +76,18 @@ const DECISION_KIND_DOCS = Object.freeze({
     outcomes: 'fidelidad de la respuesta (jev_faithfulness / gate heurístico), thumb',
     deciders: ['jev'],
   },
+  web_search_intent: {
+    label: 'Intención de búsqueda web',
+    decides: 'si el turno necesita buscar en la web, en qué tipo de fuente y con qué frescura',
+    outcomes: 'thumb, regenerate, éxito/fallo de la herramienta de búsqueda',
+    deciders: ['jev'],
+  },
+  web_search_filter: {
+    label: 'Filtro de resultados web',
+    decides: 'qué resultados de búsqueda llegan al modelo y en qué orden',
+    outcomes: 'fidelidad de la respuesta (jev_faithfulness), thumb',
+    deciders: ['jev'],
+  },
 });
 
 const THRESHOLD_DOCS = Object.freeze([
@@ -103,6 +115,10 @@ const THRESHOLD_DOCS = Object.freeze([
   { key: 'jevRagDrop', env: 'SIRAGPT_RLCD_JEV_RAG_DROP', def: 0.8, doc: 'p(fragmento irrelevante) mínima para excluirlo del contexto (siempre quedan ≥2).' },
   { key: 'jevFaithHigh', env: 'SIRAGPT_RLCD_JEV_FAITH_HIGH', def: 0.8, doc: 'p(respaldada) mínima para puntuar high_faithfulness; p(cita inventada) ≥ este valor puntúa low.' },
   { key: 'jevFaithLow', env: 'SIRAGPT_RLCD_JEV_FAITH_LOW', def: 0.35, doc: 'p(respaldada) máxima para puntuar low_faithfulness y avisar al usuario.' },
+  // Jev web search (fase 3)
+  { key: 'jevWebForce', env: 'SIRAGPT_RLCD_JEV_WEB_FORCE', def: 0.75, doc: 'p(web_required) calibrada mínima para arrancar el turno con la herramienta de búsqueda (fuerza el carril agéntico).' },
+  { key: 'jevWebSuggest', env: 'SIRAGPT_RLCD_JEV_WEB_SUGGEST', def: 0.5, doc: 'p(web_required + web_recommended) calibrada mínima para indicar al modelo que busque fuentes actuales.' },
+  { key: 'jevWebDrop', env: 'SIRAGPT_RLCD_JEV_WEB_DROP', def: 0.8, doc: 'p(resultado irrelevante) mínima para descartarlo de la respuesta de web_search (siempre quedan ≥2).' },
 ]);
 
 const FLAG_DOCS = Object.freeze([
@@ -123,6 +139,8 @@ const FLAG_DOCS = Object.freeze([
   { key: 'jevSkillPicker', env: 'SIRAGPT_RLCD_JEV_SKILL_PICKER', def: true, doc: 'Jev elige la skill recomendada para run_skill.' },
   { key: 'jevRagFilter', env: 'SIRAGPT_RLCD_JEV_RAG_FILTER', def: true, doc: 'Jev puntúa la relevancia de cada fragmento RAG y descarta los irrelevantes antes de inyectarlos.' },
   { key: 'jevFaithfulness', env: 'SIRAGPT_RLCD_JEV_FAITHFULNESS', def: true, doc: 'Jev comprueba si la respuesta está respaldada por las fuentes y avisa cuando no.' },
+  { key: 'jevWebSearch', env: 'SIRAGPT_RLCD_JEV_WEB_SEARCH', def: true, doc: 'El juez decide si el turno necesita buscar en la web, en qué fuente y con qué frescura; puede arrancar el bucle con la herramienta de búsqueda.' },
+  { key: 'jevWebFilter', env: 'SIRAGPT_RLCD_JEV_WEB_FILTER', def: true, doc: 'Jev puntúa la relevancia de cada resultado de web_search y descarta los irrelevantes antes de entregarlos al modelo.' },
 ]);
 
 function describe(env = process.env) {
