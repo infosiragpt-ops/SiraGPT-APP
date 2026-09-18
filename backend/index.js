@@ -655,6 +655,7 @@ const idempotency = idempotencyMiddleware();
 // every paying customer into one quota.
 const {
     resolveRateLimitConfig,
+    isAuthSessionMaintenancePath,
     makeJwtAwareKeyGenerator,
     makeSuperAdminBypass,
 } = require('./src/middleware/rate-limit-policy');
@@ -708,7 +709,9 @@ const authLimiter = rateLimit({
     ...makeLimiterCommon('auth'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.auth,
-    skip: skipForSuperAdmin,
+    // Credential attempts only: /me, /csrf-token, /refresh, /logout and
+    // /sessions are routine browser traffic and ride the general API limiter.
+    skip: (req) => skipForSuperAdmin(req) || isAuthSessionMaintenancePath(req.path),
     message: 'Too many auth attempts, please try again later.',
 });
 
@@ -739,6 +742,7 @@ const apiLimiter = rateLimit({
     max: rateLimitCfg.api,
     skip: (req) => {
         if (skipForSuperAdmin(req)) return true;
+        if (req.originalUrl.startsWith('/api/auth')) return !isAuthSessionMaintenancePath(req.originalUrl);
         return apiLimiterSpecificPrefixes.some((prefix) => req.originalUrl.startsWith(prefix));
     },
     message: 'Too many requests, please try again later.',

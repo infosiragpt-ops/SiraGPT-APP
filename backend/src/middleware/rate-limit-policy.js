@@ -197,7 +197,23 @@ function makeSuperAdminBypass(jwtSecret) {
   };
 }
 
+/**
+ * Session-maintenance routes under /api/auth that a logged-in browser hits
+ * on every page load / tab (token check, CSRF seed, refresh, session list,
+ * logout). They are NOT credential attempts, so they must ride the general
+ * API limiter instead of the 30-per-15-min anti-bruteforce bucket — with the
+ * strict bucket, one office IP with two people and a few tabs locked everyone
+ * out with «Too many auth attempts».
+ */
+const AUTH_SESSION_MAINTENANCE_RE = /^\/(me|csrf-token|refresh|logout|sessions(?:\/.*)?)(?:\?.*)?$/;
+
+function isAuthSessionMaintenancePath(path) {
+  const p = String(path || '').replace(/^\/api\/auth/, '');
+  return AUTH_SESSION_MAINTENANCE_RE.test(p);
+}
+
 module.exports = {
+  isAuthSessionMaintenancePath,
   resolveRateLimitConfig,
   resolveSensitiveRateLimitPolicy,
   resolveStoreRetryAfterSeconds,
