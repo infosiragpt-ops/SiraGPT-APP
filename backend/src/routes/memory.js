@@ -99,8 +99,6 @@ router.delete('/', async (req, res) => {
 
   let documentCleared = false;
   try {
-    const v = await vault.clear(userId);
-    if (!v || v.ok !== true) throw new Error('vault clear failed');
     // eslint-disable-next-line global-require
     require('../services/memory-document').clear(userId);
     documentCleared = true;
@@ -110,6 +108,7 @@ router.delete('/', async (req, res) => {
   }
 
   try {
+    // clearUserMemory wipes the vault (Postgres) + vector store together.
     await longTermMemory.clearUserMemory(userId);
   } catch (vecErr) {
     req.log?.error?.({ err: vecErr }, 'memory: vector clear failed (document cleared)');

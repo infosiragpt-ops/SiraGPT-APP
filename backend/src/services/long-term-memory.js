@@ -496,6 +496,11 @@ function buildMemoryBlock(facts) {
 }
 
 async function clearUserMemory(userId) {
+  // The canonical vault (Postgres user_memories) is part of the privacy
+  // wipe: a failure here must surface to the caller, never be swallowed.
+  // eslint-disable-next-line global-require
+  const vaultClear = await require('./memory/vault').clear(userId);
+  if (!vaultClear || vaultClear.ok !== true) throw new Error('memory vault clear failed');
   const pgStore = userMemoryStore.getStore();
   if (pgStore) return pgStore.clear(userId);
   await rag.clear(userId, collectionFor(userId));
