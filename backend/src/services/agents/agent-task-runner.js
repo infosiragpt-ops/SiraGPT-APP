@@ -132,21 +132,36 @@ function buildOpenClawRuntimeProfile({ goal, userId = null, chatId = null, fileI
   }
 }
 
+const CHAT_SUMMARY_MAX_CHARS = 1400;
+const CHAT_SUMMARY_MIN_CUT = 600;
+
+/**
+ * The chat-side summary of a generated deliverable. Keeps the markdown
+ * STRUCTURE (headings, lists, tables need their line breaks) — flattening
+ * every whitespace run turned «## Datos» + a table into one 900-char line
+ * that rendered as a giant heading. Long text is clipped at a paragraph or
+ * line boundary, never mid-table-row when a boundary exists.
+ */
 function summarizeForChat(text, policy) {
-  const raw = String(text || '').replace(/\s+/g, ' ').trim();
   const intro = `Preparé el entregable profesional en formato ${String(policy?.format || 'documento').toUpperCase()} y lo validé antes de adjuntarlo.`;
+  const raw = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, '').replace(/[ \t]{2,}/g, ' '))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (!raw) return intro;
-  let clipped;
-  if (raw.length <= 900) {
-    clipped = raw;
-  } else {
-    // Surrogate-safe slice: pull the cut back if the last kept code
-    // unit is a high surrogate so we don't emit a dangling surrogate
-    // that JSON.stringify would replace with U+FFFD.
-    let cut = 900;
+  let clipped = raw;
+  if (raw.length > CHAT_SUMMARY_MAX_CHARS) {
+    const window = raw.slice(0, CHAT_SUMMARY_MAX_CHARS);
+    const paragraph = window.lastIndexOf('\n\n');
+    const line = window.lastIndexOf('\n');
+    let cut = paragraph >= CHAT_SUMMARY_MIN_CUT ? paragraph : (line >= CHAT_SUMMARY_MIN_CUT ? line : CHAT_SUMMARY_MAX_CHARS);
+    // Surrogate-safe: never end on a dangling high surrogate.
     const code = raw.charCodeAt(cut - 1);
     if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
-    clipped = `${raw.slice(0, cut).trim()}...`;
+    clipped = `${raw.slice(0, cut).trim()}\n\n…`;
   }
   return `${intro}\n\nResumen conversacional:\n\n${clipped}`;
 }
@@ -3944,6 +3959,7 @@ const { classifyTaskError, presentTaskError, toAgentTaskErrorEvent } = require('
 
 module.exports = {
   runAgentTaskJob,
+  summarizeForChat,
   buildFinalizeProfile,
   buildOpenAICompatibleClient,
   classifyTaskError,
