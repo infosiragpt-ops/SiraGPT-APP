@@ -285,7 +285,11 @@ async function persistWriteResponse(
 meRouter.get('/me', authenticateToken, async (req, res, next) => {
   try {
     const row = await ensureCreditRow(req.user.id);
-    res.json({ credits: serializeCredits(row) });
+    const credits = serializeCredits(row);
+    // eslint-disable-next-line global-require
+    const { hasUnlimitedCredits } = require('../middleware/charge-credits');
+    if (credits && hasUnlimitedCredits(req.user)) credits.unlimited = true;
+    res.json({ credits });
   } catch (err) {
     next(err);
   }

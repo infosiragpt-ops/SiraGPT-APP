@@ -13,6 +13,8 @@ import { authenticatedFetch } from "./authenticated-fetch"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 export interface Credits {
+  /** Admins / super-admins: never metered — the badge shows ∞. */
+  unlimited?: boolean
   userId: string
   orgId: string | null
   balance: string
@@ -95,6 +97,7 @@ export function balanceAsBigInt(credits: Credits | null | undefined): bigint {
 }
 
 export function isLowBalance(credits: Credits | null, threshold: bigint = BigInt(50)): boolean {
+  if (credits?.unlimited) return false
   return balanceAsBigInt(credits) < threshold
 }
 
