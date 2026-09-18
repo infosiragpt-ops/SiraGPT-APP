@@ -1,5 +1,6 @@
 "use client";
 
+import { OfficeFileIcon } from "@/components/office-file-icon"
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { devLog } from "@/lib/dev-log";
@@ -385,7 +386,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
                 and a layout-shift wrapper for what is effectively a
                 glyph. Keeping the plain <img>. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/icons/Excel.png" alt="Excel" className="h-5 w-5" />
+            <OfficeFileIcon kind="excel" size={20} className="h-5 w-5" title="Excel" />
             <h3 className="font-semibold text-sm text-foreground">Excel File</h3>
           </div>
           <div className="flex items-center gap-1">

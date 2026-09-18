@@ -9,6 +9,7 @@
 
 import * as React from "react"
 import { FileText, Download, Eye, MessageSquare, RefreshCw } from "lucide-react"
+import { OfficeFileIcon, officeKindForName, type OfficeKind } from "@/components/office-file-icon"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
@@ -53,13 +54,8 @@ function formatLabel(row: ArtifactRow): string {
   return ext ? ext.toUpperCase() : "DOC"
 }
 
-function formatIconSrc(row: ArtifactRow): string | null {
-  const f = formatLabel(row).toLowerCase()
-  if (f === "docx" || f === "doc") return "/icons/Word.png"
-  if (f === "xlsx" || f === "xls" || f === "csv") return "/icons/Excel.png"
-  if (f === "pptx" || f === "ppt") return "/icons/Bigger P powerpoint.png"
-  if (f === "pdf") return "/icons/pdf.png"
-  return null
+function formatIconKind(row: ArtifactRow): OfficeKind | null {
+  return officeKindForName(formatLabel(row).toLowerCase())
 }
 
 function sizeLabel(bytes?: number | null): string {
@@ -187,7 +183,7 @@ export default function DocumentsPage() {
       {artifacts !== null && artifacts.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2">
           {artifacts.map((row) => {
-            const icon = formatIconSrc(row)
+            const icon = formatIconKind(row)
             return (
               <div
                 key={row.id}
@@ -198,8 +194,7 @@ export default function DocumentsPage() {
               >
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted/30">
                   {icon ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={icon} alt="" className="h-9 w-9 object-contain" />
+                    <OfficeFileIcon kind={icon} size={36} className="h-9 w-9" />
                   ) : (
                     <FileText className="h-7 w-7 text-muted-foreground" />
                   )}

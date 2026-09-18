@@ -1,5 +1,6 @@
 "use client"
 
+import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
 import dynamic from "next/dynamic"
 import {
@@ -1449,7 +1450,7 @@ const ActionsDropdown = ({
       disabled: isToolSwitchDisabled,
       dotClassName: "bg-blue-500",
       iconClassName: "bg-blue-100 dark:bg-blue-900/20",
-      icon: <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <OfficeFileIcon kind="word" size={16} className="h-4 w-4" />,
       onClick: () => {
         handleWordConnectorToggle?.();
         setIsOpen(false);
@@ -1463,7 +1464,7 @@ const ActionsDropdown = ({
       disabled: isToolSwitchDisabled,
       dotClassName: "bg-blue-500",
       iconClassName: "bg-blue-100 dark:bg-blue-900/20",
-      icon: <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <OfficeFileIcon kind="excel" size={16} className="h-4 w-4" />,
       onClick: () => {
         handleExcelConnectorToggle?.();
         setIsOpen(false);
@@ -1872,17 +1873,17 @@ const getFileIcon = (file: any) => {
 
   switch (extension) {
     case 'pdf':
-      return <img src="/icons/pdf.png" alt="PDF" className="h-8 w-8" />;
+      return <OfficeFileIcon kind="pdf" size={32} className="h-8 w-8" title="PDF" />;
     case 'doc':
     case 'docx':
-      return <img src="/icons/Word.png" alt="Word" className="h-8 w-8" />;
+      return <OfficeFileIcon kind="word" size={32} className="h-8 w-8" title="Word" />;
     case 'xls':
     case 'xlsx':
     case 'csv':
-      return <img src="/icons/Excel.png" alt="Excel" className="h-8 w-8" />;
+      return <OfficeFileIcon kind="excel" size={32} className="h-8 w-8" title="Excel" />;
     case 'ppt':
     case 'pptx':
-      return <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-8 w-8" />;
+      return <OfficeFileIcon kind="powerpoint" size={32} className="h-8 w-8" title="PowerPoint" />;
     case 'txt':
       return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
     case 'mp4':
@@ -2638,8 +2639,8 @@ const ActiveToolsDisplay = ({
     isGoogleCalendarActive && { id: 'calendar', label: 'Calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
     isGoogleDriveActive && { id: 'drive', label: 'Drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
     isSpotifyActive && { id: 'spotify', label: 'Spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', label: 'Word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
-    isExcelConnectorActive && { id: 'excel', label: 'Excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', label: 'Word', icon: <OfficeFileIcon kind="word" size={16} className="h-4 w-4" title="Word" /> },
+    isExcelConnectorActive && { id: 'excel', label: 'Excel', icon: <OfficeFileIcon kind="excel" size={16} className="h-4 w-4" title="Excel" /> },
     isComputerUseActive && { id: `computer-use-${activeComputerUseMode}`, label: computerUseAppMeta[activeComputerUseMode].label, icon: activeComputerUseIcon },
   ].filter(Boolean) as { id: string; label: string; icon: JSX.Element }[];
 
@@ -2973,7 +2974,7 @@ const ActiveToolsDisplay = ({
       <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/Word.png" alt="Word" className="h-4 w-4 shrink-0" />
+            <OfficeFileIcon kind="word" size={16} className="h-4 w-4 shrink-0" title="Word" />
             <span className="truncate">Word</span>
           </div>
           <Switch checked={isWordConnectorActive} onCheckedChange={handleWordConnectorToggle} />
@@ -2987,7 +2988,7 @@ const ActiveToolsDisplay = ({
       >
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4 shrink-0" />
+            <OfficeFileIcon kind="excel" size={16} className="h-4 w-4 shrink-0" title="Excel" />
             <span className="truncate">Excel</span>
           </div>
           <Switch checked={isExcelConnectorActive} onCheckedChange={handleExcelConnectorToggle} />
