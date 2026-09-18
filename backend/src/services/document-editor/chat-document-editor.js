@@ -321,6 +321,46 @@ async function runChatDocumentEdit({
     emit({ label: 'Abriendo el documento', detail: sources.map((source) => source.name).join(', ') });
     const files = await loadSourceFiles(sources, deps);
 
+    // Deterministic surgical path FIRST (no model, no sandbox): the
+    // source-preserving engine executes machine-plannable ops (add_slide,
+    // replace_text, …) with exact patches and deck-DNA styling, delivering
+    // only validation-passing artifacts. Anything it declines — vague
+    // requests needing interpretation, redesign/"modo reformateo",
+    // unsupported formats — falls through to the LLM loop below, so current
+    // behavior is fully preserved as fallback.
+    if (!deps.isReformateoRequest(instruction)) {
+      try {
+        const deterministic = await deps.tryDeterministicEdit({
+          prisma, userId, chatId, fileIds, prompt: instruction, displayPrompt: instruction, signal,
+        });
+        const candidates = Array.isArray(deterministic?.results) && deterministic.results.length
+          ? deterministic.results
+          : (deterministic && !deterministic.clarification ? [deterministic] : []);
+        const passing = (item) => item?.artifact?.id
+          && ((item?.validation && item.validation.passed === true)
+            || (item?.artifact?.validation && item.artifact.validation.passed === true));
+        const served = candidates.filter(passing);
+        if (served.length) {
+          const artifacts = served.map((item) => ({
+            id: item.artifact.id,
+            filename: item.artifact.filename,
+            format: item.artifact.format,
+            mime: item.artifact.mime,
+            sizeBytes: item.artifact.sizeBytes,
+            downloadUrl: item.artifact.downloadUrl,
+          }));
+          const names = artifacts.map((artifact) => artifact.filename).join(', ');
+          const summary = cleanSummary(deterministic.content || served.map((item) => item.content).find(Boolean))
+            || `Listo. Apliqué los cambios y te dejo el archivo editado: ${names}.`;
+          try { deps.log('deterministic_edit_served', { artifacts: artifacts.length }); } catch { /* noop */ }
+          return { ok: true, artifacts, summary };
+        }
+        try { deps.log('deterministic_edit_decline', { clarification: Boolean(deterministic?.clarification) }); } catch { /* noop */ }
+      } catch (err) {
+        try { deps.log('deterministic_edit_error', { message: String(err?.message || err).slice(0, 200) }); } catch { /* noop */ }
+      }
+    }
+
     const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
     let result;
     try {
@@ -396,6 +436,8 @@ function resolveDeps(injected) {
     extractFileIds: lazy('extractFileIds', () => require('../message-attachments').extractFileIdsFromMessageFiles),
     saveArtifact: lazy('saveArtifact', () => require('../agents/task-tools').saveArtifact),
     runDocumentAgent: lazy('runDocumentAgent', () => require('../doc-agent').runDocumentAgent),
+    tryDeterministicEdit: lazy('tryDeterministicEdit', () => require('../source-preserving-document-edit').tryGenerateSourcePreservingDocumentEdit),
+    isReformateoRequest: lazy('isReformateoRequest', () => require('../doc-agent/surgical-rules').isReformateoRequest),
     createPromptedToolClient: lazy('createPromptedToolClient', () => require('./prompted-tool-client').createPromptedToolClient),
     resolveDocAgentCandidates: lazy('resolveDocAgentCandidates', () => require('../doc-agent/llm-runtime').resolveDocAgentCandidates),
     createFailoverClient: lazy('createFailoverClient', () => require('../doc-agent/llm-runtime').createFailoverClient),
