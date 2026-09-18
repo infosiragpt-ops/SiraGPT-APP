@@ -40,7 +40,7 @@ function buildNavigateTool({ userId, conversationId, env }) {
   return {
     name: 'computer_navigate',
     description:
-      'Abre una URL http(s) en el navegador REAL de la computadora de ESTE chat. Úsala primero para ofertas, reservas, DMV, seguro o cualquier sitio en vivo. Cada chat TIENE una computadora en vivo. Si no te dieron una URL, localiza primero el sitio oficial con web_search y navega al resultado.',
+      'Abre una URL http(s) en el navegador REAL de la computadora de ESTE chat. Úsala primero para ofertas, reservas, DMV, seguro o cualquier sitio en vivo. Cada chat TIENE una computadora en vivo. Si no te dieron una URL, localiza primero el sitio oficial con web_search y navega al resultado. El resultado trae `loaded` (lo que Chrome muestra ahora) y `confirmed`: si confirmed:false, verifica con computer_screenshot antes de afirmar que la página cargó.',
     parameters: {
       type: 'object',
       properties: {
@@ -86,7 +86,31 @@ function buildNavigateTool({ userId, conversationId, env }) {
         try {
           const opened = await require('./live-page').navigatePage(session, url, env || process.env, ctx.signal);
           liveActions.recordActivity(session.sessionKey, { action: 'computer_navigate', url: opened.url || url });
-          return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
+          // Verificación de lo que Chrome muestra AHORA (page.url() tras goto):
+          // un goto "ok" no prueba que cargó el sitio pedido.
+          const loaded = opened && opened.url ? { url: String(opened.url), title: String(opened.title || '') } : null;
+          if (loaded && /^chrome-error:\/\//i.test(loaded.url)) {
+            return {
+              ok: false,
+              error: 'navigate_failed',
+              message: 'Chrome mostró una página de error en vez del sitio.',
+              detail: loaded.url.slice(0, 160),
+              url,
+              fallback: 'El sitio no cargó en el navegador. Localiza el sitio oficial con web_search y reintenta computer_navigate con la URL encontrada; si no existe, dilo con lo que sí verificaste.',
+            };
+          }
+          const norm = (u) => String(u || '').replace(/\/$/, '');
+          const confirmed = !!(loaded && norm(loaded.url) === norm(url));
+          return {
+            ok: true,
+            tool: 'computer_navigate',
+            url,
+            result: opened,
+            loaded,
+            confirmed,
+            ...(confirmed ? {} : { note: 'Página en otra URL (redirección o aún cargando): verifica con computer_screenshot antes de afirmar que cargó.' }),
+            _preview: `Abriendo ${url}`,
+          };
         } catch (err) {
           const detail = err && err.message ? String(err.message).slice(0, 160) : undefined;
           const dnsish = /ENOTFOUND|EAI_AGAIN|getaddrinfo|NXDOMAIN|not known|could not resolve|failed to resolve|name resolution|net::ERR_NAME/i.test(detail || '');

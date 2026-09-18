@@ -48,13 +48,16 @@ const NORTHWIND_TREE = [
 
 const realEnsure = persistent.ensureSession;
 const realOpenUrl = persistent.openUrlInChrome;
+const realPeek = persistent.peekPage;
 let sessionCalls;
 let openedUrls;
+let peekResult;
 
 beforeEach(() => {
   handoff.resetTakeoverForTests();
   sessionCalls = 0;
   openedUrls = [];
+  peekResult = { url: NORTHWIND_URL, title: 'Northwind — Plans', text: '' };
   persistent.ensureSession = async () => {
     sessionCalls += 1;
     return { sessionId: 'sess-e2e', userId: 'u1', conversationId: 'chat-northwind' };
@@ -63,11 +66,16 @@ beforeEach(() => {
     openedUrls.push(String(url));
     return { ok: true, stdout: 'Opening', stderr: '', container: 'sira-ac-user-u1' };
   };
+  persistent.peekPage = async () => {
+    if (peekResult instanceof Error) throw peekResult;
+    return peekResult;
+  };
 });
 
 afterEach(() => {
   persistent.ensureSession = realEnsure;
   persistent.openUrlInChrome = realOpenUrl;
+  persistent.peekPage = realPeek;
 });
 
 function chatCtx() {
@@ -119,6 +127,9 @@ test('E2E Northwind: abre el pricing, observa el árbol y responde con los 3 pre
   assert.match(opened._preview, /Abriendo https:\/\/northwind\.example\/pricing/);
   assert.deepEqual(openedUrls, [NORTHWIND_URL]);
   assert.equal(sessionCalls, 1, 'una sola sesión por navegación');
+  // Verificación post-apertura: Chrome muestra el pricing pedido.
+  assert.equal(opened.confirmed, true);
+  assert.equal(opened.loaded.url, NORTHWIND_URL);
 
   // "Opened northwind.example in browser" → el modelo observa (árbol CDP, sin visión)
   const obs = await persistent.observe(
@@ -269,4 +280,36 @@ test('fallo no-DNS (timeout) → navigate_failed sin fallback inventado', async 
   assert.equal(out.ok, false);
   assert.equal(out.error, 'navigate_failed');
   assert.equal(out.fallback, undefined);
+});
+
+/* ── 11. verificación post-apertura: el "Opening" no basta ─────────────── */
+
+test('verify-after-open: Chrome en página de error → navigate_failed con fallback', async () => {
+  peekResult = { url: 'chrome-error://chromewebdata/', title: 'No se puede acceder a este sitio', text: '' };
+  const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'navigate_failed');
+  assert.match(out.message, /página de error/);
+  assert.match(out.fallback, /web_search/);
+});
+
+test('verify-after-open: otra URL en pantalla → ok con confirmed:false y nota de verificar', async () => {
+  peekResult = { url: 'https://www.google.com/', title: 'Google', text: '' };
+  const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
+  assert.equal(out.ok, true);
+  assert.equal(out.confirmed, false);
+  assert.equal(out.loaded.url, 'https://www.google.com/');
+  assert.match(out.note, /computer_screenshot/);
+});
+
+test('verify-after-open: peek roto → ok fail-open con confirmed:false', async () => {
+  peekResult = null;
+  const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
+  assert.equal(out.ok, true);
+  assert.equal(out.confirmed, false);
+  assert.equal(out.loaded, null);
+});
+
+test('verify-after-open: la descripción documenta loaded/confirmed', () => {
+  assert.match(navigateTool().description, /confirmed/);
 });
