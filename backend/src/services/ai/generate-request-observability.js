@@ -289,6 +289,8 @@ const ALLOWED_EVENTS = new Set([
   'routing.intent_triage_completed',
   'routing.intent_triage_failed',
   'routing.intent_triage_persistence_failed',
+  'routing.jev_tier_steering',
+  'routing.jev_tier_steering_failed',
   'routing.reroute_skipped',
   'routing.rerouted',
   'routing.tool_capable_model_restored',
