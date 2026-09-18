@@ -16,6 +16,10 @@ function matchesWhere(row, where = {}) {
       if (!v.some((w) => matchesWhere(row, w))) return false;
       continue;
     }
+    if (k === 'NOT') {
+      if (matchesWhere(row, v)) return false;
+      continue;
+    }
     if (v && typeof v === 'object' && !(v instanceof Date)) {
       if ('contains' in v) {
         const hay = String(row[k] || '');
@@ -24,6 +28,7 @@ function matchesWhere(row, where = {}) {
         continue;
       }
       if ('in' in v) { if (!v.in.includes(row[k])) return false; continue; }
+      if ('startsWith' in v) { if (!String(row[k] || '').startsWith(v.startsWith)) return false; continue; }
       if ('gt' in v) { if (!(row[k] > v.gt)) return false; continue; }
       return false;
     }
