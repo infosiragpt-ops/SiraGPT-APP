@@ -1264,10 +1264,32 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const allowedSkillSet = Array.isArray(customGptAgentPolicy.allowedSkillIds)
       ? new Set(customGptAgentPolicy.allowedSkillIds)
       : null;
-    const runtimeRecommendedSkillIds = Array.from(new Set([
+    let runtimeRecommendedSkillIds = Array.from(new Set([
       ...(customGptAgentPolicy.recommendedSkillIds || []),
       ...inferRecommendedSkills(userQuery, customGptSkillPlan?.selectedSkillIds || []),
     ])).filter((skillId) => !allowedSkillSet || allowedSkillSet.has(skillId));
+    // RLCD × Jev skill picker (fase 2b): one Choice over the visible skill
+    // catalogue; Jev's picks go first as RECOMENDADA. Fail-open, ≤1.5 s.
+    try {
+      const skillPicker = require('./rlcd/jev-skill-picker');
+      if (skillPicker.isSkillPickerEnabled()) {
+        const skillRunnerMod = require('./agents/skill-runner');
+        const descriptors = typeof skillRunnerMod.listSkillDescriptors === 'function'
+          ? skillRunnerMod.listSkillDescriptors({ clearance: (opts && opts.clearance) || null, ...(allowedSkillSet ? { allowedSkillIds: Array.from(allowedSkillSet) } : {}) })
+          : [];
+        const picked = await skillPicker.pickSkills({
+          query: userQuery,
+          descriptors,
+          history: Array.isArray(history) ? history.slice(-2) : [],
+          chatId: toolContext.chatId || null,
+          ledger: require('./rlcd').ledger,
+        });
+        if (picked && picked.recommended.length) {
+          runtimeRecommendedSkillIds = Array.from(new Set([...picked.recommended, ...runtimeRecommendedSkillIds]))
+            .filter((skillId) => !allowedSkillSet || allowedSkillSet.has(skillId));
+        }
+      }
+    } catch (_) { /* advisory */ }
     const runtimeSkillPolicy = {
       ...customGptAgentPolicy,
       recommendedSkillIds: runtimeRecommendedSkillIds,
@@ -1495,6 +1517,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           coworkRunId: toolContext.coworkRunId || null,
           // Protegido reviewer: the event stream pauses write-side tools on
           // permission_request when this is 'protected'.
+          // RLCD × Jev tool guard reads the user's request to judge each call.
+          userQuery: typeof userQuery === 'string' ? userQuery : null,
           composerPermission: toolContext.permission
             || toolContext.toolPermission
             || toolContext.composerPermission

@@ -418,12 +418,35 @@ function createAgentEventStream(opts = {}) {
             } catch (_) { /* fail-closed: no helper → no ask (the tool gate already denied) */ }
           }
           let runCtx = ctx;
-          if ((meta.permissionTier === 'confirm' || protectedWrite) && permission) {
+          // RLCD × Jev tool guard (fase 2b): a call that is not already gated
+          // is assessed for irreversible / external effects; above threshold
+          // it goes through the same permission gate with a stated reason.
+          let jevGuard = null;
+          if (meta.permissionTier !== 'confirm' && !protectedWrite && permission) {
+            try {
+              const guard = require('../rlcd/jev-tool-guard');
+              if (guard.shouldAssess(tool.name) && guard.isGuardEnabled()) {
+                jevGuard = await guard.assessToolCall({
+                  toolName: tool.name,
+                  args,
+                  userMessage: ctxInfo.userQuery || '',
+                  toolDescription: tool.description || '',
+                  chatId: ctxInfo.chatId || null,
+                  ledger: require('../rlcd').ledger,
+                });
+                if (jevGuard) emit('tool_risk_assessed', { blockIndex: call.blockIndex, id: call.id, name: tool.name, risk: jevGuard.risk, calibrated: jevGuard.calibrated, confirm: jevGuard.confirm });
+              }
+            } catch (_) { jevGuard = null; /* fail-open */ }
+          }
+          const jevConfirm = Boolean(jevGuard && jevGuard.confirm);
+          if ((meta.permissionTier === 'confirm' || protectedWrite || jevConfirm) && permission) {
             const outcome = await permission.requestPermission({
               chatId: ctxInfo.chatId || null,
               userId: ctxInfo.userId || null,
               toolName: tool.name,
-              humanDescription: call.humanDescription,
+              humanDescription: jevConfirm && !(meta.permissionTier === 'confirm' || protectedWrite)
+                ? `${call.humanDescription} — Jev: ${jevGuard.reasonLabel} (riesgo ${Math.round(jevGuard.calibrated * 100)} %)`
+                : call.humanDescription,
               args: previewOf(call.args, 1_500),
               signal,
               prisma: ctxInfo.prisma || null,
@@ -446,6 +469,9 @@ function createAgentEventStream(opts = {}) {
               ...(outcome.scope ? { scope: outcome.scope } : {}),
               ...(outcome.cached ? { cached: true } : {}),
             });
+            if (jevGuard && !outcome.cached) {
+              try { require('../rlcd/jev-tool-guard').recordGuardOutcome(jevGuard, outcome.decision, require('../rlcd').ledger); } catch (_) { /* advisory */ }
+            }
             if (outcome.decision !== 'allow') {
               const reason = outcome.reason === 'timeout'
                 ? 'permission_denied: the user did not answer the permission request in time'

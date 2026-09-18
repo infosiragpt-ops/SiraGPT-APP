@@ -58,6 +58,18 @@ const DECISION_KIND_DOCS = Object.freeze({
     outcomes: 'éxito/fallo de la herramienta de medios, thumb',
     deciders: ['heuristic', 'calibrated', 'jev'],
   },
+  tool_risk: {
+    label: 'Riesgo de herramienta',
+    decides: 'pedir confirmación antes de ejecutar una llamada potencialmente irreversible o con efectos externos',
+    outcomes: 'respuesta del usuario al permiso (denegar = hacía falta preguntar)',
+    deciders: ['jev'],
+  },
+  skill_route: {
+    label: 'Ruta de skill',
+    decides: 'qué skill especializada recomendar al agente para la petición',
+    outcomes: 'éxito/fallo de run_skill, thumb',
+    deciders: ['jev'],
+  },
 });
 
 const THRESHOLD_DOCS = Object.freeze([
@@ -76,6 +88,11 @@ const THRESHOLD_DOCS = Object.freeze([
   { key: 'jevModelConfidence', env: 'SIRAGPT_RLCD_JEV_MODEL_CONFIDENCE', def: 0.7, doc: 'Confianza mínima de la familia de modelo para dirigir la ruta automática.' },
   { key: 'jevSatisfied', env: 'SIRAGPT_RLCD_JEV_SATISFIED', def: 0.75, doc: 'p(satisfecho) mínima para puntuar la respuesta anterior como liked.' },
   { key: 'jevDissatisfied', env: 'SIRAGPT_RLCD_JEV_DISSATISFIED', def: 0.3, doc: 'p(satisfecho) máxima para puntuar la respuesta anterior como disliked.' },
+  // Jev tool guard + skill picker (fase 2b)
+  { key: 'jevToolConfirm', env: 'SIRAGPT_RLCD_JEV_TOOL_CONFIRM', def: 0.7, doc: 'Riesgo calibrado (irreversible/efecto externo) mínimo para pedir confirmación antes de ejecutar una herramienta.' },
+  { key: 'jevToolUnrequested', env: 'SIRAGPT_RLCD_JEV_TOOL_UNREQUESTED', def: 0.8, doc: 'p(acción no pedida por el usuario) mínima para pedir confirmación aunque el riesgo sea moderado.' },
+  { key: 'jevSkillPrimary', env: 'SIRAGPT_RLCD_JEV_SKILL_PRIMARY', def: 0.5, doc: 'Probabilidad mínima de la skill ganadora para recomendarla.' },
+  { key: 'jevSkillSecondary', env: 'SIRAGPT_RLCD_JEV_SKILL_SECONDARY', def: 0.25, doc: 'Probabilidad mínima de skills alternativas para listarlas como recomendadas.' },
 ]);
 
 const FLAG_DOCS = Object.freeze([
@@ -92,6 +109,8 @@ const FLAG_DOCS = Object.freeze([
   { key: 'jevCompute', env: 'SIRAGPT_RLCD_JEV_COMPUTE', def: true, doc: 'La profundidad juzgada ajusta el modo de cómputo si el usuario no fijó esfuerzo.' },
   { key: 'jevModelSteering', env: 'SIRAGPT_RLCD_JEV_MODEL_STEERING', def: false, doc: 'La familia de modelo juzgada dirige la ruta automática (nunca un modelo elegido por el usuario).' },
   { key: 'jevSatisfaction', env: 'SIRAGPT_RLCD_JEV_SATISFACTION', def: true, doc: 'Puntuar la respuesta anterior con la reacción implícita del usuario.' },
+  { key: 'jevToolGuard', env: 'SIRAGPT_RLCD_JEV_TOOL_GUARD', def: true, doc: 'Jev evalúa cada llamada a herramienta no de solo lectura y pide confirmación si es irreversible o tiene efectos externos.' },
+  { key: 'jevSkillPicker', env: 'SIRAGPT_RLCD_JEV_SKILL_PICKER', def: true, doc: 'Jev elige la skill recomendada para run_skill.' },
 ]);
 
 function describe(env = process.env) {

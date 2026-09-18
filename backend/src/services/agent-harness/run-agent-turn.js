@@ -133,6 +133,7 @@ async function attachHarness(opts = {}) {
     workspaceId = null,
     coworkRunId = null,
     composerPermission = null,
+    userQuery = null,
   } = opts;
 
   const registry = createToolRegistry();
@@ -214,7 +215,7 @@ async function attachHarness(opts = {}) {
     write,
     registry,
     permission: permissionManager,
-    ctxInfo: { chatId, userId, workspaceId, coworkRunId, prisma, composerPermission },
+    ctxInfo: { chatId, userId, workspaceId, coworkRunId, prisma, composerPermission, userQuery },
     provider,
     signal,
   });
