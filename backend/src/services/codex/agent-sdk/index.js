@@ -300,6 +300,18 @@ async function freshFileTree(runner, project, signal = null) {
  * the run timeline as it happens; `deps.customAgents` extends the registry
  * with workspace-defined specialists.
  */
+async function sharedMemoryIndex(deps = {}) {
+  const userId = deps.userId || (deps.project && deps.project.userId) || null;
+  if (!userId || deps.sharedMemory === false) return '';
+  try {
+    // eslint-disable-next-line global-require
+    const block = await require('../../memory/vault').buildIndexBlock(userId, { maxLines: 8, maxChars: 1200, tools: false });
+    return block ? `Memoria compartida del usuario (índice):\n${block}` : '';
+  } catch {
+    return '';
+  }
+}
+
 async function runSubagent({ name, task, context = '', model = null, effort = null, deps = {} }) {
   const fail = (result) => ({ ok: false, agent: name, result, steps: 0, toolCallsCount: 0, actions: [], durationMs: 0, tokensIn: 0, tokensOut: 0 });
   const custom = deps.customAgents && typeof deps.customAgents === 'object' ? deps.customAgents : {};
@@ -336,6 +348,10 @@ async function runSubagent({ name, task, context = '', model = null, effort = nu
   const tree = await freshFileTree(runner, project, signal);
   const userParts = [String(task)];
   if (context) userParts.push(`Contexto del proyecto:\n${context}`);
+  // Shared memory: every specialist sees the same always-loaded index as the
+  // main loop (Postgres-backed, so a write by one is visible to the others).
+  const memoryIndex = await sharedMemoryIndex(deps);
+  if (memoryIndex) userParts.push(memoryIndex);
   if (tree) userParts.push(`Archivos actuales del workspace:\n${tree}`);
   const messages = [
     {

@@ -141,6 +141,17 @@ Design notes: `docs/rag-embeddings.md`.
 | `SIRAGPT_KEY_REJECT_MEMO_MS` | `300000` | How long a rejected key is remembered (`backend/src/utils/provider-key-health.js`). A new key (different fingerprint) or an admin "apply connection" re-arms the provider immediately. |
 | `SIRAGPT_MEMORY_EMBED_PROVIDER` | `auto` | Memory tables (1024-dim): `auto`/`ladder` use the ladder; `openai`, `gemini`, `voyage`, `jina`, `mistral` pin one rung. |
 | `SIRAGPT_MEMORY_LLM_MODEL` | provider default | Model for memory-fact extraction (`backend/src/services/memory-llm-client.js`), which now rides the failover ladder (DeepSeek → OpenAI → Anthropic → …) instead of a single OpenAI client. |
+## Memoria estilo Claude Code (vault + consolidación)
+
+Ver `docs/memory-architecture.md`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_MEMORY_GREP_MAX_CHARS` | `24000` | Hasta este tamaño de memoria (chars) `memory_search` es solo grep; por encima se suma el peldaño vectorial. |
+| `SIRAGPT_MEMORY_CONSOLIDATION` | on | `0` apaga la consolidación nocturna («dreaming») y el botón «Consolidar ahora». |
+| `SIRAGPT_MEMORY_CONSOLIDATION_CRON` | `17 3 * * *` | Horario UTC del job `memory-consolidation` (system-cron). |
+| `SIRAGPT_MEMORY_CONSOLIDATION_BATCH` | `50` | Usuarios máximos por pase nocturno. |
+| `SIRAGPT_COMPACTION_MEMORY` | on | `0` evita extraer hechos a memoria cuando se compacta el contexto de un chat largo. |
 
 ## Search Tools
 

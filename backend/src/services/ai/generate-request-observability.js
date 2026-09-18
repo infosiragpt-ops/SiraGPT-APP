@@ -200,6 +200,7 @@ const ALLOWED_EVENTS = new Set([
   'memory.cross_chat_recalled',
   'memory.cross_chat_recall_failed',
   'memory.document_block_failed',
+  'memory.index_block_failed',
   'memory.extraction_schedule_failed',
   'memory.orchestration_unavailable',
   'memory.recall_failed',

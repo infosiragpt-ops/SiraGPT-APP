@@ -439,6 +439,7 @@ const inFlight = new Map();
 async function compactChat({
   prisma,
   chatId,
+  userId = null,
   rows,
   previousSummary = '',
   previousMeta = null,
@@ -481,12 +482,39 @@ async function compactChat({
         data: { contextSummary: summary, contextSummaryUntil: until, contextSummaryMeta: meta },
       });
     }
+    // Compaction is the natural moment to keep what matters: the folded
+    // turns are about to leave the context, so durable facts in them go to
+    // the user's memory vault (fire-and-forget, never blocks the turn).
+    scheduleMemoryExtraction({ userId, chatId, transcript, env });
     return { ok: true, summary, until, meta, coveredMessages: list.length, source };
   })().catch((error) => ({ ok: false, reason: error && error.message ? error.message : String(error) }))
     .finally(() => inFlight.delete(chatId));
 
   inFlight.set(chatId, job);
   return job;
+}
+
+function scheduleMemoryExtraction({ userId, chatId, transcript, env = process.env } = {}) {
+  if (!userId || !transcript) return false;
+  const flag = String(env.SIRAGPT_COMPACTION_MEMORY || '').toLowerCase();
+  if (flag === '0' || flag === 'off' || flag === 'false') return false;
+  setImmediate(async () => {
+    try {
+      // eslint-disable-next-line global-require
+      const ltm = require('./long-term-memory');
+      // eslint-disable-next-line global-require
+      const client = require('./memory-llm-client').createMemoryLlmClient({ env });
+      if (!client || typeof ltm.extractFacts !== 'function') return;
+      const facts = await ltm.extractFacts(client, String(transcript).slice(0, 12000), '');
+      if (!Array.isArray(facts) || !facts.length) return;
+      // eslint-disable-next-line global-require
+      const out = await require('./memory/vault').recordFacts(userId, facts, { source: `compaction:${String(chatId).slice(0, 40)}` });
+      if (out.stored || out.updated) console.log(`[context-compaction] memory kept ${out.stored} new / ${out.updated} reinforced fact(s) from folded turns (chat ${chatId})`);
+    } catch (err) {
+      console.warn(`[context-compaction] memory extraction skipped: ${err && err.message}`);
+    }
+  });
+  return true;
 }
 
 /**
@@ -559,6 +587,7 @@ async function maybeCompactInBackground({
 }
 
 module.exports = {
+  scheduleMemoryExtraction,
   DEFAULTS,
   SUMMARY_SYSTEM_PROMPT,
   getConfig,

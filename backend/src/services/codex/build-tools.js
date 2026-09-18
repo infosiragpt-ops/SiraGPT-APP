@@ -861,6 +861,7 @@ const TOOLS = {
           deps: {
             runner: ctx.runner,
             project: ctx.project,
+            userId: ctx.userId || (ctx.project && ctx.project.userId) || null,
             webSearch: ctx.webSearch,
             env: ctx.env,
             llmTurn: ctx.llmTurn,
