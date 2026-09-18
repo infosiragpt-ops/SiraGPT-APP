@@ -8071,7 +8071,8 @@ router.post(
         // tick so the reply is already ack'd to the client.
         if (userId && !__publicWebReadonly && typeof prompt === 'string' && fullResponseContent) {
           try {
-            const memoryOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+            // Memory extraction rides the provider ladder, never a single key.
+            const memoryOpenAI = require('../services/memory-llm-client').createMemoryLlmClient();
             longTermMemory.extractFactsAsync({
               openai: memoryOpenAI,
               userId,

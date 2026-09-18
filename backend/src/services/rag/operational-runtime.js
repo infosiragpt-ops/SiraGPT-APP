@@ -625,6 +625,18 @@ async function buildRuntimeContext({
       overfetchK: Math.max(k * 3, 18),
     });
   } catch (err) {
+    // This used to return silently: an invalid embedding key produced zero
+    // log lines on the chat path. Say it once per minute and count it.
+    try {
+      const now = Date.now();
+      if (now - (buildRuntimeContext._lastUnavailableLogAt || 0) > 60000) {
+        buildRuntimeContext._lastUnavailableLogAt = now;
+        console.warn(`[rag] operational retrieval unavailable: ${String(err && err.message || err).slice(0, 200)}`);
+      }
+      // eslint-disable-next-line global-require
+      const m = require('../../utils/metrics');
+      if (typeof m.counter === 'function') m.counter('siragpt_rag_retrieve_mode_total', { mode: 'unavailable' }, 1);
+    } catch { /* telemetry never blocks */ }
     return {
       active: false,
       reason: err.message || 'retrieve failed',
