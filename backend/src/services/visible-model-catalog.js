@@ -72,24 +72,6 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     aliases: ['muse-spark-1.1', 'meta/muse-spark-1.1'],
   },
   {
-    name: 'typesafe/jev-latest',
-    displayName: 'TypeSafe Jev',
-    provider: 'TypeSafe',
-    type: 'TEXT',
-    icon: 'TypeSafeLogo',
-    description: 'Jev de TypeSafe (RLCD): decisiones con probabilidades calibradas — elige, puntua o responde si/no; no redacta texto.',
-    aliases: ['typesafe/jev-latest', '~typesafe/jev-latest', 'jev-latest', 'jev'],
-  },
-  {
-    name: 'typesafe/jev-1.13',
-    displayName: 'TypeSafe Jev 1.13',
-    provider: 'TypeSafe',
-    type: 'TEXT',
-    icon: 'TypeSafeLogo',
-    description: 'Jev 1.13.0 fijado: mismas decisiones calibradas con umbrales de confianza estables.',
-    aliases: ['typesafe/jev-1.13', '~typesafe/jev-1.13', 'typesafe/jev-1.13.0', 'jev-1.13', 'jev-1.13.0'],
-  },
-  {
     name: 'z-ai/glm-5.1',
     displayName: 'Z5.1',
     provider: 'OpenRouter',
@@ -286,6 +268,27 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     icon: 'Sparkles',
     description: 'Dolphin 72B via OpenRouter: chat abierto, codigo y razonamiento.',
     aliases: ['dolphin-72b', 'dolphin-72b-mistral', 'cognitivecomputations/dolphin-72b-mistral'],
+  },
+  // TypeSafe Jev is a decision model, not a chat model: it must never become
+  // the picker default (the composer falls back to models[0] when no default
+  // is pinned), so both rows are listed last on purpose.
+  {
+    name: 'typesafe/jev-latest',
+    displayName: 'TypeSafe Jev',
+    provider: 'TypeSafe',
+    type: 'TEXT',
+    icon: 'TypeSafeLogo',
+    description: 'Jev de TypeSafe (RLCD): decisiones con probabilidades calibradas — elige, puntua o responde si/no; no redacta texto.',
+    aliases: ['typesafe/jev-latest', '~typesafe/jev-latest', 'jev-latest', 'jev'],
+  },
+  {
+    name: 'typesafe/jev-1.13',
+    displayName: 'TypeSafe Jev 1.13',
+    provider: 'TypeSafe',
+    type: 'TEXT',
+    icon: 'TypeSafeLogo',
+    description: 'Jev 1.13.0 fijado: mismas decisiones calibradas con umbrales de confianza estables.',
+    aliases: ['typesafe/jev-1.13', '~typesafe/jev-1.13', 'typesafe/jev-1.13.0', 'jev-1.13', 'jev-1.13.0'],
   },
 ]);
 
