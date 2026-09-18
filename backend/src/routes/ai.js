@@ -370,9 +370,16 @@ function createProviderClient(provider, opts = {}) {
 
   if (provider === "DeepSeek") {
     if (!providerConnectionReady('DeepSeek')) throwConnectionUnavailable('DeepSeek');
-    return new OpenAI({
+    // Billing/auth failover: a 402 «Insufficient Balance» (or a rejected key)
+    // on DeepSeek direct retries the SAME model through OpenRouter
+    // (`deepseek/<model>`) instead of ending the turn with an error.
+    // See services/ai/deepseek-billing-failover.
+    const { wrapDeepSeekClient } = require('../services/ai/deepseek-billing-failover');
+    return wrapDeepSeekClient(new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
+    }), {
+      fallbackClientFactory: () => createProviderClient('OpenRouter'),
     });
   }
 
