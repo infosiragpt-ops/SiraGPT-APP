@@ -25,6 +25,7 @@ const MIN_BIN_SAMPLES = Number(process.env.SIRAGPT_RLCD_MIN_BIN_SAMPLES) || 5;
 const PRIOR_WEIGHT = Number(process.env.SIRAGPT_RLCD_PRIOR_WEIGHT) || 5;
 const MAX_DECISIONS = Number(process.env.SIRAGPT_RLCD_MAX_DECISIONS) || 20000;
 const MAX_CHATS = 5000;
+const RECENT_RING = Number(process.env.SIRAGPT_RLCD_RECENT_RING) || 200;
 
 const DECISION_KINDS = Object.freeze(['intent_triage', 'execution_lane', 'model_route', 'compute_mode', 'media_intent']);
 
@@ -48,6 +49,8 @@ let byMessage = new Map(); // messageId → [ids]
 let lastByChat = new Map(); // chatId → [ids] (most recent turn)
 let bins = new Map(); // kind → Array(BIN_COUNT) of { n, sumConf, pos, brier }
 let counters = freshCounters();
+let recent = []; // newest last, capped at RECENT_RING; entries are the live decision objects
+let dirty = false; // true when something changed since the last persisted snapshot
 
 function freshCounters() {
   return {
@@ -123,7 +126,10 @@ function recordDecision({ kind, choice, confidence, signature = null, chatId = n
       outcome: null,
     };
     decisions.set(id, decision);
+    recent.push(decision);
+    if (recent.length > RECENT_RING) recent.splice(0, recent.length - RECENT_RING);
     counters.decisions += 1;
+    dirty = true;
     bump(counters.byKind, k);
     evictIfNeeded();
     return id;
@@ -189,6 +195,7 @@ function applyOutcome(decision, label, value, source) {
   b.sumConf += decision.confidence;
   b.pos += value;
   b.brier += (decision.confidence - value) ** 2;
+  dirty = true;
 }
 
 /**
@@ -289,7 +296,7 @@ function reliabilityFor(kind) {
 
 function snapshot() {
   return {
-    version: 1,
+    version: 2,
     decisions: counters.decisions,
     outcomes: counters.outcomes,
     outcomesUnmatched: counters.outcomesUnmatched,
@@ -302,9 +309,66 @@ function snapshot() {
   };
 }
 
+/**
+ * Durable subset of the state: reliability bins + counters. Pending
+ * decisions are short-lived (they need an outcome within the session) and
+ * are deliberately not persisted.
+ */
+function persistable() {
+  return {
+    version: 2,
+    savedAt: Date.now(),
+    counters: {
+      decisions: counters.decisions,
+      outcomes: counters.outcomes,
+      outcomesUnmatched: counters.outcomesUnmatched,
+      byKind: { ...counters.byKind },
+      byOutcome: { ...counters.byOutcome },
+      laneForced: counters.laneForced,
+      laneConsulted: counters.laneConsulted,
+    },
+    bins: Object.fromEntries(Array.from(bins.entries()).map(([k, arr]) => [k, arr.map((b) => ({ n: b.n, sumConf: b.sumConf, pos: b.pos, brier: b.brier }))])),
+  };
+}
+
+/** Last decisions (newest first) with their outcome, for the admin panel. */
+function recentDecisions({ limit = 50, kind = null } = {}) {
+  const n = Math.max(1, Math.min(RECENT_RING, Number(limit) || 50));
+  const out = [];
+  for (let i = recent.length - 1; i >= 0 && out.length < n; i -= 1) {
+    const d = recent[i];
+    if (kind && d.kind !== kind) continue;
+    out.push({
+      id: d.id,
+      kind: d.kind,
+      choice: d.choice,
+      confidence: d.confidence,
+      signature: d.signature,
+      chatId: d.chatId ? `${String(d.chatId).slice(0, 6)}…` : null,
+      source: d.meta && d.meta.source ? d.meta.source : 'heuristic',
+      createdAt: d.createdAt,
+      outcome: d.outcome ? { label: d.outcome.label, value: d.outcome.value, source: d.outcome.source, at: d.outcome.at } : null,
+    });
+  }
+  return out;
+}
+
+function isDirty() { return dirty; }
+function markClean() { dirty = false; }
+
 function load(obj) {
   try {
     if (!obj || typeof obj !== 'object' || !obj.bins) return false;
+    if (obj.counters && typeof obj.counters === 'object') {
+      const c = obj.counters;
+      counters.decisions = Number(c.decisions) || 0;
+      counters.outcomes = Number(c.outcomes) || 0;
+      counters.outcomesUnmatched = Number(c.outcomesUnmatched) || 0;
+      counters.byKind = { ...(c.byKind && typeof c.byKind === 'object' ? c.byKind : {}) };
+      counters.byOutcome = { ...(c.byOutcome && typeof c.byOutcome === 'object' ? c.byOutcome : {}) };
+      counters.laneForced = Number(c.laneForced) || 0;
+      counters.laneConsulted = Number(c.laneConsulted) || 0;
+    }
     for (const [k, arr] of Object.entries(obj.bins)) {
       if (!Array.isArray(arr) || arr.length !== BIN_COUNT) continue;
       bins.set(k, arr.map((b) => ({
@@ -314,6 +378,7 @@ function load(obj) {
         brier: Number(b.brier) || 0,
       })));
     }
+    dirty = false;
     return true;
   } catch {
     return false;
@@ -323,6 +388,7 @@ function load(obj) {
 function noteLane({ consulted = false, forced = false } = {}) {
   if (consulted) counters.laneConsulted += 1;
   if (forced) counters.laneForced += 1;
+  if (consulted || forced) dirty = true;
 }
 
 function toPrometheusText() {
@@ -355,6 +421,8 @@ function reset() {
   lastByChat = new Map();
   bins = new Map();
   counters = freshCounters();
+  recent = [];
+  dirty = false;
 }
 
 function getDecision(id) {
@@ -377,6 +445,11 @@ module.exports = {
   reliabilityFor,
   noteLane,
   snapshot,
+  persistable,
+  recentDecisions,
+  isDirty,
+  markClean,
+  RECENT_RING,
   load,
   toPrometheusText,
   reset,

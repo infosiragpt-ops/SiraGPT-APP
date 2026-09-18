@@ -8,6 +8,7 @@ import {
   Database,
   Shield,
   Activity,
+  Gauge,
   FileText,
   Bot,
   Heart,
@@ -52,6 +53,7 @@ const adminMenuItems = [
   { title: "Reportes", icon: FileText, url: "/admin/reports" },
   { title: "Estado", icon: Heart, url: "/admin/health" },
   { title: "RLHF", icon: GraduationCap, url: "/admin/rlhf" },
+  { title: "RLCD", icon: Gauge, url: "/admin/rlcd" },
   { title: "Ajustes", icon: Settings, url: "/admin/settings" },
 ]
 

@@ -65,6 +65,13 @@ unen igual que en el resto de decisiones. Si una forma de pedirlo lleva a
 fallos repetidos, ese bin de confianza pierde la fuerza y pasa a preguntar.
 `SIRAGPT_RLCD_MEDIA_STEERING=0` deja solo el registro.
 
+## Fase 1 (PR #743): persistencia, configuración y panel
+
+* **Persistencia sin migración** (`backend/src/services/rlcd/persistence.js`): los bins de fiabilidad y los contadores se guardan como JSON en `system_settings` (clave `rlcd.ledger.v2`). Se restauran al arrancar, se vuelcan cada `SIRAGPT_RLCD_PERSIST_INTERVAL_MS` (5 min) si hubo cambios y en el apagado ordenado (paso `rlcd_ledger_flush`). Las decisiones pendientes no se persisten (necesitan su resultado dentro de la sesión). `SIRAGPT_RLCD_PERSIST=0` lo desactiva. `POST /api/rlcd/persist` (admin) fuerza un volcado.
+* **Configuración revisable** (`backend/src/services/rlcd/config.js`): tipos de decisión con qué deciden y qué resultados los puntúan, umbrales y flags con su variable de entorno y valor por defecto. `GET /api/rlcd/stats` (admin) devuelve `config` y `persistence`.
+* **Anillo de decisiones recientes**: `GET /api/rlcd/decisions?limit&kind` (admin) lista las últimas 200 decisiones con elección, confianza, decisor (`heuristic`/`jev`) y resultado.
+* **Panel** `/admin/rlcd`: fiabilidad por tipo (ECE, Brier, acierto), diagramas de fiabilidad por bin, umbrales efectivos, mezcla de resultados, estado de Jev y de la persistencia, decisiones recientes con filtro por tipo y botón «Guardar ledger».
+
 ## Telemetría
 
 - `GET /api/rlcd/stats` (autenticado): `enabled`, `laneSteering`,
