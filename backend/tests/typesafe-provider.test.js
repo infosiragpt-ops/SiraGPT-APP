@@ -145,6 +145,10 @@ test('decision chat: message shapes map to noul / choice / score / json / fallba
   assert.equal(json.mode, 'json');
   assert.equal(json.state, 'hola');
   assert.equal(json.model, 'jev-1.13');
+  const longOr = b('¿Debería desplegar la nueva versión el viernes por la tarde o el lunes por la mañana? Somos un equipo de 3 personas.');
+  assert.equal(longOr.mode, 'choice');
+  assert.deepEqual(Object.keys(longOr.questions.decision.criteria).slice(0, 2), ['Debería desplegar la nueva versión el viernes por la tarde', 'el lunes por la mañana']);
+  assert.equal(longOr.questions.decision.instructions, '¿Debería desplegar la nueva versión el viernes por la tarde o el lunes por la mañana?');
   const fb = b('quiero una moto roja');
   assert.equal(fb.mode, 'fallback');
   assert.ok(fb.hint);
