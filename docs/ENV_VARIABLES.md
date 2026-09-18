@@ -118,6 +118,18 @@ plus the steering flag it already defines:
 
 ---
 
+## Memoria estilo Claude Code (vault + consolidación)
+
+Ver `docs/memory-architecture.md`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_MEMORY_GREP_MAX_CHARS` | `24000` | Hasta este tamaño de memoria (chars) `memory_search` es solo grep; por encima se suma el peldaño vectorial. |
+| `SIRAGPT_MEMORY_CONSOLIDATION` | on | `0` apaga la consolidación nocturna («dreaming») y el botón «Consolidar ahora». |
+| `SIRAGPT_MEMORY_CONSOLIDATION_CRON` | `17 3 * * *` | Horario UTC del job `memory-consolidation` (system-cron). |
+| `SIRAGPT_MEMORY_CONSOLIDATION_BATCH` | `50` | Usuarios máximos por pase nocturno. |
+| `SIRAGPT_COMPACTION_MEMORY` | on | `0` evita extraer hechos a memoria cuando se compacta el contexto de un chat largo. |
+
 ## Search Tools
 
 | Variable | Provider | Purpose |

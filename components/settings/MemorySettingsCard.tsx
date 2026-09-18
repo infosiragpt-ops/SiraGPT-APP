@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select"
-import { Brain, Plus, Trash2, Search as SearchIcon, Check, X, Pencil } from "lucide-react"
+import { Brain, Plus, Trash2, Search as SearchIcon, Check, X, Pencil, Moon, Undo2 } from "lucide-react"
 import { toast } from "sonner"
-import { apiClient } from "@/lib/api"
+import { apiClient, type MemoryConsolidationReport } from "@/lib/api"
 
 type MemoryEntry = {
   id: string
@@ -23,11 +23,33 @@ const CATEGORY_LABELS: Record<string, string> = {
   personal: "Datos personales",
   preference: "Preferencias",
   work: "Trabajo y contexto",
+  project: "Proyectos",
+  people: "Personas",
+  decision: "Decisiones",
+  tool: "Herramientas",
   instruction: "Instrucciones",
   knowledge: "Conocimiento",
 }
 
-const CATEGORIES = ["personal", "preference", "work", "instruction", "knowledge"]
+const CATEGORIES = ["personal", "preference", "work", "project", "people", "decision", "tool", "instruction", "knowledge"]
+
+const SOURCE_LABELS: Record<string, string> = {
+  auto: "aprendido",
+  consolidation: "consolidado",
+  "legacy-import": "importado",
+}
+
+function sourceLabel(source?: string): string | null {
+  if (!source) return null
+  if (SOURCE_LABELS[source]) return SOURCE_LABELS[source]
+  if (source.startsWith("tool:") || source === "tool") return "guardado en chat"
+  if (source.startsWith("compaction:")) return "rescatado al compactar"
+  return null
+}
+
+function formatWhen(iso: string): string {
+  try { return new Date(iso).toLocaleString("es", { dateStyle: "medium", timeStyle: "short" }) } catch { return iso }
+}
 
 export function MemorySettingsCard() {
   const [entries, setEntries] = React.useState<MemoryEntry[]>([])
@@ -38,6 +60,48 @@ export function MemorySettingsCard() {
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [editText, setEditText] = React.useState("")
   const [busy, setBusy] = React.useState(false)
+  const [reports, setReports] = React.useState<MemoryConsolidationReport[]>([])
+  const [dreaming, setDreaming] = React.useState(false)
+  const [showReport, setShowReport] = React.useState(false)
+
+  const loadReports = React.useCallback(async () => {
+    try {
+      const data = await apiClient.getMemoryConsolidation()
+      setReports(Array.isArray(data.reports) ? data.reports : [])
+    } catch {
+      setReports([])
+    }
+  }, [])
+
+  React.useEffect(() => { void loadReports() }, [loadReports])
+
+  const consolidateNow = async () => {
+    setDreaming(true)
+    try {
+      const r = await apiClient.runMemoryConsolidation()
+      if (r.report) toast.success(`Memoria consolidada: ${r.report.before} → ${r.report.after} entradas`)
+      else toast.message(r.skipped === "too_few_entries" ? "Todavía hay muy pocas entradas para consolidar" : "No había cambios que consolidar")
+      await Promise.all([load(), loadReports()])
+    } catch {
+      toast.error("No se pudo consolidar la memoria ahora")
+    } finally {
+      setDreaming(false)
+    }
+  }
+
+  const revertReport = async (id: string) => {
+    if (!window.confirm("¿Deshacer esta consolidación y restaurar la memoria anterior?")) return
+    setBusy(true)
+    try {
+      await apiClient.revertMemoryConsolidation(id)
+      toast.success("Memoria restaurada")
+      await Promise.all([load(), loadReports()])
+    } catch {
+      toast.error("No se pudo restaurar")
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -204,7 +268,7 @@ export function MemorySettingsCard() {
                       <p className="text-sm break-words">{e.text}</p>
                       <div className="flex items-center gap-2 mt-1">
                         <Badge variant="secondary" className="text-[10px]">{CATEGORY_LABELS[e.category] || e.category}</Badge>
-                        {e.source === "auto" && <span className="text-[10px] text-muted-foreground">aprendido</span>}
+                        {sourceLabel(e.source) && <span className="text-[10px] text-muted-foreground">{sourceLabel(e.source)}</span>}
                       </div>
                     </div>
                     <Button variant="ghost" size="icon" onClick={() => { setEditingId(e.id); setEditText(e.text) }}>
@@ -219,6 +283,64 @@ export function MemorySettingsCard() {
             ))}
           </ul>
         )}
+
+        {/* Consolidation ("dreaming"): reviewable and reversible */}
+        <div className="rounded-lg border border-border/60 p-3 space-y-2" data-memory-consolidation="1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <Moon className="h-4 w-4 mt-0.5 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">Consolidación nocturna</p>
+                <p className="text-xs text-muted-foreground">
+                  Cada noche SiraGPT reorganiza tu memoria: fusiona duplicados, resuelve contradicciones y ordena por temas. Aquí ves qué cambió y puedes deshacerlo.
+                </p>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={consolidateNow} disabled={dreaming || busy || entries.length < 2} className="shrink-0">
+              {dreaming ? "Consolidando…" : "Consolidar ahora"}
+            </Button>
+          </div>
+          {reports.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Aún no se ha consolidado tu memoria.</p>
+          ) : (
+            <div className="space-y-1">
+              {reports.slice(0, showReport ? 5 : 1).map((r) => (
+                <div key={r.id} className="rounded-md bg-muted/40 p-2 text-xs space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      <span className="font-medium">{formatWhen(r.at)}</span> · {r.before} → {r.after} entradas
+                      {r.reverted && <span className="ml-1 text-muted-foreground">(deshecha)</span>}
+                    </span>
+                    {!r.reverted && (
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => revertReport(r.id)} disabled={busy}>
+                        <Undo2 className="h-3.5 w-3.5 mr-1" /> Deshacer
+                      </Button>
+                    )}
+                  </div>
+                  {r.notes && <p className="text-muted-foreground">{r.notes}</p>}
+                  {r.merged.length > 0 && (
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {r.merged.slice(0, 6).map((m, i) => (
+                        <li key={i}><span className="text-muted-foreground">{m.from.length} entradas → </span>{m.to.text}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {r.dropped.length > 0 && (
+                    <p className="text-muted-foreground">Descartadas: {r.dropped.slice(0, 4).map((d) => `«${d.text}»`).join(", ")}{r.dropped.length > 4 ? "…" : ""}</p>
+                  )}
+                  {r.refiled.length > 0 && (
+                    <p className="text-muted-foreground">Reordenadas por tema: {r.refiled.length}</p>
+                  )}
+                </div>
+              ))}
+              {reports.length > 1 && (
+                <button type="button" className="text-xs text-muted-foreground underline-offset-2 hover:underline" onClick={() => setShowReport((v) => !v)}>
+                  {showReport ? "Ver menos" : `Ver ${reports.length - 1} anteriores`}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </Card>
   )

@@ -28,6 +28,22 @@ import {
   PROVIDER_UNAVAILABLE_MESSAGE,
   shouldRetryGenerateHttp,
 } from "./generate-stream-errors"
+export type MemoryConsolidationReport = {
+  id: string
+  at: string
+  before: number
+  after: number
+  merged: Array<{ from: Array<{ id: string; text: string }>; to: { text: string; topic: string } }>
+  refiled: Array<{ id: string; text: string; from: string; to: string }>
+  rewritten: Array<{ id: string; from: string; to: string; topic: string }>
+  dropped: Array<{ id: string; text: string; topic: string }>
+  kept: number
+  notes: string
+  reverted: boolean
+  revertedAt?: string
+  snapshotSize: number
+}
+
 export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -3119,6 +3135,15 @@ class ApiClient {
   }
   async clearMemory(): Promise<{ ok: boolean }> {
     return this.request('/memory', { method: 'DELETE' });
+  }
+  async getMemoryConsolidation(): Promise<{ enabled: boolean; reports: MemoryConsolidationReport[] }> {
+    return this.request('/memory/consolidation');
+  }
+  async runMemoryConsolidation(): Promise<{ ok: boolean; skipped: string | null; report: MemoryConsolidationReport | null }> {
+    return this.request('/memory/consolidation/run', { method: 'POST' });
+  }
+  async revertMemoryConsolidation(id: string): Promise<{ ok: boolean; restored: number; report: MemoryConsolidationReport }> {
+    return this.request(`/memory/consolidation/${encodeURIComponent(id)}/revert`, { method: 'POST' });
   }
 
   async changePassword(data: { currentPassword: string; newPassword: string }) {

@@ -99,6 +99,7 @@ describe('system-cron', () => {
         'failed-email-retry',
         'growth-gauges',
         'hard-delete-deleted-users',
+        'memory-consolidation',
         'prune-api-usage',
         'research-saved-search-alerts',
         'rlhf-phase3',
