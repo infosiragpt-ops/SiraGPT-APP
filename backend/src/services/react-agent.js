@@ -814,6 +814,65 @@ function parseNativeToolCalls(content) {
   return { toolCalls, cleanedContent: stripNativeToolCallMarkup(text) };
 }
 
+/**
+ * Authoritative "today" for the loop. The model's training data is frozen in
+ * the past, so without this line a current-events run searches the wrong
+ * year ("bitcoin price today 2025", "October 2026") and burns its whole step
+ * budget on forecasts. The plain chat path already injects the date through
+ * master-prompt; the agentic loop never did. Pass `now: null` to disable.
+ */
+function buildCurrentDateLine(now = Date.now()) {
+  if (now === null || now === false) return '';
+  const d = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(d.getTime())) return '';
+  const iso = d.toISOString().slice(0, 10);
+  let human = iso;
+  try {
+    human = new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }).format(d);
+  } catch (_) { /* keep ISO */ }
+  return `Current date (UTC): ${human} — ISO ${iso}. This is the REAL "today"; your training data is older. `
+    + `Never infer the current year, month or "this week" from memory: compute them from this date, use it in search queries `
+    + `(e.g. "${d.getUTCFullYear()}"), and treat sources dated after it as forecasts, not facts.`;
+}
+
+const MIN_UNVERIFIED_DRAFT_CHARS = 40;
+const UNVERIFIED_DRAFT_CAVEAT = '> ⚠️ No pude verificar automáticamente esta respuesta (se agotaron los intentos de comprobación). '
+  + 'Te dejo el mejor borrador con sus fuentes; contrasta las cifras, fechas y enlaces antes de usarlos.';
+
+function executedToolNames(steps) {
+  const names = new Set();
+  for (const step of steps || []) {
+    for (const action of (step && step.actions) || []) {
+      if (!action || typeof action.tool !== 'string' || action.tool === 'finalize') continue;
+      const obs = action.observation;
+      if (obs && typeof obs === 'object' && obs.error) continue;
+      names.add(action.tool);
+    }
+  }
+  return names;
+}
+
+/**
+ * When the repair allowance runs out, an information answer that passed the
+ * tool gates but not the answer reviewer is still worth more to the user than
+ * «No pude verificar…» after minutes of work. Return the draft with an honest
+ * caveat — but NEVER when a required tool never ran (the content may be
+ * invented) or when the draft claims a side effect no tool performed.
+ */
+function buildUnverifiedDraftAnswer({ draft, guard, steps }) {
+  const text = String(draft || '').trim();
+  if (text.length < MIN_UNVERIFIED_DRAFT_CHARS) return null;
+  if (Array.isArray(guard && guard.missingTools) && guard.missingTools.length > 0) return null;
+  try {
+    const { verifyClaims } = require('./agents/completion-claim-verifier');
+    const claims = verifyClaims(text, executedToolNames(steps));
+    if (claims && claims.severity === 'high') return null;
+  } catch (_) {
+    return null;
+  }
+  return `${text}\n\n${UNVERIFIED_DRAFT_CAVEAT}`;
+}
+
 function buildDegradedAnswer(stoppedReason) {
   const reason = String(stoppedReason || '');
   if (reason.startsWith('verification_failed')) {
@@ -1028,10 +1087,12 @@ async function run(openai, opts) {
   const registryNames = new Set(registry.map((t) => t.name));
   let promptedBlock = prompted ? promptedTC.buildPromptedToolsBlock(registry) : '';
 
+  const currentDateLine = buildCurrentDateLine(opts.now === undefined ? Date.now() : opts.now);
   const messages = [
     {
       role: 'system',
       content: SYSTEM_PROMPT
+        + (currentDateLine ? `\n\n${currentDateLine}` : '')
         + (extraSystem ? `\n\n${extraSystem}` : '')
         + (promptedBlock ? `\n\n${promptedBlock}` : ''),
     },
@@ -1058,6 +1119,9 @@ async function run(openai, opts) {
   // Finalize-guard rejection tracking (see MAX_FINALIZE_REJECTIONS above).
   let finalizeRejectionsTotal = 0;
   let finalizeRejectionsConsecutive = 0;
+  // Last draft the guard rejected (delivered with a caveat on exhaustion —
+  // see buildUnverifiedDraftAnswer).
+  let lastRejectedDraft = null;
   // Escape hatch for exhausted-tool re-polling: some models keep calling a
   // tool we already declared unavailable, re-reading the same observation
   // forever. After EXHAUSTED_REPOLL_LIMIT consecutive such calls we force
@@ -1530,6 +1594,7 @@ async function run(openai, opts) {
           // repair allowance as native finalize calls.
           finalizeRejectionsTotal += 1;
           finalizeRejectionsConsecutive += 1;
+          lastRejectedDraft = { answer: thought || '', guard };
           if (
             finalizeRejectionsConsecutive >= MAX_CONSEC_FINALIZE_REJECTIONS ||
             finalizeRejectionsTotal >= MAX_FINALIZE_REJECTIONS
@@ -1835,6 +1900,7 @@ async function run(openai, opts) {
         } else if (guard?.ok !== true) {
           finalizeRejectionsTotal += 1;
           finalizeRejectionsConsecutive += 1;
+          lastRejectedDraft = { answer: dispatch.result?.answer || '', guard };
           observation = {
             error: 'finalize_guard_failed',
             message: guard?.message || 'Finalization blocked by execution policy.',
@@ -1914,10 +1980,20 @@ async function run(openai, opts) {
   // degraded answer so the caller has something real to show.
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
+  let unverifiedDraft = false;
   if (finalAnswer == null || String(finalAnswer).trim() === '') {
     if (finalizeRejectionsTotal > 0 && stoppedReason === 'max_steps') {
       stoppedReason = 'verification_failed:step_budget';
     }
+    if (String(stoppedReason).startsWith('verification_failed') && lastRejectedDraft) {
+      const salvaged = buildUnverifiedDraftAnswer({ draft: lastRejectedDraft.answer, guard: lastRejectedDraft.guard, steps });
+      if (salvaged) {
+        finalAnswer = salvaged;
+        unverifiedDraft = true;
+      }
+    }
+  }
+  if (finalAnswer == null || String(finalAnswer).trim() === '') {
     if (exhaustedTools.size > 0 && !String(stoppedReason).startsWith('verification_failed')) {
       const toolList = Array.from(exhaustedTools).join(', ');
       finalAnswer = 'Una herramienta interna necesaria para esta tarea falló de forma repetida. Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o acota la solicitud.';
@@ -1939,11 +2015,14 @@ async function run(openai, opts) {
 
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
-  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools) };
+  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft };
 }
 
 module.exports = {
   run,
+  buildCurrentDateLine,
+  buildUnverifiedDraftAnswer,
+  UNVERIFIED_DRAFT_CAVEAT,
   DEFAULT_MAX_STEPS,
   DEFAULT_MAX_RUNTIME_MS,
   SYSTEM_PROMPT,
