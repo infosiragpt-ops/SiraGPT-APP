@@ -239,6 +239,21 @@ registerGauge('siragpt_queue_probe_last_success_timestamp_seconds', {
   maxSeries: 20,
   suppressWhenEmpty: true,
 });
+registerCounter('siragpt_embedding_requests_total', {
+  help: 'Embedding ladder requests by provider and outcome (ok, error, key_rejected)',
+  labels: ['provider', 'outcome'],
+  maxSeries: 32,
+});
+registerCounter('siragpt_embedding_space_switch_total', {
+  help: 'Times the active embedding vector space changed provider for a dimension',
+  labels: ['dim'],
+  maxSeries: 8,
+});
+registerCounter('siragpt_rag_retrieve_mode_total', {
+  help: 'RAG retrieval outcomes that were not the normal semantic path (bm25_degraded, unavailable)',
+  labels: ['mode'],
+  maxSeries: 8,
+});
 registerCounter('siragpt_stream_failures_total', {
   help: 'Sanitized streaming failures by bounded backend surface and stable public code',
   labels: ['surface', 'code'],

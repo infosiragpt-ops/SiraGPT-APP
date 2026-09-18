@@ -216,6 +216,7 @@ async function applyAdminConnections() {
       if (chosen) {
         for (const name of envVars) process.env[name] = chosen;
         applied.push(providerKey);
+        try { require('../utils/provider-key-health').clear(providerKey); } catch (_) { /* optional */ }
         return;
       }
       // No usable winner — restore original .env value if it changed.
