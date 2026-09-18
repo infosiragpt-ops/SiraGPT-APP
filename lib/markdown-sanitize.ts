@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 
 import { CALLOUT_KINDS, remarkCallouts } from "./markdown/remark-callouts"
+import { remarkDemoteOverlongHeadings } from "./markdown/remark-demote-overlong-headings"
 
 const agenticSearchClassNames = [
   "agentic-search-status",
@@ -114,4 +115,7 @@ export const markdownRemarkPlugins = [
   remarkMath,
   remarkDirective,
   remarkCallouts,
+  // A one-paragraph answer wrapped in heading syntax by the model must read
+  // as body text, not as a 300-character title.
+  remarkDemoteOverlongHeadings,
 ] as any[]
