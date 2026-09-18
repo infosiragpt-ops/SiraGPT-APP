@@ -88,7 +88,8 @@ async function semanticRerank(query, items, opts = {}) {
 /** True when a real embedding backend is configured (best-effort probe). */
 function isSemanticAvailable() {
   try {
-    return Boolean(process.env.OPENAI_API_KEY && String(process.env.OPENAI_API_KEY).trim());
+    // Validity, not presence: a rejected key is memoised by the ladder.
+    return require('./embedding-provider').isAvailable(1536);
   } catch {
     return false;
   }

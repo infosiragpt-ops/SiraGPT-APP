@@ -30,6 +30,12 @@ function isConfigured(env = process.env) {
   const provider = (env.SIRAGPT_MEMORY_EMBED_PROVIDER || 'voyage').toLowerCase();
   if (provider === 'voyage') return Boolean(env.VOYAGE_API_KEY);
   if (provider === 'jina') return Boolean(env.JINA_API_KEY);
+  // `auto` / `ladder`: any provider able to serve 1024 dims with a usable,
+  // non-rejected key (OpenAI `dimensions`, Gemini outputDimensionality,
+  // Voyage, Jina, Mistral) — see services/embedding-provider.
+  if (provider === 'auto' || provider === 'ladder' || provider === 'openai' || provider === 'gemini' || provider === 'mistral') {
+    try { return require('./embedding-provider').isAvailable(EMBED_DIM, env); } catch { return false; }
+  }
   // Unknown provider: let getStore() proceed so embedTexts surfaces the
   // explicit "unsupported provider" error rather than silently disabling.
   return true;
@@ -105,6 +111,17 @@ async function embedTexts(texts, opts = {}) {
       fetchImpl,
     );
     return (json.data || []).map(item => coerceEmbedding(item.embedding));
+  }
+
+  if (provider === 'auto' || provider === 'ladder' || provider === 'openai' || provider === 'gemini' || provider === 'mistral') {
+    // Memory ladder: 1024-dim vectors from whichever provider is healthy;
+    // sticky per dimension so one memory table never mixes two spaces.
+    const ladder = require('./embedding-provider');
+    const env = provider === 'auto' || provider === 'ladder'
+      ? process.env
+      : { ...process.env, SIRAGPT_EMBED_PROVIDER_ORDER: provider };
+    const vecs = await ladder.embed(texts, { targetDim: EMBED_DIM, env, fetchImpl, inputType: 'document' });
+    return vecs.map((v) => coerceEmbedding(Array.from(v)));
   }
 
   throw new Error(`unsupported memory embedding provider: ${provider}`);

@@ -138,10 +138,24 @@ function shouldUseDirectExtractedFieldAnswer({ prompt = '', response = '', direc
   return !normalizedCurrent.includes(normalizedAnswer);
 }
 
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/i;
+function isImageAttachment(file) {
+  const mime = String(file?.mimeType || file?.type || '').toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  return IMAGE_EXT_RE.test(String(file?.name || file?.originalName || file?.filename || ''));
+}
+
 function shouldRecoverAttachmentResponse({ prompt, response, processedFiles = [] }) {
   if (!Array.isArray(processedFiles) || processedFiles.length === 0) return false;
   const trimmed = String(response || '').trim();
   if (!trimmed) return true;
+  // Image-only attachments are answered by a vision model, not by the
+  // document pipeline. A short answer ("2", "un gato") is NOT weak and the
+  // canned «no encontré texto suficiente» fallback is simply wrong for a
+  // picture — only a generic stream failure justifies recovery here.
+  if (processedFiles.every(isImageAttachment)) {
+    return GENERIC_STREAM_FAILURE_RE.test(trimmed);
+  }
   if (OPERATIONAL_DISCLOSURE_RE.test(trimmed)) return true;
   if (FILE_READ_FAILURE_RE.test(trimmed)) return true;
   if (GENERIC_STREAM_FAILURE_RE.test(trimmed)) return true;
@@ -306,6 +320,7 @@ module.exports = {
   buildChatUploadedFileContext,
   recoverChatAttachmentResponse,
   _internal: {
+    isImageAttachment,
     buildDirectExtractedFieldAnswer,
     buildDirectExtractedSummaryAnswer,
     shouldUseDirectExtractedFieldAnswer,

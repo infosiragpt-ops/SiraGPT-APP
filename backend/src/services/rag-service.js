@@ -149,28 +149,44 @@ function getOpenAI() {
  * makes ONE upstream embeddings request. Default OFF — production
  * behavior is identical to pre-flag main.
  */
+// Embedding ladder (services/embedding-provider): OpenAI → Gemini (1536 via
+// outputDimensionality + L2 norm) with key-rejection memo, sticky vector
+// space per dimension and 1:1 length guarantee. `_embedRaw` keeps its name
+// so the single-flight / cache layers above are untouched.
+function embeddingProvider() {
+  return require('./embedding-provider');
+}
 async function _embedRaw(texts) {
-  const openai = getOpenAI();
-  if (!openai) throw new Error('OPENAI_API_KEY not configured — RAG embed() unavailable');
-
-  const BATCH = (() => {
-    try {
-      return require('./document-extract-fastpath').embedBatchSize();
-    } catch {
-      return 128;
-    }
-  })(); // well under OpenAI's 2048-input ceiling
-  const out = [];
-  for (let i = 0; i < texts.length; i += BATCH) {
-    const slice = texts.slice(i, i + BATCH);
-    const resp = await openai.embeddings.create({ model: EMBED_MODEL, input: slice });
-    for (const d of resp.data) {
-      // Float32Array is ~4× smaller than a JS number[] — matters when
-      // a user ingests hundreds of chunks into memory.
-      out.push(Float32Array.from(d.embedding));
-    }
+  const provider = embeddingProvider();
+  if (!provider.isAvailable(EMBED_DIM)) {
+    throw new Error('No embedding provider available (OPENAI_API_KEY / GEMINI_API_KEY missing or rejected) — RAG embed() unavailable');
   }
-  return out;
+  const vecs = await provider.embed(texts, { targetDim: EMBED_DIM, useCache: false, openaiClient: getOpenAI() });
+  if (vecs.length !== texts.length) throw new Error(`embed returned ${vecs.length} vectors for ${texts.length} chunks`);
+  return vecs;
+}
+
+let _lastDegradedLogAt = 0;
+function _noteDegraded(reason) {
+  try {
+    // eslint-disable-next-line global-require
+    const m = require('../utils/metrics');
+    if (typeof m.counter === 'function') m.counter('siragpt_rag_retrieve_mode_total', { mode: 'bm25_degraded' }, 1);
+  } catch { /* metrics optional */ }
+  const now = Date.now();
+  if (now - _lastDegradedLogAt > 60000) {
+    _lastDegradedLogAt = now;
+    console.warn(`[rag] embeddings unavailable — serving BM25-only retrieval (${reason})`);
+  }
+}
+
+/** Shape a BM25-only pool like the semantic path's final hits (no rerank/MMR). */
+function finalizeDegradedHits(pool, k, opts = {}) {
+  const hits = pool.slice(0, Math.max(1, k)).map((h) => ({ ...h }));
+  if (opts.includeDiagnostics) {
+    return hits.map((h) => ({ ...h, diagnostics: { retrievalMode: 'bm25_degraded', reason: h.degradedReason || null } }));
+  }
+  return hits;
 }
 
 async function _embedUncached(texts) {
@@ -199,8 +215,12 @@ const _embedCache = new Map(); // sha256(model\0text) → Float32Array
 const _embedCacheStats = { hits: 0, misses: 0 };
 
 function _embedCacheKey(text) {
+  // The cache is keyed by the ACTIVE vector space (provider:model:dim), not
+  // just the model name: under the ladder a Gemini vector must never be
+  // served for an OpenAI-space lookup.
+  const space = (() => { try { return embeddingProvider().expectedSpace(EMBED_DIM); } catch { return null; } })() || EMBED_MODEL;
   return require('node:crypto').createHash('sha256')
-    .update(EMBED_MODEL).update('\0').update(String(text)).digest('hex');
+    .update(space).update('\0').update(String(text)).digest('hex');
 }
 
 async function embed(texts) {
@@ -452,7 +472,40 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     expansionKeywords = keywords;
     if (keywords.length > 0 && expanded !== query) toEmbed.push(expanded);
   }
-  const queryVecs = await embed(toEmbed);
+  // Embedding outage ≠ retrieval outage: when every embedding provider is
+  // down (rejected key, network) fall back to the lexical BM25 ranker, which
+  // needs no key, and label the mode so callers/telemetry can see it.
+  let queryVecs = null;
+  let degradedReason = null;
+  try {
+    queryVecs = await embed(toEmbed);
+  } catch (embedErr) {
+    degradedReason = String((embedErr && embedErr.message) || embedErr).slice(0, 200);
+    _noteDegraded(degradedReason);
+  }
+  if (!queryVecs) {
+    const bmIndex = bm25.buildIndex(entries.map((e, idx) => ({ text: e.text, _idx: idx })));
+    const bmHits = bm25.searchIndex(bmIndex, query, { k: Math.max(1, cappedPool) });
+    const degradedPool = bmHits
+      .filter((h) => h && h.doc && Number.isInteger(h.doc._idx) && h.score > 0)
+      .slice(0, Math.max(1, cappedPool))
+      .map((h) => {
+        const e = entries[h.doc._idx];
+        return {
+          _idx: h.doc._idx,
+          text: e.text,
+          source: e.source,
+          title: e.title,
+          score: h.score,
+          vectorScore: 0,
+          textScore: h.score,
+          fusionScore: h.score,
+          retrievalMode: 'bm25_degraded',
+          degradedReason,
+        };
+      });
+    return finalizeDegradedHits(degradedPool, k, opts);
+  }
 
   const scored = entries.map((e, idx) => {
     let best = -Infinity;
