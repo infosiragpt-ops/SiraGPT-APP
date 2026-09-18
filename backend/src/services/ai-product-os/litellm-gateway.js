@@ -34,6 +34,8 @@ const PROVIDER_ALIASES = Object.freeze({
   anthropic: "anthropic",
   meta: "meta",
   llama: "meta",
+  typesafe: "typesafe",
+  jev: "typesafe",
   custom: "custom",
 });
 
@@ -100,6 +102,17 @@ const PROVIDER_MANIFESTS = Object.freeze({
     request_format: "openai_chat_completions",
     supports: { text: true, multimodal: true, tools: true, structured_outputs: false, streaming: true },
     cost_per_1m_tokens_usd: { input: null, output: null },
+  },
+  typesafe: {
+    provider: "typesafe",
+    display_name: "TypeSafe AI (Jev)",
+    api_key_env: "TYPESAFE_API_KEY",
+    base_url: "https://api.typesafe.ai",
+    // System One evaluation endpoint (POST /v1/systemone): typed questions in,
+    // calibrated probabilities out. No chat completions, no tools, no streaming.
+    request_format: "typesafe_systemone",
+    supports: { text: true, multimodal: false, tools: false, structured_outputs: true, streaming: false },
+    cost_per_1m_tokens_usd: { input: 0.042, output: 0 },
   },
   custom: {
     provider: "custom",
