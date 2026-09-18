@@ -8,6 +8,7 @@
  *   memory_write         deliberate, guarded write in the same conversation
  *   memory_forget        remove a memory the user asked to drop
  *   chat_history_search  full-text search over the user's past chats
+ *   connector_search     the user's connected sources (Google Drive, Gmail)
  *
  * Same tool shape as task-tools (`name/description/parameters/execute(args, ctx)`),
  * `ctx.userId` scopes every call; without it the tools answer ok:false (never
@@ -16,6 +17,7 @@
 
 const vault = require('../memory/vault');
 const chatHistory = require('../memory/chat-history-search');
+const connectorSearch = require('../memory/connector-search');
 
 function preview(text, n = 120) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
@@ -148,7 +150,32 @@ const chatHistorySearch = {
   },
 };
 
-const MEMORY_TOOLS = [memoryReadTopic, memorySearch, memoryWrite, memoryForget, chatHistorySearch];
+const connectorSearchTool = {
+  name: 'connector_search',
+  description: 'Busca en las fuentes CONECTADAS del usuario (Google Drive y Gmail, con su propia cuenta) archivos o correos relevantes: nombres, asunto, remitente, fecha y fragmento. Úsalo cuando el usuario mencione "mi Drive", "el correo de…", "el archivo que tengo en Google" o cuando la memoria y los chats no contengan el dato. Nunca devuelve credenciales ni cuerpos completos.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Palabras clave (Gmail admite operadores como from:, subject:, newer_than:7d).' },
+      sources: { type: 'array', items: { type: 'string', enum: ['drive', 'gmail'] }, description: 'Fuentes a consultar (default: ambas).' },
+      limit: { type: 'integer', minimum: 1, maximum: 20 },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+  async execute({ query, sources, limit } = {}, ctx = {}) {
+    const gate = needUser(ctx, 'connector_search'); if (gate) return gate;
+    if (!query || typeof query !== 'string') return { ok: false, error: 'connector_search requires a "query"' };
+    ctx.onEvent?.({ type: 'tool_call', tool: 'connector_search', preview: preview(query, 80) });
+    const res = await connectorSearch.searchConnectors(ctx.userId, query, { sources: Array.isArray(sources) && sources.length ? sources : ['drive', 'gmail'], limit: Math.max(1, Math.min(20, Number(limit) || 8)) });
+    const total = (res.sources || []).reduce((n, s) => n + (s.results ? s.results.length : 0), 0);
+    ctx.onEvent?.({ type: 'tool_output', tool: 'connector_search', ok: !!res.ok, preview: res.ok ? `${total} resultado(s)` : `Sin fuentes conectadas (${res.error || (res.sources || []).map((s) => s.error).join(', ')})` });
+    if (!res.ok) return { ok: false, error: res.error || 'no_connected_sources', sources: res.sources || [] };
+    return { ok: true, sources: res.sources, _preview: `${total} resultado(s) en ${res.sources.filter((s) => s.ok).map((s) => s.source).join(' + ')}` };
+  },
+};
+
+const MEMORY_TOOLS = [memoryReadTopic, memorySearch, memoryWrite, memoryForget, chatHistorySearch, connectorSearchTool];
 const MEMORY_TOOL_NAMES = MEMORY_TOOLS.map((t) => t.name);
 
-module.exports = { MEMORY_TOOLS, MEMORY_TOOL_NAMES, memoryReadTopic, memorySearch, memoryWrite, memoryForget, chatHistorySearch };
+module.exports = { MEMORY_TOOLS, MEMORY_TOOL_NAMES, memoryReadTopic, memorySearch, memoryWrite, memoryForget, chatHistorySearch, connectorSearch: connectorSearchTool };

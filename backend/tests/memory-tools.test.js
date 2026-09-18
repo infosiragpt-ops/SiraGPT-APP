@@ -31,7 +31,7 @@ test('every tool refuses to run without an authenticated user (never cross-user)
     const r = await t.execute({ query: 'x', topic: 'x', text: 'hecho de prueba', id: 'y' }, {});
     assert.equal(r.ok, false); assert.match(r.error, /requires an authenticated user/);
   }
-  assert.deepEqual(tools.MEMORY_TOOL_NAMES, ['memory_read_topic', 'memory_search', 'memory_write', 'memory_forget', 'chat_history_search']);
+  assert.deepEqual(tools.MEMORY_TOOL_NAMES, ['memory_read_topic', 'memory_search', 'memory_write', 'memory_forget', 'chat_history_search', 'connector_search']);
   for (const t of tools.MEMORY_TOOLS) {
     assert.equal(t.parameters.type, 'object'); assert.equal(t.parameters.additionalProperties, false);
     assert.ok(t.description.length > 40);
