@@ -27,7 +27,7 @@ const MAX_DECISIONS = Number(process.env.SIRAGPT_RLCD_MAX_DECISIONS) || 20000;
 const MAX_CHATS = 5000;
 const RECENT_RING = Number(process.env.SIRAGPT_RLCD_RECENT_RING) || 200;
 
-const DECISION_KINDS = Object.freeze(['intent_triage', 'execution_lane', 'model_route', 'compute_mode', 'media_intent', 'tool_risk', 'skill_route']);
+const DECISION_KINDS = Object.freeze(['intent_triage', 'execution_lane', 'model_route', 'compute_mode', 'media_intent', 'tool_risk', 'skill_route', 'rag_filter']);
 
 const OUTCOME_LABELS = Object.freeze({
   success: 1,

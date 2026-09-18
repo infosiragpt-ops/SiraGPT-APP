@@ -3893,6 +3893,39 @@ router.post(
         generateLog.warnError('rag.rerank_failed', rerankErr);
       }
 
+      // RLCD × Jev RAG filter (fase 2c): score every retrieved hit against
+      // the question, drop the irrelevant ones and re-render the evidence
+      // block with the essential passage first. Fail-open, ≤1.5 s.
+      try {
+        if (operationalRagContext && Array.isArray(operationalRagContext.hits) && operationalRagContext.hits.length >= 3) {
+          const ragFilter = require('../services/rlcd/jev-rag-filter');
+          if (ragFilter.isRagFilterEnabled()) {
+            const __filtered = await ragFilter.filterHits({
+              query: prompt,
+              hits: operationalRagContext.hits,
+              chatId: canPersist ? chatId : null,
+              ledger: require('../services/rlcd').ledger,
+            });
+            if (__filtered && Array.isArray(__filtered.hits) && __filtered.hits.length) {
+              const __before = operationalRagContext.hits.length;
+              operationalRagContext.hits = __filtered.hits;
+              operationalRagContext.contextBlock = operationalRag.buildEvidenceBlock({
+                query: prompt,
+                collection: operationalRagContext.collection,
+                docs: operationalRagContext.docs,
+                hits: __filtered.hits,
+                graphAnswer: operationalRagContext.graphAnswer || null,
+                retrievalMeta: operationalRagContext.retrievalMeta || {},
+              });
+              if (__filtered.decisionId) req._rlcdRagDecisionId = __filtered.decisionId;
+              generateLog.info('rlcd.rag_filtered', { before: __before, after: __filtered.hits.length, dropped: __filtered.dropped, latencyMs: __filtered.latencyMs });
+            }
+          }
+        }
+      } catch (ragFilterErr) {
+        generateLog.warnError('rag.rerank_failed', ragFilterErr);
+      }
+
       const evidenceBlock = operationalRagContext?.contextBlock
         ? `\n\n${operationalRagContext.contextBlock}`
         : '';
@@ -7923,6 +7956,39 @@ router.post(
                 }
               } catch (_) { /* noop */ }
             }
+            // RLCD × Jev grounded-answer check (fase 2c): calibrated verdict on
+            // whether the answer is supported by the sources; scores the
+            // turn's decisions and warns the user only when confidently
+            // unsupported and the heuristic gate stayed silent.
+            try {
+              const jevFaith = require('../services/rlcd/jev-faithfulness');
+              if (jevFaith.isFaithfulnessEnabled()) {
+                const __sources = faithGate.buildGroundingContext({
+                  evidenceBlock,
+                  uploadedFileContext: uploadedFileContextForTurn,
+                  documentEnrichmentBlock,
+                  memoryBlock,
+                  activeMemoryBlock,
+                  crossChatBlock,
+                  webSearchBlock,
+                });
+                if (__sources.length) {
+                  const __jf = await jevFaith.checkAnswer({ question: prompt, answer: fullResponseContent, sources: __sources, language: (langResolution && langResolution.language) || 'es' });
+                  if (__jf) {
+                    generateLog.info('rlcd.jev_faithfulness', { verdict: __jf.verdict, supported: __jf.supported, invented: __jf.invented, coverage: __jf.coverage, latencyMs: __jf.latencyMs });
+                    if (__jf.outcome) {
+                      const __ids = [...(Array.isArray(req._rlcdDecisionIds) ? req._rlcdDecisionIds : []), ...(req._rlcdRagDecisionId ? [req._rlcdRagDecisionId] : [])];
+                      if (__ids.length) { try { require('../services/rlcd').recordOutcome({ decisionIds: __ids, outcome: __jf.outcome, source: 'jev_faithfulness' }); } catch (_) { /* advisory */ } }
+                      try { require('../services/routing-feedback').recordOutcome({ intent: req._cognitiveDecision && req._cognitiveDecision.intent, difficulty: req._cognitiveDecision && req._cognitiveDecision.difficulty, model: actualModel, outcome: __jf.outcome }); } catch (_) { /* advisory */ }
+                    }
+                    if (__jf.verdict === 'low' && __jf.footer && __faith.action !== 'annotate' && !res.writableEnded) {
+                      res.write(`data: ${JSON.stringify({ content: __jf.footer })}\n\n`);
+                      fullResponseContent = `${fullResponseContent}${__jf.footer}`;
+                    }
+                  }
+                }
+              }
+            } catch (_) { /* advisory */ }
             if (__faith.action === 'annotate' && __faith.footer && !res.writableEnded) {
               res.write(`data: ${JSON.stringify({ content: __faith.footer })}\n\n`);
               fullResponseContent = `${fullResponseContent}${__faith.footer}`;

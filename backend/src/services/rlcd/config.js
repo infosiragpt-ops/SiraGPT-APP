@@ -70,6 +70,12 @@ const DECISION_KIND_DOCS = Object.freeze({
     outcomes: 'éxito/fallo de run_skill, thumb',
     deciders: ['jev'],
   },
+  rag_filter: {
+    label: 'Filtro de evidencia RAG',
+    decides: 'qué fragmentos recuperados entran en el contexto y en qué orden',
+    outcomes: 'fidelidad de la respuesta (jev_faithfulness / gate heurístico), thumb',
+    deciders: ['jev'],
+  },
 });
 
 const THRESHOLD_DOCS = Object.freeze([
@@ -93,6 +99,10 @@ const THRESHOLD_DOCS = Object.freeze([
   { key: 'jevToolUnrequested', env: 'SIRAGPT_RLCD_JEV_TOOL_UNREQUESTED', def: 0.8, doc: 'p(acción no pedida por el usuario) mínima para pedir confirmación aunque el riesgo sea moderado.' },
   { key: 'jevSkillPrimary', env: 'SIRAGPT_RLCD_JEV_SKILL_PRIMARY', def: 0.5, doc: 'Probabilidad mínima de la skill ganadora para recomendarla.' },
   { key: 'jevSkillSecondary', env: 'SIRAGPT_RLCD_JEV_SKILL_SECONDARY', def: 0.25, doc: 'Probabilidad mínima de skills alternativas para listarlas como recomendadas.' },
+  // Jev RAG filter + grounded-answer check (fase 2c)
+  { key: 'jevRagDrop', env: 'SIRAGPT_RLCD_JEV_RAG_DROP', def: 0.8, doc: 'p(fragmento irrelevante) mínima para excluirlo del contexto (siempre quedan ≥2).' },
+  { key: 'jevFaithHigh', env: 'SIRAGPT_RLCD_JEV_FAITH_HIGH', def: 0.8, doc: 'p(respaldada) mínima para puntuar high_faithfulness; p(cita inventada) ≥ este valor puntúa low.' },
+  { key: 'jevFaithLow', env: 'SIRAGPT_RLCD_JEV_FAITH_LOW', def: 0.35, doc: 'p(respaldada) máxima para puntuar low_faithfulness y avisar al usuario.' },
 ]);
 
 const FLAG_DOCS = Object.freeze([
@@ -111,6 +121,8 @@ const FLAG_DOCS = Object.freeze([
   { key: 'jevSatisfaction', env: 'SIRAGPT_RLCD_JEV_SATISFACTION', def: true, doc: 'Puntuar la respuesta anterior con la reacción implícita del usuario.' },
   { key: 'jevToolGuard', env: 'SIRAGPT_RLCD_JEV_TOOL_GUARD', def: true, doc: 'Jev evalúa cada llamada a herramienta no de solo lectura y pide confirmación si es irreversible o tiene efectos externos.' },
   { key: 'jevSkillPicker', env: 'SIRAGPT_RLCD_JEV_SKILL_PICKER', def: true, doc: 'Jev elige la skill recomendada para run_skill.' },
+  { key: 'jevRagFilter', env: 'SIRAGPT_RLCD_JEV_RAG_FILTER', def: true, doc: 'Jev puntúa la relevancia de cada fragmento RAG y descarta los irrelevantes antes de inyectarlos.' },
+  { key: 'jevFaithfulness', env: 'SIRAGPT_RLCD_JEV_FAITHFULNESS', def: true, doc: 'Jev comprueba si la respuesta está respaldada por las fuentes y avisa cuando no.' },
 ]);
 
 function describe(env = process.env) {

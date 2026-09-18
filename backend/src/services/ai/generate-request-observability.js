@@ -249,6 +249,8 @@ const ALLOWED_EVENTS = new Set([
   'rlcd.jev_ask',
   'rlcd.jev_compute',
   'rlcd.jev_lane',
+  'rlcd.rag_filtered',
+  'rlcd.jev_faithfulness',
   'rlcd.prompt_applied',
   'rlcd.skipped',
   'rlhf.implicit_signal',
