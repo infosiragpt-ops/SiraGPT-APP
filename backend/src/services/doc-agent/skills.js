@@ -130,6 +130,8 @@ FORMAT-PRESERVATION CONTRACT (surgical edits):
   shape.text = … (it nukes run formatting).
 - NEW SLIDES use the deck's OWN layouts: pick from prs.slide_layouts by name
   so the master's fonts/colors are inherited — never a generic hardcoded look.
+  PptxGenJS/platform decks ship ONE layout (DEFAULT) with NO placeholders:
+  fall back to prs.slide_layouts[0] + shapes.add_textbox for title/body.
 - Keep slide order, notes, media and theme untouched unless asked.
 - SURGICAL TEXT PATCH (preferred for TEXT-ONLY changes): text lives in a:t of
   ppt/slides/slideN.xml and notesSlideN.xml — unpack, patch with lxml

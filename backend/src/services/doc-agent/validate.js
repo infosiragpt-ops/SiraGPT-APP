@@ -46,7 +46,12 @@ function listZipEntries(buffer) {
     const commentLen = buffer.readUInt16LE(off + 32);
     if (off + 46 + nameLen > buffer.length) return null;
     const name = buffer.toString('utf8', off + 46, off + 46 + nameLen);
-    entries.push({ name, crc, compSize, uncompSize });
+    // Directory entries (names ending in "/") are NOT OOXML parts.
+    // PptxGenJS/JSZip-authored decks ship explicit directory entries
+    // (ppt/, ppt/slides/, …) that library round-trips (python-pptx,
+    // openpyxl, LibreOffice) legitimately drop. Counting them as parts
+    // turns every such edit into a false `parts_removed` hard fail.
+    if (!name.endsWith('/')) entries.push({ name, crc, compSize, uncompSize });
     off += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
