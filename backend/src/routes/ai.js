@@ -419,6 +419,17 @@ function createProviderClient(provider, opts = {}) {
     });
   }
 
+  if (provider === "TypeSafe") {
+    // Jev is not chat-completions: aiService.generateStream branches to the
+    // decision adapter (services/typesafe-decision-chat.js) before touching
+    // this client. Gate on the key here so a missing TYPESAFE_API_KEY is the
+    // same 503 "Conexión no disponible" as every other first-party provider;
+    // the returned client only serves side tasks (titles, triage) that pick
+    // their own OpenAI model.
+    if (!providerConnectionReady('TypeSafe')) throwConnectionUnavailable('TypeSafe');
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'typesafe-decision-model' });
+  }
+
   // Custom / Ollama / HuggingFace already handled at the top via
   // createCustomProviderClient — never fall through to OpenAI.
   return new OpenAI({
@@ -512,6 +523,7 @@ function buildCompactionCompletion(runtime, req) {
       present: !!(process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY),
       envKey: 'MODEL_API_KEY (or META_API_KEY)',
     },
+    { name: 'TypeSafe', envKey: 'TYPESAFE_API_KEY' },
   ];
   const missing = checks.filter((c) => (c.present === undefined ? !process.env[c.envKey] : !c.present));
   if (missing.length > 0) {
@@ -875,6 +887,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     if (wantMusic) staticTypesToEnsure.push('MUSIC');
     if (staticTypesToEnsure.length > 0) {
       await modelSyncService.ensureStaticCatalogModels({ types: staticTypesToEnsure });
+    }
+    if (wantText) {
+      // TypeSafe Jev rows are created from code (no migration) the first time
+      // the TEXT picker lists while TYPESAFE_API_KEY is configured.
+      try { await require('../services/typesafe-catalog').ensureTypeSafeCatalogRows(prisma); } catch (_) { /* fail-open */ }
     }
 
     const whereClause = {
@@ -5635,6 +5652,23 @@ router.post(
               signature: req._rlcdSignature || null,
             });
             if (req._rlcdMedia.decisionId) req._rlcdDecisionIds.push(req._rlcdMedia.decisionId);
+            // TypeSafe Jev (when configured) re-decides the uncertain band with a
+            // model trained for calibrated probabilities. Fail-open, ≤1.5 s.
+            try {
+              const __refined = await rlcd.refineMediaIntentWithJev(req._rlcdMedia, {
+                chatId: canPersist ? chatId : null,
+                text: prompt,
+                hasImageAttachment: (typeof processedFiles !== 'undefined' && Array.isArray(processedFiles))
+                  ? processedFiles.some((file) => file && isImageMime(file.mimeType || file.type))
+                  : false,
+                signature: req._rlcdSignature || null,
+              });
+              if (__refined && __refined !== req._rlcdMedia) {
+                req._rlcdMedia = __refined;
+                if (__refined.decisionId) req._rlcdDecisionIds.push(__refined.decisionId);
+                generateLog.info('rlcd.media_refined_by_jev', { action: __refined.action, kind: __refined.kind, raw: __refined.raw, calibrated: __refined.calibrated, jevTool: __refined.jev && __refined.jev.tool, latencyMs: __refined.jev && __refined.jev.latencyMs });
+              }
+            } catch (_) { /* advisory */ }
             if (req._rlcdMedia.ask && req._rlcdMedia.question && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
               intentTriageDecision = { action: 'ask', question: req._rlcdMedia.question, reason: 'rlcd_media_uncertain', source: 'rlcd_media', score: 1 - (req._rlcdMedia.calibrated || 0) };
             }
@@ -7248,6 +7282,9 @@ router.post(
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)
+                // TypeSafe Jev answers with probabilities, not tool calls: the
+                // decision adapter in aiService handles the whole turn.
+                && !/^typesafe$/i.test(String(actualProvider || ''))
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
                 && (!hasImages || documentEditRequested || createDocRequested)
               );

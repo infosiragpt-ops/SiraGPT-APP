@@ -215,6 +215,50 @@ function decideMediaIntent({ chatId, text, intent = null, hasImageAttachment = f
   return out;
 }
 
+const MEDIA_VOCAB = /\b(imagen|imagenes|imágenes|foto|fotos|logo|logotipo|dibuj\w*|ilustra\w*|póster|poster|cartel|banner|retrato|render|v[ií]deo|clip|animaci[oó]n|canci[oó]n|m[uú]sica|beat|jingle|melod[ií]a|voz|locuci[oó]n|audio|narra\w*|image|images|picture|photo|drawing|illustration|logo|video|song|music|voice|speech|narration)\b/i;
+
+/**
+ * Re-decide the media intent with TypeSafe Jev when the heuristic is not
+ * already confident. Async and fail-open: returns `base` untouched when Jev
+ * is disabled/unconfigured, the text has no media vocabulary, or the call
+ * fails. A refined decision is recorded as its own ledger entry
+ * (meta.source = 'jev', meta.supersedes = heuristic id) so both predictors
+ * are scored against the same outcome.
+ */
+async function refineMediaIntentWithJev(base, { chatId, text, history = [], hasImageAttachment = false, signature = null, env = process.env } = {}) {
+  if (!base || !isEnabled(env)) return base;
+  try {
+    // eslint-disable-next-line global-require
+    const jev = require('./jev-decider');
+    if (!jev.isJevEnabled(env)) return base;
+    const msg = String(text || '');
+    const heuristicSure = base.action === 'force' && Number(base.raw) >= 0.85 && !base.repaired;
+    if (heuristicSure) return base;
+    if (!base.kind && !MEDIA_VOCAB.test(msg)) return base;
+    const answer = await jev.askJevMediaIntent({ text: msg, history, hasImageAttachment, env });
+    if (!answer) return base;
+    const merged = jev.mergeJevDecision(base, answer, {
+      ledger,
+      forceThreshold: mediaForceThreshold(env),
+      askThreshold: mediaAskThreshold(env),
+      steering: isMediaSteeringEnabled(env),
+      text: msg,
+    });
+    const id = ledger.recordDecision({
+      kind: 'media_intent',
+      choice: merged.action === 'none' ? 'chat' : `${merged.action}:${merged.kind}`,
+      confidence: merged.raw,
+      signature,
+      chatId,
+      meta: { source: 'jev', tool: merged.tool, supersedes: base.decisionId || null, jevTool: answer.tool, jevConfidence: answer.confidence, model: answer.model, latencyMs: answer.latencyMs, calibrated: merged.calibrated },
+    });
+    merged.decisionId = id;
+    merged.heuristicDecisionId = base.decisionId || null;
+    if (chatId && id) ledger.appendTurn(chatId, [id]);
+    return merged;
+  } catch { return base; }
+}
+
 function recordOutcome(args) {
   if (!isEnabled()) return 0;
   return ledger.recordOutcome(args);
@@ -651,6 +695,7 @@ module.exports = {
   recordTurnDecisions,
   decideExecutionLane,
   decideMediaIntent,
+  refineMediaIntentWithJev,
   isMediaSteeringEnabled,
   mediaForceThreshold,
   mediaAskThreshold,
