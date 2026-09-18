@@ -64,9 +64,12 @@ const EXT_MIME_FALLBACK = {
 
 const SUCCESS_METHODS = new Set(['whisper', 'local-whisper']);
 // Cloud transcription ladder. OpenAI Whisper first when its key works, then
-// Meta's transcription model (same OpenAI-compatible `audio/transcriptions`
-// surface), then the local whisper.cpp engine which has no size limit.
-const DEFAULT_PROVIDER_ORDER = ['openai', 'meta', 'local'];
+// xAI Grok STT (`/v1/stt`, see xai-audio.js), then Meta's transcription model
+// (OpenAI-compatible `audio/transcriptions`), then the local whisper.cpp
+// engine which has no size limit. An invalid key on one rung never blocks
+// the next: every rung is tried in order.
+const DEFAULT_PROVIDER_ORDER = ['openai', 'xai', 'meta', 'local'];
+const DEFAULT_XAI_STT_MODEL = 'grok-stt';
 const DEFAULT_META_TRANSCRIBE_MODEL = 'muse-voice-transcribe-1.0';
 const DEFAULT_META_BASE_URL = 'https://api.meta.ai/v1';
 // Cloud providers cap request bodies (25 MB on Whisper). Longer recordings
@@ -202,6 +205,10 @@ function metaApiKey(options = {}) {
   return String(env.MODEL_API_KEY || env.META_API_KEY || env.LLAMA_API_KEY || '').trim();
 }
 
+function xaiApiKey(options = {}) {
+  return String(envOf(options).XAI_API_KEY || '').trim();
+}
+
 /** Cloud providers in ladder order, only those with a usable key. */
 function cloudProviders(options = {}) {
   const env = envOf(options);
@@ -217,6 +224,22 @@ function cloudProviders(options = {}) {
           const OpenAI = require('openai');
           return new OpenAI({ apiKey: env.OPENAI_API_KEY });
         })(),
+      });
+    } else if (name === 'xai' && xaiApiKey(options) && String(env.TRANSCRIBE_XAI_DISABLED || '') !== '1') {
+      out.push({
+        name: 'xai',
+        method: 'whisper',
+        model: env.XAI_STT_MODEL || DEFAULT_XAI_STT_MODEL,
+        verbose: false,
+        // xAI STT is a multipart POST to /v1/stt, not the OpenAI SDK surface.
+        transcribeFile: options.xaiTranscribe || ((filePath, mimeType, fileName, language) => require('./xai-audio').transcribeXaiAudioFile({
+          filePath,
+          originalName: fileName,
+          mimeType,
+          model: env.XAI_STT_MODEL || undefined,
+          language,
+          env,
+        })),
       });
     } else if (name === 'meta' && metaApiKey(options) && String(env.TRANSCRIBE_META_DISABLED || '') !== '1') {
       out.push({
@@ -292,6 +315,15 @@ async function segmentForCloud(filePath, options = {}) {
 }
 
 async function transcribeCloudFile(provider, filePath, mimeType, fileName, options, language, prompt) {
+  if (typeof provider.transcribeFile === 'function') {
+    const out = await provider.transcribeFile(filePath, mimeType, fileName, language, prompt);
+    return {
+      text: String(out?.text || ''),
+      segments: [],
+      model: out?.model || provider.model,
+      language: language || out?.language || null,
+    };
+  }
   const client = provider.client();
   const fileBuffer = await fsPromises.readFile(filePath);
   const blob = typeof options.createFile === 'function'
@@ -502,6 +534,8 @@ module.exports = {
   isAbortError,
   isInvalidKeyError,
   hasOpenAiKey,
+  xaiApiKey,
+  DEFAULT_XAI_STT_MODEL,
   AUDIO_MIME_MAP,
   SUCCESS_METHODS,
   get AUDIO_MAX_FILE_BYTES() {

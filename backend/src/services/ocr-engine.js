@@ -234,6 +234,10 @@ class OcrEngine {
     const texts = [];
     let confSum = 0;
     let confSamples = 0;
+    // Time budget for a single picture: a chat attachment must never hold the
+    // turn for a minute of tesseract tiles when a vision model can read it.
+    const budgetMs = Number(process.env.SIRAGPT_OCR_IMAGE_BUDGET_MS) || 12000;
+    const startedAt = Date.now();
     try {
       if (typeof worker.setParameters === 'function') {
         await worker.setParameters({
@@ -242,6 +246,7 @@ class OcrEngine {
         }).catch(() => null);
       }
       for (const tile of tiles) {
+        if (Date.now() - startedAt > budgetMs) break;
         const buf = await sharp(input)
           .extract({ left: tile.left, top: tile.top, width: tile.width, height: tile.height })
           .greyscale()
