@@ -18,7 +18,8 @@
 
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
-const memoryDocument = require('../services/memory-document');
+const vault = require('../services/memory/vault');
+const consolidation = require('../services/memory/consolidation');
 const longTermMemory = require('../services/long-term-memory');
 
 const router = express.Router();
@@ -30,112 +31,114 @@ function getUserId(req) {
 }
 
 // Read the full document (entries + rendered markdown + stats).
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
   try {
-    return res.json(memoryDocument.getDocument(userId));
+    return res.json(await vault.getDocument(userId));
   } catch (err) {
-    req.log?.error?.({ err }, 'memory: read failed');
-    return res.status(500).json({ error: 'memory_read_failed' });
+    return res.status(500).json({ error: 'memory_unavailable', detail: err && err.message });
   }
 });
 
-// Keyword search over the document.
-router.get('/search', (req, res) => {
+// The always-loaded index exactly as the model sees it (for the settings UI).
+router.get('/index', async (req, res) => {
+  const userId = getUserId(req);
+  if (!userId) return res.status(401).json({ error: 'unauthorized' });
+  const block = await vault.buildIndexBlock(userId, { tools: false });
+  return res.json({ block, stats: await vault.stats(userId) });
+});
+
+router.get('/topics/:topic', async (req, res) => {
+  const userId = getUserId(req);
+  if (!userId) return res.status(401).json({ error: 'unauthorized' });
+  return res.json(await vault.readTopic(userId, req.params.topic, { limit: 200 }));
+});
+
+// grep first; vector rung only when the corpus is large.
+router.get('/search', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
   const q = String(req.query.q || '').trim();
-  try {
-    return res.json({ query: q, results: memoryDocument.search(userId, q) });
-  } catch (err) {
-    req.log?.error?.({ err }, 'memory: search failed');
-    return res.status(500).json({ error: 'memory_search_failed' });
-  }
+  if (!q) return res.json({ query: q, results: [] });
+  const out = await vault.search(userId, q, { limit: 20 });
+  return res.json({ query: q, mode: out.mode, results: out.results });
 });
 
-// Add a manual memory entry.
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  const { text, category } = req.body || {};
-  if (!text || typeof text !== 'string' || text.trim().length < 2) {
-    return res.status(400).json({ error: 'text_required' });
-  }
-  try {
-    const entry = memoryDocument.addEntry(userId, { text, category });
-    return res.status(201).json({ entry });
-  } catch (err) {
-    req.log?.error?.({ err }, 'memory: add failed');
-    return res.status(400).json({ error: err.message || 'memory_add_failed' });
-  }
+  const { text, category, topic } = req.body || {};
+  const r = await vault.write(userId, { text, topic: topic || category, source: 'manual', importance: 0.7, confidence: 1 });
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  return res.status(201).json({ entry: r.entry, created: r.created });
 });
 
-// Edit an existing entry.
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  const { text, category } = req.body || {};
-  try {
-    const entry = memoryDocument.updateEntry(userId, req.params.id, { text, category });
-    if (!entry) return res.status(404).json({ error: 'not_found' });
-    return res.json({ entry });
-  } catch (err) {
-    req.log?.error?.({ err }, 'memory: update failed');
-    return res.status(400).json({ error: err.message || 'memory_update_failed' });
-  }
+  const { text, category, topic } = req.body || {};
+  const r = await vault.update(userId, req.params.id, { text, topic: topic || category });
+  if (!r.ok) return res.status(r.error === 'not_found' ? 404 : 400).json({ error: r.error });
+  return res.json({ entry: r.entry });
 });
 
-// Delete one entry.
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  try {
-    const ok = memoryDocument.deleteEntry(userId, req.params.id);
-    if (!ok) return res.status(404).json({ error: 'not_found' });
-    return res.json({ ok: true });
-  } catch (err) {
-    req.log?.error?.({ err }, 'memory: delete failed');
-    return res.status(500).json({ error: 'memory_delete_failed' });
-  }
+  const r = await vault.forget(userId, req.params.id);
+  if (!r.ok) return res.status(404).json({ error: r.error || 'not_found' });
+  return res.json({ ok: true });
 });
 
-// Clear the entire document AND the user's learned vector facts so the
-// "forget me" action is honoured across both stores. This is a privacy
-// action: if EITHER store fails to clear we must NOT report full success,
-// otherwise the user is told they were forgotten while learned facts
-// remain recallable. On partial failure we surface a non-2xx + a body
-// describing exactly which store was cleared.
+// Wipe everything — a PRIVACY action: vault + legacy document + vector store.
+// Fails closed: partial clears are reported as such, never as success.
 router.delete('/', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
 
   let documentCleared = false;
   try {
-    memoryDocument.clear(userId);
+    // eslint-disable-next-line global-require
+    require('../services/memory-document').clear(userId);
     documentCleared = true;
   } catch (err) {
     req.log?.error?.({ err }, 'memory: document clear failed');
-    return res.status(500).json({
-      error: 'memory_clear_failed',
-      documentCleared: false,
-      vectorCleared: false,
-    });
+    return res.status(500).json({ error: 'memory_clear_failed', documentCleared: false, vectorCleared: false });
   }
 
   try {
+    // clearUserMemory wipes the vault (Postgres) + vector store together.
     await longTermMemory.clearUserMemory(userId);
   } catch (vecErr) {
     req.log?.error?.({ err: vecErr }, 'memory: vector clear failed (document cleared)');
-    return res.status(500).json({
-      error: 'memory_vector_clear_failed',
-      partial: true,
-      documentCleared,
-      vectorCleared: false,
-    });
+    return res.status(500).json({ error: 'memory_vector_clear_failed', partial: true, documentCleared, vectorCleared: false });
   }
 
   return res.json({ ok: true, documentCleared, vectorCleared: true });
+});
+
+// ── consolidation ("dreaming") — reviewable and reversible ────────────────
+router.get('/consolidation', async (req, res) => {
+  const userId = getUserId(req);
+  if (!userId) return res.status(401).json({ error: 'unauthorized' });
+  return res.json({ enabled: consolidation.isEnabled(), reports: await consolidation.listReports(userId) });
+});
+
+router.post('/consolidation/run', async (req, res) => {
+  const userId = getUserId(req);
+  if (!userId) return res.status(401).json({ error: 'unauthorized' });
+  const r = await consolidation.consolidateUser(userId, { force: true });
+  if (!r.ok) return res.status(503).json({ error: r.error || r.skipped || 'consolidation_failed' });
+  return res.json({ ok: true, skipped: r.skipped || null, report: r.report || null });
+});
+
+router.post('/consolidation/:id/revert', async (req, res) => {
+  const userId = getUserId(req);
+  if (!userId) return res.status(401).json({ error: 'unauthorized' });
+  const r = await consolidation.revert(userId, req.params.id);
+  if (!r.ok) return res.status(r.error === 'not_found' ? 404 : 409).json({ error: r.error });
+  return res.json({ ok: true, restored: r.restored, report: r.report });
 });
 
 module.exports = router;

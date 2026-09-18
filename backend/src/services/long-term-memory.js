@@ -398,6 +398,12 @@ function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
       // enumerable/editable/queryable surface). Best-effort, lazy
       // require to avoid a circular dependency; failures here must not
       // affect vector-store ingestion below.
+      // Canonical sink: the memory vault (Postgres, indexed, reviewable).
+      try {
+        await require('./memory/vault').recordFacts(userId, facts, { source: 'auto' });
+      } catch (vaultErr) {
+        console.warn(`[long-term-memory] vault sink failed: ${vaultErr.message}`);
+      }
       try {
         require('./memory-document').recordFacts(userId, facts);
       } catch (docErr) {
@@ -490,6 +496,11 @@ function buildMemoryBlock(facts) {
 }
 
 async function clearUserMemory(userId) {
+  // The canonical vault (Postgres user_memories) is part of the privacy
+  // wipe: a failure here must surface to the caller, never be swallowed.
+  // eslint-disable-next-line global-require
+  const vaultClear = await require('./memory/vault').clear(userId);
+  if (!vaultClear || vaultClear.ok !== true) throw new Error('memory vault clear failed');
   const pgStore = userMemoryStore.getStore();
   if (pgStore) return pgStore.clear(userId);
   await rag.clear(userId, collectionFor(userId));

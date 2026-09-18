@@ -208,7 +208,6 @@ const memoryEngine = require('../services/memory-engine');
 const memoryMetrics = require('../services/memory-metrics');
 const memorySemantic = require('../services/memory-semantic');
 const memoryLlmExtract = require('../services/memory-llm-extract');
-const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
@@ -3808,10 +3807,13 @@ router.post(
         // Always-on memory DOCUMENT block: surfaces manually-curated and
         // high-priority identity facts even when no semantic match fired.
         try {
-          const _docBlock = memoryDocument.buildDocumentBlock(userId, { maxEntries: 12 });
-          if (_docBlock) memoryBlock = `${memoryBlock}\n\n${_docBlock}`;
+          // Claude-Code-style memory: the INDEX is always loaded (topics +
+          // most important entries); the model opens topics / searches /
+          // writes on demand through the memory_* tools.
+          const _indexBlock = await require('../services/memory/vault').buildIndexBlock(userId);
+          if (_indexBlock) memoryBlock = `${memoryBlock}\n\n${_indexBlock}`;
         } catch (e) {
-          generateLog.warnError('memory.document_block_failed', e);
+          generateLog.warnError('memory.index_block_failed', e);
         }
         crossChatTurnsForAttribution = Array.isArray(_crossChatTurns) ? _crossChatTurns : [];
         if (_crossChatEnabled && _crossChatMod) {
@@ -6501,6 +6503,7 @@ router.post(
             const __result = await conversationCompactor.compactChat({
               prisma,
               chatId,
+              userId,
               rows: __compactionPlan.rowsToCompact,
               previousSummary: __chatContextState?.contextSummary || '',
               previousMeta: __chatContextState?.contextSummaryMeta || null,

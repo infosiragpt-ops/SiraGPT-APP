@@ -55,6 +55,8 @@ const ANNOUNCEMENT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_ANNOUNCEMENT_SWEEP_S
 // EVT sweep (04:30). Hard-deletes rows whose `expiresAt` is in the past
 // (auth middleware already rejects them; no need to keep the rows).
 const API_KEY_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_API_KEY_SWEEP_SCHEDULE || '45 4 * * *';
+// Memory consolidation ("dreaming"): reorganise each changed user memory once a night.
+const MEMORY_CONSOLIDATION_SCHEDULE = process.env.SIRAGPT_MEMORY_CONSOLIDATION_CRON || '17 3 * * *';
 // Ratchet 45 — flush in-process cost-tracker into the CostUsageDaily
 // table. Default 05:00 UTC so it runs after every other retention job;
 // reports older than 24h are served from this table.
@@ -1095,6 +1097,42 @@ function start(opts = {}) {
     task: rlhfPhase3Task,
     meta: rlhfPhase3Meta,
   });
+
+  // Nightly memory consolidation ("dreaming"): merge duplicates, resolve
+  // contradictions, re-file topics, leave a reviewable report per user.
+  // SIRAGPT_MEMORY_CONSOLIDATION=0 disables; the job itself re-checks the flag.
+  let memoryConsolidationRunning = false;
+  const memoryConsolidationMeta = {};
+  const memoryConsolidationTask = cron.schedule(
+    MEMORY_CONSOLIDATION_SCHEDULE,
+    async () => {
+      if (memoryConsolidationRunning) {
+        logger.warn?.('[system-cron] skip memory-consolidation — previous run still active');
+        return;
+      }
+      memoryConsolidationRunning = true;
+      const finish = recordRun(memoryConsolidationMeta, 'memory-consolidation');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./memory-consolidation');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] memory-consolidation retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] memory-consolidation done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] memory-consolidation failed: ${err && err.message}`);
+      } finally {
+        memoryConsolidationRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'memory-consolidation', schedule: MEMORY_CONSOLIDATION_SCHEDULE, task: memoryConsolidationTask, meta: memoryConsolidationMeta });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

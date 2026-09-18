@@ -104,6 +104,7 @@
     'update_plan',
     'web_search', 'read_url', 'web_extract', 'deep_search',
     'memory_recall', 'rag_retrieve', 'self_rag_answer',
+    'memory_read_topic', 'memory_search', 'memory_write', 'memory_forget', 'chat_history_search', 'connector_search',
     'python_exec', 'run_tests',
     'create_document', 'verify_artifact', 'document_edit',
     'run_skill', 'run_skill_pipeline',
@@ -131,6 +132,12 @@ const STAGE_LABELS = {
     computer_type: () => 'Escribiendo en la computadora',
     computer_navigate: (args) => `Abriendo ${prettyDomain(args?.url) || 'sitio'} en la computadora`,
     memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
+    memory_read_topic: (args) => `Abriendo memoria: ${truncate(args?.topic, 32)}`,
+    memory_search: (args) => `Buscando en tu memoria "${truncate(args?.query, 48)}"`,
+    memory_write: (args) => `Guardando en memoria: ${truncate(args?.text, 48)}`,
+    memory_forget: () => 'Olvidando un recuerdo',
+    chat_history_search: (args) => `Buscando en chats anteriores "${truncate(args?.query, 48)}"`,
+    connector_search: (args) => `Buscando en tus fuentes conectadas "${truncate(args?.query, 48)}"`,
     clone_project: (args) => `Clonando ${truncate(args?.url, 60)}`,
     host_bash: (args) => `Ejecutando ${truncate(args?.command, 60)}`,
     host_file: (args) => `Editando ${truncate(args?.path, 60)}`,
@@ -1860,6 +1867,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
+      'Memoria persistente: el índice del usuario ya está en el system prompt. Abre un tema con `memory_read_topic`, busca con `memory_search` (grep primero), recupera lo hablado en otros chats con `chat_history_search`, busca en Drive/Gmail del usuario con `connector_search`, y guarda hechos nuevos y duraderos con `memory_write` en esta misma conversación (nunca secretos ni detalles efímeros). Si el usuario pide olvidar algo, usa `memory_forget`.',
       'Para continuidad entre conversaciones (el usuario dice "lo que hablamos antes", "retoma", "¿en qué quedamos?", "mis chats", "la sesión de ayer"): usa `session_list` para ver sus sesiones recientes, `session_search` para encontrar un tema concreto, y `session_history` para abrir una sesión por su id y leer el hilo completo antes de continuar. Solo accedes a sesiones del propio usuario.',
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
@@ -2728,6 +2736,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     ];
   }
 
+  function loadMemoryTools() {
+    try {
+      // eslint-disable-next-line global-require
+      return require('./agents/memory-tools').MEMORY_TOOLS;
+    } catch (err) {
+      try { console.warn('[agentic-chat] memory tools unavailable:', err && err.message); } catch (_) {}
+      return [];
+    }
+  }
+
   function loadTaskTools() {
     try {
       // Lazy-load: document/media helpers are heavy and should not be
@@ -2790,7 +2808,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    *   lean. Calling with no args keeps the legacy base toolset.
    */
   function buildDefaultTools(opts = {}) {
-    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool, projectReadTool, projectWriteTool, projectExecTool, projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool, projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool, decideWithJevTool];
+    const base = [...baseWebTools(), ...loadTaskTools(), ...loadMemoryTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool, projectReadTool, projectWriteTool, projectExecTool, projectCloneRepoTool, projectPreviewStartTool, projectPreviewStatusTool, projectPreviewStopTool, projectChangesTool, projectOpenPullRequestTool, projectPullRequestChecksTool, decideWithJevTool];
     const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
 
     // Phase C: expose the real, policy-gated filesystem skills (openalex,
