@@ -55,7 +55,7 @@ export function CreditsBadge({ className = "" }: { className?: string }) {
   if (!credits) return null
 
   const low = isLowBalance(credits)
-  const label = formatCreditBalance(credits.balance)
+  const label = credits.unlimited ? "∞" : formatCreditBalance(credits.balance)
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
