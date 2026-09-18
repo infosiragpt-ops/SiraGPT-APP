@@ -259,6 +259,95 @@ async function refineMediaIntentWithJev(base, { chatId, text, history = [], hasI
   } catch { return base; }
 }
 
+/**
+ * Fase 2a — per-turn Jev judge. Runs BEFORE this turn's decisions are
+ * recorded so the satisfaction signal scores the *previous* turn (lastByChat
+ * still points at it). Records intent_triage / compute_mode / model_route
+ * decisions with meta.source='jev'; the execution_lane decision is recorded
+ * later by `applyJevLane` once the heuristic lane is known. Fail-open: null.
+ */
+async function judgeTurnWithJev({ chatId, text, history = [], previousAnswer = null, hasImage = false, hasDocs = false, fileNames = [], userPickedModel = false, userSetEffort = false, heuristicAsk = false, signature = null, env = process.env } = {}) {
+  if (!isEnabled(env)) return null;
+  try {
+    // eslint-disable-next-line global-require
+    const cfg = require('./config').describe(env);
+    if (!cfg.flags.jevJudge.value || !cfg.flags.jev.value) return null;
+    // eslint-disable-next-line global-require
+    const judge = require('./jev-turn-judge');
+    const judgement = await judge.judgeTurn({ text, history, previousAnswer, hasImage, hasDocs, fileNames, env });
+    if (!judgement) return null;
+    const actions = judge.applyTurnJudgement(judgement, { userPickedModel, userSetEffort, heuristicAgentic: false, heuristicAsk, ledger, env });
+    const out = { judgement, actions, decisionIds: [], satisfactionOutcome: null, question: null };
+    // Satisfaction → outcome for the previous turn of this chat.
+    if (cfg.flags.jevSatisfaction.value && actions.satisfaction && chatId) {
+      const n = ledger.recordOutcome({ chatId, outcome: actions.satisfaction, source: 'jev_satisfaction' });
+      if (n > 0) out.satisfactionOutcome = actions.satisfaction;
+    }
+    const askChoice = actions.ask ? 'ask' : (actions.vetoAsk ? 'execute_veto' : 'execute');
+    const idT = ledger.recordDecision({
+      kind: 'intent_triage',
+      choice: askChoice,
+      confidence: actions.ask ? actions.raw.ask : 1 - (actions.raw.ask || 0),
+      signature,
+      chatId,
+      meta: { source: 'jev', lane: judgement.lane.choice, needsContext: judgement.needsContext, model: judgement.model, latencyMs: judgement.latencyMs },
+    });
+    if (idT) out.decisionIds.push(idT);
+    if (judgement.depth && judgement.depth.label) {
+      const idC = ledger.recordDecision({
+        kind: 'compute_mode',
+        choice: `${judgement.depth.label}${actions.computeLevel ? `:${actions.computeLevel}` : ':advisory'}`,
+        confidence: judgement.depth.confidence,
+        signature,
+        chatId,
+        meta: { source: 'jev', score: judgement.depth.score, applied: Boolean(actions.computeLevel) },
+      });
+      if (idC) out.decisionIds.push(idC);
+    }
+    if (judgement.modelFamily) {
+      const idM = ledger.recordDecision({
+        kind: 'model_route',
+        choice: `family:${judgement.modelFamily.choice}`,
+        confidence: judgement.modelFamily.probability,
+        signature,
+        chatId,
+        meta: { source: 'jev', advisory: true, userPickedModel },
+      });
+      if (idM) out.decisionIds.push(idM);
+    }
+    if (actions.ask) out.question = judge.clarifyQuestion(judgement);
+    return out;
+  } catch { return null; }
+}
+
+/**
+ * Fase 2a — apply the judge's lane opinion once the heuristic lane is known.
+ * Mutates `lane` ({agentic, forced, reason}) and records an execution_lane
+ * decision (meta.source='jev'). Returns the decision id or null.
+ */
+function applyJevLane(lane, judged, { heuristicAgentic = false, chatId = null, signature = null, env = process.env } = {}) {
+  if (!lane || !judged || !judged.judgement || !isEnabled(env)) return null;
+  try {
+    // eslint-disable-next-line global-require
+    const judge = require('./jev-turn-judge');
+    const a = judge.applyTurnJudgement(judged.judgement, { heuristicAgentic, ledger, env });
+    let choice = 'agree';
+    if (a.forceAgentic && !lane.agentic) { lane.agentic = true; lane.forced = true; lane.reason = 'jev'; choice = 'force_agentic'; }
+    else if (a.vetoAgentic && lane.agentic && lane.forced !== true) { lane.agentic = false; lane.vetoed = true; lane.reason = 'jev_veto'; choice = 'veto_agentic'; }
+    const pAgent = Number(judged.judgement.lane.probabilities.tools_agent) || 0;
+    const id = ledger.recordDecision({
+      kind: 'execution_lane',
+      choice: `${choice}:${judged.judgement.lane.choice}`,
+      confidence: lane.agentic ? pAgent : 1 - pAgent,
+      signature,
+      chatId,
+      meta: { source: 'jev', heuristicAgentic, laneChoice: judged.judgement.lane.choice },
+    });
+    if (chatId && id) ledger.appendTurn(chatId, [id]);
+    return id;
+  } catch { return null; }
+}
+
 function recordOutcome(args) {
   if (!isEnabled()) return 0;
   return ledger.recordOutcome(args);
@@ -714,6 +803,8 @@ module.exports = {
   decideExecutionLane,
   decideMediaIntent,
   refineMediaIntentWithJev,
+  judgeTurnWithJev,
+  applyJevLane,
   isMediaSteeringEnabled,
   mediaForceThreshold,
   mediaAskThreshold,
