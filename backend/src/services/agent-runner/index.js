@@ -127,7 +127,7 @@ const COLOR_WORD_RE = new RegExp(
   `\\b(color|${Object.keys(NAMED_COLORS).join('|')})\\b|#[0-9a-fA-F]{6}`,
   'i',
 );
-const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|inserta|reemplaza|borra|elimina)\b/i;
+const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|pon|ponle|ponme|coloca|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|inserta|reemplaza|borra|elimina)\b/i;
 // Pictures are read by the vision runtime, never by the document runner: an
 // attached screenshot must not turn «¿cuánto es?» into a document task.
 const IMAGE_FILE_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/i;
