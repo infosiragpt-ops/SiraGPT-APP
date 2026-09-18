@@ -127,7 +127,16 @@ const COLOR_WORD_RE = new RegExp(
   `\\b(color|${Object.keys(NAMED_COLORS).join('|')})\\b|#[0-9a-fA-F]{6}`,
   'i',
 );
-const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|gracias|thanks|inserta|reemplaza|borra|elimina)\b/i;
+const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|inserta|reemplaza|borra|elimina)\b/i;
+// Pictures are read by the vision runtime, never by the document runner: an
+// attached screenshot must not turn «¿cuánto es?» into a document task.
+const IMAGE_FILE_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/i;
+function isImageFile(file) {
+  if (!file || typeof file !== 'object') return false;
+  const mime = String(file.mimeType || file.type || '').toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  return IMAGE_FILE_RE.test(String(file.name || file.originalName || file.filename || ''));
+}
 
 function shouldRunAgentRunner({
   files = [],
@@ -135,7 +144,8 @@ function shouldRunAgentRunner({
   hasPriorArtifacts = false,
   text = '',
 } = {}) {
-  const hasFiles = (Array.isArray(files) && files.length > 0)
+  const documentFiles = (Array.isArray(files) ? files : []).filter((file) => !isImageFile(file));
+  const hasFiles = documentFiles.length > 0
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
   if (isRunnerOnlyDocumentTurn(t)) return true;

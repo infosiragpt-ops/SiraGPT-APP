@@ -207,7 +207,7 @@ test('when every cloud provider fails, a big file still reaches local whisper (n
 });
 
 test('TRANSCRIBE_PROVIDERS orders the ladder and can skip the cloud entirely', async (t) => {
-  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'meta', 'local']);
+  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'xai', 'meta', 'local']);
   assert.deepEqual(audioTranscriber.providerOrder({ env: { TRANSCRIBE_PROVIDERS: 'meta, local' } }), ['meta', 'local']);
   const providers = audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_y', TRANSCRIBE_PROVIDERS: 'meta,openai,local' } });
   assert.deepEqual(providers.map((p) => p.name), ['meta', 'openai']);

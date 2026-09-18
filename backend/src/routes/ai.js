@@ -10281,6 +10281,44 @@ function fromImageEngineProvider(provider, fallback) {
   return ENGINE_PROVIDER_TO_ROUTE_PROVIDER[String(provider || '').trim().toLowerCase()] || fallback;
 }
 
+// ── Image auth fallback ─────────────────────────────────────────────────
+// A picked image model is binding (the engine never substitutes). The one
+// exception is an OPERATOR failure: the picked provider rejects our API key
+// (401/403 / key missing). That is not a model choice the user made, so we
+// render with another active image model (preferring xAI → Gemini → fal →
+// OpenRouter) and record `substitutedFrom` on the generated file. Disable
+// with SIRAGPT_IMAGE_AUTH_FALLBACK=0.
+const IMAGE_AUTH_FAILURE_RE = /api key missing|invalid api key|incorrect api key|unauthorized|authentication|\b40[13]\b|forbidden|invalid_api_key/i;
+const IMAGE_FALLBACK_PROVIDER_ORDER = ['xai', 'gemini', 'fal', 'openrouter', 'openai'];
+
+function imageAuthFallbackEnabled(env = process.env) {
+  const v = String(env.SIRAGPT_IMAGE_AUTH_FALLBACK ?? '').trim().toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off');
+}
+
+function isImageAuthFailure(result) {
+  const attempts = Array.isArray(result && result.attempts) ? result.attempts : [];
+  if (!attempts.length) return false;
+  return attempts.every((a) => a && a.ok === false && IMAGE_AUTH_FAILURE_RE.test(String(a.error || '')));
+}
+
+async function pickImageAuthFallback({ prismaClient, failedProvider, excludeModel }) {
+  const rows = await prismaClient.aiModel.findMany({
+    where: { type: 'IMAGE', isActive: true },
+    select: { name: true, provider: true },
+  });
+  const candidates = [];
+  for (const row of rows) {
+    const engineProvider = toImageEngineProvider(row.provider);
+    if (!engineProvider || engineProvider === failedProvider) continue;
+    if (String(row.name) === String(excludeModel)) continue;
+    if (!imageEngine.isProviderConfigured(engineProvider)) continue;
+    candidates.push({ name: row.name, provider: row.provider, engineProvider, engineModel: String(row.name).replace(/^(?:x-ai|xai)\//i, '') });
+  }
+  candidates.sort((a, b) => IMAGE_FALLBACK_PROVIDER_ORDER.indexOf(a.engineProvider) - IMAGE_FALLBACK_PROVIDER_ORDER.indexOf(b.engineProvider));
+  return candidates[0] || null;
+}
+
 function imageProviderAttemptTimeoutMs() {
   const raw = Number(process.env.CHAT_IMAGE_PROVIDER_TIMEOUT_MS || process.env.IMAGE_GEN_PROVIDER_TIMEOUT_MS || 120000);
   if (!Number.isFinite(raw)) return 120000;
@@ -10863,7 +10901,7 @@ router.post(
             attempts: result.attempts || [],
           }));
         }
-        const result = await imageEngine.generateImage({
+        let result = await imageEngine.generateImage({
           prompt: imagePrompt,
           model: grokImageRequested ? model.replace(/^(?:x-ai|xai)\//i, '') : model,
           provider: toImageEngineProvider(provider),
@@ -10874,6 +10912,34 @@ router.post(
           timeoutMs: imageProviderAttemptTimeoutMs(),
           failover: false,
         });
+        let substitutedFrom = null;
+        if ((!result.ok || !result.images?.length) && isImageAuthFailure(result) && imageAuthFallbackEnabled() && !requestAbortController.signal.aborted) {
+          try {
+            const alt = await pickImageAuthFallback({ prismaClient: prisma, failedProvider: toImageEngineProvider(provider), excludeModel: model });
+            if (alt) {
+              const retry = await imageEngine.generateImage({
+                prompt: imagePrompt,
+                model: alt.engineModel,
+                provider: alt.engineProvider,
+                aspectRatio,
+                quality,
+                n: imageCount,
+                signal: requestAbortController.signal,
+                timeoutMs: imageProviderAttemptTimeoutMs(),
+                failover: false,
+              });
+              console.warn(`[images] auth failure on ${provider}/${model}; ${retry.ok ? 'rendered with' : 'fallback also failed on'} ${alt.provider}/${alt.name}`);
+              if (retry.ok && retry.images?.length) {
+                substitutedFrom = { model, provider };
+                result = { ...retry, attempts: [...(result.attempts || []), ...(retry.attempts || [])] };
+                model = alt.name;
+                provider = alt.provider;
+              }
+            }
+          } catch (fallbackErr) {
+            console.warn('[images] auth fallback failed:', fallbackErr && fallbackErr.message);
+          }
+        }
         if (!result.ok || !result.images?.length) {
           const err = new Error(result.error || 'Image provider did not return any image data.');
           err.code = result.code || 'image_generation_failed';
@@ -10884,7 +10950,8 @@ router.post(
         return result.images.map((img) => ({
           b64: img.b64,
           provider: actualProvider,
-          model: grokImageRequested ? model : result.model || model,
+          model: substitutedFrom ? model : (grokImageRequested ? model : result.model || model),
+          substitutedFrom,
           attempts: result.attempts || [],
         }));
       };
@@ -10932,6 +10999,7 @@ router.post(
           aspectRatio,
           index: index + 1,
           count: imageResults.length,
+          substitutedFrom: imageResult.substitutedFrom || null,
           model: imageResult.model || model,
           provider: imageResult.provider || provider,
           quality,
