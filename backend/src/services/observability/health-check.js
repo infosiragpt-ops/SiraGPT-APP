@@ -432,6 +432,41 @@ function checkDatabasePool(poolMetrics, getPoolAutoscalerState) {
   }
 }
 
+/**
+ * Embedding ladder health (informational): which providers are configured,
+ * which keys were REJECTED (memoised), the active vector space per dimension
+ * and whether RAG retrieval is currently degraded to BM25-only.
+ */
+function checkEmbeddings(env = process.env) {
+  try {
+    // eslint-disable-next-line global-require
+    const ladder = require('../embedding-provider');
+    const st = ladder.status(env);
+    const availableRag = Array.isArray(st.spaces[1536] && st.spaces[1536].available) ? st.spaces[1536].available : [];
+    const rejected = Object.entries(st.providers).filter(([, p]) => p.rejected).map(([name]) => name);
+    const configured = Object.entries(st.providers).filter(([, p]) => p.configured).map(([name]) => name);
+    let status = 'healthy';
+    if (!availableRag.length) status = 'degraded';
+    return {
+      name: 'embeddings',
+      status,
+      critical: false,
+      latency_ms: 0,
+      details: {
+        configured,
+        rejected,
+        rag_available: availableRag,
+        rag_space: st.spaces[1536] && st.spaces[1536].active ? st.spaces[1536].active.space : null,
+        memory_available: st.spaces[1024] ? st.spaces[1024].available : [],
+        cache: st.cache,
+        note: !availableRag.length ? 'RAG retrieval runs BM25-only until an embedding key is valid (OPENAI_API_KEY or GEMINI_API_KEY)' : null,
+      },
+    };
+  } catch (err) {
+    return { name: 'embeddings', status: 'skipped', critical: false, latency_ms: 0, details: { error: String(err && err.message) } };
+  }
+}
+
 function checkModelProvidersConfigured(env = process.env) {
   // Informational only — environment configuration is an ops concern,
   // not a runtime invariant. Surfaces *which* providers are reachable
@@ -947,6 +982,7 @@ async function runFullHealthCheck({
   ]);
   checks.push(checkProcess());
   checks.push(checkModelProvidersConfigured(env));
+  checks.push(checkEmbeddings(env));
   checks.push(checkMcpPolicyConfiguration(env));
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));

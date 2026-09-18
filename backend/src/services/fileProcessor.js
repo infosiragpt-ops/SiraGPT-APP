@@ -5,6 +5,10 @@ const sharp = require('sharp');
 const fs = require('fs').promises;
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
+// Memo: when the vision runtime rejects our key (401/403) skip the fallback
+// for a while instead of paying a doomed round-trip on every upload.
+let visionAuthFailedUntil = 0;
+const VISION_AUTH_MEMO_MS = 10 * 60 * 1000;
 const mixedPdf = require('./document/mixed-pdf');
 const officeImages = require('./office-image-extractor');
 const { readXlsxFile, selectWorkbookWorksheets, worksheetRows, evaluateFormulas } = require('./xlsx-safe-workbook');
@@ -983,6 +987,10 @@ class FileProcessor {
             };
           }
         } catch (err) {
+          const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
+          if (status === 401 || status === 403 || /incorrect api key|invalid api key|unauthorized/i.test(String(err?.message || ''))) {
+            visionAuthFailedUntil = Date.now() + VISION_AUTH_MEMO_MS;
+          }
           console.warn('[fileProcessor] vision fallback failed:', err && err.message);
         }
       }
@@ -1051,6 +1059,7 @@ class FileProcessor {
     // weak local OCR falls through to the vision model whenever an OpenAI
     // key is available. Opt out explicitly with SIRAGPT_VISION_FALLBACK_ENABLED=0.
     if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED === '0') return false;
+    if (visionAuthFailedUntil > Date.now()) return false;
     // Any configured vision runtime qualifies (Gemini / Meta / xAI / OpenRouter /
     // OpenAI) — see ai/vision-runtime.js. The OpenAI key alone is no longer the gate.
     if (!options.openai && require('./ai/vision-runtime').visionRuntimeCandidates().length === 0) return false;

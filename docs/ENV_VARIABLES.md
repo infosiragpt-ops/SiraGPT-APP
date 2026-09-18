@@ -118,6 +118,29 @@ plus the steering flag it already defines:
 
 ---
 
+## Embeddings ladder (RAG + memory)
+
+`backend/src/services/embedding-provider.js` is the single embedding entry point
+for RAG (`rag-service`, operational RAG, GraphRAG) and memory (`user-memory-store`,
+`memory-semantic`). It is a failover ladder with the same discipline as the chat
+gateway: a provider whose key is rejected (401/403) is memoised and skipped, the
+first space that serves a dimension becomes sticky for the process (no mixed
+vector spaces in one index), and every result is exactly `targetDim` floats 1:1
+with the inputs. When no provider can serve, RAG answers from the lexical BM25
+pool (`retrievalMode: bm25_degraded`) instead of failing the turn, memory skips
+its semantic pass, and `/api/health` reports the `embeddings` check as degraded.
+Design notes: `docs/rag-embeddings.md`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_EMBED_PROVIDER_ORDER` | `openai,gemini,voyage,jina,mistral` | Ladder order (comma list). Rungs without a usable key are skipped. Voyage/Jina/Mistral only serve the 1024-dim memory tables. |
+| `SIRAGPT_EMBED_MODEL_OPENAI` | `text-embedding-3-small` | OpenAI embedding model (native 1536; `dimensions` for 1024). |
+| `SIRAGPT_EMBED_MODEL_GEMINI` | `gemini-embedding-001` | Gemini model (`outputDimensionality` 1536/1024 + L2 normalisation). Keys: `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY` or `GOOGLE_AI_API_KEY`. |
+| `SIRAGPT_EMBED_MODEL_VOYAGE` / `_JINA` / `_MISTRAL` | `voyage-3-large` / `jina-embeddings-v3` / `mistral-embed` | 1024-dim memory rungs (`VOYAGE_API_KEY`, `JINA_API_KEY`, `MISTRAL_API_KEY`). |
+| `SIRA_EMBED_TIMEOUT_MS` | `30000` | Per-request timeout for every rung. `SIRA_EMBED_MAX_RETRIES` (default `2`) bounds the OpenAI SDK's idempotent retries. |
+| `SIRAGPT_KEY_REJECT_MEMO_MS` | `300000` | How long a rejected key is remembered (`backend/src/utils/provider-key-health.js`). A new key (different fingerprint) or an admin "apply connection" re-arms the provider immediately. |
+| `SIRAGPT_MEMORY_EMBED_PROVIDER` | `auto` | Memory tables (1024-dim): `auto`/`ladder` use the ladder; `openai`, `gemini`, `voyage`, `jina`, `mistral` pin one rung. |
+| `SIRAGPT_MEMORY_LLM_MODEL` | provider default | Model for memory-fact extraction (`backend/src/services/memory-llm-client.js`), which now rides the failover ladder (DeepSeek → OpenAI → Anthropic → …) instead of a single OpenAI client. |
 ## Memoria estilo Claude Code (vault + consolidación)
 
 Ver `docs/memory-architecture.md`.
