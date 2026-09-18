@@ -141,7 +141,8 @@ describe("run-trace · one row + assistant anchor", () => {
   })
 
   it("collapses a succeeded run to a one-line duration", () => {
-    assert.equal(collapseSuccessLabel(33), "Analizado en 33 s ✓")
+    assert.equal(collapseSuccessLabel(33), "Pensó durante 33 s")
+    assert.equal(collapseSuccessLabel(95), "Pensó durante 1 min 35 s")
   })
 
   it("marks a stream stale only after 3 missed heartbeats", () => {

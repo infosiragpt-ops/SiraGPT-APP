@@ -1,8 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { SIRA_CELESTE } from "@/lib/thinking-loaders"
-import { Dotm3x3_15 } from "@/components/ui/dotm-3x3-15"
+import { CLAUDE_THINK_ACCENT } from "@/lib/thinking-loaders"
+import { ClaudeAsterisk } from "@/components/claude-asterisk"
 
 export const PENSANDO_BARS_SRC = "/loaders/pensando.svg"
 
@@ -12,10 +12,12 @@ export type PensandoBarsProps = {
 }
 
 /**
- * THE only animated in-progress glyph: the 3×3 dot-matrix ripple
- * (shadcn @dotmatrix/dotm-3x3-15), celeste #38BDF8 — never inherited
- * from the theme. The component honors prefers-reduced-motion on its
- * own (static opacity ramp instead of the ripple).
+ * THE only animated in-progress glyph: the Claude asterisk (eight rounded
+ * arms, slow rotation + breathing) in the terracotta think accent #D97757
+ * (`--think-accent`), the same glyph for chat, agent loop, documents and
+ * images. The name is historical (it replaced the celeste 3×3 dot matrix,
+ * which replaced the bouncing bars); every caller keeps working unchanged.
+ * Honors prefers-reduced-motion (static glyph).
  */
 export function PensandoBars({ size = 28, className }: PensandoBarsProps) {
   return (
@@ -26,7 +28,7 @@ export function PensandoBars({ size = 28, className }: PensandoBarsProps) {
       data-loader-src={PENSANDO_BARS_SRC}
       style={{ display: "inline-flex", lineHeight: 0 }}
     >
-      <Dotm3x3_15 size={size} color={SIRA_CELESTE} ariaLabel="" />
+      <ClaudeAsterisk size={size} active color={`var(--think-accent, ${CLAUDE_THINK_ACCENT})`} />
     </span>
   )
 }

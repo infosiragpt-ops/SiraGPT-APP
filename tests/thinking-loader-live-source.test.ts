@@ -26,15 +26,15 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.match(docs, /retired/)
   })
 
-  it("ships PensandoBars as the 3×3 dot-matrix ripple hardcoded #38BDF8", () => {
+  it("ships PensandoBars as the Claude asterisk in the terracotta think accent", () => {
     const bars = source("components/pensando-bars.tsx")
     const svg = source("public/loaders/pensando.svg")
     const icon = source("components/icons/thinking-bars-icon.tsx")
     const indicator = source("components/ui/thinking-indicator.tsx")
-    assert.match(bars, /import \{ Dotm3x3_15 \} from "@\/components\/ui\/dotm-3x3-15"/)
-    assert.match(bars, /<Dotm3x3_15 size=\{size\} color=\{SIRA_CELESTE\}/)
+    assert.match(bars, /import \{ ClaudeAsterisk \} from "@\/components\/claude-asterisk"/)
+    assert.match(bars, /<ClaudeAsterisk size=\{size\} active color=\{`var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)`\} \/>/)
     assert.match(bars, /data-pensando-bars="1"/)
-    assert.doesNotMatch(bars, /currentColor/)
+    assert.doesNotMatch(bars, /Dotm3x3_15/)
     assert.match(svg, /viewBox="0 0 36 36"/)
     assert.match(svg, /fill="#38BDF8"/)
     assert.doesNotMatch(svg, /currentColor/)

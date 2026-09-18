@@ -13,7 +13,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
     data-loader-src="/loaders/pensando.svg"
     data-pensando-bars="1"
     data-thinking-loader="pensando"
-    style="color: var(--sira-celeste, #38BDF8);"
+    style="color: var(--think-accent, #D97757);"
   >
     <span
       aria-hidden="true"
@@ -27,64 +27,57 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
         data-pensando-bars="1"
         style="display: inline-flex; line-height: 0;"
       >
-        <div
-          aria-label=""
-          aria-live="polite"
-          class="dmx-root dmx-matrix-3 dmx-dot-shape-circle"
-          role="status"
-          style="width: 11px; height: 11px; --dmx-speed: 0.5714285714285714; --dmx-dot-size: 3px; --dmx-halo-level: 0; --dmx-dot-fill: #38BDF8; color: rgb(56, 189, 248); --dmx-opacity-base: 0.06;"
+        <svg
+          aria-hidden="true"
+          class="claude-asterisk claude-asterisk--active"
+          data-claude-asterisk="active"
+          height="20"
+          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #D97757);"
+          viewBox="0 0 40 40"
+          width="20"
         >
-          <div
-            class="dmx-grid"
-            style="gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr));"
+          <g
+            fill="currentColor"
           >
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 0; --dmx-x: -4px; --dmx-y: -4px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(0 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 0; --dmx-col: 1; --dmx-x: 0px; --dmx-y: -4px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(45 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 2; --dmx-x: 4px; --dmx-y: -4px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(90 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(135 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 0; --dmx-row: 1; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; --dmx-ripple-ring: 0; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(180 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(225 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 4px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(270 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 4px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(315 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 4px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <circle
+              cx="20"
+              cy="20"
+              r="3.1"
             />
-          </div>
-        </div>
+          </g>
+        </svg>
       </span>
     </span>
   </div>
@@ -119,7 +112,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
     data-loader-src="/loaders/pensando.svg"
     data-pensando-bars="1"
     data-thinking-loader="pensando"
-    style="color: var(--sira-celeste, #38BDF8);"
+    style="color: var(--think-accent, #D97757);"
   >
     <span
       aria-hidden="true"
@@ -133,64 +126,57 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
         data-pensando-bars="1"
         style="display: inline-flex; line-height: 0;"
       >
-        <div
-          aria-label=""
-          aria-live="polite"
-          class="dmx-root dmx-matrix-3 dmx-dot-shape-circle"
-          role="status"
-          style="width: 11px; height: 11px; --dmx-speed: 0.5714285714285714; --dmx-dot-size: 3px; --dmx-halo-level: 0; --dmx-dot-fill: #38BDF8; color: rgb(56, 189, 248); --dmx-opacity-base: 0.06;"
+        <svg
+          aria-hidden="true"
+          class="claude-asterisk claude-asterisk--active"
+          data-claude-asterisk="active"
+          height="20"
+          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #D97757);"
+          viewBox="0 0 40 40"
+          width="20"
         >
-          <div
-            class="dmx-grid"
-            style="gap: 1px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr));"
+          <g
+            fill="currentColor"
           >
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 0; --dmx-x: -4px; --dmx-y: -4px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(0 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 0; --dmx-col: 1; --dmx-x: 0px; --dmx-y: -4px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(45 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 0; --dmx-col: 2; --dmx-x: 4px; --dmx-y: -4px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(90 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(135 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 0; --dmx-row: 1; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; --dmx-ripple-ring: 0; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(180 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(225 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 0; --dmx-x: -4px; --dmx-y: 4px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(270 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: 0px; --dmx-y: 4px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 1; --dmx-ripple-ring: 1; --dmx-ripple-parity: 1;"
+            <path
+              d="M20 3.2c1.9 0 3.4 1.5 3.4 3.4l-1.1 10.6c-.1 1.2-1.1 2.1-2.3 2.1s-2.2-.9-2.3-2.1L16.6 6.6c0-1.9 1.5-3.4 3.4-3.4z"
+              transform="rotate(315 20 20)"
             />
-            <span
-              aria-hidden="true"
-              class="dmx-dot dmx-ripple-echo-3"
-              style="width: 3px; height: 3px; --dmx-distance: 1.4142135623730951; --dmx-row: 2; --dmx-col: 2; --dmx-x: 4px; --dmx-y: 4px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 2; --dmx-ripple-ring: 2; --dmx-ripple-parity: 0;"
+            <circle
+              cx="20"
+              cy="20"
+              r="3.1"
             />
-          </div>
-        </div>
+          </g>
+        </svg>
       </span>
     </span>
   </div>

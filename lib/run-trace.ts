@@ -153,7 +153,8 @@ export function descriptionsDiffer(label: string, description?: string | null): 
 
 export function collapseSuccessLabel(elapsedSec: number): string {
   const seconds = Math.max(1, Math.round(Number(elapsedSec) || 0))
-  return `Analizado en ${seconds} s ✓`
+  if (seconds < 60) return `Pensó durante ${seconds} s`
+  return `Pensó durante ${Math.floor(seconds / 60)} min ${seconds % 60} s`
 }
 
 export function shouldRenderRunTrace(opts: {
