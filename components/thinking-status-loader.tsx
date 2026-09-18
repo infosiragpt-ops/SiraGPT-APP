@@ -23,7 +23,7 @@ export type ThinkingStatusLoaderProps = {
   label?: string | null
   elapsedSec?: number | null
   compact?: boolean
-  /** `glyph` is the 20px rail dot; `chip` is the header/status size. */
+  /** `glyph` is the 16px rail dot; `chip` is the 22px header/status size. */
   density?: ThinkingStatusLoaderDensity
   hideLabel?: boolean
   /** Set false when nested inside another role=status region. */
@@ -45,8 +45,8 @@ function formatElapsed(sec: number): string {
  * keeps semantic colors — running is --step-running blue, never brand-red.
  */
 const DENSITY_PX: Record<ThinkingStatusLoaderDensity, number> = {
-  chip: 32,
-  glyph: 20,
+  chip: 22,
+  glyph: 16,
 }
 
 export function ThinkingStatusLoader({

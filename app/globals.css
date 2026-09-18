@@ -156,7 +156,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --think-accent: #D97757;
     --step-pending: #8A8580;
     --step-running: var(--think-accent);
-    --step-done: #059669;
+    --step-done: #6B6660;
     --step-failed: #B45353;
 
     /*
@@ -257,7 +257,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --think-accent: #E08A6A;
     --step-pending: #8A8580;
     --step-running: var(--think-accent);
-    --step-done: #34D399;
+    --step-done: #A8A29E;
     --step-failed: #F87171;
   }
 
@@ -8733,7 +8733,7 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 :root {
   --step-pending: #8A8580;
   --step-running: var(--think-accent, #D97757);
-  --step-done: #059669;
+  --step-done: #6B6660;
   --step-failed: #dc2626;
 }
 .dark {

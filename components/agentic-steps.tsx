@@ -52,6 +52,7 @@ import { DOCUMENT_ACTION_CLASS, DOCUMENT_ACTION_ICON_CLASS, DOCUMENT_CARD_CLASS,
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
+import { TraceRail, TraceRailRow } from "@/components/trace-rail"
 import { loaderLabel, mapEventToLoaderState, type LoaderState } from "@/lib/thinking-loaders"
 interface Props {
   state: AgentTaskState
@@ -885,43 +886,38 @@ function ArtifactCard({
 }
 
 function TimelineRow({
-  icon,
   label,
   detail,
   status,
   badges = [],
+  phase,
 }: {
-  icon: React.ReactNode
+  icon?: React.ReactNode
   label: string
   detail?: string
   status?: "running" | "done" | "error" | "muted"
   badges?: string[]
+  phase?: string | null
 }) {
   return (
-    <div className="relative flex gap-2.5">
-      <div className="flex w-5 shrink-0 justify-center text-muted-foreground">
-        <div className={cn(
-          "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 ring-1 ring-border/50",
-          status === "done" && "text-[var(--step-done,#059669)]",
-          status === "running" && "text-[var(--step-running,#38BDF8)] shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
-          status === "error" && "text-[var(--step-failed,#B45353)]",
-          (!status || status === "muted") && "text-muted-foreground",
-        )}>
-          {icon}
-        </div>
-      </div>
-      <div className="min-w-0 flex-1 pb-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-[13px] font-medium leading-5 text-foreground">{label}</div>
-          {badges.map((badge) => (
-            <span key={badge} className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {badge}
-            </span>
-          ))}
-        </div>
-        {detail && <div className="mt-0.5 max-w-[52rem] text-[12px] leading-5 text-muted-foreground">{detail}</div>}
-      </div>
-    </div>
+    <TraceRailRow
+      label={
+        badges.length ? (
+          <span className="inline-flex flex-wrap items-center gap-2">
+            {label}
+            {badges.map((badge) => (
+              <span key={badge} className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {badge}
+              </span>
+            ))}
+          </span>
+        ) : label
+      }
+      labelText={label}
+      phase={phase}
+      status={status === "error" ? "failed" : status === "running" ? "running" : status === "muted" ? "muted" : "done"}
+      detail={detail}
+    />
   )
 }
 
@@ -1111,16 +1107,18 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             {traceExpanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/70" />}
           </button>
           {traceExpanded && (
-            <div className="mt-1 border-l border-border/50 pl-3">
+            <TraceRail>
               {timelineSteps.map((step) => (
-                <div key={step.id} className={cn("py-1 text-[12.5px] leading-5", STEP_STATUS_CLASS[step.status === "error" ? "failed" : "done"])}>
-                  {step.label}
-                  {step.detail && descriptionsDiffer(step.label, step.detail) ? (
-                    <div className="mt-0.5 text-[12px] text-muted-foreground/65">{step.detail}</div>
-                  ) : null}
-                </div>
+                <TraceRailRow
+                  key={step.id}
+                  label={step.label}
+                  labelText={step.label}
+                  phase={step.phase}
+                  status={step.status === "error" ? "failed" : "done"}
+                  detail={step.detail && descriptionsDiffer(step.label, step.detail) ? step.detail : undefined}
+                />
               ))}
-            </div>
+            </TraceRail>
           )}
           {hasDeliverable ? <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} /> : null}
         </div>
@@ -1211,26 +1209,21 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
         </div>
 
         {liveExpanded && (
-          <div className="mt-1 border-l border-border/50 pl-3">
+          <TraceRail>
             {visibleSteps.map((step) => (
-              <div key={step.id} className="py-1">
-                <div
-                  className={cn(
-                    "text-[12.5px] leading-5",
-                    STEP_STATUS_CLASS[step.status === "error" ? "failed" : step.status === "running" ? "running" : "done"],
-                    step.status === "running" && "font-medium",
-                  )}
-                >
-                  {step.status === "running" && !descriptionsDiffer(headerKitLabel, step.label) ? null : step.label}
-                  {step.count > 1 && <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">×{step.count}</span>}
-                </div>
-                {step.detail && descriptionsDiffer(step.label, step.detail) && (
-                  <div className="mt-0.5 max-w-[48rem] text-[12px] leading-5 text-muted-foreground/65">{step.detail}</div>
-                )}
+              <TraceRailRow
+                key={step.id}
+                label={step.status === "running" && !descriptionsDiffer(headerKitLabel, step.label) ? headerKitLabel : step.label}
+                labelText={step.label}
+                phase={step.phase}
+                status={step.status === "error" ? "failed" : step.status === "running" ? "running" : "done"}
+                count={step.count}
+                detail={step.detail && descriptionsDiffer(step.label, step.detail) ? step.detail : undefined}
+              >
                 <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
-              </div>
+              </TraceRailRow>
             ))}
-          </div>
+          </TraceRail>
         )}
       </div>
     )
@@ -1285,7 +1278,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
       </div>
 
       {traceExpanded && (
-        <div className="mt-1 border-l border-border/50 pl-3">
+        <TraceRail>
           {state.queue && !state.done && (
             <TimelineRow
               icon={<AgentStatusIcon kind={state.queue.status === "running" ? "working" : "queued"} className="h-4 w-4" />}
@@ -1302,6 +1295,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
                 label={step.label}
                 detail={step.detail}
                 status={step.status}
+                phase={step.phase}
                 badges={step.count > 1 ? [`${step.count} pasos`] : []}
               />
               <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
@@ -1326,7 +1320,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
           )}
 
           <ValidationSummary state={state} />
-        </div>
+        </TraceRail>
       )}
 
       {state.artifacts?.length > 0 && (

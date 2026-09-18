@@ -19,7 +19,7 @@ export type PensandoBarsProps = {
  * which replaced the bouncing bars); every caller keeps working unchanged.
  * Honors prefers-reduced-motion (static glyph).
  */
-export function PensandoBars({ size = 28, className }: PensandoBarsProps) {
+export function PensandoBars({ size = 20, className }: PensandoBarsProps) {
   return (
     <span
       className={className}
