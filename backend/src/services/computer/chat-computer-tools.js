@@ -47,7 +47,7 @@ function buildNavigateTool({ userId, conversationId, env }) {
   return {
     name: 'computer_navigate',
     description:
-      'Abre una URL http(s) en el navegador REAL de la computadora de ESTE chat. Úsala primero para ofertas, reservas, DMV, seguro o cualquier sitio en vivo. Cada chat TIENE una computadora en vivo.',
+      'Abre una URL http(s) en el navegador REAL de la computadora de ESTE chat. Úsala primero para ofertas, reservas, DMV, seguro o cualquier sitio en vivo. Cada chat TIENE una computadora en vivo. Si no te dieron una URL, localiza primero el sitio oficial con web_search y navega al resultado. El resultado trae `loaded` (lo que Chrome muestra ahora) y `confirmed`: si confirmed:false, verifica con computer_screenshot antes de afirmar que la página cargó.',
     parameters: {
       type: 'object',
       properties: {
@@ -95,14 +95,46 @@ function buildNavigateTool({ userId, conversationId, env }) {
             signal: ctx.signal,
             timeoutMs: 12_000,
           });
-          return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
+          // Verificación best-effort de lo que Chrome muestra AHORA: el "Opening"
+          // de docker exec no prueba que la página cargó. Nunca convierte un open
+          // exitoso en error, salvo página de error de Chrome (DNS/caído real).
+          let loaded = null;
+          try {
+            const peek = await persistent.peekPage(session, env || process.env);
+            if (peek && peek.url) loaded = { url: String(peek.url), title: String(peek.title || '') };
+          } catch (_) { /* peek es best-effort */ }
+          if (loaded && /^chrome-error:\/\//i.test(loaded.url)) {
+            return {
+              ok: false,
+              error: 'navigate_failed',
+              message: 'Chrome mostró una página de error en vez del sitio.',
+              detail: loaded.url.slice(0, 160),
+              url,
+              fallback: 'El sitio no cargó en el navegador. Localiza el sitio oficial con web_search y reintenta computer_navigate con la URL encontrada; si no existe, dilo con lo que sí verificaste.',
+            };
+          }
+          const norm = (u) => String(u || '').replace(/\/$/, '');
+          const confirmed = !!(loaded && norm(loaded.url) === norm(url));
+          return {
+            ok: true,
+            tool: 'computer_navigate',
+            url,
+            result: opened,
+            loaded,
+            confirmed,
+            ...(confirmed ? {} : { note: 'Página aún abriéndose o en otra URL: verifica con computer_screenshot antes de afirmar que cargó.' }),
+            _preview: `Abriendo ${url}`,
+          };
         } catch (err) {
+          const detail = err && err.message ? String(err.message).slice(0, 160) : undefined;
+          const dnsish = /ENOTFOUND|EAI_AGAIN|getaddrinfo|NXDOMAIN|not known|could not resolve|failed to resolve|name resolution|net::ERR_NAME/i.test(detail || '');
           return {
             ok: false,
             error: 'navigate_failed',
             message: 'No se pudo abrir la página en el navegador de este chat.',
-            detail: err && err.message ? String(err.message).slice(0, 160) : undefined,
+            detail,
             url,
+            ...(dnsish ? { fallback: 'El sitio no resolvió por DNS. Localiza el sitio oficial con web_search y reintenta computer_navigate con la URL encontrada; si no existe, dilo con lo que sí verificaste.' } : {}),
           };
         }
       } catch (err) {
