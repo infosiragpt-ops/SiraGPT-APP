@@ -213,6 +213,22 @@ describe('createAnswerVerifier', () => {
     assert.equal(openai.calls.length, 2);
   });
 
+  test('the judge excerpt samples EVERY tool call, so late sources are visible to the reviewer', async () => {
+    const openai = judgeClient(['{"pass":true}']);
+    const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: LONG_QUERY });
+    const steps = Array.from({ length: 12 }, (_, i) => ({
+      actions: [{ tool: 'web_search', args: `{"query":"q${i}"}`, observation: { marker: `SOURCE_${i}_MARK`, filler: 'x'.repeat(3000) } }],
+    }));
+    assert.equal((await guard({ answer: LONG_ANSWER, steps })).ok, true);
+    const sent = openai.calls[0].messages[1].content;
+    assert.match(sent, /SOURCE_0_MARK/, 'first call still represented');
+    assert.match(sent, /SOURCE_11_MARK/, 'latest call represented (old excerpt cut after ~2 calls)');
+    assert.match(sent, /q5/, 'middle calls represented');
+    assert.ok(sent.indexOf('SOURCE_0_MARK') < sent.indexOf('SOURCE_11_MARK'), 'chronological order');
+    assert.ok(sent.length < 9500, 'review input stays bounded');
+  });
+
+
   test('evidence outside the bounded judge excerpt still invalidates cached approval', async () => {
     const openai = judgeClient(['{"pass":true}', '{"pass":false}']);
     const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: LONG_QUERY });
