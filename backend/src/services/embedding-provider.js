@@ -30,9 +30,12 @@
 const crypto = require('node:crypto');
 const keyHealth = require('../utils/provider-key-health');
 
-// Milder than the chat ladder's list on purpose: offline tests stub the
-// OpenAI SDK with fake keys and must still reach the OpenAI rung.
-const PLACEHOLDER_KEY_RE = /^your_|^sk-xxx+$|^changeme$|^dummy$|^not-used$|^ci-dummy$/i;
+// Placeholder keys (CI dummies, templates) never reach the network. The
+// OpenAI rung is exempt on purpose: it goes through the `openai` SDK, which
+// offline suites stub with fake keys, and a genuinely bad key is caught by
+// the rejection memo after one 401 anyway.
+const PLACEHOLDER_KEY_RE = /dummy|not-used|ci-dummy|test-key|^your_|^sk-xxx|^changeme$/i;
+const PLACEHOLDER_EXEMPT = new Set(['openai']);
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_ORDER = ['openai', 'gemini', 'voyage', 'jina', 'mistral'];
 
@@ -84,7 +87,7 @@ function keyFor(name, env = process.env) {
   if (!spec) return '';
   for (const k of spec.keys) {
     const v = String(env[k] || '').trim();
-    if (v && !PLACEHOLDER_KEY_RE.test(v)) return v;
+    if (v && (PLACEHOLDER_EXEMPT.has(name) || !PLACEHOLDER_KEY_RE.test(v))) return v;
   }
   return '';
 }
@@ -315,6 +318,7 @@ async function embed(texts, { targetDim = 1536, space = null, sticky = true, env
     );
   }
   const tried = [];
+  const errors = [];
   let lastErr = null;
   for (const c of usable) {
     const spec = PROVIDERS[c.name];
@@ -351,6 +355,7 @@ async function embed(texts, { targetDim = 1536, space = null, sticky = true, env
       lastErr = err;
       stats.errors += 1; bump(c.name, 'errors');
       tried.push(c.name);
+      errors.push(`${c.name}: ${String((err && err.message) || err).slice(0, 200)}`);
       if (signal && signal.aborted) throw err;
       if (keyHealth.isInvalidKeyError(err)) {
         keyHealth.markRejected(c.name, c.key, err, env);
@@ -365,7 +370,7 @@ async function embed(texts, { targetDim = 1536, space = null, sticky = true, env
       if (space) break; // exact space demanded: never substitute
     }
   }
-  const e = new EmbeddingUnavailableError(`every embedding provider failed for ${targetDim} dims (${tried.join(', ')}): ${lastErr && lastErr.message}`, { targetDim, tried });
+  const e = new EmbeddingUnavailableError(`every embedding provider failed for ${targetDim} dims: ${errors.length ? errors.join('; ') : (lastErr && lastErr.message)}`, { targetDim, tried });
   e.cause = lastErr;
   throw e;
 }
