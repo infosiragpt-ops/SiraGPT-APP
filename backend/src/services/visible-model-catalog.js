@@ -419,6 +419,10 @@ function curateVisibleAdminMediaModels(models = [], type, options = {}) {
   const allowedNames = options.allowedNames instanceof Set
     ? options.allowedNames
     : null;
+  // "activar = visible": an admin-activated model the engine can route
+  // (provider inferable from its name) is shown even when it is not in the
+  // static verified allow-list. Models nobody can run stay hidden.
+  const isRoutable = typeof options.isRoutable === 'function' ? options.isRoutable : null;
 
   return (Array.isArray(models) ? models : []).map(normalizeCatalogModelType).filter((model) => {
     const name = String(model?.name || '').trim();
@@ -427,9 +431,14 @@ function curateVisibleAdminMediaModels(models = [], type, options = {}) {
     if (model?.isActive !== true) return false;
     if (isVirtualModel(model)) return false;
     if (allowedNames && !allowedNames.has(name)
-      && !(normalizedType === 'IMAGE' && isActiveGrokImageModel(model))) return false;
+      && !(normalizedType === 'IMAGE' && isActiveGrokImageModel(model))
+      && !(isRoutable && safeRoutable(isRoutable, name))) return false;
     return true;
   });
+}
+
+function safeRoutable(isRoutable, name) {
+  try { return Boolean(isRoutable(name)); } catch { return false; }
 }
 
 module.exports = {
