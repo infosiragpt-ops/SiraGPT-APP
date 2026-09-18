@@ -30,6 +30,7 @@ describe("Office file icons (Microsoft 365 2026 style)", () => {
       "components/message-component.tsx",
       "components/chat-interface-enhanced.tsx",
       "components/doc/document-artifact-chrome.tsx",
+      "components/document-page-thumb.tsx",
       "components/ExcelConnector.tsx",
       "components/WordConnector.tsx",
       "app/documents/page.tsx",
