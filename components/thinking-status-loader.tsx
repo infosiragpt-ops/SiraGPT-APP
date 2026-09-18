@@ -6,7 +6,7 @@ import { PensandoBars } from "@/components/pensando-bars"
 import {
   type LoaderState,
   LOADER_LABELS,
-  SIRA_CELESTE,
+  CLAUDE_THINK_ACCENT,
   isTerminalLoaderState,
   loaderChipSrc,
   loaderLabel,
@@ -40,7 +40,7 @@ function formatElapsed(sec: number): string {
 
 /**
  * Status chip for Pensando / AgenticSteps / RunTrace header.
- * In-progress always uses PensandoBars (Luis geometry, fill #38BDF8).
+ * In-progress always uses PensandoBars (the Claude asterisk, think accent #D97757).
  * Terminal states keep the static check / X. The step list (not this chip)
  * keeps semantic colors — running is --step-running blue, never brand-red.
  */
@@ -91,7 +91,7 @@ export function ThinkingStatusLoader({
         glyph ? "gap-0" : compact ? "gap-2" : "gap-2.5",
         className,
       )}
-      style={{ color: `var(--sira-celeste, ${SIRA_CELESTE})` }}
+      style={{ color: `var(--think-accent, ${CLAUDE_THINK_ACCENT})` }}
     >
       <span
         className="flex shrink-0 items-center justify-center"
@@ -119,7 +119,7 @@ export function ThinkingStatusLoader({
           className={cn(
             "min-w-0 truncate font-sans tracking-[-0.01em]",
             compact ? "text-[13px] leading-5" : "text-[13.5px] font-medium leading-5",
-            state === "error" ? "text-[var(--step-failed,#B45353)]" : "text-[var(--step-running,#38BDF8)]",
+            state === "error" ? "text-[var(--step-failed,#B45353)]" : "text-[var(--step-running,#D97757)]",
             state === "completado" && "text-[var(--step-done,#059669)]",
             !terminal && "thinking-shimmer-text",
           )}

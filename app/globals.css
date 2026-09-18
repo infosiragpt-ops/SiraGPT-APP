@@ -150,10 +150,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --code-fg: #e8eef7;
     --content-max: 46rem;
 
-    /* RunTrace / Pensando stepper — running is brand celeste, never red. */
+    /* RunTrace / Pensando stepper — running is the Claude think accent
+       (terracotta), same glyph and colour on every flow. */
     --sira-celeste: #38BDF8;
+    --think-accent: #D97757;
     --step-pending: #8A8580;
-    --step-running: #38BDF8;
+    --step-running: var(--think-accent);
     --step-done: #059669;
     --step-failed: #B45353;
 
@@ -252,8 +254,9 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --content-max: 46rem;
 
     --sira-celeste: #38BDF8;
+    --think-accent: #E08A6A;
     --step-pending: #8A8580;
-    --step-running: #38BDF8;
+    --step-running: var(--think-accent);
     --step-done: #34D399;
     --step-failed: #F87171;
   }
@@ -8729,15 +8732,39 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  */
 :root {
   --step-pending: #8A8580;
-  --step-running: #2563eb;
+  --step-running: var(--think-accent, #D97757);
   --step-done: #059669;
   --step-failed: #dc2626;
 }
 .dark {
   --step-pending: #9ca3af;
-  --step-running: #60a5fa;
+  --step-running: var(--think-accent, #E08A6A);
   --step-done: #34d399;
   --step-failed: #f87171;
+}
+
+/* Claude asterisk — the single "thinking" glyph. Slow rotation + breathing
+   while active; frozen under prefers-reduced-motion. */
+@keyframes claude-asterisk-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes claude-asterisk-breathe {
+  0%, 100% { transform: scale(0.92); opacity: 0.85; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+.claude-asterisk { transform-origin: 50% 50%; }
+.claude-asterisk--active {
+  animation: claude-asterisk-spin 4.5s linear infinite;
+}
+.claude-asterisk--active > g {
+  transform-origin: 50% 50%;
+  transform-box: fill-box;
+  animation: claude-asterisk-breathe 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .claude-asterisk--active,
+  .claude-asterisk--active > g { animation: none; }
 }
 .run-trace-step--pending { color: var(--step-pending); }
 .run-trace-step--running { color: var(--step-running); }

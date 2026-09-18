@@ -2063,3 +2063,43 @@ test('runAgenticChat: claimed EDIT turn with files keeps the surgical loop when 
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
   }
 });
+
+test('buildChatFinalizeProfile: read-only summary over an attached doc waives the docintel/rag hard gate', () => {
+  const available = new Set(['docintel_analyze', 'rag_retrieve', 'web_search']);
+  const profile = agenticStream._internal.buildChatFinalizeProfile({
+    userQuery: 'dame un resumen en un solo párrafo',
+    fileIds: ['f1'],
+    fileMetadata: [{ id: 'f1', mimeType: 'application/pdf', name: 'tesis.pdf' }],
+    availableToolNames: available,
+  });
+  assert.ok(!profile.requiredTools.includes('docintel_analyze'),
+    'summary turns must not hard-require docintel_analyze');
+  assert.ok(!profile.requiredTools.includes('rag_retrieve'),
+    'summary turns must not hard-require rag_retrieve');
+});
+
+test('buildChatFinalizeProfile: non-read-only attachment turns keep the docintel/rag gate', () => {
+  const available = new Set(['docintel_analyze', 'rag_retrieve', 'web_search']);
+  const profile = agenticStream._internal.buildChatFinalizeProfile({
+    userQuery: 'usa el documento adjunto para preparar la propuesta',
+    fileIds: ['f1'],
+    fileMetadata: [{ id: 'f1', mimeType: 'application/pdf', name: 'tesis.pdf' }],
+    availableToolNames: available,
+  });
+  assert.ok(profile.requiredTools.includes('docintel_analyze'),
+    'non-read-only doc turns keep the private-context gate');
+  assert.ok(profile.requiredTools.includes('rag_retrieve'),
+    'non-read-only doc turns keep the private-context gate');
+});
+
+test('buildChatFinalizeProfile: read-only waiver never unlocks side-effect gates', () => {
+  const available = new Set(['docintel_analyze', 'rag_retrieve', 'create_document', 'verify_artifact']);
+  const profile = agenticStream._internal.buildChatFinalizeProfile({
+    userQuery: 'crea un pdf con el resumen del documento',
+    fileIds: ['f1'],
+    fileMetadata: [{ id: 'f1', mimeType: 'application/pdf', name: 'tesis.pdf' }],
+    availableToolNames: available,
+  });
+  assert.ok(profile.requiredTools.includes('create_document'),
+    'deliverable turns must still require create_document');
+});

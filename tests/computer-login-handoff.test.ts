@@ -499,7 +499,7 @@ describe("computer login handoff · source & Spanish chrome", () => {
       assert.doesNotMatch(src, /XFCE/)
     }
     const bars = source("components/pensando-bars.tsx")
-    assert.match(bars, /#38BDF8/)
+    assert.match(bars, /#D97757/)
   })
 
   it("does not add OpenRouter computer models", () => {

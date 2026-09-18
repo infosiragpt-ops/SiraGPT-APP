@@ -6,6 +6,8 @@
  */
 
 export const SIRA_CELESTE = "#38BDF8"
+/** Claude-style thinking accent (terracotta): the asterisk glyph + active step colour. */
+export const CLAUDE_THINK_ACCENT = "#D97757"
 
 /** Runtime states wired into ThinkingStatusLoader / tool map. */
 export const LOADER_STATES = [
