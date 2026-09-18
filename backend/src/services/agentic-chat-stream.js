@@ -722,7 +722,23 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const available = availableToolNames instanceof Set
       ? availableToolNames
       : new Set(Array.from(availableToolNames || []));
-    const requiredTools = (profile.requiredTools || []).filter((tool) => available.has(tool));
+    // Read-only Q&A over an attachment ("dame un resumen en un solo párrafo")
+    // is answered from the already-injected document text. Requiring
+    // docintel_analyze/rag_retrieve as a HARD finalize gate turned judge-proof
+    // summaries into verification_failed dead-ends: #715 fail-opened the
+    // answer verifier, but this gate runs FIRST in the composed guard and
+    // blocked before that fail-open was ever consulted. The tools stay
+    // available and the quality gates keep recommending them — only the hard
+    // block is waived, and only for read-only intents (create/search/edit
+    // queries never classify as read-only).
+    let gateTools = profile.requiredTools || [];
+    try {
+      const { isReadOnlyQaIntent } = require('./agents/completion-claim-verifier');
+      if (isReadOnlyQaIntent(userQuery)) {
+        gateTools = gateTools.filter((tool) => tool !== 'docintel_analyze' && tool !== 'rag_retrieve');
+      }
+    } catch (_) { /* fail-open to legacy gating */ }
+    const requiredTools = gateTools.filter((tool) => available.has(tool));
     const minimumToolCalls = Object.fromEntries(
       Object.entries(profile.minimumToolCalls || {}).filter(([tool]) => requiredTools.includes(tool))
     );
