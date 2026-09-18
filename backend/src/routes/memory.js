@@ -91,14 +91,32 @@ router.delete('/:id', async (req, res) => {
   return res.json({ ok: true });
 });
 
-// Wipe everything: vault + vector store + legacy sinks.
+// Wipe everything — a PRIVACY action: vault + legacy document + vector store.
+// Fails closed: partial clears are reported as such, never as success.
 router.delete('/', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
-  await vault.clear(userId);
-  try { await longTermMemory.clearUserMemory(userId); } catch (_) { /* best effort */ }
-  try { require('../services/memory-document').clear(userId); } catch (_) { /* legacy sink */ }
-  return res.json({ ok: true });
+
+  let documentCleared = false;
+  try {
+    const v = await vault.clear(userId);
+    if (!v || v.ok !== true) throw new Error('vault clear failed');
+    // eslint-disable-next-line global-require
+    require('../services/memory-document').clear(userId);
+    documentCleared = true;
+  } catch (err) {
+    req.log?.error?.({ err }, 'memory: document clear failed');
+    return res.status(500).json({ error: 'memory_clear_failed', documentCleared: false, vectorCleared: false });
+  }
+
+  try {
+    await longTermMemory.clearUserMemory(userId);
+  } catch (vecErr) {
+    req.log?.error?.({ err: vecErr }, 'memory: vector clear failed (document cleared)');
+    return res.status(500).json({ error: 'memory_vector_clear_failed', partial: true, documentCleared, vectorCleared: false });
+  }
+
+  return res.json({ ok: true, documentCleared, vectorCleared: true });
 });
 
 // ── consolidation ("dreaming") — reviewable and reversible ────────────────
