@@ -78,6 +78,29 @@ use the sandboxed codex runner instead.
 | `GEMA4_DISPLAY_NAME` | `Gema4 31B` | Public display name returned by `/api/ai/models` |
 | `GEMA4_ICON` | `ChatGPTLogo` | Icon key returned with the virtual fallback model |
 
+### Jev tier steering (flash↔pro escalation)
+
+The RLCD × Jev per-turn judge (`backend/src/services/rlcd/jev-turn-judge.js`,
+TypeSafe Jev via the native `/v1/systemone` provider) already answers, with
+calibrated probabilities, which model family the turn needs. Its verdict is
+applied to the Sira flash↔pro tier routing by
+`backend/src/services/ai/jev-router.js` inside `/api/ai/generate`: a
+`reasoning`/`coding` verdict escalates a flash-tier turn to the pro tier, a
+`fast_cheap` verdict vetoes a heuristic pro escalation, everything else stays
+advisory (logged as `routing.jev_tier_steering`). No extra network call — it
+consumes the judge's single per-turn fan-out. The existing apply guards are
+unchanged: the user's picker always wins, plan eligibility and provider
+inference still gate the final model. Fail-open by shape.
+
+Activation = the RLCD Jev judge running (`TYPESAFE_API_KEY` + `SIRAGPT_RLCD_JEV`)
+plus the steering flag it already defines:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_RLCD_JEV_MODEL_STEERING` | `false` | The judged model family steers the automatic route (never a user-picked model). Off = advisory telemetry only |
+| `SIRAGPT_RLCD_JEV_MODEL_CONFIDENCE` | `0.7` | Minimum family confidence for the verdict to steer |
+| `SIRAGPT_JEV_PRO_TARGET` | *(derived)* | Override the pro-tier target id; by default the flash id's tier token is swapped (`deepseek-v4-flash` → `deepseek-v4-pro`) |
+
 ### Embedding Providers
 
 | Variable | Provider | Purpose |
