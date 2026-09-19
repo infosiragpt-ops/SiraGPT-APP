@@ -389,6 +389,30 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
 });
 
 
+// Live browser progress for the side-panel chip ("Viendo google.com - clic -
+// paso 3"). Read-only and side-effect free: never creates a session, only
+// reports the last recorded agent action plus a best-effort page peek.
+router.get('/activity', requireFlag, authenticateToken, async (req, res) => {
+  try {
+    const identity = identityFor(req);
+    requireProvenIsolation(identity);
+    const { getActivity } = require('../services/computer/live-actions');
+    const persistent = require('../services/computer/persistent');
+    const activity = getActivity(identity.sessionKey);
+    let peek = null;
+    try {
+      peek = await persistent.peekExisting(identity);
+    } catch (_) { /* container may not be running */ }
+    return res.json({
+      activity: activity || null,
+      url: (peek && peek.url) || (activity && activity.lastUrl) || null,
+      title: (peek && peek.title) || '',
+    });
+  } catch (err) {
+    return failComputer(res, err, 'activity_failed');
+  }
+});
+
 router.get('/login-handoff', requireFlag, authenticateToken, async (req, res) => {
   try {
     const identity = identityFor(req);

@@ -67,6 +67,7 @@ export type AgentComputerShellProps = {
   /** Open focused on the live browser so the agent can search the web. */
   initialDock?: DockApp
   navigateUrl?: string
+  autoNavigate?: boolean
 }
 
 export function AgentComputerShell({
@@ -77,6 +78,7 @@ export function AgentComputerShell({
   liveStatus,
   initialDock = "browser",
   navigateUrl = "",
+  autoNavigate = true,
 }: AgentComputerShellProps) {
   const t = useTranslations("codex.panel.agentComputer")
   const [preview, setPreview] = React.useState<CodePreviewState | null>(null)
@@ -180,6 +182,7 @@ export function AgentComputerShell({
           <IntegratedBrowserBar
             conversationId={conversationId}
             initialUrl={navigateUrl}
+            autoNavigate={autoNavigate}
             onNavigated={() => void focusApp("browser")}
           />
           <span

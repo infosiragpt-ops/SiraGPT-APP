@@ -10,6 +10,7 @@ import { postComputerNavigate } from "@/lib/computer-navigate-client"
 export type IntegratedBrowserBarProps = {
   conversationId?: string | null
   initialUrl?: string
+  autoNavigate?: boolean
   compact?: boolean
   onNavigated?: (url: string) => void
 }
@@ -18,6 +19,7 @@ export function IntegratedBrowserBar({
   conversationId,
   initialUrl = "",
   compact = false,
+  autoNavigate = true,
   onNavigated,
 }: IntegratedBrowserBarProps) {
   const [value, setValue] = React.useState(initialUrl)
@@ -32,7 +34,7 @@ export function IntegratedBrowserBar({
 
   React.useEffect(() => {
     const chatId = String(conversationId || "").trim()
-    if (!initialUrl || !chatId) return
+    if (!autoNavigate || !initialUrl || !chatId) return
     const stamp = `${chatId}::${initialUrl}`
     if (stamp === lastAutoUrl.current) return
     lastAutoUrl.current = stamp
@@ -56,7 +58,7 @@ export function IntegratedBrowserBar({
     return () => {
       cancelled = true
     }
-  }, [initialUrl, conversationId])
+  }, [initialUrl, conversationId, autoNavigate])
 
   const go = async (event?: React.FormEvent) => {
     event?.preventDefault()

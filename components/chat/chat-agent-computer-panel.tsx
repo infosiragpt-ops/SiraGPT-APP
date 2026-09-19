@@ -21,6 +21,7 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { AgentComputerShell } from "@/components/code/agent-computer-shell"
 import { DepartmentComputerPane } from "@/components/code/department-computer-pane"
+import { postComputerNavigate } from "@/lib/computer-navigate-client"
 import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import { ComputerLoginHandoffBanner } from "@/components/chat/computer-login-handoff-banner"
 import { coworkApi, type ScheduledCoworkTask } from "@/lib/cowork-api"
@@ -45,12 +46,25 @@ export type ChatAgentComputerPanelProps = {
   startExpanded?: boolean
   initialDock?: "browser" | "desktop" | "files" | "terminal"
   navigateUrl?: string
+  agentNavigating?: boolean
 }
 
 type LiveStatus = "starting" | "live" | "error" | "idle"
 
 const HEADER_BTN =
   "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+
+function activityLabel(tool: string | null | undefined): string {
+  switch (String(tool || "")) {
+    case "computer_navigate": return "abriendo"
+    case "computer_click": return "clic"
+    case "computer_type": return "escribiendo"
+    case "computer_scroll": return "desplazando"
+    case "computer_keypress": return "tecla"
+    case "computer_screenshot": return "mirando"
+    default: return "trabajando"
+  }
+}
 
 const SCHEDULE_PRESETS: Array<{ id: string; label: string; cron: string }> = [
   { id: "daily", label: "Cada día · 9:00", cron: "0 9 * * *" },
@@ -79,10 +93,13 @@ export default function ChatAgentComputerPanel({
   startExpanded = false,
   initialDock = "browser",
   navigateUrl = "",
+  agentNavigating = false,
 }: ChatAgentComputerPanelProps) {
   const chatId = String(conversationId || "").trim()
   const [liveStatus, setLiveStatus] = React.useState<LiveStatus>("starting")
   const [expanded, setExpanded] = React.useState(Boolean(startExpanded || loginHandoff))
+  const [activity, setActivity] = React.useState<{ step?: number; lastAction?: string | null; lastUrl?: string | null } | null>(null)
+  const [activityUrl, setActivityUrl] = React.useState<string>("")
   const [handoffActive, setHandoffActive] = React.useState(Boolean(loginHandoff))
   const [handoffSite, setHandoffSite] = React.useState<string>(String(loginHandoffSite || ""))
   const [handoffKind, setHandoffKind] = React.useState<string>(String(loginHandoffKind || ""))
@@ -112,6 +129,20 @@ export default function ChatAgentComputerPanel({
     if (loginHandoffKind) setHandoffKind(String(loginHandoffKind))
     if (loginHandoff || startExpanded) setExpanded(true)
   }, [loginHandoff, loginHandoffSite, loginHandoffKind, startExpanded])
+
+  // A tool owns its navigation. Replaying it from UI after mount/collapse
+  // could wipe a partially completed form. Only manual URL requests run here.
+  const lastManualNavigation = React.useRef("")
+  React.useEffect(() => {
+    if (!chatId || !navigateUrl || agentNavigating) return
+    const stamp = `${chatId}:${navigateUrl}`
+    if (lastManualNavigation.current === stamp) return
+    lastManualNavigation.current = stamp
+    void postComputerNavigate(chatId, navigateUrl).catch(() => {
+      lastManualNavigation.current = ""
+      toast.error("No se pudo abrir la página")
+    })
+  }, [chatId, navigateUrl, agentNavigating])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -151,7 +182,25 @@ export default function ChatAgentComputerPanel({
   React.useEffect(() => {
     if (!chatId) return
     let cancelled = false
+    const pullActivity = async () => {
+      try {
+        const res = await authenticatedFetch(
+          `${computerApiBase()}/agent-computer/activity?conversationId=${encodeURIComponent(chatId)}`,
+          { credentials: "include", headers: authHeaders(), signal: AbortSignal.timeout(15_000) },
+        )
+        const body = await res.json().catch(() => ({}))
+        if (cancelled || !res.ok) return
+        setActivity(body.activity || null)
+        setActivityUrl(String(body.url || ""))
+      } catch {
+        /* chip stays quiet without progress */
+      }
+    }
+    let pulling = false
     const pull = async () => {
+      if (pulling || cancelled) return
+      pulling = true
+      await pullActivity()
       try {
         const res = await authenticatedFetch(
           `${computerApiBase()}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}&probe=1`,
@@ -175,6 +224,8 @@ export default function ChatAgentComputerPanel({
         }
       } catch {
         /* overlay stays usable without the banner */
+      } finally {
+        pulling = false
       }
     }
     void pull()
@@ -243,6 +294,14 @@ export default function ChatAgentComputerPanel({
   const showExpanded = expanded || handoffActive
   const mobileFullScreen = Boolean(layout.fullScreen && handoffActive)
 
+  let activityHost = ""
+  try { activityHost = activityUrl ? new URL(activityUrl).hostname : "" } catch { /* no host */ }
+  const activityChip = (activity || activityUrl) && (
+          <p className="mt-1 truncate text-center text-[12px] text-sky-700 dark:text-sky-400" data-testid="chat-computer-activity">
+            {`Navegador${activityHost ? ` · ${activityHost}` : ""}${activity?.lastAction ? ` · ${activityLabel(activity.lastAction)}` : ""}${activity?.step ? ` · paso ${activity.step}` : ""}`}
+          </p>
+        )
+
   if (showExpanded) {
     return (
       <section
@@ -268,7 +327,9 @@ export default function ChatAgentComputerPanel({
         {handoffActive ? null : (
           <button
             type="button"
-            onClick={() => setExpanded(false)}
+            onClick={() => {
+              setExpanded(false)
+            }}
             aria-label="Volver al panel"
             className="flex h-8 shrink-0 items-center gap-1.5 border-b border-black/10 bg-zinc-50 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:border-white/10 dark:bg-[#161618] dark:text-zinc-300 dark:hover:text-white"
             data-testid="chat-computer-collapse"
@@ -277,6 +338,7 @@ export default function ChatAgentComputerPanel({
             Panel
           </button>
         )}
+        {activityChip}
         <div className="relative min-h-0 min-w-0 flex-1" style={{ pointerEvents: "auto" }} data-testid="chat-computer-live-desktop">
           <AgentComputerShell
             conversationId={chatId}
@@ -285,6 +347,7 @@ export default function ChatAgentComputerPanel({
             liveStatus={liveStatus}
             initialDock={initialDock}
             navigateUrl={navigateUrl}
+            autoNavigate={false}
           >
             {pane}
           </AgentComputerShell>
@@ -328,7 +391,7 @@ export default function ChatAgentComputerPanel({
       </div>
 
       <div className="shrink-0 px-4 pt-1">
-        <IntegratedBrowserBar conversationId={chatId} compact initialUrl={navigateUrl} onNavigated={() => setExpanded(true)} />
+        <IntegratedBrowserBar conversationId={chatId} compact autoNavigate={false} initialUrl={navigateUrl} onNavigated={() => setExpanded(true)} />
       </div>
 
       {/* Live screen thumbnail — click opens the full window. */}
@@ -347,6 +410,7 @@ export default function ChatAgentComputerPanel({
         <p className="mt-2 text-center text-[13px] text-muted-foreground">
           Pantalla de SiraGPT
         </p>
+        {activityChip}
       </div>
 
       {/* Rutinas — recurring tasks this computer runs on a schedule. */}
