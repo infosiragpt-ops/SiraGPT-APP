@@ -866,6 +866,7 @@ jobs:
           path: |
             playwright-report/
             test-results/
+            /tmp/browser-gate-*.png
           if-no-files-found: ignore
           retention-days: 7
 

@@ -63,7 +63,9 @@ async function main() {
     const snap = await observePage(session, env);
     const city = snap.controls.find(c => c.label === 'Ciudad');
     assert.ok(city, 'real observation must identify the visible form field');
+    console.log('Observed form target', JSON.stringify(city));
     await run('computer_click', { x: city.x, y: city.y });
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('name')), 'city', 'click must focus the observed field');
     await run('computer_type', { text: 'Lima' });
     assert.equal(await page.locator('[name=city]').inputValue(), 'Lima', 'click/type target the observed field');
     await run('computer_keypress', { key: 'Tab' });
@@ -92,6 +94,20 @@ async function main() {
     assert.equal(await page.locator('#pw').inputValue(), 'fixture-private-do-not-echo');
     console.log('PASS real browser: password gate -> private user takeover -> writes refused');
     handoff.resetTakeoverForTests();
+  } catch (error) {
+    // Fixture-only diagnostics; no input values or real credentials are logged.
+    const page = context?.pages()[0];
+    if (page) {
+      console.log('Browser gate diagnostic', JSON.stringify(await page.evaluate(() => ({
+        title: document.title, focus: document.activeElement?.getAttribute('name'),
+        tag: document.activeElement?.tagName, focused: document.hasFocus(),
+        viewport: [innerWidth, innerHeight],
+        fields: Array.from(document.querySelectorAll('input')).map(el => ({name:el.name,type:el.type,length:el.value.length,rect:el.getBoundingClientRect().toJSON()})),
+      })).catch(() => ({}))));
+      await page.screenshot({ path: '/tmp/browser-gate-page.png' }).catch(() => {});
+      await exec('import', ['-window', 'root', '/tmp/browser-gate-desktop.png']).catch(() => {});
+    }
+    throw error;
   } finally {
     await browser?.close();
     if (chromeProcess && chromeProcess.exitCode === null) {
