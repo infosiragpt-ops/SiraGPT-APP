@@ -70,6 +70,7 @@ async function mockApi(page: Page, activity: () => ActivityState) {
     if (path === "/payments/subscription") {
       return fulfillJson(route, { plan: "PRO", status: "active", subscription: null, apiUsage: 0, monthlyLimit: 100000 })
     }
+    if (path === "/chats" && request.method() === "POST") return fulfillJson(route, { chat }, 201)
     if (path === "/chats" && request.method() === "GET") {
       return fulfillJson(route, { chats: [{ ...chat, messages: [] }], pagination: { page: 1, limit: 20, total: 1, pages: 1 } })
     }
