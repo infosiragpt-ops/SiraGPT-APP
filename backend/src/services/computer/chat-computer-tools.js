@@ -13,7 +13,7 @@
 
 const { agentComputerEnabled } = require('./flags');
 const f7Flags = require('../agent-runner/multimodal/flags');
-const { COMPUTER_TOOL_DEFINITIONS, makeComputerExecutors } = require('../agent-runner/multimodal/computer');
+const liveActions = require('./live-actions');
 const { HAS_COMPUTER_POLICY_ES, POLICY_ES } = require('./login-handoff');
 const { createWorkspaceFileApi } = require('./workspace-files');
 const { authorizeComposerTool, composerDeniedResult } = require('../composer-permission');
@@ -23,6 +23,8 @@ const COMPUTER_TOOL_NAMES = Object.freeze([
   'computer_screenshot',
   'computer_click',
   'computer_type',
+  'computer_scroll',
+  'computer_keypress',
   'computer_navigate',
   'computer_list_files',
   'computer_read_file',
@@ -32,15 +34,6 @@ const COMPUTER_TOOL_NAMES = Object.freeze([
 
 function shouldOfferComputerTools(env = process.env) {
   return agentComputerEnabled(env) === true || f7Flags.computerEnabled(env) === true;
-}
-
-function jsonResult(value) {
-  if (value == null) return '';
-  if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && typeof value.text === 'string' && value.__f7Image) {
-    return value.text;
-  }
-  try { return JSON.stringify(value); } catch (_) { return String(value); }
 }
 
 function buildNavigateTool({ userId, conversationId, env }) {
@@ -239,44 +232,196 @@ function buildWorkspaceFileTools({ userId, conversationId, env, persistent } = {
   ];
 }
 
-function openaiDefToReactTool(def, executors, extras) {
-  const fn = def && def.function ? def.function : def;
-  const name = fn && fn.name;
+// Live browser tools: every pointer/keyboard/observe action runs on the
+// SAME per-chat container browser the user watches in the side panel
+// (live-actions.js), never on the F7 fake/xvfb headless driver. That is
+// what makes "rellena el formulario y completa el trabajo" actually work.
+function liveContext({ userId, conversationId, env }, args, ctx) {
   return {
-    name,
-    description: fn.description,
-    parameters: fn.parameters || { type: 'object', properties: {} },
+    userId: args.userId || (ctx && ctx.userId) || userId,
+    conversationId: args.conversationId || (ctx && ctx.chatId) || conversationId,
+    env: env || process.env,
+    signal: ctx && ctx.signal,
+  };
+}
+
+function liveError(tool, err, fallback) {
+  return {
+    ok: false,
+    error: (err && err.code) || `${tool}_failed`,
+    message: (err && (err.publicMessage || err.message)) || fallback,
+  };
+}
+
+function buildLiveScreenshotTool(owner) {
+  return {
+    name: 'computer_screenshot',
+    description:
+      'Captura el navegador EN VIVO de este chat y la adjunta a tu siguiente turno como imagen (datos). Úsala ANTES y DESPUÉS de cada acción para verificar el estado real de la página.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
     async execute(args = {}, ctx = {}) {
-      const run = executors[name];
-      if (typeof run !== 'function') {
-        return { ok: false, error: 'computer_tool_missing', message: `Herramienta ${name} no disponible.` };
+      try {
+        const out = await liveActions.liveScreenshot(liveContext(owner, args, ctx));
+        if (!out.ok) return out.result;
+        ctx.onEvent?.({ type: 'tool_output', tool: 'computer_screenshot', ok: true, preview: String(out.text || '').slice(0, 160) });
+        return out;
+      } catch (err) {
+        return liveError('computer_screenshot', err, 'La captura del navegador falló.');
       }
-      const merged = {
-        ...args,
-        conversationId: args.conversationId || ctx.chatId || extras.conversationId,
-        userId: args.userId || ctx.userId || extras.userId,
-      };
-      const out = await run(merged, { signal: ctx.signal });
-      ctx.onEvent?.({ type: 'tool_output', tool: name, ok: true, preview: String(jsonResult(out)).slice(0, 160) });
-      return jsonResult(out);
     },
   };
 }
 
-function buildChatComputerTools({ userId, conversationId, env = process.env, session } = {}) {
+function buildLiveClickTool(owner) {
+  return {
+    name: 'computer_click',
+    description:
+      'Haz clic en coordenadas (x, y) del navegador EN VIVO de este chat — el mismo que el usuario ve en el panel lateral. Verifica con computer_screenshot después.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'integer', description: 'Coordenada X en píxeles.' },
+        y: { type: 'integer', description: 'Coordenada Y en píxeles.' },
+        button: { type: 'string', enum: ['left', 'middle', 'right'], description: 'Botón del mouse (default left).' },
+      },
+      required: ['x', 'y'],
+      additionalProperties: false,
+    },
+    async execute(args = {}, ctx = {}) {
+      try {
+        const btn = liveActions.normalizeComputerButton(args.button);
+        if (!btn.ok && args.button != null && String(args.button).trim()) {
+          return { ok: false, error: 'computer_button_invalid', message: 'Botón inválido: usa left, middle o right.' };
+        }
+        const pt = liveActions.clampComputerPoint(args.x, args.y);
+        const base = liveContext(owner, args, ctx);
+        const out = await liveActions.liveAct({
+          ...base,
+          toolName: 'computer_click',
+          action: { type: 'click', x: pt.x, y: pt.y, button: btn.button },
+          url: args.url,
+          title: args.title,
+          dom: args.dom || args.pageText || args.a11y,
+        });
+        if (!out.ok) return out.result;
+        ctx.onEvent?.({ type: 'tool_output', tool: 'computer_click', ok: true, preview: `Clic en ${pt.x},${pt.y}` });
+        return { ok: true, tool: 'computer_click', x: pt.x, y: pt.y, button: btn.button, activity: out.activity };
+      } catch (err) {
+        return liveError('computer_click', err, 'El clic en el navegador falló.');
+      }
+    },
+  };
+}
+
+function buildLiveTypeTool(owner) {
+  return {
+    name: 'computer_type',
+    description:
+      'Escribe texto en el elemento enfocado del navegador EN VIVO de este chat. NUNCA escribas contraseñas, OTP, 2FA, CVV ni usuario de un formulario de login: si aparece un muro de login, PAUSA y pide toma de control. El usuario inicia sesión en la computadora; SiraGPT no ve la contraseña.',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Texto a escribir (máx 2000 caracteres).' },
+      },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    async execute(args = {}, ctx = {}) {
+      try {
+        const text = String(args.text || '');
+        if (!text.length) return { ok: false, error: 'E_PARAMS', message: 'computer_type requiere `text`.' };
+        const base = liveContext(owner, args, ctx);
+        const out = await liveActions.liveAct({
+          ...base,
+          toolName: 'computer_type',
+          action: { type: 'type', text: text.slice(0, liveActions.MAX_TYPE_CHARS) },
+          text,
+          focused: args.focused || args.focusedField,
+          url: args.url,
+          title: args.title,
+          dom: args.dom || args.pageText || args.a11y,
+          waitForRelease: true,
+        });
+        if (!out.ok) return out.result;
+        ctx.onEvent?.({ type: 'tool_output', tool: 'computer_type', ok: true, preview: `Escritos ${text.length} caracteres` });
+        return { ok: true, tool: 'computer_type', typed: text.length, activity: out.activity };
+      } catch (err) {
+        return liveError('computer_type', err, 'La escritura en el navegador falló.');
+      }
+    },
+  };
+}
+
+function buildLiveScrollTool(owner) {
+  return {
+    name: 'computer_scroll',
+    description:
+      'Desplaza la página del navegador EN VIVO de este chat. Úsalo para revelar formularios largos antes de hacer clic o escribir.',
+    parameters: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Dirección del desplazamiento.' },
+        amount: { type: 'integer', description: 'Píxeles a desplazar (100–3000, default 500).' },
+      },
+      additionalProperties: false,
+    },
+    async execute(args = {}, ctx = {}) {
+      try {
+        const action = liveActions.scrollAction({ direction: args.direction, amount: args.amount, dx: args.dx, dy: args.dy });
+        const out = await liveActions.liveAct({ ...liveContext(owner, args, ctx), toolName: 'computer_scroll', action });
+        if (!out.ok) return out.result;
+        ctx.onEvent?.({ type: 'tool_output', tool: 'computer_scroll', ok: true, preview: `Desplazado ${args.direction || 'dx/dy'}` });
+        return { ok: true, tool: 'computer_scroll', activity: out.activity };
+      } catch (err) {
+        return liveError('computer_scroll', err, 'El desplazamiento falló.');
+      }
+    },
+  };
+}
+
+function buildLiveKeypressTool(owner) {
+  return {
+    name: 'computer_keypress',
+    description:
+      'Pulsa una tecla en el navegador EN VIVO de este chat (Enter para enviar un formulario, Tab para avanzar de campo, Escape para cerrar diálogos).',
+    parameters: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'Tecla: Enter, Tab, Escape, PageDown, ArrowDown…' },
+        modifiers: { type: 'array', items: { type: 'string' }, description: 'Modificadores opcionales: Control, Shift, Alt.' },
+      },
+      required: ['key'],
+      additionalProperties: false,
+    },
+    async execute(args = {}, ctx = {}) {
+      try {
+        const action = liveActions.keypressAction({ key: args.key, modifiers: args.modifiers });
+        const out = await liveActions.liveAct({ ...liveContext(owner, args, ctx), toolName: 'computer_keypress', action });
+        if (!out.ok) return out.result;
+        ctx.onEvent?.({ type: 'tool_output', tool: 'computer_keypress', ok: true, preview: `Tecla ${args.key}` });
+        return { ok: true, tool: 'computer_keypress', activity: out.activity };
+      } catch (err) {
+        return liveError('computer_keypress', err, 'La tecla no se pudo pulsar.');
+      }
+    },
+  };
+}
+
+function buildChatComputerTools({ userId, conversationId, env = process.env } = {}) {
   if (!shouldOfferComputerTools(env)) return [];
-  const built = makeComputerExecutors({
-    env,
-    userId,
-    session,
-    computerEnabled: true,
-  });
-  const tools = COMPUTER_TOOL_DEFINITIONS.map((def) => openaiDefToReactTool(def, built.executors, { userId, conversationId }));
+  const owner = { userId, conversationId, env };
+  const tools = [
+    buildLiveScreenshotTool(owner),
+    buildLiveClickTool(owner),
+    buildLiveTypeTool(owner),
+    buildLiveScrollTool(owner),
+    buildLiveKeypressTool(owner),
+  ];
   tools.push(buildNavigateTool({ userId, conversationId, env }));
   tools.push(...buildWorkspaceFileTools({ userId, conversationId, env }));
-  tools._cleanup = built.cleanup;
   return tools;
 }
+
 
 function offeredComputerToolNames(env = process.env) {
   return shouldOfferComputerTools(env) ? [...COMPUTER_TOOL_NAMES] : [];
