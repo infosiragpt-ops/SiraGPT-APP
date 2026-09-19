@@ -38,7 +38,11 @@ test.beforeEach(() => {
   vault.resetForTests(); consolidation.resetForTests();
   db = createFakePrisma();
   vault.setDeps({ prisma: db, log: quiet });
-  consolidation.setDeps({ prisma: db, log: quiet, now: () => Date.parse('2026-09-19T03:17:00Z') });
+  // Relative clock: the "unchanged since last pass" skip compares entry
+  // timestamps against the report instant. A frozen absolute `now` turns
+  // into a time bomb once wall-clock passes it (entries written "now" look
+  // newer than the frozen report). Date.now() keeps the skip deterministic.
+  consolidation.setDeps({ prisma: db, log: quiet, now: () => Date.now() });
 });
 
 test('consolidateUser: merges duplicates, resolves the contradiction (newest wins), re-files, drops noise, leaves a reviewable report', async () => {
