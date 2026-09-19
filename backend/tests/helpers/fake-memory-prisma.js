@@ -100,7 +100,7 @@ function createFakePrisma() {
         if (v && typeof v === 'object' && 'increment' in v) row[k] = (row[k] || 0) + v.increment;
         else row[k] = v;
       }
-      row.updatedAt = new Date(Date.now() + 1);
+      row.updatedAt = new Date();
       return pick(row, select);
     },
     async upsert({ where, create, update, select }) {
