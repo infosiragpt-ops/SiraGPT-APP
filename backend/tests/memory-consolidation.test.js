@@ -42,6 +42,13 @@ test.beforeEach(() => {
 });
 
 test('consolidateUser: merges duplicates, resolves the contradiction (newest wins), re-files, drops noise, leaves a reviewable report', async () => {
+  // Frozen fake to match the frozen service clock: otherwise wall-clock time
+  // leaks through entry timestamps and the "unchanged since last" skip below
+  // goes red as soon as real time passes the frozen instant.
+  const frozen = Date.parse('2026-09-19T03:17:00Z');
+  db = createFakePrisma({ now: frozen });
+  vault.setDeps({ prisma: db, log: quiet });
+  consolidation.setDeps({ prisma: db, log: quiet, now: () => frozen });
   const ids = await seed();
   const llm = llmReturning((body) => {
     assert.equal(body.response_format.type, 'json_object');

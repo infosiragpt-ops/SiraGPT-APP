@@ -44,7 +44,11 @@ function pick(row, select) {
   return out;
 }
 
-function createFakePrisma() {
+function createFakePrisma({ now } = {}) {
+  // Optional fixed clock (ms since epoch) for deterministic time-sensitive
+  // suites. Real-clock behavior is unchanged when omitted.
+  const fixed = Number.isFinite(Number(now)) ? Number(now) : null;
+  const nowMs = () => (fixed !== null ? fixed : Date.now());
   const memories = [];
   const settings = new Map();
   const raw = [];
@@ -88,7 +92,7 @@ function createFakePrisma() {
       if (data.contentHash && memories.some((r) => r.userId === data.userId && r.contentHash === data.contentHash)) {
         const err = new Error('Unique constraint failed on the fields: (`user_id`,`content_hash`)'); err.code = 'P2002'; throw err;
       }
-      const now = new Date();
+      const now = new Date(nowMs());
       const row = { id: data.id || nextId(), importanceScore: 0, confidence: 0.8, accessCount: 0, lastAccessedAt: now, createdAt: now, updatedAt: now, category: null, source: null, contentHash: null, ...data };
       memories.push(row);
       return pick(row, select);
@@ -100,7 +104,7 @@ function createFakePrisma() {
         if (v && typeof v === 'object' && 'increment' in v) row[k] = (row[k] || 0) + v.increment;
         else row[k] = v;
       }
-      row.updatedAt = new Date(Date.now() + 1);
+      row.updatedAt = new Date(nowMs() + (fixed !== null ? 0 : 1));
       return pick(row, select);
     },
     async upsert({ where, create, update, select }) {
