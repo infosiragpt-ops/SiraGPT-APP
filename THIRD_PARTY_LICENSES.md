@@ -788,7 +788,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `accepts` | 1.3.8, 2.0.0 | MIT | [link](https://github.com/jshttp/accepts) |
 | `acorn` | 8.16.0 | MIT | [link](https://github.com/acornjs/acorn) |
 | `acorn-import-attributes` | 1.9.5 | MIT | [link](https://github.com/xtuc/acorn-import-attributes) |
-| `adm-zip` | 0.6.0 | MIT | [link](https://github.com/cthackers/adm-zip) |
+| `adm-zip` | 0.6.1 | MIT | [link](https://github.com/cthackers/adm-zip) |
 | `agent-base` | 6.0.2, 7.1.4 | MIT | [link](https://github.com/TooTallNate/node-agent-base) |
 | `ajv` | 8.20.0 | MIT | [link](https://github.com/ajv-validator/ajv) |
 | `ajv-formats` | 3.0.1 | MIT | [link](https://github.com/ajv-validator/ajv-formats) |
