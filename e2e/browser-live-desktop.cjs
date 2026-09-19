@@ -13,6 +13,7 @@ const { createOrchestrator } = require('../services/computer-orchestrator/server
 const { buildChatComputerTools } = require('../backend/src/services/computer/chat-computer-tools');
 const { observePage } = require('../backend/src/services/computer/live-page');
 const { ensureSession } = require('../backend/src/services/computer/persistent');
+const { CHROME_DOCKER_FLAGS } = require('../backend/src/services/computer/chrome-desktop-flags');
 const handoff = require('../backend/src/services/computer/login-handoff');
 const exec = promisify(execFile);
 const listen = s => new Promise(r => s.listen(0, '127.0.0.1', r));
@@ -35,14 +36,17 @@ async function main() {
   try {
     await listen(fixture); await listen(orch.server);
     env.AGENT_COMPUTER_ORCHESTRATOR_URL = `http://127.0.0.1:${orch.server.address().port}`;
-    chromeProcess = spawn(chromium.executablePath(), ['--no-sandbox', '--no-first-run', '--no-startup-window', `--user-data-dir=${profile}`, '--remote-debugging-port=9222', '--window-position=0,0', '--window-size=1280,900'], { stdio: 'ignore' });
+    const chromeLog = fs.openSync('/tmp/browser-gate-chrome.log', 'w');
+    const desktopFlags = CHROME_DOCKER_FLAGS.split(' ').filter(flag => !flag.startsWith('--user-data-dir='));
+    chromeProcess = spawn(chromium.executablePath(), [...desktopFlags, '--no-startup-window', `--user-data-dir=${profile}`, '--remote-debugging-port=9222', '--window-position=0,0', '--window-size=1280,900'], { stdio: ['ignore', 'ignore', chromeLog] });
+    fs.closeSync(chromeLog);
     let ready = false;
     for (let i = 0; i < 40; i++) {
       try { ready = (await fetch('http://127.0.0.1:9222/json/version', { signal: AbortSignal.timeout(500) })).ok; } catch { /* bounded startup */ }
       if (ready) break;
       await new Promise(resolve => setTimeout(resolve, 250));
     }
-    assert.ok(ready, 'desktop Chrome must start its CDP endpoint');
+    assert.ok(ready, `desktop Chrome must start its CDP endpoint: ${fs.readFileSync('/tmp/browser-gate-chrome.log', 'utf8').slice(-1500)}`);
     browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
     context = browser.contexts()[0];
     assert.equal(context.pages().length, 0, 'fresh production desktop starts with no tab');
