@@ -5,7 +5,7 @@
 const { resolveOrchConfig } = require('./orch-client');
 const { rewriteCdpWs } = require('./cdp-client');
 
-async function withLivePage(session, env, signal, run) {
+async function withLivePage(session, env, signal, run, { createPage = false } = {}) {
   signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000);
   signal.throwIfAborted();
   const cfg = resolveOrchConfig(env);
@@ -27,6 +27,9 @@ async function withLivePage(session, env, signal, run) {
     for (const candidate of pages) {
       if (await candidate.evaluate(() => document.hasFocus()).catch(() => false)) { page = candidate; break; }
     }
+    // Fresh desktops start Chrome with --no-startup-window. Create only a
+    // tab in THAT existing persistent context, never a separate browser.
+    if (!page && createPage && browser.contexts()[0]) page = await browser.contexts()[0].newPage();
     if (!page) throw new Error('browser_page_missing');
     return await run(page);
   } finally {
@@ -68,7 +71,7 @@ async function navigatePage(session, url, env = process.env, signal) {
     await page.bringToFront();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
     return { ok: true, url: page.url() };
-  });
+  }, { createPage: true });
 }
 
 async function actPage(session, action, env = process.env, signal) {

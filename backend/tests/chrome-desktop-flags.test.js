@@ -69,7 +69,8 @@ describe('chrome desktop flags', () => {
     assert.match(tools, /navigatePage\(session, url/);
     const livePage = read('backend/src/services/computer/live-page.js');
     assert.match(livePage, /chromium\.connectOverCDP/);
-    assert.doesNotMatch(livePage, /chromium\.launch|\.newPage\(/);
+    assert.doesNotMatch(livePage, /chromium\.launch|browser\.newContext\(/);
+    assert.match(livePage, /browser\.contexts\(\)\[0\]\.newPage\(\)/);
     assert.doesNotMatch(route, /about:blank/);
     assert.doesNotMatch(tools, /about:blank/);
   });

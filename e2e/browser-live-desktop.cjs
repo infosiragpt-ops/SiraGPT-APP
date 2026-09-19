@@ -31,11 +31,21 @@ async function main() {
     ensureContainer: async () => ({ info: {}, reused: true }), containerIp: () => '127.0.0.1',
     execIn: async (_container, command) => exec('bash', ['-c', command], { timeout: 20000, maxBuffer: 12 * 1024 * 1024 }),
   }});
-  let context;
+  let context, browser, chromeProcess;
   try {
     await listen(fixture); await listen(orch.server);
     env.AGENT_COMPUTER_ORCHESTRATOR_URL = `http://127.0.0.1:${orch.server.address().port}`;
-    context = await chromium.launchPersistentContext(profile, { headless: false, viewport: null, args: ['--no-sandbox', '--remote-debugging-port=9222', '--window-position=0,0', '--window-size=1280,900'] });
+    chromeProcess = spawn(chromium.executablePath(), ['--no-sandbox', '--no-first-run', '--no-startup-window', `--user-data-dir=${profile}`, '--remote-debugging-port=9222', '--window-position=0,0', '--window-size=1280,900'], { stdio: 'ignore' });
+    let ready = false;
+    for (let i = 0; i < 40; i++) {
+      try { ready = (await fetch('http://127.0.0.1:9222/json/version', { signal: AbortSignal.timeout(500) })).ok; } catch { /* bounded startup */ }
+      if (ready) break;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    assert.ok(ready, 'desktop Chrome must start its CDP endpoint');
+    browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+    context = browser.contexts()[0];
+    assert.equal(context.pages().length, 0, 'fresh production desktop starts with no tab');
     const owner = { userId: 'desktop-e2e', conversationId: 'form-e2e', env };
     const tools = buildChatComputerTools(owner);
     const run = async (name, args = {}) => {
@@ -46,6 +56,7 @@ async function main() {
     };
     const url = `http://127.0.0.1:${fixture.address().port}/form`;
     await run('computer_navigate', { url });
+    assert.equal(context.pages().length, 1, 'first navigation creates a tab in the existing Chrome');
     const page = context.pages()[0];
     await page.waitForSelector('input[name=city]');
     const session = await ensureSession(owner);
@@ -82,7 +93,12 @@ async function main() {
     console.log('PASS real browser: password gate -> private user takeover -> writes refused');
     handoff.resetTakeoverForTests();
   } finally {
-    await context?.close();
+    await browser?.close();
+    if (chromeProcess && chromeProcess.exitCode === null) {
+      const exited = new Promise(resolve => chromeProcess.once('exit', resolve));
+      chromeProcess.kill();
+      await exited;
+    }
     await close(orch.server); await close(fixture);
     wm.kill();
     fs.rmSync(profile, { recursive: true, force: true });
