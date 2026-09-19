@@ -47,21 +47,19 @@ async function observePage(session, env = process.env, signal) {
       autocomplete: el.getAttribute('autocomplete') || '',
       label: el.getAttribute('aria-label') || el.labels?.[0]?.innerText || '',
     } : null;
-    const offsetX = window.screenX + Math.max(0, (window.outerWidth - window.innerWidth) / 2);
-    const offsetY = window.screenY + Math.max(0, window.outerHeight - window.innerHeight);
     const controls = Array.from(document.querySelectorAll('input,textarea,select,button,a,[role="button"],[contenteditable="true"]'))
       .flatMap((el) => {
         const r = el.getBoundingClientRect();
         if (!r.width || !r.height || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) return [];
         const m = metadata(el);
         const label = String(m.label || el.innerText || el.getAttribute('placeholder') || m.name || m.type).slice(0, 100);
-        return [{ label, type: m.type, x: Math.round(offsetX + r.left + r.width / 2), y: Math.round(offsetY + r.top + r.height / 2) }];
+        return [{ label, type: m.type, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }];
       }).slice(0, 60);
     return {
       url: location.href, title: document.title,
       text: String(document.body?.innerText || '').slice(0, 5000),
       focused: metadata(document.activeElement), controls,
-      center: { x: Math.round(offsetX + innerWidth / 2), y: Math.round(offsetY + innerHeight / 2) },
+      center: { x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) },
     };
   }));
 }
@@ -78,11 +76,7 @@ async function actPage(session, action, env = process.env, signal) {
   return withLivePage(session, env, signal, async (page) => {
     await page.bringToFront();
     if (action.type === 'click') {
-      const origin = await page.evaluate(() => ({
-        x: screenX + Math.max(0, (outerWidth - innerWidth) / 2),
-        y: screenY + Math.max(0, outerHeight - innerHeight),
-      }));
-      await page.mouse.click(action.x - origin.x, action.y - origin.y, { button: action.button || 'left' });
+      await page.mouse.click(action.x, action.y, { button: action.button || 'left' });
     } else if (action.type === 'type') {
       await page.keyboard.insertText(action.text);
     } else if (action.type === 'keypress') {

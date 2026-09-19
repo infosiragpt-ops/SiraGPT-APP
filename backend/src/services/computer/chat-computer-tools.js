@@ -277,7 +277,7 @@ function buildLiveClickTool(owner) {
   return {
     name: 'computer_click',
     description:
-      'Haz clic en coordenadas (x, y) del navegador EN VIVO de este chat — el mismo que el usuario ve en el panel lateral. Verifica con computer_screenshot después.',
+      'Haz clic en las coordenadas (x, y) del contenido de la página (viewport) que devuelve computer_screenshot — el mismo navegador que el usuario ve en el panel lateral. Verifica con computer_screenshot después.',
     parameters: {
       type: 'object',
       properties: {
