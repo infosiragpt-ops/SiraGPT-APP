@@ -76,7 +76,19 @@ async function actPage(session, action, env = process.env, signal) {
   return withLivePage(session, env, signal, async (page) => {
     await page.bringToFront();
     if (action.type === 'click') {
-      await page.mouse.click(action.x, action.y, { button: action.button || 'left' });
+      // A newly created Linux window may have DOM geometry before Chromium's
+      // compositor can accept a raw mouse event. Use Playwright's actionability
+      // checks on the observed hit target; never force a click through overlays.
+      const hit = await page.evaluateHandle(({ x, y }) => document.elementFromPoint(x, y), action);
+      try {
+        const element = hit.asElement();
+        if (!element) throw new Error('browser_target_not_visible');
+        const offset = await element.evaluate((el, point) => {
+          const rect = el.getBoundingClientRect();
+          return { x: point.x - rect.left - el.clientLeft, y: point.y - rect.top - el.clientTop };
+        }, action);
+        await element.click({ position: offset, button: action.button || 'left', timeout: 8000 });
+      } finally { await hit.dispose(); }
     } else if (action.type === 'type') {
       await page.keyboard.insertText(action.text);
     } else if (action.type === 'keypress') {
