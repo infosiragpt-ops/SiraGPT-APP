@@ -825,10 +825,17 @@ jobs:
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Install real desktop input dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox
+
+      - name: Browser tools operate a real Chromium form (hard gate)
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' node e2e/browser-live-desktop.cjs
+
       - name: Boot, pre-warm, and run critical-path e2e (hard gate)
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3005
           NEXT_PUBLIC_API_URL: /api
+          NEXT_PUBLIC_AGENT_COMPUTER: '1'
           CI: '1'
         run: |
           npm run dev -- --port 3005 > /tmp/next-e2e.log 2>&1 &
@@ -847,7 +854,7 @@ jobs:
           # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
           # and runs against this pre-warmed instance.
           STATUS=0
-          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts e2e/document-task-error-recovery.spec.ts || STATUS=$?
+          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts e2e/document-task-error-recovery.spec.ts e2e/chat-integrated-browser.spec.ts e2e/chat-browser-live-progress.spec.ts e2e/chat-computer-login-handoff.spec.ts || STATUS=$?
           kill "$SERVER_PID" 2>/dev/null || true
           exit $STATUS
 
@@ -859,6 +866,7 @@ jobs:
           path: |
             playwright-report/
             test-results/
+            /tmp/browser-gate-*.png
           if-no-files-found: ignore
           retention-days: 7
 

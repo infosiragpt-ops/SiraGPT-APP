@@ -6332,6 +6332,7 @@ function ChatInterfaceContent() {
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
   const [computerBrowserMode, setComputerBrowserMode] = React.useState(false);
   const [computerNavigateUrl, setComputerNavigateUrl] = React.useState("");
+  const [computerAgentNavigating, setComputerAgentNavigating] = React.useState(false);
   const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
   const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
   const [loginHandoffKind, setLoginHandoffKind] = React.useState("");
@@ -12513,7 +12514,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }).catch(() => undefined);
   }, [setCurrentChat]);
 
-  const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string }) => {
+  const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string; agentNavigating?: boolean }) => {
     setShowAudioPanel(false);
     setActiveSearchActivityId(null);
     setDocumentPreviewUrl(null);
@@ -12526,6 +12527,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     closeArtifactPanel();
     setCoworkPanelOpen(false);
     setComputerBrowserMode(Boolean(opts?.browser));
+    setComputerAgentNavigating(Boolean(opts?.agentNavigating));
     if (opts?.url) setComputerNavigateUrl(opts.url);
     setComputerPanelOpen(true);
     if (!currentChatIdRef.current) {
@@ -12555,7 +12557,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const id = String(detail.conversationId || "").trim();
       const openId = String(currentChatIdRef.current || "").trim();
       if (id && openId && id !== openId) return;
-      openComputerPanel({ browser: true, url: detail.url });
+      openComputerPanel({ browser: true, url: detail.url, agentNavigating: true });
     };
     window.addEventListener(COMPUTER_NAVIGATE_WINDOW_EVENT, onNavigate as EventListener);
     return () => window.removeEventListener(COMPUTER_NAVIGATE_WINDOW_EVENT, onNavigate as EventListener);
@@ -14482,6 +14484,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   startExpanded={computerBrowserMode || loginHandoffActive}
                   initialDock={computerBrowserMode ? "browser" : "desktop"}
                   navigateUrl={computerNavigateUrl}
+                  agentNavigating={computerAgentNavigating}
                   onClose={() => {
                     setComputerPanelOpen(false)
                     setComputerBrowserMode(false)
