@@ -22,7 +22,7 @@ async function main() {
   assert.ok(process.env.DISPLAY, 'Real desktop gate requires Xvfb; never skip silently');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-browser-gate-'));
   const wm = spawn('openbox', [], { stdio: 'ignore' });
-  const env = { NODE_ENV: 'test', SIRAGPT_AGENT_COMPUTER: '1', AGENT_COMPUTER_API_KEY: 'desktop-fixture-only' };
+  const env = { NODE_ENV: 'test', SIRAGPT_AGENT_COMPUTER: '1', AGENT_COMPUTER_API_KEY: require('node:crypto').randomUUID() };
   const fixture = http.createServer((_req, res) => {
     res.setHeader('Content-Type', 'text/html');
     res.end(`<!doctype html><html><title>Formulario local de prueba</title><style>body{margin:40px;font:18px sans-serif}input,button{display:block;padding:12px;margin:12px 0}#long{margin-top:1100px}#wide{width:2400px;height:60px}</style><form onsubmit="event.preventDefault();document.querySelector('output').textContent='Guardado: '+this.city.value+' / '+this.subject.value"><label>Ciudad<input name="city"></label><label>Asunto<input name="subject"></label><button>Guardar</button></form><output></output><div id="long">Final del formulario</div><div id="wide">Desplazamiento horizontal</div><button id="secret" onclick="document.querySelector('#wall').hidden=false;document.querySelector('#pw').focus()">Entrar</button><div id="wall" hidden><h2>Inicia sesión</h2><label>Contraseña<input id="pw" type="password" value="fixture-private-do-not-echo"></label></div></html>`);
@@ -54,11 +54,14 @@ async function main() {
     assert.ok(city, 'real observation must identify the visible form field');
     await run('computer_click', { x: city.x, y: city.y });
     await run('computer_type', { text: 'Lima' });
+    assert.equal(await page.locator('[name=city]').inputValue(), 'Lima', 'click/type target the observed field');
     await run('computer_keypress', { key: 'Tab' });
     await run('computer_type', { text: 'Solicitud' });
+    assert.equal(await page.locator('[name=subject]').inputValue(), 'Solicitud', 'Tab advances to next field');
     await run('computer_keypress', { key: 'Tab', modifiers: ['Shift'] });
     await run('computer_keypress', { key: 'a', modifiers: ['Control'] });
     await run('computer_type', { text: 'Cusco' });
+    assert.equal(await page.locator('[name=city]').inputValue(), 'Cusco', 'Shift+Tab and Ctrl+A replace original field');
     await run('computer_keypress', { key: 'Enter' });
     await page.waitForFunction(() => document.querySelector('output').textContent === 'Guardado: Cusco / Solicitud');
     const shot = await run('computer_screenshot');

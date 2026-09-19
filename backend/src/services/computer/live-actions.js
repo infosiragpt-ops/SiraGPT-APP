@@ -9,9 +9,9 @@
  * driver, while `computer_navigate` opened URLs in the real per-chat
  * container browser. Clicks and keystrokes therefore never landed where
  * the user was watching, so form-filling "worked" for the model but did
- * nothing visible. These helpers forward every action to the live session
- * through the same orchestrator endpoint the `/agent-computer/action`
- * route uses, with the same login-handoff refusals.
+ * nothing visible. These helpers use the live session's authenticated CDP
+ * proxy for browser input and its orchestrator endpoint for screenshots,
+ * with fresh page observations and the same login-handoff refusals.
  *
  * Security preserved:
  * - Conversation isolation via persistent.ensureSession (proven isolation).
@@ -83,7 +83,7 @@ function orchHeaders(env) {
 }
 
 /**
- * Forward one mapped action to the live orchestrator session.
+ * Forward one mapped action to the live browser session.
  * @returns {Promise<{data: object, action: object}>}
  */
 async function forwardAction({ session, action, env, signal, timeoutMs }) {
@@ -93,6 +93,12 @@ async function forwardAction({ session, action, env, signal, timeoutMs }) {
     signal,
   });
   const mappedAction = (mapped && mapped.actions && mapped.actions[0]) || action;
+  if (mappedAction.type !== 'screenshot') {
+    // Playwright uses the authenticated CDP proxy of this exact desktop.
+    // No orchestrator upgrade, separate browser or invisible driver needed.
+    const data = await livePage.actPage(session, mappedAction, env, signal);
+    return { data, action: mappedAction };
+  }
   const { orch, headers } = orchHeaders(env);
   const target = `${orch.url}/sessions/${encodeURIComponent(session.sessionId)}/agent/action`;
   let res;

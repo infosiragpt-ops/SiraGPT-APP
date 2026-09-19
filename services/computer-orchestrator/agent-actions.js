@@ -68,13 +68,9 @@ function buildActionCommand(body) {
     case 'scroll': {
       const dy = Number(action.scrollY || 0);
       const dx = Number(action.scrollX || 0);
-      const commands = [];
-      for (const [amount, button] of [[dy, dy < 0 ? 4 : 5], [dx, dx < 0 ? 6 : 7]]) {
-        if (!amount) continue;
-        const repeats = Math.min(40, Math.max(1, Math.round(Math.abs(amount) / 80)));
-        commands.push(`xdotool click --repeat ${repeats} --delay 30 ${button}`);
-      }
-      return `xdotool mousemove ${x} ${y} && ${commands.join(' && ') || 'true'}`;
+      const vert = dy < 0 ? 4 : 5;
+      const repeats = Math.min(20, Math.max(1, Math.round(Math.abs(dy || dx) / 80) || 3));
+      return `xdotool mousemove ${x} ${y} click --repeat ${repeats} ${vert}`;
     }
     case 'type':
       return `xdotool type --delay 12 -- ${shellQuote(action.text || '')}`;
@@ -83,7 +79,7 @@ function buildActionCommand(body) {
         .map(xdoKey)
         .filter(Boolean);
       if (!keys.length) return 'true';
-      return `xdotool key --clearmodifiers ${shellQuote(keys.join('+'))}`;
+      return `xdotool key ${keys.map(shellQuote).join(' ')}`;
     }
     case 'drag': {
       const path = Array.isArray(action.path) ? action.path : [];

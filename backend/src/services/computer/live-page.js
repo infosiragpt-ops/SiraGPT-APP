@@ -71,4 +71,28 @@ async function navigatePage(session, url, env = process.env, signal) {
   });
 }
 
-module.exports = { observePage, navigatePage };
+async function actPage(session, action, env = process.env, signal) {
+  return withLivePage(session, env, signal, async (page) => {
+    await page.bringToFront();
+    if (action.type === 'click') {
+      const origin = await page.evaluate(() => ({
+        x: screenX + Math.max(0, (outerWidth - innerWidth) / 2),
+        y: screenY + Math.max(0, outerHeight - innerHeight),
+      }));
+      await page.mouse.click(action.x - origin.x, action.y - origin.y, { button: action.button || 'left' });
+    } else if (action.type === 'type') {
+      await page.keyboard.insertText(action.text);
+    } else if (action.type === 'keypress') {
+      await page.keyboard.press(action.keys.join('+'));
+    } else if (action.type === 'scroll') {
+      const center = await page.evaluate(() => ({ x: innerWidth / 2, y: innerHeight / 2 }));
+      await page.mouse.move(center.x, center.y);
+      await page.mouse.wheel(action.scrollX || 0, action.scrollY || 0);
+    } else {
+      throw new Error('browser_action_unsupported');
+    }
+    return { ok: true, type: action.type };
+  });
+}
+
+module.exports = { observePage, navigatePage, actPage };

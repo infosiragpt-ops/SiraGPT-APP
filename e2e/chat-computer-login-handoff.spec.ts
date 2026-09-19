@@ -5,6 +5,7 @@ import { expect, test, type Page, type Route } from "@playwright/test"
  * Not the critical UI gate. APIs are stubbed. Never captures credentials.
  */
 test.describe.configure({ timeout: 240_000 })
+test.use({ locale: "es-PE" })
 
 const user = {
   id: "login-handoff-user",
