@@ -123,7 +123,9 @@ test('transcription skill uses owner-resolved media, cleans it, and can save TXT
     },
   };
   const result = await transcribeSkill.execute({ language: 'es', saveTranscript: true }, ctx);
-  assert.deepEqual(request, { fileId: undefined, allowedKinds: ['audio', 'video'], maxSourceBytes: 1234 });
+  // Hour-long media welcome: the source cap is disk/time (2 GB default), not
+  // the cloud request cap — the mock's AUDIO_MAX_FILE_BYTES no longer gates it.
+  assert.deepEqual(request, { fileId: undefined, allowedKinds: ['audio', 'video'], maxSourceBytes: 2 * 1024 * 1024 * 1024 });
   assert.equal(cleanupCalls, 1);
   assert.equal(providerOptions.openai, undefined);
   assert.equal(result.transcript, 'Hola, esta es una transcripcion profesional.');
@@ -249,4 +251,106 @@ test('audio transcriber provider seam preserves language, prompt, segments, and 
   assert.equal(result.method, 'whisper');
   assert.equal(result.transcript, 'Esta transcripcion contiene suficiente texto.');
   assert.equal(result.segments.length, 1);
+});
+
+function longVideoCtx(events, { sizeBytes = 800 * 1024 * 1024, transcribeResult = null, onProgress = null } = {}) {
+  const transcriber = {
+    async transcribe(filePath, mimeType, filename, options) {
+      if (typeof options.onProgress === 'function' && onProgress) {
+        options.onProgress({ stage: 'transcribe', completed: 1, total: 6 });
+      }
+      return transcribeResult || {
+        method: 'local-whisper',
+        transcript: 'Transcripcion de una hora con suficientes caracteres para superar el umbral.',
+        segments: [
+          { start: 0, end: 4.5, text: 'Bienvenidos a la clase' },
+          { start: 5, end: 9.25, text: 'Hoy veremos transcripcion larga' },
+        ],
+        model: 'base',
+        language: 'es',
+      };
+    },
+  };
+  return {
+    ...artifactContext(events),
+    ...(onProgress ? { onProgress } : {}),
+    mediaRuntime: {
+      async resolveOwnedMediaSource(options) {
+        if (options.maxSourceBytes < sizeBytes) {
+          throw new Error(`rejected at ${options.maxSourceBytes}`);
+        }
+        return {
+          localPath: '/private/video.mp4',
+          source: { fileId: 'video-1', filename: 'WhatsApp Video 2026-09-18 at 4.30.28 PM.mp4', mimeType: 'video/mp4', sizeBytes },
+          cleanup: async () => {},
+        };
+      },
+    },
+    audioTranscriber: transcriber,
+  };
+}
+
+test('transcription skill accepts hour-long videos and saves the SRT pack', async () => {
+  const events = [];
+  const result = await transcribeSkill.execute(
+    { format: 'srt', saveTranscript: true },
+    longVideoCtx(events),
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.format, 'srt');
+  assert.ok(result.srt.includes('00:00:00,000 --> 00:00:04,500'));
+  assert.ok(result.srt.includes('Bienvenidos a la clase'));
+  assert.equal(result.artifact.kind, 'transcript');
+  assert.match(result.artifact.filename, /-transcript\.srt$/);
+  assert.equal(result.srtArtifact, null, 'no SRT supplement when SRT is the primary format');
+  assert.ok(events.some((e) => e.type === 'file_artifact'));
+});
+
+test('transcription skill saves VTT primary plus SRT supplement', async () => {
+  const events = [];
+  const result = await transcribeSkill.execute(
+    { format: 'vtt', saveTranscript: true },
+    longVideoCtx(events),
+  );
+  assert.equal(result.format, 'vtt');
+  assert.ok(result.vtt.startsWith('WEBVTT'));
+  assert.match(result.artifact.filename, /-transcript\.vtt$/);
+  assert.ok(result.srtArtifact, 'SRT supplement saved alongside');
+  assert.match(result.srtArtifact.filename, /-transcript\.srt$/);
+  assert.equal(events.filter((e) => e.type === 'file_artifact').length, 2);
+});
+
+test('transcription skill saves JSON with segments and forwards progress', async () => {
+  const events = [];
+  const progress = [];
+  const saved = [];
+  const ctx = longVideoCtx(events, { onProgress: (e) => progress.push(e) });
+  const origSave = ctx.saveArtifact;
+  ctx.saveArtifact = (input) => { saved.push(input); return origSave(input); };
+  const result = await transcribeSkill.execute(
+    { format: 'json', saveTranscript: true },
+    ctx,
+  );
+  assert.equal(result.format, 'json');
+  assert.match(result.artifact.filename, /-transcript\.json$/);
+  const payload = JSON.parse(Buffer.from(saved[0].base64, 'base64').toString('utf8'));
+  assert.equal(payload.text, 'Transcripcion de una hora con suficientes caracteres para superar el umbral.');
+  assert.equal(payload.segments.length, 2);
+  assert.equal(payload.language, 'es');
+  assert.deepEqual(progress, [{ stage: 'transcribe', completed: 1, total: 6 }]);
+  assert.ok(result.srtArtifact, 'JSON pack also carries SRT');
+});
+
+test('transcription skill falls back to TXT when timestamps are missing', async () => {
+  const events = [];
+  const result = await transcribeSkill.execute(
+    { format: 'srt', saveTranscript: true },
+    longVideoCtx(events, {
+      transcribeResult: { method: 'whisper', transcript: 'Texto sin segmentos con longitud suficiente.', segments: [] },
+    }),
+  );
+  assert.equal(result.format, 'txt');
+  assert.equal(result.formatFallback, 'txt');
+  assert.equal(result.srt, null);
+  assert.match(result.artifact.filename, /-transcript\.txt$/);
 });

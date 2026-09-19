@@ -79,6 +79,76 @@ const DEFAULT_SEGMENT_SECONDS = 600;
 const SEGMENT_AUDIO_BITRATE = '48k';
 const KEYISH_RE = /\bsk-[A-Za-z0-9._-]{3,}\b|\bBearer\s+\S+|OPENAI_API_KEY/i;
 
+/** Clamp to a finite, non-negative millisecond timestamp. */
+function clampTimestampSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+/** 3723.5 → "01:02:03,500" (SRT) or "01:02:03.500" (VTT). */
+function formatTimestamp(seconds, separator) {
+  const totalMs = Math.max(0, Math.round(clampTimestampSeconds(seconds) * 1000));
+  const ms = totalMs % 1000;
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const secs = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const mins = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return `${pad2(hours)}:${pad2(mins)}:${pad2(secs)}${separator}${String(ms).padStart(3, '0')}`;
+}
+
+function cleanSegmentText(value) {
+  return String(value || '').replace(/\r/g, '').trim();
+}
+
+/** Normalize raw provider segments: drop empties, fix inverted ranges. */
+function normalizeSegments(segments) {
+  const out = [];
+  for (const raw of Array.isArray(segments) ? segments : []) {
+    const text = cleanSegmentText(raw?.text);
+    if (!text) continue;
+    const start = clampTimestampSeconds(raw?.start);
+    let end = clampTimestampSeconds(raw?.end);
+    if (!(end > start)) end = start + 0.5;
+    out.push({ start, end, text });
+  }
+  return out;
+}
+
+/** SubRip subtitles. Empty string when there are no usable segments. */
+function buildSrt(segments) {
+  const list = normalizeSegments(segments);
+  return list.map((seg, index) => [
+    String(index + 1),
+    `${formatTimestamp(seg.start, ',')} --> ${formatTimestamp(seg.end, ',')}`,
+    seg.text,
+    '',
+  ].join('\n')).join('\n').trim();
+}
+
+/** WebVTT subtitles. Empty string when there are no usable segments. */
+function buildVtt(segments) {
+  const list = normalizeSegments(segments);
+  if (!list.length) return '';
+  return ['WEBVTT', '', ...list.map((seg) => [
+    `${formatTimestamp(seg.start, '.')} --> ${formatTimestamp(seg.end, '.')}`,
+    seg.text,
+    '',
+  ].join('\n'))].join('\n').trim() + '\n';
+}
+
+/** Best-effort progress relay for long jobs; never breaks transcription. */
+function emitProgress(options, event) {
+  try {
+    if (options && typeof options.onProgress === 'function') options.onProgress(event);
+  } catch { /* progress is best-effort */ }
+}
+
 function envOf(options = {}) {
   return options.env || process.env;
 }
@@ -362,9 +432,11 @@ async function transcribeCloud(provider, filePath, mimeType, fileName, fileSize,
   try {
     const texts = [];
     const stitched = [];
+    emitProgress(options, { stage: 'segments', completed: 0, total: segments.length });
     for (const seg of segments) {
       if (options.signal && options.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
       const part = await transcribeCloudFile(provider, seg.path, 'audio/mpeg', `segment-${seg.index + 1}.mp3`, options, language, prompt);
+      emitProgress(options, { stage: 'transcribe', completed: seg.index + 1, total: segments.length });
       const text = String(part.text || '').trim();
       if (text) texts.push(text);
       for (const s of part.segments || []) {
@@ -524,6 +596,10 @@ module.exports = {
   providerOrder,
   segmentForCloud,
   transcribeCloud,
+  buildSrt,
+  buildVtt,
+  formatTimestamp,
+  normalizeSegments,
   DEFAULT_META_TRANSCRIBE_MODEL,
   DEFAULT_SEGMENT_SECONDS,
   transcribe,

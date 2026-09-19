@@ -49,7 +49,7 @@ test('no OPENAI_API_KEY uses the local path, not a missing-key placeholder', asy
 
 test('OpenAI 401 falls back to local and never leaks sk-proj or the 401 body', async (t) => {
   const filePath = tempAudio(t);
-  const fakeKeyShape = 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_xxxxxx';
+  const fakeKeyShape = 'sk-proj-TESTKEY_x1';
   let localCalls = 0;
   const result = await audioTranscriber.transcribe(filePath, 'audio/ogg', 'nota.ogg', {
     env: { OPENAI_API_KEY: fakeKeyShape, WHISPER_LANGUAGE: 'es' },
@@ -79,7 +79,7 @@ test('OpenAI 401 falls back to local and never leaks sk-proj or the 401 body', a
 
 test('when local also fails the placeholder is Spanish and secret-safe', async (t) => {
   const filePath = tempAudio(t);
-  const fakeKeyShape = 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_yyyyyy';
+  const fakeKeyShape = 'sk-proj-TESTKEY_y1';
   const result = await audioTranscriber.transcribe(filePath, 'audio/opus', 'ptt.opus', {
     env: { OPENAI_API_KEY: fakeKeyShape },
     openai: {
@@ -112,7 +112,7 @@ test('aborted OpenAI calls do not fall back to local', async (t) => {
   controller.abort();
   await assert.rejects(
     audioTranscriber.transcribe(filePath, 'audio/ogg', 'nota.ogg', {
-      env: { OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_abort' },
+      env: { OPENAI_API_KEY: 'sk-proj-TESTKEY_abort' },
       signal: controller.signal,
       openai: {
         audio: {
@@ -136,7 +136,7 @@ test('aborted OpenAI calls do not fall back to local', async (t) => {
 });
 
 test('sanitizeProviderError redacts key-shaped provider text', () => {
-  const err = new Error('401 Incorrect API key provided: sk-proj-TESTKEY_NOT_A_REAL_SECRET_zzzzzz');
+  const err = new Error('401 Incorrect API key provided: sk-proj-TESTKEY_z1');
   err.status = 401;
   const sanitized = audioTranscriber.sanitizeProviderError(err);
   assert.doesNotMatch(sanitized, /sk-proj/);
@@ -193,7 +193,7 @@ test('when every cloud provider fails, a big file still reaches local whisper (n
   const filePath = tempAudio(t, 'clase.mp4');
   let localCalls = 0;
   const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase.mp4', {
-    env: { MODEL_API_KEY: 'meta-test-key', OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_x' },
+    env: { MODEL_API_KEY: 'meta-test-key', OPENAI_API_KEY: 'sk-proj-TESTKEY_m1' },
     maxFileBytes: 4,
     segmentAudio: fakeSegments(t, 1),
     createFile: (buffer, name, mime) => ({ name, mime }),
@@ -209,7 +209,7 @@ test('when every cloud provider fails, a big file still reaches local whisper (n
 test('TRANSCRIBE_PROVIDERS orders the ladder and can skip the cloud entirely', async (t) => {
   assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'xai', 'meta', 'local']);
   assert.deepEqual(audioTranscriber.providerOrder({ env: { TRANSCRIBE_PROVIDERS: 'meta, local' } }), ['meta', 'local']);
-  const providers = audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_y', TRANSCRIBE_PROVIDERS: 'meta,openai,local' } });
+  const providers = audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', OPENAI_API_KEY: 'sk-proj-TESTKEY_m2', TRANSCRIBE_PROVIDERS: 'meta,openai,local' } });
   assert.deepEqual(providers.map((p) => p.name), ['meta', 'openai']);
   assert.deepEqual(audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', TRANSCRIBE_META_DISABLED: '1' } }).map((p) => p.name), []);
 
@@ -222,4 +222,48 @@ test('TRANSCRIBE_PROVIDERS orders the ladder and can skip the cloud entirely', a
   });
   assert.equal(cloudCalls, 0);
   assert.equal(result.method, 'local-whisper');
+});
+
+test('subtitle builders emit valid SRT/VTT with renumbering and cleanup', () => {
+  assert.equal(audioTranscriber.formatTimestamp(0, ','), '00:00:00,000');
+  assert.equal(audioTranscriber.formatTimestamp(3723.5, ','), '01:02:03,500');
+  assert.equal(audioTranscriber.formatTimestamp(3723.5, '.'), '01:02:03.500');
+  assert.equal(audioTranscriber.formatTimestamp(-4, ','), '00:00:00,000');
+  const srt = audioTranscriber.buildSrt([
+    { start: 0, end: 2.5, text: 'Hola' },
+    { start: 3, end: 3, text: 'Mundo' },
+    { start: 5, end: 4, text: 'invertido' },
+    { start: 7, end: 8, text: '   ' },
+  ]);
+  assert.equal(srt, [
+    '1', '00:00:00,000 --> 00:00:02,500', 'Hola', '',
+    '2', '00:00:03,000 --> 00:00:03,500', 'Mundo', '',
+    '3', '00:00:05,000 --> 00:00:05,500', 'invertido',
+  ].join('\n'));
+  const vtt = audioTranscriber.buildVtt([{ start: 61.25, end: 63, text: 'Minuto uno' }]);
+  assert.ok(vtt.startsWith('WEBVTT\n\n'));
+  assert.ok(vtt.includes('00:01:01.250 --> 00:01:03.000'));
+  assert.equal(audioTranscriber.buildSrt([]), '');
+  assert.equal(audioTranscriber.buildSrt(null), '');
+  assert.equal(audioTranscriber.buildVtt([]), '');
+});
+
+test('segmented cloud transcription reports progress per segment', async (t) => {
+  const filePath = tempAudio(t, 'clase-larga.mp4');
+  const events = [];
+  const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase-larga.mp4', {
+    env: { MODEL_API_KEY: 'meta-test-key' },
+    maxFileBytes: 4,
+    segmentAudio: fakeSegments(t, 4),
+    createFile: (buffer, name, mime) => ({ name, mime }),
+    onProgress: (event) => events.push(event),
+    metaClient: {
+      audio: { transcriptions: { async create() { return { text: 'parte larga con suficientes caracteres', segments: [] }; } } },
+    },
+    async localTranscribe() { throw new Error('local must not run when the cloud ladder succeeds'); },
+  });
+  assert.equal(result.method, 'whisper');
+  assert.deepEqual(events.map((e) => e.stage), ['segments', 'transcribe', 'transcribe', 'transcribe', 'transcribe']);
+  assert.deepEqual(events.map((e) => e.completed), [0, 1, 2, 3, 4]);
+  assert.ok(events.every((e) => e.total === 4));
 });
