@@ -47,6 +47,7 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 
 async function mockApi(page: Page, activity: () => ActivityState) {
   const activityHits: string[] = []
+  const navigated: string[] = []
 
   await page.addInitScript(() => {
     localStorage.setItem("auth-token", "live-progress-token")
@@ -91,6 +92,7 @@ async function mockApi(page: Page, activity: () => ActivityState) {
     }
     if (path === "/agent-computer/navigate" && request.method() === "POST") {
       const body = (request.postDataJSON() || {}) as { url?: string }
+      navigated.push(String(body.url || ""))
       return fulfillJson(route, { ok: true, url: body.url, conversationId: chat.id })
     }
     if (path === "/agent-computer/action" && request.method() === "POST") {
@@ -109,7 +111,7 @@ async function mockApi(page: Page, activity: () => ActivityState) {
 
   await page.route("**/api/**", handleApiRoute)
   await page.route("http://localhost:5000/**", handleApiRoute)
-  return { activityHits }
+  return { activityHits, navigated }
 }
 
 async function openPanel(page: Page) {
@@ -117,7 +119,7 @@ async function openPanel(page: Page) {
   await page.goto("/agentes?id=live-progress-chat&browser=1", { waitUntil: "domcontentloaded", timeout: 120_000 })
   const panel = page.getByTestId("chat-agent-computer-panel")
   await expect(panel).toBeVisible({ timeout: 60_000 })
-  await expect(panel).toHaveAttribute("data-chat-computer-view", "compact")
+  await expect(panel).toHaveAttribute("data-chat-computer-view", "expanded")
   return panel
 }
 
@@ -136,7 +138,7 @@ test("chip shows full live progress", async ({ page }) => {
   await openPanel(page)
   const chip = page.getByTestId("chat-computer-activity")
   await expect(chip).toBeVisible({ timeout: 30_000 })
-  await expect(chip).toContainText("En vivo")
+  await expect(chip).toContainText("Navegador")
   await expect(chip).toContainText("www.ejemplo.com")
   await expect(chip).toContainText("clic")
   await expect(chip).toContainText("paso 3")
@@ -147,7 +149,7 @@ test("chip shows url-only progress", async ({ page }) => {
   await openPanel(page)
   const chip = page.getByTestId("chat-computer-activity")
   await expect(chip).toBeVisible({ timeout: 30_000 })
-  await expect(chip).toContainText("En vivo")
+  await expect(chip).toContainText("Navegador")
   await expect(chip).toContainText("google.com")
 })
 
@@ -189,6 +191,8 @@ test("panel polls the activity endpoint per chat", async ({ page }) => {
 test("agent navigate auto-expands the panel once", async ({ page }) => {
   await mockApi(page, () => ({ activity: null, url: null, title: "" }))
   const panel = await openPanel(page)
+  await page.getByTestId("chat-browser-button").click()
+  await expect(panel).toHaveCount(0)
   await page.evaluate(() => {
     window.dispatchEvent(
       new CustomEvent("siragpt:computer-navigate", {
@@ -218,4 +222,29 @@ test("manual collapse wins over later navigates", async ({ page }) => {
   await navigate("https://www.ejemplo.com/b")
   await page.waitForTimeout(2_000)
   await expect(panel).toHaveAttribute("data-chat-computer-view", "compact")
+})
+
+
+test("agent navigation and collapsing never replay a website request", async ({ page }) => {
+  const { navigated } = await mockApi(page, () => ({ activity: null, url: null, title: "" }))
+  await openPanel(page)
+  await expect.poll(() => navigated.length).toBeGreaterThan(0)
+  const before = navigated.length
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent("siragpt:computer-navigate", {
+    detail: { url: "https://example.com/filled-form", conversationId: "live-progress-chat", tool: "computer_navigate" },
+  })))
+  await expect(page.getByTestId("integrated-browser-url").first()).toHaveValue("https://example.com/filled-form")
+  await page.getByTestId("chat-computer-collapse").click()
+  await page.getByTestId("chat-computer-expand").click()
+  await expect(page.getByTestId("chat-computer-live-desktop")).toBeVisible()
+  expect(navigated.length).toBe(before)
+})
+
+test("finished activity clears stale site and step", async ({ page }) => {
+  let active = true
+  await mockApi(page, () => active ? { activity: { step: 3, lastAction: "computer_click", lastUrl: "https://example.com" }, url: "https://example.com", title: "" } : { activity: null, url: null, title: "" })
+  await openPanel(page)
+  await expect(page.getByTestId("chat-computer-activity")).toContainText("paso 3")
+  active = false
+  await expect(page.getByTestId("chat-computer-activity")).toHaveCount(0, { timeout: 15000 })
 })

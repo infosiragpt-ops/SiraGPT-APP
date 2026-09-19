@@ -398,7 +398,7 @@ router.get('/activity', requireFlag, authenticateToken, async (req, res) => {
     requireProvenIsolation(identity);
     const { getActivity } = require('../services/computer/live-actions');
     const persistent = require('../services/computer/persistent');
-    const activity = getActivity(identity.conversationId);
+    const activity = getActivity(identity.sessionKey);
     let peek = null;
     try {
       peek = await persistent.peekExisting(identity);

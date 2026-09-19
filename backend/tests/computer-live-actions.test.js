@@ -1,234 +1,132 @@
-'use strict';
-
-/**
- * Tests for the Claude-style live browser: chat computer tools act on the
- * SAME per-chat container browser the user watches (live-actions.js), plus
- * the new computer_scroll / computer_keypress tools and the side-panel
- * activity feed.
- *
- * Fully offline: persistent session, login-handoff verdicts and the
- * orchestrator HTTP layer are stubbed. The action mapper stays real so
- * coordinate clamping and key normalisation are genuinely exercised.
- */
-
-const { describe, test, beforeEach, afterEach } = require('node:test');
+ 'use strict';
+const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('path');
-
-const SERVICE_DIR = path.resolve(__dirname, '../src/services');
-const COMPUTER_DIR = path.join(SERVICE_DIR, 'computer');
-
-// ── Stubs (registered before loading the units under test) ────────────────
-
-const fetchCalls = [];
-let fetchHandler = null;
-const realFetch = global.fetch;
-global.fetch = async (url, opts) => {
-  fetchCalls.push({ url: String(url), body: opts && opts.body ? String(opts.body) : '' });
-  if (fetchHandler) return fetchHandler(url, opts);
-  return { ok: true, status: 200, json: async () => ({ ok: true }) };
-};
-
-let refuseNext = { refuse: false };
-const loginHandoffStub = {
-  refuseAgentType: () => refuseNext,
-  detectLoginGate: () => ({ site: 'test', kind: 'password' }),
-  beginTakeover: () => ({ event: 'takeover' }),
-  getTakeover: () => ({ active: true }),
-  loginHandoffToolResult: (gate) => ({ ok: false, loginHandoff: true, site: gate && gate.site }),
-  waitUntilReleased: async () => ({ released: true }),
-  loginHandoffResumeResult: () => ({ ok: true, resumed: true }),
-};
-
-const persistentStub = {
-  ensureSession: async ({ userId, conversationId }) => ({
-    sessionId: 'sess-1',
-    userId,
-    conversationId,
-  }),
-  peekPage: async () => ({ url: 'https://ejemplo.com/form', title: 'Formulario', text: 'Nombre:' }),
-};
-
-require.cache[require.resolve(path.join(COMPUTER_DIR, 'login-handoff'))] = { exports: loginHandoffStub };
-require.cache[require.resolve(path.join(COMPUTER_DIR, 'persistent'))] = { exports: persistentStub };
-
-const liveActions = require(path.join(COMPUTER_DIR, 'live-actions'));
-const chatComputer = require(path.join(COMPUTER_DIR, 'chat-computer-tools'));
-
-const TEST_ENV = { SIRAGPT_AGENT_COMPUTER: '1', NODE_ENV: 'test' };
-
-function owner() {
-  return { userId: 'user-1', conversationId: 'chat-1', env: TEST_ENV };
-}
-
+const { createOrchestrator } = require('../../services/computer-orchestrator/server');
+const livePage = require('../src/services/computer/live-page');
+const handoff = require('../src/services/computer/login-handoff');
+const live = require('../src/services/computer/live-actions');
+const chat = require('../src/services/computer/chat-computer-tools');
+const { resolveSessionIdentity } = require('../src/services/computer/member-key');
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+let orch, env, commands = [], page, fail = false, shot = PNG;
+const originalObserve = livePage.observePage;
+before(async () => {
+  env = { NODE_ENV: 'test', SIRAGPT_AGENT_COMPUTER: '1', AGENT_COMPUTER_API_KEY: 'isolated-test-only', AGENT_COMPUTER_MAX_DESKTOPS: '50' };
+  orch = createOrchestrator({ driver: 'fake', env, execImpl: async (container, command) => {
+    commands.push({ container, command });
+    if (fail) throw new Error('execution failed');
+    return { stdout: command.includes('import -window') ? shot : '', stderr: '' };
+  }});
+  await new Promise(r => orch.server.listen(0, '127.0.0.1', r));
+  env.AGENT_COMPUTER_ORCHESTRATOR_URL = `http://127.0.0.1:${orch.server.address().port}`;
+  livePage.observePage = async () => page;
+});
+after(async () => {
+  livePage.observePage = originalObserve;
+  orch.server.closeAllConnections();
+  await new Promise(r => orch.server.close(r));
+});
 beforeEach(() => {
-  fetchCalls.length = 0;
-  fetchHandler = null;
-  refuseNext = { refuse: false };
+  commands = []; fail = false; shot = PNG;
+  page = { url: 'https://example.com/form', title: 'Formulario', text: 'Nombre', focused: { type: 'text', name: 'city' }, center: { x: 800, y: 500 }, controls: [{ label: 'Ciudad', type: 'text', x: 50, y: 150 }] };
+  handoff.resetTakeoverForTests();
 });
+const owner = (userId = 'u1', conversationId = 'chat1') => ({ userId, conversationId, env });
+const tool = (name, who = owner()) => chat.buildChatComputerTools(who).find(t => t.name === name);
 
-afterEach(() => {
-  if (global.fetch !== realFetch && fetchCalls.length >= 0) { /* keep stub for whole file */ }
+test('real HTTP orchestrator contract: click and typed text reach the same per-chat desktop', async () => {
+  assert.equal((await tool('computer_click').execute({ x: 50, y: 150 })).ok, true);
+  assert.equal((await tool('computer_type').execute({ text: 'Lima' })).ok, true);
+  assert.equal(commands.length, 2);
+  assert.equal(commands[0].container, commands[1].container);
+  assert.match(commands[0].command, /mousemove 50 150 click 1/);
+  assert.match(commands[1].command, /type.*Lima/);
 });
-
-// ── Action builders (pure) ────────────────────────────────────────────────
-
-describe('live-actions builders', () => {
-  test('scrollAction maps directions to scroll vectors', () => {
-    assert.deepEqual(liveActions.scrollAction({ direction: 'down' }), { type: 'scroll', scrollX: 0, scrollY: 500 });
-    assert.deepEqual(liveActions.scrollAction({ direction: 'up', amount: 1000 }), { type: 'scroll', scrollX: 0, scrollY: -1000 });
-    assert.deepEqual(liveActions.scrollAction({ dx: 10, dy: -20 }), { type: 'scroll', scrollX: 10, scrollY: -20 });
-  });
-
-  test('scrollAction rejects empty specs', () => {
-    assert.throws(() => liveActions.scrollAction({}), { code: 'E_PARAMS' });
-    assert.throws(() => liveActions.scrollAction({ direction: 'diagonal' }), { code: 'E_PARAMS' });
-  });
-
-  test('keypressAction normalises keys and modifiers', () => {
-    assert.deepEqual(liveActions.keypressAction({ key: 'ENTER' }), { type: 'keypress', keys: ['Enter'] });
-    assert.deepEqual(
-      liveActions.keypressAction({ key: 'tab', modifiers: ['shift'] }),
-      { type: 'keypress', keys: ['Shift', 'Tab'] }
-    );
-  });
-
-  test('keypressAction requires a key', () => {
-    assert.throws(() => liveActions.keypressAction({}), { code: 'E_PARAMS' });
-  });
-
-  test('activity feed counts steps per conversation', () => {
-    const a1 = liveActions.recordActivity('chat-A', { action: 'computer_click', url: 'https://a.com' });
-    const a2 = liveActions.recordActivity('chat-A', { action: 'computer_type', url: 'https://a.com/x' });
-    const b1 = liveActions.recordActivity('chat-B', { action: 'computer_navigate', url: 'https://b.com' });
-    assert.equal(a1.step, 1);
-    assert.equal(a2.step, 2);
-    assert.equal(a2.lastAction, 'computer_type');
-    assert.equal(a2.lastUrl, 'https://a.com/x');
-    assert.equal(b1.step, 1, 'conversations are isolated');
-    assert.deepEqual(liveActions.getActivity('chat-A'), a2);
-    assert.equal(liveActions.getActivity('chat-missing'), null);
-  });
+test('real screenshot envelope pngBase64 is retained; chat consumes text coordinates, never raw PNG', async () => {
+  const image = await live.liveScreenshot(owner());
+  assert.equal(image.__f7Image.base64, PNG);
+  const result = await tool('computer_screenshot').execute();
+  assert.match(result.text, /Ciudad.*50,150/);
+  assert.equal(result.__f7Image, undefined);
+  assert.ok(!JSON.stringify(result).includes(PNG));
 });
-
-// ── liveAct forwarding ────────────────────────────────────────────────────
-
-describe('liveAct forwards to the live container session', () => {
-  test('click reaches the orchestrator agent/action endpoint', async () => {
-    const out = await liveActions.liveAct({
-      ...owner(),
-      toolName: 'computer_click',
-      action: { type: 'click', x: 100, y: 200, button: 'left' },
-    });
-    assert.equal(out.ok, true);
-    assert.equal(fetchCalls.length, 1);
-    assert.match(fetchCalls[0].url, /\/sessions\/sess-1\/agent\/action/);
-    const sent = JSON.parse(fetchCalls[0].body);
-    assert.equal(sent.type, 'click');
-    assert.equal(sent.x, 100);
-    assert.equal(out.activity.step >= 1, true);
-    assert.equal(out.activity.lastUrl, 'https://ejemplo.com/form');
-  });
-
-  test('refused actions never touch the network', async () => {
-    refuseNext = { refuse: true, reason: 'password wall' };
-    const out = await liveActions.liveAct({
-      ...owner(),
-      toolName: 'computer_type',
-      action: { type: 'type', text: 'hunter2' },
-      text: 'hunter2',
-    });
-    assert.equal(out.ok, false);
-    assert.equal(out.refused, true);
-    assert.equal(fetchCalls.length, 0);
-    assert.equal(out.result.loginHandoff, true);
-  });
-
-  test('liveScreenshot returns vision payload plus page context', async () => {
-    fetchHandler = async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ ok: true, screenshot: { base64: 'a'.repeat(200), mediaType: 'image/png' } }),
-    });
-    const out = await liveActions.liveScreenshot(owner());
-    assert.equal(out.ok, true);
-    assert.equal(out.url, 'https://ejemplo.com/form');
-    assert.match(out.text, /ejemplo\.com/);
-    assert.ok(out.__f7Image && out.__f7Image.base64.length > 100);
-  });
+test('empty screenshots fail rather than report fake success', async () => {
+  shot = '';
+  const result = await tool('computer_screenshot').execute();
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'browser_screenshot_missing');
 });
-
-// ── Chat tool surface ─────────────────────────────────────────────────────
-
-describe('chat computer tools (live)', () => {
-  test('offers scroll + keypress alongside the classic tools', () => {
-    const tools = chatComputer.buildChatComputerTools(owner());
-    const names = tools.map((t) => t.name);
-    for (const name of [
-      'computer_screenshot',
-      'computer_click',
-      'computer_type',
-      'computer_scroll',
-      'computer_keypress',
-      'computer_navigate',
-      'computer_list_files',
-      'computer_read_file',
-      'computer_write_file',
-      'computer_edit_file',
-    ]) {
-      assert.ok(names.includes(name), `missing tool ${name}`);
-    }
-  });
-
-  test('stays hidden when the flag is off', () => {
-    assert.deepEqual(
-      chatComputer.buildChatComputerTools({ userId: 'u', conversationId: 'c', env: { NODE_ENV: 'test' } }),
-      []
-    );
-  });
-
-  function tool(name) {
-    return chatComputer.buildChatComputerTools(owner()).find((t) => t.name === name);
-  }
-
-  test('computer_scroll drives the live page', async () => {
-    const r = await tool('computer_scroll').execute({ direction: 'down', amount: 800 }, {});
-    assert.equal(r.ok, true);
-    const sent = JSON.parse(fetchCalls[0].body);
-    assert.equal(sent.type, 'scroll');
-    assert.equal(sent.scrollY, 800);
-  });
-
-  test('computer_keypress sends Enter for form submit', async () => {
-    const r = await tool('computer_keypress').execute({ key: 'Enter' }, {});
-    assert.equal(r.ok, true);
-    const sent = JSON.parse(fetchCalls[0].body);
-    assert.equal(sent.type, 'keypress');
-    assert.deepEqual(sent.keys, ['Enter']);
-  });
-
-  test('computer_click rejects bad buttons without network', async () => {
-    const r = await tool('computer_click').execute({ x: 1, y: 2, button: 'side' }, {});
-    assert.equal(r.ok, false);
-    assert.equal(fetchCalls.length, 0);
-  });
-
-  test('computer_type requires text', async () => {
-    const r = await tool('computer_type').execute({ text: '' }, {});
-    assert.equal(r.ok, false);
-    assert.equal(fetchCalls.length, 0);
-  });
-
-  test('computer_type writes into the live browser', async () => {
-    const events = [];
-    const r = await tool('computer_type').execute(
-      { text: 'Luis' },
-      { onEvent: (e) => events.push(e) }
-    );
-    assert.equal(r.ok, true);
-    assert.equal(r.typed, 4);
-    const sent = JSON.parse(fetchCalls[0].body);
-    assert.equal(sent.type, 'type');
-    assert.ok(events.some((e) => e.tool === 'computer_type'));
-  });
+test('scroll targets observed page center, supports horizontal and vertical wheel', async () => {
+  await tool('computer_scroll').execute({ direction: 'right', amount: 640 });
+  assert.match(commands[0].command, /mousemove 800 500/);
+  assert.match(commands[0].command, /--repeat 8 --delay 30 7/);
+  await tool('computer_scroll').execute({ direction: 'up', amount: 640 });
+  assert.match(commands[1].command, /--repeat 8 --delay 30 4/);
+});
+test('keyboard modifiers are a chord, not sequential key presses', async () => {
+  await tool('computer_keypress').execute({ key: 'Tab', modifiers: ['Shift'] });
+  assert.match(commands[0].command, /key --clearmodifiers 'shift\+Tab'/);
+});
+test('live DOM login gate blocks typing even if model supplies benign fake page context', async () => {
+  page = { ...page, text: 'Inicia sesión. Contraseña', focused: { type: 'password', name: 'password' } };
+  const result = await tool('computer_type').execute({ text: 'private', focused: { type: 'text' }, dom: 'safe' });
+  assert.match(JSON.stringify(result), /loginHandoff/);
+  assert.equal(commands.length, 0);
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+test('password screenshot activates handoff without capturing pixels', async () => {
+  page = { ...page, focused: { type: 'password' }, text: 'Inicia sesión. Contraseña' };
+  const result = await live.liveScreenshot(owner());
+  assert.equal(result.refused, true);
+  assert.equal(commands.length, 0);
+  assert.equal(result.__f7Image, undefined);
+});
+test('active human takeover prevents reads and writes until explicit release', async () => {
+  handoff.beginTakeover({ user: { id: 'u1' }, conversationId: 'chat1', kind: 'password' });
+  livePage.observePage = async () => { throw new Error('must not observe during takeover'); };
+  try {
+    assert.equal((await live.liveScreenshot(owner())).refused, true);
+    assert.equal((await live.liveAct({ ...owner(), toolName: 'computer_click', action: { type: 'click', x: 1, y: 2 } })).refused, true);
+    assert.equal(commands.length, 0);
+  } finally { livePage.observePage = async () => page; }
+});
+test('failed observation prevents action rather than guessing where to type', async () => {
+  page = null;
+  assert.equal((await tool('computer_type').execute({ text: 'Lima' })).ok, false);
+  assert.equal(commands.length, 0);
+});
+test('upstream execution failure is not reported as completed activity', async () => {
+  fail = true;
+  const r = await tool('computer_click').execute({ x: 1, y: 2 });
+  assert.equal(r.ok, false);
+});
+test('aborted actions do not execute', async () => {
+  const c = new AbortController(); c.abort();
+  assert.equal((await tool('computer_click').execute({ x: 1, y: 2 }, { signal: c.signal })).ok, false);
+  assert.equal(commands.length, 0);
+});
+test('model arguments cannot select another user or conversation', async () => {
+  await tool('computer_click').execute({ x: 1, y: 2, userId: 'victim', conversationId: 'victim-chat' });
+  assert.match(commands[0].container, /u1_c_chat1/);
+});
+test('activity and desktop are isolated by BOTH member and chat', async () => {
+  await tool('computer_click', owner('a', 'shared')).execute({ x: 1, y: 2 });
+  await tool('computer_type', owner('b', 'shared')).execute({ text: 'Lima' });
+  const a = resolveSessionIdentity({ id: 'a' }, 'shared', env);
+  const b = resolveSessionIdentity({ id: 'b' }, 'shared', env);
+  assert.notEqual(commands[0].container, commands[1].container);
+  assert.equal(live.getActivity(a.sessionKey).lastAction, 'computer_click');
+  assert.equal(live.getActivity(b.sessionKey).lastAction, 'computer_type');
+  assert.equal(live.getActivity('shared'), null);
+});
+test('tools are flag gated and include scroll plus keyboard', () => {
+  assert.deepEqual(chat.buildChatComputerTools({ env: { NODE_ENV: 'test' } }), []);
+  for (const n of ['computer_scroll', 'computer_keypress', 'computer_navigate']) assert.ok(tool(n));
+});
+test('malformed input is refused before mutation', async () => {
+  assert.equal((await tool('computer_click').execute({ button: 'side' })).ok, false);
+  assert.equal((await tool('computer_type').execute({ text: '' })).ok, false);
+  assert.throws(() => live.scrollAction({ direction: 'diagonal' }));
+  assert.throws(() => live.keypressAction({}));
+  assert.equal(commands.length, 0);
 });
