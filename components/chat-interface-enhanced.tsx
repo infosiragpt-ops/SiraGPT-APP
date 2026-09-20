@@ -3255,6 +3255,16 @@ const ActiveToolsDisplay = ({
             track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : isSiraVozModel(name) ? "VoiceStudio" : "Google", surface: "voice-tool-picker" });
           })}
 
+          <button
+            type="button"
+            onClick={() => onOpenVoiceStudio("voices")}
+            aria-label="Crear voz"
+            className="flex h-7 shrink-0 items-center gap-1 rounded-full border border-zinc-200 px-2 text-[11px] dark:border-white/15"
+          >
+            <Mic className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Crear voz</span>
+          </button>
+
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
               configurations). Sits right after the provider selector per the
               requested order: provider → Voice → configurations. */}
@@ -5437,6 +5447,10 @@ function ChatInterfaceContent() {
   const [selectedSiraVoiceName, setSelectedSiraVoiceName] = React.useState<string>("")
   const [voiceStudioOpen, setVoiceStudioOpen] = React.useState(false)
   const [voiceStudioTab, setVoiceStudioTab] = React.useState<"voices" | "dub" | "transcribe" | "audiobook" | "jobs">("voices")
+  React.useEffect(() => {
+    if (isVoiceGenerationActive) { setVoiceStudioTab("voices"); setVoiceStudioOpen(true) }
+    else setVoiceStudioOpen(false)
+  }, [isVoiceGenerationActive])
   React.useEffect(() => {
     const stored = readStoredVoiceStudioVoice()
     if (stored.id) {
@@ -13927,8 +13941,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             "relative h-full min-w-0 flex-col overflow-hidden",
             coworkMobileFullscreen ? "hidden" : "flex",
             !rightPanelActive && "w-full",
+            voiceStudioOpen && voiceStudioTab === "voices" && "md:pr-[208px]",
           )}
         >
+          <VoiceStudioModal
+            open={voiceStudioOpen}
+            onOpenChange={setVoiceStudioOpen}
+            initialTab={voiceStudioTab}
+            catalogVoiceId={selectedVoiceId}
+            onSelectCatalogVoice={selectedVoiceModel === "ElevenLabs" ? handleSelectVoice : undefined}
+            selectedVoiceId={selectedSiraVoiceId || null}
+            onSelectVoice={handleSelectSiraVoice}
+            language={selectedVoiceLanguage}
+            languageOptions={VOICE_LANGUAGE_OPTIONS}
+            chatFiles={voiceStudioChatFiles}
+            ensureChatId={ensureVoiceStudioChatId}
+            onJobFinished={(job) => { if (job?.chatId) void selectChat(job.chatId) }}
+            onInsertText={(text) => setInput((prev) => (prev ? `${prev}\n\n${text}` : text))}
+          />
           {/* Header */}
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
@@ -14053,19 +14083,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   effectOptions={VOICE_EFFECT_OPTIONS}
                   stability={selectedVoiceStability}
                   onStabilityChange={setSelectedVoiceStability}
-                />
-                <VoiceStudioModal
-                  open={voiceStudioOpen}
-                  onOpenChange={setVoiceStudioOpen}
-                  initialTab={voiceStudioTab}
-                  selectedVoiceId={selectedSiraVoiceId || null}
-                  onSelectVoice={handleSelectSiraVoice}
-                  language={selectedVoiceLanguage}
-                  languageOptions={VOICE_LANGUAGE_OPTIONS}
-                  chatFiles={voiceStudioChatFiles}
-                  ensureChatId={ensureVoiceStudioChatId}
-                  onJobFinished={(job) => { if (job?.chatId) void selectChat(job.chatId) }}
-                  onInsertText={(text) => setInput((prev) => (prev ? `${prev}\n\n${text}` : text))}
                 />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}
