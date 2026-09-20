@@ -3,8 +3,8 @@
 /**
  * Sira Voz — Estudio de voz (VoiceStudio, open source, 100 % local, gratis).
  *
- * One dialog for the four studio features the local engine offers:
- *   Mis voces   → clone a voice from a 3–20 s recording/upload, audition it,
+ * Inline voice workspace; the remaining studio tools retain their dialog:
+ *   Mis voces   → clone a voice from a 10–20 s recording/upload, audition it,
  *                 pick it for the Voz composer mode
  *   Doblar      → dub a video/audio into another language (auto-clones the
  *                 original speakers or uses one of your voices)
@@ -18,6 +18,11 @@
 import * as React from "react"
 import {
   AudioLines,
+  X,
+  Circle,
+  ThumbsUp,
+  FilePlus2,
+  VolumeX,
   BookAudio,
   Check,
   Clapperboard,
@@ -52,7 +57,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Progress } from "@/components/ui/progress"
 import { apiClient, type VoiceStudioJob, type VoiceStudioStatus, type VoiceStudioVoice } from "@/lib/api"
-import { resetVoices } from "@/hooks/use-voices"
+import { useVoices, resetVoices } from "@/hooks/use-voices"
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { SIRA_VOZ_LABEL, SIRA_VOZ_TAGLINE } from "@/lib/chat/media-composer-config"
 import { cn } from "@/lib/utils"
@@ -74,6 +79,8 @@ export interface VoiceStudioModalProps {
   onSelectVoice: (voice: { id: string; name: string } | null) => void
   language: string
   languageOptions: readonly string[]
+  catalogVoiceId?: string | null
+  onSelectCatalogVoice?: (id: string, name: string) => void
   /** Files already attached in this chat (big media goes through the chunked upload). */
   chatFiles?: VoiceStudioChatFile[]
   /** Returns the chat the results should be posted to (creating one if needed). */
@@ -361,10 +368,19 @@ function loadElementDurationSeconds(file: File): Promise<number> {
     }
     const el = document.createElement("audio")
     el.preload = "metadata"
+    let settled = false
     const done = (value: number) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeout)
+      el.onloadedmetadata = null
+      el.onerror = null
+      el.removeAttribute("src")
+      el.load()
       URL.revokeObjectURL(url)
       resolve(value)
     }
+    const timeout = window.setTimeout(() => done(0), 10000)
     el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? el.duration : 0)
     el.onerror = () => done(0)
     el.src = url
@@ -682,7 +698,53 @@ function ProfessionalVoicePanel({ language, languageOptions }: {
 
 // ── Voices ────────────────────────────────────────────────────────────────
 
-function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, language, languageOptions, onVoicesChange }: {
+function CatalogVoiceRows({
+  selectedId,
+  onSelect,
+}: {
+  selectedId?: string | null
+  onSelect: (id: string, name: string) => void
+}) {
+  const { voices, loading } = useVoices()
+  return (
+    <div className="space-y-1" aria-label="Voces del catálogo">
+      {loading && <p className="text-xs text-zinc-500">Cargando voces…</p>}
+      {voices.map((voice) => (
+        <button
+          key={voice.voiceId}
+          type="button"
+          onClick={() => onSelect(voice.voiceId, voice.name)}
+          aria-pressed={selectedId === voice.voiceId}
+          className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-zinc-100 dark:hover:bg-white/10"
+        >
+          <Mic className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[10px] font-medium leading-tight">{voice.name}</span>
+            <span className="block truncate text-[9px] leading-tight text-zinc-500">
+              {voice.description || voice.labels?.accent || voice.category}
+            </span>
+          </span>
+          {selectedId === voice.voiceId && <Check className="h-3 w-3 shrink-0" />}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function VoicesPanel({
+  status,
+  voices,
+  loading,
+  selectedVoiceId,
+  onSelectVoice,
+  language,
+  languageOptions,
+  onVoicesChange,
+  onClose,
+  onOpenTab,
+  catalogVoiceId,
+  onSelectCatalogVoice,
+}: {
   status: VoiceStudioStatus | null
   voices: VoiceStudioVoice[]
   loading: boolean
@@ -691,16 +753,26 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
   language: string
   languageOptions: readonly string[]
   onVoicesChange: () => Promise<void>
+  onClose: () => void
+  onOpenTab: (tab: VoiceStudioTab) => void
+  catalogVoiceId?: string | null
+  onSelectCatalogVoice?: (id: string, name: string) => void
 }) {
+  const [consent, setConsent] = React.useState(false)
   const { play, stop, playingKey } = useBlobAudio()
   const [name, setName] = React.useState("")
   const [voiceLanguage, setVoiceLanguage] = React.useState(language || "Spanish")
   const [refText, setRefText] = React.useState("")
-  const [sample, setSample] = React.useState<{ blob: Blob; filename: string; source: "record" | "upload" } | null>(null)
+  const [sample, setSample] = React.useState<{
+    blob: Blob
+    filename: string
+    source: "record" | "upload"
+    duration: number
+  } | null>(null)
   const [recording, setRecording] = React.useState(false)
   const [elapsed, setElapsed] = React.useState(0)
   const [creating, setCreating] = React.useState(false)
-  const [cloneMode, setCloneMode] = React.useState<"instant" | "pro">("instant")
+  const [cloneMode, setCloneMode] = React.useState<"instant" | "pro" | null>(null)
   const [deleting, setDeleting] = React.useState<string | null>(null)
   const [testText, setTestText] = React.useState("Hola, soy tu nueva voz en SiraGPT. ¿Qué creamos hoy?")
   const [testing, setTesting] = React.useState(false)
@@ -710,8 +782,60 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
   const streamRef = React.useRef<MediaStream | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
 
+  const [details, setDetails] = React.useState(false)
+  const [checking, setChecking] = React.useState(false)
+  const [requestingMic, setRequestingMic] = React.useState(false)
+  const closeButtonRef = React.useRef<HTMLButtonElement>(null)
+  React.useEffect(() => {
+    if (cloneMode) closeButtonRef.current?.focus()
+  }, [cloneMode])
+  const [sampleError, setSampleError] = React.useState("")
+  const selectionRef = React.useRef(0)
+  const recordingStartRef = React.useRef(0)
+  const aliveRef = React.useRef(true)
+  React.useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      selectionRef.current += 1
+    }
+  }, [])
+  const acceptSample = async (file: File) => {
+    const selection = ++selectionRef.current
+    setSample(null)
+    setDetails(false)
+    setConsent(false)
+    setSampleError("")
+    setChecking(false)
+    if (file.size > 10 * MB) {
+      setSampleError("La muestra supera los 10 MB")
+      return
+    }
+    if (
+      !/^(audio|video)\//.test(file.type) &&
+      !/\.(wav|mp3|m4a|ogg|opus|flac|webm|mp4|mov)$/i.test(file.name)
+    ) {
+      setSampleError("Elige un archivo de audio o video")
+      return
+    }
+    setChecking(true)
+    const duration = await loadAudioDurationSeconds(file)
+    if (selection !== selectionRef.current || !aliveRef.current) return
+    setChecking(false)
+    if (!duration) {
+      setSampleError("No se pudo leer el audio. Prueba con un archivo WAV o MP3.")
+      return
+    }
+    setSample({ blob: file, filename: file.name, source: "upload", duration })
+    if (duration < 10) setSampleError("Se requieren al menos 10 segundos de audio")
+    else if (duration > MAX_RECORD_SECONDS + 0.5)
+      setSampleError("La muestra debe durar entre 10 y 20 segundos")
+  }
   const stopRecording = React.useCallback(() => {
-    if (timerRef.current) { window.clearInterval(timerRef.current); timerRef.current = null }
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current)
+      timerRef.current = null
+    }
     const recorder = recorderRef.current
     if (recorder && recorder.state !== "inactive") recorder.stop()
     recorderRef.current = null
@@ -720,27 +844,53 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
     setRecording(false)
   }, [])
 
-  React.useEffect(() => () => { stopRecording() }, [stopRecording])
+  React.useEffect(
+    () => () => {
+      stopRecording()
+    },
+    [stopRecording],
+  )
 
   const startRecording = async () => {
+    const requestId = ++selectionRef.current
+    setRequestingMic(true)
     try {
       if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
         toast.error("Tu navegador no permite grabar. Sube un archivo de audio.")
         return
       }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (!aliveRef.current || requestId !== selectionRef.current) {
+        stream.getTracks().forEach((t) => t.stop())
+        return
+      }
       streamRef.current = stream
-      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported(m))
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) =>
+        MediaRecorder.isTypeSupported(m),
+      )
       const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
       chunksRef.current = []
-      recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data) }
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data)
+      }
       recorder.onstop = () => {
         const type = recorder.mimeType || "audio/webm"
         const blob = new Blob(chunksRef.current, { type })
         const ext = /mp4/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg" : "webm"
-        if (blob.size > 0) setSample({ blob, filename: `grabacion.${ext}`, source: "record" })
+        if (blob.size > 0 && aliveRef.current) {
+          const duration = (Date.now() - recordingStartRef.current) / 1000
+          setSample({ blob, filename: `grabacion.${ext}`, source: "record", duration })
+          if (duration < 10) setSampleError("Se requieren al menos 10 segundos de audio")
+        }
       }
       recorderRef.current = recorder
+      selectionRef.current += 1
+      setSample(null)
+      setSampleError("")
+      setDetails(false)
+      setConsent(false)
+      setChecking(false)
+      recordingStartRef.current = Date.now()
       recorder.start(250)
       setElapsed(0)
       setRecording(true)
@@ -753,19 +903,32 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
     } catch (err) {
       toast.error(errorMessage(err, "No se pudo acceder al micrófono"))
       stopRecording()
+    } finally {
+      if (aliveRef.current) setRequestingMic(false)
     }
   }
 
   const createVoice = async () => {
-    if (!name.trim()) { toast.error("Ponle un nombre a la voz"); return }
-    if (!sample) { toast.error("Graba o sube una muestra de 3 a 20 segundos"); return }
+    if (!name.trim()) {
+      toast.error("Ponle un nombre a la voz")
+      return
+    }
+    if (!sample || sample.duration < 10 || sample.duration > MAX_RECORD_SECONDS + 0.5 || !consent) return
     setCreating(true)
     try {
-      const res = await apiClient.cloneVoiceStudioVoice({ audio: sample.blob, filename: sample.filename, name: name.trim(), language: voiceLanguage, refText: refText.trim() || undefined })
+      const res = await apiClient.cloneVoiceStudioVoice({
+        audio: sample.blob,
+        filename: sample.filename,
+        name: name.trim(),
+        language: voiceLanguage,
+        refText: refText.trim() || undefined,
+      })
       toast.success(`Voz «${res.voice.name}» creada`)
       setName("")
       setRefText("")
       setSample(null)
+      setDetails(false)
+      setCloneMode(null)
       await onVoicesChange()
       onSelectVoice({ id: res.voice.id, name: res.voice.name })
     } catch (err) {
@@ -791,7 +954,10 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
   }
 
   const previewVoice = async (voice: VoiceStudioVoice) => {
-    if (playingKey === `voice:${voice.id}`) { stop(); return }
+    if (playingKey === `voice:${voice.id}`) {
+      stop()
+      return
+    }
     try {
       const blob = await apiClient.fetchVoiceStudioVoicePreview(voice.id)
       play(`voice:${voice.id}`, blob)
@@ -802,10 +968,17 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
 
   const testVoice = async () => {
     if (!testText.trim()) return
-    if (playingKey === "test") { stop(); return }
+    if (playingKey === "test") {
+      stop()
+      return
+    }
     setTesting(true)
     try {
-      const blob = await apiClient.previewVoiceStudioSpeech({ text: testText.trim().slice(0, 600), voiceId: selectedVoiceId || null, language: voiceLanguage })
+      const blob = await apiClient.previewVoiceStudioSpeech({
+        text: testText.trim().slice(0, 600),
+        voiceId: selectedVoiceId || null,
+        language: voiceLanguage,
+      })
       play("test", blob)
     } catch (err) {
       toast.error(errorMessage(err, "No se pudo generar la prueba"))
@@ -815,182 +988,418 @@ function VoicesPanel({ status, voices, loading, selectedVoiceId, onSelectVoice, 
   }
 
   const languageChoices = languageOptions.map((l) => ({ value: l, label: languageLabel(l) }))
-
+  const validSample = Boolean(
+    sample &&
+      sample.duration >= 10 &&
+      sample.duration <= MAX_RECORD_SECONDS + 0.5 &&
+      sample.blob.size <= 10 * MB,
+  )
+  const closeFlow = () => {
+    if (creating) return
+    selectionRef.current += 1
+    setChecking(false)
+    setRequestingMic(false)
+    stopRecording()
+    stop()
+    setCloneMode(null)
+    setDetails(false)
+  }
+  const cardClass =
+    "w-full rounded-lg border border-zinc-200/80 bg-white p-1.5 text-left transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-white/15 dark:bg-zinc-950 dark:hover:bg-white/5"
   return (
-    <div className="space-y-4">
-      <SectionTitle icon={Mic} title="Mis voces" subtitle="Clona tu voz con una muestra de 3 a 20 segundos y úsala en Voz, doblajes y audiolibros." />
-
-      <div className={CARD_CLASS}>
-        <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-white/55">Voz activa para Sira Voz</p>
-        <div className="space-y-1.5">
+    <>
+      <aside
+        data-testid="voice-create-panel"
+        aria-label="Crear voz"
+        className={cn(
+          "absolute bottom-0 right-0 top-14 z-20 w-full overflow-y-auto bg-background px-3 pb-5 pt-2 text-foreground md:w-[208px]",
+          cloneMode && "hidden md:block",
+        )}
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <AudioLines className="h-3.5 w-3.5" />
+          <h2 className="flex-1 text-[12px] font-semibold">Crear voz</h2>
+          <span className="text-[10px] text-zinc-500">
+            {voices.length}
+            {status?.limits?.maxVoices ? ` / ${status.limits.maxVoices}` : ""} creadas
+          </span>
           <button
             type="button"
-            onClick={() => onSelectVoice(null)}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors",
-              !selectedVoiceId ? "border-zinc-950 bg-zinc-950 text-white dark:border-white dark:bg-white dark:text-zinc-950" : "border-zinc-200 hover:bg-zinc-50 dark:border-white/12 dark:hover:bg-white/[0.04]",
-            )}
+            onClick={onClose}
+            aria-label="Cerrar panel de voz"
+            className="grid h-7 w-7 place-items-center rounded hover:bg-zinc-100 dark:hover:bg-white/10"
           >
-            <Sparkles className="h-4 w-4 shrink-0" />
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-semibold">Voz predeterminada de Sira</span>
-              <span className={cn("block text-[11.5px]", !selectedVoiceId ? "text-white/70 dark:text-zinc-600" : "text-zinc-500 dark:text-white/55")}>Narrador neutro, +600 idiomas</span>
-            </span>
-            {!selectedVoiceId && <Check className="h-4 w-4 shrink-0" />}
-          </button>
-          {loading && voices.length === 0 && (
-            <div className="flex items-center gap-2 px-3 py-2 text-[12.5px] text-zinc-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando tus voces…</div>
-          )}
-          {voices.map((voice) => {
-            const active = selectedVoiceId === voice.id
-            return (
-              <div
-                key={voice.id}
-                className={cn(
-                  "flex items-center gap-2 rounded-xl border px-2 py-2 transition-colors",
-                  active ? "border-zinc-950 bg-zinc-950 text-white dark:border-white dark:bg-white dark:text-zinc-950" : "border-zinc-200 hover:bg-zinc-50 dark:border-white/12 dark:hover:bg-white/[0.04]",
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => void previewVoice(voice)}
-                  title="Escuchar la muestra"
-                  aria-label={`Escuchar la muestra de ${voice.name}`}
-                  className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", active ? "bg-white/15 dark:bg-zinc-950/10" : "bg-zinc-100 dark:bg-white/10")}
-                >
-                  {playingKey === `voice:${voice.id}` ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 translate-x-px" />}
-                </button>
-                <button type="button" onClick={() => onSelectVoice({ id: voice.id, name: voice.name })} className="min-w-0 flex-1 text-left">
-                  <span className="block truncate text-[13px] font-semibold">{voice.name}</span>
-                  <span className={cn("block text-[11.5px]", active ? "text-white/70 dark:text-zinc-600" : "text-zinc-500 dark:text-white/55")}>{languageLabel(voice.language)} · voz clonada</span>
-                </button>
-                {active && <Check className="h-4 w-4 shrink-0" />}
-                <button
-                  type="button"
-                  onClick={() => void deleteVoice(voice)}
-                  disabled={deleting === voice.id}
-                  title="Eliminar voz"
-                  aria-label={`Eliminar la voz ${voice.name}`}
-                  className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", active ? "hover:bg-white/15 dark:hover:bg-zinc-950/10" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-white/10")}
-                >
-                  {deleting === voice.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Input value={testText} onChange={(e) => setTestText(e.target.value)} maxLength={600} placeholder="Escribe algo para escuchar la voz activa" className={cn(FIELD_CLASS, "flex-1")} />
-          <Button type="button" onClick={() => void testVoice()} disabled={testing || !status?.ok} className={PRIMARY_BUTTON}>
-            {testing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : playingKey === "test" ? <Pause className="mr-1.5 h-4 w-4" /> : <Play className="mr-1.5 h-4 w-4" />}
-            {playingKey === "test" ? "Detener" : "Probar voz"}
-          </Button>
-        </div>
-      </div>
-
-      <div className={CARD_CLASS}>
-        <p className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-white/55">Crear voz</p>
-        <div className="mb-3 grid gap-2 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setCloneMode("instant")}
-            className={cn(
-              "rounded-2xl border p-3 text-left transition-colors",
-              cloneMode === "instant"
-                ? "border-zinc-950 bg-zinc-50 dark:border-white dark:bg-white/[0.06]"
-                : "border-zinc-200 hover:bg-zinc-50 dark:border-white/12 dark:hover:bg-white/[0.04]",
-            )}
-          >
-            <span className="block text-[13px] font-semibold text-zinc-950 dark:text-white">Clon de voz instantánea</span>
-            <span className="block text-[11.5px] text-zinc-500 dark:text-white/55">Tu voz local en segundos, gratis.</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setCloneMode("pro")}
-            className={cn(
-              "rounded-2xl border p-3 text-left transition-colors",
-              cloneMode === "pro"
-                ? "border-zinc-950 bg-zinc-50 dark:border-white dark:bg-white/[0.06]"
-                : "border-zinc-200 hover:bg-zinc-50 dark:border-white/12 dark:hover:bg-white/[0.04]",
-            )}
-          >
-            <span className="block text-[13px] font-semibold text-zinc-950 dark:text-white">Clon de voz profesional</span>
-            <span className="block text-[11.5px] text-zinc-500 dark:text-white/55">Réplica ElevenLabs · 30 min de audio · ~5 min</span>
+            <X className="h-3 w-3" />
           </button>
         </div>
-        {cloneMode === "instant" ? (
-        <>
-        <p className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-white/55">Clonar una voz nueva</p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label className="text-[12px] text-zinc-700 dark:text-white/75">Nombre</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Mi voz, Narrador, Abuela…" className={FIELD_CLASS} />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-[12px] text-zinc-700 dark:text-white/75">Idioma de la muestra</Label>
-            <NativeSelect aria-label="Idioma de la muestra" value={voiceLanguage} onChange={setVoiceLanguage} options={languageChoices} />
-          </div>
-        </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="space-y-2">
           <button
             type="button"
-            onClick={() => (recording ? stopRecording() : void startRecording())}
-            disabled={creating}
-            className={cn(
-              "flex items-center justify-center gap-2 rounded-2xl border px-4 py-4 text-[13px] font-semibold transition-colors",
-              recording ? "border-zinc-950 bg-zinc-950 text-white dark:border-white dark:bg-white dark:text-zinc-950" : "border-zinc-200 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-white/12 dark:bg-zinc-900 dark:text-white dark:hover:bg-zinc-800",
-            )}
-          >
-            {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            {recording ? `Grabando… ${elapsed}s / ${MAX_RECORD_SECONDS}s · Detener` : "Grabar con el micrófono"}
-          </button>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={creating || recording}
-            className="flex items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-4 text-[13px] font-semibold text-zinc-900 transition-colors hover:bg-zinc-50 dark:border-white/12 dark:bg-zinc-900 dark:text-white dark:hover:bg-zinc-800"
-          >
-            <Upload className="h-4 w-4" />
-            Subir un audio (≤ 25 MB)
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*,video/*"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              if (!file) return
-              if (file.size > 25 * MB) { toast.error("La muestra supera los 25 MB"); return }
-              setSample({ blob: file, filename: file.name, source: "upload" })
+            onClick={() => {
+              selectionRef.current += 1
+              setChecking(false)
+              setRequestingMic(false)
+              stopRecording()
+              setCloneMode("instant")
+              setDetails(false)
             }}
-          />
+            data-testid="voice-clone-instant"
+            className={cardClass}
+          >
+            <span className="flex items-center gap-1 text-[9px] leading-tight font-medium">
+              <AudioLines className="h-3 w-3" />
+              Clon de voz instantánea
+            </span>
+            <span className="mt-0.5 block text-[8px] leading-[11px] text-zinc-500">
+              Clona tu voz con solo 10 segundos de audio.
+            </span>
+            <span className="mt-1 block text-[8px] leading-tight">2 minutos · Sira Voz</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              selectionRef.current += 1
+              setChecking(false)
+              setRequestingMic(false)
+              stopRecording()
+              stop()
+              setCloneMode("pro")
+            }}
+            data-testid="voice-clone-professional"
+            className={cardClass}
+          >
+            <span className="flex items-center gap-1 text-[9px] leading-tight font-medium">
+              <Mic className="h-3 w-3" />
+              Clon de voz profesional
+            </span>
+            <span className="mt-0.5 block text-[8px] leading-[11px] text-zinc-500">
+              Crea la réplica digital más realista de tu voz. Requiere al menos 30 minutos de audio limpio.
+            </span>
+            <span className="mt-1 block text-[8px] leading-tight">5 minutos · según tu plan</span>
+          </button>
         </div>
-        {sample && (
-          <div className="mt-2 flex items-center gap-2 rounded-xl bg-zinc-100 px-3 py-2 text-[12.5px] text-zinc-800 dark:bg-white/[0.06] dark:text-white/85">
-            <AudioLines className="h-4 w-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{sample.source === "record" ? "Grabación lista" : sample.filename} · {formatBytes(sample.blob.size)}</span>
-            <button type="button" onClick={() => (playingKey === "sample" ? stop() : play("sample", sample.blob))} className="text-[12px] font-semibold underline-offset-2 hover:underline">{playingKey === "sample" ? "Detener" : "Escuchar"}</button>
-            <button type="button" onClick={() => setSample(null)} className="text-[12px] font-semibold underline-offset-2 hover:underline">Quitar</button>
+        <div className="mt-4 space-y-1" aria-label="Mis voces">
+          {loading && <p className="text-xs text-zinc-500">Cargando tus voces…</p>}
+          {voices.map((voice) => (
+            <div
+              key={voice.id}
+              className="flex items-center gap-1 rounded-md py-1 hover:bg-zinc-50 dark:hover:bg-white/5"
+            >
+              <button
+                type="button"
+                onClick={() => void previewVoice(voice)}
+                aria-label={`Escuchar la muestra de ${voice.name}`}
+                className="grid h-7 w-7 shrink-0 place-items-center"
+              >
+                {playingKey === `voice:${voice.id}` ? (
+                  <Pause className="h-3.5 w-3.5" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => onSelectVoice({ id: voice.id, name: voice.name })}
+                aria-pressed={selectedVoiceId === voice.id}
+                className="min-w-0 flex-1 text-left"
+              >
+                <span className="block truncate text-[10px] font-medium leading-tight">{voice.name}</span>
+                <span className="block text-[10px] text-zinc-500">
+                  {languageLabel(voice.language)} · Sira Voz
+                </span>
+              </button>
+              {selectedVoiceId === voice.id && <Check className="h-3 w-3" />}
+              <button
+                type="button"
+                disabled={deleting === voice.id}
+                onClick={() => void deleteVoice(voice)}
+                aria-label={`Eliminar la voz ${voice.name}`}
+                className="grid h-7 w-7 place-items-center text-zinc-500"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          {onSelectCatalogVoice && (
+            <CatalogVoiceRows selectedId={catalogVoiceId} onSelect={onSelectCatalogVoice} />
+          )}
+          {!onSelectCatalogVoice && (
+            <button
+              type="button"
+              onClick={() => onSelectVoice(null)}
+              className="flex w-full items-center gap-2 py-2 text-left text-[11px]"
+            >
+              <Mic className="h-4 w-4" />
+              Voz predeterminada de Sira{!selectedVoiceId && <Check className="ml-auto h-3 w-3" />}
+            </button>
+          )}
+        </div>
+        <details className="mt-5 text-[11px] text-zinc-500">
+          <summary className="cursor-pointer">Más herramientas de voz</summary>
+          <div className="mt-2 grid gap-2">
+            {TABS.filter((t) => t.id !== "voices").map((t) => (
+              <button type="button" className="text-left" key={t.id} onClick={() => onOpenTab(t.id)}>
+                {t.label}
+              </button>
+            ))}
           </div>
-        )}
-        <div className="mt-3 space-y-1.5">
-          <Label className="text-[12px] text-zinc-700 dark:text-white/75">Texto de la muestra <span className="font-normal text-zinc-500">(opcional, mejora la fidelidad)</span></Label>
-          <Textarea value={refText} onChange={(e) => setRefText(e.target.value)} maxLength={1000} rows={2} placeholder="Escribe exactamente lo que dice la grabación" className={cn(FIELD_CLASS, "h-auto min-h-[64px] resize-y")} />
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <p className="text-[11.5px] text-zinc-500 dark:text-white/55">Consejo: habla claro, sin música de fondo, entre 3 y 20 segundos.</p>
-          <Button type="button" onClick={() => void createVoice()} disabled={creating || recording || !status?.ok} className={PRIMARY_BUTTON}>
-            {creating ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Sparkles className="mr-1.5 h-4 w-4" />}
-            Crear voz
-          </Button>
-        </div>
-        </>
-        ) : (
-          <ProfessionalVoicePanel language={language} languageOptions={languageOptions} />
-        )}
-      </div>
-    </div>
+          <Input
+            aria-label="Texto para probar Sira Voz"
+            value={testText}
+            onChange={(e) => setTestText(e.target.value)}
+            maxLength={600}
+            className="my-2 h-8 text-xs"
+          />
+          <button type="button" disabled={testing || !status?.ok} onClick={() => void testVoice()}>
+            {playingKey === "test" ? "Detener" : "Probar voz de Sira"}
+          </button>
+        </details>
+      </aside>
+      {cloneMode && (
+        <section
+          data-testid="voice-clone-workspace"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation()
+              closeFlow()
+            }
+          }}
+          aria-label={cloneMode === "instant" ? "Clon de voz instantánea" : "Clon de voz profesional"}
+          className="absolute inset-x-0 bottom-0 top-14 z-20 overflow-y-auto bg-background md:right-[208px]"
+        >
+          <div className="flex min-h-full items-center justify-center px-5 py-14 md:pl-[136px] md:pr-8">
+            <div className="relative w-full max-w-[556px] md:-translate-y-3">
+              <button
+                type="button"
+                ref={closeButtonRef}
+                disabled={creating}
+                onClick={closeFlow}
+                aria-label="Cerrar creación de voz"
+                className="absolute -right-2 -top-10 grid h-9 w-9 place-items-center text-zinc-600 hover:text-zinc-950 dark:text-zinc-300"
+              >
+                <X className="h-7 w-7" strokeWidth={1} />
+              </button>
+              {cloneMode === "pro" ? (
+                <ProfessionalVoicePanel language={language} languageOptions={languageOptions} />
+              ) : (
+                <>
+                  {!details ? (
+                    <>
+                      <div className="mb-5 grid gap-4 sm:grid-cols-3" data-testid="voice-recording-tips">
+                        {[
+                          {
+                            Icon: VolumeX,
+                            title: "Evite los entornos ruidosos",
+                            text: "Los sonidos de fondo interfieren con los resultados de calidad de grabación.",
+                          },
+                          {
+                            Icon: ThumbsUp,
+                            title: "Comprobar la calidad del micrófono",
+                            text: "Pruebe unidades externas o micrófonos de auriculares para una mejor captura de audio.",
+                          },
+                          {
+                            Icon: Mic,
+                            title: "Utilice equipos consistentes",
+                            text: "No cambie el equipo de grabación entre muestras.",
+                          },
+                        ].map(({ Icon, title, text }) => (
+                          <div key={title}>
+                            <Icon className="mb-2 h-4 w-4" />
+                            <p className="text-[13px] font-medium leading-snug">{title}</p>
+                            <p className="mt-1 text-[12px] leading-[1.45] text-zinc-500 dark:text-zinc-400">
+                              {text}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                      <div
+                        data-testid="voice-sample-dropzone"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          if (!recording && !requestingMic && !checking && e.dataTransfer.files[0])
+                            void acceptSample(e.dataTransfer.files[0])
+                        }}
+                        className="flex min-h-[208px] flex-col items-center justify-center rounded-xl border border-dotted border-zinc-400/70 bg-zinc-50/50 px-4 py-6 text-center dark:bg-white/[0.02]"
+                      >
+                        <button
+                          type="button"
+                          disabled={recording || requestingMic || checking}
+                          onClick={() => fileInputRef.current?.click()}
+                          className="flex flex-col items-center gap-2 disabled:opacity-50"
+                        >
+                          <span className="mb-1 grid h-9 w-9 place-items-center rounded-lg border border-zinc-200 bg-background">
+                            <FilePlus2 className="h-4 w-4" />
+                          </span>
+                          <span className="text-[13px] font-medium">
+                            Haga clic para cargar, o arrastre y suelte
+                          </span>
+                          <span className="text-[12px] text-zinc-500">
+                            Archivos de audio o video de hasta 10 MB cada uno
+                          </span>
+                        </button>
+                        <input
+                          data-testid="voice-sample-input"
+                          ref={fileInputRef}
+                          type="file"
+                          accept="audio/*,video/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            e.target.value = ""
+                            if (file) void acceptSample(file)
+                          }}
+                        />
+                        <span className="my-2 text-xs text-zinc-500">o</span>
+                        <button
+                          type="button"
+                          title="Grabar con el micrófono"
+                          disabled={checking || requestingMic}
+                          onClick={() => (recording ? stopRecording() : void startRecording())}
+                          className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-background px-3 py-1.5 text-[12px] shadow-sm dark:border-white/15"
+                        >
+                          {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                          {recording
+                            ? `Grabando… ${elapsed}s / ${MAX_RECORD_SECONDS}s · Detener`
+                            : requestingMic
+                              ? "Conectando micrófono…"
+                              : "Grabar audio"}
+                        </button>
+                      </div>
+                      {checking && (
+                        <p role="status" className="mt-2 text-xs text-zinc-500">
+                          Comprobando el audio…
+                        </p>
+                      )}
+                      {sample && (
+                        <div className="mt-3 flex items-center gap-2 text-xs">
+                          <AudioLines className="h-4 w-4 shrink-0" />
+                          <span className="min-w-0 flex-1 truncate">
+                            {sample.filename} · {formatClock(sample.duration)} ·{" "}
+                            {formatBytes(sample.blob.size)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => (playingKey === "sample" ? stop() : play("sample", sample.blob))}
+                          >
+                            {playingKey === "sample" ? "Detener" : "Escuchar"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={recording}
+                            onClick={() => {
+                              selectionRef.current += 1
+                              stop()
+                              setSample(null)
+                              setSampleError("")
+                            }}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      )}
+                      {sampleError && (
+                        <p role="alert" className="mt-2 text-xs text-red-600">
+                          {sampleError}
+                        </p>
+                      )}
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <p className="flex items-center gap-2 text-[12px]">
+                          {validSample ? (
+                            <Check className="h-4 w-4" />
+                          ) : (
+                            <Circle className="h-4 w-4 text-zinc-200" />
+                          )}
+                          Se requieren 10 segundos de audio
+                        </p>
+                        <Button
+                          type="button"
+                          disabled={!validSample || recording || checking}
+                          onClick={() => setDetails(true)}
+                          className={cn(PRIMARY_BUTTON, "rounded-lg")}
+                        >
+                          Siguiente
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-4" data-testid="voice-clone-details">
+                      <h2 className="text-lg font-semibold">Clonar una voz nueva</h2>
+                      <p className="text-sm text-zinc-500">
+                        Tu muestra está lista. Esta voz estará disponible con Sira Voz.
+                      </p>
+                      <div className="space-y-1">
+                        <Label htmlFor="clone-voice-name">Nombre</Label>
+                        <Input
+                          id="clone-voice-name"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          maxLength={80}
+                          placeholder="Mi voz"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Idioma de la muestra</Label>
+                        <NativeSelect
+                          aria-label="Idioma de la muestra"
+                          value={voiceLanguage}
+                          onChange={setVoiceLanguage}
+                          options={languageChoices}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="clone-voice-text">Texto de la muestra (opcional)</Label>
+                        <Textarea
+                          id="clone-voice-text"
+                          value={refText}
+                          onChange={(e) => setRefText(e.target.value)}
+                          maxLength={1000}
+                          placeholder="Escribe exactamente lo que dice la grabación"
+                        />
+                      </div>
+                      <label className="flex items-start gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={consent}
+                          onChange={(e) => setConsent(e.target.checked)}
+                          className="mt-0.5"
+                        />
+                        Confirmo que esta es mi voz o que tengo autorización para usarla.
+                      </label>
+                      {!status?.ok && (
+                        <p role="status" className="text-xs text-zinc-500">
+                          {status
+                            ? "El servicio de clonación no está disponible. Intenta de nuevo más tarde."
+                            : "Conectando con el servicio de voz…"}
+                        </p>
+                      )}
+                      <div className="flex justify-between">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={creating}
+                          onClick={() => setDetails(false)}
+                        >
+                          Atrás
+                        </Button>
+                        <Button
+                          type="button"
+                          onClick={() => void createVoice()}
+                          disabled={creating || !name.trim() || !consent || !status?.ok}
+                          className={PRIMARY_BUTTON}
+                        >
+                          {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Crear voz
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+    </>
   )
 }
 
@@ -1423,6 +1832,8 @@ export default function VoiceStudioModal({
   ensureChatId,
   onJobFinished,
   onInsertText,
+  catalogVoiceId,
+  onSelectCatalogVoice,
 }: VoiceStudioModalProps) {
   const [tab, setTab] = React.useState<VoiceStudioTab>(initialTab)
   const [status, setStatus] = React.useState<VoiceStudioStatus | null>(null)
@@ -1519,6 +1930,8 @@ export default function VoiceStudioModal({
   const activeAudiobook = jobs.find((j) => j.kind === "audiobook" && isActiveJob(j)) || null
   const ready = Boolean(status?.ok)
 
+  if (open && tab === "voices") return <VoicesPanel status={status} voices={voices} loading={voicesLoading} selectedVoiceId={selectedVoiceId} onSelectVoice={onSelectVoice} language={language} languageOptions={languageOptions} onVoicesChange={loadVoices} onClose={() => onOpenChange(false)} onOpenTab={setTab} catalogVoiceId={catalogVoiceId} onSelectCatalogVoice={onSelectCatalogVoice} />
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92dvh] w-[min(100vw-1rem,60rem)] max-w-none flex-col gap-0 overflow-hidden rounded-3xl border-zinc-200 bg-white p-0 text-zinc-900 shadow-2xl dark:border-white/12 dark:bg-zinc-950 dark:text-white sm:max-w-none">
@@ -1567,9 +1980,6 @@ export default function VoiceStudioModal({
                 {status.status === "starting" ? "El motor de voz está arrancando. Suele tardar uno o dos minutos." : "El motor de voz no responde. Intenta de nuevo en unos segundos."}
                 <button type="button" onClick={() => void loadStatus()} className="ml-auto text-[12px] font-semibold underline-offset-2 hover:underline">Reintentar</button>
               </div>
-            )}
-            {tab === "voices" && (
-              <VoicesPanel status={status} voices={voices} loading={voicesLoading} selectedVoiceId={selectedVoiceId} onSelectVoice={onSelectVoice} language={language} languageOptions={languageOptions} onVoicesChange={loadVoices} />
             )}
             {tab === "dub" && (
               <DubPanel status={status} voices={voices} selectedVoiceId={selectedVoiceId} language={language} chatFiles={chatFiles} ensureChatId={ensureChatId} onJobStarted={handleJobStarted} activeJob={activeDub} />
