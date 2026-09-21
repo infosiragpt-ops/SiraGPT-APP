@@ -29,7 +29,7 @@ async function resolveChatMediaFileIds(prisma, { userId, chatId }) {
   if (!userId || !chatId || !prisma.chat?.findFirst || !prisma.message?.findMany) return [];
   const chat = await prisma.chat.findFirst({ where: { id: chatId, userId, deletedAt: null }, select: { id: true } });
   if (!chat) return [];
-  const messages = await prisma.message.findMany({ where: { chatId: chat.id, deletedAt: null },
+  const messages = await prisma.message.findMany({ where: { chatId: chat.id, role: 'USER', deletedAt: null },
     orderBy: { timestamp: 'desc' }, take: 30, select: { files: true } });
   const { extractFileIdsFromMessageFiles } = require('./message-attachments');
   for (const message of messages) {

@@ -131,6 +131,7 @@ test('follow-up uses only the newest batch in the owned chat, never global recen
   prisma.chat = { findFirst: async ({ where }) => where.userId === 'u' && where.id === 'chat-u' ? { id: 'chat-u' } : null };
   prisma.message = { findMany: async ({ where }) => {
     assert.equal(where.chatId, 'chat-u');
+    assert.equal(where.role, 'USER', 'assistant TXT artifacts must not replace the uploaded audio batch');
     return [{ files: null }, { files: rows.map(row => ({ id: row.id })) }, { files: ['old-unrelated'] }];
   } };
   assert.deepEqual(await batch.resolveChatMediaFileIds(prisma, { userId: 'u', chatId: 'chat-u' }), rows.map(row => row.id));
