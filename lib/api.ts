@@ -1912,6 +1912,14 @@ class ApiClient {
     return this.request(`/files${query ? `?${query}` : ''}`);
   }
 
+  async getFilesProcessingStatus(ids: string[]): Promise<any> {
+    return this.request(`/files/processing-status?ids=${encodeURIComponent(ids.join(','))}`, { timeoutMs: 20_000, maxRetries: 0 });
+  }
+
+  async retryFileProcessing(id: string): Promise<any> {
+    return this.request(`/files/${encodeURIComponent(id)}/retry-processing`, { method: 'POST', timeoutMs: 20_000, maxRetries: 0 });
+  }
+
   async getFile(id: string): Promise<FileEnvelope> {
     return (await this.request(`/files/${id}`)) as FileEnvelope;
   }

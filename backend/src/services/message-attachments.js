@@ -735,7 +735,10 @@ async function serializeMessageAttachments(prisma, { userId, fileIds = [], clien
       type: mimeType || null,
       size: row?.size ?? meta.size ?? null,
       url: row?.filename ? `/uploads/${userId}/${row.filename}` : (meta.url || null),
-      extractedText: compactString(hasUsefulExtractedText(row?.extractedText) ? row.extractedText : null, 120000),
+      // Media transcripts live once in File and in the downloadable TXT. Do
+      // not duplicate megabytes into every chat-history attachment snapshot.
+      extractedText: require('./media-transcription-queue').isMediaFile({ mimeType, originalName: displayName })
+        ? null : compactString(hasUsefulExtractedText(row?.extractedText) ? row.extractedText : null, 120000),
       openaiFileId: row?.openaiFileId || meta.openaiFileId || null,
       sourceChannel: meta.sourceChannel || null,
       isLongPasteDocument: Boolean(meta.isLongPasteDocument || longPasteMeta || longPasteTitle),

@@ -33,6 +33,22 @@ export interface ExtractVideoMetaOptions {
   thumbnailMaxWidth?: number;
 }
 
+// A batch may contain 50 long recordings. Native players can read duration
+// lazily; waveform decoding is optional, bounded in size and concurrency.
+const MAX_AUDIO_PREVIEW_BYTES = 8 * 1024 * 1024;
+let metadataActive = 0;
+const metadataWaiters: Array<() => void> = [];
+export async function scheduleMediaMetadata<T>(work: () => Promise<T>): Promise<T> {
+  if (metadataActive >= 2) await new Promise<void>((resolve) => metadataWaiters.push(resolve));
+  else metadataActive += 1;
+  try { return await work(); }
+  finally {
+    const next = metadataWaiters.shift();
+    if (next) next();
+    else metadataActive -= 1;
+  }
+}
+
 const DEFAULT_BUCKETS = 48;
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_THUMBNAIL_MAX_WIDTH = 320;
@@ -129,6 +145,7 @@ export async function extractAudioMeta(
   file: File,
   opts: ExtractAudioMetaOptions = {},
 ): Promise<AudioMeta | null> {
+  if (!file || file.size > MAX_AUDIO_PREVIEW_BYTES) return null;
   const buckets = opts.buckets ?? DEFAULT_BUCKETS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 

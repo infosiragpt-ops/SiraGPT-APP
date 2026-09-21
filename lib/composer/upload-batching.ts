@@ -21,7 +21,7 @@ export type UploadChunk<TFile, TTemp> = {
 
 export const COMPOSER_UPLOAD_BATCH_LIMITS: UploadBatchLimits = Object.freeze({
   maxFiles: 50,
-  maxBytes: 220 * 1024 * 1024,
+  maxBytes: 64 * 1024 * 1024,
 })
 
 function normalizedFileBytes(file: UploadFileLike): number {

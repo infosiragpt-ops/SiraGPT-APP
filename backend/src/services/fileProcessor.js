@@ -215,6 +215,7 @@ class FileProcessor {
       }
 
       let extractedText = '';
+      let transcription = null;
       let ocr = ocrEngine.skipped('not_ocr_applicable').ocr;
 
       console.log(`Processing file: ${originalname}, type: ${mimetype}${effectiveMimeType !== mimetype ? ` -> ${effectiveMimeType}` : ''}, path: ${filePath}`);
@@ -291,7 +292,7 @@ class FileProcessor {
         }
       }
 
-      switch (effectiveMimeType) {
+      switch (audioTranscriber.isAudioMedia(effectiveMimeType, originalname) ? '__audio_media' : effectiveMimeType) {
         case 'application/pdf':
           {
             const result = await this.processPDF(filePath, { detailed: true, ...processOpts });
@@ -374,6 +375,7 @@ class FileProcessor {
           extractedText = await this.processPowerPoint(filePath, processOpts);
           break;
 
+        case '__audio_media':
         case 'audio/mpeg':
         case 'audio/wav':
         case 'audio/ogg':
@@ -387,7 +389,8 @@ class FileProcessor {
         case 'video/mpeg':
         case 'video/quicktime':
         case 'video/webm':
-          extractedText = await this.processAudio(filePath, effectiveMimeType, originalname);
+          transcription = await this.processAudio(filePath, effectiveMimeType, originalname, { ...processOpts, detailed: true });
+          extractedText = transcription.text || '';
           break;
 
         case 'application/zip':
@@ -428,6 +431,7 @@ class FileProcessor {
       return {
         success: true,
         extractedText,
+        ...(transcription ? { transcription } : {}),
         ocr,
         timings,
         fileInfo: {
@@ -437,9 +441,11 @@ class FileProcessor {
         }
       };
     } catch (error) {
+      if (audioTranscriber.isAbortError(error, options.signal)) throw error;
       console.error('File processing error:', error);
       return {
         success: false,
+        code: error.code || 'extraction_failed',
         error: error.message,
         // Keep extractedText EMPTY on failure — the human-readable reason lives
         // in `error` (surfaced downstream as extractionWarning). Putting the
@@ -1234,17 +1240,18 @@ class FileProcessor {
     }
   }
 
-async processAudio(filePath, mimeType, originalName) {
-    try {
-      const result = await audioTranscriber.transcribe(filePath, mimeType, originalName);
-      if (result.method === 'whisper' || result.method === 'local-whisper') {
-        console.log(`[fileProcessor] Audio transcribed via ${result.method}: ${originalName}, ${result.text?.length || 0} chars`);
-      }
-      return result.text || '';
-    } catch (error) {
-      console.warn(`[fileProcessor] Audio transcription failed: ${error.message}`);
-      return `Media file "${originalName}" — transcription unavailable. Type: ${mimeType}`;
+  async processAudio(filePath, mimeType, originalName, options = {}) {
+    const result = await audioTranscriber.transcribe(filePath, mimeType, originalName, options);
+    if (!audioTranscriber.SUCCESS_METHODS.has(result.method) || !String(result.transcript || '').trim()) {
+      const reason = result.reasonCode || 'local_unavailable';
+      const message = reason === 'no_speech' ? 'No se detectó voz en el archivo.'
+        : reason === 'file_empty' ? 'El archivo está vacío.'
+          : reason === 'file_unavailable' ? 'No se pudo leer el archivo de audio.'
+            : reason === 'audio_decode_failed' ? 'No se pudo decodificar el audio; comprueba que el archivo no esté dañado.'
+              : 'La transcripción no está disponible temporalmente. Puedes reintentarlo.';
+      throw Object.assign(new Error(message), { code: reason });
     }
+    return options.detailed ? result : result.text;
   }
 
   async processZip(filePath) {

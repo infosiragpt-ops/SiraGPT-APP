@@ -57,10 +57,12 @@ function createR2ArtifactStorage({ env = process.env, client = createR2Client(en
   const expiresIn = Number.parseInt(env.R2_PRESIGNED_URL_TTL_SECONDS || '900', 10);
   return {
     enabled: Boolean(client && bucket),
-    async put({ key, body, contentType, metadata }) {
+    async put({ key, body, contentType, metadata, contentLength, signal }) {
       if (!client || !bucket) throw new Error('R2 storage is not configured');
       const { PutObjectCommand } = loadSdk();
-      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, Metadata: metadata }));
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, Metadata: metadata,
+        ...(Number.isFinite(contentLength) ? { ContentLength: contentLength } : {}),
+      }), signal ? { abortSignal: signal } : undefined);
       return { key, bucket };
     },
     async signedGetUrl(key, ttl = expiresIn) {

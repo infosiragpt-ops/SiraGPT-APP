@@ -98,6 +98,20 @@ async function persistLocalFile({ localPath, key, contentType, metadata, deleteL
   return { key, ref: refFromKey(key), storage: 'r2' };
 }
 
+// Large recordings must not be read wholesale into a Buffer. Keep the local
+// copy until the caller has atomically persisted the new File.path reference.
+async function persistLocalFileStream({ localPath, key, contentType, metadata, signal, env = process.env }) {
+  if (!enabled(env)) return { key: null, ref: localPath, storage: 'local' };
+  signal?.throwIfAborted();
+  const stat = await fs.stat(localPath);
+  const body = fsSync.createReadStream(localPath, { signal });
+  try {
+    await storage(env).put({ key, body, contentType: contentType || 'application/octet-stream',
+      contentLength: stat.size, metadata, signal });
+    return { key, ref: refFromKey(key), storage: 'r2' };
+  } finally { body.destroy(); }
+}
+
 // ── Reads ──
 async function signedUrl(refOrKey, ttl, env = process.env) {
   if (!enabled(env)) return null;
@@ -200,6 +214,7 @@ module.exports = {
   sanitizeSegment,
   putBuffer,
   persistLocalFile,
+  persistLocalFileStream,
   signedUrl,
   readStream,
   stat,

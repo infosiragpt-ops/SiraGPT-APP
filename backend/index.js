@@ -569,6 +569,7 @@ const {
     closeSwarmRuntime,
 } = require('./src/services/codex/swarm-runner');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
+const { startMediaTranscriptionWorker, closeMediaTranscriptionQueue } = require('./src/services/media-transcription-queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
 const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
@@ -1670,6 +1671,7 @@ async function startServer() {
       .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
       .catch((err) => logger.warn({ err: err.message }, 'codex_swarm_recovery_failed'));
     startDocumentCollectionWorker();
+    startMediaTranscriptionWorker();
     // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
     // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
     // producción; CODEX_PROACTIVE_ENABLED=0/1 fuerza). unref'd — nunca retiene
@@ -1924,6 +1926,7 @@ async function startServer() {
             closeProactiveScheduler(),
             closeDocumentCollectionWorker(),
             closeDocumentCollectionQueue(),
+            closeMediaTranscriptionQueue(),
             closeHarnessWorker(),
         ]);
     }, 5000);

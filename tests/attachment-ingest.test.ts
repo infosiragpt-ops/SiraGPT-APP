@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { blobToFile, DEFAULT_MAX_MEDIA_BYTES, isMediaUpload, validateFile } from "../lib/attachment-ingest"
+import { blobToFile, DEFAULT_MAX_MEDIA_BYTES, isMediaUpload, validateFile, validateBatch } from "../lib/attachment-ingest"
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const XLS_MIME = "application/vnd.ms-excel"
@@ -50,4 +50,16 @@ test("audio and video are capped at 2 GB while documents keep the 100 MB cap", (
   const huge = validateFile({ name: "x.mp4", type: "video/mp4", size: 3000 * MB } as unknown as File)
   assert.equal(huge.code, "size_exceeded")
   assert.match(String(huge.reason), /2048 MB/)
+})
+
+test("supports 50 recordings with a clear 51st rejection and MIME-less formats", () => {
+  const files = Array.from({length: 51}, (_, index) => makeFile(`${index}.flac`, ""))
+  const result = validateBatch(files)
+  assert.equal(result.accepted.length, 50)
+  assert.equal(result.rejected.length, 1)
+  assert.match(result.rejected[0].reason, /50 audios/)
+  assert.equal(validateBatch(files.slice(0, 2), { existingMediaCount: 49 }).accepted.length, 1)
+  for (const ext of ["flac", "aac", "wma", "aif", "aiff"]) {
+    assert.equal(validateFile({name: `lecture.${ext}`, type: "", size: 200 * 1024 * 1024} as File).ok, true)
+  }
 })

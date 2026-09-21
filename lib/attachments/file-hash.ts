@@ -61,7 +61,7 @@ export interface DedupeResult<T extends File> {
   unique: T[]
   /** Files whose hash matched `existingHashes` or an earlier file in the batch. */
   duplicates: T[]
-  /** Content hash for every input file (including duplicates). */
+  /** Content hash for bounded-size inputs (including duplicates). Large files are not hashed. */
   hashes: Map<T, string>
 }
 
@@ -80,6 +80,9 @@ export async function dedupeFiles<T extends File>(
   const hashes = new Map<T, string>()
 
   for (const file of files) {
+    // Browser SHA requires an entire ArrayBuffer. Large recordings stay
+    // file-backed; do not sample-hash and accidentally discard distinct audio.
+    if (file.size > 8 * 1024 * 1024) { unique.push(file); continue }
     const hash = await hashFile(file)
     hashes.set(file, hash)
     if (seen.has(hash)) {

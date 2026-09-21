@@ -4,6 +4,7 @@
 // Classify stable reason codes only. Details after ':' may contain provider
 // diagnostics and are deliberately neither inspected nor exposed here.
 const FAILED_STOP_REASONS = new Set([
+  'media_batch_failed',
   'verification_failed',
   'invalid_resume_checkpoint',
   'resume_budget_exhausted',

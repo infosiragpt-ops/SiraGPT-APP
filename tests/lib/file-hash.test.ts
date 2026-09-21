@@ -97,6 +97,15 @@ describe('dedupeFiles', () => {
     expect(hashes.size).toBe(0)
   })
 
+  it('keeps large recordings file-backed without sampling false duplicates', async () => {
+    const large = { name: 'long.mp3', size: 200 * 1024 * 1024, arrayBuffer: () => { throw new Error('do not buffer'); } } as unknown as File
+    const second = { ...large, name: 'other.mp3' } as File
+    const result = await dedupeFiles([large, second])
+    expect(result.unique).toEqual([large, second])
+    expect(result.duplicates).toEqual([])
+    expect(result.hashes.size).toBe(0)
+  })
+
   it('records a hash for every input file, including duplicates', async () => {
     const a = makeFile('x', 'a.txt')
     const b = makeFile('x', 'b.txt')

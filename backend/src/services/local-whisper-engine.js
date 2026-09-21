@@ -41,11 +41,11 @@ function timeoutMs(options) {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
-/** Default worker threads: up to 8, never more than the host exposes. */
+/** Two concurrent STT workers share host cores; explicit overrides remain supported. */
 function defaultThreadCount() {
   let cores = 1;
   try { cores = Math.max(1, (os.cpus() || []).length || 1); } catch (_) { cores = 1; }
-  return Math.max(1, Math.min(8, cores));
+  return Math.max(1, Math.min(4, Math.floor(cores / 2) || 1));
 }
 
 function resolveThreadCount(options) {
@@ -180,6 +180,7 @@ function runProcess(command, args, options = {}) {
     }
 
     options.signal?.addEventListener?.('abort', onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
     child.stdout?.on('data', (chunk) => stdout.push(chunk));
     child.stderr?.on('data', (chunk) => stderr.push(chunk));
     child.once('error', (error) => {
@@ -235,9 +236,14 @@ function parseWhisperCppJson(raw) {
     return { text: '', segments: [] };
   }
   const rows = Array.isArray(parsed.transcription) ? parsed.transcription : [];
+  const seconds = (offset, stamp) => {
+    if (Number.isFinite(offset)) return Math.max(0, offset / 1000);
+    const match = /^(\d+):(\d+):(\d+)[,.](\d+)$/.exec(String(stamp || ''));
+    return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(`0.${match[4]}`) : 0;
+  };
   const segments = rows.map((row) => ({
-    start: 0,
-    end: 0,
+    start: seconds(row.offsets?.from, row.timestamps?.from),
+    end: seconds(row.offsets?.to, row.timestamps?.to),
     text: String(row.text || '').trim(),
   })).filter((row) => row.text);
   const text = String(parsed.text || segments.map((s) => s.text).join(' ')).trim();
@@ -304,7 +310,8 @@ async function transcribeWithPython(wavPath, language, options = {}) {
     '--model', modelName(options),
   ];
   if (language) args.push('--language', language);
-  await runProcess(pythonPath(options), args, options);
+  const wavStat = await fsPromises.stat(wavPath).catch(() => null);
+  await runProcess(pythonPath(options), args, { ...options, timeoutMs: whisperTimeoutForWav(wavStat?.size || 0, options) });
   const raw = await readIfExists(outPath);
   if (!raw) {
     const err = new Error('python whisper returned no output');
@@ -335,7 +342,12 @@ async function transcribeLocal(filePath, options = {}) {
   const tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'sira-local-whisper-'));
   const wavPath = path.join(tmpDir, 'audio.wav');
   try {
-    await convertToWav(filePath, wavPath, options);
+    try {
+      await convertToWav(filePath, wavPath, options);
+    } catch (err) {
+      if (err.code === 'LOCAL_WHISPER_ABORTED' || err.code === 'LOCAL_WHISPER_UNAVAILABLE' || err.code === 'LOCAL_WHISPER_TIMEOUT') throw err;
+      throw Object.assign(new Error('Audio could not be decoded'), { code: 'AUDIO_DECODE_FAILED', cause: err });
+    }
     try {
       return await transcribeWithWhisperCpp(wavPath, options.language, options);
     } catch (cppErr) {
@@ -356,6 +368,7 @@ async function transcribeLocal(filePath, options = {}) {
 }
 
 module.exports = {
+  parseWhisperCppJson,
   defaultThreadCount,
   whisperTimeoutForWav,
   transcribeLocal,
