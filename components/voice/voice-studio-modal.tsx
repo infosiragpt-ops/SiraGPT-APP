@@ -25,6 +25,7 @@ import {
   VolumeX,
   BookAudio,
   Check,
+  ChevronDown,
   Clapperboard,
   Copy,
   Download,
@@ -60,6 +61,7 @@ import { apiClient, type VoiceStudioJob, type VoiceStudioStatus, type VoiceStudi
 import { useVoices, resetVoices } from "@/hooks/use-voices"
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { SIRA_VOZ_LABEL, SIRA_VOZ_TAGLINE } from "@/lib/chat/media-composer-config"
+import { analyzeAudioBlob, type SampleLab } from "@/lib/voice/sample-lab"
 import { cn } from "@/lib/utils"
 
 export type VoiceStudioTab = "voices" | "dub" | "transcribe" | "audiobook" | "jobs"
@@ -129,6 +131,15 @@ const DUB_TARGET_LANGUAGES = ["Spanish", "English", "Portuguese", "French", "Ger
 
 const MAX_RECORD_SECONDS = 20
 const MB = 1024 * 1024
+const VOICE_RAIL = "md:w-[320px]"
+const CLONE_SCRIPT =
+  "Hola, esta es mi voz. Voy a leer despacio, con mi tono de siempre, para que el clon salga fiel. El cielo está despejado, el café está caliente y hoy empiezo un proyecto nuevo."
+
+const TEST_SPEEDS = [
+  { id: "pausada", label: "Pausada", speed: 0.85 },
+  { id: "natural", label: "Natural", speed: 1 },
+  { id: "agil", label: "Ágil", speed: 1.25 },
+] as const
 
 /** Media URLs come back as `/api/...` paths; resolve them against the backend root like the artifact players do. */
 function resolveMediaUrl(downloadUrl?: string | null): string | null {
@@ -315,6 +326,69 @@ function useBlobAudio() {
   }, [stop])
   React.useEffect(() => stop, [stop])
   return { play, stop, playingKey }
+}
+
+function verdictLabel(verdict: SampleLab["verdict"]): string {
+  if (verdict === "excelente") return "Excelente"
+  if (verdict === "usable") return "Usable"
+  return "Débil"
+}
+
+function formatVoiceDate(iso?: string | null): string {
+  const time = Date.parse(iso || "")
+  if (!Number.isFinite(time)) return ""
+  return new Intl.DateTimeFormat("es", { day: "numeric", month: "short" }).format(new Date(time))
+}
+
+function SampleWaveform({ peaks }: { peaks: number[] }) {
+  return (
+    <div className="flex h-12 items-end gap-px" aria-hidden="true">
+      {peaks.map((peak, index) => (
+        <span
+          key={index}
+          className="min-w-0 flex-1 rounded-sm bg-zinc-900 dark:bg-white"
+          style={{ height: `${Math.max(8, Math.round(peak * 100))}%` }}
+        />
+      ))}
+    </div>
+  )
+}
+
+function SampleLabCard({ lab }: { lab: SampleLab }) {
+  const metrics = [
+    { label: "Nivel", value: lab.peak <= 0 ? "—" : `${Math.round(lab.peak * 100)}%` },
+    { label: "Silencio", value: `${Math.round(lab.silenceRatio * 100)}%` },
+    { label: "Voz", value: `${Math.round(lab.voicedRatio * 100)}%` },
+  ]
+  return (
+    <div data-testid="voice-sample-lab" className="mt-3 rounded-2xl border border-zinc-200 bg-white p-3 dark:border-white/12 dark:bg-zinc-950">
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <p className="text-[13px] font-semibold text-zinc-950 dark:text-white">Laboratorio de la muestra</p>
+        <p className="text-[12px] tabular-nums text-zinc-600 dark:text-white/70">
+          {lab.score}/100 · {verdictLabel(lab.verdict)}
+        </p>
+      </div>
+      <SampleWaveform peaks={lab.peaks} />
+      <dl className="mt-3 grid grid-cols-3 gap-2">
+        {metrics.map((metric) => (
+          <div key={metric.label} className="rounded-xl bg-zinc-50 px-2 py-1.5 dark:bg-white/[0.04]">
+            <dt className="text-[11px] text-zinc-500 dark:text-white/55">{metric.label}</dt>
+            <dd className="text-[13px] font-semibold tabular-nums text-zinc-950 dark:text-white">{metric.value}</dd>
+          </div>
+        ))}
+      </dl>
+      <ul className="mt-2 space-y-1">
+        {lab.notes.map((note) => (
+          <li key={note} className="text-[12px] leading-5 text-zinc-600 dark:text-white/70">{note}</li>
+        ))}
+      </ul>
+      {lab.verdict === "débil" && (
+        <p className="mt-2 text-[12px] leading-5 text-zinc-500 dark:text-white/55">
+          Puedes crear la voz igual. Una toma más limpia suena más fiel.
+        </p>
+      )}
+    </div>
+  )
 }
 
 // ── Clon profesional (ElevenLabs PVC, oficial) ──────────────────────────────
@@ -620,18 +694,18 @@ function ProfessionalVoicePanel({ language, languageOptions }: {
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
           <AudioLines className="h-4 w-4 text-zinc-900 dark:text-white" />
-          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Evite los entornos ruidosos</p>
-          <p className="text-[12px] text-zinc-500 dark:text-white/60">Los sonidos de fondo interfieren con los resultados de calidad de grabación.</p>
+          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Cuarto en silencio</p>
+          <p className="text-[12px] text-zinc-500 dark:text-white/60">El clon copia el ruido igual que tu voz. Apaga ventiladores y avisos.</p>
         </div>
         <div>
           <Mic className="h-4 w-4 text-zinc-900 dark:text-white" />
-          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Compruebe la calidad del micrófono</p>
-          <p className="text-[12px] text-zinc-500 dark:text-white/60">Pruebe unidades externas o micrófonos de auriculares para una mejor captura de audio.</p>
+          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Un solo micrófono</p>
+          <p className="text-[12px] text-zinc-500 dark:text-white/60">Varias tomas del mismo equipo suman mejor que una sola con ruido.</p>
         </div>
         <div>
           <RefreshCw className="h-4 w-4 text-zinc-900 dark:text-white" />
-          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Utilice equipos consistentes</p>
-          <p className="text-[12px] text-zinc-500 dark:text-white/60">No cambie el equipo de grabación entre muestras.</p>
+          <p className="mt-1 text-[13px] font-semibold text-zinc-950 dark:text-white">Distancia fija</p>
+          <p className="text-[12px] text-zinc-500 dark:text-white/60">Habla a un palmo y no cambies de sitio entre archivos.</p>
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -676,7 +750,19 @@ function ProfessionalVoicePanel({ language, languageOptions }: {
           ))}
         </div>
       )}
-      <Progress value={Math.min(100, (totalSeconds / PVC_REQUIRED_SECONDS) * 100)} className="h-1.5 bg-zinc-200 dark:bg-white/10 [&>div]:bg-zinc-950 dark:[&>div]:bg-white" />
+      <div className="rounded-2xl border border-zinc-200 px-3 py-3 dark:border-white/12">
+        <p className="text-[12px] font-medium text-zinc-500 dark:text-white/55">Cobertura de la sesión</p>
+        <p className="mt-1 text-[28px] font-semibold tabular-nums leading-none tracking-tight text-zinc-950 dark:text-white">
+          {formatClock(totalSeconds)}
+          <span className="ml-1 text-[14px] font-medium text-zinc-500 dark:text-white/55">/ 30:00</span>
+        </p>
+        <Progress value={Math.min(100, (totalSeconds / PVC_REQUIRED_SECONDS) * 100)} className="mt-3 h-1.5 bg-zinc-200 dark:bg-white/10 [&>div]:bg-zinc-950 dark:[&>div]:bg-white" />
+        <ul className="mt-3 space-y-1 text-[12px] leading-5 text-zinc-600 dark:text-white/70">
+          <li>{name.trim() ? "Nombre listo." : "Falta el nombre de la voz."}</li>
+          <li>{files.length} {files.length === 1 ? "archivo" : "archivos"} · máximo {PVC_MAX_FILES}, mismo micrófono.</li>
+          <li>{meetsMinimum ? "Ya hay 30 minutos. Puedes entrenar." : `Faltan ${formatClock(Math.max(0, PVC_REQUIRED_SECONDS - totalSeconds))} de voz limpia.`}</li>
+        </ul>
+      </div>
       <div className="flex items-center justify-between gap-3">
         <p className="flex items-center gap-2 text-[12.5px] text-zinc-600 dark:text-white/65">
           <span className={cn("flex h-4 w-4 items-center justify-center rounded-full border", meetsMinimum ? "border-zinc-950 bg-zinc-950 text-white dark:border-white dark:bg-white dark:text-zinc-950" : "border-zinc-300 text-transparent dark:border-white/25")}>
@@ -715,16 +801,16 @@ function CatalogVoiceRows({
           type="button"
           onClick={() => onSelect(voice.voiceId, voice.name)}
           aria-pressed={selectedId === voice.voiceId}
-          className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-zinc-100 dark:hover:bg-white/10"
+          className="flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:hover:bg-white/10"
         >
           <Mic className="h-4 w-4 shrink-0" />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[10px] font-medium leading-tight">{voice.name}</span>
-            <span className="block truncate text-[9px] leading-tight text-zinc-500">
+            <span className="block truncate text-[13px] font-medium leading-tight">{voice.name}</span>
+            <span className="block truncate text-[12px] leading-tight text-zinc-500">
               {voice.description || voice.labels?.accent || voice.category}
             </span>
           </span>
-          {selectedId === voice.voiceId && <Check className="h-3 w-3 shrink-0" />}
+          {selectedId === voice.voiceId && <Check className="h-3.5 w-3.5 shrink-0" />}
         </button>
       ))}
     </div>
@@ -790,7 +876,24 @@ function VoicesPanel({
     if (cloneMode) closeButtonRef.current?.focus()
   }, [cloneMode])
   const [sampleError, setSampleError] = React.useState("")
+  const [lab, setLab] = React.useState<SampleLab | null>(null)
+  const [testSpeed, setTestSpeed] = React.useState(1)
+  const [level, setLevel] = React.useState(0)
   const selectionRef = React.useRef(0)
+  const rafRef = React.useRef<number | null>(null)
+  const meterCtxRef = React.useRef<AudioContext | null>(null)
+  const meterGenRef = React.useRef(0)
+  const stopMeter = React.useCallback(() => {
+    meterGenRef.current += 1
+    if (rafRef.current != null) {
+      window.cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+    const ctx = meterCtxRef.current
+    meterCtxRef.current = null
+    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => {})
+    setLevel(0)
+  }, [])
   const recordingStartRef = React.useRef(0)
   const aliveRef = React.useRef(true)
   React.useEffect(() => {
@@ -803,6 +906,7 @@ function VoicesPanel({
   const acceptSample = async (file: File) => {
     const selection = ++selectionRef.current
     setSample(null)
+    setLab(null)
     setDetails(false)
     setConsent(false)
     setSampleError("")
@@ -821,17 +925,24 @@ function VoicesPanel({
     setChecking(true)
     const duration = await loadAudioDurationSeconds(file)
     if (selection !== selectionRef.current || !aliveRef.current) return
+    let report: SampleLab | null = null
+    if (duration >= 10 && duration <= MAX_RECORD_SECONDS + 0.5) {
+      report = await analyzeAudioBlob(file)
+      if (selection !== selectionRef.current || !aliveRef.current) return
+    }
     setChecking(false)
     if (!duration) {
       setSampleError("No se pudo leer el audio. Prueba con un archivo WAV o MP3.")
       return
     }
+    setLab(report)
     setSample({ blob: file, filename: file.name, source: "upload", duration })
     if (duration < 10) setSampleError("Se requieren al menos 10 segundos de audio")
     else if (duration > MAX_RECORD_SECONDS + 0.5)
       setSampleError("La muestra debe durar entre 10 y 20 segundos")
   }
   const stopRecording = React.useCallback(() => {
+    stopMeter()
     if (timerRef.current) {
       window.clearInterval(timerRef.current)
       timerRef.current = null
@@ -842,14 +953,74 @@ function VoicesPanel({
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     setRecording(false)
+  }, [stopMeter])
+  const stopRecordingRef = React.useRef(stopRecording)
+  stopRecordingRef.current = stopRecording
+
+  React.useEffect(() => () => {
+    stopRecordingRef.current()
   }, [])
 
-  React.useEffect(
-    () => () => {
-      stopRecording()
-    },
-    [stopRecording],
-  )
+  React.useEffect(() => {
+    if (!recording) return
+    const startedAt = recordingStartRef.current || Date.now()
+    let frame = 0
+    const tick = () => {
+      const seconds = Math.floor((Date.now() - startedAt) / 1000)
+      setElapsed((current) => (current === seconds ? current : seconds))
+      if (seconds >= MAX_RECORD_SECONDS) {
+        stopRecordingRef.current()
+        return
+      }
+      frame = window.requestAnimationFrame(tick)
+    }
+    frame = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(frame)
+  }, [recording])
+
+  const startMeter = (stream: MediaStream) => {
+    stopMeter()
+    const generation = meterGenRef.current
+    try {
+      const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!Ctor) return
+      const ctx = new Ctor()
+      if (generation !== meterGenRef.current) {
+        void ctx.close().catch(() => {})
+        return
+      }
+      meterCtxRef.current = ctx
+      void ctx.resume().catch(() => {})
+      const source = ctx.createMediaStreamSource(stream)
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 1024
+      source.connect(analyser)
+      const data = new Uint8Array(analyser.fftSize)
+      let last = 0
+      const tick = (now: number) => {
+        if (generation !== meterGenRef.current) return
+        try {
+          analyser.getByteTimeDomainData(data)
+          if (now - last > 80) {
+            last = now
+            let sum = 0
+            for (let i = 0; i < data.length; i++) {
+              const sample = (data[i] - 128) / 128
+              sum += sample * sample
+            }
+            const next = Math.min(1, Math.sqrt(sum / data.length) * 3.2)
+            setLevel((prev) => prev * 0.55 + next * 0.45)
+          }
+          rafRef.current = window.requestAnimationFrame(tick)
+        } catch {
+          /* The take continues if the meter stops. */
+        }
+      }
+      rafRef.current = window.requestAnimationFrame(tick)
+    } catch {
+      /* Recording still works when the meter cannot start. */
+    }
+  }
 
   const startRecording = async () => {
     const requestId = ++selectionRef.current
@@ -865,6 +1036,7 @@ function VoicesPanel({
         return
       }
       streamRef.current = stream
+      startMeter(stream)
       const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((m) =>
         MediaRecorder.isTypeSupported(m),
       )
@@ -880,12 +1052,19 @@ function VoicesPanel({
         if (blob.size > 0 && aliveRef.current) {
           const duration = (Date.now() - recordingStartRef.current) / 1000
           setSample({ blob, filename: `grabacion.${ext}`, source: "record", duration })
+          setLab(null)
           if (duration < 10) setSampleError("Se requieren al menos 10 segundos de audio")
+          else if (duration <= MAX_RECORD_SECONDS + 0.5) {
+            void analyzeAudioBlob(blob).then((report) => {
+              if (aliveRef.current) setLab(report)
+            })
+          }
         }
       }
       recorderRef.current = recorder
       selectionRef.current += 1
       setSample(null)
+      setLab(null)
       setSampleError("")
       setDetails(false)
       setConsent(false)
@@ -894,12 +1073,6 @@ function VoicesPanel({
       recorder.start(250)
       setElapsed(0)
       setRecording(true)
-      const startedAt = Date.now()
-      timerRef.current = window.setInterval(() => {
-        const seconds = Math.floor((Date.now() - startedAt) / 1000)
-        setElapsed(seconds)
-        if (seconds >= MAX_RECORD_SECONDS) stopRecording()
-      }, 250)
     } catch (err) {
       toast.error(errorMessage(err, "No se pudo acceder al micrófono"))
       stopRecording()
@@ -927,6 +1100,7 @@ function VoicesPanel({
       setName("")
       setRefText("")
       setSample(null)
+      setLab(null)
       setDetails(false)
       setCloneMode(null)
       await onVoicesChange()
@@ -978,6 +1152,7 @@ function VoicesPanel({
         text: testText.trim().slice(0, 600),
         voiceId: selectedVoiceId || null,
         language: voiceLanguage,
+        speed: testSpeed,
       })
       play("test", blob)
     } catch (err) {
@@ -1005,33 +1180,53 @@ function VoicesPanel({
     setDetails(false)
   }
   const cardClass =
-    "w-full rounded-lg border border-zinc-200/80 bg-white p-1.5 text-left transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-white/15 dark:bg-zinc-950 dark:hover:bg-white/5"
+    "w-full rounded-2xl border border-zinc-200 bg-white p-3 text-left transition-colors hover:border-zinc-400 hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-white/15 dark:bg-zinc-950 dark:hover:bg-white/5"
+  const voiceCap = status?.limits?.maxVoices || 0
+  const defaultVoiceOn = !selectedVoiceId && !(onSelectCatalogVoice && catalogVoiceId)
   return (
     <>
       <aside
         data-testid="voice-create-panel"
         aria-label="Crear voz"
         className={cn(
-          "absolute bottom-0 right-0 top-14 z-20 w-full overflow-y-auto bg-background px-3 pb-5 pt-2 text-foreground md:w-[208px]",
+          "absolute bottom-0 right-0 top-14 z-20 w-full overflow-y-auto border-l border-zinc-200/80 bg-background px-4 pb-6 pt-3 text-foreground dark:border-white/10",
+          VOICE_RAIL,
           cloneMode && "hidden md:block",
         )}
       >
-        <div className="mb-3 flex items-center gap-2">
-          <AudioLines className="h-3.5 w-3.5" />
-          <h2 className="flex-1 text-[12px] font-semibold">Crear voz</h2>
-          <span className="text-[10px] text-zinc-500">
-            {voices.length}
-            {status?.limits?.maxVoices ? ` / ${status.limits.maxVoices}` : ""} creadas
+        <div className="mb-4 flex items-start gap-2">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-zinc-950 text-white dark:bg-white dark:text-zinc-950">
+            <AudioLines className="h-4 w-4" />
           </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[15px] font-semibold leading-tight">Crear voz</h2>
+            <p className="mt-0.5 text-[12px] tabular-nums text-zinc-500">
+              {voices.length}
+              {voiceCap ? ` / ${voiceCap}` : ""} creadas
+            </p>
+          </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Cerrar panel de voz"
-            className="grid h-7 w-7 place-items-center rounded hover:bg-zinc-100 dark:hover:bg-white/10"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:hover:bg-white/10"
           >
-            <X className="h-3 w-3" />
+            <X className="h-4 w-4" />
           </button>
         </div>
+        {voiceCap > 0 && (
+          <div
+            className="mb-4 h-1 overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10"
+            role="meter"
+            aria-label="Voces creadas"
+            aria-valuemin={0}
+            aria-valuemax={voiceCap}
+            aria-valuenow={voices.length}
+          >
+            <div className="h-full bg-zinc-950 dark:bg-white" style={{ width: `${Math.min(100, (voices.length / voiceCap) * 100)}%` }} />
+          </div>
+        )}
+        <p className="mb-2 text-[12px] font-medium text-zinc-500">Nuevo clon</p>
         <div className="space-y-2">
           <button
             type="button"
@@ -1044,16 +1239,20 @@ function VoicesPanel({
               setDetails(false)
             }}
             data-testid="voice-clone-instant"
-            className={cardClass}
+            aria-pressed={cloneMode === "instant"}
+            className={cn(cardClass, cloneMode === "instant" && "border-zinc-950 dark:border-white")}
           >
-            <span className="flex items-center gap-1 text-[9px] leading-tight font-medium">
-              <AudioLines className="h-3 w-3" />
-              Clon de voz instantánea
+            <span className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-[13px] font-semibold leading-tight">
+                <AudioLines className="h-4 w-4 shrink-0" />
+                Clon de voz instantánea
+              </span>
+              <span className="shrink-0 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:border-white/15 dark:text-white/70">10–20 s</span>
             </span>
-            <span className="mt-0.5 block text-[8px] leading-[11px] text-zinc-500">
+            <span className="mt-2 block text-[12px] leading-5 text-zinc-600 dark:text-white/70">
               Clona tu voz con solo 10 segundos de audio.
             </span>
-            <span className="mt-1 block text-[8px] leading-tight">2 minutos · Sira Voz</span>
+            <span className="mt-2 block text-[12px] text-zinc-500">2 minutos · Sira Voz</span>
           </button>
           <button
             type="button"
@@ -1066,93 +1265,173 @@ function VoicesPanel({
               setCloneMode("pro")
             }}
             data-testid="voice-clone-professional"
-            className={cardClass}
+            aria-pressed={cloneMode === "pro"}
+            className={cn(cardClass, cloneMode === "pro" && "border-zinc-950 dark:border-white")}
           >
-            <span className="flex items-center gap-1 text-[9px] leading-tight font-medium">
-              <Mic className="h-3 w-3" />
-              Clon de voz profesional
+            <span className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-[13px] font-semibold leading-tight">
+                <Mic className="h-4 w-4 shrink-0" />
+                Clon de voz profesional
+              </span>
+              <span className="shrink-0 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:border-white/15 dark:text-white/70">30 min</span>
             </span>
-            <span className="mt-0.5 block text-[8px] leading-[11px] text-zinc-500">
+            <span className="mt-2 block text-[12px] leading-5 text-zinc-600 dark:text-white/70">
               Crea la réplica digital más realista de tu voz. Requiere al menos 30 minutos de audio limpio.
             </span>
-            <span className="mt-1 block text-[8px] leading-tight">5 minutos · según tu plan</span>
+            <span className="mt-2 block text-[12px] text-zinc-500">5 minutos · según tu plan</span>
           </button>
         </div>
-        <div className="mt-4 space-y-1" aria-label="Mis voces">
-          {loading && <p className="text-xs text-zinc-500">Cargando tus voces…</p>}
-          {voices.map((voice) => (
-            <div
-              key={voice.id}
-              className="flex items-center gap-1 rounded-md py-1 hover:bg-zinc-50 dark:hover:bg-white/5"
-            >
-              <button
-                type="button"
-                onClick={() => void previewVoice(voice)}
-                aria-label={`Escuchar la muestra de ${voice.name}`}
-                className="grid h-7 w-7 shrink-0 place-items-center"
-              >
-                {playingKey === `voice:${voice.id}` ? (
-                  <Pause className="h-3.5 w-3.5" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => onSelectVoice({ id: voice.id, name: voice.name })}
-                aria-pressed={selectedVoiceId === voice.id}
-                className="min-w-0 flex-1 text-left"
-              >
-                <span className="block truncate text-[10px] font-medium leading-tight">{voice.name}</span>
-                <span className="block text-[10px] text-zinc-500">
-                  {languageLabel(voice.language)} · Sira Voz
-                </span>
-              </button>
-              {selectedVoiceId === voice.id && <Check className="h-3 w-3" />}
-              <button
-                type="button"
-                disabled={deleting === voice.id}
-                onClick={() => void deleteVoice(voice)}
-                aria-label={`Eliminar la voz ${voice.name}`}
-                className="grid h-7 w-7 place-items-center text-zinc-500"
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-          {onSelectCatalogVoice && (
-            <CatalogVoiceRows selectedId={catalogVoiceId} onSelect={onSelectCatalogVoice} />
+        <div className="mt-5" aria-label="Mis voces">
+          <p className="mb-2 text-[12px] font-medium text-zinc-500">Biblioteca</p>
+          {loading && <p className="text-[12px] text-zinc-500">Cargando tus voces…</p>}
+          {!loading && voices.length === 0 && (
+            <p className="mb-2 text-[12px] leading-5 text-zinc-500">Aún no tienes clones. Los que crees se quedan aquí.</p>
           )}
-          {!onSelectCatalogVoice && (
+          <div className="space-y-1">
+            {voices.map((voice) => {
+              const created = formatVoiceDate(voice.createdAt)
+              return (
+                <div
+                  key={voice.id}
+                  className={cn(
+                    "flex items-center gap-1 rounded-xl px-1 py-1",
+                    selectedVoiceId === voice.id ? "bg-zinc-100 dark:bg-white/10" : "hover:bg-zinc-50 dark:hover:bg-white/5",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void previewVoice(voice)}
+                    aria-label={`Escuchar la muestra de ${voice.name}`}
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-full hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:hover:bg-zinc-900"
+                  >
+                    {playingKey === `voice:${voice.id}` ? (
+                      <Pause className="h-4 w-4" />
+                    ) : (
+                      <Play className="h-4 w-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectVoice({ id: voice.id, name: voice.name })}
+                    aria-pressed={selectedVoiceId === voice.id}
+                    className="min-w-0 flex-1 py-1 text-left"
+                  >
+                    <span className="block truncate text-[13px] font-medium leading-tight">{voice.name}</span>
+                    <span className="block truncate text-[12px] text-zinc-500">
+                      {languageLabel(voice.language)} · Sira Voz{created ? ` · ${created}` : ""}
+                    </span>
+                  </button>
+                  {selectedVoiceId === voice.id && <Check className="h-4 w-4 shrink-0" />}
+                  <button
+                    type="button"
+                    disabled={deleting === voice.id}
+                    onClick={() => void deleteVoice(voice)}
+                    aria-label={`Eliminar la voz ${voice.name}`}
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-zinc-500 hover:bg-white hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 disabled:opacity-40 dark:hover:bg-zinc-900 dark:hover:text-white"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )
+            })}
+            {onSelectCatalogVoice && (
+              <CatalogVoiceRows selectedId={catalogVoiceId} onSelect={onSelectCatalogVoice} />
+            )}
             <button
               type="button"
               onClick={() => onSelectVoice(null)}
-              className="flex w-full items-center gap-2 py-2 text-left text-[11px]"
+              aria-pressed={defaultVoiceOn}
+              className={cn(
+                "flex min-h-11 w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-[13px]",
+                defaultVoiceOn ? "bg-zinc-100 dark:bg-white/10" : "hover:bg-zinc-50 dark:hover:bg-white/5",
+              )}
             >
-              <Mic className="h-4 w-4" />
-              Voz predeterminada de Sira{!selectedVoiceId && <Check className="ml-auto h-3 w-3" />}
+              <Mic className="h-4 w-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium leading-tight">Voz predeterminada de Sira</span>
+                <span className="block text-[12px] text-zinc-500">Lista para narrar, sin clonar</span>
+              </span>
+              {defaultVoiceOn && <Check className="h-4 w-4 shrink-0" />}
             </button>
-          )}
-        </div>
-        <details className="mt-5 text-[11px] text-zinc-500">
-          <summary className="cursor-pointer">Más herramientas de voz</summary>
-          <div className="mt-2 grid gap-2">
-            {TABS.filter((t) => t.id !== "voices").map((t) => (
-              <button type="button" className="text-left" key={t.id} onClick={() => onOpenTab(t.id)}>
-                {t.label}
-              </button>
-            ))}
           </div>
-          <Input
-            aria-label="Texto para probar Sira Voz"
-            value={testText}
-            onChange={(e) => setTestText(e.target.value)}
-            maxLength={600}
-            className="my-2 h-8 text-xs"
-          />
-          <button type="button" disabled={testing || !status?.ok} onClick={() => void testVoice()}>
-            {playingKey === "test" ? "Detener" : "Probar voz de Sira"}
-          </button>
+        </div>
+        <details className="group mt-5 border-t border-zinc-200 pt-4 text-foreground dark:border-white/10">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-lg py-1 text-[13px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 [&::-webkit-details-marker]:hidden">
+            Más herramientas de voz
+            <ChevronDown className="h-4 w-4 text-zinc-500 transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none" />
+          </summary>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {TABS.filter((t) => t.id !== "voices").map((t) => {
+              const Icon = t.icon
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  aria-label={t.label}
+                  onClick={() => onOpenTab(t.id)}
+                  className="rounded-xl border border-zinc-200 px-2.5 py-2 text-left hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400 dark:border-white/12 dark:hover:bg-white/5"
+                >
+                  <Icon className="h-4 w-4" />
+                  <span className="mt-1 block text-[12px] font-semibold">{t.label}</span>
+                  <span className="block text-[11px] leading-4 text-zinc-500">{t.hint}</span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-3 rounded-2xl border border-zinc-200 p-3 dark:border-white/12">
+            <p className="text-[13px] font-semibold">Banco de prueba</p>
+            <p className="mt-0.5 text-[12px] leading-5 text-zinc-500">Escucha la voz elegida antes de usarla en el compositor.</p>
+            <Input
+              aria-label="Texto para probar Sira Voz"
+              value={testText}
+              onChange={(e) => setTestText(e.target.value)}
+              maxLength={600}
+              className="my-2 h-10 text-[13px]"
+            />
+            <div className="mb-2 flex gap-1" role="group" aria-label="Velocidad de la prueba">
+              {TEST_SPEEDS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-pressed={testSpeed === preset.speed}
+                  onClick={() => setTestSpeed(preset.speed)}
+                  className={cn(
+                    "h-9 flex-1 rounded-full border text-[12px] font-medium",
+                    testSpeed === preset.speed
+                      ? "border-zinc-950 bg-zinc-950 text-white dark:border-white dark:bg-white dark:text-zinc-950"
+                      : "border-zinc-200 text-zinc-700 hover:bg-zinc-50 dark:border-white/15 dark:text-white/80 dark:hover:bg-white/5",
+                  )}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <label className="mb-3 block text-[12px] text-zinc-600 dark:text-white/70">
+              <span className="flex items-center justify-between">
+                Velocidad
+                <span className="tabular-nums">{testSpeed.toFixed(2)}×</span>
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={testSpeed}
+                aria-label="Velocidad de la prueba"
+                onChange={(e) => setTestSpeed(Number(e.target.value))}
+                className="mt-1 w-full accent-zinc-950"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={testing || !status?.ok}
+              onClick={() => void testVoice()}
+              className="inline-flex h-10 items-center rounded-full bg-zinc-950 px-4 text-[13px] font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-zinc-950"
+            >
+              {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {playingKey === "test" ? "Detener" : "Probar voz de Sira"}
+            </button>
+          </div>
         </details>
       </aside>
       {cloneMode && (
@@ -1165,9 +1444,9 @@ function VoicesPanel({
             }
           }}
           aria-label={cloneMode === "instant" ? "Clon de voz instantánea" : "Clon de voz profesional"}
-          className="absolute inset-x-0 bottom-0 top-14 z-20 overflow-y-auto bg-background md:right-[208px]"
+          className="absolute inset-x-0 bottom-0 top-14 z-20 overflow-y-auto bg-background md:right-[320px]"
         >
-          <div className="flex min-h-full items-center justify-center px-5 py-14 md:pl-[136px] md:pr-8">
+          <div className="flex min-h-full items-center justify-center px-5 py-14 md:px-8">
             <div className="relative w-full max-w-[556px] md:-translate-y-3">
               <button
                 type="button"
@@ -1185,22 +1464,27 @@ function VoicesPanel({
                 <>
                   {!details ? (
                     <>
+                      <ol className="mb-4 flex items-center gap-2 text-[12px] text-zinc-500" aria-label="Pasos del clon instantáneo">
+                        <li className="font-semibold text-zinc-950 dark:text-white">1 · Muestra</li>
+                        <li aria-hidden className="h-px w-6 bg-zinc-300 dark:bg-white/20" />
+                        <li>2 · Identidad</li>
+                      </ol>
                       <div className="mb-5 grid gap-4 sm:grid-cols-3" data-testid="voice-recording-tips">
                         {[
                           {
                             Icon: VolumeX,
-                            title: "Evite los entornos ruidosos",
-                            text: "Los sonidos de fondo interfieren con los resultados de calidad de grabación.",
+                            title: "Cuarto en silencio",
+                            text: "El clon copia el ruido igual que tu voz. Apaga ventiladores y avisos.",
                           },
                           {
                             Icon: ThumbsUp,
-                            title: "Comprobar la calidad del micrófono",
-                            text: "Pruebe unidades externas o micrófonos de auriculares para una mejor captura de audio.",
+                            title: "Un solo micrófono",
+                            text: "El de los auriculares basta. No cambies de equipo a media toma.",
                           },
                           {
                             Icon: Mic,
-                            title: "Utilice equipos consistentes",
-                            text: "No cambie el equipo de grabación entre muestras.",
+                            title: "Distancia fija",
+                            text: "Habla a un palmo, sin girar la cabeza ni taparte la boca.",
                           },
                         ].map(({ Icon, title, text }) => (
                           <div key={title}>
@@ -1211,6 +1495,22 @@ function VoicesPanel({
                             </p>
                           </div>
                         ))}
+                      </div>
+                      <div className="mb-4 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3 dark:border-white/12 dark:bg-white/[0.03]">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-[13px] font-semibold text-zinc-950 dark:text-white">Guion de unos 15 segundos</p>
+                          <button
+                            type="button"
+                            onClick={() => void copyTextSafe(CLONE_SCRIPT).then((result) => {
+                              if (result?.ok) toast.success("Guion copiado")
+                              else toast.error("No se pudo copiar el guion")
+                            })}
+                            className="shrink-0 text-[12px] font-semibold underline-offset-2 hover:underline"
+                          >
+                            Copiar guion
+                          </button>
+                        </div>
+                        <p className="mt-1 text-[13px] leading-6 text-zinc-700 dark:text-white/80">{CLONE_SCRIPT}</p>
                       </div>
                       <div
                         data-testid="voice-sample-dropzone"
@@ -1265,6 +1565,27 @@ function VoicesPanel({
                               ? "Conectando micrófono…"
                               : "Grabar audio"}
                         </button>
+                        {recording && (
+                          <div className="mt-3 w-full max-w-xs text-left">
+                            <div className="mb-1 flex justify-between text-[12px] tabular-nums text-zinc-600 dark:text-white/70">
+                              <span>Toma</span>
+                              <span>{elapsed < 10 ? `Faltan ${10 - elapsed} s` : "Duración válida"}</span>
+                            </div>
+                            <div className="h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-white/15" aria-hidden="true">
+                              <div
+                                className="h-full bg-zinc-950 motion-reduce:transition-none dark:bg-white"
+                                style={{ width: `${Math.min(100, (elapsed / MAX_RECORD_SECONDS) * 100)}%` }}
+                              />
+                            </div>
+                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-white/15" aria-hidden="true">
+                              <div
+                                className="h-full origin-left bg-zinc-950 dark:bg-white"
+                                style={{ transform: `scaleX(${Math.max(0.04, level)})` }}
+                              />
+                            </div>
+                            <p className="mt-1 text-[11px] text-zinc-500">Nivel del micrófono</p>
+                          </div>
+                        )}
                       </div>
                       {checking && (
                         <p role="status" className="mt-2 text-xs text-zinc-500">
@@ -1291,6 +1612,7 @@ function VoicesPanel({
                               selectionRef.current += 1
                               stop()
                               setSample(null)
+                              setLab(null)
                               setSampleError("")
                             }}
                           >
@@ -1303,6 +1625,7 @@ function VoicesPanel({
                           {sampleError}
                         </p>
                       )}
+                      {lab && !sampleError && <SampleLabCard lab={lab} />}
                       <div className="mt-3 flex items-center justify-between gap-3">
                         <p className="flex items-center gap-2 text-[12px]">
                           {validSample ? (
@@ -1324,10 +1647,22 @@ function VoicesPanel({
                     </>
                   ) : (
                     <div className="space-y-4" data-testid="voice-clone-details">
+                      <ol className="flex items-center gap-2 text-[12px] text-zinc-500" aria-label="Pasos del clon instantáneo">
+                        <li>1 · Muestra</li>
+                        <li aria-hidden className="h-px w-6 bg-zinc-300 dark:bg-white/20" />
+                        <li className="font-semibold text-zinc-950 dark:text-white">2 · Identidad</li>
+                      </ol>
                       <h2 className="text-lg font-semibold">Clonar una voz nueva</h2>
                       <p className="text-sm text-zinc-500">
                         Tu muestra está lista. Esta voz estará disponible con Sira Voz.
                       </p>
+                      {sample && (
+                        <p className="text-[12px] text-zinc-600 dark:text-white/70">
+                          {sample.filename} · {formatClock(sample.duration)}
+                          {lab ? ` · calidad ${lab.score}/100` : ""}
+                        </p>
+                      )}
+                      {lab && <SampleLabCard lab={lab} />}
                       <div className="space-y-1">
                         <Label htmlFor="clone-voice-name">Nombre</Label>
                         <Input

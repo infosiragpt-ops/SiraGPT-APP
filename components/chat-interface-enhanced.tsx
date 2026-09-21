@@ -13941,7 +13941,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             "relative h-full min-w-0 flex-col overflow-hidden",
             coworkMobileFullscreen ? "hidden" : "flex",
             !rightPanelActive && "w-full",
-            voiceStudioOpen && voiceStudioTab === "voices" && "md:pr-[208px]",
+            voiceStudioOpen && voiceStudioTab === "voices" && "md:pr-[320px]",
           )}
         >
           <VoiceStudioModal
