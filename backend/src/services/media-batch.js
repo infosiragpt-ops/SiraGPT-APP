@@ -114,6 +114,12 @@ function isMediaFollowup(goal) {
     && /reintent|anal[ií]z|an[aá]lisis|resum|compar|transcrib/i.test(String(goal));
 }
 
+function shouldResolveMediaBatchFromHistory(goal, { plainTranscriptionRequest = false } = {}) {
+  // Generic analysis/code requests must not inherit old audio implicitly.
+  // The composer supplies IDs for its qualified short follow-up commands.
+  return plainTranscriptionRequest || isMediaFollowup(goal);
+}
+
 function splitTranscript(text, maxChars = ANALYSIS_CHUNK_CHARS) {
   const parts = [];
   for (let offset = 0; offset < text.length; offset += maxChars) parts.push(text.slice(offset, offset + maxChars));
@@ -172,4 +178,4 @@ async function analyzeMediaBatch({ rows, goal, complete, signal, onProgress = ()
 }
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
-  waitForMediaBatch, transcriptBundle, wantsMediaAnalysis, isMediaFollowup, splitTranscript, analyzeMediaBatch };
+  waitForMediaBatch, transcriptBundle, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch };

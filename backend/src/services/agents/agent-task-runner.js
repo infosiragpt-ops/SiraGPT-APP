@@ -2128,7 +2128,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;
-  const mediaFileIds = hasAttachedFiles ? files : (plainTranscriptionRequest || mediaBatch.isMediaFollowup(displayGoal || goal) || mediaBatch.wantsMediaAnalysis(displayGoal || goal))
+  const mediaFileIds = hasAttachedFiles ? files : mediaBatch.shouldResolveMediaBatchFromHistory(displayGoal || goal, { plainTranscriptionRequest })
     ? await mediaBatch.resolveChatMediaFileIds(prisma, { userId: user.id, chatId }) : [];
   const mediaBatchRows = mediaFileIds.length
     ? await mediaBatch.loadMediaBatch(prisma, { userId: user.id, fileIds: mediaFileIds }) : null;

@@ -151,3 +151,12 @@ test('explicit retry schedules only the failed audio, then returns all 50 preser
   assert.deepEqual(enqueued, [{ fileId: 'f49', userId: 'u', retry: true }]);
   assert.equal(result.ready, 50); assert.equal(result.failed, 0);
 });
+
+test('new programming or general tasks do not inherit the previous audio batch', () => {
+  for (const goal of ['analiza el código de mi proyecto', 'explica este algoritmo', 'qué hora es', 'cómo cambio mi contraseña']) {
+    assert.equal(batch.shouldResolveMediaBatchFromHistory(goal), false, goal);
+  }
+  assert.equal(batch.shouldResolveMediaBatchFromHistory('analiza los audios'), true);
+  assert.equal(batch.shouldResolveMediaBatchFromHistory('reintenta los audios fallidos'), true);
+  assert.equal(batch.shouldResolveMediaBatchFromHistory('transcribir', { plainTranscriptionRequest: true }), true);
+});
