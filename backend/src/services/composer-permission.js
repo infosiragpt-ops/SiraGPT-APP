@@ -19,6 +19,9 @@ const COMPOSER_PERMISSIONS = Object.freeze([
 
 const WRITE_TOOLS = new Set([
   'write',
+  'project_write',
+  'project_clone_repo',
+  'project_open_pull_request',
   'edit',
   'write_file',
   'edit_file',
@@ -38,6 +41,9 @@ const WRITE_TOOLS = new Set([
 
 const COMMAND_TOOLS = new Set([
   'bash',
+  'project_exec',
+  'project_preview_start',
+  'project_preview_stop',
   'execute_bash',
   'shell',
   'execute_shell',

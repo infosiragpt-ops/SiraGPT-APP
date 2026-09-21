@@ -25,7 +25,12 @@ describe("AGENTES_CODING_V2 Phase 3a IDE shell", () => {
     const api = source("lib/agentes-coding/api.ts")
     const page = source("app/agentes/page.tsx")
 
-    assert.match(surface, /AgentesCodingIdeGate/)
+    assert.doesNotMatch(surface, /<AgentesCodingIdeGate/)
+    const chat = source("components/chat-interface-enhanced.tsx")
+    const codingPanel = source("components/chat/chat-coding-panel.tsx")
+    assert.match(chat, /ChatCodingPanel/)
+    assert.match(codingPanel, /coreCodexApi.access/)
+    assert.match(codingPanel, /!access.enabled \|\| !access.canRun/)
     assert.match(page, /AgentsHomeSurface/)
     assert.doesNotMatch(page, /\/code/)
     assert.match(gate, /useAgentesCodingHealth/)

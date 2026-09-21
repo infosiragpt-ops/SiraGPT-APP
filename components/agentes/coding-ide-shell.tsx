@@ -34,7 +34,12 @@ const CodingMonacoDiff = dynamic(() => import("@/components/agentes/coding-monac
 
 type Pane = "editor" | "diff" | "changes" | "terminal" | "preview"
 
-export function CodingIdeShell() {
+export function CodingIdeShell({ conversationId, embedded = false, onClose, onProjectReady }: {
+  conversationId?: string
+  embedded?: boolean
+  onClose?: () => void
+  onProjectReady?: (ready: boolean) => void
+} = {}) {
   const [open, setOpen] = React.useState(true)
   const [pane, setPane] = React.useState<Pane>("editor")
   const [sideBySide, setSideBySide] = React.useState(true)
@@ -55,11 +60,12 @@ export function CodingIdeShell() {
   // Modo proyecto (MVP programación web): un CodexProject durable vinculado
   // al chat actual. Sin proyecto abierto, el shell conserva su modo sesión.
   const routeParams = useParams()
-  const chatId = typeof routeParams?.id === "string" ? routeParams.id : ""
+  const chatId = conversationId ?? (typeof routeParams?.id === "string" ? routeParams.id : "")
   const [project, setProject] = React.useState<CodexProject | null>(null)
   const [projects, setProjects] = React.useState<CodexProject[]>([])
   const [projectName, setProjectName] = React.useState("")
   const projectId = project?.id || null
+  React.useEffect(() => { onProjectReady?.(Boolean(projectId)) }, [projectId, onProjectReady])
 
   const resetEditor = React.useCallback(() => {
     setActivePath("")
@@ -110,7 +116,7 @@ export function CodingIdeShell() {
         try {
           const body = await projectsCodexApi.readFileContent(id, open)
           const content = String(body?.content ?? "")
-          if (projectIdRef.current === id && activePathRef.current === open && content !== originalRef.current) {
+          if (projectIdRef.current === id && activePathRef.current === open && draftRef.current === originalRef.current && content !== originalRef.current) {
             setOriginal(content)
             setDraft(content)
             // El agente cambió el contenido sin tocar el árbol: también
@@ -210,7 +216,10 @@ export function CodingIdeShell() {
         setProjects(all)
         if (bound) {
           setProject(bound)
-          await refreshProjectFiles(bound.id)
+          const paths = await projectsCodexApi.listFiles(bound.id)
+          if (cancelled) return
+          filesSigRef.current = paths.join("\0")
+          setFiles(paths.map((path) => ({ path })))
         }
       } catch (err) {
         if (!cancelled) fail(err)
@@ -299,6 +308,7 @@ export function CodingIdeShell() {
   }
 
   function handleOpenFile(path: string) {
+    if (busy || (dirty && !window.confirm("Tienes cambios sin guardar. ¿Descartarlos y abrir otro archivo?"))) return
     if (projectId) void openProjectFile(path)
     else void openFile(path)
   }
@@ -364,6 +374,10 @@ export function CodingIdeShell() {
     setError("")
     try {
       if (projectId) {
+        const current = await projectsCodexApi.readFileContent(projectId, activePath)
+        if (String(current.content ?? "") !== original) {
+          throw new Error("El archivo cambió en el proyecto. Copia tu borrador y vuelve a abrirlo para revisar los cambios antes de guardar.")
+        }
         await projectsCodexApi.importFiles(projectId, [{ path: activePath, content: draft }])
         setOriginal(draft)
         await refreshProjectFiles(projectId)
@@ -381,6 +395,7 @@ export function CodingIdeShell() {
   }
 
   async function handleCreateFile() {
+    if (dirty && !window.confirm("Tienes cambios sin guardar. ¿Descartarlos y crear otro archivo?")) return
     const path = newPath.trim().replace(/^\/+/, "")
     if (!path) {
       setError("Indica una ruta de archivo.")
@@ -390,7 +405,9 @@ export function CodingIdeShell() {
     setError("")
     try {
       if (projectId) {
-        await projectsCodexApi.importFiles(projectId, [{ path, content: draft && activePath === path ? draft : "" }])
+        const existing = await projectsCodexApi.listFiles(projectId)
+        if (existing.includes(path)) throw new Error("Ese archivo ya existe. Ábrelo para editarlo.")
+        await projectsCodexApi.importFiles(projectId, [{ path, content: "" }])
         await refreshProjectFiles(projectId)
         await openProjectFile(path)
       } else {
@@ -421,14 +438,19 @@ export function CodingIdeShell() {
   }
 
   async function handleExec(command: string) {
-    if (!session) return
+    if ((!session && !projectId) || busy) return
     setBusy(true)
     setError("")
     try {
-      const result = await agentesCodingApi.exec(session.id, command)
+      const result = projectId
+        ? await projectsCodexApi.execInProject(projectId, command)
+        : await agentesCodingApi.exec(session!.id, command)
       const stdout = result.stdout || ""
       const stderr = result.stderr || ""
-      setTerminalOut([`$ ${command}`, stdout, stderr].filter(Boolean).join("\n"))
+      setTerminalOut([`$ ${command}`, stdout, stderr,
+        "timedOut" in result && result.timedOut ? "Tiempo de ejecución agotado." : `Código de salida: ${result.exitCode ?? "desconocido"}`,
+      ].filter(Boolean).join("\n"))
+      if (projectId) await refreshProjectFiles(projectId)
     } catch (err) {
       fail(err)
     } finally {
@@ -454,16 +476,16 @@ export function CodingIdeShell() {
 
   return (
     <section
-      className="absolute inset-x-0 bottom-0 z-20 flex max-h-[48vh] min-h-[280px] flex-col border-t border-border bg-background shadow-lg"
+      className={cn("flex min-h-0 flex-col border-l border-border bg-background", embedded ? "h-full" : "absolute inset-x-0 bottom-0 z-20 max-h-[48vh] min-h-[280px] border-t shadow-lg")}
       data-testid="agentes-coding-ide"
       aria-label="Editor de código"
     >
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <h2 className="text-sm font-medium">Editor de código</h2>
         <span className="text-xs text-muted-foreground" data-testid="agentes-coding-session-label">
-          {project ? `Proyecto ${project.name}` : session ? `Sesión ${session.id}` : "Sin sesión"}
+          {project ? `Proyecto ${project.name}` : session ? `Sesión ${session.id}` : embedded ? "Vincula un proyecto a este chat" : "Sin sesión"}
         </span>
-        <select
+        {!embedded && <select
           className="h-8 min-w-0 max-w-40 truncate rounded-md border border-border bg-background px-1 text-xs"
           value={projectId || ""}
           onChange={(event) => {
@@ -480,8 +502,8 @@ export function CodingIdeShell() {
               {entry.name}
             </option>
           ))}
-        </select>
-        <input
+        </select>}
+        {(!embedded || !projectId) && <input
           className="h-8 w-28 rounded-md border border-border bg-background px-2 text-xs"
           value={projectName}
           onChange={(event) => setProjectName(event.target.value)}
@@ -489,16 +511,16 @@ export function CodingIdeShell() {
           aria-label="Nombre del proyecto"
           disabled={busy || !chatId}
           data-testid="agentes-coding-project-name"
-        />
-        <CodingRepoPicker
+        />}
+        {(!embedded || !projectId) && <CodingRepoPicker
           chatId={chatId}
           sourceControl={project?.sourceControl ?? null}
           disabled={busy || !chatId}
           onBound={handleRepoBound}
-        />
+        />}
         {busy ? <ThinkingIndicator size="xs" label="Cargando" /> : null}
         <div className="ml-auto flex flex-wrap items-center gap-1">
-          <button
+          {(!embedded || !projectId) && <button
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
             onClick={handleEnsureProject}
@@ -507,8 +529,8 @@ export function CodingIdeShell() {
             data-testid="agentes-coding-new-project"
           >
             Nuevo proyecto
-          </button>
-          <button
+          </button>}
+          {!embedded && <button
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
             onClick={handleCreateSession}
@@ -516,7 +538,7 @@ export function CodingIdeShell() {
             data-testid="agentes-coding-new-session"
           >
             Nueva sesión
-          </button>
+          </button>}
           <button
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
@@ -526,18 +548,22 @@ export function CodingIdeShell() {
           >
             Guardar
           </button>
-          <button
+          {!embedded && <button
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
             onClick={handleDestroy}
             disabled={busy || !session}
           >
             Cerrar sesión
-          </button>
+          </button>}
           <button
             type="button"
             className="h-8 rounded-md px-2 text-xs text-muted-foreground"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              if (dirty && !window.confirm("Tienes cambios sin guardar. ¿Cerrar el editor y descartarlos?")) return
+              if (onClose) onClose()
+              else setOpen(false)
+            }}
             data-testid="agentes-coding-ide-collapse"
           >
             Ocultar
@@ -551,9 +577,9 @@ export function CodingIdeShell() {
         </p>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(100px,28%)_minmax(0,1fr)]">
         <aside className="min-h-0 overflow-auto border-r border-border" data-testid="agentes-coding-file-tree">
-          <div className="flex items-center justify-between px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-1 px-2 py-2">
             <p className="text-xs font-medium">Archivos</p>
             <button
               type="button"
@@ -566,7 +592,7 @@ export function CodingIdeShell() {
               Actualizar
             </button>
           </div>
-          <div className="flex gap-1 px-2 pb-2">
+          <div className="flex flex-wrap gap-1 px-2 pb-2">
             <input
               className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs"
               value={newPath}
@@ -583,7 +609,7 @@ export function CodingIdeShell() {
             >
               Crear
             </button>
-            <button
+            {!embedded && <button
               type="button"
               className="h-8 rounded-md border border-border px-2 text-xs"
               onClick={handleRepoMap}
@@ -591,7 +617,7 @@ export function CodingIdeShell() {
               data-testid="agentes-coding-repo-map"
             >
               Mapa
-            </button>
+            </button>}
           </div>
           {mapHints.length > 0 ? (
             <ul className="px-2 pb-2" data-testid="agentes-coding-repo-map-hints">
@@ -612,13 +638,13 @@ export function CodingIdeShell() {
             <p className="px-3 text-xs text-muted-foreground">Sin archivos. Crea uno para empezar.</p>
           ) : null}
           {!session && !projectId ? (
-            <p className="px-3 text-xs text-muted-foreground">Abre un proyecto o crea una sesión para listar archivos.</p>
+            <p className="px-3 text-xs text-muted-foreground">Crea un proyecto o conecta un repositorio. Después pide los cambios desde este chat.</p>
           ) : null}
           <FileTreeList nodes={tree} activePath={activePath} onOpen={handleOpenFile} />
         </aside>
 
         <div className="flex min-h-0 min-w-0 flex-col">
-          <div className="flex items-center gap-1 border-b border-border px-2">
+          <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
             <PaneTab current={pane} id="editor" onSelect={setPane}>Editor</PaneTab>
             <PaneTab current={pane} id="diff" onSelect={setPane}>Diferencias</PaneTab>
             <PaneTab current={pane} id="changes" onSelect={setPane}>Cambios</PaneTab>
@@ -642,6 +668,7 @@ export function CodingIdeShell() {
                   language={language}
                   path={activePath}
                   onChange={setDraft}
+                  readOnly={busy}
                 />
               ) : (
                 <p className="p-3 text-xs text-muted-foreground">
@@ -674,7 +701,7 @@ export function CodingIdeShell() {
             ) : null}
             {pane === "terminal" ? (
               <CodingTerminalPane
-                sessionId={session?.id || null}
+                sessionId={projectId || session?.id || null}
                 busy={busy}
                 lastOutput={terminalOut}
                 onExec={handleExec}
@@ -705,7 +732,7 @@ function PaneTab({
     <button
       type="button"
       className={cn(
-        "h-8 px-2 text-xs",
+        "h-8 shrink-0 whitespace-nowrap px-2 text-xs",
         current === id ? "border-b-2 border-primary font-medium" : "text-muted-foreground",
       )}
       onClick={() => onSelect(id)}

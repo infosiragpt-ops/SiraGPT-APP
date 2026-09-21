@@ -136,3 +136,19 @@ test('audit installation paths must refer to the named package, without traversa
     assert.throws(() => invoke(report), /installation paths/)
   }
 })
+
+
+test('npm low metavulnerability over moderate leaves retains raw findings without relaxing the high boundary', () => {
+  const report = reportFor({
+    dompurify: packageEntry('dompurify', [advisory('dompurify', 'moderate', 'https://github.com/advisories/GHSA-cmwh-pvxp-8882')], 'moderate'),
+    'monaco-editor': packageEntry('monaco-editor', ['dompurify'], 'low'),
+  })
+  const original = clone(report)
+  assert.equal(invoke(report).result.ok, true)
+  assert.deepEqual(report, original)
+  for (const level of ['high', 'critical']) {
+    const hidden = reportFor({ leaf: packageEntry('leaf', [advisory('leaf', level)], level), parent: packageEntry('parent', ['leaf'], 'low') })
+    assert.throws(() => invoke(hidden), /severity does not match/)
+  }
+  assert.throws(() => invoke(reportFor({ direct: packageEntry('direct', [advisory('direct', 'moderate')], 'low') })), /severity does not match/)
+})

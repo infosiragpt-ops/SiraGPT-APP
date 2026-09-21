@@ -888,9 +888,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       toolContext.userQuery = toolContext.userQuery || userQuery;
       toolContext.goal = toolContext.goal || userQuery;
     }
-    const softwareBuildTurn = isSoftwareBuildRequest(userQuery) && !isExplicitDocumentRequest(userQuery);
-    const githubPrTurn = isGithubPrRequest(userQuery);
-    const githubLocalPreviewTurn = isGithubLocalPreviewRequest(userQuery);
+    const codingWorkspace = Boolean(toolContext.codingWorkspace?.projectId);
+    const softwareBuildTurn = !codingWorkspace && isSoftwareBuildRequest(userQuery) && !isExplicitDocumentRequest(userQuery);
+    const githubPrTurn = !codingWorkspace && isGithubPrRequest(userQuery);
+    const githubLocalPreviewTurn = !codingWorkspace && isGithubLocalPreviewRequest(userQuery);
     if (!res) throw new Error('runAgenticChat: res is required');
 
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
@@ -905,7 +906,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
     if (
-      preloopFileIds.length === 0
+      !codingWorkspace && preloopFileIds.length === 0
       && toolContext.prisma
       && toolContext.userId
       && toolContext.chatId
@@ -1078,7 +1079,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           });
         } catch (_) { prior = false; }
       }
-      if (shouldRunAgentRunner({
+      if (!codingWorkspace && shouldRunAgentRunner({
         fileIds: preloopFileIds,
         hasPriorArtifacts: prior,
         text: userQuery,
@@ -1130,7 +1131,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (
       // fileIds may be empty on a follow-up that only names ## file.pptx —
       // tryGenerate recovers the recent chat attachment via chatId.
-      (preloopFileIds.length > 0 || Boolean(toolContext.chatId))
+      !codingWorkspace && (preloopFileIds.length > 0 || Boolean(toolContext.chatId))
       && toolContext.prisma
       && toolContext.userId
       && customGptCapabilities?.documents !== false
@@ -1322,7 +1323,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       ...customGptAgentPolicy,
       recommendedSkillIds: runtimeRecommendedSkillIds,
     };
-    const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
+    const artifactDeliveryContract = buildArtifactDeliveryContract(codingWorkspace ? '' : userQuery, customGptAgentPolicy);
 
     if (toolContext?.prisma && toolContext?.userId) {
       try {
@@ -1602,6 +1603,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         console.warn('[agentic-chat] prompted tool cap failed (using full set):', capErr && capErr.message);
       }
     }
+    if (codingWorkspace) tools = require('./codex/chat-coding-workspace').codingTools();
     const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
@@ -1719,8 +1721,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         }
       } catch (_) { /* best-effort; fall back to model-driven tool choice */ }
     }
+    if (codingWorkspace) initialToolChoice = 'project_list';
     const executionProfile = buildChatFinalizeProfile({
-      userQuery,
+      userQuery: codingWorkspace ? '' : userQuery,
       fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
       fileMetadata: Array.isArray(toolContext.fileMetadata) ? toolContext.fileMetadata : [],
       hasImageAttachment: toolContext.hasImageAttachment === true,
@@ -1842,7 +1845,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
-    const extraSystem = [
+    const extraSystem = codingWorkspace
+      ? [require('./codex/chat-coding-workspace').WORKSPACE_POLICY, preferenceBlock || '', historyForPrompt].join('\n')
+      : [
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
@@ -2027,6 +2032,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (String(process.env.SIRAGPT_TOOL_DEFER || '') === '1') {
       const mustKeep = new Set([
         ...CORE_AGENT_TOOL_NAMES,
+        ...(codingWorkspace ? tools.map((t) => t.name) : []),
         ...(executionProfile.requiredTools || []),
         ...(initialToolChoice ? [initialToolChoice] : []),
       ]);

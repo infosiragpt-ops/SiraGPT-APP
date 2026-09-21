@@ -69,7 +69,16 @@ function classifyAuditReport(report) {
     if (memo.has(name)) return memo.get(name);
     const next = new Set([...stack, name]);
     const leaves = entries[name].via.flatMap((via) => typeof via === 'string' ? resolve(via, next) : [via]);
-    expect(leaves.length > 0 && Math.max(...leaves.map((leaf) => severity(leaf.severity))) === severity(entries[name].severity),
+    const leafSeverity = Math.max(...leaves.map((leaf) => severity(leaf.severity)));
+    const packageSeverity = severity(entries[name].severity);
+    // npm's metavulnerability score can be lower than the direct advisory
+    // (observed: monaco-editor low -> dompurify moderate). Preserve that raw
+    // report, but accept this only below our high/critical boundary and only
+    // for indirect entries. A lowered direct/high/critical finding still fails
+    // closed; this grants no advisory exception or patch attestation.
+    const nonBlockingMetaScore = entries[name].via.every((via) => typeof via === 'string')
+      && packageSeverity < leafSeverity && leafSeverity < severity('high');
+    expect(leaves.length > 0 && (leafSeverity === packageSeverity || nonBlockingMetaScore),
       'Audit package severity does not match advisory chain');
     memo.set(name, leaves); return leaves;
   }

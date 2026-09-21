@@ -724,6 +724,7 @@ interface PaginationInfo {
   pages: number
 }
 interface AddMessageOptions {
+  codingWorkspace?: boolean
   imageModel?: string
   imageProvider?: string
   imageQuality?: string
@@ -1321,7 +1322,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ...(options?.imageQuality ? { imageQuality: options.imageQuality } : {}),
             reasoningEffort: selectedEffort,
             ...composerGenerateFlags(),
-            ...((lightweightTurn || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),
+            ...(options?.codingWorkspace ? { codingWorkspace: true } : {}),
+            ...(((lightweightTurn && !options?.codingWorkspace) || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
             ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
               ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }
