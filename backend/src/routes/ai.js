@@ -7450,7 +7450,7 @@ router.post(
               const __agenticWillRun = (
                 agenticStream.isEnabled()
                 && (shouldRunAgentic || __rlcdLane.forced === true || (req._rlcdMedia && req._rlcdMedia.force === true) || documentEditRequested || createDocRequested)
-                && !(!verifiedCodingWorkspace && __rlcdLane.vetoed === true && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
+                && !(__rlcdLane.vetoed === true && !verifiedCodingWorkspace && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)

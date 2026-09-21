@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1523**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1524**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -454,7 +454,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1, 22.0.0 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1123)
+## MIT (1124)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -1205,6 +1205,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `mlly` | 1.8.2 | MIT | [link](https://github.com/unjs/mlly) |
 | `modern-tar` | 0.8.4 | MIT | [link](https://github.com/ayuhito/modern-tar) |
 | `module-details-from-path` | 1.0.4 | MIT | [link](https://github.com/watson/module-details-from-path) |
+| `monaco-editor` | 0.56.0 | MIT | [link](https://github.com/microsoft/monaco-editor) |
 | `morgan` | 1.11.0 | MIT | [link](https://github.com/expressjs/morgan) |
 | `motion-dom` | 12.38.0 | MIT | [link](https://github.com/motiondivision/motion) |
 | `motion-utils` | 12.36.0 | MIT | [link](https://github.com/motiondivision/motion) |
