@@ -191,3 +191,6 @@ capacitor-cordova-android-plugins/
 # Bundle size baseline / report (regenerated on demand)
 bundle-size-report.json
 backend/deployments-backup.json
+
+# Generated from the pinned Monaco package before dev/build
+/public/code-editor/

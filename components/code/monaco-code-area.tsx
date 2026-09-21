@@ -20,15 +20,18 @@
  */
 
 import * as React from "react"
-import Editor, { type BeforeMount, type OnChange, type OnMount } from "@monaco-editor/react"
+import Editor, { loader, type BeforeMount, type OnChange, type OnMount } from "@monaco-editor/react"
 
 import { cn } from "@/lib/utils"
+
+loader.config({ paths: { vs: "/code-editor/vs" } })
 
 type Props = {
   value: string
   language: string
   onChange: (value: string) => void
   path: string
+  readOnly?: boolean
 }
 
 // Map the file-extension language hints we already pass into the
@@ -141,7 +144,7 @@ const handleBeforeMount: BeforeMount = (monaco) => {
   })
 }
 
-export default function MonacoCodeArea({ value, language, onChange, path }: Props) {
+export default function MonacoCodeArea({ value, language, onChange, path, readOnly = false }: Props) {
   const handleChange = React.useCallback<OnChange>(
     (next) => {
       // Monaco emits `undefined` when the model is being torn down.
@@ -186,6 +189,7 @@ export default function MonacoCodeArea({ value, language, onChange, path }: Prop
           onChange={handleChange}
           onMount={handleMount}
           options={{
+            readOnly,
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
             wordWrap: "on",

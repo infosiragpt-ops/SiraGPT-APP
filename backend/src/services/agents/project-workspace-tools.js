@@ -252,6 +252,24 @@ async function projectExec(args, ctx) {
   };
 }
 
+const projectListTool = {
+  name: 'project_list',
+  description: 'List files in the persistent project linked to this chat. Start here before reading or changing code. Never lists another workspace.',
+  parameters: { type: 'object', properties: {}, additionalProperties: false },
+  async execute(_args, ctx = {}) {
+    try {
+      const bound = await resolveBoundProject(ctx);
+      if (bound.error) return bound.error;
+      const { runner } = depsFromCtx(ctx);
+      if (!runner) return runnerUnavailable();
+      const out = await runner.exec(bound.project.id, ['git', 'ls-files', '--cached', '--others', '--exclude-standard'], { timeoutMs: 15000 });
+      if (!out?.ok) return { ok: false, code: 'list_failed', message: 'No se pudieron listar los archivos del proyecto.' };
+      const files = String(out.stdout || '').split('\n').filter((p) => p && sanitizeRelPath(p) && !isBlockedSecretPath(p));
+      return { ok: true, files: files.slice(0, 2000), truncated: files.length > 2000 };
+    } catch (_) { return runnerUnavailable(); }
+  },
+};
+
 const projectReadTool = {
   name: 'project_read',
   description: 'Read a text file from this chat\'s linked web project (Codex workspace). Use to inspect code, configs or docs before editing. Line-based offset/limit, output capped. Fails with no_project when the chat has no linked project yet — clone the user\'s repo with project_clone_repo first.',
@@ -317,6 +335,7 @@ const projectExecTool = {
 };
 
 module.exports = {
+  projectListTool,
   projectReadTool,
   projectWriteTool,
   projectExecTool,

@@ -21,6 +21,7 @@ vi.mock("@/lib/codex/api/projects", async () => {
       getProjectByChat: vi.fn(),
       ensureProjectForChat: vi.fn(),
       listFiles: vi.fn(),
+      execInProject: vi.fn(),
       readFileContent: vi.fn(),
       importFiles: vi.fn(),
       startPreview: vi.fn(),
@@ -216,4 +217,58 @@ describe("CodingIdeShell auto-refresh", () => {
     expect(screen.getByTestId("agentes-preview-iframe")).toHaveAttribute("src", "/x/")
     expect(vi.mocked(projectsCodexApi.startPreview)).toHaveBeenCalledTimes(1)
   })
+  it("edición iniciada durante una lectura de polling no pierde el borrador", async () => {
+    await renderWithProject()
+    fireEvent.click(screen.getByText("a.ts"))
+    const editor = await screen.findByTestId("monaco-stub")
+    let finish!: (value: any) => void
+    vi.mocked(projectsCodexApi.readFileContent).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await nextPollTick(() => intervalCbs)
+    await waitFor(() => expect(finish).toBeDefined())
+    fireEvent.change(editor, { target: { value: "borrador mientras esperaba" } })
+    finish({ ok: true, path: "src/a.ts", content: "cambio remoto" })
+    await Promise.resolve()
+    expect(editor).toHaveValue("borrador mientras esperaba")
+  })
+
+  it("rechaza guardar cuando el agente modificó la versión original", async () => {
+    await renderWithProject()
+    vi.mocked(projectsCodexApi.importFiles).mockClear()
+    fireEvent.click(screen.getByText("a.ts"))
+    fireEvent.change(await screen.findByTestId("monaco-stub"), { target: { value: "mi borrador" } })
+    vi.mocked(projectsCodexApi.readFileContent).mockResolvedValue({ ok: true, path: "src/a.ts", content: "cambio del agente" })
+    fireEvent.click(screen.getByTestId("agentes-coding-save"))
+    await screen.findByText(/El archivo cambió en el proyecto/)
+    expect(projectsCodexApi.importFiles).not.toHaveBeenCalled()
+    expect(screen.getByTestId("monaco-stub")).toHaveValue("mi borrador")
+  })
+
+  it("no trunca un archivo existente al pulsar Crear", async () => {
+    await renderWithProject()
+    vi.mocked(projectsCodexApi.importFiles).mockClear()
+    fireEvent.change(screen.getByRole("textbox", { name: "Ruta del archivo" }), { target: { value: "src/a.ts" } })
+    fireEvent.click(screen.getByRole("button", { name: "Crear", exact: true }))
+    await screen.findByText(/Ese archivo ya existe/)
+    expect(projectsCodexApi.importFiles).not.toHaveBeenCalled()
+  })
+
+  it("modo chat usa conversationId real, solo proyecto y terminal durable", async () => {
+    vi.mocked(projectsCodexApi.getProjectByChat).mockResolvedValue({ id: "p1", name: "Mi app" } as never)
+    vi.mocked(projectsCodexApi.listProjects).mockResolvedValue([])
+    vi.mocked(projectsCodexApi.listFiles).mockResolvedValue(["src/a.ts"])
+    vi.mocked(projectsCodexApi.execInProject).mockResolvedValue({ ok: false, exitCode: 7, stderr: "prueba fallida" })
+    const ready = vi.fn()
+    render(<CodingIdeShell conversationId="query-chat-id" embedded onProjectReady={ready} />)
+    await screen.findByText("a.ts")
+    expect(projectsCodexApi.getProjectByChat).toHaveBeenCalledWith("query-chat-id")
+    expect(screen.queryByTestId("agentes-coding-new-session")).toBeNull()
+    expect(screen.queryByTestId("agentes-coding-project-select")).toBeNull()
+    fireEvent.click(screen.getByTestId("agentes-coding-pane-terminal"))
+    fireEvent.change(screen.getByTestId("agentes-coding-terminal-input"), { target: { value: "npm test" } })
+    fireEvent.click(screen.getByRole("button", { name: "Ejecutar" }))
+    await screen.findByText(/Código de salida: 7/)
+    expect(projectsCodexApi.execInProject).toHaveBeenCalledWith("p1", "npm test")
+    expect(ready).toHaveBeenCalledWith(true)
+  })
+
 })

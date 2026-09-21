@@ -37,15 +37,15 @@ export function CodingTerminalPane({ sessionId, busy, lastOutput, onExec, wsUrl 
       data-ws-url={wsUrl || ""}
     >
       <p className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
-        Terminal (pendiente de WebSocket). Los comandos usan la sesión del sandbox.
+        Ejecuta comandos en este proyecto. Para encadenarlos, ejecútalos por separado.
       </p>
       <pre
         className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-xs text-foreground"
         data-testid="agentes-coding-terminal-output"
       >
         {lastOutput || (sessionId
-          ? "Sesión lista. Escribe un comando."
-          : "Crea una sesión para usar el terminal.")}
+          ? "Proyecto listo. Escribe un comando."
+          : "Crea o conecta un proyecto para usar el terminal.")}
       </pre>
       <form className="flex items-center gap-2 border-t border-border p-2" onSubmit={submit}>
         <label className="sr-only" htmlFor="agentes-coding-terminal-input">

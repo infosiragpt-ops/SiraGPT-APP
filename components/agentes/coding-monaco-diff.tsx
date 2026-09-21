@@ -5,7 +5,9 @@
  * Uses the existing @monaco-editor/react package (already in package.json).
  */
 
-import { DiffEditor } from "@monaco-editor/react"
+import { loader, DiffEditor } from "@monaco-editor/react"
+
+loader.config({ paths: { vs: "/code-editor/vs" } })
 
 type Props = {
   original: string

@@ -2168,6 +2168,7 @@ router.post(
     body('chatId').optional().isString(),
     body('files').optional().isArray(),
     body('streamId').optional().isString().trim().isLength({ min: 1, max: 200 }),
+    body('codingWorkspace').optional().isBoolean(),
     body('enableWebGrounding').optional().isBoolean(),
     body('webGroundingQuery').optional().isString().isLength({ max: 12000 }),
     body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: 200 }),
@@ -2443,6 +2444,18 @@ router.post(
           }
         } catch (ownerErr) {
           generateLog.warnError('ownership.precheck_failed', ownerErr);
+        }
+      }
+
+      let verifiedCodingWorkspace = null;
+      if (req.body.codingWorkspace === true) {
+        try {
+          const access = await require('../services/codex/chat-coding-workspace').authorizeChatCoding({ user: req.user, chatId, db: prisma });
+          if (!access.ok) return res.status(access.status).json({ error: access.error, message: access.message });
+          if (req.body.disableAgentic === true) return res.status(409).json({ error: 'coding_tools_disabled', message: 'Activa las herramientas del chat para programar en el proyecto.' });
+          verifiedCodingWorkspace = { projectId: access.projectId };
+        } catch (_) {
+          return res.status(503).json({ error: 'coding_unavailable', message: 'No se pudo comprobar el proyecto. Reintenta en unos segundos.' });
         }
       }
 
@@ -5804,7 +5817,7 @@ router.post(
           req._trivialTurn = req._turnDecision
             ? req._turnDecision.trivial === true
             : (req._trivialTurn === true || isTrivialChatTurn(prompt));
-          if (req._trivialTurn) {
+          if (req._trivialTurn && !verifiedCodingWorkspace) {
             req.body.disableAgentic = true;
             req._thinkingLevel = 'disabled';
           }
@@ -6912,7 +6925,7 @@ router.post(
         : { isCodeTask: false, confidence: 0 };
 
       let autonomousGoalRunId = null;
-      if (isAuth && chatId && typeof prompt === 'string') {
+      if (!verifiedCodingWorkspace && isAuth && chatId && typeof prompt === 'string') {
         try {
           const goalEscalation = await autonomousGoalEscalation.maybeCreateAutonomousGoalRun({
             prisma,
@@ -6951,7 +6964,7 @@ router.post(
       req._autonomousGoalRunId = autonomousGoalRunId;
 
       let codexRunId = null;
-      if (isAuth && chatId && typeof prompt === 'string') {
+      if (!verifiedCodingWorkspace && isAuth && chatId && typeof prompt === 'string') {
         if (codeIntent.isCodeTask && codeIntent.confidence >= 0.75) {
           try {
             const codexRun = enqueueCodexRun({
@@ -7387,7 +7400,7 @@ router.post(
                 documentEditRequested = require('../services/agents/agentic-trigger')
                   .isDocumentEditRequest(prompt);
               } catch (_) { documentEditRequested = false; }
-              const shouldRunAgentic = agenticStream.shouldUseAgenticChat({
+              const shouldRunAgentic = Boolean(verifiedCodingWorkspace) || agenticStream.shouldUseAgenticChat({
                 prompt,
                 history: priorHistory,
                 files: processedFiles || [],
@@ -7437,7 +7450,7 @@ router.post(
               const __agenticWillRun = (
                 agenticStream.isEnabled()
                 && (shouldRunAgentic || __rlcdLane.forced === true || (req._rlcdMedia && req._rlcdMedia.force === true) || documentEditRequested || createDocRequested)
-                && !(__rlcdLane.vetoed === true && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
+                && !(!verifiedCodingWorkspace && __rlcdLane.vetoed === true && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)
@@ -7620,6 +7633,8 @@ router.post(
                     },
                   },
                   toolContext: {
+                    codingWorkspace: verifiedCodingWorkspace,
+                    coworkDisabled: Boolean(verifiedCodingWorkspace),
                     userId,
                     imageModel: typeof req.body?.imageModel === 'string' ? req.body.imageModel : undefined,
                     imageProvider: typeof req.body?.imageProvider === 'string' ? toImageEngineProvider(req.body.imageProvider) : undefined,
@@ -7735,6 +7750,13 @@ router.post(
             } catch (agenticErr) {
               generateLog.warnError('agentic.loop_failed', agenticErr);
               // Fall through to aiService.generateStream below.
+            }
+
+            // Never report a plain-text completion as a successful code edit.
+            if (verifiedCodingWorkspace) {
+              const message = 'No pude completar la operación en el proyecto con el modelo seleccionado. Revisa los pasos y reintenta; no doy los cambios por terminados.';
+              if (!res.writableEnded) res.write(`data: ${JSON.stringify({ replace: true, content: message })}\n\n`);
+              return message;
             }
 
             // If the agentic path streamed a sentinel (success-but-degraded or

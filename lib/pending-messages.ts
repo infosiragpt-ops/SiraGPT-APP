@@ -32,6 +32,7 @@ export interface PendingAIRequestEnvelope {
   permission?: string
   regenerate?: boolean
   regenerationAttempt?: number
+  codingWorkspace?: boolean
   disableAgentic?: boolean
   enableWebGrounding?: boolean
   webGroundingQuery?: string

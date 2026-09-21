@@ -1,5 +1,6 @@
 "use client"
 
+import { projectsCodexApi } from "@/lib/codex/api/projects"
 import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
 import dynamic from "next/dynamic"
@@ -31,6 +32,7 @@ import {
   NetworkIcon,
   Network,
   Monitor,
+  Code2,
   Share,
   Search,
   Download,
@@ -295,6 +297,7 @@ const CoworkPanel = dynamic(
   () => import("@/components/chat/cowork-panel"),
   { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" /> },
 )
+const ChatCodingPanel = dynamic(() => import("@/components/chat/chat-coding-panel"), { ssr: false });
 const ChatAgentComputerPanel = dynamic(
   () => import("@/components/chat/chat-agent-computer-panel"),
   { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" data-testid="chat-agent-computer-loading" /> },
@@ -6343,6 +6346,20 @@ function ChatInterfaceContent() {
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
+  const [codePanelOpen, setCodePanelOpen] = React.useState(false);
+  const [codeProjectReady, setCodeProjectReady] = React.useState(false);
+  const [codeOpening, setCodeOpening] = React.useState(false);
+  const codingWorkspace = codeProjectReady && Boolean(currentChat?.id);
+  React.useEffect(() => {
+    let cancelled = false;
+    setCodeProjectReady(false);
+    if (currentChat?.id) {
+      void projectsCodexApi.getProjectByChat(currentChat.id).then((project) => {
+        if (!cancelled) setCodeProjectReady(Boolean(project?.id));
+      }).catch(() => { /* ordinary chats have no code project */ });
+    }
+    return () => { cancelled = true; };
+  }, [currentChat?.id]);
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
   const [computerBrowserMode, setComputerBrowserMode] = React.useState(false);
   const [computerNavigateUrl, setComputerNavigateUrl] = React.useState("");
@@ -10780,7 +10797,7 @@ REWRITTEN TEXT:`;
         // straight into the agent-task pipeline and the chat froze on
         // "Analizando solicitud" whenever the worker/relay hiccupped.
         && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend));
-    const shouldStartAgenticLoopForCurrentMessage = shouldStartAgenticLoopImmediately && !shouldUseAcademicSearch;
+    const shouldStartAgenticLoopForCurrentMessage = !codingWorkspace && shouldStartAgenticLoopImmediately && !shouldUseAcademicSearch;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
@@ -11012,7 +11029,7 @@ REWRITTEN TEXT:`;
       const routingMessages = existingRoutingMessages.some((message: any) => message?.id === userMessage.id)
         ? existingRoutingMessages
         : [...existingRoutingMessages, userMessage];
-      const intent = await aiService.classifyIntent(
+      const intent = codingWorkspace ? 'text' : await aiService.classifyIntent(
         msg,
         routingMessages,
         intentController.signal
@@ -11048,6 +11065,7 @@ REWRITTEN TEXT:`;
             ...imageSettings,
             idempotencyKey,
             mentionedApps: mentionPayload.mentionedApps,
+            codingWorkspace,
             pinnedAppIds: pins,
           });
         }
@@ -12415,6 +12433,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     sidePreviewAttachment
   );
   const rightPanelActive = Boolean(
+    codePanelOpen ||
     coworkPanelOpen ||
     computerPanelOpen ||
     showAudioPanel ||
@@ -12425,7 +12444,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
-  const coworkMobileFullscreen = Boolean((coworkPanelOpen || computerPanelOpen) && isSidebarMobile);
+  const coworkMobileFullscreen = Boolean((codePanelOpen || coworkPanelOpen || computerPanelOpen) && isSidebarMobile);
   const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
@@ -12475,12 +12494,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
     closeArtifactPanel();
+    setCodePanelOpen(false);
     setComputerPanelOpen(false);
     setCoworkPanelOpen(true);
   }, [closeArtifactPanel]);
 
   React.useEffect(() => {
-    if (!coworkPanelOpen && !computerPanelOpen) return;
+    if (!codePanelOpen && !coworkPanelOpen && !computerPanelOpen) return;
     if (
       showAudioPanel ||
       searchActivityPanelOpen ||
@@ -12491,10 +12511,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       isExcelConnectorActive ||
       activeArtifact
     ) {
+      setCodePanelOpen(false);
       setCoworkPanelOpen(false);
       setComputerPanelOpen(false);
     }
   }, [
+    codePanelOpen,
     coworkPanelOpen,
     computerPanelOpen,
     showAudioPanel,
@@ -12528,6 +12550,31 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }).catch(() => undefined);
   }, [setCurrentChat]);
 
+  const openCodePanel = React.useCallback(async () => {
+    if (codeOpening) return;
+    setCodeOpening(true);
+    try {
+      if (!currentChatIdRef.current) {
+        await createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
+      }
+      setShowAudioPanel(false);
+      setActiveSearchActivityId(null);
+      setDocumentPreviewUrl(null);
+      setComposerPreviewIndex(null);
+      setSidePreviewAttachment(null);
+      setSidePreviewSiblings([]);
+      setSourcesPanelData(null);
+      setIsWordConnectorActive(false);
+      setIsExcelConnectorActive(false);
+      closeArtifactPanel();
+      setCoworkPanelOpen(false);
+      setComputerPanelOpen(false);
+      setCodePanelOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo abrir el espacio de código");
+    } finally { setCodeOpening(false); }
+  }, [codeOpening, createNewChat, closeArtifactPanel]);
+
   const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string; agentNavigating?: boolean }) => {
     setShowAudioPanel(false);
     setActiveSearchActivityId(null);
@@ -12540,6 +12587,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsExcelConnectorActive(false);
     closeArtifactPanel();
     setCoworkPanelOpen(false);
+    setCodePanelOpen(false);
     setComputerBrowserMode(Boolean(opts?.browser));
     setComputerAgentNavigating(Boolean(opts?.agentNavigating));
     if (opts?.url) setComputerNavigateUrl(opts.url);
@@ -13980,6 +14028,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
+                <Button variant={codePanelOpen ? "secondary" : "ghost"} size="icon"
+                  onClick={() => void openCodePanel()} disabled={codeOpening}
+                  title={codingWorkspace ? "Código · proyecto vinculado a este chat" : "Código"} aria-label="Código" aria-pressed={codePanelOpen}
+                  data-testid="chat-code-button" className="chat-header-icon-btn h-11 w-11 rounded-full">
+                  <Code2 className="h-5 w-5" />
+                </Button>
                 <Button
                   variant={computerPanelOpen && !computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
@@ -14476,7 +14530,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
                   : coworkPanelOpen
                     ? 'clamp(320px, 42vw, 720px)'
-                  : computerPanelOpen
+                  : (codePanelOpen || computerPanelOpen)
                     ? 'clamp(320px, 48vw, 880px)'
                   : searchActivityPanelOpen
                     ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
@@ -14485,6 +14539,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               }}
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
+              {codePanelOpen && currentChat?.id && (
+                <ChatCodingPanel key={currentChat.id} chatId={currentChat.id}
+                  onClose={() => setCodePanelOpen(false)}
+                  onProjectReady={setCodeProjectReady} />
+              )}
               {coworkPanelOpen && currentChat?.id && (
                 <CoworkPanel
                   chatId={currentChat.id}
@@ -14589,20 +14648,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </div>
                 </div>
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && activeSearchActivity && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && activeSearchActivity && (
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
                   onSave={saveSearchActivityToLibrary}
                 />
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -14616,7 +14675,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -14633,7 +14692,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -14646,7 +14705,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -14655,10 +14714,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
               )}
-              {!coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
+              {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && sourcesPanelData && (
                 <SourcesPanel
                   sources={sourcesPanelData.sources}
                   activity={sourcesPanelData.activity}
