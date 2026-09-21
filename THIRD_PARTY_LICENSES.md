@@ -196,7 +196,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `detect-libc` | 2.1.2 | Apache-2.0 | [link](https://github.com/lovell/detect-libc) |
 | `didyoumean` | 1.2.2 | Apache-2.0 | [link](https://github.com/dcporter/didyoumean.js) |
 | `docx-preview` | 0.3.7 | Apache-2.0 | [link](https://github.com/VolodymyrBaydalka/docxjs) |
-| `dompurify` | 3.4.13 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
+| `dompurify` | 3.4.13, 3.4.8 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
 | `drizzle-orm` | 0.45.2 | Apache-2.0 | [link](https://github.com/drizzle-team/drizzle-orm) |
 | `ecdsa-sig-formatter` | 1.0.11 | Apache-2.0 | [link](https://github.com/Brightspace/node-ecdsa-sig-formatter) |
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
@@ -1136,7 +1136,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `make-cancellable-promise` | 1.3.2 | MIT | [link](https://github.com/wojtekmaj/make-cancellable-promise) |
 | `make-event-props` | 1.6.2 | MIT | [link](https://github.com/wojtekmaj/make-event-props) |
 | `markdown-table` | 3.0.4 | MIT | [link](https://github.com/wooorm/markdown-table) |
-| `marked` | 16.4.1, 16.4.2 | MIT | [link](https://github.com/markedjs/marked) |
+| `marked` | 14.0.0, 16.4.1, 16.4.2 | MIT | [link](https://github.com/markedjs/marked) |
 | `matcher` | 3.0.0 | MIT | [link](https://github.com/sindresorhus/matcher) |
 | `math-intrinsics` | 1.1.0 | MIT | [link](https://github.com/es-shims/math-intrinsics) |
 | `mdast-util-directive` | 3.1.0 | MIT | [link](https://github.com/syntax-tree/mdast-util-directive) |
