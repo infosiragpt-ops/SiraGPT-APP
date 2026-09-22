@@ -6,6 +6,7 @@ const { softDeleteWhere } = require('../utils/prisma-soft-delete');
 const { requireScope } = require('../middleware/require-scope');
 const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
+const mediaTranscription = require('../services/media-transcription-queue');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
 const extractFastpath = require('../services/document-extract-fastpath');
@@ -764,6 +765,13 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
 }
 
 function scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord) {
+  if (mediaTranscription.isMediaFile(fileRecord)) {
+    // The File row is already durable. Never delete its binary if Redis is
+    // temporarily unavailable: the media worker reconciles pending rows.
+    void mediaTranscription.enqueueMediaTranscription({ fileId: fileRecord.id, userId })
+      .catch(() => console.warn('[files] media queued for reconciliation', fileRecord.id));
+    return;
+  }
   enqueueAsyncFileProcessing(() => processFileAfterFastUpload(file, userId, prismaClient, fileRecord));
 }
 
@@ -823,9 +831,11 @@ async function processFilesForAsyncPreview(files, userId, prismaClient) {
           });
         }
 
-        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, mediaTranscription.isMediaFile(fileRecord) ? 'uploaded' : 'extracting', { userId });
         scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord);
-        return uploadResponseForFile(file, fileRecord);
+        return uploadResponseForFile(file, fileRecord, {
+          processingStage: mediaTranscription.isMediaFile(fileRecord) ? 'uploaded' : 'extracting',
+        });
       } catch (error) {
         console.error('Fast upload validation error:', error);
         if (fileRecord?.id) {
@@ -997,7 +1007,9 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
       });
     }
 
-    const asyncProcessing = isAsyncUploadRequest(req);
+    const asyncProcessing = isAsyncUploadRequest(req) || req.files.some(file => mediaTranscription.isMediaFile({
+      mimeType: file.mimetype, originalName: file.originalname,
+    }));
     const processedFiles = asyncProcessing
       ? await processFilesForAsyncPreview(req.files, req.user.id, prisma)
       : await processFilesInParallel(req.files, req.user.id, prisma);
@@ -1007,7 +1019,11 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
     // context that correlates content. This helps the chat infer intent.
     if (asyncProcessing) {
       scheduleCrossDocumentAnalysisWhenReady(
-        processedFiles.filter(f => f.success && f.id).map(f => f.id),
+        // Audio analysis belongs to the requested chat task and its selected
+        // model, not the opportunistic first-two-documents upload summary.
+        processedFiles.filter(f => f.success && f.id && !mediaTranscription.isMediaFile({
+          ...f, mimeType: f.mimeType || f.type, originalName: f.originalName || f.name,
+        })).map(f => f.id),
         req.user.id,
       );
     } else {
@@ -1118,6 +1134,35 @@ function scheduleCrossDocumentAnalysis(processedFiles, userId) {
  *
  * Authorisation: a user can only read status for their own files.
  */
+router.get('/processing-status', authenticateToken, async (req, res) => {
+  const ids = [...new Set(String(req.query.ids || '').split(',').filter(Boolean))];
+  if (!ids.length || ids.length > 50 || ids.some(id => id.length > 160)) {
+    return res.status(400).json({ error: 'Consulta entre 1 y 50 archivos.' });
+  }
+  try {
+    const files = await prisma.file.findMany({
+      where: softDeleteWhere({ userId: req.user.id, id: { in: ids } }),
+      select: { id: true, originalName: true, mimeType: true, processingStage: true,
+        processingError: true, processingStageAt: true },
+    });
+    return res.json({ files });
+  } catch {
+    return res.status(503).json({ error: 'No se pudo consultar el progreso. Reintenta en unos segundos.' });
+  }
+});
+
+router.post('/:id/retry-processing', authenticateToken, requireScope('files:write'), async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({ where: softDeleteWhere({ id: req.params.id, userId: req.user.id }) });
+    if (!file) return res.status(404).json({ error: 'Archivo no disponible.' });
+    if (!mediaTranscription.isMediaFile(file)) return res.status(400).json({ error: 'Este reintento es para audio o vídeo.' });
+    const result = await mediaTranscription.enqueueMediaTranscription({ fileId: file.id, userId: req.user.id, retry: true });
+    return res.status(202).json({ file: { id: file.id, processingStage: result.stage, processingError: null } });
+  } catch {
+    return res.status(503).json({ error: 'No se pudo programar el reintento. Tus archivos siguen guardados.' });
+  }
+});
+
 router.get('/:id/processing-status', authenticateToken, async (req, res) => {
   try {
     const status = await fileProcessingStatus.getStatus(prisma, req.params.id);

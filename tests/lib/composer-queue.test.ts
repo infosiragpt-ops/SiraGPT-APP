@@ -49,11 +49,19 @@ describe("durable composer queue", () => {
 
   it("bounds the number of durable attachments per queued task", () => {
     const serialized = serializeComposerQueueFiles(
-      Array.from({ length: 40 }, (_, index) => ({ fileId: `upload-${index}`, name: `file-${index}.txt` })),
+      Array.from({ length: 60 }, (_, index) => ({ fileId: `upload-${index}`, name: `file-${index}.txt` })),
     )
 
-    expect(serialized).toHaveLength(24)
-    expect(serialized.at(-1)?.fileId).toBe("upload-23")
+    expect(serialized).toHaveLength(50)
+    expect(serialized.at(-1)?.fileId).toBe("upload-49")
+  })
+
+  it("restores all 50 recording IDs and failures after a reload", () => {
+    const files = Array.from({ length: 50 }, (_, index) => ({ id: `audio-${index}`, name: `${index}.mp3`, mimeType: "audio/mpeg", processingStage: index === 23 ? "failed" : "extracting" }))
+    expect(writePersistedComposerQueue("user-a", [queueItem({ msg: "transcribe y analiza", files })])).toBe(true)
+    const restored = readPersistedComposerQueue("user-a")[0]
+    expect(restored.files.map((f) => f.id)).toEqual(files.map((f) => f.id))
+    expect(restored.files[23].processingStage).toBe("failed")
   })
 
   it("preserves FIFO order and idempotency keys per account", () => {

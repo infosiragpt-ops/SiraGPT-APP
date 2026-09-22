@@ -8,8 +8,11 @@ import {
   collectUploadFileIds,
   isComposerFileProcessingPending,
   isComposerFileUploadFailed,
+  isComposerFileSendBlockedByFailure,
   isComposerFileUploadPending,
   parseMessageFiles,
+  isMediaFollowupPrompt,
+  resolveMediaFollowupFiles,
   shouldWaitForDocumentProcessing,
 } from "../lib/chat/composer-files"
 
@@ -73,6 +76,36 @@ describe("chat composer files", () => {
   })
 })
 
+describe("historical media batch follow-ups", () => {
+  const files = Array.from({ length: 50 }, (_, index) => ({ id: `audio-${index}`, name: `${index}.mp3`, mimeType: "audio/mpeg" }))
+  const history = [
+    { role: "USER", files: JSON.stringify(files) },
+    { role: "ASSISTANT", files: [{ id: "report", name: "report.pdf" }] },
+    { role: "USER", content: "analiza los 50 audios", files: [] },
+    { role: "ASSISTANT", content: "Análisis parcial" },
+  ]
+
+  it("restores all 50 IDs after refresh and skips empty follow-ups for repeated retries", () => {
+    assert.deepEqual(resolveMediaFollowupFiles("reintenta los audios fallidos", history), files)
+    assert.deepEqual(resolveMediaFollowupFiles("analiza los50", history), files)
+    assert.deepEqual(resolveMediaFollowupFiles("transcribe todos", history), files)
+    assert.deepEqual(resolveMediaFollowupFiles("reintenta los fallidos", [
+      ...history, { role: "USER", content: "reintenta los audios fallidos" },
+    ]), files)
+  })
+
+  it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {
+    assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", [
+      ...history, { role: "USER", files: [{ id: "new-doc", name: "brief.pdf" }] },
+    ]), [])
+    assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", []), [])
+    assert.deepEqual(resolveMediaFollowupFiles("analiza el código", history), [])
+    assert.deepEqual(resolveMediaFollowupFiles("crea una web", history), [])
+    assert.deepEqual(resolveMediaFollowupFiles("crea una web para analizar audios", history), [])
+    assert.equal(isMediaFollowupPrompt("analiza las ventas de hoy"), false)
+  })
+})
+
 describe("collectProcessingFileIds", () => {
   const TXT = "text/plain"
 
@@ -96,5 +129,14 @@ describe("collectProcessingFileIds", () => {
     assert.deepEqual(collectProcessingFileIds([{ id: "x", name: "campo-contenido.txt", mimeType: TXT, status: "processing", processingStage: "ready" }]), [])
     assert.deepEqual(collectProcessingFileIds([]), [])
     assert.deepEqual(collectProcessingFileIds([null, undefined, "junk"] as any), [])
+  })
+})
+
+ describe("media batch send admission", () => {
+  it("permits partial media processing failures but not lost uploads or failed documents", () => {
+    assert.equal(isComposerFileSendBlockedByFailure({ id: "audio-1", name: "one.mp3", processingStage: "failed" }), false)
+    assert.equal(isComposerFileSendBlockedByFailure({ id: "video-1", name: "two.mp4", processingStage: "failed" }), false)
+    assert.equal(isComposerFileSendBlockedByFailure({ tempId: "no-upload", name: "one.mp3", status: "failed" }), true)
+    assert.equal(isComposerFileSendBlockedByFailure({ id: "doc-1", name: "one.pdf", processingStage: "failed" }), true)
   })
 })

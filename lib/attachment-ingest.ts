@@ -42,7 +42,7 @@ const DEFAULT_MAX_BYTES =
 // transcribed server-side, so they get a much larger cap than documents.
 export const DEFAULT_MAX_MEDIA_BYTES =
   envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 2048) * 1024 * 1024
-const MEDIA_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "mp4", "mov", "webm", "mpeg", "mpg"])
+const MEDIA_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "mp4", "mov", "webm", "mpeg", "mpg", "aac", "flac", "wma", "aif", "aiff", "m4v", "mkv", "avi", "ogv", "3gp"])
 
 export function isMediaUpload(file: { type?: string; name?: string } | null | undefined): boolean {
   const mime = String(file?.type || "").toLowerCase()
@@ -346,14 +346,19 @@ export function sanitizeHtml(input: string): string {
  */
 export function validateBatch(
   files: File[],
-  opts: { maxBytes?: number; maxCount?: number; existingCount?: number } = {}
+  opts: { maxBytes?: number; maxCount?: number; existingCount?: number; existingMediaCount?: number } = {}
 ): { accepted: File[]; rejected: Array<{ file: File; reason: string; code: string }> } {
   const accepted: File[] = []
   const rejected: Array<{ file: File; reason: string; code: string }> = []
   const maxCount = opts.maxCount ?? DEFAULT_MAX_COUNT
   const existing = opts.existingCount ?? 0
+  let mediaCount = opts.existingMediaCount ?? 0
 
   for (const f of files) {
+    if (isMediaUpload(f) && mediaCount >= 50) {
+      rejected.push({ file: f, reason: "Máximo 50 audios o vídeos por mensaje", code: "count_exceeded" })
+      continue
+    }
     if (accepted.length + existing >= maxCount) {
       rejected.push({
         file: f,
@@ -363,7 +368,7 @@ export function validateBatch(
       continue
     }
     const v = validateFile(f, opts)
-    if (v.ok) accepted.push(f)
+    if (v.ok) { accepted.push(f); if (isMediaUpload(f)) mediaCount += 1 }
     else rejected.push({ file: f, reason: v.reason!, code: v.code! })
   }
   return { accepted, rejected }

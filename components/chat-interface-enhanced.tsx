@@ -168,6 +168,7 @@ import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
   validateBatch,
+  isMediaUpload,
   filesToFileList,
   logIngest,
 } from "@/lib/attachment-ingest"
@@ -339,7 +340,7 @@ import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction 
 import { routePaste } from "@/lib/attachments/paste-router"
 import { htmlToMarkdown } from "@/lib/attachments/html-to-markdown"
 import { dedupeFiles } from "@/lib/attachments/file-hash"
-import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta"
+import { extractAudioMeta, extractVideoMeta, scheduleMediaMetadata } from "@/lib/attachments/media-meta"
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
@@ -359,11 +360,13 @@ import {
   isAudioComposerFile,
   isComposerFileProcessingPending,
   collectProcessingFileIds,
-  isComposerFileUploadFailed,
+  isComposerFileSendBlockedByFailure,
   isComposerFileUploadPending,
   isVideoComposerFile,
+  isMediaFollowupPrompt,
   previewAttachmentKey,
   resolveComposerMediaSrc,
+  resolveMediaFollowupFiles,
   resolveUploadFileId,
   shouldCreateLocalMediaPreview,
   snapshotComposerFilesForMessage,
@@ -2041,7 +2044,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const rawProgress = uploadProgress[fileId];
           const isUploading = file.status === 'uploading';
           const progress = isUploading
-            ? Math.max(1, Math.min(99, rawProgress ?? 1))
+            ? Math.max(0, Math.min(100, rawProgress ?? 0))
             : (rawProgress || 0);
           const isFailed = file.status === 'failed';
           const longPasteMeta = getLongPasteMetadata(file);
@@ -2412,6 +2415,17 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     </Button>
                   </div>
                 </>
+              )}
+              {(isAudio || isVideo) && (
+                <div className="flex min-h-7 items-center justify-between gap-2 px-2 py-1 text-[11px] text-muted-foreground" data-testid="media-attachment-status" aria-live="polite">
+                  <span className="min-w-0 truncate" title={isFailed ? (file.processingError || file.uploadError || "No se pudo transcribir") : undefined}>
+                    {isUploading ? (progress > 0 ? `Subiendo ${progress}%` : "En cola de subida")
+                      : isFailed ? (resolveUploadFileId(file) ? "No se pudo transcribir" : "Subida fallida")
+                      : isActiveProcessingStage(getFileProcessingStage(file)) || file.status === "processing" ? "Transcribiendo…"
+                      : "Listo para analizar"}
+                  </span>
+                  {isFailed && retryUpload && <button type="button" className="shrink-0 underline underline-offset-2" onClick={(e) => { e.stopPropagation(); retryUpload(file); }} aria-label={`Reintentar ${file.name}`}>Reintentar</button>}
+                </div>
               )}
             </motion.div>
           );
@@ -5702,10 +5716,9 @@ function ChatInterfaceContent() {
     }
   }, [hydrateUploadedFileFromBackend, updateUploadedFileById]);
 
-  // Safety net for every chip variant: while an attachment with a server id
-  // is still "processing", re-read it from the backend every 2 s until it is
-  // ready/failed. The per-chip pollers cover the common cases; this keeps a
-  // chip that mounts no poller from blocking the send forever.
+  // One bounded status request per 50 IDs, not one GET per recording.
+  // Long recordings keep their durable processing state; leaving the page
+  // stops polling, not the server's transcription job.
   const processingWatchKey = collectProcessingFileIds(uploadedFiles).join(',');
   React.useEffect(() => {
     const ids = processingWatchKey ? processingWatchKey.split(',') : [];
@@ -5716,18 +5729,33 @@ function ChatInterfaceContent() {
     const tick = async () => {
       if (cancelled) return;
       attempts += 1;
-      for (const id of ids) {
-        if (cancelled) return;
-        await hydrateUploadedFileFromBackend(id);
-      }
-      if (!cancelled && attempts < 90) timer = setTimeout(tick, 2000);
+      try {
+        for (let start = 0; start < ids.length && !cancelled; start += 50) {
+          const body = await apiClient.getFilesProcessingStatus(ids.slice(start, start + 50));
+          if (cancelled) return;
+          const rows = Array.isArray(body?.files) ? body.files : Array.isArray(body?.statuses) ? body.statuses : [];
+          const byId = new Map<string, any>(rows.map((row: any) => [String(row.id || row.fileId), row]));
+          setUploadedFiles((current: any[]) => {
+            const next = current.map((file: any) => {
+              const row = byId.get(resolveUploadFileId(file) || "");
+              const stage = row?.processingStage || row?.stage;
+              if (!stage || file.status === "uploading") return file;
+              const error = row.processingError ?? row.error ?? null;
+              const status = stage === "ready" ? "ready" : stage === "failed" ? "failed" : "processing";
+              if (file.processingStage === stage && (file.processingError ?? null) === error && file.status === status) return file;
+              return { ...file, processingStage: stage, processingError: error, status };
+            });
+            if (next.every((file: any, index: number) => file === current[index])) return current;
+            uploadedFilesRef.current = next;
+            return next;
+          });
+        }
+      } catch { /* A disconnected tab resumes polling without failing uploads. */ }
+      if (!cancelled) timer = setTimeout(tick, attempts < 15 ? 2000 : 5000);
     };
-    timer = setTimeout(tick, 1500);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [processingWatchKey, hydrateUploadedFileFromBackend]);
+    timer = setTimeout(tick, 1000);
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [processingWatchKey, setUploadedFiles]);
 
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
@@ -8907,6 +8935,7 @@ But first, you need to connect your Spotify account securely using the button be
     // explained immediately and never become failed retry chips.
     const { accepted, rejected } = validateBatch(filesToUpload, {
       existingCount: uploadedFilesRef.current.length,
+      existingMediaCount: uploadedFilesRef.current.filter(isMediaUpload).length,
     });
     if (rejected.length > 0) {
       const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
@@ -8986,9 +9015,11 @@ But first, you need to connect your Spotify account securely using the button be
       };
       const chipHint = { name: tf.name, type: mime };
       if (isAudioComposerFile(chipHint) || mime.startsWith('audio/')) {
-        void extractAudioMeta(tf.file).then(applyMediaMeta).catch(() => {});
+        // Large batches use the native player's duration metadata. No PCM
+        // decoding of 50 recordings solely to draw decorative waveforms.
+        if (tempFiles.length <= 4) void scheduleMediaMetadata(() => extractAudioMeta(tf.file)).then(applyMediaMeta).catch(() => {});
       } else if (isVideoComposerFile(chipHint) || mime.startsWith('video/')) {
-        void extractVideoMeta(tf.file).then(applyMediaMeta).catch(() => {});
+        if (tempFiles.length <= 4) void scheduleMediaMetadata(() => extractVideoMeta(tf.file)).then(applyMediaMeta).catch(() => {});
       }
     });
 
@@ -9000,28 +9031,8 @@ But first, you need to connect your Spotify account securely using the button be
     });
 
     setIsUploading(true);
-    let optimisticTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
-      let optimisticPct = 6;
-      setUploadProgress(prev => {
-        const next = { ...prev };
-        tempFiles.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, optimisticPct); });
-        return next;
-      });
-      optimisticTimer = setInterval(() => {
-        optimisticPct = Math.min(96, optimisticPct + Math.max(4, Math.round((96 - optimisticPct) * 0.28)));
-        setUploadProgress(prev => {
-          const next = { ...prev };
-          tempFiles.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, optimisticPct); });
-          return next;
-        });
-        if (optimisticPct >= 96 && optimisticTimer) {
-          clearInterval(optimisticTimer);
-          optimisticTimer = null;
-        }
-      }, 90);
-
       // Large media (≥ 80 MB) never fits one proxied request: it is isolated
       // in its own batch and sent through the chunked transport below.
       const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles, {
@@ -9088,7 +9099,7 @@ But first, you need to connect your Spotify account securely using the button be
             });
           }
           const merged = response.files.map((f: any, idx: number) => {
-            const failed = f?.success === false;
+            const failed = f?.success === false || (f?.processingStage || f?.stage) === 'failed';
             const processingStage = f?.processingStage || f?.stage || null;
             return {
               ...f,
@@ -9185,7 +9196,6 @@ But first, you need to connect your Spotify account securely using the button be
       // Previews are intentionally KEPT alive on failure so the chip
       // can render its thumbnail next to the retry button.
     } finally {
-      if (optimisticTimer) clearInterval(optimisticTimer);
       setIsUploading(false);
       setUploadProgress(prev => {
         const next = { ...prev };
@@ -9199,26 +9209,33 @@ But first, you need to connect your Spotify account securely using the button be
    * Retry an upload that previously failed. Reuses the in-memory File
    * object stored on the chip — no need for the user to re-drop.
    */
-  const retryUpload = React.useCallback((failedFile: any) => {
+  const retryUpload = React.useCallback(async (failedFile: any) => {
+    const durableId = resolveUploadFileId(failedFile);
+    if (durableId && (isAudioComposerFile(failedFile) || isVideoComposerFile(failedFile))) {
+      updateUploadedFileById(durableId, (current: any) => ({ ...current, status: "processing", processingStage: "uploaded", processingError: null, uploadError: null }));
+      try { await apiClient.retryFileProcessing(durableId); }
+      catch (error: any) {
+        updateUploadedFileById(durableId, (current: any) => ({ ...current, status: "failed", processingStage: "failed", processingError: error?.message || "No se pudo reintentar" }));
+        toast.error(error?.message || "No se pudo reintentar la transcripción.");
+      }
+      return;
+    }
     const localFile = getAttachmentLocalFile(failedFile);
     if (!localFile) {
       toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
       return;
     }
+    const hashKey = failedFile.tempId || failedFile.id;
+    const failedHash = attachmentHashByIdRef.current.get(hashKey);
+    if (failedHash) attachmentHashesRef.current.delete(failedHash);
+    attachmentHashByIdRef.current.delete(hashKey);
     setUploadedFiles((cur: any[]) => {
-      const next = cur.filter(f => f.tempId !== failedFile.tempId && f.id !== failedFile.id);
+      const next = cur.filter(f => (f.tempId || f.id) !== hashKey);
       uploadedFilesRef.current = next;
       return next;
     });
-    const dt = new DataTransfer();
-    try {
-      dt.items.add(localFile);
-    } catch {
-      toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
-      return;
-    }
-    handleAndUploadFiles(dt.files, failedFile.sourceChannel || 'retry');
-  }, [handleAndUploadFiles, setUploadedFiles]);
+    await handleAndUploadFiles(filesToFileList([localFile]), failedFile.sourceChannel || 'retry');
+  }, [handleAndUploadFiles, setUploadedFiles, updateUploadedFileById]);
 
   React.useEffect(() => {
     handlePasteCaptureActionRef.current = (action: PasteCaptureAction, result: PasteCaptureResult) => {
@@ -9226,6 +9243,7 @@ But first, you need to connect your Spotify account securely using the button be
         const documentFile = createLongPasteDocumentFile(result.normalizedText);
         const { accepted, rejected } = validateBatch([documentFile], {
           existingCount: uploadedFilesRef.current.length,
+          existingMediaCount: uploadedFilesRef.current.filter(isMediaUpload).length,
         });
         if (rejected.length > 0) {
           rejected.forEach(r => toast.error(r.reason));
@@ -9287,6 +9305,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (all.length === 0) return;
     const { accepted, rejected } = validateBatch(all, {
       existingCount: uploadedFilesRef.current.length,
+      existingMediaCount: uploadedFilesRef.current.filter(isMediaUpload).length,
     });
     if (rejected.length > 0) {
       // Group identical reasons into a single toast so 8 rejected files
@@ -9353,6 +9372,7 @@ But first, you need to connect your Spotify account securely using the button be
       if (all.length === 0) return;
       const { accepted, rejected } = validateBatch(all, {
         existingCount: uploadedFilesRef.current.length,
+        existingMediaCount: uploadedFilesRef.current.filter(isMediaUpload).length,
       });
       if (rejected.length > 0) {
         const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
@@ -9399,6 +9419,7 @@ But first, you need to connect your Spotify account securely using the button be
     delete w.__siraPendingFiles;
     const { accepted, rejected } = validateBatch(pending, {
       existingCount: uploadedFilesRef.current.length,
+      existingMediaCount: uploadedFilesRef.current.filter(isMediaUpload).length,
     });
     if (rejected.length > 0) {
       const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
@@ -9514,6 +9535,7 @@ But first, you need to connect your Spotify account securely using the button be
     // ─── Files present — ingest ─────────────────────────────────────
     const { accepted, rejected } = validateBatch(files, {
       existingCount: uploadedFilesRef.current.length,
+      existingMediaCount: uploadedFilesRef.current.filter(isMediaUpload).length,
     });
     if (rejected.length > 0) {
       const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
@@ -10116,7 +10138,7 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
-    if (composerFiles.some(isComposerFileUploadFailed)) {
+    if (composerFiles.some(isComposerFileSendBlockedByFailure)) {
       toast.error("No se pudo adjuntar el documento. Reintenta la subida antes de enviar.");
       return;
     }
@@ -10384,7 +10406,10 @@ REWRITTEN TEXT:`;
       }
       return; // Stop further execution
     }
-    let filesToSend = [...composerFiles];
+    const mediaFollowupFiles = !codingWorkspace && composerFiles.length === 0
+      ? resolveMediaFollowupFiles(msg, currentChat?.messages || [])
+      : [];
+    let filesToSend = composerFiles.length ? [...composerFiles] : mediaFollowupFiles;
     const imageAttachments = filesToSend.filter((file: any) =>
       String(file?.type || file?.mimeType || "").startsWith("image/"),
     );
@@ -10787,6 +10812,7 @@ REWRITTEN TEXT:`;
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
+      || mediaFollowupFiles.length > 0
       || (deterministicAgenticIntent
         && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
         && !imageOnlyTurn
@@ -12163,6 +12189,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // Original-file editing needs the canonical admission path. Keep these
       // queued turns until their chat is opened; never bypass it via addMessage.
       if (resolveDocumentSandboxAdmission(item.msg, { attachments: item.files || [] }).route) return false;
+      // Media follow-ups need the opened chat's full attachment history and
+      // durable agent-task path, not the background inline generate shortcut.
+      if (!(item.files || []).length && isMediaFollowupPrompt(item.msg)) return false;
       return true;
     });
     if (bgIndex < 0) return;
@@ -13949,7 +13978,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB por documento; audio y video hasta 2 GB. Se conserva el orden en que los sueltes.
+              PDF, Office, imágenes y datos; hasta 50 audios o vídeos por mensaje. 100 MB por documento; audio y video hasta 2 GB. Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>

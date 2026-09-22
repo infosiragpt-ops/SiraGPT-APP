@@ -58,6 +58,14 @@ describe("buildComposerUploadChunks", () => {
     assert.equal(chunks[0].files[0].name, "oversized")
   })
 
+  it("uploads 50 medium recordings below the edge limit without losing order", () => {
+    const files = Array.from({ length: 50 }, (_, index) => ({ name: `${index}.mp3`, size: 30 * 1024 * 1024 }))
+    const chunks = buildComposerUploadChunks(files, files.map((f) => f.name))
+    assert.equal(chunks.length, 25)
+    assert.ok(chunks.every((c) => c.files.reduce((n, f) => n + f.size, 0) < 100 * 1024 * 1024))
+    assert.deepEqual(chunks.flatMap((c) => c.files), files)
+  })
+
   it("returns no batches for an empty selection", () => {
     assert.deepEqual(buildComposerUploadChunks([], []), [])
   })
@@ -72,7 +80,7 @@ describe("buildComposerUploadChunks", () => {
   it("publishes the backend-compatible request limits once", () => {
     assert.deepEqual(COMPOSER_UPLOAD_BATCH_LIMITS, {
       maxFiles: 50,
-      maxBytes: 220 * 1024 * 1024,
+      maxBytes: 64 * 1024 * 1024,
     })
   })
 })

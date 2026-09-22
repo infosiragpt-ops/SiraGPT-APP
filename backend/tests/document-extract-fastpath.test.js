@@ -346,13 +346,13 @@ test('files route keeps skip-until-send RAG and applies the office-vision gate',
   assert.doesNotMatch(src, /SIRAGPT_UPLOAD_CONCURRENCY \|\| '5'/);
 });
 
-test('async composer upload advances extracting then ready without waiting on embeddings', () => {
+test('async composer upload queues media and advances documents to extracting without waiting on embeddings', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/routes/files.js'), 'utf8');
   assert.match(src, /\/:id\/processing-status/);
   assert.match(
     src,
-    /setStage\(prismaClient, fileRecord\.id, 'extracting'[\s\S]{0,240}scheduleFileAfterFastUpload/,
-    'HTTP async upload must mark extracting before returning so the chip can leave preparando índice',
+    /setStage\(prismaClient, fileRecord\.id, mediaTranscription\.isMediaFile\(fileRecord\) \? 'uploaded' : 'extracting'[\s\S]{0,240}scheduleFileAfterFastUpload/,
+    'HTTP async upload queues durable media and marks documents extracting before returning',
   );
   assert.match(
     src,

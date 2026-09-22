@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 
 import {
   extractAudioMeta,
+  scheduleMediaMetadata,
   extractVideoMeta,
   formatMediaDuration,
   buildPeakBars,
@@ -24,6 +25,24 @@ afterEach(() => {
   delete globalRecord.webkitAudioContext;
   delete globalRecord.OfflineAudioContext;
   delete globalRecord.webkitOfflineAudioContext;
+});
+
+describe('batch metadata budget', () => {
+  it('bounds 50 concurrent callers to two decoders', async () => {
+    let active = 0; let peak = 0;
+    const results = await Promise.all(Array.from({ length: 50 }, (_, index) => scheduleMediaMetadata(async () => {
+      active += 1; peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return index;
+    })));
+    expect(peak).toBe(2);
+    expect(results).toEqual(Array.from({ length: 50 }, (_, index) => index));
+  });
+  it('does not read or decode a large recording to generate a waveform', async () => {
+    const large = { size: 200 * 1024 * 1024, arrayBuffer: () => { throw new Error('must remain file-backed'); } } as unknown as File;
+    await expect(extractAudioMeta(large)).resolves.toBeNull();
+  });
 });
 
 describe('extractAudioMeta', () => {

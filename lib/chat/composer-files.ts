@@ -110,6 +110,32 @@ export function collectMessageFileIds(files: unknown): string[] {
   return ids
 }
 
+/** Only media follow-ups, never a generic new request that happens to follow an upload. */
+export function isMediaFollowupPrompt(prompt: string): boolean {
+  const text = String(prompt || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/([a-z])(\d)/g, "$1 $2").replace(/[¿?¡!.,;:]/g, " ").replace(/\s+/g, " ").trim()
+  if (!text || text.length > 240) return false
+  const action = /^(?:(?:por favor|ahora|puedes|podrias|quiero que|necesito que|vuelve a) )?(?:transcrib\w*|transcripci\w*|analiz\w*|analisis|resum\w*|reintent\w*|compar\w*)\b/
+  if (!action.test(text)) return false
+  if (/\b(?:audios?|videos?|grabaciones?|grabacion|recordings?)\b/.test(text)) return true
+  // "analiza los50" / "reintenta los fallidos" refer to the most recent batch.
+  // Keep the vocabulary closed so "analiza el codigo" remains a new task.
+  return /^(?:por favor )?(?:analiza|analizar|resume|resumir|transcribe|transcribir|reintenta|reintentar|compara|comparar)(?: (?:los|las|estos|estas|esos|esas|todos|todas|restantes|fallidos|fallidas|pendientes|nuevamente|otra|vez|de|nuevo|por|favor|\d+))*$/.test(text)
+}
+
+/** Reuse only this chat's latest attached USER batch; an intervening document stops lookup. */
+export function resolveMediaFollowupFiles(prompt: string, messages: readonly unknown[] = []): unknown[] {
+  if (!isMediaFollowupPrompt(prompt)) return []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; files?: unknown } | null
+    if (!message || String(message.role || "").toLowerCase() !== "user") continue
+    const files = parseMessageFiles(message.files).filter((file) => Boolean(resolveUploadFileId(file)))
+    if (!files.length) continue
+    return files.length <= 50 && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
+  }
+  return []
+}
+
 export function attachmentHasPreviewSource(attachment: unknown): boolean {
   const candidate = asComposerFile(attachment)
   return Boolean(
@@ -180,6 +206,12 @@ function isTerminalProcessingStage(stage: FileProcessingStage | null): boolean {
 export function isComposerFileUploadFailed(file: unknown): boolean {
   const candidate = asComposerFile(file)
   return Boolean(candidate && (candidate.status === "failed" || getFileProcessingStage(candidate) === "failed"))
+}
+
+/** A failed transcription is recoverable server-side; a failed upload is not. */
+export function isComposerFileSendBlockedByFailure(file: unknown): boolean {
+  if (!isComposerFileUploadFailed(file)) return false
+  return !(resolveUploadFileId(file) && (isAudioComposerFile(file) || isVideoComposerFile(file)))
 }
 
 export function sanitizeLongPasteMetaForMessage(meta: LongPasteMetadata | null): SafeLongPasteMetadata | null {

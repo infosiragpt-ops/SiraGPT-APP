@@ -1,7 +1,8 @@
 const OpenAI = require('openai');
 const reactAgent = require('../react-agent');
 const { statusForAgentStopReason, canRecoverAgentStopReason } = require('./react-run-outcome');
-const { buildTaskTools } = require('./task-tools');
+const { buildTaskTools, saveArtifact } = require('./task-tools');
+const mediaBatch = require('../media-batch');
 const taskStore = require('./task-store');
 const auditLog = require('./audit-log');
 const metrics = require('./metrics');
@@ -2127,7 +2128,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;
-  let uploadedFileContext = wantsSourcePreservingEdit
+  const mediaFileIds = hasAttachedFiles ? files : mediaBatch.shouldResolveMediaBatchFromHistory(displayGoal || goal, { plainTranscriptionRequest })
+    ? await mediaBatch.resolveChatMediaFileIds(prisma, { userId: user.id, chatId }) : [];
+  const mediaBatchRows = mediaFileIds.length
+    ? await mediaBatch.loadMediaBatch(prisma, { userId: user.id, fileIds: mediaFileIds }) : null;
+  let uploadedFileContext = wantsSourcePreservingEdit || mediaBatchRows
     ? ''
     : await buildUploadedFileContext(prisma, {
       userId: user.id,
@@ -2143,7 +2148,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // Describimos las imágenes con el runtime de visión configurado y
   // anexamos la descripción al contexto: el guard deja de dispararse y el
   // agente responde con contexto visual real.
-  if (!wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0
+  if (!mediaBatchRows && !wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0
     && countUsefulWords(uploadedFileContext) < DEFAULT_THIN_THRESHOLD) {
     try {
       const fileRows = await prisma.file.findMany({
@@ -2399,6 +2404,84 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   };
 
   try {
+    if (mediaBatchRows) {
+      // The same persistent File jobs serve uploads, refreshes and chat turns.
+      // Do not send an empty transcript or the first few seconds to the LLM
+      // while the remaining recordings are still being transcribed.
+      const ids = mediaBatchRows.map(row => row.id);
+      await backfillUserMessageFilesForTranscription(prisma, {
+        chatId, userId: user.id, taskId, fileIds: ids, clientMetadata: fileMetadata, content: displayGoal,
+      });
+      emit({ type: 'step_start', id: 'media_transcription', label: `Transcribiendo ${ids.length} archivos`, icon: 'file-text' });
+      const batch = await mediaBatch.waitForMediaBatch({
+        prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
+        retryFailed: /reintent|retry/i.test(String(displayGoal || goal)),
+        timeoutMs: Math.max(0, Math.min(90 * 60_000, maxRuntimeMs - (Date.now() - startedAt) - 120_000)),
+        onProgress: progress => emit({ type: 'checkpoint',
+          label: `${progress.ready}/${progress.total} transcritos · ${progress.pending} pendientes · ${progress.failed} con incidencias`,
+          status: 'saved', payload: { mediaBatch: progress } }),
+      });
+      emit({ type: 'step_done', id: 'media_transcription', ok: batch.ready > 0 });
+      const fullTranscript = mediaBatch.transcriptBundle(batch.rows);
+      if (batch.ready > 0) {
+        const artifact = saveArtifact({ filename: 'transcripciones-completas.txt',
+          base64: Buffer.from(fullTranscript, 'utf8').toString('base64'), mime: 'text/plain',
+          ownerUserId: user.id, chatId });
+        artifacts.push(artifact);
+        emit({ type: 'file_artifact', artifact });
+        await persistence.persistGeneratedArtifact({ artifact, task });
+      }
+      let analysis = null;
+      let analysisUnavailable = false;
+      let mediaAnalysisUsage = null;
+      if (batch.ready && ((!plainTranscriptionRequest && !/reintent|retry/i.test(String(displayGoal || goal))) || mediaBatch.wantsMediaAnalysis(displayGoal || goal))) {
+        emit({ type: 'step_start', id: 'media_analysis', label: 'Analizando cada transcripción', icon: 'braces' });
+        try {
+          if (!openai) throw new Error('selected_model_unavailable');
+          const completion = require('../media-analysis-runtime').createMediaAnalysisCompletion({
+            client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider,
+            userId: user.id, chatId, prisma,
+          });
+          mediaAnalysisUsage = completion.usage;
+          analysis = await mediaBatch.analyzeMediaBatch({
+            rows: batch.rows, goal: displayGoal || goal, signal: controller.signal,
+            onProgress: progress => emit({ type: 'checkpoint',
+              label: `Analizando ${progress.name} · parte ${progress.part}/${progress.parts}`,
+              status: 'saved', payload: { mediaAnalysis: progress } }),
+            // Respect the exact composer model and its resolved provider.
+            // No extra default model or provider fallback for batch summaries.
+            complete: completion.complete,
+          });
+        } catch (error) {
+          throwIfAborted(controller.signal);
+          analysisUnavailable = true;
+        }
+        emit({ type: 'step_done', id: 'media_analysis', ok: Boolean(analysis?.text) });
+      }
+      const notices = [
+        `**${batch.ready} de ${batch.total} archivos transcritos.**`,
+        batch.ready ? 'La descarga adjunta conserva las transcripciones completas, separadas por archivo.' : '',
+        batch.failed ? `${batch.failed} archivos no se pudieron transcribir. Escribe «reintenta los audios fallidos» para recuperar solo esos archivos; los demás siguen guardados.` : '',
+        batch.pending ? `${batch.pending} archivos siguen pendientes en la cola. Puedes consultar su progreso y volver a pedir el análisis cuando terminen, sin subirlos de nuevo.` : '',
+        analysis?.summaries?.length ? `Análisis realizado sobre ${analysis.summaries.length} archivos, incluyendo todos sus fragmentos.` : '',
+        analysis?.failed?.length ? `No se pudo analizar: ${analysis.failed.map(row => row.name).join(', ')}. Sus transcripciones siguen disponibles.` : '',
+        analysisUnavailable ? 'El modelo seleccionado no pudo terminar el análisis. Las transcripciones están guardadas; puedes volver a solicitarlo.' : '',
+      ].filter(Boolean);
+      if (analysis?.text) notices.push(analysis.text);
+      else if (batch.ready) notices.push(fullTranscript.length <= 20000 ? fullTranscript
+        : `${fullTranscript.slice(0, 16000)}\n\n[Vista previa. Descarga el TXT adjunto para leer las transcripciones completas.]`);
+      documentPolicy = { ...(documentPolicy || {}), mode: 'chat_only', autoGenerate: false,
+        reason: 'Transcripción persistida por archivo y análisis de todos sus fragmentos.' };
+      task.documentPolicy = documentPolicy;
+      return await finishDeterministicTask({ finalMarkdown: notices.join('\n\n'),
+        stoppedReason: batch.failed === batch.total ? 'media_batch_failed'
+          : batch.failed || batch.pending || analysisUnavailable || analysis?.failed?.length ? 'media_batch_partial' : 'transcription_finalize',
+        steps: analysis ? 2 : 1, artifactsList: artifacts,
+        metadata: { transcriptionFileIds: ids, mediaBatch: { total: batch.total, ready: batch.ready,
+          failed: batch.failed, pending: batch.pending, analyzed: analysis?.summaries?.length || 0 },
+        mediaAnalysis: analysis?.summaries || [], mediaAnalysisUsage },
+      });
+    }
     // ── F2: AgentRunner PRIMARY on the durable agent-task entry ──────────
     // The chat UI's intent classifier still routes 'ppt'/document turns to
     // POST /api/agent/task, which used to create documents via the loop's

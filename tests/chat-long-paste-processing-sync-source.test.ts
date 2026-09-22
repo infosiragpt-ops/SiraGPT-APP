@@ -22,8 +22,8 @@ describe("long paste chip processing sync (source contract)", () => {
 
   it("keeps a composer-wide safety net that re-reads processing attachments until they settle", () => {
     assert.match(chatInterface, /const processingWatchKey = collectProcessingFileIds\(uploadedFiles\)\.join\(','\);/)
-    assert.match(chatInterface, /await hydrateUploadedFileFromBackend\(id\);/)
-    assert.match(chatInterface, /if \(!cancelled && attempts < 90\) timer = setTimeout\(tick, 2000\);/)
-    assert.match(chatInterface, /\}, \[processingWatchKey, hydrateUploadedFileFromBackend\]\);/)
+    assert.match(chatInterface, /await apiClient\.getFilesProcessingStatus\(ids\.slice\(start, start \+ 50\)\)/)
+    assert.match(chatInterface, /if \(!cancelled\) timer = setTimeout\(tick, attempts < 15 \? 2000 : 5000\);/)
+    assert.match(chatInterface, /\}, \[processingWatchKey, setUploadedFiles\]\);/)
   })
 })

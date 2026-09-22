@@ -107,6 +107,7 @@ async function transcribeXaiAudioFile({
   mimeType,
   model,
   language,
+  signal,
   env = process.env,
   axiosImpl = axios,
 } = {}) {
@@ -118,7 +119,8 @@ async function transcribeXaiAudioFile({
 
   const config = resolveXaiAudioConfig(env);
   const form = new FormData();
-  form.append('file', fs.createReadStream(filePath), {
+  const audioStream = fs.createReadStream(filePath);
+  form.append('file', audioStream, {
     filename: originalName || path.basename(filePath) || 'voice.webm',
     contentType: mimeType || 'application/octet-stream',
   });
@@ -126,19 +128,24 @@ async function transcribeXaiAudioFile({
   const normalizedLanguage = normalizeOptionalString(language || config.ttsLanguage);
   if (normalizedLanguage) form.append('language', normalizedLanguage);
 
-  const response = await axiosImpl.post(`${config.baseUrl}/stt`, form, {
-    headers: xaiHeaders(config, form.getHeaders()),
-    timeout: config.timeoutMs,
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-  });
+  try {
+    const response = await axiosImpl.post(`${config.baseUrl}/stt`, form, {
+      headers: xaiHeaders(config, form.getHeaders()),
+      timeout: config.timeoutMs,
+      signal,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
 
-  return {
-    provider: 'xai',
-    model: normalizeOptionalString(model) || config.sttModel,
-    text: transcriptionTextFromPayload(response.data),
-    raw: response.data,
-  };
+    return {
+      provider: 'xai',
+      model: normalizeOptionalString(model) || config.sttModel,
+      text: transcriptionTextFromPayload(response.data),
+      raw: response.data,
+    };
+  } finally {
+    audioStream.destroy();
+  }
 }
 
 async function synthesizeXaiSpeech({

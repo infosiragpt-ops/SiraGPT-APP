@@ -69,7 +69,24 @@ describe("describeUnextractedAttachment", () => {
 const {
   hydrateChatMessageAttachments,
   messageFilesNeedHydration,
+  serializeMessageAttachments,
 } = require("../src/services/message-attachments");
+
+test("50 long media transcripts keep playable chat snapshots small; document context remains intact", async () => {
+  const rows = Array.from({ length: 50 }, (_, i) => ({ id: `a${i}`, filename: `a${i}.mp3`,
+    originalName: `Audio ${i}.mp3`, mimeType: "audio/mpeg", extractedText: "palabras ".repeat(20000) }));
+  rows.push({ id: "doc", filename: "notas.txt", originalName: "notas.txt", mimeType: "text/plain", extractedText: "Notas completas del documento." });
+  const snapshots = await serializeMessageAttachments({ file: { findMany: async () => rows } }, {
+    userId: "u", fileIds: rows.map(row => row.id),
+  });
+  assert.ok(JSON.stringify(snapshots).length < 50000, "history must not contain 50 full transcripts");
+  for (const file of snapshots.slice(0, 50)) {
+    assert.equal(file.extractedText, null);
+    assert.equal(file.url, `/uploads/u/${file.filename}`);
+  }
+  assert.equal(snapshots.at(-1).extractedText, "Notas completas del documento.");
+  assert.equal(rows[0].extractedText.length, 180000, "durable full text is unchanged");
+});
 
 describe("hydrateChatMessageAttachments for video/audio after transcription", () => {
   test("id-only stubs need hydration; durable /uploads urls do not", () => {
