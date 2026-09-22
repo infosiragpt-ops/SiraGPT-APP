@@ -31,6 +31,18 @@ export function mentionsDocumentTarget(prompt: string): boolean {
   return DOCUMENT_TARGET_RE.test(prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""))
 }
 
+function hasLiteralDocumentReplacement(prompt: string): boolean {
+  const text = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  const quoted = /"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|«[^»\n]*»/g
+  const values = text.match(quoted) || []
+  if (values.length < 2) return false
+  const command = text.replace(quoted, "<literal>")
+  // Do not let an old document hijack a new code/chat task. Quoted document
+  // content itself can contain these words; only the instruction is checked.
+  if (/\b(?:codigo|script|proyecto|repositorio|respuesta|mensaje|modelo|proveedor|cuenta)\b/.test(command)) return false
+  return /\b(?:cambi\w*|reempla[zc]\w*|sustitu\w*|replace)\b[^.?!]{0,80}<literal>\s+(?:por|con|a|with|to)\s*<literal>/.test(command)
+}
+
 export function historyDocumentAttachments(messages: readonly unknown[]): unknown[] {
   const files: unknown[] = []
   for (const message of messages.slice(-RECENT_HISTORY_MESSAGES)) {
@@ -60,6 +72,6 @@ export function resolveDocumentSandboxAdmission(
     return { route: null, attachments: [] }
   }
   // Follow-up without attachments: the server resolves the latest version.
-  if (explicit && context.length > 0 && mentionsDocumentTarget(prompt)) return { route: "edit", attachments: [] }
+  if (explicit && context.length > 0 && (mentionsDocumentTarget(prompt) || hasLiteralDocumentReplacement(prompt))) return { route: "edit", attachments: [] }
   return { route: null, attachments: [] }
 }

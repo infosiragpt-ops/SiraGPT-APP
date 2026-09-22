@@ -749,6 +749,23 @@ test('unresolved source-preserving intent fails closed without sandbox or a fals
   assert.match(out.hint, /No generé un documento nuevo/);
 });
 
+test('all strict Word precision errors block sandbox regeneration', async () => {
+  for (const code of ['DOCX_EDIT_AMBIGUOUS', 'DOCX_EDIT_NOT_FOUND', 'DOCX_EDIT_UNSUPPORTED', 'DOCX_EDIT_INVALID', 'DOCX_EDIT_INSTRUCTION_REQUIRED']) {
+    let sandboxCalled = false;
+    const tool = buildDocumentEditTool({
+      prisma: fakePrisma([{ id: 'f1', userId: 'u1', size: 1024, path: '/no/read.docx', originalName: 'original.docx' }]),
+      sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => {
+        throw Object.assign(new Error('No se pudo ubicar una coincidencia única; el original se conserva.'), { code });
+      } },
+      runDocumentAgent: async () => { sandboxCalled = true; return { outputs: [] }; },
+    });
+    const result = await tool.execute({ instruction: 'cambia "a" por "á"' }, baseCtx());
+    assert.equal(result.ok, false);
+    assert.equal(result.code, code);
+    assert.equal(sandboxCalled, false);
+  }
+});
+
 test('in-process fast path falls through to the sandbox when the editor returns null or throws', async () => {
   const inputPath = tmpFileWith('original-bytes');
 
