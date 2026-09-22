@@ -228,14 +228,20 @@ async function convertToWav(inputPath, wavPath, options = {}) {
 }
 
 function parseWhisperCppJson(raw) {
-  if (!raw) return { text: '', segments: [] };
+  const invalid = { text: '', segments: [], valid: false };
+  if (!raw) return invalid;
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { text: '', segments: [] };
+    return invalid;
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    || (typeof parsed.text !== 'string' && !Array.isArray(parsed.transcription))
+    || (parsed.text !== undefined && typeof parsed.text !== 'string')
+    || (parsed.transcription !== undefined && !Array.isArray(parsed.transcription))) return invalid;
   const rows = Array.isArray(parsed.transcription) ? parsed.transcription : [];
+  if (rows.some((row) => !row || typeof row.text !== 'string')) return invalid;
   const seconds = (offset, stamp) => {
     if (Number.isFinite(offset)) return Math.max(0, offset / 1000);
     const match = /^(\d+):(\d+):(\d+)[,.](\d+)$/.exec(String(stamp || ''));
@@ -247,14 +253,14 @@ function parseWhisperCppJson(raw) {
     text: String(row.text || '').trim(),
   })).filter((row) => row.text);
   const text = String(parsed.text || segments.map((s) => s.text).join(' ')).trim();
-  return { text, segments, language: parsed.result?.language || parsed.language || null };
+  return { text, segments, language: parsed.result?.language || parsed.language || null, valid: true };
 }
 
 async function readIfExists(filePath) {
   try {
     return await fsPromises.readFile(filePath, 'utf8');
   } catch {
-    return '';
+    return null;
   }
 }
 
@@ -283,12 +289,20 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
     threads: resolveThreadCount(options),
   });
 
-  const spawned = await runProcess(bin, args, scopedOptions);
-  const txt = (await readIfExists(`${outBase}.txt`)).trim();
-  const json = parseWhisperCppJson(await readIfExists(`${outBase}.json`));
-  const text = txt || json.text || String(spawned.stdout || '').trim();
-  if (!text) {
-    const err = new Error('whisper.cpp returned empty transcript');
+  await runProcess(bin, args, scopedOptions);
+  const txt = (await readIfExists(`${outBase}.txt`) || '').trim();
+  const rawJson = await readIfExists(`${outBase}.json`);
+  const json = parseWhisperCppJson(rawJson);
+  if (rawJson !== null && !json.valid) {
+    const err = new Error('whisper.cpp returned invalid output');
+    err.code = 'LOCAL_WHISPER_INVALID_OUTPUT';
+    throw err;
+  }
+  const text = txt || json.text;
+  // A successful decoder with valid empty JSON found no speech. Missing
+  // output (or stdout diagnostics alone) is not evidence of silence.
+  if (!text && !json.valid) {
+    const err = new Error('whisper.cpp returned no output');
     err.code = 'LOCAL_WHISPER_EMPTY';
     throw err;
   }
@@ -318,16 +332,20 @@ async function transcribeWithPython(wavPath, language, options = {}) {
     err.code = 'LOCAL_WHISPER_EMPTY';
     throw err;
   }
-  const parsed = JSON.parse(raw);
-  const text = String(parsed.text || '').trim();
-  if (!text) {
-    const err = new Error('python whisper returned empty transcript');
-    err.code = 'LOCAL_WHISPER_EMPTY';
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { /* invalid output is handled below */ }
+  if (!parsed || typeof parsed.text !== 'string'
+    || (parsed.segments !== undefined && (!Array.isArray(parsed.segments)
+      || parsed.segments.some((row) => !row || typeof row.text !== 'string')))) {
+    const err = new Error('python whisper returned invalid output');
+    err.code = 'LOCAL_WHISPER_INVALID_OUTPUT';
     throw err;
   }
+  const segments = Array.isArray(parsed.segments) ? parsed.segments : [];
+  const text = parsed.text.trim() || segments.map((row) => row.text.trim()).filter(Boolean).join(' ');
   return {
     text,
-    segments: Array.isArray(parsed.segments) ? parsed.segments : [],
+    segments,
     language: parsed.language || language || null,
     model: parsed.model || modelName(options),
     engine: parsed.engine || 'faster-whisper',
