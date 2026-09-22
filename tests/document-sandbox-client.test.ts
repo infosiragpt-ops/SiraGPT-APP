@@ -70,6 +70,16 @@ test("conversational tweaks never edit the chat document", () => {
   assert.equal(mentionsDocumentTarget("cambia el título"), true)
   assert.equal(mentionsDocumentTarget("cambia el tono de tu respuesta"), false)
 })
+test("literal replacement follow-ups keep the latest Word without requiring a repeated document noun", () => {
+  const historyAttachments = [{ filename: "informe.docx", artifactId: "abc123" }]
+  for (const prompt of ['ahora cambia "a" por "á"', 'reemplaza “codigo” por “código”', 'sustituye «dato» por «dato nuevo»', 'replace "a" with "b"']) {
+    assert.deepEqual(resolveDocumentSandboxAdmission(prompt, { historyAttachments }), { route: "edit", attachments: [] }, prompt)
+    assert.equal(resolveDocumentSandboxAdmission(prompt).route, null, 'a literal replacement alone cannot invent a source')
+  }
+  for (const prompt of ['cambia "a" por "b" en mi código', 'reemplaza "a" por "b" en tu respuesta', 'explica cómo cambiar "a" por "b"']) {
+    assert.equal(resolveDocumentSandboxAdmission(prompt, { historyAttachments }).route, null, prompt)
+  }
+})
 test("history admission only looks at recent messages and parses persisted file JSON", () => {
   const old = { files: [{ id: "uploaded-1", name: "viejo.docx" }] }
   const chatter = Array.from({ length: 8 }, () => ({ files: [] }))

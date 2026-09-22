@@ -1715,6 +1715,45 @@ test('runAgenticChat source-preserving validation failure ends honestly without 
   }
 });
 
+test('runAgenticChat precision ambiguity ends without model fallback, tools, or artifacts', async () => {
+  let llmCalls = 0;
+  let toolCalls = 0;
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => {
+          throw Object.assign(new Error('Encontré 3 coincidencias. Indica el párrafo; el original se conserva.'), { code: 'DOCX_EDIT_AMBIGUOUS' });
+        },
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai: { chat: { completions: { create: async () => { llmCalls += 1; return finalizeMessage('must not regenerate'); } } } },
+      model: 'gpt-4o-mini', userQuery: 'reemplaza "a" por "á" en el mismo Word', history: [], res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'], prisma: {} },
+      toolsOverride: [{ name: 'document_edit', description: 'edit', parameters: { type: 'object', properties: {} },
+        execute: async () => { toolCalls += 1; return { ok: true }; } }],
+    });
+    assert.equal(llmCalls, 0);
+    assert.equal(toolCalls, 0);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit_failed');
+    assert.deepEqual(result.artifacts, []);
+    assert.match(result.finalAnswer, /3 coincidencias/);
+    assert.equal(frames().some((frame) => frame?.type === 'file_artifact'), false);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
 test('runAgenticChat forces document_edit and drops create_document on attachment edit turns', async () => {
   let firstArgs = null;
   let calls = 0;

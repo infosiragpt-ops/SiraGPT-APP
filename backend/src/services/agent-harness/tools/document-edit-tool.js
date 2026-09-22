@@ -144,7 +144,7 @@ const SOURCE_PRESERVING_NO_FALLBACK_CODES = new Set([
 ]);
 
 function isSourcePreservingNoFallbackError(err) {
-  return Boolean(err && SOURCE_PRESERVING_NO_FALLBACK_CODES.has(err.code));
+  return Boolean(err && (SOURCE_PRESERVING_NO_FALLBACK_CODES.has(err.code) || /^DOCX_EDIT_/.test(String(err.code || ''))));
 }
 
 function sourcePreservingNoFallbackResult(err) {

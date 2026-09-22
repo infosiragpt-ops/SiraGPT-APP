@@ -1233,7 +1233,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           );
         }
         if (
-          code === 'REPLACE_TEXT_NOT_FOUND'
+          String(code || '').startsWith('DOCX_EDIT_')
+          || code === 'REPLACE_TEXT_NOT_FOUND'
           || code === 'REPLACE_TEXT_UNSPECIFIED'
           || code === 'DOCUMENT_TITLE_NOT_FOUND'
           || code === 'DOCUMENT_TITLE_UNSPECIFIED'

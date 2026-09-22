@@ -8,6 +8,7 @@ const { promisify } = require('util');
 const PizZip = require('pizzip');
 const { parsePresentationTitleEdit, isScopedSlideMutation, resolveSlideScope } = require('./document-editing/presentation-title-intent');
 const { verifySlideTitleEdit, assertBoundedOfficePackage } = require('./document-editing/edit-output-proof');
+const { parseDocxPrecisionRequest } = require('./document-editing/docx-precision-intent');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { renderPreview } = require('./doc-preview');
@@ -132,6 +133,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const verbHay = withCollapsedRepeats(text);
   const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
+  if (hasFiles && parseDocxPrecisionRequest(prompt)) return true;
 
   const editorialCorrectionIntent = requestWantsMinimalProofreading(text);
   const professionalEditingIntent = requestWantsProfessionalEditing(text);
@@ -8510,6 +8512,34 @@ async function tryGenerateSourcePreservingDocumentEdit({
   signal,
 } = {}) {
   const requestText = displayPrompt || prompt || '';
+  if (parseDocxPrecisionRequest(requestText)) {
+    // Reuse the canonical ownership/version resolver. The legacy heuristic
+    // selector can prefer a historical upload based on extracted-text guesses;
+    // an exact edit must use the explicit upload or latest owned delivered copy.
+    // precisionOnly never enters the generic planner (avoids recursion here).
+    const { runChatDocumentEdit } = require('./document-editor/chat-document-editor');
+    const exact = await runChatDocumentEdit({
+      prisma, userId, chatId, fileIds, instruction: requestText, signal, precisionOnly: true,
+    });
+    if (exact) {
+      if (!exact.ok) {
+        const error = new Error(exact.message);
+        error.code = String(exact.code || '').startsWith('DOCX_EDIT_') ? exact.code : 'DOCX_EDIT_UNAVAILABLE';
+        throw error;
+      }
+      const artifact = exact.artifacts?.[0];
+      if (!artifact || artifact.validation?.passed !== true) {
+        const error = new Error('La edición exacta no superó la comprobación del archivo original. No se entregó ningún documento.');
+        error.code = 'DOCX_EDIT_VALIDATION_FAILED';
+        throw error;
+      }
+      return {
+        content: exact.summary, artifact, validation: artifact.validation, format: 'docx', previewHtml: null,
+        file: { type: 'doc', format: 'docx', title: artifact.filename, filename: artifact.filename,
+          url: artifact.downloadUrl, mime: artifact.mime, size: artifact.sizeBytes, metrics: artifact.validation },
+      };
+    }
+  }
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
   // Attached images travel outside the editable set: they are candidate
   // replacement payloads for "reemplaza la foto por la imagen adjunta".
