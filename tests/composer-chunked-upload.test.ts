@@ -76,7 +76,7 @@ describe("chunked upload wiring (source contract)", () => {
     assert.match(composer, /import \{ shouldUseChunkedUpload \} from "@\/lib\/composer\/chunked-upload"/)
     assert.match(composer, /isolate: shouldUseChunkedUpload,/)
     assert.match(composer, /chunk\.isolated && chunk\.files\.length === 1 && shouldUseChunkedUpload\(chunk\.files\[0\]\)\s*\? await apiClient\.uploadFileChunked\(chunk\.files\[0\], \{/)
-    assert.match(composer, /100 MB por documento; audio y video hasta 10 GB \(unas 10 horas por archivo\)\./)
+    assert.match(composer, /Hasta 1 GB por documento; audio y video hasta 10 GB \(unas 10 horas por archivo\)\./)
   })
 
   it("audio and video get the 10 GB client cap", () => {

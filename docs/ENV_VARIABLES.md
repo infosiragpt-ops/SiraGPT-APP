@@ -563,3 +563,22 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SIRAGPT_INPUT_SANITIZER_MODE` | `block` | XSS/prompt injection mode: `block`, `warn`, `off` |
+
+---
+
+## Chat attachments — any format (optional)
+
+Every file type is accepted in the `/agentes` composer. Defaults need no configuration.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MAX_FILE_SIZE` / `UPLOAD_MAX_FILE_MB` | `1024` | Per-file cap in MB for documents and every non-media format (chunked upload above 80 MB) |
+| `NEXT_PUBLIC_COMPOSER_MAX_FILE_MB` | `1024` | Same cap enforced by the composer before uploading (build-time) |
+| `MAX_MEDIA_FILE_MB` / `NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB` | `10240` | Audio/video cap (see PR #785) |
+| `SIRAGPT_MEMORY_SAFE_MAX_BYTES` | `157286400` | Above this size only streaming readers run (PDF, media, archives, capped text); other formats are stored and described by name/type/size |
+| `UNIVERSAL_EXTRACT_MAX_CHARS` | `2097152` | Text cap for long-tail formats (iWork, WordPerfect, Visio, 7z/tar, .msg/.eml/.mbox, MOBI) |
+| `UNIVERSAL_ARCHIVE_MEMBER_MAX_BYTES` | `1048576` | Bytes read per archive member (piped to stdout, never unpacked to disk) |
+| `UNIVERSAL_ARCHIVE_MAX_MEMBERS_READ` | `60` | Readable archive members whose text is included |
+| `UNIVERSAL_ARCHIVE_MAX_LISTED` | `500` | Archive entries listed in the inventory |
+| `UNIVERSAL_ARCHIVE_MAX_UNPACKED_BYTES` | `2147483648` | Above this declared unpacked size only the index is shown |
+| `UNIVERSAL_EXTRACT_TIMEOUT_MS` | `90000` | Per-command timeout (LibreOffice gets at least 120 s) |

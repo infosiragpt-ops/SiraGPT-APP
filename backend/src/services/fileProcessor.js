@@ -20,6 +20,7 @@ const audioTranscriber = require('./audio-transcriber');
 const zipParser = require('./zip-parser');
 const { detectProtectedFile, detectCorruptFile } = require('./protected-file-detector');
 const { isLegacyFormat, extractLegacyText } = require('./legacy-format-converter');
+const universalExtractor = require('./universal-document-extractor');
 const { readTextFile } = require('./text-encoding-detector');
 const { detectDialect, parseCSV, formatCsvBlock } = require('./csv-dialect-detector');
 const { extractFromFile: extractHtmlContent } = require('./html-content-extractor');
@@ -214,6 +215,34 @@ class FileProcessor {
         // Fall through to normal processing
       }
 
+      // ── Oversized non-PDF files ──
+      // Documents up to 1 GB are accepted, but DOCX/XLSX/PPTX/ODF/EPUB/image
+      // parsers load the whole file in memory. Above the memory-safe ceiling
+      // only streaming readers run (PDF above, audio/video, archives listed by
+      // external tools, text read up to its cap); everything else is stored
+      // intact and described to the model by name, type and size.
+      if (isLargeFile && effectiveMimeType !== 'application/pdf'
+        && !audioTranscriber.isAudioMedia(effectiveMimeType, originalname)) {
+        const family = universalExtractor.familyFor(originalname);
+        const archive = family === '7z' || family === 'tar' || family === 'stream'
+          || /\.zip$/i.test(String(originalname || ''));
+        if (!archive) {
+          const typeLabel = effectiveMimeType || mimetype || 'application/octet-stream';
+          const textLike = isTextLikeMime(typeLabel) || await sniffTextLike(filePath);
+          const largeText = textLike
+            ? await this.processGenericText(filePath, originalname, typeLabel, fileSize)
+            : opaqueBinaryPlaceholder(originalname, typeLabel);
+          return {
+            success: true,
+            extractedText: largeText,
+            ocr: ocrEngine.skipped('large_file').ocr,
+            memSafe: true,
+            memSafeNote: `Large file (${(fileSize / 1024 / 1024).toFixed(0)} MB) stored intact; in-memory parsers skipped.`,
+            fileInfo: { name: originalname, type: typeLabel, size: fileSize },
+          };
+        }
+      }
+
       let extractedText = '';
       let transcription = null;
       let ocr = ocrEngine.skipped('not_ocr_applicable').ocr;
@@ -279,9 +308,13 @@ class FileProcessor {
 
       // ── Legacy format detection & conversion (.doc, .xls, .ppt via LibreOffice) ──
       const fileExt = path.extname(String(originalname || '')).toLowerCase();
-      if (effectiveMimeType !== '__external_done' && isLegacyFormat(fileExt)) {
+      // LEGACY_EXTENSIONS holds bare names ('doc'), so strip the dot — with it
+      // this branch never ran and .doc/.xls/.ppt reached parsers that cannot
+      // read OLE2 binaries.
+      const bareExt = fileExt.replace(/^\./, '');
+      if (effectiveMimeType !== '__external_done' && isLegacyFormat(bareExt)) {
         try {
-          const legacyText = await extractLegacyText(filePath, fileExt);
+          const legacyText = await extractLegacyText(filePath, bareExt);
           if (legacyText && legacyText.trim().length > 20) {
             extractedText = legacyText;
             console.log(`[fileProcessor] legacy format (${fileExt}) converted via LibreOffice: ${legacyText.length} chars`);
@@ -289,6 +322,19 @@ class FileProcessor {
           }
         } catch (err) {
           console.warn(`[fileProcessor] legacy format conversion failed (${fileExt}): ${err && err.message}`);
+        }
+      }
+
+      // ── Long-tail formats (iWork, WordPerfect, Visio, 7z/tar/gz, .msg,
+      // .eml/.mbox, MOBI…) — see universal-document-extractor. Runs only when
+      // no dedicated parser already produced text.
+      if (effectiveMimeType !== '__external_done'
+        && !audioTranscriber.isAudioMedia(effectiveMimeType, originalname)
+        && universalExtractor.handles(originalname)) {
+        const universal = await universalExtractor.extract(filePath, originalname);
+        if (universal.text) {
+          extractedText = universal.text;
+          effectiveMimeType = '__external_done';
         }
       }
 
@@ -302,7 +348,9 @@ class FileProcessor {
           break;
 
         case 'application/msword':
-          extractedText = await this.processLegacyDoc(filePath, originalname);
+          // Reached only when LibreOffice could not convert the .doc above;
+          // keep the upload usable (stored + downloadable) instead of failing.
+          extractedText = opaqueBinaryPlaceholder(originalname, effectiveMimeType);
           break;
         case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
           extractedText = await this.processWord(filePath, processOpts);

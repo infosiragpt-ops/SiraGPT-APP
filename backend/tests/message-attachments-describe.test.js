@@ -52,6 +52,13 @@ describe("describeUnextractedAttachment", () => {
     assert.match(msg, /no se pudo extraer/i);
   });
 
+  test("stored-only formats: the model gets type + size and is told the file was kept, not rejected", () => {
+    const msg = describeUnextractedAttachment({ name: "plano.dwg", mimeType: "image/vnd.dwg", size: 3 * 1024 * 1024 });
+    assert.match(msg, /Archivo "plano\.dwg" \(image\/vnd\.dwg, 3\.0 MB\)/);
+    assert.match(msg, /se guardó completo/);
+    assert.doesNotMatch(msg, /no soportado|reintente/);
+  });
+
   test("falls back to a default name and never throws on empty/null input", () => {
     assert.doesNotThrow(() => describeUnextractedAttachment());
     assert.doesNotThrow(() => describeUnextractedAttachment(null));

@@ -221,7 +221,9 @@ test('upload policy keeps text-ish extension fallbacks usable', () => {
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.mimeType, 'text/plain');
+  // A CSV the browser declared as text/plain is stored as text/csv so the
+  // table parser (not the prose reader) handles it.
+  assert.equal(result.mimeType, 'text/csv');
   assert.equal(mimeMatchesExtension('text/plain', 'csv'), true);
 });
 
@@ -240,7 +242,7 @@ test('upload policy accepts legacy binary .xls spreadsheets for Office workflows
 
 test('upload limits default to a bounded commercial ceiling unless explicitly overridden', () => {
   const limits = resolveUploadLimits({});
-  assert.equal(limits.fileSize, 100 * 1024 * 1024);
+  assert.equal(limits.fileSize, 1024 * 1024 * 1024);
   assert.equal(limits.files, 1000);
 
   const tooLarge = validateUploadPolicy({
@@ -272,9 +274,9 @@ test('an SVG reported as generic XML is accepted (still active-content sanitized
   assert.equal(native.ok, true, native.code);
 });
 
-test('audio/video get their own cap (2 GB default) while documents keep 100 MB', () => {
+test('audio/video get their own cap (10 GB default) while documents get 1 GB', () => {
   const limits = resolveUploadLimits({});
-  assert.equal(limits.fileSize, 100 * 1024 * 1024);
+  assert.equal(limits.fileSize, 1024 * 1024 * 1024);
   assert.equal(limits.mediaFileSize, DEFAULT_MAX_MEDIA_UPLOAD_MB * 1024 * 1024);
   assert.equal(resolveUploadLimits({ MAX_MEDIA_FILE_MB: '512' }).mediaFileSize, 512 * 1024 * 1024);
   assert.equal(DEFAULT_MAX_MEDIA_UPLOAD_MB, 10240, 'one 10-hour recording (several GB) fits the default media cap');
@@ -290,8 +292,12 @@ test('audio/video get their own cap (2 GB default) while documents keep 100 MB',
   const bigPdf = validateUploadPolicy({
     originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', size: 900 * 1024 * 1024,
   });
-  assert.equal(bigPdf.ok, false);
-  assert.equal(bigPdf.code, 'file_too_large');
+  assert.equal(bigPdf.ok, true, 'a 900 MB PDF fits the 1 GB document cap');
+  const hugePdf = validateUploadPolicy({
+    originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', size: 1100 * 1024 * 1024,
+  });
+  assert.equal(hugePdf.ok, false);
+  assert.equal(hugePdf.code, 'file_too_large');
   const hugeVideo = validateUploadPolicy({
     originalName: 'clase.mp4', declaredMime: 'video/mp4', detectedMime: 'video/mp4', detectionSource: 'magic-bytes', size: 11 * 1024 * 1024 * 1024,
   });
@@ -330,7 +336,9 @@ test('every audio format keeps its own identity (magic bytes measured with real 
     ['voz.aac', '', 'audio/aac', 'audio/aac'],
     ['cine.ac3', '', 'audio/vnd.dolby.dd-raw', 'audio/vnd.dolby.dd-raw'],
     ['movil.3gp', 'audio/3gpp', 'video/3gpp', 'audio/3gpp'],
-    ['clase.ts', '', null, 'video/mp2t'],
+    // Real ffmpeg MPEG-TS: file-type has no signature, detectMime's own
+    // transport-stream sniff reports it as magic video/mp2t.
+    ['clase.ts', '', 'video/mp2t', 'video/mp2t'],
   ];
   for (const [originalName, declaredMime, detected, expected] of cases) {
     const result = validateUploadPolicy({
@@ -344,4 +352,93 @@ test('every audio format keeps its own identity (magic bytes measured with real 
   // A 1 GB CAF with no browser MIME still gets the media cap, not 100 MB.
   const bigCaf = validateUploadPolicy({ originalName: 'larga.caf', declaredMime: '', detectedMime: '', detectionSource: 'fallback', size: 1024 * 1024 * 1024 });
   assert.equal(bigCaf.ok, true, JSON.stringify(bigCaf));
+});
+
+test('legacy Office / Outlook files inside an OLE2 container are accepted and routed by extension', () => {
+  // file-type 22 names the container (application/x-cfb) for every OLE2 file.
+  const cases = [
+    ['informe.doc', 'application/msword'],
+    ['plantilla.dot', 'application/msword'],
+    ['cuentas.xls', 'application/vnd.ms-excel'],
+    ['clase.ppt', 'application/vnd.ms-powerpoint'],
+    ['diapositivas.pps', 'application/vnd.ms-powerpoint'],
+    ['correo.msg', 'application/vnd.ms-outlook'],
+    ['plano.vsd', 'application/vnd.visio'],
+  ];
+  for (const [name, expected] of cases) {
+    const r = validateUploadPolicy({ originalName: name, declaredMime: 'application/octet-stream', detectedMime: 'application/x-cfb', detectionSource: 'magic-bytes', size: 4096 });
+    assert.equal(r.ok, true, `${name}: ${r.code}`);
+    assert.equal(r.mimeType, expected, name);
+  }
+});
+
+test('same-family variants pass the integrity check; cross-family disguises still fail', () => {
+  const accepted = [
+    ['animacion.png', 'image/apng'],
+    ['foto.heic', 'image/heic-sequence'],
+    ['audio.mp4', 'audio/x-m4a'],
+    ['video.mpg', 'video/MP2P'],
+    ['libro.epub', 'application/zip'],
+    ['texto.odt', 'application/zip'],
+    ['pelicula.ogg', 'video/ogg'],
+  ];
+  for (const [name, detected] of accepted) {
+    const r = validateUploadPolicy({ originalName: name, declaredMime: '', detectedMime: detected, detectionSource: 'magic-bytes', size: 4096 });
+    assert.equal(r.ok, true, `${name} (${detected}): ${r.code}`);
+  }
+  const rejected = [
+    ['renamed.docx', 'application/pdf'],
+    ['factura.pdf', 'application/x-msdownload'],
+    ['foto.png', 'application/x-msdownload'],
+    ['informe.doc', 'application/pdf'],
+    ['audio.mp3', 'application/x-elf'],
+  ];
+  for (const [name, detected] of rejected) {
+    const r = validateUploadPolicy({ originalName: name, declaredMime: '', detectedMime: detected, detectionSource: 'magic-bytes', size: 4096 });
+    assert.equal(r.code, 'extension_mime_mismatch', name);
+  }
+});
+
+test('text formats declared as octet-stream keep their real type (email, calendar, subtitles, svg)', () => {
+  const cases = [
+    ['mensaje.eml', 'message/rfc822'],
+    ['agenda.ics', 'text/calendar'],
+    ['contacto.vcf', 'text/vcard'],
+    ['subtitulos.srt', 'application/x-subrip'],
+    ['subtitulos.vtt', 'text/vtt'],
+    ['logo.svg', 'image/svg+xml'],
+    ['notas.md', 'text/markdown'],
+  ];
+  for (const [name, expected] of cases) {
+    const r = validateUploadPolicy({ originalName: name, declaredMime: 'application/octet-stream', detectedMime: 'application/octet-stream', detectionSource: 'fallback', size: 100 });
+    assert.equal(r.ok, true, name);
+    assert.equal(r.mimeType, expected, name);
+  }
+  // Active content stays a forced download even when the browser said octet-stream.
+  const svg = validateUploadPolicy({ originalName: 'logo.svg', declaredMime: 'application/octet-stream', size: 100 });
+  assert.equal(svg.forceDownload, true);
+});
+
+test('.ts / .mts / .cts are TypeScript unless the bytes are an MPEG transport stream', () => {
+  const {
+    looksLikeMpegTransportStream,
+  } = require('../src/services/upload-security-policy');
+  for (const declared of ['video/mp2t', 'application/octet-stream', '', 'text/plain']) {
+    const r = validateUploadPolicy({ originalName: 'app.ts', declaredMime: declared, detectedMime: declared, detectionSource: 'fallback', size: 2048 });
+    assert.equal(r.ok, true);
+    assert.equal(r.mimeType, 'text/x-typescript', `declared ${declared || '(none)'}`);
+    assert.equal(isMediaMime(r.mimeType), false);
+  }
+  const video = validateUploadPolicy({ originalName: 'grabacion.ts', declaredMime: 'video/mp2t', detectedMime: 'video/mp2t', detectionSource: 'magic-bytes', size: 2048 });
+  assert.equal(video.mimeType, 'video/mp2t');
+
+  const ts = Buffer.alloc(188 * 4);
+  for (let i = 0; i < 4; i += 1) ts[i * 188] = 0x47;
+  assert.equal(looksLikeMpegTransportStream(ts), true);
+  const m2ts = Buffer.alloc(192 * 3);
+  for (let i = 0; i < 3; i += 1) m2ts[4 + i * 192] = 0x47;
+  assert.equal(looksLikeMpegTransportStream(m2ts), true);
+  const code = Buffer.from('import { x } from "./y";\n'.repeat(40));
+  assert.equal(looksLikeMpegTransportStream(code), false);
+  assert.equal(looksLikeMpegTransportStream(Buffer.from('G')), false);
 });
