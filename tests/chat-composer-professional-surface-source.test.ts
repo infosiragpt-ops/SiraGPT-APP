@@ -11,8 +11,8 @@ const composerSurfacePath = path.join(process.cwd(), "components", "chat", "Chat
 const composerSurface = fs.readFileSync(composerSurfacePath, "utf8")
 const composerLayoutPath = path.join(process.cwd(), "lib", "composer-layout.ts")
 const composerLayout = fs.readFileSync(composerLayoutPath, "utf8")
-const effortMenuPath = path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx")
-const effortMenu = fs.readFileSync(effortMenuPath, "utf8")
+const fastTogglePath = path.join(process.cwd(), "components", "chat", "composer-fast-mode-toggle.tsx")
+const fastToggle = fs.readFileSync(fastTogglePath, "utf8")
 const contextMenuPath = path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx")
 const contextMenu = fs.readFileSync(contextMenuPath, "utf8")
 const permissionMenuPath = path.join(process.cwd(), "components", "chat", "composer-permission-menu.tsx")
@@ -254,15 +254,11 @@ describe("professional chat composer surface source contract", () => {
       )
     }
     assert.match(
-      effortMenu,
-      /value: "Max", label: "Extra high"/,
-      "the far-right Max compute value should expose the reference's Extra high label",
+      fastToggle,
+      /className=\{cn\("composer-effort-chip composer-fast-toggle", fast && "is-on"\)\}/,
+      "the lightning keeps the toolbar chip geometry and order slot",
     )
-    assert.equal(
-      (effortMenu.match(/<PopoverTrigger asChild>/g) || []).length,
-      1,
-      "effort owns only its lightning-chip trigger",
-    )
+    assert.doesNotMatch(fastToggle, /PopoverTrigger/, "the lightning is a one-click switch, not a popover")
     assert.equal(
       (contextMenu.match(/<PopoverTrigger asChild>/g) || []).length,
       1,
@@ -272,15 +268,15 @@ describe("professional chat composer surface source contract", () => {
     assert.match(contextMenu, /data-testid="composer-context-menu"/)
     assert.match(contextMenu, /role="progressbar"/)
     assert.doesNotMatch(
-      effortMenu,
+      fastToggle,
       /composer-context-trigger|composer-effort-ring/,
-      "the effort popover must not reclaim the context trigger",
+      "the fast-mode switch must not reclaim the context trigger",
     )
     assert.match(chatInterface, /composer-dictation-button/)
     assert.match(
       chatInterface,
-      /<ComposerContextMenu[\s\S]{0,260}\{renderComposerModelControls\(\)\}[\s\S]{0,120}<ComposerEffortMenu[\s\S]{0,180}\{renderDictationButton\(\)\}\s*<ChatComposerPrimaryAction/,
-      "context, model, effort, microphone and primary action must keep the approved order",
+      /<ComposerContextMenu[\s\S]{0,260}\{renderComposerModelControls\(\)\}[\s\S]{0,260}<ComposerFastModeToggle \/>\}\s*\{renderDictationButton\(\)\}\s*<ChatComposerPrimaryAction/,
+      "context, model, fast mode, microphone and primary action must keep the approved order",
     )
     assert.doesNotMatch(
       chatInterface,
@@ -380,8 +376,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-effort-chip\.is-high svg\s*\{\s*color: #e89a96;/,
-      "the high-effort lightning should use the reference's restrained warm accent",
+      /\.composer-fast-toggle\.is-on svg\s*\{\s*color: #e2766f;/,
+      "an active fast mode lights the bolt with the restrained warm accent",
     )
     assert.match(
       globals,

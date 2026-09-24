@@ -569,7 +569,7 @@ class AIService {
         return out.text;
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null }) {
         // The route hands us a client for the provider it resolved. When an
         // image turn has to leave a text-only model, `provider` changes below;
         // that client must then NOT be reused (live 2026-09-02: Meta's client
@@ -845,6 +845,11 @@ class AIService {
                     messages: workingMessages,
                     stream: true,
                     thinkingLevel: turnThinkingLevel,
+                    // Composer "Esfuerzo": the user's level reaches the
+                    // provider knob only when it is still the turn's level
+                    // (a trivial turn downgrades it to disabled).
+                    thinkingLevelExplicit: Boolean(thinkingLevelExplicit) && !thinkingDisabled
+                        && String(turnThinkingLevel) === String(thinkingLevel),
                     extra: extraPayload,
                     maxOutputTokens: effectiveMaxOutput,
                     tools: Array.isArray(tools) ? tools : [],

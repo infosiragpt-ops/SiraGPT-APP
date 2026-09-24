@@ -1341,432 +1341,6 @@ details[open] > summary .think-chevron,
 }
 
 
-/* ─── Effort — violet glass rail ─────────────────────────────────────
-   A continuous violet fill communicates the selected range. The existing
-   deterministic SVG adds a quiet microtexture, anchored to the full rail.
-   A raised white dial marks the exact stop; light animates only during
-   interaction. Pointer mapping, four levels and persistence stay unchanged. */
-.effort-section {
-  padding: 0.55rem 1.1rem 0.3rem;
-  border: 0;
-  background: transparent;
-  /* Single source of slider geometry: the track, stops, fill, ticks and
-     bubble all resolve these by inheritance, so every stop lands on the
-     same x in every element. (--effort-thumb-w names the stop travel inset;
-     there is no visible dial.) */
-  --effort-steps: 3;
-  --effort-rail-h: 0.9375rem;
-  --effort-thumb-w: 1.5rem;
-  --effort-thumb-h: 1.5rem;
-  --effort-pad: 0.3rem;
-  --effort-rail: hsl(257 62% 93%);
-  --effort-fill-base: hsl(258 70% 92%);
-  --effort-violet: hsl(259 88% 62%);
-  --effort-accent: hsl(259 88% 62%);
-  --effort-fill-mid: hsl(262 80% 82%);
-  --effort-fill-end: hsl(258 70% 92%);
-  --effort-grip: hsl(260 24% 48%);
-}
-
-.effort-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.25rem;
-}
-
-.effort-title {
-  color: hsl(var(--foreground) / 0.9);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: -0.005em;
-  line-height: 1.1;
-}
-
-/* Text readout of the active level (Low … Extra high): the value never
-   relies on color or density alone (WCAG 1.4.1). */
-.effort-level {
-  color: hsl(264 47% 43%);
-  padding: 0.125rem 0.5rem;
-  border: 1px solid hsl(264 62% 65% / 0.14);
-  border-radius: 0.5rem;
-  background: hsl(264 74% 96%);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: -0.005em;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.effort-track {
-  position: relative;
-  display: block;
-  height: 2.75rem;
-  margin: 0;
-  padding: 0;
-  border-radius: 999px;
-  outline: none;
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  /* The rail clips its own texture; the focus ring and value bubble
-     need to remain visible outside it. */
-  overflow: visible;
-  --effort-index: 0;
-  /* Declared HERE on purpose: var(--effort-index) inside this expression
-     resolves against the declaring element, and the [data-effort] overrides
-     below also land on the track. Defining it on the section froze the fill
-     at stop 0 (custom properties substitute at declaration scope). */
-  --effort-x: calc(
-    var(--effort-pad) + var(--effort-thumb-w) / 2 +
-    var(--effort-index) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
-  );
-  /* The reveal position itself animates (registered @property below), so the
-     cloud glides between stops instead of jumping. */
-  transition: --effort-x 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-/* Registered so --effort-x interpolates as a length-percentage: without this
-   the reveal would snap discretely. Unsupported browsers simply jump. */
-@property --effort-x {
-  syntax: "<length-percentage>";
-  inherits: true;
-  initial-value: 0%;
-}
-.effort-track[data-effort="0"] { --effort-index: 0; }
-.effort-track[data-effort="1"] { --effort-index: 1; }
-.effort-track[data-effort="2"] { --effort-index: 2; }
-.effort-track[data-effort="3"] { --effort-index: 3; }
-.effort-track[data-dragging="true"] {
-  cursor: grabbing;
-}
-.effort-track[data-disabled="true"] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.effort-track[data-disabled="true"] .effort-dither-twinkle,
-.effort-track[data-disabled="true"] .effort-sheen {
-  animation: none;
-}
-
-/* Visible knob (dial): a white dot riding the active stop. It is a sibling
-   of .effort-track-line (which clips its children), so nothing cuts it, and
-   it resolves the same shared --effort-x by inheritance. */
-.effort-knob {
-  position: absolute;
-  top: 50%;
-  left: var(--effort-x);
-  width: var(--effort-thumb-w);
-  height: var(--effort-thumb-w);
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: hsl(0 0% 100%);
-  border: 1px solid hsl(260 30% 40% / 0.14);
-  box-shadow:
-    0 1px 2px hsl(260 30% 24% / 0.18),
-    0 3px 8px hsl(260 30% 24% / 0.14);
-  pointer-events: none;
-  transition: left 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.effort-track[data-dragging="true"] .effort-knob {
-  box-shadow:
-    0 1px 2px hsl(260 30% 24% / 0.2),
-    0 5px 14px hsl(260 30% 24% / 0.2);
-  transition: none;
-}
-
-/* Specificity (0,3,0) beats the global [tabindex]:focus-visible rule (0,2,0),
-   whose dark --ring would otherwise win by source order. */
-.effort-section .effort-track:focus-visible {
-  outline: 2px solid var(--effort-accent);
-  outline-offset: 2px;
-}
-/* Thumb focus ring lives after the hover rule (same specificity wins). */
-
-.effort-track-line {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: var(--effort-rail-h);
-  transform: translateY(-50%);
-  border-radius: 999px;
-  pointer-events: none;
-  overflow: hidden;
-  isolation: isolate;
-  background: var(--effort-rail);
-  box-shadow:
-    inset 0 1px 3px hsl(260 30% 24% / 0.1),
-    0 1px 0 hsl(0 0% 100% / 0.85);
-}
-.effort-track-line::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border: 1px solid hsl(260 30% 40% / 0.1);
-  border-radius: inherit;
-  background: linear-gradient(180deg, hsl(0 0% 100% / 0.24), transparent 55%);
-  pointer-events: none;
-}
-.effort-track-fill {
-  position: absolute;
-  inset: 0;
-  display: block;
-  border-radius: inherit;
-  pointer-events: none;
-  overflow: hidden;
-  background: linear-gradient(90deg, var(--effort-fill-base), var(--effort-fill-mid) 50%, var(--effort-fill-end));
-  box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.3);
-  /* Reveal the anchored cloud up to the active stop with a soft 28 px
-     dissolve edge instead of a hard cut. The mask rides --effort-x, which
-     animates on the track (see @property above). */
-  -webkit-mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 28px), transparent var(--effort-x));
-  mask-image: linear-gradient(90deg, #fff calc(var(--effort-x) - 28px), transparent var(--effort-x));
-}
-.effort-dither {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  opacity: 1;
-}
-.effort-dither-base {
-  fill: transparent;
-}
-.effort-dither-core {
-  fill: var(--effort-violet);
-  opacity: 0.45;
-}
-.effort-dither-px {
-  fill: var(--effort-violet);
-  shape-rendering: crispEdges;
-}
-.effort-dither-px-light {
-  fill: hsl(262 80% 74%);
-}
-.effort-dither-px-deep {
-  fill: hsl(267 88% 50%);
-}
-.effort-dither-spark {
-  fill: hsl(0 0% 100% / 0.78);
-  shape-rendering: crispEdges;
-}
-/* Living pixels: the sparse layers breathe with a wave that travels left →
-   right (each pixel's delay is a function of its grid position — see
-   twinkleDelayS). Dense layers and the solid cap stay static so the bar
-   keeps reading as a solid control. Opacity-only: no layout, GPU-cheap. */
-.effort-dither-twinkle {
-  /* Each pixel beats around its own centre (SVG needs an explicit box). */
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: effort-pixel-wave 2.4s ease-in-out infinite;
-  animation-play-state: paused;
-}
-/* Heartbeat: quick lub at 10%, dub at 30%, then rest. Opacity follows the
-   thump so the beat reads even at 3 px. Staggered per-pixel delays (see
-   twinkleDelayS) turn the beat into a pulse travelling down the bar. */
-@keyframes effort-pixel-wave {
-  0%   { opacity: 0.85; transform: scale(1); }
-  10%  { opacity: 1;    transform: scale(1.5); }
-  20%  { opacity: 0.55; transform: scale(1); }
-  30%  { opacity: 1;    transform: scale(1.32); }
-  42%  { opacity: 0.7;  transform: scale(1); }
-  100% { opacity: 0.85; transform: scale(1); }
-}
-/* A quiet light pass on hover, keyboard focus or drag. At rest the control
-   stays still, so it never resembles an indeterminate loading indicator. */
-.effort-sheen {
-  position: absolute;
-  inset: 0;
-  display: block;
-  border-radius: inherit;
-  pointer-events: none;
-  background: linear-gradient(100deg, transparent 43%, hsl(0 0% 100% / 0.2) 50%, transparent 57%);
-  background-size: 250% 100%;
-  background-repeat: no-repeat;
-  animation: effort-sheen-sweep 5.6s linear infinite;
-  animation-play-state: paused;
-}
-.effort-track:is(:hover, :focus-visible, [data-dragging="true"]):not([data-disabled="true"]) .effort-sheen,
-.effort-track:is(:hover, :focus-visible, [data-dragging="true"]):not([data-disabled="true"]) .effort-dither-twinkle {
-  animation-play-state: running;
-}
-@keyframes effort-sheen-sweep {
-  from { background-position: 120% 0; }
-  to { background-position: -20% 0; }
-}
-
-/* Stops: invisible hit areas centred on each level + a faint tick dot on the
-   part of the rail that is not yet revealed. */
-.effort-stop {
-  --i: 0;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: calc(
-    var(--effort-pad) + var(--effort-thumb-w) / 2 +
-    var(--i) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
-  );
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-  width: 1.5rem;
-  min-width: 0;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  transform: translateX(-50%);
-  background: transparent !important;
-  background-color: transparent !important;
-  box-shadow: none !important;
-  -webkit-appearance: none;
-  appearance: none;
-  cursor: pointer;
-  color: inherit;
-}
-.effort-stop[data-stop="1"] { --i: 1; }
-.effort-stop[data-stop="2"] { --i: 2; }
-.effort-stop[data-stop="3"] { --i: 3; }
-
-/* No visible dial: the value lives in the pixel cloud's cut position, the
-   header readout and the tick marks below. Stops stay invisible hit areas. */
-
-/* Discrete step marks under the rail: four fixed stops, snapped on
-   release — a second non-color cue next to the header readout. */
-.effort-ticks {
-  position: relative;
-  height: 0.375rem;
-  margin-top: 0.3rem;
-}
-.effort-ticks > span {
-  --i: 0;
-  position: absolute;
-  top: 0;
-  left: calc(
-    var(--effort-pad) + var(--effort-thumb-w) / 2 +
-    var(--i) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
-  );
-  width: 2px;
-  height: 5px;
-  transform: translateX(-50%);
-  border-radius: 1px;
-  background: hsl(220 8% 68%);
-}
-.effort-ticks > span[data-stop="1"] { --i: 1; }
-.effort-ticks > span[data-stop="2"] { --i: 2; }
-.effort-ticks > span[data-stop="3"] { --i: 3; }
-.dark .effort-ticks > span {
-  background: hsl(0 0% 100% / 0.4);
-}
-
-/* Value bubble that follows the active stop while dragging. Clamped so it never
-   leaves the popover at the end stops. */
-.effort-bubble {
-  position: absolute;
-  bottom: calc(100% + 0.45rem);
-  left: clamp(2.75rem, var(--effort-x), calc(100% - 2.75rem));
-  z-index: 3;
-  transform: translateX(-50%);
-  padding: 0.3rem 0.6rem;
-  border-radius: 0.6rem;
-  background: hsl(40 3% 11%);
-  color: hsl(0 0% 100%);
-  font-size: 0.7rem;
-  font-weight: 600;
-  line-height: 1.2;
-  white-space: nowrap;
-  pointer-events: none;
-  box-shadow:
-    0 2px 6px hsl(220 25% 10% / 0.25),
-    0 8px 20px -8px hsl(220 25% 10% / 0.35);
-}
-.effort-bubble::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: hsl(40 3% 11%);
-}
-.dark .effort-bubble {
-  background: hsl(0 0% 96%);
-  color: hsl(220 12% 10%);
-  box-shadow:
-    0 2px 6px hsl(0 0% 0% / 0.5),
-    0 8px 20px -8px hsl(0 0% 0% / 0.6);
-}
-.dark .effort-bubble::after {
-  border-top-color: hsl(0 0% 96%);
-}
-
-.effort-ends {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 0.15rem;
-  /* 5.4:1 on the light popover (WCAG 1.4.3) with margin over the 4.5 floor. */
-  color: hsl(220 9% 42%);
-  font-size: 0.625rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-.dark .effort-ends {
-  color: hsl(var(--muted-foreground));
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .effort-track,
-  .effort-track-fill,
-  .effort-dither-twinkle,
-  .effort-sheen,
-  .effort-bubble {
-    animation: none !important;
-    transition: none !important;
-  }
-}
-
-.dark .effort-section {
-  background: transparent;
-  --effort-rail: hsl(258 18% 20%);
-  --effort-fill-base: hsl(258 30% 32%);
-  --effort-violet: hsl(268 90% 72%);
-  --effort-accent: hsl(268 90% 72%);
-  --effort-fill-mid: hsl(262 55% 48%);
-  --effort-fill-end: hsl(258 30% 32%);
-}
-.dark .effort-level {
-  color: hsl(264 100% 86%);
-  border-color: hsl(264 80% 76% / 0.18);
-  background: hsl(264 50% 60% / 0.14);
-}
-.dark .effort-track-line {
-  box-shadow:
-    inset 0 1px 3px hsl(0 0% 0% / 0.35),
-    0 1px 0 hsl(0 0% 100% / 0.06);
-}
-.dark .effort-track-line::after {
-  border-color: hsl(264 80% 85% / 0.12);
-  background: linear-gradient(180deg, hsl(0 0% 100% / 0.12), transparent 55%);
-}
-
-@media (forced-colors: active) {
-  .effort-track-line {
-    border: 1px solid CanvasText;
-    background: Canvas;
-  }
-  .effort-track-fill { background: Highlight; }
-  .effort-dither, .effort-sheen, .effort-track-line::after { display: none; }
-  .effort-section .effort-level { color: CanvasText; border-color: CanvasText; background: Canvas; }
-  .effort-section .effort-track:focus-visible { outline-color: Highlight; }
-}
-
 .model-provider-section {
   margin-top: 0.375rem;
 }
@@ -1840,6 +1414,281 @@ details[open] > summary .think-chevron,
   width: 0.875rem;
   height: 0.875rem;
   opacity: 0.9;
+}
+
+/* ─── Composer model menu — Claude-style two-line rows ───────────────
+   Logo · name over a one-line tagline · check on the active model. The
+   footer carries the "Esfuerzo" row that opens the effort submenu. */
+.model-picker-list .model-picker-row .model-logo-chip {
+  width: 1.25rem;
+  height: 1.25rem;
+  opacity: 1;
+}
+
+.model-picker-row-tagline {
+  margin-top: 1px;
+  color: hsl(var(--muted-foreground) / 0.9);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 0.95rem;
+}
+
+.model-picker-row-check {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
+  color: hsl(217 91% 55%);
+}
+
+.dark .model-picker-row-check {
+  color: hsl(213 94% 68%);
+}
+
+.model-picker-row-more {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.model-picker-row:hover .model-picker-row-more,
+.model-picker-row[data-highlighted] .model-picker-row-more,
+.model-picker-row-more[aria-expanded="true"] {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .model-picker-row-more {
+    opacity: 1;
+  }
+}
+
+.model-logo-monogram {
+  border-radius: 6px;
+  background: hsl(220 14% 93%);
+  color: hsl(220 12% 34%);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.dark .model-logo-monogram {
+  background: hsl(0 0% 100% / 0.1);
+  color: hsl(0 0% 88%);
+}
+
+.model-picker-content .model-picker-search-shell {
+  margin: 6px 6px 2px;
+  border-radius: 10px;
+  background: hsl(220 14% 96.5%);
+  transition: box-shadow 140ms ease-out, background-color 140ms ease-out;
+}
+
+.model-picker-content .model-picker-search-shell:focus-within {
+  background: #ffffff;
+  box-shadow: 0 0 0 1px hsl(220 13% 84%), 0 0 0 4px hsl(217 91% 60% / 0.12);
+}
+
+.dark .model-picker-content .model-picker-search-shell {
+  background: hsl(0 0% 100% / 0.05);
+}
+
+.dark .model-picker-content .model-picker-search-shell:focus-within {
+  background: hsl(0 0% 100% / 0.07);
+  box-shadow: 0 0 0 1px hsl(0 0% 100% / 0.14), 0 0 0 4px hsl(213 94% 68% / 0.14);
+}
+
+.model-picker-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 2.25rem 1rem;
+  text-align: center;
+}
+
+.model-picker-empty-title {
+  color: hsl(var(--foreground) / 0.86);
+  font-size: 12.5px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.model-picker-empty-hint {
+  color: hsl(var(--muted-foreground) / 0.85);
+  font-size: 11.5px;
+}
+
+.model-picker-footer {
+  border-top: 1px solid hsl(220 13% 91%);
+  padding: 0.3rem 0.375rem 0.375rem;
+}
+
+.dark .model-picker-footer {
+  border-top-color: hsl(0 0% 100% / 0.08);
+}
+
+.model-picker-effort-trigger {
+  display: flex;
+  min-height: 2.35rem;
+  align-items: center;
+  gap: 0.6rem;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  color: hsl(var(--foreground) / 0.92);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.model-picker-effort-trigger:focus,
+.model-picker-effort-trigger[data-highlighted],
+.model-picker-effort-trigger[data-state="open"] {
+  background: hsl(var(--foreground) / 0.045) !important;
+}
+
+.dark .model-picker-effort-trigger:focus,
+.dark .model-picker-effort-trigger[data-highlighted],
+.dark .model-picker-effort-trigger[data-state="open"] {
+  background: hsl(0 0% 100% / 0.06) !important;
+}
+
+.model-picker-effort-trigger > svg:last-child {
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-left: 0.1rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+
+.model-picker-effort-trigger-chevron {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground) / 0.8);
+  transition: transform 160ms ease-out;
+}
+
+.model-effort-inline {
+  margin: 0.15rem 0 0.1rem;
+  border-radius: 0.6rem;
+  background: hsl(220 14% 97.5%);
+  padding: 0.2rem 0.25rem 0.25rem;
+}
+
+.dark .model-effort-inline {
+  background: hsl(0 0% 100% / 0.04);
+}
+
+/* Radix ScrollArea wraps content in a display:table box that grows with the
+   longest row, pushing the trailing check out of view. Keep rows at the
+   viewport width so names/taglines truncate and the check stays visible. */
+.chat-model-menu-scroll [data-radix-scroll-area-viewport] > div {
+  display: block !important;
+  min-width: 0 !important;
+}
+
+.model-picker-effort-trigger-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground) / 0.9);
+}
+
+.model-picker-effort-trigger-value {
+  color: hsl(var(--muted-foreground) / 0.95);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.model-effort-submenu {
+  z-index: 1001;
+  border-radius: 12px !important;
+  border: 1px solid hsl(220 13% 86% / 0.72) !important;
+  background: #ffffff !important;
+  color: #0a0a0a !important;
+  box-shadow:
+    0 18px 40px -26px hsl(220 30% 12% / 0.32),
+    0 1px 0 hsl(0 0% 100% / 0.96) inset !important;
+}
+
+.dark .model-effort-submenu {
+  border-color: hsl(0 0% 100% / 0.11) !important;
+  background: hsl(var(--popover) / 0.98) !important;
+  color: hsl(var(--popover-foreground)) !important;
+}
+
+.model-effort-help {
+  margin: 0;
+  padding: 0.4rem 0.55rem 0.55rem;
+  color: hsl(var(--muted-foreground) / 0.95);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.model-effort-option {
+  display: flex;
+  min-height: 2.2rem;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.55rem;
+  color: hsl(var(--foreground) / 0.92);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.model-effort-option:focus,
+.model-effort-option[data-highlighted] {
+  background: hsl(var(--foreground) / 0.045) !important;
+}
+
+.dark .model-effort-option:focus,
+.dark .model-effort-option[data-highlighted] {
+  background: hsl(0 0% 100% / 0.06) !important;
+}
+
+.model-effort-option.is-active .model-effort-option-label {
+  font-weight: 600;
+}
+
+.model-effort-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 6px;
+  padding: 0.1rem 0.4rem;
+  background: hsl(220 14% 94%);
+  color: hsl(220 10% 38%);
+  font-size: 10.5px;
+  font-weight: 550;
+  line-height: 1.1rem;
+  white-space: nowrap;
+}
+
+.model-effort-badge.is-warning {
+  background: hsl(38 92% 90%);
+  color: hsl(28 80% 30%);
+}
+
+.dark .model-effort-badge {
+  background: hsl(0 0% 100% / 0.08);
+  color: hsl(0 0% 78%);
+}
+
+.dark .model-effort-badge.is-warning {
+  background: hsl(38 80% 50% / 0.18);
+  color: hsl(40 90% 72%);
+}
+
+.model-effort-check {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: hsl(217 91% 55%);
+}
+
+.dark .model-effort-check {
+  color: hsl(213 94% 68%);
 }
 
 .model-picker-effort {
@@ -6484,11 +6333,15 @@ footer {
 .composer-permission-chip.is-full {
   color: #dc2626;
 }
-.composer-effort-chip.is-high {
+.composer-fast-toggle.is-on {
   color: hsl(220 8% 46%);
+  background: hsl(4 70% 96%);
 }
-.composer-effort-chip.is-high svg {
-  color: #e89a96;
+.composer-fast-toggle.is-on svg {
+  color: #e2766f;
+}
+.dark .composer-fast-toggle.is-on {
+  background: hsl(4 60% 50% / 0.16);
 }
 .composer-context-trigger {
   order: 10;
@@ -6551,52 +6404,6 @@ footer {
 .composer-permission-row.is-selected {
   background: hsl(220 14% 96%);
 }
-.composer-fast-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 0.65rem 1rem 0.75rem;
-  border-top: 1px solid hsl(220 12% 90%);
-}
-.composer-effort-menu[data-effort="2"] .composer-fast-row,
-.composer-effort-menu[data-effort="3"] .composer-fast-row {
-  border-top-color: hsl(278 28% 82%);
-}
-.composer-fast-icon {
-  color: #d83a30;
-}
-.composer-fast-switch {
-  width: 2.1rem;
-  height: 1.2rem;
-  border-radius: 999px;
-  border: 0;
-  background: hsl(220 10% 82%);
-  position: relative;
-  flex-shrink: 0;
-}
-/* Knob lives on ::before — on phones the global 44px tap-target expander
-   claims `button[aria-label]::after`, which used to swallow the knob. */
-.composer-fast-switch::before {
-  content: "";
-  position: absolute;
-  top: 0.12rem;
-  left: 0.12rem;
-  width: 0.96rem;
-  height: 0.96rem;
-  border-radius: 999px;
-  background: white;
-  transition: transform 140ms ease;
-}
-.composer-fast-switch.is-on {
-  background: #e99a91;
-}
-.composer-fast-switch.is-on::before {
-  transform: translateX(0.9rem);
-  background: #302b29;
-}
-
-.composer-effort-menu,
 .composer-context-menu {
   overflow: hidden;
   border: 1px solid hsl(36 12% 84%);
@@ -6688,7 +6495,6 @@ footer {
   margin-top: 0.15rem;
 }
 
-.dark .composer-effort-menu,
 .dark .composer-context-menu {
   border-color: hsl(0 0% 100% / 0.12);
   background: hsl(220 12% 10% / 0.99);
@@ -6715,8 +6521,7 @@ footer {
   background: hsl(0 0% 78%);
 }
 
-.dark .composer-context-section,
-.dark .composer-fast-row {
+.dark .composer-context-section {
   border-top-color: hsl(0 0% 100% / 0.1);
 }
 .composer-input-row .composer-model-inline .chat-model-trigger {
@@ -7216,7 +7021,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   background-color: hsl(0 0% 100% / 0.08);
 }
 .dark .composer-input-row .composer-model-inline .chat-model-trigger,
-.dark .composer-effort-chip.is-high,
+.dark .composer-fast-toggle.is-on,
 .dark .composer-dictation-button:not([aria-pressed="true"]) {
   color: hsl(216 14% 72%) !important;
 }
@@ -7235,7 +7040,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-permission-chip.is-full {
   color: #f87171;
 }
-.dark .composer-effort-chip.is-high svg {
+.dark .composer-fast-toggle.is-on svg {
   color: #fca5a5;
 }
 
