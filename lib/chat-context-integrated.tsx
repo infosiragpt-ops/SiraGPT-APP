@@ -281,6 +281,14 @@ export interface AgentStepClient {
   status: 'planned' | 'executing' | 'completed' | 'error' | 'denied' | 'interrupted'
   isError?: boolean
   durationMs?: number
+  /** Structured web search summary (Búsqueda rápida). */
+  search?: {
+    count: number
+    latencyMs?: number
+    provider?: string
+    cached?: boolean
+    sources: Array<{ title?: string; url: string }>
+  }
 }
 
 export interface AgentRunClient {
@@ -518,6 +526,7 @@ function createAgentTraceHandlers(opts: {
             isError: Boolean(event.isError),
             preview: event.preview,
             durationMs: event.durationMs,
+            ...(event.search ? { search: event.search } : {}),
           })
           patchMessage({ agentSteps: orderedSteps() })
           break

@@ -109,6 +109,32 @@ function errorPreviewOf(result, max = RESULT_PREVIEW_MAX_CHARS) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+// Web search results travel as a compact, structured summary on tool_result
+// so the chat can render «Buscando en la web · N fuentes · 180 ms» with source
+// chips instead of a raw JSON preview. Never includes snippets or the query.
+function searchSummaryOf(name, result) {
+  if (!/(^|_)search$/.test(String(name || ''))) return null;
+  if (typeof result === 'string') {
+    try { result = JSON.parse(result); } catch (_) { return null; }
+  }
+  if (!result || typeof result !== 'object') return null;
+  const list = Array.isArray(result.results) ? result.results : null;
+  if (!list) return null;
+  const sources = [];
+  for (const r of list) {
+    if (!r || typeof r.url !== 'string' || !/^https?:\/\//i.test(r.url)) continue;
+    sources.push({ title: String(r.title || '').slice(0, 160), url: r.url.slice(0, 500) });
+    if (sources.length >= 8) break;
+  }
+  return {
+    count: Number.isFinite(result.count) ? result.count : list.length,
+    ...(Number.isFinite(result.latencyMs) ? { latencyMs: Math.round(result.latencyMs) } : {}),
+    ...(typeof result.provider === 'string' ? { provider: result.provider.slice(0, 40) } : {}),
+    cached: Boolean(result.cached),
+    sources,
+  };
+}
+
 function parseArgs(raw) {
   if (raw == null) return {};
   if (typeof raw === 'object') return raw;
@@ -294,6 +320,8 @@ function createAgentEventStream(opts = {}) {
       record.durationMs = durationMs;
       record.isError = Boolean(isError);
     }
+    const search = isError ? null : searchSummaryOf(call.name, result);
+    if (record && search) record.search = search;
     run.toolCallCount += 1;
     if (isError) run.errorCount += 1;
     run.charCount += persisted.json.length;
@@ -305,6 +333,7 @@ function createAgentEventStream(opts = {}) {
       isError: Boolean(isError),
       durationMs,
       ...(status && status !== 'completed' && status !== 'error' ? { status } : {}),
+      ...(search ? { search } : {}),
     });
     auditCall(call, { isError: Boolean(isError), status, durationMs });
   }
@@ -572,6 +601,7 @@ function createAgentEventStream(opts = {}) {
 }
 
 module.exports = {
+  searchSummaryOf,
   createAgentEventStream,
   truncateForRecord,
   estimateCostUsd,

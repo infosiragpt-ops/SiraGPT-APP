@@ -37,7 +37,7 @@ const rag = require('../rag-service');
 const bm25 = require('../bm25');
 const codeChunker = require('../code-chunker');
 const gearAgent = require('../gear-agent');
-const webSearch = require('./web-search');
+const fastSearch = require('./web-search/fast-search');
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1179,28 +1179,37 @@ const propose_patch = {
   },
 };
 
-// ─── Web search (free providers, no API key) ────────────────────────────────
+// ─── Web search (Búsqueda rápida: hedged provider ladder + cache) ───────────
 
 const web_search = {
   name: 'web_search',
-  description: 'Search the open web. Uses Brave Search when BRAVE_SEARCH_API_KEY is set (freshest, highest quality) and otherwise free, key-less providers (DuckDuckGo → Wikipedia → SearXNG). Use when the answer needs information past the model cutoff or specific recent facts. Pass freshness ("pd"=day, "pw"=week, "pm"=month, "py"=year) for recent/news queries. Returns up to maxResults normalised hits.',
+  description: 'Fast web search (Búsqueda rápida). One call returns ranked, de-duplicated results (title, url, snippet, date, domain) from the fastest available engine: Perplexity Search / Brave / Tavily / Exa when configured, otherwise free key-less providers (DuckDuckGo, Wikipedia, Stack Exchange…). Cached, typically well under a second. Use when the answer needs information past the model cutoff or specific recent facts. Pass freshness ("pd"=day, "pw"=week, "pm"=month, "py"=year) for recent/news queries, and domains / excludeDomains to restrict sites. Returns up to maxResults hits; call read_url on a result for the full page.',
   schema: {
     query: 'string (required — the search query)',
     maxResults: 'number (optional, default 5, max 15)',
     locale: 'string (optional — BCP47-ish like "es-es" or "en"; nudges provider region/language)',
-    freshness: 'string (optional — recency window: pd|pw|pm|py or day|week|month|year; honoured by Brave)',
+    freshness: 'string (optional — recency window: pd|pw|pm|py or day|week|month|year)',
+    domains: 'string[] (optional — only these sites, e.g. ["gob.pe"])',
+    excludeDomains: 'string[] (optional — never these sites)',
   },
-  async handler(args) {
+  async handler(args, ctx) {
     const query = typeof args?.query === 'string' ? args.query.trim() : '';
     if (!query) return { error: 'missing "query"' };
     const maxResults = Math.max(1, Math.min(Number(args?.maxResults) || 5, 15));
     const locale = typeof args?.locale === 'string' ? args.locale : null;
     const freshness = typeof args?.freshness === 'string' ? args.freshness : undefined;
-    // Use the aggregating/relevance-ranked path for chat. The legacy
-    // first-non-empty search() path can be fooled by a broad academic provider
-    // returning unrelated papers before the general-web providers answer.
-    const searched = await webSearch.searchMany(query, { maxResults, locale, freshness });
-    const { provider, providers, cached, attempts } = searched;
+    // Búsqueda rápida: hedged race across the configured engines with the
+    // free relevance-ranked aggregate (searchMany) as the always-on last rung.
+    const searched = await fastSearch.fastSearch(query, {
+      maxResults,
+      locale,
+      freshness,
+      domains: Array.isArray(args?.domains) ? args.domains : undefined,
+      excludeDomains: Array.isArray(args?.excludeDomains) ? args.excludeDomains : undefined,
+      userId: ctx?.userId || args?.userId || null,
+      signal: ctx?.signal,
+    });
+    const { provider, providers, cached, attempts, latencyMs } = searched;
     let results = searched.results;
     // RLCD × Jev: score every hit against the question, drop the irrelevant
     // ones and put the essential source first. Fail-open: any error keeps
@@ -1221,17 +1230,20 @@ const web_search = {
     // llama-3.1-8b) tend to hallucinate sources, stall, or re-run the same
     // query when they get an empty list with no guidance. A directive note
     // steers them to pivot or answer honestly instead of looping.
-    const note = results.length === 0
+    const note = searched.rateLimited ? searched.note : results.length === 0
       ? 'No results from any provider. Do NOT repeat the same query — rephrase it (fewer or different keywords, drop quotes, try synonyms or a broader angle), or answer from prior knowledge while clearly stating you could not find live web sources.'
       : undefined;
     // Return structured JSON (not a concatenated string) so the model can
     // cite individual URLs rather than treat the whole response as prose.
     return {
+      engine: 'fast',
       provider,
       providers,
       cached,
+      latencyMs,
       count: results.length,
       results,
+      ...(searched.rateLimited ? { rateLimited: true } : {}),
       ...(jev ? { jev } : {}),
       ...(note ? { note } : {}),
       // Slim attempt trace — useful when the model needs to explain why
