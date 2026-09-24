@@ -5637,7 +5637,15 @@ router.post(
                 generateLog.info('reasoning.trivial_kept_direct', { mode: 'direct' });
               } else {
                 cognitiveDecision.compute = __effortOverride;
-                generateLog.info('reasoning.user_override_applied', { mode: __effortOverride.mode });
+                // The composer "Esfuerzo" also drives the provider's native
+                // thinking knob (reasoning_effort / reasoning.effort / DeepSeek
+                // thinking) — see litellm-gateway applyThinkingControls.
+                const __providerLevel = reasoningOrchestrator.thinkingLevelForEffort(req.body && req.body.reasoningEffort);
+                if (__providerLevel && req._thinkingLevel !== 'disabled') {
+                  req._thinkingLevel = __providerLevel;
+                  req._thinkingLevelExplicit = true;
+                }
+                generateLog.info('reasoning.user_override_applied', { mode: __effortOverride.mode, thinkingLevel: __providerLevel || null });
               }
             }
           } catch (_) { /* effort override must never break the turn */ }
@@ -7796,6 +7804,7 @@ router.post(
                 ? Math.min(256, actualMaxOutputTokens || 256)
                 : actualMaxOutputTokens,
               thinkingLevel: req._thinkingLevel || undefined,
+              thinkingLevelExplicit: req._thinkingLevelExplicit === true && req._thinkingLevel !== 'disabled',
               trivialTurn: req._trivialTurn === true,
               toolChoice: req._trivialTurn === true ? 'none' : undefined,
               // RLHF implicit signal: a failed turn (Conexión no disponible,

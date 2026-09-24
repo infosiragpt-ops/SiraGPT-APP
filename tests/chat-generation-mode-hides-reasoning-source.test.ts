@@ -30,11 +30,11 @@ describe("generation modes hide text-reasoning controls", () => {
     )
   })
 
-  it("hides the effort picker (slider + fast mode) while a generation modality is active", () => {
+  it("hides the fast-mode switch while a generation modality is active", () => {
     assert.match(
       chatInterface,
-      /\{!isMediaToolActive && \(\s*<ComposerEffortMenu/,
-      "effort and fast mode take no reasoningEffort on generation turns",
+      /\{!isMediaToolActive && <ComposerFastModeToggle \/>\}/,
+      "fast mode takes no reasoningEffort on generation turns (effort lives in the hidden model menu)",
     )
   })
 
@@ -45,7 +45,7 @@ describe("generation modes hide text-reasoning controls", () => {
     )
     assert.match(
       chatInterface,
-      /<ComposerEffortMenu\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
+      /<ComposerEffortSubmenu\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
     )
   })
 })

@@ -20,6 +20,14 @@ import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
+import {
+  COMPOSER_EFFORT_SCALE,
+  COMPOSER_EFFORT_SCALE_KEY,
+  COMPOSER_EFFORT_STORAGE_KEY,
+  DEFAULT_COMPOSER_EFFORT,
+  migrateStoredComposerEffort,
+  normalizeComposerEffort,
+} from "./chat/composer-effort"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -798,19 +806,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [selectedModel, setSelectedModel] = useState("")
   const selectedModelRef = useRef(selectedModel)
   selectedModelRef.current = selectedModel
-  // Composer reasoning-effort picker (Bajo/Medio/Extra/Max), Claude-style.
-  // Persisted so the user's choice survives reloads; sent to the backend as
-  // `reasoningEffort` and mapped to the compute plan there.
-  const [selectedEffort, setSelectedEffortState] = useState<string>("Medio")
+  // Composer reasoning effort (Bajo/Medio/Alto/Extra/Máx), chosen at the foot
+  // of the model menu. Persisted so the choice survives reloads; sent to the
+  // backend as `reasoningEffort` and mapped there to the compute plan and the
+  // provider's native thinking knob. Values stored by the old four-stop
+  // slider ("Extra" = High, "Max" = Extra high) are migrated once.
+  const [selectedEffort, setSelectedEffortState] = useState<string>(DEFAULT_COMPOSER_EFFORT)
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem("sira:composer:effort")
-      if (saved) setSelectedEffortState(saved)
+      const saved = window.localStorage.getItem(COMPOSER_EFFORT_STORAGE_KEY)
+      const scale = window.localStorage.getItem(COMPOSER_EFFORT_SCALE_KEY)
+      if (saved) setSelectedEffortState(migrateStoredComposerEffort(saved, scale))
+      if (scale !== COMPOSER_EFFORT_SCALE) {
+        if (saved) window.localStorage.setItem(COMPOSER_EFFORT_STORAGE_KEY, migrateStoredComposerEffort(saved, scale))
+        window.localStorage.setItem(COMPOSER_EFFORT_SCALE_KEY, COMPOSER_EFFORT_SCALE)
+      }
     } catch { /* ignore */ }
   }, [])
   const setSelectedEffort = useCallback((effort: string) => {
-    setSelectedEffortState(effort)
-    try { window.localStorage.setItem("sira:composer:effort", effort) } catch { /* ignore */ }
+    const next = normalizeComposerEffort(effort)
+    setSelectedEffortState(next)
+    try {
+      window.localStorage.setItem(COMPOSER_EFFORT_STORAGE_KEY, next)
+      window.localStorage.setItem(COMPOSER_EFFORT_SCALE_KEY, COMPOSER_EFFORT_SCALE)
+    } catch { /* ignore */ }
   }, [])
   const [selectProvider, setSelectedProivder] = useState("")
   const [availableModels, setAvailableModels] = useState<any[]>([])

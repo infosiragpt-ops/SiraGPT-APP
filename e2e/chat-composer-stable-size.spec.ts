@@ -26,6 +26,16 @@ const model = {
   contextLength: 500_000,
 }
 
+// Extra catalog rows for the model-menu contract: a Sira alias, a decision
+// model and an OpenRouter-synced row with no brand icon.
+const catalogModels = [
+  model,
+  { id: "m-sira-pro", name: "deepseek/deepseek-v4-pro", displayName: "Sira Pro", provider: "DeepSeek", type: "TEXT" },
+  { id: "m-grok", name: "x-ai/grok-4.6", displayName: "Grok 4.6", provider: "xAI", type: "TEXT" },
+  { id: "m-dots", name: "dots/dots3-note-preview:free", displayName: "Dots Studio: Dots3-Note Preview (free)", provider: "OpenRouter", type: "TEXT" },
+  { id: "m-jev", name: "typesafe/jev", displayName: "TypeSafe Jev", provider: "TypeSafe", type: "TEXT" },
+]
+
 const chat = {
   id: "composer-size-chat",
   title: "Composer size QA",
@@ -76,6 +86,7 @@ async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
   await page.addInitScript(() => {
     localStorage.setItem("auth-token", "composer-size-token")
     localStorage.setItem("sira:composer:effort", "Max")
+    localStorage.removeItem("sira:composer:effort-scale")
     localStorage.setItem("sira.composer.access", "full")
     localStorage.removeItem("currentChatId")
   })
@@ -88,7 +99,7 @@ async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
     if (path === "/auth/me") return fulfillJson(route, { user })
     if (path === "/health" && request.method() === "HEAD") return route.fulfill({ status: 204 })
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
-    if (path === "/ai/models") return fulfillJson(route, { models: [model] })
+    if (path === "/ai/models") return fulfillJson(route, { models: catalogModels })
     if (path === "/payments/subscription") {
       return fulfillJson(route, {
         plan: "PRO",
@@ -162,6 +173,7 @@ async function composerMetrics(page: Page) {
       permissionLevel: permission.getAttribute("data-level") || "",
       effortLabel: effortChip.textContent?.trim().replace(/[▾⌃]/g, "").trim(),
       effortAria: effortChip.getAttribute("aria-label") || "",
+      effortPressed: effortChip.getAttribute("aria-pressed") || "",
       hasInlineAgentToggle: Boolean(surface.querySelector(".composer-sira-code-toggle")),
       toolbarOrder: [contextTrigger, modelTrigger, effortChip, dictation, primaryAction]
         .map((element) => element.getBoundingClientRect().left),
@@ -246,7 +258,8 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.permissionTitle).toBe("Acceso completo")
   expect(approved.permissionLevel).toBe("full")
   expect(approved.effortLabel).toBe("")
-  expect(approved.effortAria).toBe("Esfuerzo: Extra high")
+  expect(approved.effortAria).toBe("Modo rápido desactivado")
+  expect(approved.effortPressed).toBe("false")
   expect(approved.hasInlineAgentToggle).toBe(false)
   expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))
 
@@ -355,14 +368,13 @@ test("mobile composer keeps its size while a long prompt scrolls internally", as
   expect(multiline.modelBelowText).toBe(true)
 })
 
-test("context and effort open as separate professional popovers with real data", async ({ page }) => {
+test("context popover and model menu with effort submenu use real data", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const state = { hasConversation: true }
   await mockChatApi(page, state)
 
   await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
   const contextTrigger = page.getByTestId("composer-context-trigger")
-  const effortTrigger = page.getByTestId("composer-effort-chip")
   await expect(contextTrigger).toBeVisible({ timeout: 120_000 })
 
   await contextTrigger.click()
@@ -386,70 +398,55 @@ test("context and effort open as separate professional popovers with real data",
   expect(contextGeometry.height).toBeLessThanOrEqual(245)
   expect(contextGeometry.radius).toBe("16px")
 
-  await effortTrigger.click()
+  await page.keyboard.press("Escape")
   await expect(contextMenu).toBeHidden()
+
+  // Model menu: two-line rows (name + tagline), check on the active model,
+  // monogram for the unbranded OpenRouter row, cleaned catalog label.
+  await page.locator(".composer-model-inline .chat-model-trigger").click()
+  const modelMenu = page.getByTestId("composer-model-menu")
+  await expect(modelMenu).toBeVisible()
+  await expect(modelMenu.locator(".model-picker-row")).toHaveCount(catalogModels.length)
+  await expect(modelMenu.getByText("Dots3-Note Preview", { exact: true })).toBeVisible()
+  await expect(modelMenu.getByText(/Dots Studio:|\(free\)/)).toHaveCount(0)
+  await expect(modelMenu.locator(".model-logo-monogram")).toHaveCount(1)
+  await expect(modelMenu.locator('.model-picker-row[data-selected="true"] .model-picker-row-check')).toBeVisible()
+  await expect(modelMenu.locator(".model-picker-row-tagline").first()).not.toBeEmpty()
+  await page.waitForTimeout(300) // let the menu fade-in settle before the evidence shot
+  await page.screenshot({ path: "test-results/model-menu.png" })
+
+  const search = modelMenu.getByRole("textbox", { name: "Buscar modelos" })
+  await search.fill("zzz")
+  await expect(modelMenu.getByText("Sin resultados para «zzz»")).toBeVisible()
+  await search.fill("")
+
+  // Effort row at the foot, migrated from the old "Max" (Extra high) to Extra.
+  const effortRow = modelMenu.getByTestId("composer-effort-trigger")
+  await expect(effortRow).toHaveAccessibleName("Esfuerzo: Extra")
+  await effortRow.click()
   const effortMenu = page.getByTestId("composer-effort-menu")
   await expect(effortMenu).toBeVisible()
-  await expect(effortMenu.getByText("Esfuerzo", { exact: true })).toBeVisible()
-  await expect(effortMenu.getByText("Más rápido", { exact: true })).toBeVisible()
-  await expect(effortMenu.getByText("Más inteligente", { exact: true })).toBeVisible()
-  await expect(effortMenu.getByText("Modo rápido", { exact: true })).toBeVisible()
-  await expect(effortMenu.getByText("Respuestas más rápidas, mayor uso de los límites.", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText(/Un mayor esfuerzo significa respuestas más completas/)).toBeVisible()
+  await expect(effortMenu.getByRole("menuitemradio")).toHaveCount(5)
+  await expect(effortMenu.getByText("Predeterminado", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText("Mayor uso", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByRole("menuitemradio", { name: /Extra/ })).toHaveAttribute("aria-checked", "true")
+  await page.waitForTimeout(300) // let the menu fade-in settle before the evidence shot
+  await page.screenshot({ path: "test-results/effort-submenu.png" })
+  await effortMenu.getByRole("menuitemradio", { name: /Alto/ }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe("Alto")
 
-  const effortGeometry = await effortMenu.evaluate((element) => {
-    const rect = element.getBoundingClientRect()
-    return { width: rect.width, height: rect.height, radius: getComputedStyle(element).borderRadius }
-  })
-  expect(effortGeometry.width).toBeGreaterThanOrEqual(312)
-  expect(effortGeometry.width).toBeLessThanOrEqual(334)
-  expect(effortGeometry.height).toBeGreaterThanOrEqual(145)
-  expect(effortGeometry.height).toBeLessThanOrEqual(194)
-  expect(effortGeometry.radius).toBe("16px")
-
-  const slider = effortMenu.getByRole("slider", { name: /Esfuerzo/ })
-  await expect(slider).toHaveAccessibleName("Esfuerzo Extra high")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
-  await expect(slider).toHaveAttribute("aria-orientation", "horizontal")
-  await expect(effortMenu.locator(".effort-level")).toHaveText("Extra high")
-  await expect(effortMenu.locator(".effort-ticks > span")).toHaveCount(4)
-  await slider.focus()
-  await page.keyboard.press("Home")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Low")
-  await page.keyboard.press("PageUp")
-  await expect(slider).toHaveAttribute("aria-valuetext", "High")
-  await page.keyboard.press("PageDown")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Low")
-  await page.keyboard.press("End")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
-  await expect(effortTrigger).toHaveAttribute("aria-label", "Esfuerzo: Extra high")
-  await expect(effortTrigger).toHaveText("")
-  // Dragging shows a value bubble that follows the thumb.
-  const sliderBox = await slider.boundingBox()
-  expect(sliderBox, "slider must expose a 24px+ target").not.toBeNull()
-  expect(sliderBox!.height).toBeGreaterThanOrEqual(24)
-  await page.mouse.move(sliderBox!.x + sliderBox!.width - 4, sliderBox!.y + sliderBox!.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(sliderBox!.x + sliderBox!.width / 2, sliderBox!.y + sliderBox!.height / 2, { steps: 5 })
-  await expect(effortMenu.getByTestId("composer-effort-bubble")).toBeVisible()
-  await page.mouse.up()
-  await expect(effortMenu.getByTestId("composer-effort-bubble")).toBeHidden()
-  await page.keyboard.press("End")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe("Max")
-
-  const fastMode = effortMenu.getByRole("switch", { name: "Modo rápido" })
-  await expect(fastMode).toHaveAttribute("aria-checked", "false")
-  await fastMode.press("Space")
-  await expect(fastMode).toHaveAttribute("aria-checked", "true")
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("sira.composer.fast"))).toBe("1")
-
+  // The lightning is a one-click fast-mode switch that persists.
   await page.keyboard.press("Escape")
-  await expect(effortMenu).toBeHidden()
-  await expect(effortTrigger).toBeFocused()
+  const fastToggle = page.getByTestId("composer-fast-toggle")
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "false")
+  await fastToggle.click()
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "true")
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("sira.composer.fast"))).toBe("1")
+  await page.screenshot({ path: "test-results/composer-toolbar.png", clip: await page.locator('[data-testid="chat-composer-surface"]:visible').last().boundingBox() || undefined })
 
   await page.reload({ waitUntil: "domcontentloaded" })
-  await page.getByTestId("composer-effort-chip").click()
-  await expect(page.getByRole("switch", { name: "Modo rápido" })).toHaveAttribute("aria-checked", "true")
+  await expect(page.getByTestId("composer-fast-toggle")).toHaveAttribute("aria-pressed", "true", { timeout: 120_000 })
 })
 
 test("composer popovers remain inside a mobile viewport", async ({ page }) => {
@@ -469,13 +466,21 @@ test("composer popovers remain inside a mobile viewport", async ({ page }) => {
     expect(rect!.x + rect!.width).toBeLessThanOrEqual(382)
   }
 
-  await page.getByTestId("composer-effort-chip").press("Enter")
+  await page.keyboard.press("Escape")
+  await page.locator(".composer-model-inline .chat-model-trigger").click()
+  const modelMenu = page.getByTestId("composer-model-menu")
+  await expect(modelMenu).toBeVisible()
+  await modelMenu.getByTestId("composer-effort-trigger").click()
   const effortMenu = page.getByTestId("composer-effort-menu")
   await expect(effortMenu).toBeVisible()
-  const effortRect = await effortMenu.boundingBox()
-  expect(effortRect).not.toBeNull()
-  expect(effortRect!.x).toBeGreaterThanOrEqual(8)
-  expect(effortRect!.x + effortRect!.width).toBeLessThanOrEqual(382)
+  for (const menu of [modelMenu, effortMenu]) {
+    const rect = await menu.boundingBox()
+    expect(rect).not.toBeNull()
+    expect(rect!.x).toBeGreaterThanOrEqual(8)
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(382)
+  }
+  await page.waitForTimeout(300) // let the menu fade-in settle before the evidence shot
+  await page.screenshot({ path: "test-results/effort-submenu-mobile.png" })
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
