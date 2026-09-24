@@ -2468,8 +2468,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         analysisUnavailable ? 'El modelo seleccionado no pudo terminar el análisis. Las transcripciones están guardadas; puedes volver a solicitarlo.' : '',
       ].filter(Boolean);
       if (analysis?.text) notices.push(analysis.text);
-      else if (batch.ready) notices.push(fullTranscript.length <= 20000 ? fullTranscript
-        : `${fullTranscript.slice(0, 16000)}\n\n[Vista previa. Descarga el TXT adjunto para leer las transcripciones completas.]`);
+      else if (batch.ready) {
+        const chatTranscript = mediaBatch.transcriptMarkdown(batch.rows);
+        notices.push(chatTranscript.length <= 20000 ? chatTranscript
+          : `${chatTranscript.slice(0, 16000)}\n\n_Vista previa. Descarga el TXT adjunto para leer las transcripciones completas._`);
+      }
       documentPolicy = { ...(documentPolicy || {}), mode: 'chat_only', autoGenerate: false,
         reason: 'Transcripción persistida por archivo y análisis de todos sus fragmentos.' };
       task.documentPolicy = documentPolicy;
