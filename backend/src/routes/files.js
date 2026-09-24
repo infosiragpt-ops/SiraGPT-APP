@@ -24,6 +24,7 @@ const {
   isMediaExtension,
   resolveUploadLimits,
   isDeclaredUploadAllowed,
+  detectTransportStream,
 } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
@@ -275,6 +276,11 @@ async function detectMime(filePath, fallbackMime) {
     const detected = await fileTypeFromFile(filePath);
     if (detected && detected.mime) {
       return { mime: detected.mime, ext: detected.ext || null, source: 'magic-bytes' };
+    }
+    // Plain 188-byte MPEG-TS has no file-type signature; without this a real
+    // `.ts` recording would be taken for TypeScript source by the policy.
+    if (await detectTransportStream(filePath)) {
+      return { mime: 'video/mp2t', ext: 'ts', source: 'magic-bytes' };
     }
   } catch (e) {
     console.warn('[files] magic-byte detection failed:', e.message);

@@ -185,9 +185,9 @@ describe("validateBatch · count cap", () => {
     assert.equal(result.rejected[0].code, "count_exceeded")
   })
 
-  it("rejects a file above the default 100 MB cap", () => {
+  it("rejects a file above the default 1 GB document cap", () => {
     const big = ok("pesado.png")
-    Object.defineProperty(big, "size", { value: 101 * 1024 * 1024 })
+    Object.defineProperty(big, "size", { value: 1025 * 1024 * 1024 })
     const result = validateBatch([big])
     assert.equal(result.accepted.length, 0)
     assert.equal(result.rejected[0].code, "size_exceeded")

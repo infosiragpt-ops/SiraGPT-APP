@@ -157,8 +157,10 @@ describe("long recording chip progress", () => {
     for (const name of ["nota.caf", "llamada.amr", "voz.m4a", "libro.m4b", "radio.wma", "musica.mka", "ptt.opus", "clase.aiff"]) {
       assert.equal(isAudioComposerFile({ name, type: "" }), true, name)
     }
-    for (const name of ["clase.mkv", "cine.wmv", "tv.ts", "movil.3gp", "viejo.flv"]) {
+    for (const name of ["clase.mkv", "cine.wmv", "tv.m2ts", "movil.3gp", "viejo.flv"]) {
       assert.equal(isVideoComposerFile({ name, type: "" }), true, name)
     }
+    // `.ts` is TypeScript by name; real MPEG-TS is recognised server-side.
+    assert.equal(isVideoComposerFile({ name: "app.ts", type: "video/mp2t" }), false)
   })
 })

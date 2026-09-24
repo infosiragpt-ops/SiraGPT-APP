@@ -81,7 +81,8 @@ function describeUnextractedAttachment(row = {}) {
   const r = row || {};
   const name = String(r.name || r.originalName || r.filename || 'archivo').trim() || 'archivo';
   const type = String(r.mimeType || r.type || '').toLowerCase();
-  if (isImageFile(r)) {
+  // image/vnd.* is CAD / Photoshop / DjVu (file-type labels), not a photo.
+  if (isImageFile(r) && !/^image\/vnd\./.test(type)) {
     return `[Imagen "${name}": no se detectó texto legible mediante OCR. `
       + 'Si es una foto o un diagrama sin texto, el modelo de texto actual no puede verla directamente. '
       + 'Pídele al usuario que describa su contenido, o sugiérele cambiar a un modelo con visión.]';
@@ -95,8 +96,23 @@ function describeUnextractedAttachment(row = {}) {
     return `[Archivo multimedia "${name}": no se obtuvo transcripción. `
       + 'Indica al usuario que reintente o suba un formato compatible.]';
   }
-  return `[Archivo "${name}": no se pudo extraer su contenido (puede estar vacío, protegido `
-    + 'o en un formato no soportado). Pide al usuario que reintente o lo suba en otro formato.]';
+  const size = Number(r.size || r.fileSize || 0);
+  const sizeLabel = size > 0 ? `, ${formatAttachmentBytes(size)}` : '';
+  const typeLabel = type && type !== 'application/octet-stream' ? `${type}${sizeLabel}` : `${sizeLabel.replace(/^, /, '')}`;
+  // Every format is accepted: a CAD drawing, 3D model, font or binary is
+  // stored intact. The model must not claim the file was rejected — it knows
+  // name, type and size, and asks for an export only if content is needed.
+  return `[Archivo "${name}"${typeLabel ? ` (${typeLabel})` : ''}: se adjuntó y se guardó completo, pero no se pudo extraer `
+    + 'texto de su contenido (formato binario, vacío o protegido). Trabaja con su nombre, tipo y tamaño; '
+    + 'si necesitas lo que contiene, pide al usuario una exportación legible (PDF, CSV, TXT o DOCX).]';
+}
+
+function formatAttachmentBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = Number(bytes) || 0;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${unit === 0 || value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 function isSpreadsheetFile(row = {}) {
