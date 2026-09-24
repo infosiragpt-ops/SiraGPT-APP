@@ -342,9 +342,23 @@ jobs:
           failure_bundle_sha=$(DOC_SANDBOX_TEST_PYTHON="$(command -v python)" \
             node --import tsx tests/helpers/doc-sandbox-failure-evidence-bundle.ts "$failure_bundle_dir/failure-evidence.json")
           [[ "$failure_bundle_sha" =~ ^[a-f0-9]{64}$ ]]
-          minio_image=quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          # quay.io/minio/minio (and docker.io/minio/minio) now answer 401 to
+          # anonymous pulls. pgsty/minio is the community-maintained build of
+          # the same server (same `server /data`, env and health endpoints),
+          # pinned by digest; the old quay digest stays as a fallback.
+          minio_images=(
+            pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          )
+          minio_image=""
           for pull_try in 1 2 3 4 5 6; do
-            if docker pull "$minio_image"; then
+            for candidate in "${minio_images[@]}"; do
+              if docker pull "$candidate"; then
+                minio_image="$candidate"
+                break
+              fi
+            done
+            if [ -n "$minio_image" ]; then
               break
             fi
             if [ "$pull_try" -eq 6 ]; then
