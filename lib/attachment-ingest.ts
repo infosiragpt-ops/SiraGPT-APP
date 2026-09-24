@@ -39,10 +39,17 @@ function envInt(value: string | undefined, fallback: number): number {
 const DEFAULT_MAX_BYTES =
   envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 100) * 1024 * 1024
 // Audio / video are uploaded in chunks (lib/composer/chunked-upload) and
-// transcribed server-side, so they get a much larger cap than documents.
+// transcribed server-side, so they get a much larger cap than documents:
+// 10 GB fits a single 10-hour recording.
 export const DEFAULT_MAX_MEDIA_BYTES =
-  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 2048) * 1024 * 1024
-const MEDIA_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "mp4", "mov", "webm", "mpeg", "mpg", "aac", "flac", "wma", "aif", "aiff", "m4v", "mkv", "avi", "ogv", "3gp"])
+  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 10240) * 1024 * 1024
+// Mirrors backend MEDIA_EXTENSION_MIME: every format ffmpeg can transcribe.
+const MEDIA_EXTENSIONS = new Set([
+  "mp3", "mp2", "mpga", "wav", "wave", "ogg", "oga", "opus", "spx", "m4a", "m4b", "m4r", "aac", "flac", "alac",
+  "aif", "aiff", "aifc", "caf", "amr", "awb", "wma", "ac3", "eac3", "dts", "weba", "mka", "ape", "wv", "au", "snd",
+  "mp4", "m4v", "mov", "qt", "webm", "mkv", "avi", "wmv", "asf", "flv", "mpeg", "mpg", "m2v",
+  "ts", "mts", "m2ts", "ogv", "3gp", "3g2", "vob",
+])
 
 export function isMediaUpload(file: { type?: string; name?: string } | null | undefined): boolean {
   const mime = String(file?.type || "").toLowerCase()
@@ -173,9 +180,10 @@ export function validateFile(
   }
   if (Number.isFinite(max) && file.size > max) {
     const mb = Math.round(max / (1024 * 1024))
+    const limit = mb >= 1024 && mb % 1024 === 0 ? `${mb / 1024} GB` : `${mb} MB`
     return {
       ok: false,
-      reason: `El archivo supera el máximo de ${mb} MB`,
+      reason: `El archivo supera el máximo de ${limit}`,
       code: "size_exceeded",
     }
   }

@@ -11,8 +11,117 @@ const { pipeline } = require('node:stream/promises');
 const QUEUE_NAME = 'siragpt-media-transcription';
 const ATTEMPTS = 3;
 const CONCURRENCY = 2;
-const PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+// One job may be a 10-hour lecture on CPU whisper. The budget covers the
+// whole recording; checkpoints make any interruption resumable.
+const PROCESS_TIMEOUT_MS = positiveMs(process.env.SIRAGPT_MEDIA_PROCESS_TIMEOUT_MS, 12 * 60 * 60 * 1000);
+// Every deploy recreates the backend and stalls the running job. Long jobs
+// must survive many of those (they resume from checkpoints), so the stalled
+// ceiling is far above BullMQ's default instead of failing on the 3rd deploy.
+const MAX_STALLED_COUNT = 20;
+const PROGRESS_WRITE_INTERVAL_MS = 3000;
+const CHECKPOINT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const PENDING_STAGES = ['uploaded', 'validating', 'extracting'];
+
+function positiveMs(value, fallback) {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function checkpointRoot(env = process.env) {
+  // Inside the persistent uploads volume (survives container recreation).
+  // Dot-directories are never served by the /uploads static handler.
+  return env.MEDIA_TRANSCRIPTION_CHECKPOINT_DIR
+    || path.join(path.resolve(env.UPLOAD_DIR || 'uploads'), '.transcription-checkpoints');
+}
+
+/**
+ * Per-file segment store. Each finished segment is one small JSON file
+ * written atomically, so a crash mid-write never corrupts earlier segments.
+ * `meta` (segment length + count) must match or the entry is ignored.
+ */
+function createDiskCheckpoint(dir) {
+  const fileFor = index => path.join(dir, `seg-${String(index).padStart(5, '0')}.json`);
+  return {
+    dir,
+    async load(index, meta) {
+      const raw = await fs.promises.readFile(fileFor(index), 'utf8').catch(() => null);
+      if (!raw) return null;
+      const saved = JSON.parse(raw);
+      if (saved?.meta?.segmentSeconds !== meta?.segmentSeconds || saved?.meta?.total !== meta?.total) return null;
+      return saved.part || null;
+    },
+    async save(index, meta, part) {
+      await fs.promises.mkdir(dir, { recursive: true });
+      const target = fileFor(index);
+      const tmp = `${target}.${process.pid}.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify({ meta, part, savedAt: new Date().toISOString() }));
+      await fs.promises.rename(tmp, target);
+    },
+    clear: () => fs.promises.rm(dir, { recursive: true, force: true }),
+  };
+}
+
+function checkpointFor(row, root = checkpointRoot()) {
+  return createDiskCheckpoint(path.join(root, `${jobIdFor(row.id, row.userId)}-${Number(row.size) || 0}`));
+}
+
+async function sweepStaleCheckpoints({ root = checkpointRoot(), now = Date.now(), maxAgeMs = CHECKPOINT_MAX_AGE_MS } = {}) {
+  const entries = await fs.promises.readdir(root, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^media-[a-f0-9]{64}-\d+$/.test(entry.name)) continue;
+    const full = path.join(root, entry.name);
+    const stat = await fs.promises.stat(full).catch(() => null);
+    if (stat && now - stat.mtimeMs > maxAgeMs) {
+      await fs.promises.rm(full, { recursive: true, force: true }).catch(() => {});
+      removed++;
+    }
+  }
+  return { removed };
+}
+
+/**
+ * Turns transcriber events into the compact progress object stored on the
+ * BullMQ job (and read by /api/files/processing-status). ETA uses only
+ * segments transcribed in this run, so resumed checkpoints don't skew it.
+ */
+function createProgressTracker({ publish, now = () => Date.now(), intervalMs = PROGRESS_WRITE_INTERVAL_MS }) {
+  let lastWrite = 0;
+  let lastKey = '';
+  const durations = [];
+  let lastSegmentAt = 0;
+  const startedAt = now();
+  return (event = {}) => {
+    const total = Math.max(0, Number(event.total) || 0);
+    const completed = Math.min(total, Math.max(0, Number(event.completed) || 0));
+    const at = now();
+    if (event.stage === 'segments') lastSegmentAt = at;
+    if (event.stage === 'transcribe') {
+      const took = at - lastSegmentAt;
+      // A checkpointed segment is replayed in milliseconds; only real work counts.
+      if (lastSegmentAt && took > 1000) durations.push(took);
+      if (durations.length > 8) durations.shift();
+      lastSegmentAt = at;
+    }
+    const percent = event.stage === 'preparing' ? 1
+      : event.stage === 'segments' ? 2
+        : event.stage === 'transcribe' && total ? Math.min(99, Math.max(2, Math.round(2 + (97 * completed) / total))) : null;
+    const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+    const progress = {
+      stage: event.stage === 'preparing' ? 'preparing' : 'transcribing',
+      completed, total, percent,
+      durationSeconds: Math.round(Number(event.durationSeconds) || 0),
+      etaSeconds: avg && total > completed ? Math.round((avg * (total - completed)) / 1000) : null,
+      startedAt: new Date(startedAt).toISOString(),
+      updatedAt: new Date(at).toISOString(),
+    };
+    const key = `${progress.stage}:${completed}:${total}`;
+    if (key === lastKey && at - lastWrite < intervalMs) return;
+    lastKey = key;
+    lastWrite = at;
+    try { void Promise.resolve(publish(progress)).catch(() => {}); } catch (_) { /* best-effort */ }
+  };
+}
 
 function isMediaFile(file) {
   const mime = String(file?.mimeType || file?.mimetype || '').toLowerCase().split(';')[0].trim();
@@ -110,7 +219,8 @@ async function configureMediaQueue(queue) {
 }
 
 function createMediaTranscriptionService({ prisma, getQueue, processFile, materialize = materializeMedia,
-  validate = validateMedia, offload = offloadMedia, timeoutMs = PROCESS_TIMEOUT_MS, now = () => Date.now() }) {
+  validate = validateMedia, offload = offloadMedia, timeoutMs = PROCESS_TIMEOUT_MS, now = () => Date.now(),
+  createCheckpoint = row => checkpointFor(row) }) {
   const activeControllers = new Set();
   const loadOwned = async (fileId, userId) => {
     if (!fileId || !userId) throw failure('media_owner_required', 'Falta el archivo o su propietario.');
@@ -162,9 +272,10 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     return { id: fileId, queued: true, stage: 'uploaded' };
   }
 
-  async function processMediaJob(job) {
+  async function processMediaJob(job, token) {
     const { fileId, userId } = job.data || {};
     let local;
+    let checkpoint = null;
     const controller = new AbortController();
     activeControllers.add(controller);
     const timer = setTimeout(() => controller.abort(failure('media_timeout', 'La transcripción superó el tiempo permitido.')), timeoutMs);
@@ -176,10 +287,13 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         return { id: fileId, cached: true, stage: 'ready' };
       }
       await stage(fileId, userId, 'extracting');
+      checkpoint = createCheckpoint(row);
       local = await materialize(row.path, { signal: controller.signal });
       controller.signal.throwIfAborted();
       const mimeType = await validate(local, row);
-      const result = await processFile({ path: local.path, mimetype: mimeType, originalname: row.originalName, size: row.size }, { signal: controller.signal });
+      const onProgress = createProgressTracker({ publish: progress => job.updateProgress?.(progress) });
+      const result = await processFile({ path: local.path, mimetype: mimeType, originalname: row.originalName, size: row.size },
+        { signal: controller.signal, onProgress, checkpoint });
       controller.signal.throwIfAborted();
       const transcript = result?.transcription?.transcript ?? result?.extractedText;
       if (!result?.success || !hasTranscript({ extractedText: transcript })) {
@@ -192,6 +306,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       // leaves the job recoverable; after it, a replay is a cache hit.
       await writeOwned(fileId, userId, { extractedText: transcript, processingStage: 'ready',
         processingStageAt: new Date(now()), processingError: null });
+      await checkpoint?.clear?.().catch(() => {});
       // Offload is optional enrichment after durable text is ready. Local
       // uploads live on the existing persistent volume if R2 is unavailable.
       // Never erase the local copy before updating the owner-scoped DB ref.
@@ -202,6 +317,21 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       return { id: fileId, stage: 'ready', characters: transcript.length };
     } catch (caught) {
       const err = controller.signal.aborted ? controller.signal.reason : caught;
+      // A deploy/restart is not a failed attempt: park the job for a few
+      // seconds without spending one of its retries. It resumes from its
+      // checkpoints on the next worker, however many deploys happen.
+      if (err?.code === 'media_shutdown' && token && typeof job.moveToDelayed === 'function') {
+        let parked = false;
+        try {
+          await job.moveToDelayed(now() + 5000, token);
+          parked = true;
+        } catch (_) { /* connection already gone: the stalled checker recovers it */ }
+        if (parked) {
+          await stage(fileId, userId, 'uploaded').catch(() => {});
+          const { DelayedError } = require('bullmq');
+          throw new DelayedError();
+        }
+      }
       const transient = isTransientMediaError(err);
       const willRetry = transient && Number(job.attemptsMade || 0) + 1 < Number(job.opts?.attempts || ATTEMPTS);
       if (!transient) job.discard?.();
@@ -239,8 +369,31 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     return { recovered };
   }
 
-  return { enqueueMediaTranscription, processMediaJob, reconcilePendingMedia,
-    abortActive: () => { for (const controller of activeControllers) controller.abort(failure('media_shutdown', 'La transcripción se reanudará después del reinicio.')); },
+  // Live progress of the durable job, for the composer chip. Owner-scoped by
+  // construction (job id hashes userId + fileId). Never throws: a missing
+  // Redis simply means "no progress to show", not a failed status read.
+  async function readMediaProgress({ fileIds = [], userId, timeoutMs: readTimeoutMs = 1500 } = {}) {
+    const out = {};
+    if (!userId || !fileIds.length) return out;
+    let queue;
+    try { queue = getQueue(); } catch { return out; }
+    const read = Promise.all(fileIds.map(async (fileId) => {
+      try {
+        const job = await queue.getJob(jobIdFor(fileId, userId));
+        const progress = job?.progress;
+        if (progress && typeof progress === 'object' && !Array.isArray(progress)) out[fileId] = progress;
+      } catch { /* progress is optional */ }
+    }));
+    await Promise.race([read, new Promise(resolve => { const t = setTimeout(resolve, readTimeoutMs); t.unref?.(); })]);
+    return out;
+  }
+
+  return { enqueueMediaTranscription, processMediaJob, reconcilePendingMedia, readMediaProgress,
+    abortActive: () => {
+      const count = activeControllers.size;
+      for (const controller of activeControllers) controller.abort(failure('media_shutdown', 'La transcripción se reanudará después del reinicio.'));
+      return count;
+    },
   };
 }
 
@@ -270,9 +423,9 @@ function startMediaTranscriptionWorker() {
   const { Worker } = require('bullmq');
   const redis = require('./agents/agent-task-queue');
   workerConnection = redis.createRedisConnection({ label: 'media-transcription-worker' });
-  worker = new Worker(QUEUE_NAME, job => getService().processMediaJob(job), {
+  worker = new Worker(QUEUE_NAME, (job, token) => getService().processMediaJob(job, token), {
     connection: workerConnection, ...redis.getBullMQRuntimeOptions(), concurrency: CONCURRENCY,
-    lockDuration: 300000, stalledInterval: 60000, maxStalledCount: 2, autorun: false,
+    lockDuration: 300000, stalledInterval: 60000, maxStalledCount: MAX_STALLED_COUNT, autorun: false,
   });
   let starting = false;
   const ensureRunning = async () => {
@@ -308,7 +461,7 @@ function startMediaTranscriptionWorker() {
     catch (err) { console.warn('[media-transcription-queue] reconciliation unavailable', err?.code || 'recovery_error'); }
     finally { recovering = false; }
   };
-  worker.on('ready', () => { void ensureRunning(); void reconcile(); });
+  worker.on('ready', () => { void ensureRunning(); void reconcile(); void sweepStaleCheckpoints().catch(() => {}); });
   recoveryTimer = setInterval(() => { void ensureRunning(); void reconcile(); }, 60000);
   recoveryTimer.unref?.();
   return worker;
@@ -317,7 +470,9 @@ function startMediaTranscriptionWorker() {
 async function closeMediaTranscriptionQueue() {
   clearInterval(recoveryTimer);
   recoveryTimer = null;
-  service?.abortActive();
+  // Give aborted jobs a moment to park themselves (moveToDelayed) before
+  // the connection is force-closed; they resume from checkpoints.
+  if (service?.abortActive()) await new Promise(resolve => setTimeout(resolve, 1500));
   const previous = { worker, queue, workerConnection, queueConnection };
   worker = queue = workerConnection = queueConnection = null;
   // Force-close the worker connection at shutdown. Its active jobs become
@@ -330,8 +485,10 @@ async function closeMediaTranscriptionQueue() {
 
 module.exports = {
   isMediaFile, hasTranscript, jobIdFor, isTransientMediaError, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
+  createDiskCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
+  readMediaProgress: payload => getService().readMediaProgress(payload),
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
   startMediaTranscriptionWorker, closeMediaTranscriptionQueue,
-  QUEUE_NAME, CONCURRENCY, ATTEMPTS, PROCESS_TIMEOUT_MS,
+  QUEUE_NAME, CONCURRENCY, ATTEMPTS, PROCESS_TIMEOUT_MS, MAX_STALLED_COUNT,
 };

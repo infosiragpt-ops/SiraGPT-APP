@@ -2234,12 +2234,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
   let stepIdCounter = 0;
   let currentStepId = null;
+  // A transcription turn may wait on one 10-hour recording: its budget is the
+  // media wait ceiling (the wait itself stops early if the job stalls).
+  const runtimeBudgetMs = mediaBatchRows ? Math.max(maxRuntimeMs, mediaBatch.MEDIA_WAIT_MAX_MS + 30 * 60_000) : maxRuntimeMs;
   const runtimeTimer = setTimeout(() => {
     const timeoutError = new Error('agent_runtime_timeout');
     timeoutError.name = 'TimeoutError';
     timeoutError.code = 'AGENT_RUNTIME_TIMEOUT';
     try { controller.abort(timeoutError); } catch { controller.abort(); }
-  }, maxRuntimeMs + 5000);
+  }, runtimeBudgetMs + 5000);
   runtimeTimer.unref?.();
 
   // ── Liveness + BullMQ lock heartbeat ───────────────────────────────
@@ -2416,9 +2419,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const batch = await mediaBatch.waitForMediaBatch({
         prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
         retryFailed: /reintent|retry/i.test(String(displayGoal || goal)),
-        timeoutMs: Math.max(0, Math.min(90 * 60_000, maxRuntimeMs - (Date.now() - startedAt) - 120_000)),
+        timeoutMs: Math.max(0, Math.min(mediaBatch.MEDIA_WAIT_MAX_MS, runtimeBudgetMs - (Date.now() - startedAt) - 20 * 60_000)),
         onProgress: progress => emit({ type: 'checkpoint',
-          label: `${progress.ready}/${progress.total} transcritos · ${progress.pending} pendientes · ${progress.failed} con incidencias`,
+          label: mediaBatch.describeBatchProgress(progress),
           status: 'saved', payload: { mediaBatch: progress } }),
       });
       emit({ type: 'step_done', id: 'media_transcription', ok: batch.ready > 0 });

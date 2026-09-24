@@ -263,7 +263,60 @@ test('segmented cloud transcription reports progress per segment', async (t) => 
     async localTranscribe() { throw new Error('local must not run when the cloud ladder succeeds'); },
   });
   assert.equal(result.method, 'whisper');
-  assert.deepEqual(events.map((e) => e.stage), ['segments', 'transcribe', 'transcribe', 'transcribe', 'transcribe']);
-  assert.deepEqual(events.map((e) => e.completed), [0, 1, 2, 3, 4]);
-  assert.ok(events.every((e) => e.total === 4));
+  assert.deepEqual(events.map((e) => e.stage), ['preparing', 'segments', 'transcribe', 'transcribe', 'transcribe', 'transcribe']);
+  assert.deepEqual(events.slice(1).map((e) => e.completed), [0, 1, 2, 3, 4]);
+  assert.ok(events.slice(1).every((e) => e.total === 4));
+});
+
+test('long local transcription resumes from per-segment checkpoints after a restart', async (t) => {
+  const filePath = tempAudio(t, 'clase-10h.mkv');
+  const store = new Map();
+  const checkpoint = {
+    async load(index, meta) {
+      const saved = store.get(index);
+      return saved && saved.meta.total === meta.total && saved.meta.segmentSeconds === meta.segmentSeconds ? saved.part : null;
+    },
+    async save(index, meta, part) { store.set(index, { meta, part }); },
+  };
+  const calls = [];
+  const base = {
+    env: { TRANSCRIBE_PROVIDERS: 'local' },
+    durationSeconds: 10 * 3600,
+    segmentAudio: fakeSegments(t, 60),
+    checkpoint,
+  };
+  // First run dies on segment 24 (whisper crash / container recreated).
+  const first = await audioTranscriber.transcribe(filePath, 'video/x-matroska', 'clase-10h.mkv', {
+    ...base,
+    async localTranscribe(segPath) {
+      calls.push(segPath);
+      if (calls.length === 24) throw new Error('whisper process killed');
+      return { text: `bloque ${calls.length} con suficientes palabras`, segments: [{ start: 0, end: 5, text: 'x' }], model: 'base' };
+    },
+  });
+  assert.equal(first.method, 'placeholder');
+  assert.equal(store.size, 23, 'every finished segment is persisted before the crash');
+  const resumed = [];
+  const events = [];
+  const result = await audioTranscriber.transcribe(filePath, 'video/x-matroska', 'clase-10h.mkv', {
+    ...base,
+    onProgress: (event) => events.push(event),
+    async localTranscribe(segPath) {
+      resumed.push(segPath);
+      return { text: `bloque reanudado con suficientes palabras`, segments: [{ start: 0, end: 5, text: 'y' }], model: 'base' };
+    },
+  });
+  assert.equal(result.method, 'local-whisper');
+  assert.equal(resumed.length, 37, 'only the 37 unfinished segments are transcribed again');
+  assert.equal(store.size, 60);
+  assert.equal(events.at(-1).completed, 60);
+  assert.equal(events.at(-1).durationSeconds, 36000);
+  assert.ok(result.transcript.startsWith('bloque 1 con suficientes palabras'));
+  assert.equal(result.segments.at(-1).start, 59 * 600, 'timestamps keep their offset into the 10-hour file');
+});
+
+test('segmentation budget scales with duration: a 10-hour file gets an hour, short clips keep 10 minutes', () => {
+  assert.equal(audioTranscriber.segmentationTimeoutMs({ durationSeconds: 120, env: {} }), 10 * 60 * 1000);
+  assert.equal(audioTranscriber.segmentationTimeoutMs({ durationSeconds: 36000, env: {} }), 60 * 60 * 1000);
+  assert.equal(audioTranscriber.segmentationTimeoutMs({ durationSeconds: 36000, env: { TRANSCRIBE_SEGMENT_TIMEOUT_MS: '5000' } }), 5000);
 });

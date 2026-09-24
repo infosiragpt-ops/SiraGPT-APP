@@ -32,9 +32,9 @@ test("client upload policy keeps pasted image blobs uploadable with a generated 
   assert.equal(validateFile(file).ok, true)
 })
 
-test("audio and video are capped at 2 GB while documents keep the 100 MB cap", () => {
+test("audio and video are capped at 10 GB while documents keep the 100 MB cap", () => {
   const MB = 1024 * 1024
-  assert.equal(DEFAULT_MAX_MEDIA_BYTES, 2048 * MB)
+  assert.equal(DEFAULT_MAX_MEDIA_BYTES, 10240 * MB)
   const video = { name: "clase.mp4", type: "video/mp4", size: 900 * MB } as unknown as File
   const audio = { name: "charla.m4a", type: "", size: 300 * MB } as unknown as File
   const pdf = { name: "libro.pdf", type: "application/pdf", size: 300 * MB } as unknown as File
@@ -47,9 +47,14 @@ test("audio and video are capped at 2 GB while documents keep the 100 MB cap", (
   assert.equal(rejected.ok, false)
   assert.equal(rejected.code, "size_exceeded")
   assert.match(String(rejected.reason), /100 MB/)
-  const huge = validateFile({ name: "x.mp4", type: "video/mp4", size: 3000 * MB } as unknown as File)
+  const tenHours = validateFile({ name: "clase-10h.mkv", type: "video/x-matroska", size: 6000 * MB } as unknown as File)
+  assert.equal(tenHours.ok, true, "a 6 GB 10-hour lecture is accepted")
+  const huge = validateFile({ name: "x.mp4", type: "video/mp4", size: 11000 * MB } as unknown as File)
   assert.equal(huge.code, "size_exceeded")
-  assert.match(String(huge.reason), /2048 MB/)
+  assert.match(String(huge.reason), /10 GB/)
+  for (const name of ["nota.caf", "llamada.amr", "voz.weba", "podcast.m4b", "clase.ts", "cine.wmv"]) {
+    assert.equal(isMediaUpload({ name, type: "" } as unknown as File), true, name)
+  }
 })
 
 test("supports 50 recordings with a clear 51st rejection and MIME-less formats", () => {

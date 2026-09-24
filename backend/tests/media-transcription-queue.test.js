@@ -259,3 +259,107 @@ test('media offload streams bytes with length and abort signal, without deleting
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a 10-hour job gets a 12 h budget and survives many deploys (stalled ceiling)', () => {
+  const q = require('../src/services/media-transcription-queue');
+  assert.ok(q.PROCESS_TIMEOUT_MS >= 12 * 60 * 60 * 1000);
+  assert.ok(q.MAX_STALLED_COUNT >= 20);
+});
+
+test('disk checkpoints persist each segment atomically, ignore mismatched layouts and clear on success', async (t) => {
+  const os = require('node:os');
+  const path = require('node:path');
+  const { createDiskCheckpoint, checkpointFor, sweepStaleCheckpoints } = require('../src/services/media-transcription-queue');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-ckpt-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = checkpointFor(row('clase-10h', { size: 6_000_000_000 }), root);
+  assert.match(path.basename(store.dir), /^media-[a-f0-9]{64}-6000000000$/);
+  const meta = { segmentSeconds: 600, total: 61 };
+  await store.save(3, meta, { text: 'parte cuatro', segments: [{ start: 1, end: 2, text: 'x' }] });
+  assert.deepEqual(await store.load(3, meta), { text: 'parte cuatro', segments: [{ start: 1, end: 2, text: 'x' }] });
+  assert.equal(await store.load(4, meta), null);
+  assert.equal(await store.load(3, { segmentSeconds: 300, total: 122 }), null, 'a different cut is never mixed in');
+  assert.deepEqual((await fs.readdir(store.dir)).filter(n => n.endsWith('.tmp')), []);
+  await store.clear();
+  assert.equal(await store.load(3, meta), null);
+
+  const stale = createDiskCheckpoint(path.join(root, `media-${'a'.repeat(64)}-10`));
+  await stale.save(0, meta, { text: 'viejo' });
+  const old = Date.now() - 20 * 24 * 60 * 60 * 1000;
+  await fs.utimes(stale.dir, old / 1000, old / 1000);
+  assert.deepEqual(await sweepStaleCheckpoints({ root }), { removed: 1 });
+});
+
+test('progress tracker reports %, parts and an ETA from real work only (resumed parts do not skew it)', () => {
+  const { createProgressTracker } = require('../src/services/media-transcription-queue');
+  let clock = 0;
+  const published = [];
+  const track = createProgressTracker({ publish: p => published.push(p), now: () => clock, intervalMs: 0 });
+  track({ stage: 'preparing', durationSeconds: 36000 });
+  assert.equal(published.at(-1).stage, 'preparing');
+  assert.equal(published.at(-1).percent, 1);
+  clock = 50_000;
+  track({ stage: 'segments', completed: 0, total: 60, durationSeconds: 36000 });
+  // 20 checkpointed segments replay instantly.
+  for (let i = 1; i <= 20; i++) { clock += 5; track({ stage: 'transcribe', completed: i, total: 60, durationSeconds: 36000 }); }
+  assert.equal(published.at(-1).etaSeconds, null, 'no ETA from replayed checkpoints');
+  for (let i = 21; i <= 24; i++) { clock += 60_000; track({ stage: 'transcribe', completed: i, total: 60, durationSeconds: 36000 }); }
+  const last = published.at(-1);
+  assert.equal(last.stage, 'transcribing');
+  assert.equal(last.completed, 24);
+  assert.equal(last.percent, Math.round(2 + (97 * 24) / 60));
+  assert.equal(last.etaSeconds, 36 * 60, '36 remaining parts at 60 s each');
+  assert.equal(last.durationSeconds, 36000);
+});
+
+test('worker passes progress + checkpoint to the transcriber and stores progress on the job', async () => {
+  const saved = [];
+  let cleared = 0;
+  const f = fixture([row('larga', { originalName: 'clase-10h.mkv', mimeType: 'video/x-matroska' })], {
+    createCheckpoint: () => ({ load: async () => null, save: async (...args) => { saved.push(args); }, clear: async () => { cleared++; } }),
+    processFile: async (file, { onProgress, checkpoint }) => {
+      assert.equal(typeof onProgress, 'function');
+      await checkpoint.save(0, { segmentSeconds: 600, total: 2 }, { text: 'a' });
+      onProgress({ stage: 'segments', completed: 0, total: 2, durationSeconds: 1200 });
+      onProgress({ stage: 'transcribe', completed: 1, total: 2, durationSeconds: 1200 });
+      return { success: true, extractedText: 'Transcripción completa de la clase larga' };
+    },
+  });
+  await f.service.enqueueMediaTranscription({ fileId: 'larga', userId: 'u1' });
+  const job = f.jobs.get(jobIdFor('larga', 'u1'));
+  const progress = [];
+  job.updateProgress = async p => { progress.push(p); job.progress = p; };
+  await f.service.processMediaJob(job);
+  assert.equal(saved.length, 1);
+  assert.equal(cleared, 1, 'checkpoints are removed once the transcript is durable');
+  assert.ok(progress.some(p => p.completed === 1 && p.total === 2));
+  assert.equal(f.rows.get('larga').processingStage, 'ready');
+  const read = await f.service.readMediaProgress({ fileIds: ['larga', 'otro'], userId: 'u1' });
+  assert.equal(read.larga.completed, 1);
+  assert.equal(read.otro, undefined);
+  assert.deepEqual(await f.service.readMediaProgress({ fileIds: ['larga'], userId: 'u2' }), {}, 'another user never sees the job');
+});
+
+test('a deploy parks the running job without spending a retry (DelayedError) so it resumes from checkpoints', async () => {
+  const { DelayedError } = require('bullmq');
+  let release;
+  const f = fixture([row('clase')], {
+    processFile: (file, { signal }) => new Promise((resolve, reject) => {
+      release = () => {};
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+  await f.service.enqueueMediaTranscription({ fileId: 'clase', userId: 'u1' });
+  const job = f.jobs.get(jobIdFor('clase', 'u1'));
+  const delayed = [];
+  job.moveToDelayed = async (ts, token) => { delayed.push({ ts, token }); };
+  const running = f.service.processMediaJob(job, 'lock-token');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.service.abortActive(), 1);
+  await assert.rejects(running, err => err instanceof DelayedError);
+  assert.equal(delayed.length, 1);
+  assert.equal(delayed[0].token, 'lock-token');
+  assert.equal(job.attemptsMade, 0);
+  assert.equal(f.rows.get('clase').processingStage, 'uploaded', 'chip keeps showing the pending transcription');
+  assert.ok(release);
+});

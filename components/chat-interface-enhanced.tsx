@@ -355,6 +355,7 @@ import {
   attachmentHasPreviewSource,
   buildAgentFileMetadata,
   collectUploadFileIds,
+  describeMediaTranscriptionProgress,
   getAudioMediaMeta,
   getFileProcessingStage,
   isAudioComposerFile,
@@ -2421,7 +2422,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                   <span className="min-w-0 truncate" title={isFailed ? (file.processingError || file.uploadError || "No se pudo transcribir") : undefined}>
                     {isUploading ? (progress > 0 ? `Subiendo ${progress}%` : "En cola de subida")
                       : isFailed ? (resolveUploadFileId(file) ? "No se pudo transcribir" : "Subida fallida")
-                      : isActiveProcessingStage(getFileProcessingStage(file)) || file.status === "processing" ? "Transcribiendo…"
+                      : isActiveProcessingStage(getFileProcessingStage(file)) || file.status === "processing" ? (describeMediaTranscriptionProgress(file.processingProgress) || "Transcribiendo…")
                       : "Listo para analizar"}
                   </span>
                   {isFailed && retryUpload && <button type="button" className="shrink-0 underline underline-offset-2" onClick={(e) => { e.stopPropagation(); retryUpload(file); }} aria-label={`Reintentar ${file.name}`}>Reintentar</button>}
@@ -5742,8 +5743,12 @@ function ChatInterfaceContent() {
               if (!stage || file.status === "uploading") return file;
               const error = row.processingError ?? row.error ?? null;
               const status = stage === "ready" ? "ready" : stage === "failed" ? "failed" : "processing";
-              if (file.processingStage === stage && (file.processingError ?? null) === error && file.status === status) return file;
-              return { ...file, processingStage: stage, processingError: error, status };
+              // Long recordings report live progress (%, ETA) from the media job.
+              const processingProgress = status === "processing" ? (row.processingProgress ?? null) : null;
+              const progressKey = processingProgress ? `${processingProgress.stage}:${processingProgress.percent}:${processingProgress.etaSeconds}` : "";
+              const currentProgressKey = file.processingProgress ? `${file.processingProgress.stage}:${file.processingProgress.percent}:${file.processingProgress.etaSeconds}` : "";
+              if (file.processingStage === stage && (file.processingError ?? null) === error && file.status === status && progressKey === currentProgressKey) return file;
+              return { ...file, processingStage: stage, processingError: error, status, processingProgress };
             });
             if (next.every((file: any, index: number) => file === current[index])) return current;
             uploadedFilesRef.current = next;
@@ -13978,7 +13983,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Office, imágenes y datos; hasta 50 audios o vídeos por mensaje. 100 MB por documento; audio y video hasta 2 GB. Se conserva el orden en que los sueltes.
+              PDF, Office, imágenes y datos; hasta 50 audios o vídeos por mensaje. 100 MB por documento; audio y video hasta 10 GB (unas 10 horas por archivo). Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>
