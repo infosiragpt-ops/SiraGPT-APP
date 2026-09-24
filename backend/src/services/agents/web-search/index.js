@@ -454,7 +454,16 @@ function resetProviders() {
   providers = sortProviders(builtinProviders);
 }
 
-function clearCache() { cache.clear(); manyCache.clear(); }
+function clearCache() {
+  cache.clear();
+  manyCache.clear();
+  // The fast-search engine caches on top of this adapter; clear it too so a
+  // provider swap (tests, admin key change) never serves a stale payload.
+  try {
+    // eslint-disable-next-line global-require
+    require('./fast-search')._internal._resetForTests();
+  } catch (_) { /* optional */ }
+}
 
 module.exports = {
   search,

@@ -1950,6 +1950,18 @@ router.get('/system-snapshot', requireSuperAdmin, async (_req, res) => {
   });
 });
 
+// Búsqueda rápida telemetry: configured engines + p50/p95 latency per
+// provider, cache hit counters and rate-limit rejections (no queries, no keys).
+router.get('/health/web-search', (_req, res) => {
+  try {
+    const fastSearch = require('../services/agents/web-search/fast-search');
+    res.json({ success: true, ...fastSearch.getMetrics() });
+  } catch (err) {
+    console.error('[admin/health/web-search] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ success: false, error: 'web_search_metrics_unavailable' });
+  }
+});
+
 router.get('/health/services', async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();

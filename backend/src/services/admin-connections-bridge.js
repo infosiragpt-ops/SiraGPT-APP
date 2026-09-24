@@ -57,6 +57,13 @@ const PROVIDER_ENV_MAP = Object.freeze({
   elevenlabs: 'ELEVENLABS_API_KEY',
   minimax: 'MINIMAX_API_KEY',
   suno: 'SUNO_API_KEY',
+  // Web search engines (Búsqueda rápida ladder in agents/web-search/
+  // fast-search.js). Read lazily per search call, so a key pasted in
+  // Admin → Conexiones is live on the next query.
+  perplexity: 'PERPLEXITY_API_KEY',
+  brave: 'BRAVE_SEARCH_API_KEY',
+  tavily: 'TAVILY_API_KEY',
+  exa: 'EXA_API_KEY',
   // `custom` is intentionally absent: each AdminConnection has its own
   // base URL (Ollama / vLLM / LM Studio). Live chat reads the row at
   // request time via services/ai/custom-provider-client.js — stuffing
@@ -68,6 +75,8 @@ const PROVIDER_ENV_ALIASES = Object.freeze({
   cerebras: ['GEMA4_API_KEY'],
   kimi: ['KIMI_API_KEY'],
   meta: ['META_API_KEY', 'LLAMA_API_KEY'],
+  perplexity: ['PPLX_API_KEY'],
+  brave: ['BRAVE_API_KEY'],
 });
 
 // providerKey (lowercase, panel form) → provider value in AiModel.provider column

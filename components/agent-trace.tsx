@@ -26,6 +26,21 @@ function prettyJsonOrRaw(raw?: string): string {
   try { return JSON.stringify(JSON.parse(value), null, 2) } catch { return value }
 }
 
+function formatSearchLatency(ms?: number): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null
+  if (ms < 1000) return `${Math.max(1, Math.round(ms))} ms`
+  return `${(ms / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} s`
+}
+
+// «8 fuentes · 180 ms» for a finished web search (Búsqueda rápida).
+export function searchMetaLabel(search: NonNullable<AgentStepClient["search"]>, durationMs?: number): string {
+  const parts = [search.count > 0 ? `${search.count} ${search.count === 1 ? "fuente" : "fuentes"}` : "sin resultados"]
+  const latency = formatSearchLatency(search.latencyMs ?? durationMs)
+  if (latency) parts.push(latency)
+  if (search.cached) parts.push("caché")
+  return parts.join(" · ")
+}
+
 function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineStep {
   const running = step.status === "planned" || step.status === "executing"
   const failed = step.status === "error" || step.status === "denied" || Boolean(step.isError)
@@ -42,6 +57,9 @@ function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineSte
     elapsedSec: status === "active" ? elapsedSec : null,
     expandable: Boolean(details),
     details: details || undefined,
+    ...(status === "done" && step.search
+      ? { meta: searchMetaLabel(step.search, step.durationMs), sources: step.search.sources }
+      : {}),
   }
 }
 

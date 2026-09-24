@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * web_search (harness-native definition) — thin wrapper over the EXISTING
- * provider chain (agents/web-search: Crossref → … → Brave → DuckDuckGo → …).
+ * web_search (harness-native definition) — thin wrapper over the Búsqueda
+ * rápida engine (agents/web-search/fast-search: Perplexity → Brave → Tavily →
+ * Exa → free key-less aggregate).
  *
  * The interactive chat toolset already ships a web_search tool; attachHarness
  * only registers THIS definition when the turn's toolset lacks one (API
@@ -30,14 +31,20 @@ function buildWebSearchTool() {
     inputSchema,
     permissionTier: 'auto',
     humanDescription: (args = {}) => `Buscando «${String(args.query || '').slice(0, 60)}»`,
-    execute: async (args) => {
-      const webSearch = require('../../agents/web-search');
-      const result = await webSearch.search(args.query, {
-        limit: args.maxResults || 5,
+    execute: async (args, ctx) => {
+      // Same Búsqueda rápida engine as the chat web_search tool.
+      const { fastSearch } = require('../../agents/web-search/fast-search');
+      const result = await fastSearch(args.query, {
+        maxResults: args.maxResults || 5,
         ...(args.freshness ? { freshness: args.freshness } : {}),
+        userId: ctx?.userId || null,
+        signal: ctx?.signal,
       });
       return {
+        engine: 'fast',
         provider: result.provider || null,
+        latencyMs: result.latencyMs,
+        cached: Boolean(result.cached),
         results: (result.results || []).slice(0, args.maxResults || 5),
       };
     },
