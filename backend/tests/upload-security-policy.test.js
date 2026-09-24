@@ -290,11 +290,11 @@ test('audio/video get their own cap (10 GB default) while documents get 1 GB', (
   });
   assert.equal(bigVideo.ok, true, JSON.stringify(bigVideo));
   const bigPdf = validateUploadPolicy({
-    originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', size: 900 * 1024 * 1024,
+    originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', env: {}, size: 900 * 1024 * 1024,
   });
   assert.equal(bigPdf.ok, true, 'a 900 MB PDF fits the 1 GB document cap');
   const hugePdf = validateUploadPolicy({
-    originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', size: 1100 * 1024 * 1024,
+    originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', env: {}, size: 1100 * 1024 * 1024,
   });
   assert.equal(hugePdf.ok, false);
   assert.equal(hugePdf.code, 'file_too_large');
