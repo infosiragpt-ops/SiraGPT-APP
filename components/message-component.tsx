@@ -190,6 +190,7 @@ const extractAgentTrace = (message: any): {
                 status: s.status === 'running' ? 'interrupted' : (s.status || 'completed'),
                 isError: Boolean(s.isError),
                 durationMs: s.durationMs,
+                ...(s.search && typeof s.search === 'object' ? { search: s.search } : {}),
             }));
         return {
             steps,

@@ -76,6 +76,10 @@ const PROVIDER_DEFAULTS: Record<string, { url: string; authType: AuthType; apiTy
   elevenlabs: { url: "https://api.elevenlabs.io/v1", authType: "Custom", apiType: "chat_completions" },
   minimax: { url: "https://api.minimax.io", authType: "Bearer", apiType: "chat_completions" },
   suno: { url: "https://api.sunoapi.org", authType: "Bearer", apiType: "chat_completions" },
+  perplexity: { url: "https://api.perplexity.ai", authType: "Bearer", apiType: "chat_completions" },
+  brave: { url: "https://api.search.brave.com/res/v1", authType: "Custom", apiType: "chat_completions" },
+  tavily: { url: "https://api.tavily.com", authType: "Bearer", apiType: "chat_completions" },
+  exa: { url: "https://api.exa.ai", authType: "Custom", apiType: "chat_completions" },
   ollama: { url: "http://127.0.0.1:11434/v1", authType: "None", apiType: "chat_completions" },
   lmstudio: { url: "http://127.0.0.1:1234/v1", authType: "None", apiType: "chat_completions" },
   vllm: { url: "http://127.0.0.1:8000/v1", authType: "Bearer", apiType: "chat_completions" },
@@ -101,6 +105,10 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "elevenlabs", label: "ElevenLabs API (voz + música)" },
   { key: "minimax", label: "MiniMax API (música)" },
   { key: "suno", label: "Suno Gateway API (música)" },
+  { key: "perplexity", label: "Perplexity Search API (búsqueda rápida)" },
+  { key: "brave", label: "Brave Search API (búsqueda web)" },
+  { key: "tavily", label: "Tavily Search API (búsqueda web)" },
+  { key: "exa", label: "Exa Search API (búsqueda web)" },
   { key: "ollama", label: "Ollama (local)" },
   { key: "lmstudio", label: "LM Studio (local)" },
   { key: "vllm", label: "vLLM" },
@@ -130,6 +138,8 @@ const QUICK_PICK: Array<{ key: string; label: string }> = [
   { key: "elevenlabs", label: "ElevenLabs" },
   { key: "minimax", label: "MiniMax" },
   { key: "suno", label: "Suno" },
+  { key: "perplexity", label: "Perplexity Search" },
+  { key: "brave", label: "Brave Search" },
 ]
 
 type Connection = {
@@ -183,6 +193,10 @@ function inferProviderFromUrl(u: string): string {
   if (lower.includes("typesafe.ai")) return "typesafe"
   if (lower.includes("elevenlabs.io")) return "elevenlabs"
   if (lower.includes("minimax.io")) return "minimax"
+  if (lower.includes("perplexity.ai")) return "perplexity"
+  if (lower.includes("search.brave.com")) return "brave"
+  if (lower.includes("tavily.com")) return "tavily"
+  if (lower.includes("exa.ai")) return "exa"
   if (lower.includes("sunoapi.org") || lower.includes("suno-api") || lower.includes("suno_api")) return "suno"
   if (lower.includes("ollama") || /localhost:11434|127\.0\.0\.1:11434/.test(lower)) return "ollama"
   if (lower.includes("lmstudio") || lower.includes("lm.studio") || /localhost:1234|127\.0\.0\.1:1234/.test(lower)) return "lmstudio"

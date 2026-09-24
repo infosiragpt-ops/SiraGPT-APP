@@ -29,6 +29,56 @@ export type ClaudeTimelineStep = {
   tool?: string
   path?: string
   loaderState?: LoaderState
+  /** Quiet right-aligned facts for a finished step, e.g. "8 fuentes · 180 ms". */
+  meta?: string
+  /** Sources a web search returned, rendered as favicon chips under the row. */
+  sources?: Array<{ title?: string; url: string }>
+}
+
+function sourceDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "")
+  } catch {
+    return ""
+  }
+}
+
+const MAX_SOURCE_CHIPS = 5
+
+function StepSources({ sources }: { sources: Array<{ title?: string; url: string }> }) {
+  const chips = sources
+    .map((source) => ({ ...source, domain: sourceDomain(source.url) }))
+    .filter((source) => source.domain)
+  if (!chips.length) return null
+  const visible = chips.slice(0, MAX_SOURCE_CHIPS)
+  const hidden = chips.length - visible.length
+  return (
+    <div data-step-sources="1" className="mb-1 ml-7 flex flex-wrap items-center gap-1.5">
+      {visible.map((source, index) => (
+        <a
+          key={`${source.url}-${index}`}
+          href={source.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={source.title || source.domain}
+          className="inline-flex h-6 max-w-[11rem] items-center gap-1.5 rounded-full border border-border/60 bg-background/70 pl-1 pr-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- remote favicon, decorative */}
+          <img
+            src={`https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(source.domain)}`}
+            alt=""
+            className="h-4 w-4 shrink-0 rounded-full"
+            referrerPolicy="no-referrer"
+            loading="lazy"
+          />
+          <span className="truncate">{source.domain}</span>
+        </a>
+      ))}
+      {hidden > 0 ? (
+        <span className="inline-flex h-6 items-center rounded-full border border-border/60 px-2 text-[11.5px] tabular-nums text-muted-foreground">+{hidden}</span>
+      ) : null}
+    </div>
+  )
 }
 
 export function formatClaudeElapsed(sec: number): string {
@@ -159,6 +209,7 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
               </svg>
               <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
               {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
+              {!elapsed && step.meta ? <span data-step-meta="1" className="ml-3 shrink-0 font-sans text-[12px] tabular-nums leading-5 text-muted-foreground/80">{step.meta}</span> : null}
             </summary>
             {step.detailsKind === "prose" ? (
               <pre
@@ -177,9 +228,11 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
             <span className="relative z-[1] flex h-5 w-5 shrink-0 items-center justify-center bg-background" data-kind={kind} data-loader={loaderState}>{glyph}</span>
             <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
             {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
+            {!elapsed && step.meta ? <span data-step-meta="1" className="ml-3 shrink-0 font-sans text-[12px] tabular-nums leading-5 text-muted-foreground/80">{step.meta}</span> : null}
           </>
         )}
       </div>
+      {step.sources?.length ? <StepSources sources={step.sources} /> : null}
     </div>
   )
 }

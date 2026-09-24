@@ -506,6 +506,15 @@ export type AgentToolResultEvent = {
   isError?: boolean
   durationMs?: number
   status?: string
+  /** Búsqueda rápida summary for web_search results (count, latency, sources). */
+  search?: AgentSearchSummary
+}
+export type AgentSearchSummary = {
+  count: number
+  latencyMs?: number
+  provider?: string
+  cached?: boolean
+  sources: Array<{ title?: string; url: string }>
 }
 export type AgentPermissionRequestEvent = {
   type: 'permission_request'
