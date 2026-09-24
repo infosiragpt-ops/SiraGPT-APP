@@ -68,7 +68,9 @@ test('missing first-party keys throw provider-unavailable, not a vendor swap', (
 
 test('Anthropic thinking toggle covers Claude 4/5 and disables on trivial payloads', () => {
   assert.equal(anthropicSupportsThinkingToggle('claude-sonnet-5'), true);
-  assert.equal(anthropicSupportsThinkingToggle('claude-fable-5'), true);
+  // Fable 5.x / Opus 5.5 reject `thinking: disabled` (400) — never sent there.
+  assert.equal(anthropicSupportsThinkingToggle('claude-fable-5'), false);
+  assert.equal(anthropicSupportsThinkingToggle('claude-opus-5-5'), false);
   assert.equal(anthropicSupportsThinkingToggle('claude-3-5-sonnet'), false);
   const body = { model: 'claude-sonnet-5' };
   applyAnthropicThinkingControls(body, { thinking: { type: 'disabled' } }, 'claude-sonnet-5');
