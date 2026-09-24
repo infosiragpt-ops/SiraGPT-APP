@@ -160,3 +160,17 @@ test('new programming or general tasks do not inherit the previous audio batch',
   assert.equal(batch.shouldResolveMediaBatchFromHistory('reintenta los audios fallidos'), true);
   assert.equal(batch.shouldResolveMediaBatchFromHistory('transcribir', { plainTranscriptionRequest: true }), true);
 });
+
+test('chat transcript is per-file markdown: heading + paragraph, no "=====" rule folded into a list item', () => {
+  const rows = [
+    { id: 'a', originalName: 'WhatsApp_Ptt 2026.ogg', processingStage: 'ready', extractedText: 'hola buenos días\n1. no es lista\n# no es título' },
+    { id: 'b', originalName: 'b.ogg', processingStage: 'failed' },
+  ];
+  const md = batch.transcriptMarkdown(rows);
+  assert.match(md, /^#### 1\. WhatsApp\\_Ptt 2026\.ogg\n\nhola buenos días/);
+  assert.match(md, /\n1\\\. no es lista\n\\# no es título/);
+  assert.match(md, /#### 2\. b\.ogg\n\n_No se pudo transcribir/);
+  assert.doesNotMatch(md, /={10,}/);
+  // The downloadable TXT keeps its plain-text layout.
+  assert.match(batch.transcriptBundle(rows), /1\. WhatsApp_Ptt 2026\.ogg\n={48}\n/);
+});

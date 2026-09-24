@@ -105,6 +105,29 @@ function transcriptBundle(rows) {
   }).join('\n');
 }
 
+function escapeChatMarkdown(value) {
+  return String(value || '')
+    .replace(/[\\`*_[\]<>|~]/g, ch => `\\${ch}`)
+    .replace(/^(\s*)(\d+)([.)]\s)/gm, (_m, lead, num, rest) => `${lead}${num}\\${rest}`)
+    .replace(/^(\s*)(#{1,6}\s|[-+]\s|={3,}|-{3,})/gm, (_m, lead, marker) => `${lead}\\${marker}`);
+}
+
+function transcriptMarkdown(rows) {
+  // Chat rendering of the same bundle. The TXT keeps its plain-text layout;
+  // here each file gets its own heading and paragraph so markdown does not
+  // fold the "=====" rule and the transcript into a single list item.
+  return rows.map((row, index) => {
+    const status = stateOf(row);
+    const title = `#### ${index + 1}. ${escapeChatMarkdown(row.originalName || row.filename || row.id)}`;
+    const body = status === 'ready'
+      ? escapeChatMarkdown(String(row.extractedText || '').trim())
+      : status === 'failed'
+        ? '_No se pudo transcribir este archivo. Puedes reintentarlo sin volver a subir los demás._'
+        : '_Transcripción pendiente. El archivo permanece en la cola._';
+    return `${title}\n\n${body}`;
+  }).join('\n\n');
+}
+
 function wantsMediaAnalysis(goal) {
   return /anal[ií]z|an[aá]lisis|resum|compar|sinteti|s[ií]ntesis|conclu|extrae|pregunta|qu[eé]\b|c[oó]mo\b|qui[eé]n\b|explica|tema|decisi|tarea|insight/i.test(String(goal));
 }
@@ -178,4 +201,4 @@ async function analyzeMediaBatch({ rows, goal, complete, signal, onProgress = ()
 }
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
-  waitForMediaBatch, transcriptBundle, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch };
+  waitForMediaBatch, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch };
