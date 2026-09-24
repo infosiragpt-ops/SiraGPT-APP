@@ -5,7 +5,11 @@ const {
 } = require('../config/document-batch-limits');
 
 const MB = 1024 * 1024;
-const DEFAULT_MAX_UPLOAD_MB = 100;
+// Documents (and every non-media format) up to 1 GB: bodies over the edge's
+// 100 MB request limit travel through the chunked endpoints, and parsers
+// that load the whole file in memory are skipped above
+// SIRAGPT_MEMORY_SAFE_MAX_BYTES (see fileProcessor) instead of rejecting.
+const DEFAULT_MAX_UPLOAD_MB = 1024;
 // Audio/video travel in chunks (see chunked-upload-store) and are transcribed
 // server-side, so they get their own, much larger cap: 10 GB fits a single
 // 10-hour lecture recorded on a phone or a screen recorder.
@@ -287,6 +291,126 @@ const OFFICE_LOCK_EXTENSIONS = new Set([
   'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
 ]);
 
+const TYPESCRIPT_OR_MPEGTS_EXTENSIONS = new Set(['ts', 'mts', 'cts']);
+
+/**
+ * MPEG transport stream sniff. file-type only recognises the 192-byte M2TS
+ * variant, so a plain `.ts` from ffmpeg / a TV capture has no "magic" for it.
+ * A TS file carries the 0x47 sync byte at the start of every 188-byte packet
+ * (192 for M2TS, after a 4-byte timestamp); TypeScript text never does.
+ */
+function looksLikeMpegTransportStream(head) {
+  if (!head || head.length < 189) return false;
+  const syncEvery = (offset, stride) => {
+    let packets = 0;
+    for (let i = offset; i < head.length && packets < 4; i += stride, packets += 1) {
+      if (head[i] !== 0x47) return false;
+    }
+    return packets >= 2;
+  };
+  return syncEvery(0, 188) || (head.length >= 197 && syncEvery(4, 192));
+}
+
+async function detectTransportStream(filePath) {
+  let handle;
+  try {
+    handle = await require('fs').promises.open(filePath, 'r');
+    const head = Buffer.alloc(188 * 4 + 16);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    return looksLikeMpegTransportStream(head.subarray(0, bytesRead));
+  } catch {
+    return false;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+// Magic-byte families. file-type names the CONTAINER for several formats
+// (OLE2 for .doc/.xls/.ppt/.msg, ZIP for iWork/ODF/EPUB/JAR), and reports
+// sub-variants (image/apng, image/heic-sequence, audio/x-m4a, video/MP2P)
+// that are the same kind of file as their extension.
+const OLE_CONTAINER_MIMES = new Set(['application/x-cfb', 'application/x-ole-storage', 'application/cdfv2']);
+const OLE_EXTENSIONS = new Set([
+  'doc', 'dot', 'xls', 'xlt', 'xla', 'ppt', 'pot', 'pps', 'ppa', 'msg', 'oft',
+  'vsd', 'vss', 'vst', 'pub', 'mpp', 'wps', 'xlw', 'db', 'msi',
+]);
+const ZIP_CONTAINER_MIMES = new Set(['application/zip', 'application/x-zip', 'application/x-zip-compressed']);
+const ZIP_CONTAINER_EXTENSIONS = new Set([
+  'docx', 'docm', 'dotx', 'dotm', 'xlsx', 'xlsm', 'xltx', 'xltm', 'pptx', 'pptm', 'ppsx', 'potx',
+  'odt', 'ods', 'odp', 'odg', 'ott', 'ots', 'otp', 'epub', 'pages', 'numbers', 'key',
+  'vsdx', 'xps', 'oxps', 'kmz', 'usdz', '3mf', 'sketch', 'apk', 'ipa', 'jar', 'war', 'xpi', 'crx',
+]);
+
+function mimeFamily(mime) {
+  const m = normalizeMime(mime);
+  if (!m) return null;
+  if (OLE_CONTAINER_MIMES.has(m) || /^application\/(msword|vnd\.ms-(excel|powerpoint|outlook|project|publisher)|vnd\.visio)/.test(m)) return 'ole';
+  if (ZIP_CONTAINER_MIMES.has(m) || /openxmlformats|opendocument|epub\+zip|java-archive/.test(m)) return 'zip';
+  if (m === 'application/pdf') return 'pdf';
+  if (/^image\//.test(m)) return 'image';
+  if (/^(audio|video)\//.test(m) || m === 'application/ogg') return 'media';
+  if (/^text\//.test(m) || /(json|xml|yaml|javascript)$/.test(m)) return 'text';
+  if (m === 'application/rtf') return 'text';
+  return m;
+}
+
+function extensionFamily(extension) {
+  const ext = String(extension || '').toLowerCase();
+  if (OLE_EXTENSIONS.has(ext)) return 'ole';
+  if (ZIP_CONTAINER_EXTENSIONS.has(ext)) return 'zip';
+  const accepted = EXTENSION_TO_MIMES.get(ext);
+  if (!accepted) return null;
+  const families = new Set([...accepted].map(mimeFamily));
+  return families.size === 1 ? [...families][0] : null;
+}
+
+/**
+ * True when detected bytes and extension describe the same kind of file.
+ * Executables never qualify: `payload.txt` that is a Windows binary stays
+ * a mismatch whatever its family.
+ */
+function sameFormatFamily(detectedMime, extension) {
+  if (isExecutableMime(detectedMime)) return false;
+  const family = extensionFamily(extension);
+  return Boolean(family && family === mimeFamily(detectedMime));
+}
+
+// Stored MIME for extensions whose bytes only identify a generic container
+// (OLE / ZIP) or carry no magic at all (text formats declared as
+// octet-stream). Keeps parser routing and chat labels accurate.
+const EXTENSION_CANONICAL_MIME = new Map([
+  ['doc', 'application/msword'], ['dot', 'application/msword'],
+  ['xls', 'application/vnd.ms-excel'], ['xlt', 'application/vnd.ms-excel'], ['xla', 'application/vnd.ms-excel'],
+  ['ppt', 'application/vnd.ms-powerpoint'], ['pot', 'application/vnd.ms-powerpoint'],
+  ['pps', 'application/vnd.ms-powerpoint'], ['ppa', 'application/vnd.ms-powerpoint'],
+  ['msg', 'application/vnd.ms-outlook'], ['oft', 'application/vnd.ms-outlook'],
+  ['vsd', 'application/vnd.visio'], ['pub', 'application/vnd.ms-publisher'], ['mpp', 'application/vnd.ms-project'],
+  ['epub', 'application/epub+zip'],
+  ['odt', 'application/vnd.oasis.opendocument.text'],
+  ['ods', 'application/vnd.oasis.opendocument.spreadsheet'],
+  ['odp', 'application/vnd.oasis.opendocument.presentation'],
+  ['odg', 'application/vnd.oasis.opendocument.graphics'],
+  ['pages', 'application/vnd.apple.pages'], ['numbers', 'application/vnd.apple.numbers'], ['key', 'application/vnd.apple.keynote'],
+  ['eml', 'message/rfc822'], ['mbox', 'application/mbox'],
+  ['ics', 'text/calendar'], ['vcf', 'text/vcard'],
+  ['srt', 'application/x-subrip'], ['vtt', 'text/vtt'],
+  ['svg', 'image/svg+xml'], ['md', 'text/markdown'], ['markdown', 'text/markdown'],
+  ['txt', 'text/plain'], ['csv', 'text/csv'], ['tsv', 'text/tab-separated-values'],
+  ['json', 'application/json'], ['xml', 'application/xml'], ['yaml', 'application/yaml'], ['yml', 'application/yaml'],
+  ['rtf', 'application/rtf'], ['tex', 'application/x-tex'],
+]);
+
+function canonicalMimeForContainer(extension, declaredMime, detectedMime, detectionSource) {
+  const canonical = EXTENSION_CANONICAL_MIME.get(String(extension || '').toLowerCase());
+  if (!canonical) return null;
+  const declared = normalizeMime(declaredMime);
+  const detected = normalizeMime(detectedMime);
+  const magic = detectionSource === 'magic-bytes' ? detected : '';
+  if (magic && !OLE_CONTAINER_MIMES.has(magic) && !ZIP_CONTAINER_MIMES.has(magic)) return null;
+  if (!magic && declared && !GENERIC_ARCHIVE_OR_BROWSER_MIMES.has(declared) && declared !== 'text/plain') return null;
+  return canonical;
+}
+
 function positiveInteger(value) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -457,7 +581,12 @@ function validateUploadPolicy({
   const declared = normalizeMime(declaredMime);
   const detected = normalizeMime(detectedMime);
   const limits = resolveUploadLimits(env);
-  const media = isMediaMime(detected) || isMediaMime(declared) || isMediaExtension(ext);
+  // `.ts`/`.mts`/`.cts` are TypeScript far more often than MPEG-TS video, and
+  // browsers still declare them as video/mp2t. Only real MPEG-TS bytes (magic
+  // detection) make them media; otherwise they are source code.
+  const typescriptSource = TYPESCRIPT_OR_MPEGTS_EXTENSIONS.has(ext)
+    && !(detectionSource === 'magic-bytes' && isMediaMime(detected));
+  const media = !typescriptSource && (isMediaMime(detected) || isMediaMime(declared) || isMediaExtension(ext));
   const sizeLimit = media ? limits.mediaFileSize : limits.fileSize;
 
   if (Number.isFinite(sizeLimit) && Number(size || 0) > sizeLimit) {
@@ -473,10 +602,13 @@ function validateUploadPolicy({
 
   // ── Byte-level integrity for KNOWN extensions ──
   // Any format is accepted, but a file whose extension we understand must
-  // actually contain that format: `report.pdf` with PE magic bytes or
-  // `renamed.docx` that is really a PDF is rejected — parsers would choke
-  // and it is the classic disguise trick. Unknown extensions skip this.
-  if (detectionSource === 'magic-bytes' && ext && EXTENSION_TO_MIMES.has(ext) && !mimeMatchesExtension(detected, ext)) {
+  // actually contain that KIND of format: `report.pdf` with PE magic bytes
+  // or `renamed.docx` that is really a PDF is rejected — parsers would choke
+  // and it is the classic disguise trick. Variants of the same family pass
+  // (legacy Office inside an OLE container, APNG as .png, M4A-branded .mp4,
+  // an .epub/.odt the detector only sees as ZIP). Unknown extensions skip it.
+  if (detectionSource === 'magic-bytes' && ext && EXTENSION_TO_MIMES.has(ext)
+    && !mimeMatchesExtension(detected, ext) && !sameFormatFamily(detected, ext)) {
     return {
       ok: false,
       code: 'extension_mime_mismatch',
@@ -488,8 +620,10 @@ function validateUploadPolicy({
   }
 
   const extensionCanonicalMime = canonicalMimeForAcceptedExtension(ext, declared, detected)
-    || (media ? resolveMediaMime({ ext, declared, detected, detectionSource }) : null);
-  const normalizedMime = extensionCanonicalMime || (detectionSource === 'magic-bytes' && detected ? detected : declared);
+    || (media ? resolveMediaMime({ ext, declared, detected, detectionSource }) : null)
+    || canonicalMimeForContainer(ext, declared, detected, detectionSource);
+  const normalizedMime = (typescriptSource ? 'text/x-typescript' : null)
+    || extensionCanonicalMime || (detectionSource === 'magic-bytes' && detected ? detected : declared);
   const mimeType = normalizedMime || declared || 'application/octet-stream';
   const executable = isExecutableExtension(ext) || isExecutableMime(detected) || isExecutableMime(declared);
   const activeContent = isActiveContentMime(mimeType) || isActiveContentExtension(ext);
@@ -528,6 +662,11 @@ module.exports = {
   EXECUTABLE_MIMES,
   EXTENSION_TO_MIMES,
   canonicalMimeForAcceptedExtension,
+  canonicalMimeForContainer,
+  sameFormatFamily,
+  looksLikeMpegTransportStream,
+  detectTransportStream,
+  TYPESCRIPT_OR_MPEGTS_EXTENSIONS,
   extensionFromName,
   isActiveContentExtension,
   isActiveContentMime,

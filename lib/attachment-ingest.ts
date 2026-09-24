@@ -30,14 +30,16 @@
 // vs magic-byte mismatch) and mirrors the same "any type" stance.
 
 // Configurable client-side caps (universal ingest spec): 400 files per
-// batch, 100 MB per file. Overridable per deployment via NEXT_PUBLIC_*
+// batch, 1 GB per document, 10 GB per audio/video file. Overridable per deployment via NEXT_PUBLIC_*
 // envs; callers can still pass tighter per-surface limits via opts.
 function envInt(value: string | undefined, fallback: number): number {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
+// Documents and every other non-media format: 1 GB (files over the edge's
+// 100 MB request limit go through the chunked upload endpoints).
 const DEFAULT_MAX_BYTES =
-  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 100) * 1024 * 1024
+  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 1024) * 1024 * 1024
 // Audio / video are uploaded in chunks (lib/composer/chunked-upload) and
 // transcribed server-side, so they get a much larger cap than documents:
 // 10 GB fits a single 10-hour recording.
@@ -48,13 +50,26 @@ const MEDIA_EXTENSIONS = new Set([
   "mp3", "mp2", "mpga", "wav", "wave", "ogg", "oga", "opus", "spx", "m4a", "m4b", "m4r", "aac", "flac", "alac",
   "aif", "aiff", "aifc", "caf", "amr", "awb", "wma", "ac3", "eac3", "dts", "weba", "mka", "ape", "wv", "au", "snd",
   "mp4", "m4v", "mov", "qt", "webm", "mkv", "avi", "wmv", "asf", "flv", "mpeg", "mpg", "m2v",
-  "ts", "mts", "m2ts", "ogv", "3gp", "3g2", "vob",
+  "m2ts", "ogv", "3gp", "3g2", "vob",
 ])
 
-export function isMediaUpload(file: { type?: string; name?: string } | null | undefined): boolean {
+/**
+ * `.ts`/`.mts`/`.cts` under 16 MB are TypeScript sources (browsers label them
+ * video/mp2t); bigger ones are MPEG-TS recordings. The backend's byte sniff
+ * has the final word either way.
+ */
+export function isLikelyTypeScriptSource(file: { name?: string | null; size?: number | null } | null | undefined): boolean {
+  if (!/\.(?:ts|mts|cts)$/i.test(String(file?.name || ""))) return false
+  const size = Number(file?.size)
+  return !(Number.isFinite(size) && size >= 16 * 1024 * 1024)
+}
+
+export function isMediaUpload(file: { type?: string; name?: string; size?: number } | null | undefined): boolean {
   const mime = String(file?.type || "").toLowerCase()
-  if (/^(audio|video)\//.test(mime)) return true
   const name = String(file?.name || "")
+  if (isLikelyTypeScriptSource(file)) return false
+  if (/\.(?:ts|mts)$/i.test(name)) return true
+  if (/^(audio|video)\//.test(mime)) return true
   const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : ""
   return MEDIA_EXTENSIONS.has(ext)
 }

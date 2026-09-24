@@ -65,6 +65,8 @@ WORKDIR /app
 
 # Runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows, plus
 # git/openssh-client for APPS/GitHub workspace clone, pull, diff, push.
+# 7zip: read-only listing/streaming of 7z/CAB/ISO/ARJ/LZH/WIM uploads in chat
+# (universal-document-extractor; members are piped to stdout, never unpacked).
 # bash: SiraCode workspace exec spawns /bin/bash -lc (Planificar permission
 # resume). Alpine's node image does not ship it; do not fall back to sh.
 RUN apk add --no-cache \
@@ -77,6 +79,7 @@ RUN apk add --no-cache \
     ffmpeg \
     ghostscript \
     git \
+    7zip \
     harfbuzz \
     libreoffice \
     nss \

@@ -264,7 +264,10 @@ export function buildAgentFileMetadata(files: readonly unknown[] = []): AgentFil
 }
 
 const AUDIO_EXT_RE = /\.(?:mp3|mp2|mpga|wave?|m4a|m4b|m4r|aac|ogg|oga|flac|alac|opus|spx|wma|aiff?|aifc|caf|amr|awb|ac3|eac3|dts|weba|mka|ape|wv|au|snd)$/i
-const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|qt|webm|mkv|avi|wmv|asf|flv|mpeg|mpg|m2v|ts|mts|m2ts|ogv|3gp|3g2|vob)$/i
+// `.ts`/`.mts` are left out on purpose: they are TypeScript far more often
+// than MPEG-TS video (the backend still spots real MPEG-TS by its bytes).
+const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|qt|webm|mkv|avi|wmv|asf|flv|mpeg|mpg|m2v|m2ts|ogv|3gp|3g2|vob)$/i
+const TYPESCRIPT_NAME_RE = /\.(?:ts|mts|cts)$/i
 
 export type AttachmentMediaMeta = {
   durationSeconds?: number
@@ -389,6 +392,12 @@ export function isVideoComposerFile(file: unknown): boolean {
   const candidate = asComposerFile(file)
   if (!candidate) return false
   const mime = attachmentMime(candidate)
+  // Browsers label TypeScript sources video/mp2t; only a large `.ts` (a real
+  // MPEG-TS recording) gets a player.
+  if (TYPESCRIPT_NAME_RE.test(attachmentDisplayName(candidate, ""))) {
+    const size = Number((candidate as { size?: unknown }).size)
+    return Number.isFinite(size) && size >= 16 * 1024 * 1024
+  }
   if (mime.startsWith("video/")) return true
   if (mime.startsWith("audio/") || mime.startsWith("image/")) return false
   return VIDEO_EXT_RE.test(attachmentDisplayName(candidate, ""))

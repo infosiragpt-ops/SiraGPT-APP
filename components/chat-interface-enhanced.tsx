@@ -175,6 +175,7 @@ import {
   filesToFileList,
   logIngest,
 } from "@/lib/attachment-ingest"
+import { describeAttachmentKind, type AttachmentFamily } from "@/lib/attachment-kinds"
 import { Badge } from "@/components/ui/badge"
 import {
   apiClient,
@@ -1909,9 +1910,19 @@ const getFileIcon = (file: any) => {
     case '7z':
       return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#eab308"); // yellow
     default:
-      return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#9ca3af"); // gray
+      // Every other format gets its family color (archives yellow, email
+      // sky, code slate, CAD/3D teal, design rose…) so a chip reads at a glance.
+      return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, ATTACHMENT_FAMILY_COLORS[describeAttachmentKind(file).family] || "#9ca3af");
   }
 };
+const ATTACHMENT_FAMILY_COLORS: Partial<Record<AttachmentFamily, string>> = {
+  pdf: "#dc2626", word: "#2563eb", spreadsheet: "#16a34a", presentation: "#ea580c",
+  text: "#6b7280", code: "#475569", data: "#0891b2", image: "#7c3aed", audio: "#db2777",
+  video: "#9333ea", archive: "#eab308", ebook: "#b45309", email: "#0284c7", calendar: "#0d9488",
+  contact: "#0d9488", subtitle: "#6b7280", cad: "#0f766e", model3d: "#0f766e", design: "#e11d48",
+  font: "#57534e", database: "#4f46e5", executable: "#334155", "disk-image": "#334155",
+};
+
 // Human-readable byte size for attachment chips ("1,5 MB").
 const formatChipBytes = (bytes: number | null | undefined): string => {
   if (!Number.isFinite(bytes as number) || (bytes as number) <= 0) return "";
@@ -2302,8 +2313,22 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                         {isAudio && formatChipDuration(file.mediaMeta?.durationSeconds) && (
                           <span className="tabular-nums">{formatChipDuration(file.mediaMeta?.durationSeconds)}</span>
                         )}
+                        {!isAudio && (
+                          <span data-testid="composer-chip-kind">{describeAttachmentKind(file).label}</span>
+                        )}
                         {formatChipBytes(file.size) && (
-                          <span className="tabular-nums">{formatChipBytes(file.size)}</span>
+                          <>
+                            {!isAudio && <span aria-hidden>·</span>}
+                            <span className="tabular-nums">{formatChipBytes(file.size)}</span>
+                          </>
+                        )}
+                        {!describeAttachmentKind(file).readable && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span title="Se adjunta completo; SiraGPT conoce su nombre, tipo y tamaño, pero no extrae texto de este formato.">
+                              sin vista de texto
+                            </span>
+                          </>
                         )}
                       </span>
                     )}
@@ -14043,7 +14068,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Office, imágenes y datos; hasta 50 audios o vídeos por mensaje. 100 MB por documento; audio y video hasta 10 GB (unas 10 horas por archivo). Se conserva el orden en que los sueltes.
+              Cualquier formato: PDF, Office, código, datos, correos, comprimidos, CAD, imágenes, audio y video; hasta 50 audios o vídeos por mensaje. Hasta 1 GB por documento; audio y video hasta 10 GB (unas 10 horas por archivo). Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>

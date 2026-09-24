@@ -194,8 +194,9 @@ async function materializeMedia(ref, { signal, storage = require('./object-stora
 
 async function validateMedia(local, row) {
   const { fileTypeFromFile } = await import('file-type');
-  const detected = await fileTypeFromFile(local.path);
-  const { validateUploadPolicy } = require('./upload-security-policy');
+  const { validateUploadPolicy, detectTransportStream } = require('./upload-security-policy');
+  const detected = await fileTypeFromFile(local.path)
+    || (await detectTransportStream(local.path) ? { mime: 'video/mp2t' } : null);
   const policy = validateUploadPolicy({ originalName: row.originalName, declaredMime: row.mimeType,
     detectedMime: detected?.mime || row.mimeType, detectionSource: detected ? 'magic-bytes' : 'fallback', size: row.size });
   if (!policy.ok) throw failure(policy.code || 'invalid_media', policy.message || 'Archivo multimedia no válido.');
