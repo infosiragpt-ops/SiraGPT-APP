@@ -100,3 +100,16 @@ test("generated document preview stays on the loading gate until the object is r
     /Generando vista previa/,
   )
 })
+
+test("plain-text artifacts (transcripciones .txt) open in the code-style text viewer, not the unsupported card", () => {
+  const source = readFileSync(generatedPreviewSourcePath, "utf8")
+
+  assert.match(source, /\| "text" \| "unknown"/, "PreviewFormat must know plain-text files")
+  assert.match(source, /TEXT_PREVIEW_EXTENSIONS = \[\s*"txt"/, ".txt must map to the text viewer")
+  assert.match(source, /mime\.startsWith\("text\/"\)[^\n]*return "text"/, "text/plain data URLs must use the text viewer")
+  assert.match(source, /if \(format === "text"\) \{[\s\S]{0,400}fetchPreviewAsset\(previewUrl\)/,
+    "text previews must load bytes through the authenticated asset fetch")
+  assert.match(source, /state\.kind === "text" && \(\s*<TextFilePreview/)
+  assert.match(source, /function TextFilePreview\([\s\S]*font-mono[\s\S]*index \+ 1/,
+    "the text viewer renders a monospace body with line numbers")
+})

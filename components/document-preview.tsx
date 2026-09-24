@@ -81,7 +81,7 @@ interface DocumentPreviewProps {
   onClose: () => void
 }
 
-type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "html" | "unknown"
+type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "html" | "text" | "unknown"
 
 type State =
   | { kind: "loading"; message?: string }
@@ -91,6 +91,7 @@ type State =
   | { kind: "docxNative"; buffer: ArrayBuffer }
   | { kind: "html"; html: string; warnings: string[] }
   | { kind: "iframeHtml"; html: string }
+  | { kind: "text"; text: string; truncated: boolean }
   | { kind: "unsupported"; message: string }
   | { kind: "error"; message: string }
 
@@ -121,8 +122,21 @@ const FORMAT_EXTENSION: Record<PreviewFormat, string> = {
   svg: "svg",
   pptx: "pptx",
   html: "html",
+  text: "txt",
   unknown: "bin",
 }
+
+// Plain-text artifacts (transcripciones, logs, código, subtítulos) render in a
+// code-style viewer with line numbers instead of the "no soportado" dead end.
+const TEXT_PREVIEW_EXTENSIONS = [
+  "txt", "text", "md", "markdown", "log", "json", "jsonl", "ndjson", "srt", "vtt",
+  "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "xml", "tsv",
+  "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "java", "kt",
+  "c", "h", "cpp", "hpp", "cs", "php", "swift", "sh", "bash", "zsh", "sql", "css", "scss",
+]
+const TEXT_PREVIEW_EXTENSION_RE = new RegExp(`\\.(${TEXT_PREVIEW_EXTENSIONS.join("|")})$`)
+// Keep the DOM light for huge files; the full file is still one click away.
+const MAX_TEXT_PREVIEW_CHARS = 2_000_000
 
 function inferFormat(url: string): PreviewFormat {
   const dataMatch = /^data:([^;,]+)/i.exec(url)
@@ -135,7 +149,8 @@ function inferFormat(url: string): PreviewFormat {
     if (mime.includes("presentationml.presentation")) return "pptx"
     if (mime.includes("svg")) return "svg"
     if (mime.includes("html")) return "html"
-    if (mime.includes("csv") || mime.includes("plain")) return "csv"
+    if (mime.includes("csv")) return "csv"
+    if (mime.startsWith("text/") || mime.includes("json") || mime.includes("xml") || mime.includes("yaml")) return "text"
     return "unknown"
   }
 
@@ -148,6 +163,7 @@ function inferFormat(url: string): PreviewFormat {
   if (clean.endsWith(".svg")) return "svg"
   if (clean.endsWith(".pptx")) return "pptx"
   if (clean.endsWith(".html") || clean.endsWith(".htm")) return "html"
+  if (TEXT_PREVIEW_EXTENSION_RE.test(clean)) return "text"
   return "unknown"
 }
 
@@ -466,7 +482,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
-  const canUsePreviewControls = ["svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const canUsePreviewControls = ["svg", "docxNative", "html", "iframeHtml", "text"].includes(state.kind)
   const pdfPreviewAttachment = React.useMemo<AttachmentLike | null>(() => (
     state.kind === "pdfBlob"
       ? {
@@ -802,6 +818,28 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       }
     }
 
+    if (format === "text") {
+      let cancelled = false
+      setState({ kind: "loading" })
+      ;(async () => {
+        try {
+          const resp = await fetchPreviewAsset(previewUrl)
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          const raw = (await resp.text()).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")
+          if (cancelled) return
+          const truncated = raw.length > MAX_TEXT_PREVIEW_CHARS
+          setState({ kind: "text", text: truncated ? raw.slice(0, MAX_TEXT_PREVIEW_CHARS) : raw, truncated })
+        } catch (err: unknown) {
+          if (cancelled) return
+          const message = err instanceof Error ? err.message : "No se pudo abrir la vista previa."
+          setState({ kind: "error", message })
+        }
+      })()
+      return () => {
+        cancelled = true
+      }
+    }
+
     if (!["docx", "doc", "xlsx", "csv", "pptx"].includes(format)) {
       setState({ kind: "unsupported", message: "Formato no soportado para previsualización." })
       return
@@ -1118,6 +1156,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         )}
 
+        {state.kind === "text" && (
+          <TextFilePreview text={state.text} truncated={state.truncated} filename={filename} style={previewZoomStyle} />
+        )}
+
         {(state.kind === "unsupported" || state.kind === "error") && (
           <div className="flex h-full items-center justify-center p-6">
             <div className="max-w-md rounded-lg border border-border bg-background p-6 text-center shadow-sm">
@@ -1173,4 +1215,60 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return createPortal(shell, document.body)
   }
   return shell
+}
+
+function TextFilePreview({
+  text,
+  truncated,
+  filename,
+  style,
+}: {
+  text: string
+  truncated: boolean
+  filename: string
+  style: React.CSSProperties
+}) {
+  const lines = React.useMemo(() => {
+    const split = text.split("\n")
+    if (split.length > 1 && split[split.length - 1] === "") split.pop()
+    return split
+  }, [text])
+  const gutterCh = String(lines.length).length + 1
+
+  return (
+    <div className="px-3 pb-6 pt-4 md:px-5 md:pt-6" style={style} data-testid="document-preview-text">
+      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 shadow-sm dark:border-white/10 dark:bg-zinc-900">
+        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-white/10 dark:text-zinc-400">
+          <span className="truncate font-mono">{filename}</span>
+          <span className="shrink-0 tabular-nums">
+            {lines.length.toLocaleString("es")} {lines.length === 1 ? "línea" : "líneas"}
+          </span>
+        </div>
+        <pre
+          aria-label={`Contenido de ${filename}`}
+          className="m-0 overflow-x-auto py-3 font-mono text-[13px] leading-6 text-zinc-800 dark:text-zinc-100"
+        >
+          <code className="block">
+            {lines.map((line, index) => (
+              <span key={index} className="flex hover:bg-zinc-200/50 dark:hover:bg-white/5">
+                <span
+                  aria-hidden="true"
+                  className="sticky left-0 shrink-0 select-none bg-zinc-50 pr-4 text-right text-zinc-400 dark:bg-zinc-900 dark:text-zinc-500"
+                  style={{ width: `${gutterCh + 2}ch`, paddingLeft: "1ch" }}
+                >
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words pr-4">{line || "\u00A0"}</span>
+              </span>
+            ))}
+          </code>
+        </pre>
+        {truncated && (
+          <p className="border-t border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-white/10 dark:text-zinc-400">
+            Vista previa recortada. Descarga el archivo para verlo completo.
+          </p>
+        )}
+      </div>
+    </div>
+  )
 }
