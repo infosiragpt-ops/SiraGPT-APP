@@ -113,3 +113,17 @@ test("plain-text artifacts (transcripciones .txt) open in the code-style text vi
   assert.match(source, /function TextFilePreview\([\s\S]*font-mono[\s\S]*index \+ 1/,
     "the text viewer renders a monospace body with line numbers")
 })
+
+test("preview header keeps title, controls and actions on one row, with a zoom dropdown and copy for text", () => {
+  const source = readFileSync(generatedPreviewSourcePath, "utf8")
+
+  assert.match(source, /INLINE_TOOLBAR_MIN_WIDTH = 720/)
+  assert.match(source, /grid grid-cols-\[minmax\(0,1fr\)_auto_minmax\(0,1fr\)\]/,
+    "wide panes center the controls between title and actions")
+  assert.match(source, /\{inlineToolbar && toolbarSlot\}/)
+  assert.match(source, /data-testid="ppt-zoom-select"[\s\S]{0,800}<ChevronDown/, "zoom is a real dropdown, not a bare select")
+  assert.doesNotMatch(source, /<select\s+data-testid="ppt-zoom-select"/)
+  assert.match(source, /state\.kind !== "text" && \(<>/, "text files have no page navigation")
+  assert.match(source, /data-testid="ppt-btn-copy"/)
+  assert.match(source, /data-testid="document-preview-text-copy"/)
+})

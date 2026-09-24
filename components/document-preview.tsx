@@ -3,13 +3,14 @@
 import React from "react"
 import { createPortal } from "react-dom"
 import dynamic from "next/dynamic"
-import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
+import { X, AlertCircle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
@@ -98,8 +99,11 @@ type State =
 const MIN_PREVIEW_ZOOM = 0.25
 const MAX_PREVIEW_ZOOM = 2
 const PREVIEW_ZOOM_STEP = 0.1
-// Presets del selector de zoom del encabezado (25/50/100/150/200%).
-const ZOOM_PRESETS = [0.25, 0.5, 1, 1.5, 2] as const
+// Presets del menú desplegable de zoom del encabezado.
+const ZOOM_PRESETS = [0.25, 0.5, 0.75, 0.9, 1, 1.25, 1.5, 2] as const
+// Wide panes keep title, controls and actions on ONE row; narrower panes
+// drop the controls to a second centered row so nothing gets squeezed.
+const INLINE_TOOLBAR_MIN_WIDTH = 720
 
 const previewHeaderClass =
   "border-b border-white/45 bg-white/72 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-black/25"
@@ -111,7 +115,7 @@ const previewControlShellClass =
   "rounded-full border border-white/65 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_18px_44px_rgba(15,23,42,0.16)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/56 dark:border-white/10 dark:bg-zinc-950/62 dark:shadow-black/30"
 
 const previewMetricClass =
-  "min-w-[4.6rem] rounded-full border border-white/60 bg-white/68 px-3 py-1.5 text-center text-xs font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
+  "inline-flex h-8 min-w-[4.6rem] items-center justify-center gap-1 rounded-full border border-white/60 bg-white/68 px-3 py-1.5 text-center text-xs font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
 
 const FORMAT_EXTENSION: Record<PreviewFormat, string> = {
   pdf: "pdf",
@@ -603,6 +607,36 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     }
   }, [downloadUrl, filename, isDownloading])
 
+  const [textCopied, setTextCopied] = React.useState(false)
+  const copyText = React.useCallback(async () => {
+    if (state.kind !== "text") return
+    const ok = await copyPlainText(state.text)
+    if (!ok) {
+      toast.error("No se pudo copiar el texto")
+      return
+    }
+    setTextCopied(true)
+    toast.success("Texto copiado")
+  }, [state])
+  React.useEffect(() => {
+    if (!textCopied) return
+    const timer = window.setTimeout(() => setTextCopied(false), 2000)
+    return () => window.clearTimeout(timer)
+  }, [textCopied])
+
+  const headerRef = React.useRef<HTMLDivElement | null>(null)
+  const [headerWide, setHeaderWide] = React.useState(false)
+  React.useEffect(() => {
+    const el = headerRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const measure = () => setHeaderWide(el.clientWidth >= INLINE_TOOLBAR_MIN_WIDTH)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  const inlineToolbar = headerWide && !isOverlay
+
   const openInNewTab = React.useCallback(() => {
     if (typeof window === "undefined") return
     window.open(downloadUrl, "_blank", "noopener,noreferrer")
@@ -827,8 +861,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
           const raw = (await resp.text()).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n")
           if (cancelled) return
-          const truncated = raw.length > MAX_TEXT_PREVIEW_CHARS
-          setState({ kind: "text", text: truncated ? raw.slice(0, MAX_TEXT_PREVIEW_CHARS) : raw, truncated })
+          setState({ kind: "text", text: raw, truncated: raw.length > MAX_TEXT_PREVIEW_CHARS })
         } catch (err: unknown) {
           if (cancelled) return
           const message = err instanceof Error ? err.message : "No se pudo abrir la vista previa."
@@ -953,11 +986,12 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const previewControls = canUsePreviewControls ? (
         <nav aria-label="Navegación y zoom del documento" className="flex max-w-full justify-center">
           <div className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", previewControlShellClass)}>
+            {state.kind !== "text" && (<>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8", previewIconButtonClass)}
+              className={cn(previewIconButtonClass, "h-8 w-8")}
               data-testid="ppt-nav-prev"
               onClick={() => goToPreviewPage(activePage - 1)}
               disabled={activePage <= 1}
@@ -973,7 +1007,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
               type="button"
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8", previewIconButtonClass)}
+              className={cn(previewIconButtonClass, "h-8 w-8")}
               data-testid="ppt-nav-next"
               onClick={() => goToPreviewPage(activePage + 1)}
               disabled={activePage >= pageCount}
@@ -984,12 +1018,13 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             </Button>
 
             <span className="mx-1 h-6 w-px bg-zinc-300/70 dark:bg-white/10" aria-hidden="true" />
+            </>)}
 
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8", previewIconButtonClass)}
+              className={cn(previewIconButtonClass, "h-8 w-8")}
               onClick={() => setBoundedZoom(zoom - PREVIEW_ZOOM_STEP)}
               disabled={zoom <= MIN_PREVIEW_ZOOM}
               title="Alejar"
@@ -997,26 +1032,39 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             >
               <Minus className="h-4 w-4" />
             </Button>
-            <select
-              data-testid="ppt-zoom-select"
-              aria-label="Nivel de zoom"
-              title="Nivel de zoom"
-              value={String(zoom)}
-              onChange={(e) => setBoundedZoom(Number(e.target.value))}
-              className={cn(previewMetricClass, "h-9 cursor-pointer appearance-none px-2")}
-            >
-              {!ZOOM_PRESETS.some(preset => preset === zoom) && (
-                <option value={String(zoom)}>{Math.round(zoom * 100)}%</option>
-              )}
-              {ZOOM_PRESETS.map((preset) => (
-                <option key={preset} value={String(preset)}>{Math.round(preset * 100)}%</option>
-              ))}
-            </select>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  data-testid="ppt-zoom-select"
+                  aria-label="Nivel de zoom"
+                  title="Nivel de zoom"
+                  className={cn(previewMetricClass, "cursor-pointer px-2.5 transition-colors hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/16")}
+                >
+                  <span data-testid="ppt-zoom-value">{Math.round(zoom * 100)}%</span>
+                  <ChevronDown className="h-3.5 w-3.5 opacity-60" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="min-w-36">
+                {[...ZOOM_PRESETS].reverse().map((preset) => (
+                  <DropdownMenuItem
+                    key={preset}
+                    onSelect={() => setBoundedZoom(preset)}
+                    className="justify-between tabular-nums"
+                  >
+                    {Math.round(preset * 100)}%
+                    {Math.abs(zoom - preset) < 0.001 && <Check className="h-4 w-4" aria-hidden="true" />}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setBoundedZoom(1)}>Tamaño real (100%)</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8", previewIconButtonClass)}
+              className={cn(previewIconButtonClass, "h-8 w-8")}
               onClick={() => setBoundedZoom(zoom + PREVIEW_ZOOM_STEP)}
               disabled={zoom >= MAX_PREVIEW_ZOOM}
               title="Acercar"
@@ -1028,9 +1076,26 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         </nav>
   ) : null
 
+  // The real PDF renderer portals its controls here, preserving its own
+  // page/zoom state. On wide panes the slot sits in the middle column of the
+  // title row so title, controls and actions share one height.
+  const toolbarSlot = (
+    <div
+      ref={setToolbarContainer}
+      data-testid="document-preview-toolbar"
+      className={cn("flex min-w-0 justify-center empty:hidden", !inlineToolbar && "px-2 pb-2")}
+    >
+      {previewControls}
+    </div>
+  )
+
   const header = (
-    <div data-testid="document-preview-header" className={cn("sticky top-0 z-30 w-full shrink-0", previewHeaderClass)}>
-      <div className={cn("flex min-h-16 min-w-0 items-center gap-2 px-3", isOverlay && "min-h-12 px-1 pt-[env(safe-area-inset-top)]")}>
+    <div ref={headerRef} data-testid="document-preview-header" data-toolbar-layout={inlineToolbar ? "inline" : "stacked"} className={cn("sticky top-0 z-30 w-full shrink-0", previewHeaderClass)}>
+      <div className={cn(
+        "min-h-16 min-w-0 items-center gap-2 px-3",
+        inlineToolbar ? "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]" : "flex",
+        isOverlay && "min-h-12 px-1 pt-[env(safe-area-inset-top)]",
+      )}>
         {isOverlay && (
           <Button variant="ghost" size="icon" onClick={onClose} className="h-11 w-11 shrink-0 rounded-full" title="Cerrar" aria-label="Cerrar previsualización">
             <X className="h-5 w-5" />
@@ -1043,6 +1108,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             {!isOverlay && <span className="mt-0.5 block text-xs text-muted-foreground">{formatLabel}</span>}
           </div>
         </div>
+        {inlineToolbar && toolbarSlot}
         {isOverlay ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -1054,13 +1120,23 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
               <DropdownMenuItem onSelect={download} disabled={isDownloading}>
                 <Download className="mr-2 h-4 w-4" />{isDownloading ? "Descargando…" : "Descargar"}
               </DropdownMenuItem>
+              {state.kind === "text" && (
+                <DropdownMenuItem onSelect={() => { void copyText() }}>
+                  <Copy className="mr-2 h-4 w-4" />Copiar texto
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={openInNewTab}>
                 <ExternalLink className="mr-2 h-4 w-4" />Abrir en una pestaña
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center justify-end gap-1">
+            {state.kind === "text" && (
+              <Button variant="ghost" size="icon" onClick={copyText} data-testid="ppt-btn-copy" className={previewIconButtonClass} title={textCopied ? "Copiado" : "Copiar texto"} aria-label={textCopied ? "Texto copiado" : "Copiar texto"}>
+                {textCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={download} disabled={isDownloading} data-testid="ppt-btn-download" className={previewIconButtonClass} title={isDownloading ? "Descargando" : "Descargar"} aria-label={isDownloading ? "Descargando" : "Descargar"}>
               {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
             </Button>
@@ -1073,11 +1149,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         )}
       </div>
-      {/* The real PDF renderer portals its controls here, preserving its own
-          page/zoom state. Native previews use this same header on mobile too. */}
-      <div ref={setToolbarContainer} data-testid="document-preview-toolbar" className="flex min-w-0 justify-center px-2 pb-2 empty:hidden">
-        {previewControls}
-      </div>
+      {!inlineToolbar && toolbarSlot}
     </div>
   )
 
@@ -1157,7 +1229,14 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
 
         {state.kind === "text" && (
-          <TextFilePreview text={state.text} truncated={state.truncated} filename={filename} style={previewZoomStyle} />
+          <TextFilePreview
+            text={state.text}
+            truncated={state.truncated}
+            filename={filename}
+            style={previewZoomStyle}
+            copied={textCopied}
+            onCopy={() => { void copyText() }}
+          />
         )}
 
         {(state.kind === "unsupported" || state.kind === "error") && (
@@ -1217,32 +1296,74 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   return shell
 }
 
+async function copyPlainText(value: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+  } catch {
+    // fall through to the textarea fallback (Safari without user gesture, iframes)
+  }
+  try {
+    const area = document.createElement("textarea")
+    area.value = value
+    area.setAttribute("readonly", "")
+    area.style.position = "fixed"
+    area.style.opacity = "0"
+    document.body.appendChild(area)
+    area.select()
+    const ok = document.execCommand("copy")
+    area.remove()
+    return ok
+  } catch {
+    return false
+  }
+}
+
 function TextFilePreview({
   text,
   truncated,
   filename,
   style,
+  copied,
+  onCopy,
 }: {
   text: string
   truncated: boolean
   filename: string
   style: React.CSSProperties
+  copied: boolean
+  onCopy: () => void
 }) {
   const lines = React.useMemo(() => {
-    const split = text.split("\n")
+    const visible = truncated ? text.slice(0, MAX_TEXT_PREVIEW_CHARS) : text
+    const split = visible.split("\n")
     if (split.length > 1 && split[split.length - 1] === "") split.pop()
     return split
-  }, [text])
+  }, [text, truncated])
   const gutterCh = String(lines.length).length + 1
 
   return (
     <div className="px-3 pb-6 pt-4 md:px-5 md:pt-6" style={style} data-testid="document-preview-text">
       <div className="overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50 shadow-sm dark:border-white/10 dark:bg-zinc-900">
-        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2 text-xs text-zinc-500 dark:border-white/10 dark:text-zinc-400">
-          <span className="truncate font-mono">{filename}</span>
-          <span className="shrink-0 tabular-nums">
-            {lines.length.toLocaleString("es")} {lines.length === 1 ? "línea" : "líneas"}
-          </span>
+        <div className="flex h-11 items-center justify-between gap-3 border-b border-zinc-200 pl-4 pr-2 text-xs text-zinc-500 dark:border-white/10 dark:text-zinc-400">
+          <span className="min-w-0 truncate font-mono">{filename}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="tabular-nums">
+              {lines.length.toLocaleString("es")} {lines.length === 1 ? "línea" : "líneas"}
+            </span>
+            <button
+              type="button"
+              onClick={onCopy}
+              data-testid="document-preview-text-copy"
+              aria-label={copied ? "Texto copiado" : "Copiar todo el texto"}
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copiado" : "Copiar"}
+            </button>
+          </div>
         </div>
         <pre
           aria-label={`Contenido de ${filename}`}
