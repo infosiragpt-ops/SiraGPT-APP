@@ -58,6 +58,7 @@ function buildAgentMetadata(run, { model = null } = {}) {
       status: step.status,
       ...(step.durationMs != null ? { durationMs: step.durationMs } : {}),
       isError: Boolean(step.isError),
+      ...(step.search ? { search: step.search } : {}),
     })),
     ...(run.steps.length > MAX_METADATA_STEPS ? { stepsOmitted: run.steps.length - MAX_METADATA_STEPS } : {}),
   };

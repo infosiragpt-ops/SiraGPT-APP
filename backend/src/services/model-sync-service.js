@@ -863,6 +863,17 @@ class ModelSyncService {
       return this.validateMusicProviderKey(conn);
     }
 
+    // Web search engines (Búsqueda rápida) are not model providers: their key
+    // feeds agents/web-search/fast-search.js and there is no catalog to import.
+    if (['perplexity', 'brave', 'tavily', 'exa'].includes(providerKey)) {
+      const hasKey = Boolean(cleanEnvValue(conn.apiKey || ''));
+      return {
+        ok: hasKey, status: 0, error: hasKey ? null : 'missing_api_key',
+        created: 0, updated: 0, errors: 0, count: 0, models: [],
+        note: 'search_provider_no_catalog',
+      };
+    }
+
     if (providerKey === 'fal') {
       const apiKey = cleanEnvValue(conn.apiKey || '');
       if (!apiKey) return { ok: false, status: 0, error: 'missing_api_key', created: 0, updated: 0, errors: 0, count: 0, models: [] };

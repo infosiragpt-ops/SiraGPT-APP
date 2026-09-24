@@ -114,8 +114,26 @@ async function freeTierSearch(query, { maxResults = 30, locale, freeSearch, incl
   return { provider: out?.provider ? `free:${out.provider}` : 'free', configured: true, results };
 }
 
+async function perplexitySearch(query, { maxResults = 5, locale, freshness, fetchImpl } = {}) {
+  // eslint-disable-next-line global-require
+  const perplexity = require('../services/agents/web-search/providers/perplexity');
+  if (!perplexity.enabled) return { provider: 'perplexity', configured: false, results: [] };
+  const hits = await perplexity.search(query, { maxResults, locale, freshness, ...(fetchImpl ? { fetchImpl } : {}) });
+  return {
+    provider: 'perplexity',
+    configured: true,
+    results: hits.map((r) => ({ title: r.title, url: r.url, content: r.snippet })),
+  };
+}
+
 async function searchFreshContext(query, opts = {}) {
   const errors = [];
+
+  // Perplexity Search leads when configured: single-call, agent-grade latency.
+  try {
+    const pplx = await perplexitySearch(query, opts);
+    if (pplx.results?.length) return pplx;
+  } catch (err) { errors.push({ provider: 'perplexity', message: err.message }); }
 
   try {
     const primary = await tavilySearch(query, opts);
@@ -158,6 +176,7 @@ async function searchFreshContext(query, opts = {}) {
 function listWebSearchProviders(env = process.env) {
   return {
     duckduckgo: true,
+    perplexity: Boolean(env.PERPLEXITY_API_KEY || env.PPLX_API_KEY),
     tavily: Boolean(env.TAVILY_API_KEY),
     exa: Boolean(env.EXA_API_KEY),
     firecrawl: Boolean(env.FIRECRAWL_API_KEY),
@@ -165,4 +184,4 @@ function listWebSearchProviders(env = process.env) {
   };
 }
 
-module.exports = { exaSearch, firecrawlSearch, listWebSearchProviders, needsFreshWebContext, searchFreshContext, searxngSearch, tavilySearch };
+module.exports = { exaSearch, perplexitySearch, firecrawlSearch, listWebSearchProviders, needsFreshWebContext, searchFreshContext, searxngSearch, tavilySearch };

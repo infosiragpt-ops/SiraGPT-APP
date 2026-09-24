@@ -159,6 +159,7 @@ const ADMIN_ROUTE_POLICIES = Object.freeze({
   'GET /api/admin/system-summary': policy('admin.system.read', true),
   'GET /api/admin/system-snapshot': policy('admin.system.read', true),
   'GET /api/admin/health/services': policy('admin.system.read'),
+  'GET /api/admin/health/web-search': policy('admin.system.read'),
   'GET /api/admin/backups': policy('admin.system.read'),
   'GET /api/admin/orgs/idle': policy('admin.users.read', true),
   'GET /api/admin/users/idle': policy('admin.users.read', true),
