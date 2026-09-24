@@ -3,40 +3,61 @@ import { describe, it } from "node:test"
 import fs from "node:fs"
 import path from "node:path"
 
-const chatInterface = fs.readFileSync(
-  path.join(process.cwd(), "components", "chat-interface-enhanced.tsx"),
-  "utf8",
-)
-const effortMenu = fs.readFileSync(
-  path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx"),
-  "utf8",
-)
-const contextMenu = fs.readFileSync(
-  path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx"),
-  "utf8",
-)
-const globals = fs.readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8")
-const orchestrator = fs.readFileSync(
-  path.join(process.cwd(), "backend", "src", "services", "reasoning-orchestrator.js"),
-  "utf8",
-)
+const read = (...parts: string[]) => fs.readFileSync(path.join(process.cwd(), ...parts), "utf8")
 
-describe("composer effort picker source contract", () => {
-  it("offers only levels the backend compute planner accepts", () => {
-    const levelsBlock = effortMenu.match(/export const EFFORT_LEVELS = \[([\s\S]*?)\] as const/)
-    assert.ok(levelsBlock, "EFFORT_LEVELS must exist")
-    const values = [...levelsBlock![1].matchAll(/value: "([^"]+)"/g)].map((m) => m[1])
-    assert.deepEqual(values, ["Bajo", "Medio", "Extra", "Max"])
+const chatInterface = read("components", "chat-interface-enhanced.tsx")
+const effortLib = read("lib", "chat", "composer-effort.ts")
+const submenu = read("components", "chat", "composer-effort-submenu.tsx")
+const fastToggle = read("components", "chat", "composer-fast-mode-toggle.tsx")
+const globals = read("app", "globals.css")
+const orchestrator = read("backend", "src", "services", "reasoning-orchestrator.js")
 
+describe("composer effort (foot of the model menu) source contract", () => {
+  it("offers five levels, all normalized by the backend compute planner", () => {
+    const values = [...effortLib.matchAll(/\{ value: "([^"]+)", label: "([^"]+)"/g)].map((m) => [m[1], m[2]])
+    assert.deepEqual(values, [
+      ["Bajo", "Bajo"],
+      ["Medio", "Medio"],
+      ["Alto", "Alto"],
+      ["Extra", "Extra"],
+      ["Max", "Máx"],
+    ])
     const aliasBlock = orchestrator.match(/const EFFORT_ALIASES = Object\.freeze\(\{([\s\S]*?)\}\)/)
     assert.ok(aliasBlock, "backend EFFORT_ALIASES must exist")
-    for (const value of values) {
+    for (const [value] of values) {
       assert.match(
         aliasBlock![1],
         new RegExp(`(^|[\\s{,'])${value.toLowerCase()}'?:`, "i"),
-        `backend must normalize "${value}" — a slider stop the planner ignores is a lie`,
+        `backend must normalize "${value}" — a level the planner ignores is a lie`,
       )
     }
+    assert.match(orchestrator, /extra: 'xhigh'/, "Extra sits between Alto and Máx")
+    assert.match(orchestrator, /function thinkingLevelForEffort\(level\)/, "effort also drives the provider knob")
+  })
+
+  it("marks Medio as the default and Máx as heavier usage, with the approved help copy", () => {
+    assert.match(effortLib, /value: "Medio", label: "Medio", isDefault: true/)
+    assert.match(effortLib, /value: "Max", label: "Máx", heavyUsage: true/)
+    assert.ok(
+      effortLib.includes("Un mayor esfuerzo significa respuestas más completas, pero lleva más tiempo y consume tus límites más rápido."),
+    )
+    assert.match(submenu, /Predeterminado/)
+    assert.match(submenu, /Mayor uso/)
+    assert.match(submenu, /role="menuitemradio"/)
+    assert.match(submenu, /aria-checked=\{isActive\}/)
+    assert.match(submenu, /<Check/, "the active level carries a check, never color alone")
+  })
+
+  it("renders the effort row at the foot of the model menu, not on the toolbar", () => {
+    assert.match(
+      chatInterface,
+      /<div className="model-picker-footer">\s*<ComposerEffortSubmenu\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
+    )
+    assert.match(chatInterface, /modelSupportsComposerEffort\(selectedModelData\)/, "decision/media models hide the row")
+    assert.doesNotMatch(chatInterface, /<ComposerEffortMenu/, "the old toolbar slider popover is gone")
+    assert.doesNotMatch(globals, /\.effort-track \{|\.effort-dither-core \{/, "no stale slider CSS")
+    assert.match(submenu, /DropdownMenuSubTrigger/)
+    assert.match(submenu, /data-testid="composer-effort-trigger"/)
   })
 
   it("keeps the memoized selector from freezing effort updates", () => {
@@ -44,121 +65,27 @@ describe("composer effort picker source contract", () => {
       /function areNavbarModelSelectorPropsEqual\(prev: any, next: any\) \{([\s\S]*?)\n\}/,
     )
     assert.ok(comparator, "comparator must exist")
-    assert.match(
-      comparator![1],
-      /prev\.selectedEffort === next\.selectedEffort/,
-      "memo must compare selectedEffort or the slider renders stale state",
-    )
+    assert.match(comparator![1], /prev\.selectedEffort === next\.selectedEffort/)
     assert.match(comparator![1], /prev\.setSelectedEffort === next\.setSelectedEffort/)
-  })
-
-  it("renders the effort menu on the composer toolbar and wires the context state", () => {
-    assert.match(
-      chatInterface,
-      /<ComposerEffortMenu\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
-      "the composer toolbar must render the effort menu",
-    )
     assert.match(
       chatInterface,
       /<NavbarModelSelector[\s\S]{0,600}selectedEffort=\{selectedEffort\}[\s\S]{0,80}setSelectedEffort=\{setSelectedEffort\}/,
-      "the composer call site must pass both effort props",
     )
   })
 
-  it("keeps context and effort as separate one-trigger popovers", () => {
-    assert.match(
-      chatInterface,
-      /<ComposerContextMenu\s+messages=\{currentChat\?\.messages \|\| \[\]\}\s+selectedModel=\{currentChat\?\.model \|\| selectedModel\}\s+availableModels=\{availableModels\}/,
-      "the context popover must receive the active chat and selected model",
-    )
-    assert.equal((contextMenu.match(/<PopoverTrigger asChild>/g) || []).length, 1)
-    assert.equal((effortMenu.match(/<PopoverTrigger asChild>/g) || []).length, 1)
-    assert.match(contextMenu, /data-testid="composer-context-trigger"/)
-    assert.match(effortMenu, /data-testid="composer-effort-chip"/)
-    assert.doesNotMatch(effortMenu, /composer-context-trigger|composer-effort-ring/)
+  it("leaves the lightning as a plain fast-mode switch", () => {
+    assert.match(chatInterface, /\{!isMediaToolActive && <ComposerFastModeToggle \/>\}/)
+    assert.match(fastToggle, /aria-pressed=\{fast\}/)
+    assert.match(fastToggle, /writeComposerFastMode\(next\)/)
+    assert.doesNotMatch(fastToggle, /Popover/, "one click toggles; no popover")
   })
 
-  it("uses the exact four labels and copy from the approved effort reference", () => {
-    const labels = [...effortMenu.matchAll(/value: "([^"]+)", label: "([^"]+)"/g)]
-      .map((match) => [match[1], match[2]])
-    assert.deepEqual(labels, [
-      ["Bajo", "Low"],
-      ["Medio", "Medium"],
-      ["Extra", "High"],
-      ["Max", "Extra high"],
-    ])
-    for (const copy of ["Esfuerzo", "Más rápido", "Más inteligente", "Modo rápido", "Respuestas más rápidas, mayor uso de los límites."]) {
-      assert.ok(effortMenu.includes(copy), `missing approved effort copy: ${copy}`)
-    }
-    assert.doesNotMatch(effortMenu, /effort-caption|caption:/, "the compact reference has no descriptive caption")
-    assert.match(effortMenu, /<span className="effort-title" id=\{titleId\}>Esfuerzo<\/span>/, "the title labels the slider")
-    assert.match(effortMenu, /<span className="effort-level" id=\{valueId\}>\{active\.label\}<\/span>/, "the header names the level in text — never color alone (WCAG 1.4.1)")
-  })
-
-  it("supports real dragging, not just stop clicks", () => {
-    const section = effortMenu.match(
-      /export function EffortSection\(([\s\S]*?)\nexport function ComposerEffortMenu/,
-    )
-    assert.ok(section, "EffortSection must exist")
-    assert.match(section![1], /onPointerDown=/, "the track must start drags on pointer down")
-    assert.match(section![1], /onPointerMove=/, "the track must follow pointer moves")
-    assert.match(
-      section![1],
-      /setPointerCapture/,
-      "pointer capture keeps the drag alive when the cursor leaves the track"
-    )
-    assert.match(
-      section![1],
-      /indexFromPointer/,
-      "any x on the track must map to the nearest stop"
-    )
-    assert.match(section![1], /aria-labelledby=\{\s*`\$\{titleId\} \$\{valueId\}`\s*\}/, "title + value name the slider, never a bare number")
-    assert.match(section![1], /aria-orientation="horizontal"/)
-    assert.match(section![1], /PageUp/, "PageUp jumps forward")
-    assert.match(section![1], /PageDown/, "PageDown jumps back")
-    assert.match(section![1], /className="effort-ticks"/, "discrete step marks under the rail")
-    assert.match(section![1], /className="effort-bubble"/, "value bubble follows the active stop while dragging")
-    assert.match(section![1], /data-dragging=\{dragging \? "true" : undefined\}/)
-    assert.match(
-      globals,
-      /\.effort-track \{[\s\S]{0,700}overflow: visible/,
-      "the outer hit target must leave the focus ring and value bubble visible",
-    )
-    for (const rail of ["effort-track-line", "effort-track-fill"]) {
-      assert.match(
-        globals,
-        new RegExp(`\\.${rail} \\{[^}]*overflow: hidden`),
-        "the inner rail must clip its decorative fill",
-      )
-    }
-    assert.match(effortMenu, /data-effort=\{String\(activeIndex\)\}/)
-    assert.match(effortMenu, /className="effort-track-fill"/)
-    assert.match(
-      globals,
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,220}\.effort-track-fill/,
-      "reduced motion must keep a static fill without flicker",
-    )
-  })
-
-  it("ships the effort styles in the curated stylesheet", () => {
-    for (const cls of [".effort-section", ".effort-track-line", ".effort-dither-core", ".effort-ends"]) {
-      assert.ok(globals.includes(`${cls} {`), `${cls} must exist in globals.css`)
-    }
-    assert.ok(!globals.includes(".effort-caption {"), "the removed caption must not keep stale layout CSS")
-    assert.match(
-      globals,
-      /\.effort-track:focus-visible \{[\s\S]{0,120}outline: 2px solid/,
-      "keyboard focus on the slider must be visible",
-    )
-  })
-
-  it("keeps the effort choice flowing to the generate payload", () => {
-    const context = fs.readFileSync(
-      path.join(process.cwd(), "lib", "chat-context-integrated.tsx"),
-      "utf8",
-    )
+  it("keeps the effort choice flowing to the generate payload and migrates old values", () => {
+    const context = read("lib", "chat-context-integrated.tsx")
     const sends = context.match(/reasoningEffort: selectedEffort/g) || []
     assert.ok(sends.length >= 3, "every generate call must carry reasoningEffort")
-    assert.match(context, /sira:composer:effort/, "the choice must persist across reloads")
+    assert.match(effortLib, /COMPOSER_EFFORT_STORAGE_KEY = "sira:composer:effort"/, "the choice must persist across reloads")
+    assert.match(context, /migrateStoredComposerEffort\(saved, scale\)/)
+    assert.match(effortLib, /if \(raw === "Extra"\) return "Alto"/, "old High keeps meaning High")
   })
 })

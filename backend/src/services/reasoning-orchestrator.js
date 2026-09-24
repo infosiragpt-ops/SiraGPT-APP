@@ -585,7 +585,9 @@ function planCompute({ difficulty, risk, intent = null, prompt = '' } = {}) {
 const EFFORT_ALIASES = Object.freeze({
   bajo: 'low', low: 'low', minimo: 'low', 'mínimo': 'low', fast: 'low', rapido: 'low', 'rápido': 'low',
   medio: 'medium', medium: 'medium', normal: 'medium', balanced: 'medium',
-  extra: 'high', alto: 'high', high: 'high', deep: 'high',
+  alto: 'high', high: 'high', deep: 'high',
+  // "Extra" is the fourth composer level (between Alto and Máx).
+  extra: 'xhigh', xhigh: 'xhigh', 'extra high': 'xhigh',
   max: 'max', maximo: 'max', 'máximo': 'max', maximum: 'max', ultra: 'max',
 });
 
@@ -605,6 +607,10 @@ function computeForEffort(level) {
       return { mode: 'extended', samples: 1, reasoningEffort: 'medium', reflection: true };
     case 'high':
       return { mode: 'extended', samples: 1, reasoningEffort: 'high', reflection: true };
+    case 'xhigh':
+      // Deepest single pass: the provider thinks at its xhigh/max budget
+      // (thinkingLevelForEffort) with reflection, without the 3× sampling cost.
+      return { mode: 'extended', samples: 1, reasoningEffort: 'high', reflection: true };
     case 'max':
       // Strongest streaming-safe directive: ask for multiple internal approaches
       // and reconcile (self-consistency) at high effort.
@@ -612,6 +618,18 @@ function computeForEffort(level) {
     default:
       return null;
   }
+}
+
+/**
+ * Provider thinking level for a composer effort, consumed by the gateway's
+ * applyThinkingControls: Meta reasoning_effort low…xhigh, DeepSeek V4 thinking
+ * (Bajo → off, Alto → high, Extra/Máx → max), OpenRouter reasoning.effort,
+ * xAI grok-3-mini and Gemini 2.5/3 reasoning_effort.
+ */
+function thinkingLevelForEffort(level) {
+  const norm = normalizeEffortLevel(level);
+  if (!norm) return null;
+  return { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' }[norm] || null;
 }
 
 // ── 4b. Verification plan ─────────────────────────────────────────────────────
@@ -733,6 +751,7 @@ module.exports = {
   routeModel,
   planCompute,
   computeForEffort,
+  thinkingLevelForEffort,
   normalizeEffortLevel,
   planVerification,
   summarizeForLog,

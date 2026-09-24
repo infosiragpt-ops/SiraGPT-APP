@@ -314,13 +314,17 @@ function buildProviderChatPayload({
   toolChoice,
   maxOutputTokens,
   thinkingLevel,
+  // True when the level is the user's composer "Esfuerzo" choice rather than
+  // the global SIRA_THINKING_LEVEL default — only then do providers with an
+  // optional knob (OpenRouter high, xAI mini, Gemini) get it set.
+  thinkingLevelExplicit = false,
   baseUrl,
   extra = {},
 } = {}) {
   const resolvedModel = String(model || modelId || "").trim();
   if (!resolvedModel) throw gatewayError("missing_model_id", "model is required to build provider payload");
   const runtime = getProviderRuntimeProfile({ provider, modelId: resolvedModel, baseUrl });
-  const sanitizedMessages = sanitizeMessagesForProvider(messages, runtime, thinkingLevel);
+  const sanitizedMessages = sanitizeMessagesForProvider(messages, runtime, thinkingLevel, thinkingLevelExplicit);
   const payload = {
     model: resolvedModel,
     messages: sanitizedMessages,
@@ -336,7 +340,7 @@ function buildProviderChatPayload({
   applyResponseFormat(payload, responseFormat, runtime, extra);
   applyMaxTokens(payload, maxOutputTokens, runtime);
   applyStreamingUsage(payload, runtime);
-  applyThinkingControls(payload, runtime, thinkingLevel);
+  applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExplicit);
   stripUnsupportedThinkingFields(payload, runtime);
 
   return {
@@ -410,9 +414,47 @@ function stripUnsupportedThinkingFields(payload, runtime) {
     delete payload.thinking;
     return payload;
   }
+  // Gemini's OpenAI-compatible endpoint maps `reasoning_effort` onto its
+  // thinking budget; applyGeminiReasoningControls only sets it for thinking
+  // models on an explicit user choice.
+  if (provider === "google" && payload.reasoning_effort && geminiModelSupportsReasoningEffort(runtime.model_id)) {
+    delete payload.thinking;
+    return payload;
+  }
   delete payload.reasoning_effort;
   delete payload.thinking;
   return payload;
+}
+
+// ── Composer effort → optional provider knobs ───────────────────────────────
+// Only for an explicit user choice (thinkingLevelExplicit) and only on models
+// whose APIs accept the parameter: an unsupported model can 400 on it.
+//   xAI: grok-3-mini family takes reasoning_effort low|high (grok-4 rejects it).
+//   Gemini 2.5/3 (OpenAI-compat): reasoning_effort low|medium|high.
+function xaiModelSupportsReasoningEffort(modelId) {
+  return /grok-3-mini/i.test(String(modelId || ""));
+}
+
+function geminiModelSupportsReasoningEffort(modelId) {
+  return /gemini-(2\.5|3)/i.test(String(modelId || ""));
+}
+
+function normalizeEffortThinkingLevel(thinkingLevel) {
+  const normalized = String(thinkingLevel || "").trim().toLowerCase();
+  if (normalized === "minimal") return "low";
+  return ["low", "medium", "high", "xhigh", "max"].includes(normalized) ? normalized : null;
+}
+
+function applyXaiReasoningControls(payload, runtime, thinkingLevel) {
+  const level = normalizeEffortThinkingLevel(thinkingLevel);
+  if (!level || !xaiModelSupportsReasoningEffort(runtime.model_id)) return;
+  payload.reasoning_effort = level === "low" || level === "medium" ? "low" : "high";
+}
+
+function applyGeminiReasoningControls(payload, runtime, thinkingLevel) {
+  const level = normalizeEffortThinkingLevel(thinkingLevel);
+  if (!level || !geminiModelSupportsReasoningEffort(runtime.model_id)) return;
+  payload.reasoning_effort = level === "xhigh" || level === "max" ? "high" : level;
 }
 
 // ── Meta Model API reasoning ────────────────────────────────────────────────
@@ -437,17 +479,26 @@ function applyMetaReasoningControls(payload, runtime, thinkingLevel) {
   payload.reasoning_effort = resolveMetaReasoningEffort(thinkingLevel);
 }
 
-function applyThinkingControls(payload, runtime, thinkingLevel) {
+function applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExplicit = false) {
   if (runtime.thinkingFormat === "openrouter") {
-    applyOpenRouterReasoningControls(payload, runtime, thinkingLevel);
+    applyOpenRouterReasoningControls(payload, runtime, thinkingLevel, thinkingLevelExplicit);
     return;
   }
   if (String(runtime.provider || "") === "meta") {
     applyMetaReasoningControls(payload, runtime, thinkingLevel);
     return;
   }
+  if (thinkingLevelExplicit && String(runtime.provider || "") === "xai") {
+    applyXaiReasoningControls(payload, runtime, thinkingLevel);
+    return;
+  }
+  if (thinkingLevelExplicit && String(runtime.provider || "") === "google") {
+    applyGeminiReasoningControls(payload, runtime, thinkingLevel);
+    return;
+  }
   if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) return;
-  if (isDisabledThinkingLevel(thinkingLevel)) {
+  // Composer "Bajo" on Sira Rápido/Pro: answer without the thinking phase.
+  if (isDisabledThinkingLevel(thinkingLevel) || isExplicitLowDeepSeekLevel(thinkingLevel, thinkingLevelExplicit)) {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;
     delete payload.reasoning;
@@ -487,9 +538,13 @@ function openRouterModelSupportsReasoning(modelId, catalog) {
   return OPENROUTER_REASONING_FAMILIES_RX.test(id);
 }
 
-function resolveOpenRouterReasoningEffort(thinkingLevel) {
+function resolveOpenRouterReasoningEffort(thinkingLevel, thinkingLevelExplicit = false) {
   const normalized = String(thinkingLevel || "").trim().toLowerCase();
   if (normalized === "low" || normalized === "minimal") return "low";
+  // An explicit composer choice is honoured as-is (medium stays medium,
+  // "Alto" is high); only the implicit global default falls to the env.
+  if (thinkingLevelExplicit && normalized === "medium") return "medium";
+  if (thinkingLevelExplicit && normalized === "high") return "high";
   // Only the explicit boost levels map to high. The plain "high" that
   // currentThinkingLevel() defaults to is a DeepSeek-era global, not a user
   // choice — OpenRouter reasoning defaults to "medium" (latency/cost balance),
@@ -499,7 +554,7 @@ function resolveOpenRouterReasoningEffort(thinkingLevel) {
   return ["low", "medium", "high"].includes(envDefault) ? envDefault : "medium";
 }
 
-function applyOpenRouterReasoningControls(payload, runtime, thinkingLevel) {
+function applyOpenRouterReasoningControls(payload, runtime, thinkingLevel, thinkingLevelExplicit = false) {
   // A caller-supplied `reasoning` (via extra, e.g. `{ exclude: true }`) is an
   // explicit decision — never override it.
   if (payload.reasoning !== undefined) return;
@@ -509,10 +564,10 @@ function applyOpenRouterReasoningControls(payload, runtime, thinkingLevel) {
     payload.reasoning = { exclude: true };
     return;
   }
-  payload.reasoning = { effort: resolveOpenRouterReasoningEffort(thinkingLevel) };
+  payload.reasoning = { effort: resolveOpenRouterReasoningEffort(thinkingLevel, thinkingLevelExplicit) };
 }
 
-function sanitizeMessagesForProvider(messages = [], runtime, thinkingLevel) {
+function sanitizeMessagesForProvider(messages = [], runtime, thinkingLevel, thinkingLevelExplicit = false) {
   const cloned = cloneJson(Array.isArray(messages) ? messages : []);
   // `reasoning_details` (raw OpenRouter thinking blocks, incl. Anthropic's
   // signed thinking) must be replayed VERBATIM to OpenRouter on later
@@ -525,7 +580,7 @@ function sanitizeMessagesForProvider(messages = [], runtime, thinkingLevel) {
     stripReasoningContent(cloned);
     return cloned;
   }
-  if (isDisabledThinkingLevel(thinkingLevel)) {
+  if (isDisabledThinkingLevel(thinkingLevel) || isExplicitLowDeepSeekLevel(thinkingLevel, thinkingLevelExplicit)) {
     stripReasoningContent(cloned);
     return cloned;
   }
@@ -535,6 +590,10 @@ function sanitizeMessagesForProvider(messages = [], runtime, thinkingLevel) {
 
 function isDeepSeekV4ModelId(modelId) {
   return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
+}
+
+function isExplicitLowDeepSeekLevel(thinkingLevel, thinkingLevelExplicit) {
+  return Boolean(thinkingLevelExplicit) && normalizeEffortThinkingLevel(thinkingLevel) === "low";
 }
 
 function isDisabledThinkingLevel(thinkingLevel) {

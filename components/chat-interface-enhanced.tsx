@@ -150,7 +150,10 @@ import {
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
 import { ComposerContextMenu } from "@/components/chat/composer-context-menu"
-import { ComposerEffortMenu } from "@/components/chat/composer-effort-menu"
+import { ComposerEffortSubmenu } from "@/components/chat/composer-effort-submenu"
+import { ComposerFastModeToggle } from "@/components/chat/composer-fast-mode-toggle"
+import { modelSupportsComposerEffort } from "@/lib/chat/composer-effort"
+import { getModelTagline } from "@/lib/chat/model-tagline"
 import { ComposerPermissionMenu } from "@/components/chat/composer-permission-menu"
 import {
   COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
@@ -4270,14 +4273,32 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     else toast.error("No se pudo copiar el enlace de la empresa. Cópialo manualmente.");
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
-  const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
-    <span
-      className={cn("model-logo-chip chat-model-icon", compact && "model-logo-chip--sm")}
-      data-model-brand={getModelBrandKey(model)}
-    >
-      <IconProvider name={resolveModelIconName(model)} size={compact ? 14 : 20} />
-    </span>
-  );
+  const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => {
+    const iconName = resolveModelIconName(model);
+    // Unbranded catalog rows (OpenRouter-synced, unknown vendors) resolve to
+    // the generic bot or the OpenRouter mark, which renders invisibly on the
+    // light menu. Show a neutral monogram of the model's own name instead.
+    if (iconName === "Bot" || iconName === "OpenRouterLogo") {
+      const monogram = (getModelDisplayLabel(model).match(/[\p{L}\p{N}]/u)?.[0] || "M").toUpperCase();
+      return (
+        <span
+          className={cn("model-logo-chip chat-model-icon model-logo-monogram", compact && "model-logo-chip--sm")}
+          data-model-brand="other"
+          aria-hidden
+        >
+          {monogram}
+        </span>
+      );
+    }
+    return (
+      <span
+        className={cn("model-logo-chip chat-model-icon", compact && "model-logo-chip--sm")}
+        data-model-brand={getModelBrandKey(model)}
+      >
+        <IconProvider name={iconName} size={compact ? 14 : 20} />
+      </span>
+    );
+  };
 
   const ProviderHeading = ({ provider, models }: { provider: string; models: any[] }) => {
     const sample = models[0] ? { ...models[0], provider } : { provider };
@@ -4966,17 +4987,18 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     setRowMenu(null);
   };
 
-  // ModelRow — single picker entry. Active state = subtle bg + Check on
-  // the right; rows stay one-line and restrained for fast scanning.
+  // ModelRow — single picker entry: brand logo, name, a one-line Spanish
+  // tagline underneath and a Check on the active model (Claude-style).
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
     const isComingSoon = Boolean(model.comingSoon);
     const isPinned = isPinnedModel(model.name, pinnedModel);
     const menuOpen = rowMenu === model.name;
     const label = getModelDisplayLabel(model);
+    const tagline = getModelTagline(model);
     return (
       <DropdownMenuItem
-        aria-label={label}
+        aria-label={tagline ? `${label}. ${tagline}` : label}
         title={label}
         onSelect={(event) => {
           const target = event.target as HTMLElement | null
@@ -4989,15 +5011,15 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         data-selected={isSelected ? "true" : undefined}
         disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row relative flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+          "model-picker-row group/row relative flex min-h-[2.75rem] cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
           isComingSoon && "cursor-default opacity-55",
         )}
       >
-        <ModelLogo model={model} compact />
+        <ModelLogo model={model} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="liquid-label block truncate text-[12.5px] font-medium leading-4">
+            <span className="liquid-label block truncate text-[13px] font-medium leading-[1.15rem]">
               {label}
             </span>
             {isPinned && (
@@ -5011,7 +5033,15 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               </span>
             )}
           </span>
+          {tagline ? (
+            <span className="model-picker-row-tagline block truncate">{tagline}</span>
+          ) : null}
         </span>
+        <Check
+          className={cn("model-picker-row-check", !isSelected && "invisible")}
+          strokeWidth={2.2}
+          aria-hidden
+        />
         <button
           type="button"
           aria-label="Más opciones"
@@ -5104,17 +5134,35 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" sideOffset={6} collisionPadding={12} className="model-picker-content w-[min(calc(100vw-1.5rem),16.25rem)] overflow-hidden p-0">
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        collisionPadding={12}
+        data-testid="composer-model-menu"
+        className="model-picker-content w-[min(calc(100vw-1.5rem),20rem)] overflow-hidden p-0"
+      >
         <div className="model-picker-search-shell hidden sm:block">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/55" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" aria-hidden />
             <Input
               placeholder="Buscar modelos"
+              aria-label="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="model-picker-search-input h-7 rounded-md border-0 bg-transparent pl-7 pr-2 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
+              className="model-picker-search-input h-9 rounded-lg border-0 bg-transparent pl-8 pr-2 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
               onClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                // Arrow keys hand focus to the list so the menu stays fully
+                // keyboard driven; every other key stays in the field.
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  const first = (e.currentTarget.closest(".model-picker-content") as HTMLElement | null)
+                    ?.querySelector<HTMLElement>('.model-picker-list [role="menuitem"]:not([data-disabled])');
+                  first?.focus();
+                  return;
+                }
+                e.stopPropagation();
+              }}
             />
           </div>
         </div>
@@ -5127,11 +5175,26 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
               ))}
             </div>
           ) : (
-            <div className="px-3 py-10 text-center text-[12.5px] text-muted-foreground">
-              {searchQuery ? "Sin coincidencias" : "Sin modelos disponibles"}
+            <div className="model-picker-empty" role="status">
+              <Search className="h-4 w-4 text-muted-foreground/60" aria-hidden />
+              <span className="model-picker-empty-title">
+                {searchQuery ? `Sin resultados para «${searchQuery.trim()}»` : "Sin modelos disponibles"}
+              </span>
+              {searchQuery ? (
+                <span className="model-picker-empty-hint">Prueba con otro nombre o proveedor.</span>
+              ) : null}
             </div>
           )}
         </ScrollArea>
+
+        {typeof setSelectedEffort === "function" && modelSupportsComposerEffort(selectedModelData) ? (
+          <div className="model-picker-footer">
+            <ComposerEffortSubmenu
+              selectedEffort={selectedEffort}
+              setSelectedEffort={setSelectedEffort}
+            />
+          </div>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -8628,7 +8691,7 @@ But first, you need to connect your Spotify account securely using the button be
           {/* Text-reasoning controls stay out of generation modes (Imágenes /
               Video / Voz / Música): those turns don't consume the text context
               window and take no reasoningEffort, so token/cost meters and the
-              effort slider would show misleading numbers. The model picker
+              effort control would show misleading numbers. The model picker
               already hides itself via isMediaToolActive; state is preserved
               and the chips return when the modality is closed. */}
           {!isMediaToolActive && (
@@ -8639,12 +8702,9 @@ But first, you need to connect your Spotify account securely using the button be
             />
           )}
           {renderComposerModelControls()}
-          {!isMediaToolActive && (
-            <ComposerEffortMenu
-              selectedEffort={selectedEffort}
-              setSelectedEffort={setSelectedEffort}
-            />
-          )}
+          {/* Effort lives at the foot of the model menu; the lightning is the
+              fast-mode switch only (no reasoning control on generation turns). */}
+          {!isMediaToolActive && <ComposerFastModeToggle />}
           {renderDictationButton()}
           <ChatComposerPrimaryAction
             input={input}

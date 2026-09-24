@@ -74,7 +74,7 @@ function isExplicitProductLabel(label: string): boolean {
  */
 export function brandModelLabel(source: BrandLabelSource): string {
   const display = typeof source === "string" ? "" : firstString(source?.displayName)
-  if (isExplicitProductLabel(display)) return display
+  if (isExplicitProductLabel(display)) return cleanCatalogLabel(display)
 
   if (isProGenerationModel(source)) return SIRA_PRO_LABEL
   if (isFlashGenerationModel(source)) return SIRA_RAPIDO_LABEL
@@ -83,7 +83,7 @@ export function brandModelLabel(source: BrandLabelSource): string {
     ? source
     : firstString(source?.displayName, source?.name)
   if (!raw) return SIRA_RAPIDO_LABEL
-  if (looksLikeRawVendorModelId(raw) && display && isExplicitProductLabel(display)) return display
+  if (looksLikeRawVendorModelId(raw) && display && isExplicitProductLabel(display)) return cleanCatalogLabel(display)
   return hideForbiddenVendorLabel(raw)
 }
 
@@ -95,7 +95,19 @@ function hideForbiddenVendorLabel(label: string): string {
   if (/^sira[- ]?mini$/i.test(trimmed) || /^siragpt[- ]?mini$/i.test(trimmed)) return "SiraGPT Mini"
   if (/ollama|huggingface/i.test(trimmed)) return "Sira"
   if (/^deepseek\b/i.test(trimmed)) return SIRA_RAPIDO_LABEL
-  return trimmed
+  return cleanCatalogLabel(trimmed)
+}
+
+/**
+ * OpenRouter-synced rows arrive as "Vendor: Model (free)". The picker shows
+ * the model name only — the vendor prefix and pricing suffix are catalog
+ * noise, not product copy.
+ */
+function cleanCatalogLabel(label: string): string {
+  const withoutSuffix = label.replace(/\s*\((?:free|gratis|beta)\)\s*$/i, "").trim()
+  const prefixed = withoutSuffix.match(/^[^:/]{2,40}:\s+(.+)$/)
+  const cleaned = (prefixed ? prefixed[1] : withoutSuffix).trim()
+  return cleaned || label
 }
 
 /**
