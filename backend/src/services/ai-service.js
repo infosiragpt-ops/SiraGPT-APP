@@ -887,9 +887,22 @@ class AIService {
                             failureThreshold: 5,
                             resetTimeoutMs: 60_000,
                         });
-                        const stream = await breaker.execute(() =>
-                            attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal })
-                        );
+                        const stream = await breaker.execute(async () => {
+                            try {
+                                return await attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
+                            } catch (error) {
+                                // Composer "Esfuerzo" on an OpenAI model we
+                                // misclassified: drop reasoning_effort once
+                                // instead of failing the turn.
+                                if (currentProvider !== 'OpenAI' || !payload.reasoning_effort
+                                    || Number(error?.status) !== 400 || !/reasoning/i.test(String(error?.message || ''))) {
+                                    throw error;
+                                }
+                                console.warn(`[generateStream] ${currentRuntimeModel}: reasoning_effort rejected (${error.message}); retrying without it`);
+                                delete payload.reasoning_effort;
+                                return attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
+                            }
+                        });
 
                         // Per-attempt reasoning state. A retry/fallback restarts
                         // the trace, so the accumulators reset with each attempt

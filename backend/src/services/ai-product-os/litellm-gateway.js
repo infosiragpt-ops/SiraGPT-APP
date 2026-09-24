@@ -1,5 +1,7 @@
 "use strict";
 
+const { resolveAnthropicEffortControls } = require("../providers/anthropic-effort");
+
 /**
  * litellm-gateway — internal LiteLLM-inspired model gateway.
  *
@@ -408,6 +410,11 @@ function stripUnsupportedThinkingFields(payload, runtime) {
     delete payload.reasoning_effort;
     return payload;
   }
+  if (provider === "openai" && payload.reasoning_effort && openAIModelSupportsReasoningEffort(runtime.model_id)) {
+    delete payload.thinking;
+    delete payload.output_config;
+    return payload;
+  }
   // Meta Model API (Muse Spark) takes OpenAI-style `reasoning_effort`
   // (minimal…xhigh) — applyMetaReasoningControls sets it.
   if (provider === "xai" || provider === "meta") {
@@ -423,6 +430,7 @@ function stripUnsupportedThinkingFields(payload, runtime) {
   }
   delete payload.reasoning_effort;
   delete payload.thinking;
+  delete payload.output_config;
   return payload;
 }
 
@@ -449,6 +457,44 @@ function applyXaiReasoningControls(payload, runtime, thinkingLevel) {
   const level = normalizeEffortThinkingLevel(thinkingLevel);
   if (!level || !xaiModelSupportsReasoningEffort(runtime.model_id)) return;
   payload.reasoning_effort = level === "low" || level === "medium" ? "low" : "high";
+}
+
+// ── Anthropic (direct) ──────────────────────────────────────────────────────
+// Claude takes `thinking` + `output_config.effort`, resolved per model family
+// in providers/anthropic-effort.js (Fable/Opus 5.5 reject `disabled`, Haiku
+// 4.5 still needs `budget_tokens`, …). A trivial turn arrives as
+// `thinking: {type:"disabled"}` from ai-service and is re-resolved here so it
+// never reaches a model that 400s on it.
+function applyAnthropicReasoningControls(payload, runtime, thinkingLevel, thinkingLevelExplicit = false) {
+  const disabledByCaller = payload.thinking && payload.thinking.type === "disabled";
+  delete payload.thinking;
+  delete payload.output_config;
+  const level = disabledByCaller || isDisabledThinkingLevel(thinkingLevel) ? "disabled" : thinkingLevel;
+  const controls = resolveAnthropicEffortControls({
+    model: runtime.model_id,
+    level,
+    explicit: thinkingLevelExplicit,
+    maxTokens: payload[runtime.maxTokensField || "max_tokens"] || payload.max_tokens,
+  });
+  if (controls.thinking) payload.thinking = controls.thinking;
+  if (controls.output_config) payload.output_config = controls.output_config;
+  if (controls.max_tokens) payload.max_tokens = controls.max_tokens;
+}
+
+// ── OpenAI (direct) ─────────────────────────────────────────────────────────
+// `reasoning_effort` exists only on reasoning models (o1/o3/o4 families and
+// gpt-5.x, not the gpt-5 chat snapshots); gpt-4o & co. reject it.
+function openAIModelSupportsReasoningEffort(modelId) {
+  const id = String(modelId || "").trim().toLowerCase().replace(/^openai\//, "");
+  if (/^o1-(?:mini|preview)/.test(id)) return false;
+  if (/^o[134](?:$|-)/.test(id)) return true;
+  return /^gpt-5(?:$|[.-])/.test(id) && !/chat/.test(id);
+}
+
+function applyOpenAIReasoningControls(payload, runtime, thinkingLevel) {
+  const level = normalizeEffortThinkingLevel(thinkingLevel);
+  if (!level || !openAIModelSupportsReasoningEffort(runtime.model_id)) return;
+  payload.reasoning_effort = level === "xhigh" || level === "max" ? "high" : level;
 }
 
 function applyGeminiReasoningControls(payload, runtime, thinkingLevel) {
@@ -480,6 +526,14 @@ function applyMetaReasoningControls(payload, runtime, thinkingLevel) {
 }
 
 function applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExplicit = false) {
+  if (String(runtime.provider || "") === "anthropic") {
+    applyAnthropicReasoningControls(payload, runtime, thinkingLevel, thinkingLevelExplicit);
+    return;
+  }
+  if (thinkingLevelExplicit && String(runtime.provider || "") === "openai") {
+    applyOpenAIReasoningControls(payload, runtime, thinkingLevel);
+    return;
+  }
   if (runtime.thinkingFormat === "openrouter") {
     applyOpenRouterReasoningControls(payload, runtime, thinkingLevel, thinkingLevelExplicit);
     return;
@@ -1032,4 +1086,5 @@ module.exports = {
   stripUnsupportedThinkingFields,
   resolveMetaReasoningEffort,
   applyMetaReasoningControls,
+  openAIModelSupportsReasoningEffort,
 };
