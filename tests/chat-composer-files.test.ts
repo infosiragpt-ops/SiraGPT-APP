@@ -6,6 +6,9 @@ import {
   collectMessageFileIds,
   collectProcessingFileIds,
   collectUploadFileIds,
+  describeMediaTranscriptionProgress,
+  isAudioComposerFile,
+  isVideoComposerFile,
   isComposerFileProcessingPending,
   isComposerFileUploadFailed,
   isComposerFileSendBlockedByFailure,
@@ -138,5 +141,24 @@ describe("collectProcessingFileIds", () => {
     assert.equal(isComposerFileSendBlockedByFailure({ id: "video-1", name: "two.mp4", processingStage: "failed" }), false)
     assert.equal(isComposerFileSendBlockedByFailure({ tempId: "no-upload", name: "one.mp3", status: "failed" }), true)
     assert.equal(isComposerFileSendBlockedByFailure({ id: "doc-1", name: "one.pdf", processingStage: "failed" }), true)
+  })
+})
+
+describe("long recording chip progress", () => {
+  it("shows real % and remaining time instead of a bare Transcribiendo…", () => {
+    assert.equal(describeMediaTranscriptionProgress(null), null)
+    assert.equal(describeMediaTranscriptionProgress({ stage: "preparing" }), "Preparando audio…")
+    assert.equal(describeMediaTranscriptionProgress({ stage: "transcribing", percent: 34.4, etaSeconds: 40 * 60 }), "Transcribiendo 34 % · quedan ~40 min")
+    assert.equal(describeMediaTranscriptionProgress({ stage: "transcribing", percent: 80, etaSeconds: 3 * 3600 + 900 }), "Transcribiendo 80 % · quedan ~3 h 15 min")
+    assert.equal(describeMediaTranscriptionProgress({ stage: "transcribing", percent: 5 }), "Transcribiendo 5 %")
+  })
+
+  it("classifies every supported audio/video format by extension when the browser gives no MIME", () => {
+    for (const name of ["nota.caf", "llamada.amr", "voz.m4a", "libro.m4b", "radio.wma", "musica.mka", "ptt.opus", "clase.aiff"]) {
+      assert.equal(isAudioComposerFile({ name, type: "" }), true, name)
+    }
+    for (const name of ["clase.mkv", "cine.wmv", "tv.ts", "movil.3gp", "viejo.flv"]) {
+      assert.equal(isVideoComposerFile({ name, type: "" }), true, name)
+    }
   })
 })

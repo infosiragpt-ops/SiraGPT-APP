@@ -76,11 +76,11 @@ describe("chunked upload wiring (source contract)", () => {
     assert.match(composer, /import \{ shouldUseChunkedUpload \} from "@\/lib\/composer\/chunked-upload"/)
     assert.match(composer, /isolate: shouldUseChunkedUpload,/)
     assert.match(composer, /chunk\.isolated && chunk\.files\.length === 1 && shouldUseChunkedUpload\(chunk\.files\[0\]\)\s*\? await apiClient\.uploadFileChunked\(chunk\.files\[0\], \{/)
-    assert.match(composer, /100 MB por documento; audio y video hasta 2 GB\./)
+    assert.match(composer, /100 MB por documento; audio y video hasta 10 GB \(unas 10 horas por archivo\)\./)
   })
 
-  it("audio and video get the 2 GB client cap", () => {
-    assert.match(ingest, /NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 2048\)/)
+  it("audio and video get the 10 GB client cap", () => {
+    assert.match(ingest, /NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 10240\)/)
     assert.match(ingest, /const max = opts\.maxBytes \?\? \(isMediaUpload\(file\) \? DEFAULT_MAX_MEDIA_BYTES : DEFAULT_MAX_BYTES\)/)
   })
 })

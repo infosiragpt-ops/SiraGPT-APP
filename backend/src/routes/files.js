@@ -21,6 +21,7 @@ const deepAsk = require('../services/rag/deep-ask');
 const {
   validateUploadPolicy,
   isMediaMime,
+  isMediaExtension,
   resolveUploadLimits,
   isDeclaredUploadAllowed,
 } = require('../services/upload-security-policy');
@@ -315,7 +316,15 @@ const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_M
 const ASYNC_EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_TIMEOUT_MS || '900000', 10);
 // Audio/video transcription of long recordings (local whisper on CPU) needs
 // far more than the 15-minute document budget.
-const ASYNC_EXTRACT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_MEDIA_TIMEOUT_MS || '7200000', 10);
+const ASYNC_EXTRACT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_MEDIA_TIMEOUT_MS || String(12 * 60 * 60 * 1000), 10);
+// files.size is a Postgres INTEGER (max 2 147 483 647 bytes). Media may now be
+// up to 10 GB; the real byte count lives on disk/R2 and in the upload
+// response, the row keeps the largest value the column can hold.
+const DB_FILE_SIZE_MAX = 2147483647;
+function dbFileSize(size) {
+  const n = Math.max(0, Math.floor(Number(size) || 0));
+  return Math.min(n, DB_FILE_SIZE_MAX);
+}
 const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
 const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
 const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
@@ -499,7 +508,7 @@ async function processFilesInParallel(files, userId, prismaClient) {
             filename: file.filename,
             originalName: file.originalname,
             mimeType: file.mimetype,
-            size: file.size,
+            size: dbFileSize(file.size),
             path: file.path,
             extractedText: null,
             openaiFileId: null,
@@ -789,7 +798,7 @@ async function processFilesForAsyncPreview(files, userId, prismaClient) {
             filename: file.filename,
             originalName: file.originalname,
             mimeType: file.mimetype,
-            size: file.size,
+            size: dbFileSize(file.size),
             path: file.path,
             extractedText: null,
             openaiFileId: null,
@@ -902,7 +911,7 @@ const CHUNK_BODY_LIMIT = chunkedUploads.MAX_CHUNK_BYTES + 64 * 1024;
 function chunkedUploadCap(mimeType, originalName) {
   const limits = resolveUploadLimits();
   const ext = String(originalName || '').split('.').pop();
-  const media = isMediaMime(mimeType) || /^(mp3|wav|ogg|oga|opus|m4a|mp4|mov|webm|mpeg|mpg)$/i.test(String(ext || ''));
+  const media = isMediaMime(mimeType) || isMediaExtension(ext);
   return media ? limits.mediaFileSize : limits.fileSize;
 }
 
@@ -1145,7 +1154,14 @@ router.get('/processing-status', authenticateToken, async (req, res) => {
       select: { id: true, originalName: true, mimeType: true, processingStage: true,
         processingError: true, processingStageAt: true },
     });
-    return res.json({ files });
+    // Long recordings report live progress (segments done, %, ETA) from the
+    // durable media job so the chip never sits on a bare "Transcribiendo…".
+    const pendingMedia = files.filter(file => ['uploaded', 'validating', 'extracting'].includes(file.processingStage)
+      && mediaTranscription.isMediaFile(file)).map(file => file.id);
+    const progress = pendingMedia.length && typeof mediaTranscription.readMediaProgress === 'function'
+      ? await Promise.resolve(mediaTranscription.readMediaProgress({ fileIds: pendingMedia, userId: req.user.id })).catch(() => ({})) || {}
+      : {};
+    return res.json({ files: files.map(file => (progress[file.id] ? { ...file, processingProgress: progress[file.id] } : file)) });
   } catch {
     return res.status(503).json({ error: 'No se pudo consultar el progreso. Reintenta en unos segundos.' });
   }

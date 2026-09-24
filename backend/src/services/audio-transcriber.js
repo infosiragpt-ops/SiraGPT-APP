@@ -422,10 +422,50 @@ async function probeAudioDuration(filePath, options = {}) {
   }
 }
 
+// Cutting a 10-hour recording decodes every second of audio once; give the
+// pass a budget that scales with the duration (6 min per audio hour, never
+// under 10 min) instead of a flat ceiling that long lectures would hit.
+function segmentationTimeoutMs(options = {}) {
+  const explicit = Number(options.segmentTimeoutMs || envOf(options).TRANSCRIBE_SEGMENT_TIMEOUT_MS);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const seconds = Number(options.durationSeconds) || 0;
+  return Math.max(10 * 60 * 1000, Math.ceil(seconds * 100));
+}
+
+/**
+ * Durable per-segment results. `options.checkpoint` ({ load, save }) lets the
+ * caller persist each finished segment so a restart (deploy, crash, retry)
+ * resumes a 10-hour transcription where it stopped instead of from zero.
+ * Failures to read or write a checkpoint never fail the transcription.
+ */
+async function loadSegmentCheckpoint(options, index, meta) {
+  if (!options.checkpoint || typeof options.checkpoint.load !== 'function') return null;
+  try {
+    const saved = await options.checkpoint.load(index, meta);
+    return saved && typeof saved === 'object' ? saved : null;
+  } catch { return null; }
+}
+
+async function saveSegmentCheckpoint(options, index, meta, part) {
+  if (!options.checkpoint || typeof options.checkpoint.save !== 'function') return;
+  try {
+    await options.checkpoint.save(index, meta, {
+      text: String(part?.text || part?.transcript || ''),
+      segments: normalizeSegments(part?.segments),
+      model: part?.model || null,
+      language: part?.language || null,
+    });
+  } catch { /* a missing checkpoint only costs a re-run of this segment */ }
+}
+
+function progressEvent(options, stage, extra = {}) {
+  emitProgress(options, { stage, durationSeconds: Number(options.durationSeconds) || 0, ...extra });
+}
+
 function runFfmpeg(args, options = {}) {
   const spawnImpl = options.spawnImpl || require('child_process').spawn;
   const bin = options.ffmpegPath || envOf(options).FFMPEG_PATH || 'ffmpeg';
-  const limitMs = Number(options.segmentTimeoutMs || envOf(options).TRANSCRIBE_SEGMENT_TIMEOUT_MS) || 10 * 60 * 1000;
+  const limitMs = segmentationTimeoutMs(options);
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) return reject(abortError());
     let child;
@@ -537,15 +577,21 @@ async function transcribeCloud(provider, filePath, mimeType, fileName, fileSize,
   if (fileSize <= maxBytes && !(options.durationSeconds > segmentDuration(options))) {
     return transcribeCloudFile(provider, filePath, mimeType, fileName, options, language, prompt);
   }
+  progressEvent(options, 'preparing');
   const { dir, segments } = await segmentForCloud(filePath, options);
   try {
     const texts = [];
     const stitched = [];
-    emitProgress(options, { stage: 'segments', completed: 0, total: segments.length });
+    const meta = { segmentSeconds: segmentDuration(options), total: segments.length };
+    progressEvent(options, 'segments', { completed: 0, total: segments.length });
     for (const seg of segments) {
       if (options.signal && options.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-      const part = await transcribeCloudFile(provider, seg.path, 'audio/mpeg', `segment-${seg.index + 1}.mp3`, options, language, prompt);
-      emitProgress(options, { stage: 'transcribe', completed: seg.index + 1, total: segments.length });
+      let part = await loadSegmentCheckpoint(options, seg.index, meta);
+      if (!part) {
+        part = await transcribeCloudFile(provider, seg.path, 'audio/mpeg', `segment-${seg.index + 1}.mp3`, options, language, prompt);
+        await saveSegmentCheckpoint(options, seg.index, meta, part);
+      }
+      progressEvent(options, 'transcribe', { completed: seg.index + 1, total: segments.length });
       const text = String(part.text || '').trim();
       if (text) texts.push(text);
       for (const s of part.segments || []) {
@@ -595,22 +641,28 @@ async function transcribeLocalPath(filePath, options, language, prompt) {
   const impl = options.localTranscribe || localWhisper.transcribeLocal;
   const localOptions = { ...options, language, prompt };
   if (!(options.durationSeconds > segmentDuration(options))) return impl(filePath, localOptions);
+  progressEvent(options, 'preparing');
   const { dir, segments } = await segmentForCloud(filePath, options);
   try {
     const texts = [];
     const stitched = [];
     let metadata = {};
-    emitProgress(options, { stage: 'segments', completed: 0, total: segments.length });
+    const meta = { segmentSeconds: segmentDuration(options), total: segments.length };
+    progressEvent(options, 'segments', { completed: 0, total: segments.length });
     for (const seg of segments) {
       throwIfAborted(options.signal);
-      const part = await impl(seg.path, localOptions);
+      let part = await loadSegmentCheckpoint(options, seg.index, meta);
+      if (!part) {
+        part = await impl(seg.path, localOptions);
+        await saveSegmentCheckpoint(options, seg.index, meta, part);
+      }
       metadata = part || {};
       const text = String(part?.text || part?.transcript || '').trim();
       if (text) texts.push(text);
       for (const item of normalizeSegments(part?.segments)) {
         stitched.push({ ...item, start: item.start + seg.offsetSeconds, end: item.end + seg.offsetSeconds });
       }
-      emitProgress(options, { stage: 'transcribe', completed: seg.index + 1, total: segments.length });
+      progressEvent(options, 'transcribe', { completed: seg.index + 1, total: segments.length });
     }
     return { ...metadata, text: texts.join('\n\n'), segments: stitched };
   } finally {
@@ -809,6 +861,7 @@ module.exports = {
   cloudProviders,
   providerOrder,
   segmentForCloud,
+  segmentationTimeoutMs,
   transcribeCloud,
   buildSrt,
   buildVtt,

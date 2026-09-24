@@ -7,8 +7,9 @@ const {
 const MB = 1024 * 1024;
 const DEFAULT_MAX_UPLOAD_MB = 100;
 // Audio/video travel in chunks (see chunked-upload-store) and are transcribed
-// server-side, so they get their own, much larger cap.
-const DEFAULT_MAX_MEDIA_UPLOAD_MB = 2048;
+// server-side, so they get their own, much larger cap: 10 GB fits a single
+// 10-hour lecture recorded on a phone or a screen recorder.
+const DEFAULT_MAX_MEDIA_UPLOAD_MB = 10240;
 const DEFAULT_MAX_UPLOAD_FILES = DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS;
 
 /**
@@ -188,7 +189,8 @@ const EXTENSION_TO_MIMES = new Map([
   ['opus', new Set(['audio/opus', 'audio/ogg'])],
   ['webm', new Set(['audio/webm', 'video/webm'])],
   ['mp4', new Set(['audio/mp4', 'video/mp4'])],
-  ['m4a', new Set(['audio/mp4'])],
+  // file-type reports iPhone/WhatsApp voice notes (ftyp M4A) as audio/x-m4a.
+  ['m4a', new Set(['audio/mp4', 'audio/x-m4a', 'audio/m4a'])],
   ['mov', new Set(['video/quicktime'])],
   ['mpeg', new Set(['video/mpeg'])],
   ['mpg', new Set(['video/mpeg'])],
@@ -199,6 +201,67 @@ const EXTENSION_TO_MIMES = new Map([
   // Archives
   ['zip', new Set(['application/zip'])],
 ]);
+
+// Every audio/video format we can transcribe (ffmpeg decodes all of them).
+// Canonical MIME per extension: used when the browser declares nothing /
+// octet-stream and magic bytes are inconclusive (CAF, AMR, raw AC-3...), so
+// the file is still recognised as media, stored and played with its own type.
+const MEDIA_EXTENSION_MIME = new Map([
+  ['mp3', 'audio/mpeg'], ['mp2', 'audio/mpeg'], ['mpga', 'audio/mpeg'],
+  ['wav', 'audio/wav'], ['wave', 'audio/wav'],
+  ['ogg', 'audio/ogg'], ['oga', 'audio/ogg'], ['opus', 'audio/ogg'], ['spx', 'audio/ogg'],
+  ['m4a', 'audio/mp4'], ['m4b', 'audio/mp4'], ['m4r', 'audio/mp4'], ['aac', 'audio/aac'],
+  ['flac', 'audio/flac'], ['alac', 'audio/mp4'],
+  ['aif', 'audio/aiff'], ['aiff', 'audio/aiff'], ['aifc', 'audio/aiff'], ['caf', 'audio/x-caf'],
+  ['amr', 'audio/amr'], ['awb', 'audio/amr-wb'], ['wma', 'audio/x-ms-wma'],
+  ['ac3', 'audio/ac3'], ['eac3', 'audio/eac3'], ['dts', 'audio/vnd.dts'],
+  ['weba', 'audio/webm'], ['mka', 'audio/x-matroska'], ['ape', 'audio/x-ape'], ['wv', 'audio/x-wavpack'],
+  ['au', 'audio/basic'], ['snd', 'audio/basic'], ['mid', 'audio/midi'], ['midi', 'audio/midi'],
+  ['mp4', 'video/mp4'], ['m4v', 'video/mp4'], ['mov', 'video/quicktime'], ['qt', 'video/quicktime'],
+  ['webm', 'video/webm'], ['mkv', 'video/x-matroska'], ['avi', 'video/x-msvideo'],
+  ['wmv', 'video/x-ms-wmv'], ['asf', 'video/x-ms-asf'], ['flv', 'video/x-flv'],
+  ['mpeg', 'video/mpeg'], ['mpg', 'video/mpeg'], ['m2v', 'video/mpeg'],
+  ['ts', 'video/mp2t'], ['mts', 'video/mp2t'], ['m2ts', 'video/mp2t'],
+  ['ogv', 'video/ogg'], ['3gp', 'video/3gpp'], ['3g2', 'video/3gpp2'], ['vob', 'video/mpeg'],
+]);
+
+// Extensions that only ever hold sound, even inside a video-capable
+// container (MP4/Matroska/WebM/Ogg): keep them audio so chat shows an audio
+// player and the stored type matches what the user uploaded.
+const AUDIO_ONLY_EXTENSIONS = new Set([
+  'mp3', 'mp2', 'mpga', 'wav', 'wave', 'ogg', 'oga', 'opus', 'spx', 'm4a', 'm4b', 'm4r', 'aac', 'flac', 'alac',
+  'aif', 'aiff', 'aifc', 'caf', 'amr', 'awb', 'wma', 'ac3', 'eac3', 'dts', 'weba', 'mka', 'ape', 'wv', 'au', 'snd',
+]);
+
+// Containers whose magic bytes cannot tell audio-only from video.
+const AMBIGUOUS_MEDIA_CONTAINERS = new Set([
+  'video/mp4', 'video/webm', 'video/matroska', 'video/x-matroska', 'video/3gpp', 'video/3gpp2',
+  'video/quicktime', 'video/ogg', 'application/ogg', 'video/x-ms-asf', 'audio/x-ms-asf',
+]);
+
+/**
+ * Pick the stored MIME for audio/video so every format keeps its identity:
+ * - audio declared by the browser (or an audio-only extension) inside an
+ *   ambiguous container stays audio (`voz.m4a`, WhatsApp `.opus`, `.weba`);
+ * - no usable signal → canonical type of the extension (CAF, AMR, AC-3...).
+ * Returns null when the regular rule already gives the right answer.
+ */
+function resolveMediaMime({ ext, declared, detected, detectionSource }) {
+  const extension = String(ext || '').toLowerCase();
+  const canonical = MEDIA_EXTENSION_MIME.get(extension) || null;
+  const declaredAudio = /^audio\//.test(declared) ? declared : null;
+  const magic = detectionSource === 'magic-bytes' && detected ? detected : null;
+  if (magic && AMBIGUOUS_MEDIA_CONTAINERS.has(magic)) {
+    if (declaredAudio) return declaredAudio;
+    if (AUDIO_ONLY_EXTENSIONS.has(extension) && canonical) return canonical;
+    if (magic === 'video/matroska') return 'video/x-matroska';
+    return null;
+  }
+  if (magic) return null;
+  const declaredUsable = declared && !GENERIC_ARCHIVE_OR_BROWSER_MIMES.has(declared);
+  if (!declaredUsable && canonical) return canonical;
+  return null;
+}
 
 const CANONICAL_EXTENSION_MIME = new Map([
   ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -251,6 +314,7 @@ function isMediaMime(mime) {
 
 function isMediaExtension(extension) {
   const ext = String(extension || '').toLowerCase();
+  if (MEDIA_EXTENSION_MIME.has(ext)) return true;
   const accepted = EXTENSION_TO_MIMES.get(ext);
   if (!accepted) return false;
   for (const mime of accepted) if (isMediaMime(mime)) return true;
@@ -423,7 +487,8 @@ function validateUploadPolicy({
     };
   }
 
-  const extensionCanonicalMime = canonicalMimeForAcceptedExtension(ext, declared, detected);
+  const extensionCanonicalMime = canonicalMimeForAcceptedExtension(ext, declared, detected)
+    || (media ? resolveMediaMime({ ext, declared, detected, detectionSource }) : null);
   const normalizedMime = extensionCanonicalMime || (detectionSource === 'magic-bytes' && detected ? detected : declared);
   const mimeType = normalizedMime || declared || 'application/octet-stream';
   const executable = isExecutableExtension(ext) || isExecutableMime(detected) || isExecutableMime(declared);
@@ -446,6 +511,10 @@ function validateUploadPolicy({
 
 module.exports = {
   isMediaMime,
+  isMediaExtension,
+  MEDIA_EXTENSION_MIME,
+  AUDIO_ONLY_EXTENSIONS,
+  resolveMediaMime,
   DEFAULT_MAX_MEDIA_UPLOAD_MB,
   // Known-type tables are kept for parsers, canonicalisation and the
   // extension↔magic-byte integrity check. They are NOT an allowlist anymore.

@@ -277,7 +277,8 @@ test('audio/video get their own cap (2 GB default) while documents keep 100 MB',
   assert.equal(limits.fileSize, 100 * 1024 * 1024);
   assert.equal(limits.mediaFileSize, DEFAULT_MAX_MEDIA_UPLOAD_MB * 1024 * 1024);
   assert.equal(resolveUploadLimits({ MAX_MEDIA_FILE_MB: '512' }).mediaFileSize, 512 * 1024 * 1024);
-  assert.equal(resolveUploadLimits({ MAX_FILE_SIZE: '4096' }).mediaFileSize, 4096 * 1024 * 1024, 'an explicit global cap above the media default wins');
+  assert.equal(DEFAULT_MAX_MEDIA_UPLOAD_MB, 10240, 'one 10-hour recording (several GB) fits the default media cap');
+  assert.equal(resolveUploadLimits({ MAX_FILE_SIZE: '20480' }).mediaFileSize, 20480 * 1024 * 1024, 'an explicit global cap above the media default wins');
   assert.equal(isMediaMime('video/mp4'), true);
   assert.equal(isMediaMime('audio/mpeg; codecs=1'), true);
   assert.equal(isMediaMime('application/pdf'), false);
@@ -292,8 +293,55 @@ test('audio/video get their own cap (2 GB default) while documents keep 100 MB',
   assert.equal(bigPdf.ok, false);
   assert.equal(bigPdf.code, 'file_too_large');
   const hugeVideo = validateUploadPolicy({
-    originalName: 'clase.mp4', declaredMime: 'video/mp4', detectedMime: 'video/mp4', detectionSource: 'magic-bytes', size: 3 * 1024 * 1024 * 1024,
+    originalName: 'clase.mp4', declaredMime: 'video/mp4', detectedMime: 'video/mp4', detectionSource: 'magic-bytes', size: 11 * 1024 * 1024 * 1024,
   });
   assert.equal(hugeVideo.code, 'file_too_large');
-  assert.match(hugeVideo.message, /2048 MB/);
+  assert.match(hugeVideo.message, /10240 MB/);
+  const tenHourLecture = validateUploadPolicy({
+    originalName: 'clase-10h.mkv', declaredMime: 'video/x-matroska', detectedMime: 'video/matroska', detectionSource: 'magic-bytes', size: 6 * 1024 * 1024 * 1024,
+  });
+  assert.equal(tenHourLecture.ok, true, JSON.stringify(tenHourLecture));
+  assert.equal(tenHourLecture.mimeType, 'video/x-matroska');
+});
+
+test('every audio format keeps its own identity (magic bytes measured with real ffmpeg output)', () => {
+  // [file, declared by browser, detected by file-type 22, expected stored mime]
+  const cases = [
+    ['voz.m4a', 'audio/x-m4a', 'audio/x-m4a', 'audio/x-m4a'],
+    ['voz.m4a', '', 'audio/x-m4a', 'audio/x-m4a'],
+    ['audiolibro.m4b', '', 'audio/x-m4a', 'audio/x-m4a'],
+    ['nota.mp4', 'audio/mp4', 'video/mp4', 'audio/mp4'],
+    ['clase.mp4', 'video/mp4', 'video/mp4', 'video/mp4'],
+    ['grabacion.webm', 'audio/webm', 'video/webm', 'audio/webm'],
+    ['grabacion.weba', '', 'video/webm', 'audio/webm'],
+    ['musica.mka', '', 'video/matroska', 'audio/x-matroska'],
+    ['pelicula.mkv', '', 'video/matroska', 'video/x-matroska'],
+    ['ptt.opus', 'audio/opus', 'audio/ogg', 'audio/ogg'],
+    ['ptt.ogg', '', 'audio/ogg', 'audio/ogg'],
+    ['iphone.caf', '', null, 'audio/x-caf'],
+    ['iphone.caf', 'application/octet-stream', null, 'audio/x-caf'],
+    ['llamada.amr', '', null, 'audio/amr'],
+    ['radio.wma', 'audio/x-ms-wma', 'audio/x-ms-asf', 'audio/x-ms-wma'],
+    ['radio.wma', '', 'audio/x-ms-asf', 'audio/x-ms-wma'],
+    ['estudio.flac', '', 'audio/flac', 'audio/flac'],
+    ['estudio.aiff', 'audio/aiff', 'audio/aiff', 'audio/aiff'],
+    ['master.wav', '', 'audio/wav', 'audio/wav'],
+    ['podcast.mp3', '', 'audio/mpeg', 'audio/mpeg'],
+    ['voz.aac', '', 'audio/aac', 'audio/aac'],
+    ['cine.ac3', '', 'audio/vnd.dolby.dd-raw', 'audio/vnd.dolby.dd-raw'],
+    ['movil.3gp', 'audio/3gpp', 'video/3gpp', 'audio/3gpp'],
+    ['clase.ts', '', null, 'video/mp2t'],
+  ];
+  for (const [originalName, declaredMime, detected, expected] of cases) {
+    const result = validateUploadPolicy({
+      originalName, declaredMime, detectedMime: detected || declaredMime,
+      detectionSource: detected ? 'magic-bytes' : 'fallback', size: 5 * 1024 * 1024,
+    });
+    assert.equal(result.ok, true, `${originalName}: ${JSON.stringify(result)}`);
+    assert.equal(result.mimeType, expected, `${originalName} (${declaredMime || 'sin tipo'})`);
+    assert.ok(isMediaMime(result.mimeType), `${originalName} must stay transcribable media`);
+  }
+  // A 1 GB CAF with no browser MIME still gets the media cap, not 100 MB.
+  const bigCaf = validateUploadPolicy({ originalName: 'larga.caf', declaredMime: '', detectedMime: '', detectionSource: 'fallback', size: 1024 * 1024 * 1024 });
+  assert.equal(bigCaf.ok, true, JSON.stringify(bigCaf));
 });

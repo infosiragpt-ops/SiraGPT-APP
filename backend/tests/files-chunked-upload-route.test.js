@@ -28,6 +28,8 @@ test('init validates the declared type and applies the media cap; complete reuse
 });
 
 test('audio/video extraction gets its own, longer budget', () => {
-  assert.match(src, /const ASYNC_EXTRACT_MEDIA_TIMEOUT_MS = Number\.parseInt\(process\.env\.SIRAGPT_ASYNC_EXTRACT_MEDIA_TIMEOUT_MS \|\| '7200000', 10\);/);
+  // 12 h: one 10-hour recording on CPU whisper fits the budget.
+  assert.match(src, /const ASYNC_EXTRACT_MEDIA_TIMEOUT_MS = Number\.parseInt\(process\.env\.SIRAGPT_ASYNC_EXTRACT_MEDIA_TIMEOUT_MS \|\| String\(12 \* 60 \* 60 \* 1000\), 10\);/);
+  assert.match(src, /size: dbFileSize\(file\.size\),/, 'files.size is INTEGER: >2 GB media must not break the row insert');
   assert.match(src, /const extractBudgetMs = \/\^\(audio\|video\)\\\/\/i\.test\(String\(file\.mimetype \|\| ''\)\) \? ASYNC_EXTRACT_MEDIA_TIMEOUT_MS : ASYNC_EXTRACT_TIMEOUT_MS;/);
 });

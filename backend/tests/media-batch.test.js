@@ -174,3 +174,52 @@ test('chat transcript is per-file markdown: heading + paragraph, no "=====" rule
   // The downloadable TXT keeps its plain-text layout.
   assert.match(batch.transcriptBundle(rows), /1\. WhatsApp_Ptt 2026\.ogg\n={48}\n/);
 });
+
+test('a single 10-hour recording: the chat keeps waiting while it advances and shows live %', async () => {
+  const { rows, prisma } = fixture(1);
+  rows[0].originalName = 'clase-10h.mkv';
+  let clock = 0;
+  let completed = 0;
+  const labels = [];
+  const result = await batch.waitForMediaBatch({ prisma, userId: 'u', rows,
+    enqueue: async () => ({ queued: true }), now: () => clock,
+    timeoutMs: batch.MEDIA_WAIT_MAX_MS, stallMs: 45 * 60_000,
+    readProgress: async ({ fileIds, userId }) => {
+      assert.deepEqual(fileIds, ['f0']);
+      assert.equal(userId, 'u');
+      return { f0: { stage: 'transcribing', completed, total: 61, percent: Math.round(2 + (97 * completed) / 61), etaSeconds: (61 - completed) * 60 } };
+    },
+    onProgress: p => labels.push(batch.describeBatchProgress(p)),
+    wait: async () => {
+      clock += 60_000; // one minute per poll, one part per minute: ~61 min total
+      completed++;
+      if (completed === 61) { rows[0].processingStage = 'ready'; rows[0].extractedText = 'Transcripción de diez horas de clase.'; }
+    },
+  });
+  assert.equal(clock, 61 * 60_000, 'waited the whole hour the recording needed');
+  assert.equal(result.ready, 1);
+  assert.equal(result.pending, 0);
+  assert.match(labels[1], /^Transcribiendo «clase-10h\.mkv»: \d+ % \(1\/61 partes\) · quedan ~1 h · 0\/1 transcritos/);
+});
+
+test('the wait gives up early when a job makes no progress for the stall window', async () => {
+  const { rows, prisma } = fixture(1);
+  let clock = 0;
+  const result = await batch.waitForMediaBatch({ prisma, userId: 'u', rows,
+    enqueue: async () => ({ queued: true }), now: () => clock,
+    timeoutMs: batch.MEDIA_WAIT_MAX_MS, stallMs: 45 * 60_000,
+    readProgress: async () => ({ f0: { stage: 'transcribing', completed: 3, total: 61, percent: 7 } }),
+    wait: async () => { clock += 5 * 60_000; },
+  });
+  assert.equal(result.pending, 1);
+  assert.ok(clock >= 45 * 60_000 && clock < 60 * 60_000, `stopped after the stall window, not the 12 h ceiling (${clock})`);
+});
+
+test('batch progress labels', () => {
+  assert.equal(batch.formatRemaining(30), 'menos de 2 min');
+  assert.equal(batch.formatRemaining(25 * 60), '25 min');
+  assert.equal(batch.formatRemaining(150 * 60), '2 h 30 min');
+  assert.match(batch.describeBatchProgress({ ready: 0, total: 1, pending: 1, failed: 0,
+    files: [{ name: 'a.ogg', stage: 'pending', progress: { stage: 'preparing' } }] }), /^Preparando el audio de «a\.ogg»…/);
+  assert.equal(batch.describeBatchProgress({ ready: 2, total: 3, pending: 1, failed: 0, files: [] }), '2/3 transcritos · 1 pendientes · 0 con incidencias');
+});

@@ -263,8 +263,8 @@ export function buildAgentFileMetadata(files: readonly unknown[] = []): AgentFil
   })
 }
 
-const AUDIO_EXT_RE = /\.(?:mp3|wav|m4a|aac|ogg|oga|flac|opus|wma|aiff?)$/i
-const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv|3gp)$/i
+const AUDIO_EXT_RE = /\.(?:mp3|mp2|mpga|wave?|m4a|m4b|m4r|aac|ogg|oga|flac|alac|opus|spx|wma|aiff?|aifc|caf|amr|awb|ac3|eac3|dts|weba|mka|ape|wv|au|snd)$/i
+const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|qt|webm|mkv|avi|wmv|asf|flv|mpeg|mpg|m2v|ts|mts|m2ts|ogv|3gp|3g2|vob)$/i
 
 export type AttachmentMediaMeta = {
   durationSeconds?: number
@@ -335,6 +335,40 @@ function attachmentDisplayName(file: ComposerFileRecord, fallback = "archivo"): 
 
 function attachmentMime(file: ComposerFileRecord): string {
   return String(file.mimeType || file.type || file.contentType || "").toLowerCase()
+}
+
+export interface MediaTranscriptionProgress {
+  stage?: "preparing" | "transcribing" | string
+  completed?: number
+  total?: number
+  percent?: number | null
+  etaSeconds?: number | null
+}
+
+function formatRemainingEs(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 90) return "menos de 2 min"
+  const minutes = Math.round(s / 60)
+  if (minutes < 60) return `${minutes} min`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m ? `${h} h ${m} min` : `${h} h`
+}
+
+/**
+ * Chip copy for a long recording in the durable media queue. Returns null
+ * when the server has no live progress (short clips transcribe in one pass),
+ * so the caller keeps its plain "Transcribiendo…" label.
+ */
+export function describeMediaTranscriptionProgress(progress: unknown): string | null {
+  if (!progress || typeof progress !== "object") return null
+  const p = progress as MediaTranscriptionProgress
+  if (p.stage === "preparing") return "Preparando audio…"
+  const percent = Number(p.percent)
+  if (!Number.isFinite(percent)) return null
+  const eta = Number(p.etaSeconds)
+  const remaining = Number.isFinite(eta) && eta > 0 ? ` · quedan ~${formatRemainingEs(eta)}` : ""
+  return `Transcribiendo ${Math.max(0, Math.min(99, Math.round(percent)))} %${remaining}`
 }
 
 export function isAudioComposerFile(file: unknown): boolean {

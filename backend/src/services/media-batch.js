@@ -6,6 +6,15 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { isMediaFile, hasTranscript, enqueueMediaTranscription } = require('./media-transcription-queue');
 const { throwIfAborted } = require('../utils/abort-signals');
 const MAX_MEDIA_FILES = 50;
+// A chat turn may wait on a 10-hour recording. It keeps waiting while the
+// job advances (up to this ceiling) and gives up early only when nothing has
+// moved for STALL_MS, so a wedged queue never pins an agent slot for hours.
+const MEDIA_WAIT_MAX_MS = 12 * 60 * 60 * 1000;
+const MEDIA_WAIT_STALL_MS = 45 * 60 * 1000;
+
+function defaultReadProgress(payload) {
+  return require('./media-transcription-queue').readMediaProgress(payload);
+}
 const ANALYSIS_CHUNK_CHARS = 18000;
 
 function usableTranscript(row) {
@@ -57,7 +66,8 @@ function batchCounts(rows) {
 
 async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = () => {},
   enqueue = enqueueMediaTranscription, wait = delay, now = Date.now,
-  timeoutMs = 90 * 60_000, pollMs = 4000, retryFailed = false }) {
+  timeoutMs = 90 * 60_000, stallMs = MEDIA_WAIT_STALL_MS, pollMs = 4000, retryFailed = false,
+  readProgress = defaultReadProgress }) {
   const ids = rows.map(row => row.id);
   let current = rows;
   const enqueueErrors = new Map();
@@ -74,16 +84,28 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
   }
   const deadline = now() + Math.max(0, timeoutMs);
   let lastProgress = '';
+  let lastMovedAt = now();
+  let progressById = {};
   while (true) {
     throwIfAborted(signal);
     const counts = batchCounts(current);
-    const stamp = current.map(row => `${row.id}:${stateOf(row)}:${row.processingStage}`).join('|');
+    const pendingIds = current.filter(row => stateOf(row) === 'pending').map(row => row.id);
+    if (pendingIds.length && readProgress) {
+      progressById = await Promise.resolve(readProgress({ fileIds: pendingIds, userId })).catch(() => ({})) || {};
+    }
+    const stamp = current.map(row => {
+      const p = progressById[row.id];
+      return `${row.id}:${stateOf(row)}:${row.processingStage}:${p ? `${p.stage}/${p.completed}/${p.total}` : ''}`;
+    }).join('|');
     if (stamp !== lastProgress) {
       await onProgress({ ...counts, files: current.map(row => ({ id: row.id,
-        name: row.originalName || row.filename, stage: stateOf(row) })) });
+        name: row.originalName || row.filename, stage: stateOf(row),
+        ...(progressById[row.id] ? { progress: progressById[row.id] } : {}) })) });
       lastProgress = stamp;
+      lastMovedAt = now();
     }
-    if (!counts.pending || now() >= deadline || current.every(row => stateOf(row) !== 'pending' || enqueueErrors.has(row.id))) break;
+    const stalled = stallMs > 0 && now() - lastMovedAt >= stallMs;
+    if (!counts.pending || now() >= deadline || stalled || current.every(row => stateOf(row) !== 'pending' || enqueueErrors.has(row.id))) break;
     await wait(Math.min(pollMs, Math.max(1, deadline - now())), undefined, { signal });
     const fresh = await prisma.file.findMany({ where: { userId, id: { in: ids }, deletedAt: null } });
     const byId = new Map(fresh.map(row => [row.id, row]));
@@ -91,6 +113,28 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
       processingStage: 'failed', processingError: 'El archivo ya no está disponible.' });
   }
   return { rows: current, ...batchCounts(current), enqueueErrors };
+}
+
+function formatRemaining(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  if (s < 90) return 'menos de 2 min';
+  const minutes = Math.round(s / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+/** Spanish step label for the chat, with live % for long recordings. */
+function describeBatchProgress(progress = {}) {
+  const base = `${progress.ready || 0}/${progress.total || 0} transcritos · ${progress.pending || 0} pendientes · ${progress.failed || 0} con incidencias`;
+  const live = (progress.files || []).filter(file => file.stage === 'pending' && file.progress);
+  if (live.length !== 1) return base;
+  const { name, progress: p } = live[0];
+  if (p.stage === 'preparing') return `Preparando el audio de «${name}»… · ${base}`;
+  if (!Number.isFinite(p.percent)) return base;
+  const eta = Number.isFinite(p.etaSeconds) && p.etaSeconds > 0 ? ` · quedan ~${formatRemaining(p.etaSeconds)}` : '';
+  return `Transcribiendo «${name}»: ${p.percent} % (${p.completed}/${p.total} partes)${eta} · ${base}`;
 }
 
 function transcriptBundle(rows) {
@@ -201,4 +245,4 @@ async function analyzeMediaBatch({ rows, goal, complete, signal, onProgress = ()
 }
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
-  waitForMediaBatch, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch };
+  waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch };
