@@ -3,7 +3,7 @@
 import React from "react"
 import { createPortal } from "react-dom"
 import dynamic from "next/dynamic"
-import { X, AlertCircle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
+import { X, AlertCircle, Check, ChevronDown, RotateCw, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
 import {
@@ -25,7 +25,7 @@ import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { CONVERSION_LOADING_LABEL, PREVIEW_LOADING_LABEL, resolvePreviewGate } from "@/lib/document-preview-gate"
+import { CONVERSION_LOADING_LABEL, PREVIEW_LOADING_LABEL, fetchWithTransientRetry, resolvePreviewGate } from "@/lib/document-preview-gate"
 import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 
 // Keep the full document viewer (pdf.js, DOCX/XLSX/PPTX renderers, etc.) out
@@ -46,9 +46,11 @@ const authenticatedAssetFetch = createAuthenticatedFetch({ apiBaseUrl: ASSET_BAS
 function fetchPreviewAsset(url: string): Promise<Response> {
   const normalized = normalizeBackendAssetUrl(url, process.env.NEXT_PUBLIC_IMAGE_URL)
   if (/^(data:|blob:)/i.test(normalized)) return fetch(normalized)
-  return isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
-    ? authenticatedAssetFetch(normalized)
-    : fetch(normalized)
+  return fetchWithTransientRetry(() => (
+    isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
+      ? authenticatedAssetFetch(normalized)
+      : fetch(normalized)
+  ))
 }
 
 /**
@@ -169,6 +171,15 @@ function inferFormat(url: string): PreviewFormat {
   if (clean.endsWith(".html") || clean.endsWith(".htm")) return "html"
   if (TEXT_PREVIEW_EXTENSION_RE.test(clean)) return "text"
   return "unknown"
+}
+
+function friendlyPreviewError(message: string) {
+  const status = /^HTTP (\d{3})$/.exec(message.trim())?.[1]
+  if (!status) return message
+  if (status === "404") return "El archivo ya no está disponible."
+  if (status === "401" || status === "403") return "Tu sesión no tiene acceso a este archivo. Vuelve a iniciar sesión."
+  if (status.startsWith("5") || status === "408" || status === "429") return "El servidor tardó en responder. Vuelve a intentarlo en unos segundos."
+  return `No se pudo abrir el archivo (HTTP ${status}).`
 }
 
 function inferFilename(url: string, format: PreviewFormat) {
@@ -423,6 +434,8 @@ function derivePreviewPdfUrl(assetUrl: string): string | null {
 
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
+  // Bumped by «Reintentar» to re-run the loader effect.
+  const [reloadKey, setReloadKey] = React.useState(0)
   const [isDownloading, setIsDownloading] = React.useState(false)
   const [zoom, setZoom] = React.useState(1)
   const [activePage, setActivePage] = React.useState(1)
@@ -981,11 +994,16 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       cancelled = true
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
-  }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl, previewGate.ready, previewGate.label])
+  }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl, previewGate.ready, previewGate.label, reloadKey])
 
   const previewControls = canUsePreviewControls ? (
         <nav aria-label="Navegación y zoom del documento" className="flex max-w-full justify-center">
-          <div className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", previewControlShellClass)}>
+          <div className={cn(
+            "flex max-w-full flex-wrap items-center justify-center gap-1",
+            previewControlShellClass,
+            // In the title row the shell matches the h-9 action buttons.
+            inlineToolbar && "h-9 flex-nowrap px-0.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] dark:shadow-none",
+          )}>
             {state.kind !== "text" && (<>
             <Button
               type="button"
@@ -1083,7 +1101,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     <div
       ref={setToolbarContainer}
       data-testid="document-preview-toolbar"
-      className={cn("flex min-w-0 justify-center empty:hidden", !inlineToolbar && "px-2 pb-2")}
+      className={cn("flex min-w-0 justify-center empty:hidden", inlineToolbar ? "col-start-2" : "px-2 pb-2")}
     >
       {previewControls}
     </div>
@@ -1101,7 +1119,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             <X className="h-5 w-5" />
           </Button>
         )}
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+        <div className={cn("flex min-w-0 flex-1 items-center gap-2 overflow-hidden", inlineToolbar && "col-start-1")}>
           {!isOverlay && <DocumentArtifactIcon format={format} />}
           <div className={cn("min-w-0 flex-1", isOverlay && "text-center")}>
             <h2 className="truncate text-sm font-semibold text-foreground" title={filename}>{filename}</h2>
@@ -1131,7 +1149,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <div className="flex shrink-0 items-center justify-end gap-1">
+          <div className={cn("flex shrink-0 items-center justify-end gap-1", inlineToolbar && "col-start-3 justify-self-end")}>
             {state.kind === "text" && (
               <Button variant="ghost" size="icon" onClick={copyText} data-testid="ppt-btn-copy" className={previewIconButtonClass} title={textCopied ? "Copiado" : "Copiar texto"} aria-label={textCopied ? "Texto copiado" : "Copiar texto"}>
                 {textCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
@@ -1183,7 +1201,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
         {pdfPreviewAttachment && (
           <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900">
-            <PdfRenderer a={pdfPreviewAttachment} toolbarContainer={toolbarContainer} />
+            <PdfRenderer a={pdfPreviewAttachment} toolbarContainer={toolbarContainer} compactToolbar={inlineToolbar} />
           </div>
         )}
 
@@ -1246,11 +1264,19 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
               <p className="mb-1 font-medium">
                 {state.kind === "error" ? "No se pudo previsualizar" : "Vista previa no disponible"}
               </p>
-              <p className="mb-4 text-sm text-muted-foreground">{state.message}</p>
-              <Button size="sm" onClick={download}>
-                <Download className="mr-1.5 h-4 w-4" />
-                Descargar archivo
-              </Button>
+              <p className="mb-4 text-sm text-muted-foreground">{state.kind === "error" ? friendlyPreviewError(state.message) : state.message}</p>
+              <div className="flex items-center justify-center gap-2">
+                {state.kind === "error" && (
+                  <Button size="sm" variant="outline" onClick={() => setReloadKey((key) => key + 1)} data-testid="document-preview-retry">
+                    <RotateCw className="mr-1.5 h-4 w-4" />
+                    Reintentar
+                  </Button>
+                )}
+                <Button size="sm" onClick={download}>
+                  <Download className="mr-1.5 h-4 w-4" />
+                  Descargar archivo
+                </Button>
+              </div>
             </div>
           </div>
         )}
