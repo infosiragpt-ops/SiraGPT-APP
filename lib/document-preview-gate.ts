@@ -135,3 +135,30 @@ export function resolvePreviewGate(input: PreviewGateInput = {}): PreviewGate {
     label: "",
   }
 }
+
+// Gateway/transient statuses seen while the backend restarts during a
+// publish (Caddy 502/503/504) or under brief load (408/429). Preview fetches
+// retry these quietly instead of painting «No se pudo previsualizar · HTTP 502».
+export function isTransientPreviewHttpStatus(status: number): boolean {
+  return status === 408 || status === 429 || status === 502 || status === 503 || status === 504
+}
+
+export const PREVIEW_TRANSIENT_RETRY_DELAYS_MS = [700, 1500, 3000, 5000, 8000] as const
+
+export async function fetchWithTransientRetry(
+  run: () => Promise<Response>,
+  delays: readonly number[] = PREVIEW_TRANSIENT_RETRY_DELAYS_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt >= delays.length
+    try {
+      const response = await run()
+      if (last || !isTransientPreviewHttpStatus(response.status)) return response
+    } catch (error) {
+      // Network drop (connection refused/reset through the proxy): retry too.
+      if (last || (error instanceof DOMException && error.name === "AbortError")) throw error
+    }
+    await sleep(delays[attempt])
+  }
+}

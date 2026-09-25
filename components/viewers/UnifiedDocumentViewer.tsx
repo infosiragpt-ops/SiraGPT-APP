@@ -127,6 +127,7 @@ import {
   CONVERSION_LOADING_LABEL,
   INDEXING_STATUS_LABEL,
   PREVIEW_LOADING_LABEL,
+  fetchWithTransientRetry,
   isRetryablePreviewError,
   isRetryablePreviewHttpStatus,
   resolvePreviewGate,
@@ -295,6 +296,8 @@ function formatSize(n: number | null | undefined) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
+const VIEWER_INLINE_TOOLBAR_MIN_WIDTH = 720
+
 const liquidViewerHeaderClass =
   "border-b border-white/55 bg-white/78 shadow-[0_18px_54px_rgba(15,23,42,0.08),inset_0_-1px_0_rgba(255,255,255,0.82)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/62 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_54px_rgba(0,0,0,0.28),inset_0_-1px_0_rgba(255,255,255,0.06)]"
 
@@ -369,6 +372,21 @@ export default function UnifiedDocumentViewer({
   // a retry without explicit prop wiring.
   const [retryKey, setRetryKey] = React.useState(0)
   const onRetry = React.useCallback(() => setRetryKey(k => k + 1), [])
+  // Page/zoom controls of the PDF renderer portal into the header row (same
+  // height as the action buttons) on wide panes, or a slim second row below
+  // the header on narrow ones.
+  const [toolbarEl, setToolbarEl] = React.useState<HTMLDivElement | null>(null)
+  const viewerHeaderRef = React.useRef<HTMLDivElement | null>(null)
+  const [headerWide, setHeaderWide] = React.useState(false)
+  React.useEffect(() => {
+    const el = viewerHeaderRef.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    const measure = () => setHeaderWide(el.clientWidth >= VIEWER_INLINE_TOOLBAR_MIN_WIDTH)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
   // Reset retry counter when the user navigates to a different
   // attachment — otherwise an old "I retried 3x" state would carry over.
   React.useEffect(() => { setRetryKey(0) }, [attachment?.id, attachment?.name])
@@ -460,7 +478,7 @@ export default function UnifiedDocumentViewer({
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className={cn(
+        <div ref={viewerHeaderRef} data-testid="unified-viewer-header" data-toolbar-layout={headerWide ? "inline" : "stacked"} className={cn(
           "relative isolate flex min-h-16 flex-row items-center gap-3 overflow-hidden px-4 py-2.5",
           liquidViewerHeaderClass,
         )}>
@@ -483,6 +501,10 @@ export default function UnifiedDocumentViewer({
               ) : null}
             </div>
           </div>
+
+          {headerWide && (
+            <div ref={setToolbarEl} data-testid="unified-viewer-toolbar" className="flex shrink-0 items-center empty:hidden" />
+          )}
 
           {siblings && siblings.length > 1 && (
             <div className="flex items-center gap-1.5">
@@ -573,8 +595,12 @@ export default function UnifiedDocumentViewer({
             LoadingState/ErrorState access to attachment+kind+onRetry,
             and keyed on `retryKey` so "Reintentar" remounts the renderer
             cleanly (resets all internal state, re-runs effects). */}
+        {!headerWide && (
+          <div ref={setToolbarEl} data-testid="unified-viewer-toolbar" className="flex justify-center border-b border-border/40 px-2 py-1.5 empty:hidden" />
+        )}
+
         <ViewerRenderBoundary name={attachment.name}>
-          <RendererCtx.Provider value={{ attachment, kind, onRetry }}>
+          <RendererCtx.Provider value={{ attachment, kind, onRetry, toolbarContainer: toolbarEl, inlineToolbar: headerWide }}>
             <div className="min-h-0 flex-1 overflow-hidden" key={retryKey}>
               <RendererDispatch kind={kind} attachment={attachment} isDark={isDark} />
             </div>
@@ -878,9 +904,13 @@ function cacheSet(key: string, partial: { text?: string; buffer?: ArrayBuffer })
 async function fetchAssetBytes(url: string): Promise<Response> {
   const normalized = absUrl(url)
   if (/^(data:|blob:)/i.test(normalized)) return fetch(normalized)
-  return isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
-    ? authenticatedAssetFetch(normalized)
-    : fetch(normalized)
+  // A publish restarts the backend for a few seconds; retry gateway 5xx
+  // quietly instead of surfacing «HTTP 502».
+  return fetchWithTransientRetry(() => (
+    isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
+      ? authenticatedAssetFetch(normalized)
+      : fetch(normalized)
+  ))
 }
 
 function cloneArrayBuffer(buf: ArrayBuffer): ArrayBuffer {
@@ -1003,6 +1033,9 @@ interface RendererCtxValue {
   attachment: AttachmentLike
   kind: Kind
   onRetry: () => void
+  // Header slot for the PDF page/zoom controls (null until mounted).
+  toolbarContainer?: HTMLElement | null
+  inlineToolbar?: boolean
 }
 const RendererCtx = React.createContext<RendererCtxValue | null>(null)
 
@@ -1376,7 +1409,14 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
  *   • predictable styling under light/dark mode
  *   • runs entirely in the browser — no server round-trip
  */
-export function PdfRenderer({ a, toolbarContainer }: { a: AttachmentLike; toolbarContainer?: HTMLElement | null }) {
+export function PdfRenderer({ a, toolbarContainer: toolbarContainerProp, compactToolbar: compactToolbarProp }: { a: AttachmentLike; toolbarContainer?: HTMLElement | null; compactToolbar?: boolean }) {
+  const viewerCtx = React.useContext(RendererCtx)
+  // Inside the unified viewer the header owns the slot; generated-document
+  // previews pass it explicitly. `undefined` keeps the legacy inline row.
+  const toolbarContainer = toolbarContainerProp !== undefined
+    ? toolbarContainerProp
+    : viewerCtx && "toolbarContainer" in viewerCtx ? (viewerCtx.toolbarContainer ?? null) : undefined
+  const compactToolbar = compactToolbarProp ?? Boolean(viewerCtx?.inlineToolbar)
   // pdf.js accepts a URL string OR a `{ data: Uint8Array }` payload.
   // Using `data` for in-memory File blobs avoids creating a blob URL
   // that pdf.js would have to refetch over HTTP.
@@ -1572,7 +1612,12 @@ export function PdfRenderer({ a, toolbarContainer }: { a: AttachmentLike; toolba
   // get an inline top toolbar; neither path covers the document with controls.
   const controls = (
       <nav aria-label="Navegación y zoom del documento" data-testid="pdf-preview-controls" className="flex max-w-full justify-center">
-        <div className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", liquidControlShellClass)}>
+        <div className={cn(
+          "flex max-w-full flex-wrap items-center justify-center gap-1",
+          liquidControlShellClass,
+          // Header row: shell matches the h-9 action buttons exactly.
+          compactToolbar && "h-9 flex-nowrap px-0.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:shadow-none",
+        )}>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             disabled={!numPages || activePage <= 1}
             onClick={() => goToPage(activePage - 1)}
