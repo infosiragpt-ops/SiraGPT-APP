@@ -1260,13 +1260,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         // crashed while it owned the turn. Falling through to the LLM loop
         // produced a plain answer that ECHOED the document (prod, 2026-09-25):
         // an edit turn either delivers a verified file or says it could not.
-        if (documentEditPreloopAttempted) {
-          const interrupted = Boolean(signal?.aborted) || /abort/i.test(message);
-          const answer = interrupted
-            ? 'La edición del documento se interrumpió antes de terminar (tiempo de espera o cancelación). El original no se modificó; vuelve a intentarlo.'
-            : 'No pude completar la edición del documento con el modelo seleccionado. El original no se modificó; inténtalo de nuevo o elige otro modelo.';
+        // (Other editor errors keep the legacy loop, where document_edit is
+        // still available; the route no longer "recovers" such turns with the
+        // document text, so the loop cannot echo it either.)
+        if (documentEditPreloopAttempted && (Boolean(signal?.aborted) || /\babort/i.test(message))) {
+          const answer = 'La edición del documento se interrumpió antes de terminar (tiempo de espera o cancelación). El original no se modificó; vuelve a intentarlo.';
           await writeSse(res, { replace: true, content: answer });
-          logDocRouting('source_preserving_edit', interrupted ? 'interrupted' : 'engine_error');
+          logDocRouting('source_preserving_edit', 'interrupted');
           return finishSourcePreservingPreloop('source_preserving_document_edit_failed', answer, []);
         }
       }

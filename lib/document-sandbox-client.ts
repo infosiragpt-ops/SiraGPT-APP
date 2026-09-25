@@ -92,7 +92,7 @@ export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
 // and the sentence must name something that lives in a document.
 const FUZZY_EDIT_STEMS = [
   "agreg", "anad", "anhad", "insert", "incorpor", "inclu", "met", "pon", "ponl", "coloc", "escrib", "redact", "complet",
-  "llen", "rellen", "marc", "comen", "coment", "edit", "modif", "modific", "corrig", "correg", "cambi", "reempl", "sustitu",
+  "llen", "rellen", "marc", "coment", "edit", "modif", "modific", "corrig", "correg", "cambi", "reempl", "sustitu",
   "actualiz", "quit", "borr", "elimin", "mejor", "arregl", "ajust", "renombr", "reescrib", "traduc", "parafrase", "numer",
 ]
 const FUZZY_DOC_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observacion(?:es)?|comentarios?|campos?|casillas?|firma|formulario|matriz|ficha|items?|preguntas?|respuestas?|filas|columnas|celdas|notas?|texto)\b/
@@ -112,15 +112,20 @@ function editDistanceAtMostOne(a: string, b: string): boolean {
   return edits + (a.length - i) + (b.length - j) <= 1
 }
 
+// One-edit tolerance only against stems of 5+ letters: shorter stems make
+// ordinary words look like verbs ("comercial" ~ "comen").
 function fuzzyEditVerb(word: string): boolean {
   if (word.length < 3) return false
   for (const stem of FUZZY_EDIT_STEMS) {
     if (word.startsWith(stem)) return true
     // "agreges" ~ "agreg" + suffix with a typo; compare the stem-length prefix.
-    if (word.length >= 5 && stem.length >= 4 && editDistanceAtMostOne(word.slice(0, stem.length), stem)) return true
+    if (word.length >= 6 && stem.length >= 5 && editDistanceAtMostOne(word.slice(0, stem.length), stem)) return true
   }
   return false
 }
+
+// "genera un documento nuevo de propuesta" creates, it does not edit.
+const FUZZY_NEW_DOC_RE = /\b(?:gener\w*|cre\w*|elabor\w*|produc\w*|haz(?:me)?|hacer|arma\w*|dise[nñ]\w*)\b[^.;\n]{0,60}\b(?:nuev[oa]s?|desde cero|otro|otra)\b|\b(?:nuev[oa]s?)\s+(?:documento|archivo|informe|word|excel|ppt|pptx|presentacion|reporte)\b/
 
 export function fuzzyLooksLikeDocumentEdit(prompt: string): boolean {
   const raw = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -133,6 +138,7 @@ export function fuzzyLooksLikeDocumentEdit(prompt: string): boolean {
     .replace(/\S+\.(?:docx?|xlsx?|xlsm|pptx?|pdf|odt|ods|odp|csv|rtf)\b/g, " ")
     .replace(/[^a-z0-9ñ\s]/g, " ").replace(/\s+/g, " ").trim()
   if (!text || FUZZY_READ_ONLY_RE.test(text)) return false
+  if (FUZZY_NEW_DOC_RE.test(text)) return false
   if (/\b(?:dice|decia|menciona|indica|senala)\b/.test(text) && !/\b(?:cambi\w*|edit\w*|modific\w*|agreg\w*|pon\w*|escrib\w*)\b[^,;.]{0,40}$/.test(text) && text.split(" ").filter(fuzzyEditVerb).length <= 1) return false
   if (!FUZZY_DOC_TARGET_RE.test(text)) return false
   return text.split(" ").some(fuzzyEditVerb)
