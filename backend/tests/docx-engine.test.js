@@ -324,3 +324,34 @@ test('values written into table cells pass render verification even when pdftote
   assert.ok(out.issues.some((issue) => /Valor que no existe/.test(issue)));
   assert.ok(out.issues.every((issue) => !/Coherente/.test(issue)), JSON.stringify(out.issues));
 });
+
+test('«agrega comentarios en observaciones»: a first "cannot: no me diste el texto" is pushed once and the model authors the content', async () => {
+  const { requestAuthorsContent } = require('../src/services/docx-engine/agent');
+  assert.equal(requestAuthorsContent('EN EL MISMO WORD QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR'), true);
+  assert.equal(requestAuthorsContent('completa el word con mis datos, DNI 72792992'), false);
+  const client = scriptedClient([
+    { content: null, tool_calls: [call('finish', { status: 'cannot', summary: 'No indicaste el texto de cada comentario.' })] },
+    { content: null, tool_calls: [call('fill_field', { label: 'DNI:', value: 'Observación favorable' })] },
+    { content: null, tool_calls: [call('finish', { status: 'done', summary: 'Agregué las observaciones.', expected_values: ['Observación favorable'] })] },
+    { content: null, tool_calls: [call('review_document_edit', { passed: true, issues: [], missing_information: [] })] },
+  ]);
+  const out = await runDocxEngineEdit({ buffer: fixture(), instruction: 'EN EL MISMO WORD QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR', client, model: 'm',
+    render: async (b) => ({ pages: 1, text: new PizZip(b).file('word/document.xml').asText().replace(/<[^>]+>/g, '') }) });
+  assert.equal(out.ok, true);
+  assert.equal(out.status, 'done');
+  assert.match(documentXml(out.buffer), /Observación favorable/);
+  const toolResults = client.calls[1].messages.filter((m) => m.role === 'tool').map((m) => m.content);
+  assert.ok(toolResults.some((r) => /REDACTES tú/.test(r)), 'the cannot finish must answer with the authoring push');
+});
+
+test('a second "cannot" after the push is respected (no infinite nudging)', async () => {
+  const client = scriptedClient([
+    { content: null, tool_calls: [call('finish', { status: 'cannot', summary: 'No indicaste el texto.' })] },
+    { content: null, tool_calls: [call('finish', { status: 'cannot', summary: 'El documento no tiene columna de observaciones.' })] },
+  ]);
+  const out = await runDocxEngineEdit({ buffer: fixture(), instruction: 'agrega comentarios en observaciones', client, model: 'm', render: async () => ({ pages: 1, text: '' }) });
+  assert.equal(out.ok, false);
+  assert.equal(out.status, 'cannot');
+  assert.match(out.summary, /no tiene columna/);
+  assert.equal(client.calls.length, 2);
+});
