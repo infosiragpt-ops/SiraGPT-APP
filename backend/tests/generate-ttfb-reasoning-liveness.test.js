@@ -23,6 +23,7 @@ test('reasoning and tool-call deltas count as the provider first byte', () => {
 test('server-side frames never count as a first byte', () => {
   assert.equal(frameShowsProviderFirstByte({ type: 'start', at: 1 }), false);
   assert.equal(frameShowsProviderFirstByte({ type: 'stage', label: 'Leyendo' }), false);
+  assert.equal(frameShowsProviderFirstByte({ type: 'stage', label: 'Buscando en la web', tool: 'web_search' }), false);
   assert.equal(frameShowsProviderFirstByte({ type: 'reasoning_delta', reasoning: '' }), false);
   assert.equal(frameShowsProviderFirstByte({ type: 'reasoning_done', durationMs: 5 }), false);
   assert.equal(frameShowsProviderFirstByte({ content: '' }), false);
@@ -69,4 +70,25 @@ test('generate route wires the probe before the TTFB watchdog interval', () => {
   assert.ok(probeAt > 0, 'probe required in ai.js');
   assert.ok(watchdogAt > probeAt, 'probe installed before the watchdog interval');
   assert.match(src.slice(probeAt, watchdogAt), /installFirstByteProbe\(res/);
+});
+
+test('document editor stages count as the first byte so a 2-minute Word fill is not aborted at 45 s', () => {
+  assert.equal(frameShowsProviderFirstByte({ type: 'stage', label: 'Editando documento original', tool: 'document_edit' }), true);
+  assert.equal(frameShowsProviderFirstByte({ type: 'stage', label: 'Agente trabajando', tool: 'agent_runner' }), true);
+  const startedAt = 1_000;
+  let firstByteAt = null;
+  const res = { write: () => true };
+  installFirstByteProbe(res, (at) => { if (firstByteAt == null) firstByteAt = at; });
+  res.write(frame({ type: 'stage', label: 'Leyendo la estructura del documento', tool: 'document_edit' }));
+  assert.ok(firstByteAt != null);
+  assert.equal(ad.abortIfFirstByteOver45s({ startedAt, now: startedAt + 120_000, firstByteAt }).abort, false);
+});
+
+test('generate route never "recovers" an edit turn with the extracted document text', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
+  assert.match(src, /let __attachmentRecoveryAllowed = true;/);
+  assert.match(src, /isDocumentEditRequest\(prompt\)\) __attachmentRecoveryAllowed = false;/);
+  assert.match(src, /if \(__ttfbAbortedAt != null \|\| [^\n]*controller\.signal\.aborted\)\) __attachmentRecoveryAllowed = false;/);
+  assert.match(src, /processedFiles\.length > 0 && __attachmentRecoveryAllowed\) \{/);
+  assert.match(src, /&& __attachmentRecoveryAllowed\n\s+&& chatAttachmentRecovery\.shouldRecoverAttachmentResponse\(/);
 });

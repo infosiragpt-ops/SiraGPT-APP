@@ -78,10 +78,70 @@ export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
     .replace(/\\_/g, "_")
     .replace(/#+\s*/g, " ")
     .replace(/\S+\.(?:docx?|xlsx?|xlsm|pptx?|pdf|odt|ods|odp|csv|rtf)\b/g, " ")
-  return cleaned
+  if (cleaned
     .split(/[\n.;]+/)
     .map((clause) => clause.replace(/^\s*(?:(?:el|la|mi|este|esta)\s+)?(?:docx|word|excel|xlsx|pptx|powerpoint|pdf|documento|archivo)\b\s*[,:]?\s*/, "").trim())
-    .some((clause) => clause.length > 0 && clause !== text && clauseLooksLikeEdit(clause))
+    .some((clause) => clause.length > 0 && clause !== text && clauseLooksLikeEdit(clause))) return true
+  return fuzzyLooksLikeDocumentEdit(prompt)
+}
+
+// Typo/caps/accents-tolerant fallback. Luis's real message «EN EL MISMO WORD
+// QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR» matched none of the
+// exact verb forms above and fell to the plain chat, which echoed the
+// document. Words are compared against verb STEMS with one-edit tolerance,
+// and the sentence must name something that lives in a document.
+const FUZZY_EDIT_STEMS = [
+  "agreg", "anad", "anhad", "insert", "incorpor", "inclu", "met", "pon", "ponl", "coloc", "escrib", "redact", "complet",
+  "llen", "rellen", "marc", "coment", "edit", "modif", "modific", "corrig", "correg", "cambi", "reempl", "sustitu",
+  "actualiz", "quit", "borr", "elimin", "mejor", "arregl", "ajust", "renombr", "reescrib", "traduc", "parafrase", "numer",
+]
+const FUZZY_DOC_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observacion(?:es)?|comentarios?|campos?|casillas?|firma|formulario|matriz|ficha|items?|preguntas?|respuestas?|filas|columnas|celdas|notas?|texto)\b/
+const FUZZY_READ_ONLY_RE = /^\s*(?:explica|explicame|describe|resume|resumeme|analiza|revisa|que|como|por que|dime|cual|cuales|cuanto|traduceme lo que|no (?:edites|modifiques|reescribas|cambies))\b/
+
+function editDistanceAtMostOne(a: string, b: string): boolean {
+  if (a === b) return true
+  if (Math.abs(a.length - b.length) > 1) return false
+  let i = 0, j = 0, edits = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue }
+    if (++edits > 1) return false
+    if (a.length > b.length) i++
+    else if (a.length < b.length) j++
+    else { i++; j++ }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1
+}
+
+// One-edit tolerance only against stems of 5+ letters: shorter stems make
+// ordinary words look like verbs ("comercial" ~ "comen").
+function fuzzyEditVerb(word: string): boolean {
+  if (word.length < 3) return false
+  for (const stem of FUZZY_EDIT_STEMS) {
+    if (word.startsWith(stem)) return true
+    // "agreges" ~ "agreg" + suffix with a typo; compare the stem-length prefix.
+    if (word.length >= 6 && stem.length >= 5 && editDistanceAtMostOne(word.slice(0, stem.length), stem)) return true
+  }
+  return false
+}
+
+// "genera un documento nuevo de propuesta" creates, it does not edit.
+const FUZZY_NEW_DOC_RE = /\b(?:gener\w*|cre\w*|elabor\w*|produc\w*|haz(?:me)?|hacer|arma\w*|dise[nñ]\w*)\b[^.;\n]{0,60}\b(?:nuev[oa]s?|desde cero|otro|otra)\b|\b(?:nuev[oa]s?)\s+(?:documento|archivo|informe|word|excel|ppt|pptx|presentacion|reporte)\b/
+
+export function fuzzyLooksLikeDocumentEdit(prompt: string): boolean {
+  const raw = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  // «¿Puedes editar este Word?» asks about capability; quoted text is document
+  // content, never an instruction.
+  if (/^\s*[¿]?\s*(?:puedes|podrias|podras|me puedes|me podrias|sabes|se puede|es posible)\b[^?]*\?\s*$/.test(raw)) return false
+  const text = raw
+    .replace(/"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|«[^»\n]*»/g, " ")
+    .replace(/\\_/g, "_").replace(/#+\s*/g, " ")
+    .replace(/\S+\.(?:docx?|xlsx?|xlsm|pptx?|pdf|odt|ods|odp|csv|rtf)\b/g, " ")
+    .replace(/[^a-z0-9ñ\s]/g, " ").replace(/\s+/g, " ").trim()
+  if (!text || FUZZY_READ_ONLY_RE.test(text)) return false
+  if (FUZZY_NEW_DOC_RE.test(text)) return false
+  if (/\b(?:dice|decia|menciona|indica|senala)\b/.test(text) && !/\b(?:cambi\w*|edit\w*|modific\w*|agreg\w*|pon\w*|escrib\w*)\b[^,;.]{0,40}$/.test(text) && text.split(" ").filter(fuzzyEditVerb).length <= 1) return false
+  if (!FUZZY_DOC_TARGET_RE.test(text)) return false
+  return text.split(" ").some(fuzzyEditVerb)
 }
 
 function clauseLooksLikeEdit(text: string): boolean {

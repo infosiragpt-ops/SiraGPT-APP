@@ -24,8 +24,16 @@ function frameShowsProviderFirstByte(obj) {
     return typeof obj.reasoning === 'string' && obj.reasoning.length > 0;
   }
   if (type === 'tool_call_delta') return true;
+  // The document editor (docx engine / doc-agent) runs the picked model
+  // behind server-side stages and streams no text until the file is
+  // verified (a Word fill takes 1–3 min). Its stages are provider activity:
+  // aborting at 45 s dropped the edit mid-run and the turn fell through to a
+  // plain answer that echoed the document (prod, 2026-09-25).
+  if (type === 'stage' && DOCUMENT_WORK_TOOLS.has(String(obj.tool || ''))) return true;
   return false;
 }
+
+const DOCUMENT_WORK_TOOLS = new Set(['document_edit', 'agent_runner', 'create_document']);
 
 function parseSseDataFrame(payload) {
   if (typeof payload !== 'string' || !payload.startsWith('data:')) return null;

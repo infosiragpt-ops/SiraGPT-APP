@@ -2142,3 +2142,37 @@ test('buildChatFinalizeProfile: read-only waiver never unlocks side-effect gates
   assert.ok(profile.requiredTools.includes('create_document'),
     'deliverable turns must still require create_document');
 });
+
+test('runAgenticChat: an interrupted document editor never falls through to the loop or echoes the document', async () => {
+  let llmCalls = 0;
+  const { res, body } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => { throw new Error('Request was aborted.'); },
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai: { chat: { completions: { create: async () => { llmCalls += 1; return finalizeMessage('tiene la facultad de evaluar cada una de las preguntas'); } } } },
+      model: 'grok-4.6', userQuery: 'EN EL MISMO WORD QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR', history: [], res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'], prisma: {} },
+      toolsOverride: [{ name: 'document_edit', description: 'edit', parameters: { type: 'object', properties: {} }, execute: async () => ({ ok: true }) }],
+    });
+    assert.equal(llmCalls, 0);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit_failed');
+    assert.match(result.finalAnswer, /se interrumpió/);
+    assert.deepEqual(result.artifacts, []);
+    assert.match(body(), /se interrumpió/);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});

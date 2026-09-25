@@ -7889,7 +7889,20 @@ router.post(
           },
         );
 
-        if (processedFiles.length > 0) {
+        // Attachment "recovery" answers a weak/empty reply with the extracted
+        // document text. On an EDIT turn that is an echo of the user's own
+        // file presented as the answer (prod, 2026-09-25: the editor was
+        // aborted, the plain stream came back empty and the user got the Word
+        // pasted back). Edits deliver a file or an honest error, never the
+        // document; an aborted turn is not recovered either.
+        let __attachmentRecoveryAllowed = true;
+        try {
+          if (require('../services/agents/agentic-trigger').isDocumentEditRequest(prompt)) __attachmentRecoveryAllowed = false;
+        } catch (_) { /* fail-open */ }
+        if (__ttfbAbortedAt != null || (typeof controller !== 'undefined' && controller && controller.signal && controller.signal.aborted)) __attachmentRecoveryAllowed = false;
+        if (!__attachmentRecoveryAllowed) generateLog.info('recovery.skipped_edit_turn', { aborted: __ttfbAbortedAt != null });
+
+        if (processedFiles.length > 0 && __attachmentRecoveryAllowed) {
           try {
             const directContext = uploadedFileContextForTurn
               || chatAttachmentRecovery.buildProcessedFilesContext(processedFiles, prompt);
@@ -7915,6 +7928,7 @@ router.post(
         if (
           processedFiles.length > 0
           && userId
+          && __attachmentRecoveryAllowed
           && chatAttachmentRecovery.shouldRecoverAttachmentResponse({
             prompt,
             response: fullResponseContent,

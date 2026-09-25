@@ -199,11 +199,59 @@ function isDocumentEditRequest(text) {
   if (isDocumentCorrectionEditRequest(t)) return true;
   if (isDocumentStyleEditRequest(t)) return true;
   if (STRONG_EDIT_VERBS.test(t)) return true;
-  return WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
+  if (WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t))) return true;
+  return isFuzzyDocumentEditRequest(t);
+}
+
+// Typo / caps / accent tolerant fallback («QIERO QUE AGREGES COMENTARIOS EN
+// OBSERVACIONES», «modifiqes el titulo»): a word within one edit of an edit
+// verb stem plus something that lives in a document. Read-only openers
+// (explica, resume, qué dice…) never count.
+const FUZZY_EDIT_STEMS = ['agreg', 'anad', 'anhad', 'insert', 'incorpor', 'inclu', 'met', 'pon', 'ponl', 'coloc', 'escrib', 'redact',
+  'complet', 'llen', 'rellen', 'marc', 'coment', 'edit', 'modif', 'modific', 'corrig', 'correg', 'cambi', 'reempl',
+  'sustitu', 'actualiz', 'quit', 'borr', 'elimin', 'mejor', 'arregl', 'ajust', 'renombr', 'reescrib', 'traduc', 'numer'];
+const FUZZY_DOC_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observacion(?:es)?|comentarios?|campos?|casillas?|firma|formulario|matriz|ficha|items?|preguntas?|respuestas?|notas?|texto)\b/;
+const FUZZY_READ_ONLY_RE = /^\s*(?:explica|explicame|describe|resume|resumeme|analiza|revisa|que|como|por que|dime|cual|cuales|cuanto|no (?:edites|modifiques|reescribas|cambies))\b/;
+
+function editDistanceAtMostOne(a, b) {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; let j = 0; let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i += 1; j += 1; continue; }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (a.length < b.length) j += 1;
+    else { i += 1; j += 1; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+// One-edit tolerance only against stems of 5+ letters: shorter stems make
+// ordinary words look like verbs ("comercial" ~ "comen").
+function fuzzyEditVerb(word) {
+  if (word.length < 3) return false;
+  return FUZZY_EDIT_STEMS.some((stem) => word.startsWith(stem)
+    || (word.length >= 6 && stem.length >= 5 && editDistanceAtMostOne(word.slice(0, stem.length), stem)));
+}
+
+// "genera un documento nuevo de propuesta" creates, it does not edit.
+const FUZZY_NEW_DOC_RE = /\b(?:gener\w*|cre\w*|elabor\w*|produc\w*|haz(?:me)?|hacer|arma\w*|dise[nñ]\w*)\b[^.;\n]{0,60}\b(?:nuev[oa]s?|desde cero|otro|otra)\b|\b(?:nuev[oa]s?)\s+(?:documento|archivo|informe|word|excel|ppt|pptx|presentacion|reporte)\b/;
+
+function isFuzzyDocumentEditRequest(text) {
+  const t = String(text == null ? '' : text).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\\_/g, '_').replace(/#+\s*/g, ' ')
+    .replace(/\S+\.(?:docx?|xlsx?|xlsm|pptx?|pdf|odt|ods|odp|csv|rtf)\b/g, ' ')
+    .replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t || FUZZY_READ_ONLY_RE.test(t) || !FUZZY_DOC_TARGET_RE.test(t)) return false;
+  if (FUZZY_NEW_DOC_RE.test(t) && !STRONG_EDIT_VERBS.test(t)) return false;
+  return t.split(' ').some(fuzzyEditVerb);
 }
 
 module.exports = {
   isAgenticActionRequest,
+  isFuzzyDocumentEditRequest,
   isArtifactDeliverableRequest,
   isDocumentEditRequest,
   isDocumentStyleEditRequest,
