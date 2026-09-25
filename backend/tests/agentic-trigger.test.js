@@ -127,3 +127,17 @@ test('isArtifactDeliverableRequest gates attachment turns on verb + noun', () =>
     assert.equal(isArtifactDeliverableRequest(m), false, `should NOT be a deliverable: ${m}`);
   }
 });
+
+test('typo / caps / accent tolerant edit detection (Luis prod message + paraphrases)', () => {
+  const { isDocumentEditRequest, isFuzzyDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
+  for (const prompt of [
+    'EN EL MISMO WORD QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR',
+    'ponle comentarios en observaciones', 'mete observaciones a cada pregunta', 'escribe en la columna observaciones',
+    'llena observaciones', 'comenta cada ítem', 'AGREGA OBSERVACIONES', 'quiero que agreges observaciones',
+    'pon observaciones en cada fila', 'completa la columna de observaciones', 'rellena observaciones con comentarios positivos',
+    'qiero que modifiqes el titulo del documento',
+  ]) assert.equal(isDocumentEditRequest(prompt), true, prompt);
+  for (const prompt of ['¿qué dice el documento?', 'explica el word adjunto', 'resume el archivo', 'hola como estas', 'cambia de tema']) {
+    assert.equal(isFuzzyDocumentEditRequest(prompt), false, prompt);
+  }
+});

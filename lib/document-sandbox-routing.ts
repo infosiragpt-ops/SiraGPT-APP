@@ -25,7 +25,7 @@ const RECENT_HISTORY_MESSAGES = 8
 // A follow-up without attachments edits the chat's document only when it names
 // something that lives in a document ("cambia el título", "agrega una fila"),
 // never a conversational tweak like "cambia el tono de tu respuesta".
-const DOCUMENT_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observaciones?|campos?|casillas?|firma|formulario|matriz|ficha|diapositivas|celdas|filas|columnas)\b/
+const DOCUMENT_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observaciones?|comentarios?|campos?|casillas?|firma|formulario|matriz|ficha|items?|preguntas?|diapositivas|celdas|filas|columnas)\b/
 
 export function mentionsDocumentTarget(prompt: string): boolean {
   return DOCUMENT_TARGET_RE.test(prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""))

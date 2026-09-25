@@ -334,3 +334,33 @@ test("real follow-up edits that name the file first still route to the editor", 
     assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
   }
 })
+
+test("Luis's exact uppercase/typo follow-up and its paraphrases are admitted as document edits", () => {
+  const chip = [{ id: "upload-1", name: "CARTA PARA LA VALIDACION rgp.docx" }]
+  const luis = "EN EL MISMO WORD QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR"
+  assert.equal(looksLikeExplicitDocumentEdit(luis), true)
+  assert.equal(resolveDocumentSandboxAdmission(luis, { attachments: chip }).route, "edit")
+  assert.equal(resolveDocumentSandboxAdmission(luis, { historyAttachments: chip }).route, "edit")
+  for (const prompt of [
+    "ponle comentarios en observaciones",
+    "mete observaciones a cada pregunta",
+    "escribe en la columna observaciones",
+    "llena observaciones",
+    "comenta cada ítem",
+    "AGREGA OBSERVACIONES",
+    "quiero que agreges observaciones",
+    "pon observaciones en cada fila",
+    "completa la columna de observaciones sin acentos ni mayusculas",
+    "rellena observaciones con comentarios positivos",
+    "AGREGAME OBSERVACIONS EN LA TABLA",
+    "qiero que modifiqes el titulo del documento",
+  ]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), true, prompt)
+    assert.equal(resolveDocumentSandboxAdmission(prompt, { historyAttachments: chip }).route, "edit", prompt)
+  }
+  for (const prompt of [
+    "¿qué dice el documento?", "explica el word adjunto", "resume el archivo", "dime cuántas preguntas tiene la tabla",
+    "hola como estas", "cambia de tema", "puedes editar documentos?", "cambia tu forma de responder",
+    "analiza las observaciones del documento",
+  ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+})

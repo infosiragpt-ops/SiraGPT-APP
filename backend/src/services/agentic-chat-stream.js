@@ -1256,6 +1256,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             [],
           );
         }
+        // The editor was interrupted (TTFB watchdog / Stop / provider drop) or
+        // crashed while it owned the turn. Falling through to the LLM loop
+        // produced a plain answer that ECHOED the document (prod, 2026-09-25):
+        // an edit turn either delivers a verified file or says it could not.
+        if (documentEditPreloopAttempted) {
+          const interrupted = Boolean(signal?.aborted) || /abort/i.test(message);
+          const answer = interrupted
+            ? 'La edición del documento se interrumpió antes de terminar (tiempo de espera o cancelación). El original no se modificó; vuelve a intentarlo.'
+            : 'No pude completar la edición del documento con el modelo seleccionado. El original no se modificó; inténtalo de nuevo o elige otro modelo.';
+          await writeSse(res, { replace: true, content: answer });
+          logDocRouting('source_preserving_edit', interrupted ? 'interrupted' : 'engine_error');
+          return finishSourcePreservingPreloop('source_preserving_document_edit_failed', answer, []);
+        }
       }
     }
 
