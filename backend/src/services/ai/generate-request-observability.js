@@ -279,6 +279,7 @@ const ALLOWED_EVENTS = new Set([
   'recovery.direct_normalization_failed',
   'recovery.extracted_field_applied',
   'recovery.extracted_field_failed',
+  'recovery.skipped_edit_turn',
   'recovery.spreadsheet_direct',
   'recovery.spreadsheet_failed',
   'recovery.spreadsheet_follow_up',
