@@ -52,9 +52,9 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
     return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.route('**/qa-code-preview', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>Mi aplicación</h1>' }))
-  await page.goto(opts.fresh ? '/agentes' : '/agentes?id=code-chat', { waitUntil: 'domcontentloaded' })
-  await expect(page.getByTestId('chat-code-button')).toBeVisible({ timeout: 90_000 })
-  await page.getByTestId('chat-code-button').click()
+  // The header has no code button; the workspace opens from `?code=1`.
+  await page.goto(opts.fresh ? '/agentes?code=1' : '/agentes?id=code-chat&code=1', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
   return { files, generated, requests, errors }
 }
 
@@ -83,7 +83,8 @@ test('opens beside the chat, edits real Monaco, saves and reopens the same persi
   expect((await composer.boundingBox())!.x + (await composer.boundingBox())!.width).toBeLessThanOrEqual((await panel.boundingBox())!.x)
   await page.screenshot({ path: info.outputPath('coding-desktop.png') })
   await page.getByTestId('agentes-coding-ide-collapse').click()
-  await page.getByTestId('chat-code-button').click()
+  await expect(panel).toBeHidden()
+  await page.goto('/agentes?id=code-chat&code=1', { waitUntil: 'domcontentloaded' })
   await openFile(page)
   await expect(page.locator('.monaco-editor').first()).toContainText('7')
   expect(state.requests.some(r => r.includes('/agentes-coding/sessions'))).toBe(false)

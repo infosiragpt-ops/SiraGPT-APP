@@ -32,7 +32,6 @@ import {
   NetworkIcon,
   Network,
   Monitor,
-  Code2,
   Share,
   Search,
   Download,
@@ -12730,6 +12729,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }, [openComputerPanel]);
 
+  // The header no longer has a code button; the workspace stays reachable
+  // with `?code=1` (like `?computer=1`). With `?id=` wait for that chat so
+  // the panel binds to it instead of creating a new one.
+  const codeParamHandledRef = React.useRef(false);
+  React.useEffect(() => {
+    if (codeParamHandledRef.current || typeof window === "undefined") return;
+    const code = new URLSearchParams(window.location.search).get("code");
+    if (code !== "1" && code !== "true") { codeParamHandledRef.current = true; return; }
+    if (conversationIdFromLocation(window.location.pathname, window.location.search) && !currentChat?.id) return;
+    codeParamHandledRef.current = true;
+    void openCodePanel();
+  }, [currentChat?.id, openCodePanel]);
+
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     const onNavigate = (event: Event) => {
@@ -14147,12 +14159,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
-                <Button variant={codePanelOpen ? "secondary" : "ghost"} size="icon"
-                  onClick={() => void openCodePanel()} disabled={codeOpening}
-                  title={codingWorkspace ? "Código · proyecto vinculado a este chat" : "Código"} aria-label="Código" aria-pressed={codePanelOpen}
-                  data-testid="chat-code-button" className="chat-header-icon-btn h-11 w-11 rounded-full">
-                  <Code2 className="h-5 w-5" />
-                </Button>
                 <Button
                   variant={computerPanelOpen && !computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
