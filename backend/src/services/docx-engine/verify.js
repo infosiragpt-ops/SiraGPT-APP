@@ -143,10 +143,25 @@ async function verifyEditedDocx({
       // not a blanket rejection of valid long edits.
       report.pageCountChanged = Boolean(before && after.pages !== before.pages);
       const rendered = normalizeText(after.text);
+      const story = normalizeText(storyText);
+      // pdftotext interleaves table columns line by line, so a value written
+      // into a narrow cell ("Coherente con las variables de estudio.") rarely
+      // survives as one contiguous string. When the value IS in the story XML,
+      // accept it if its words are visible in the render; only values absent
+      // from both are a real placement problem.
+      const visibleInRender = (v) => {
+        const value = normalizeText(v);
+        if (rendered.includes(value)) return true;
+        if (!story.includes(value)) return false;
+        const words = String(v).split(/\s+/).map(normalizeText).filter((w) => w.length >= 3);
+        if (!words.length) return true;
+        const hits = words.filter((w) => rendered.includes(w)).length;
+        return hits >= Math.ceil(words.length * 0.8);
+      };
       const missing = (expectedValues || [])
         .map((v) => String(v || '').trim())
         .filter(Boolean)
-        .filter((v) => !rendered.includes(normalizeText(v)));
+        .filter((v) => !visibleInRender(v));
       if (missing.length) {
         issues.push(`Estos valores no aparecen en el documento renderizado: ${missing.map((v) => `«${v.slice(0, 60)}»`).join(', ')}. Verifica que la edición quedó en el lugar correcto.`);
       }
