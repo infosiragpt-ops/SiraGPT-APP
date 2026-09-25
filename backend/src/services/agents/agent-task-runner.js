@@ -2646,6 +2646,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           // can actually cancel this pre-loop deterministic edit; the function
           // already accepts + propagates it to its LLM/sandbox calls.
           signal: controller.signal,
+          llm: openai ? { client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider, toolCallMode: (() => { try { return require('../agentic-chat-stream').resolveToolCallMode(runtimeModelProfile.runtimeProvider, runtimeModelProfile.runtimeModel) === 'prompted' ? 'prompted' : 'native'; } catch { return 'native'; } })() } : null,
+          onEvent: (stage) => { try { emit({ type: 'checkpoint', label: stage.label, status: 'running', payload: stage.detail ? { detail: stage.detail } : {} }); } catch (_) { /* relay */ } },
         });
         if (preserved === null) {
           // No había archivo adjunto ni artefacto previo que conservar: la
@@ -3695,6 +3697,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // Thread the run's abort signal so the runtimeTimer can cancel this
             // post-loop edit instead of letting it stall past maxRuntimeMs.
             signal: controller.signal,
+            llm: openai ? { client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider, toolCallMode: (() => { try { return require('../agentic-chat-stream').resolveToolCallMode(runtimeModelProfile.runtimeProvider, runtimeModelProfile.runtimeModel) === 'prompted' ? 'prompted' : 'native'; } catch { return 'native'; } })() } : null,
+            onEvent: (stage) => { try { emit({ type: 'checkpoint', label: stage.label, status: 'running', payload: stage.detail ? { detail: stage.detail } : {} }); } catch (_) { /* relay */ } },
           });
           if (preserved?.clarification) {
             // La aclaración (qué imagen editar / falta la imagen nueva) es la

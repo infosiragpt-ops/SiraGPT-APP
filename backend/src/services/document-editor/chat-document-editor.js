@@ -420,6 +420,46 @@ async function runChatDocumentEdit({
       }
     }
 
+    // Word documents: the picked model edits the file in place through the
+    // structured docx engine (outline → precise ops → verified render). This
+    // claims every Word edit — a failure is reported honestly, never replaced
+    // by an annex/rebuild fallback.
+    const wordFile = files.length === 1 && /\.docx?$/i.test(files[0].name) ? files[0] : null;
+    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env)) {
+      const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
+      let edited;
+      try {
+        edited = await deps.docxEngine.editWordDocument({
+          buffer: wordFile.buffer,
+          filename: wordFile.name,
+          instruction,
+          client,
+          model: llm.model,
+          signal,
+          onEvent: emit,
+        });
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        deps.log('docx_engine_failed', { message: String(err?.message || err).slice(0, 200) });
+        return { ok: false, code: 'ENGINE_FAILED', message: MESSAGES.ENGINE_FAILED };
+      }
+      if (!edited.ok) return { ok: false, code: String(edited.status || 'failed').toUpperCase(), message: edited.message };
+      const saved = deps.saveArtifact({
+        filename: edited.filename,
+        base64: edited.buffer.toString('base64'),
+        mime: edited.mime,
+        ownerUserId: userId,
+        chatId,
+        category: 'agent_artifact',
+        validation: { passed: true, changes: edited.changes.filter((c) => c.op !== 'warning').slice(0, 60) },
+      });
+      const artifact = {
+        id: saved.id, filename: saved.filename, format: saved.format, mime: saved.mime,
+        sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl, validation: { passed: true },
+      };
+      return { ok: true, artifacts: [artifact], summary: edited.summary };
+    }
+
     // Deterministic surgical path FIRST (no model, no sandbox): the
     // source-preserving engine executes machine-plannable ops (add_slide,
     // replace_text, …) with exact patches and deck-DNA styling, delivering
@@ -545,6 +585,7 @@ function resolveDeps(injected) {
     resolveDocAgentCandidates: lazy('resolveDocAgentCandidates', () => require('../doc-agent/llm-runtime').resolveDocAgentCandidates),
     createFailoverClient: lazy('createFailoverClient', () => require('../doc-agent/llm-runtime').createFailoverClient),
     defaultCreateClient: lazy('defaultCreateClient', () => require('../doc-agent/llm-runtime').defaultCreateClient),
+    docxEngine: lazy('docxEngine', () => require('../docx-engine')),
     sleep: injected.sleep,
     log: lazy('log', () => (event, details) => {
       try { console.warn(`[document-editor] ${event}`, JSON.stringify(details || {})); } catch { /* noop */ }

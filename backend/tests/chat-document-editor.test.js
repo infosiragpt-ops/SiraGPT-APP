@@ -54,6 +54,9 @@ function baseDeps(overrides = {}) {
   const agentCalls = [];
   const deps = {
     env: {},
+    // These cases cover the sandbox doc-agent path; Word edits with a live
+    // model go to the docx engine (tests/docx-engine.test.js).
+    docxEngine: { docxEngineEnabled: () => false },
     artifactDir: tempArtifactDir(),
     objectStorage: { toLocalTemp: async () => { throw new Error('not remote'); } },
     readSourceBuffer: async () => ({ buffer: DOCX, cleanup: async () => {} }),

@@ -8502,6 +8502,34 @@ function buildBatchEditResult({ attempts = [], requestText = '' } = {}) {
   };
 }
 
+async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent }) {
+  const docxEngine = require('./docx-engine');
+  if (!docxEngine.docxEngineEnabled()) return null;
+  const editor = require('./document-editor/chat-document-editor');
+  const sources = await editor.resolveEditSources({
+    prisma, userId, chatId, fileIds, deps: {
+      artifactDir: require('./agents/task-tools').ARTIFACT_DIR,
+      extractFileIds: require('./message-attachments').extractFileIdsFromMessageFiles,
+    },
+  });
+  if (sources.length !== 1 || !docxEngine.isWordFilename(sources[0].name)) return null;
+  const edited = await editor.runChatDocumentEdit({
+    prisma, userId, chatId, fileIds, instruction: requestText, signal, llm,
+    onEvent: typeof onEvent === 'function' ? onEvent : () => {},
+  });
+  if (!edited || !edited.ok) {
+    const error = new Error((edited && edited.message) || 'No pude completar la edición del documento con el modelo seleccionado. El original no se modificó.');
+    error.code = 'DOCX_EDIT_ENGINE_FAILED';
+    throw error;
+  }
+  const artifact = edited.artifacts[0];
+  return {
+    content: edited.summary, artifact, validation: { passed: true }, format: /\.doc$/i.test(artifact.filename) ? 'doc' : 'docx', previewHtml: null,
+    file: { type: 'doc', format: 'docx', title: artifact.filename, filename: artifact.filename,
+      url: artifact.downloadUrl, mime: artifact.mime, size: artifact.sizeBytes, metrics: { passed: true } },
+  };
+}
+
 async function tryGenerateSourcePreservingDocumentEdit({
   prisma,
   userId,
@@ -8510,8 +8538,17 @@ async function tryGenerateSourcePreservingDocumentEdit({
   prompt,
   displayPrompt,
   signal,
+  llm = null,
+  onEvent = null,
 } = {}) {
   const requestText = displayPrompt || prompt || '';
+  // Word files with a live model: the docx engine edits the document in
+  // place (the model reads its structure and fills/edits the right fields).
+  // No annex/append fallback for Word — failure is reported honestly.
+  if (llm && llm.client) {
+    const engineHit = await tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent });
+    if (engineHit) return engineHit;
+  }
   if (parseDocxPrecisionRequest(requestText)) {
     // Reuse the canonical ownership/version resolver. The legacy heuristic
     // selector can prefer a historical upload based on extracted-text guesses;

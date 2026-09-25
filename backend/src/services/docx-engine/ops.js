@@ -176,13 +176,17 @@ function columnNeighbourPara(model, cellEntry) {
       order.push(c);
     }
   }
-  for (const c of order) {
+  // Same-row cells first (a data row's own formatting), then the column;
+  // prefer non-bold sources so an empty data cell never inherits a header.
+  const sameRow = row.cells.filter((c) => c !== cell);
+  const candidates = [];
+  for (const c of [...order, ...sameRow]) {
     for (const pid of c.paragraphs) {
       const p = model.byId.get(pid).paragraph;
-      if (p.text.trim() && firstTextRun(p)) return p;
+      if (p.text.trim() && firstTextRun(p)) candidates.push(p);
     }
   }
-  return null;
+  return candidates.find((p) => !firstTextRun(p).format.bold) || candidates[0] || null;
 }
 
 /**

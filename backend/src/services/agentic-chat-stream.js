@@ -1160,6 +1160,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             prompt: userQuery,
             displayPrompt: userQuery,
             signal,
+            llm: { client: openai, model, provider, toolCallMode },
+            onEvent: (stage) => { writeSse(res, { type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}), tool: 'document_edit' }).catch(() => {}); },
           });
           if (preserved?.clarification) {
             const answer = String(preserved.content || '').trim();
