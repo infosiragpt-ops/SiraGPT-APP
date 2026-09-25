@@ -850,6 +850,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       selection = null,
       toolCallMode = 'native',
       provider = null,
+      // Composer "Esfuerzo" level forwarded to every loop step (see
+      // react-agent thinkingLevel).
+      thinkingLevel = null,
+      thinkingLevelExplicit = false,
       // Extracted text of the user's attached documents (already budget-capped
       // by the caller). Injected directly into the system prompt so the agentic
       // loop ALWAYS sees the content — rag_retrieve becomes a fallback for deep
@@ -2149,6 +2153,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         initialToolChoice,
         toolCallMode,
         parallelToolCalls: __parallelToolCalls,
+        thinkingLevel,
+        thinkingLevelExplicit,
         ctx: {
           ...toolContext,
           signal,

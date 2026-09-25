@@ -7548,8 +7548,10 @@ router.post(
                 // chosen provider/model drives every step (plan → tools →
                 // finalize) in its own tool-call mode.
                 const agenticClient = createProviderClient(actualProvider, { customConnection });
-                // Direct Claude uses a native Anthropic adapter to drive the
-                // ReAct loop. RAG helpers still expect a real OpenAI client and
+                // Direct Claude: createProviderClient returns the first-party
+                // Anthropic client, which translates tools / tool_calls /
+                // role:'tool' to native tool_use blocks (first-party-chat-clients
+                // createWithTools). RAG helpers still expect a real OpenAI client and
                 // may hard-code embedding/judge model ids, so keep that
                 // auxiliary dependency separate from the loop transport.
                 const agenticToolOpenAI = actualProvider === 'Anthropic'
@@ -7628,6 +7630,8 @@ router.post(
                     ? Math.min(160, Math.max(1, Math.round(Number(req.body.coworkBudget.maxSteps))))
                     : undefined,
                   toolCallMode: __toolCallMode,
+                  thinkingLevel: req._thinkingLevel || null,
+                  thinkingLevelExplicit: req._thinkingLevelExplicit === true && req._thinkingLevel !== 'disabled',
                   webSearchIntent: req._rlcdWebSearch || null,
                   turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision

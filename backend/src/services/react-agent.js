@@ -990,6 +990,11 @@ async function run(openai, opts) {
     // a killed worker/deploy does NOT restart the run from step 0.
     onCheckpoint = null,
     resumeCheckpoint = null,
+    // Composer "Esfuerzo": resolved per step into the active provider's native
+    // effort fields (litellm-gateway resolveProviderEffortFields), same
+    // mapping as the plain stream.
+    thinkingLevel = null,
+    thinkingLevelExplicit = false,
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -1427,6 +1432,15 @@ async function run(openai, opts) {
       if (ctx.signal.aborted) onParentAbort();
       else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
     }
+    let effortFields = {};
+    try {
+      effortFields = require('./ai-product-os/litellm-gateway').resolveProviderEffortFields({
+        provider: activeProvider,
+        model: activeModel,
+        thinkingLevel,
+        thinkingLevelExplicit,
+      }) || {};
+    } catch (_) { effortFields = {}; }
     try {
       if (prompted) {
         // Provider-safe payload: no tools/tool_choice params, no role:'tool'
@@ -1439,6 +1453,7 @@ async function run(openai, opts) {
           model: activeModel,
           messages: promptedTC.toPromptedTranscript(messages, { forceToolName }),
           temperature: 0.3,
+          ...effortFields,
         }, { signal: stepCtl.signal });
       } else {
         resp = await activeOpenai.chat.completions.create({
@@ -1448,6 +1463,7 @@ async function run(openai, opts) {
           tool_choice: toolChoice,
           ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
           temperature: 0.3,
+          ...effortFields,
         }, { signal: stepCtl.signal });
       }
     } catch (err) {

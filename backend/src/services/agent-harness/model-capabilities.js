@@ -14,6 +14,7 @@
  *   - reasoningParamStyle        — how to ASK for it:
  *       'openrouter-effort'  → payload.reasoning = { effort } (unified API)
  *       'deepseek'           → no param; reasoning_content arrives by itself
+       'reasoning-effort'   → payload.reasoning_effort (Meta Muse Spark)
  *   - contextWindow / maxOutputTokens — conservative planning numbers.
  *   - supportsImages             — image parts accepted in user content.
  *   - supportsPromptCaching      — provider-side prompt caching exists.
@@ -176,6 +177,22 @@ const FAMILY_RULES = Object.freeze([
     },
   },
   {
+    // Meta Model API (api.meta.ai/v1): OpenAI-compatible tools; a reasoning
+    // model whose thinking shares max_tokens, so `reasoning_effort` is always
+    // sent (litellm-gateway applyMetaReasoningControls — "none" is rejected).
+    family: 'meta-muse-spark',
+    match: /(?:^|[/_-])muse[-_]?spark/,
+    caps: {
+      supportsNativeTools: true,
+      supportsParallelToolCalls: false,
+      supportsReasoning: true,
+      reasoningParamStyle: 'reasoning-effort',
+      contextWindow: 1_000_000,
+      maxOutputTokens: 65_536,
+      supportsImages: true,
+    },
+  },
+  {
     family: 'xai-grok',
     match: /(?:^|\/)(?:x-ai\/)?grok-/,
     caps: {
@@ -302,8 +319,9 @@ function supportsNativeTools(provider, model, opts = {}) {
 
 // Direct-SDK providers whose chat client in THIS backend does not speak
 // OpenAI-style `tool_calls` (their slugged OpenRouter forms do — OpenRouter
-// normalises tools). Direct Anthropic is intentionally absent: the native
-// adapter translates Claude `tool_use` blocks to the loop's OpenAI envelope.
+// normalises tools). Direct Anthropic is intentionally absent: the
+// first-party Anthropic client (ai/first-party-chat-clients.js) translates
+// Claude `tool_use` blocks to the loop's OpenAI envelope.
 const NON_OPENAI_TOOL_TRANSPORTS = new Set(['mistral']);
 
 /**

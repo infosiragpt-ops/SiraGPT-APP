@@ -562,6 +562,41 @@ function applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExp
   payload.reasoning_effort = resolveDeepSeekReasoningEffort(thinkingLevel);
 }
 
+// ── Effort fields for callers that build their own payload ──────────────────
+// The ReAct agent loop calls chat.completions directly (tools, tool_choice),
+// so it can't go through buildProviderChatPayload. This returns ONLY the
+// provider's native effort fields for a composer level, resolved with the
+// exact same mapping as the plain stream. DeepSeek is skipped: its thinking
+// mode needs reasoning_content replay in tool loops, which the loop doesn't
+// carry yet.
+const EFFORT_FIELD_KEYS = ["thinking", "output_config", "reasoning_effort", "reasoning"];
+
+function resolveProviderEffortFields({
+  provider,
+  model,
+  thinkingLevel,
+  thinkingLevelExplicit = false,
+  maxTokens,
+} = {}) {
+  const resolvedModel = String(model || "").trim();
+  if (!resolvedModel || !thinkingLevel) return {};
+  const runtime = getProviderRuntimeProfile({ provider, modelId: resolvedModel });
+  if (runtime.thinkingFormat === "deepseek") return {};
+  const scratch = { model: resolvedModel, messages: [] };
+  if (Number(maxTokens) > 0) scratch[runtime.maxTokensField || "max_tokens"] = Math.trunc(Number(maxTokens));
+  applyThinkingControls(scratch, runtime, thinkingLevel, thinkingLevelExplicit);
+  stripUnsupportedThinkingFields(scratch, runtime);
+  const out = {};
+  for (const key of EFFORT_FIELD_KEYS) {
+    if (scratch[key] !== undefined) out[key] = scratch[key];
+  }
+  // Budget-thinking Claude models may need more room than the caller's cap.
+  if (runtime.provider === "anthropic" && Number(scratch.max_tokens) > 0 && Number(scratch.max_tokens) !== Number(maxTokens)) {
+    out.max_tokens = scratch.max_tokens;
+  }
+  return out;
+}
+
 // ── OpenRouter unified reasoning ────────────────────────────────────────────
 // OpenRouter normalises every provider's thinking knob behind a single
 // `reasoning: { effort }` request param and streams the chain-of-thought back
@@ -1087,4 +1122,5 @@ module.exports = {
   resolveMetaReasoningEffort,
   applyMetaReasoningControls,
   openAIModelSupportsReasoningEffort,
+  resolveProviderEffortFields,
 };
