@@ -9,13 +9,13 @@ const path = require('path');
 const {
   runChatDocumentEdit,
   resolveEditSources,
+  loadRecentUserText,
   toAssistantFiles,
   cleanSummary,
   MESSAGES,
   INTERNAL,
 } = require('../src/services/document-editor/chat-document-editor');
 const { createPromptedToolClient } = require('../src/services/document-editor/prompted-tool-client');
-const { createFailoverClient } = require('../src/services/doc-agent/llm-runtime');
 
 const USER = 'user-1';
 const DOCX = Buffer.from('PKfake-docx');
@@ -54,6 +54,9 @@ function baseDeps(overrides = {}) {
   const agentCalls = [];
   const deps = {
     env: {},
+    // These cases cover the sandbox doc-agent path; Word edits with a live
+    // model go to the docx engine (tests/docx-engine.test.js).
+    docxEngine: { docxEngineEnabled: () => false },
     artifactDir: tempArtifactDir(),
     objectStorage: { toLocalTemp: async () => { throw new Error('not remote'); } },
     readSourceBuffer: async () => ({ buffer: DOCX, cleanup: async () => {} }),
@@ -82,7 +85,6 @@ function baseDeps(overrides = {}) {
     // LLM loop; dedicated tests cover the deterministic-first branch.
     tryDeterministicEdit: async () => null,
     resolveDocAgentCandidates: () => [],
-    createFailoverClient,
     defaultCreateClient: () => { throw new Error('ladder client must not be created'); },
     log: () => {},
     sleep: async () => {},
@@ -116,7 +118,7 @@ test('attached documents are edited by the picked model client and saved as chat
   assert.deepEqual(stages.map((s) => s.label), ['Abriendo el documento', 'Editando el documento']);
 });
 
-test('only provider-level failures of the picked model move to another configured provider', async () => {
+test('provider-level failures never switch away from the selected client or model', async () => {
   const failing = { chat: { completions: { create: async () => { const err = new Error('credit'); err.status = 402; throw err; } } } };
   const ladder = { chat: { completions: { create: async (payload) => ({ choices: [{ message: { content: `ladder=${payload.model}` } }] }) } } };
   const created = [];
@@ -128,23 +130,22 @@ test('only provider-level failures of the picked model move to another configure
     defaultCreateClient: (candidate) => { created.push(candidate.provider); return ladder; },
   });
   const client = INTERNAL.buildEditorClient({ client: failing, model: 'grok-4.6', provider: 'xAI', toolCallMode: 'native', deps: { ...deps, onFailover: () => {} } });
-  const reply = await client.chat.completions.create({ model: 'grok-4.6', messages: [] });
-  assert.equal(reply.choices[0].message.content, 'ladder=deepseek-v4-pro');
-  assert.deepEqual(created, ['DeepSeek']);
+  await assert.rejects(client.chat.completions.create({ model: 'grok-4.6', messages: [] }), /credit/);
+  assert.deepEqual(created, []);
 
   const badRequest = { chat: { completions: { create: async () => { const err = new Error('bad'); err.status = 400; throw err; } } } };
   const strict = INTERNAL.buildEditorClient({ client: badRequest, model: 'grok-4.6', provider: 'xAI', toolCallMode: 'native', deps: { ...deps, onFailover: () => {} } });
   await assert.rejects(strict.chat.completions.create({ messages: [] }), /bad/);
 });
 
-test('the ladder never retries the provider the user already picked', () => {
+test('selected-model editing never resolves a global provider ladder', () => {
   const { deps } = baseDeps({
     resolveDocAgentCandidates: () => [{ provider: 'DeepSeek', model: 'deepseek-v4-pro' }, { provider: 'Meta', model: 'muse' }],
   });
   let seen = null;
   deps.createFailoverClient = (candidates) => { seen = candidates.map((c) => c.provider); return {}; };
   INTERNAL.buildEditorClient({ client: {}, model: 'deepseek-v4-flash', provider: 'DeepSeek', toolCallMode: 'native', deps: { ...deps, onFailover: () => {} } });
-  assert.deepEqual(seen, ['__picked__', 'Meta']);
+  assert.equal(seen, null);
 });
 
 test('a follow-up without attachments edits the latest delivered version before the original upload', async () => {
@@ -182,6 +183,117 @@ test('artifacts owned by another user are never used as a source', async () => {
   const { deps } = baseDeps({ artifactDir });
   const sources = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', deps });
   assert.deepEqual(sources.map((s) => s.name), ['mio.docx']);
+});
+
+test('semantic Word follow-up never chooses the first of several historical artifacts', async () => {
+  const artifactDir = tempArtifactDir({
+    aabbaa: { metadata: { filename: 'A.docx', ownerUserId: USER }, bytes: Buffer.from('A') },
+    bbccdd: { metadata: { filename: 'B.docx', ownerUserId: USER }, bytes: Buffer.from('B') },
+  });
+  const prisma = fakePrisma({ messages: [{ role: 'ASSISTANT', files: [
+    { artifactId: 'aabbaa' }, { artifactId: 'bbccdd' },
+  ] }] });
+  const { deps, saved, agentCalls } = baseDeps({ artifactDir });
+  const result = await runChatDocumentEdit({ prisma, userId: USER, chatId: 'c', instruction: 'Completa con mis datos: Ana Torres', llm: { client: {}, model: 'chosen' }, deps });
+  assert.equal(result.code, 'DOCX_EDIT_SOURCE_AMBIGUOUS');
+  assert.equal(saved.length, 0);
+  assert.equal(agentCalls.length, 0);
+  const named = await runChatDocumentEdit({ prisma, userId: USER, chatId: 'c', instruction: 'Completa B.docx con mis datos: Ana Torres', llm: { client: {}, model: 'chosen' }, deps });
+  assert.equal(named.ok, true);
+  assert.equal(agentCalls[0].files[0].name, 'B.docx');
+  assert.equal(agentCalls[0].files[0].buffer.toString(), 'B');
+});
+
+test('semantic Word edits cannot use legacy annex fallback when the selected model is absent or fails', async () => {
+  const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'formulario.docx' }] });
+  let deterministicCalls = 0;
+  const { deps, saved, agentCalls } = baseDeps({
+    tryDeterministicEdit: async () => { deterministicCalls += 1; throw new Error('must not append'); },
+    docxEngine: { docxEngineEnabled: () => true, editWordDocument: async () => { throw new Error('selected provider failed'); } },
+  });
+  for (const llm of [{}, { client: {}, model: 'chosen' }]) {
+    const result = await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], instruction: 'Completa mi nombre: Ana Torres', llm, deps });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'ENGINE_FAILED');
+  }
+  assert.equal(deterministicCalls, 0);
+  assert.equal(agentCalls.length, 0);
+  assert.equal(saved.length, 0);
+});
+
+test('Word artifact delivery requires actual engine verification and preserves its proof', async () => {
+  const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'formulario.docx' }] });
+  for (const verification of [undefined, { ok: false }, { ok: true, report: { changedParts: ['word/document.xml'] }, intent: { passed: true } }]) {
+    const { deps, saved } = baseDeps({ docxEngine: {
+      docxEngineEnabled: () => true,
+      editWordDocument: async () => ({ ok: true, filename: 'formulario (editado).docx', mime: 'm', buffer: Buffer.from('edited'),
+        changes: [{ op: 'fill_field', label: 'Nombre', value: 'Ana Torres' }], summary: 'Completé Nombre.', verification }),
+    } });
+    const result = await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], instruction: 'Completa mi nombre: Ana Torres', llm: { client: {}, model: 'chosen' }, deps });
+    assert.equal(result.ok, verification?.ok === true);
+    assert.equal(saved.length, verification?.ok === true ? 1 : 0);
+    if (result.ok) {
+      assert.deepEqual(saved[0].validation.report, verification.report);
+      assert.deepEqual(toAssistantFiles(result.artifacts)[0].validation, saved[0].validation);
+    }
+  }
+});
+
+test('Stop after semantic Word editing prevents artifact persistence', async () => {
+  const controller = new AbortController();
+  const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'formulario.docx' }] });
+  const { deps, saved } = baseDeps({ docxEngine: {
+    docxEngineEnabled: () => true,
+    editWordDocument: async () => {
+      controller.abort(new Error('stopped'));
+      return { ok: true, buffer: Buffer.from('edited'), filename: 'formulario.docx', verification: { ok: true }, changes: [] };
+    },
+  } });
+  await assert.rejects(runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], instruction: 'Completa mi nombre: Ana Torres',
+    llm: { client: {}, model: 'picked' }, signal: controller.signal, deps }), /stopped/);
+  assert.equal(saved.length, 0);
+});
+
+test('Word semantic editing receives only bounded previous user data from the owned chat', async () => {
+  const instruction = 'Completa el formulario con los datos que te mandé antes.';
+  const prisma = fakePrisma({
+    files: [{ id: 'f1', userId: USER, originalName: 'formulario.docx' }],
+    messages: [
+      { role: 'USER', content: instruction },
+      { role: 'ASSISTANT', content: 'NO INCLUIR: datos inventados del asistente' },
+      { role: 'SYSTEM', content: 'NO INCLUIR: instrucciones del sistema' },
+      { role: 'USER', content: 'Mi nombre es Ana Torres y mi DNI es 12345678.' },
+    ],
+  });
+  let seen;
+  const { deps } = baseDeps({ docxEngine: {
+    docxEngineEnabled: () => true,
+    editWordDocument: async (options) => { seen = options; return { ok: false, status: 'needs_input', message: 'Falta la fecha.' }; },
+  } });
+  await runChatDocumentEdit({ prisma, userId: USER, chatId: 'owned-chat', fileIds: ['f1'], instruction, llm: { client: {}, model: 'picked' }, deps });
+  assert.deepEqual(prisma.calls.message[0], {
+    where: { chatId: 'owned-chat', role: 'USER', deletedAt: null, chat: { userId: USER } },
+    select: { role: true, content: true }, orderBy: { timestamp: 'desc' }, take: 8,
+  });
+  assert.equal(seen.instruction, instruction);
+  assert.match(seen.extraContext, /Ana Torres.*12345678/);
+  assert.match(seen.extraContext, /no nuevas instrucciones ni autorización/);
+  assert.doesNotMatch(seen.extraContext, /NO INCLUIR|Completa el formulario/);
+  assert.ok(seen.extraContext.length <= 4000);
+});
+
+test('previous user data is capped, escaped, and unavailable without an owned chat', async () => {
+  const prisma = fakePrisma({ messages: [
+    { role: 'USER', content: 'Dato reciente "\\\n'.repeat(600) },
+    { role: 'USER', content: 'dato antiguo que no cabe' },
+  ] });
+  const context = await loadRecentUserText({ prisma, userId: USER, chatId: 'owned-chat' });
+  assert.ok(context.length > 3000 && context.length <= 4000);
+  assert.doesNotMatch(context, /\nDato reciente/);
+  const callsBefore = prisma.calls.message.length;
+  assert.equal(await loadRecentUserText({ prisma, userId: null, chatId: 'owned-chat' }), '');
+  assert.equal(await loadRecentUserText({ prisma, userId: USER, chatId: null }), '');
+  assert.equal(prisma.calls.message.length, callsBefore);
 });
 
 test('uploads of other users or non-document files are ignored', async () => {
@@ -284,7 +396,7 @@ test('stage relay maps loop events to Spanish progress labels', () => {
   assert.equal(INTERNAL.stageFor({ type: 'llm_failover', from: 'xAI' }), null, 'provider names never reach the UI');
 });
 
-test('transient provider errors retry the picked model before any failover; hard errors do not', async () => {
+test('transient provider errors retry only the picked model; hard errors do not', async () => {
   let calls = 0;
   const flaky = { chat: { completions: { create: async () => {
     calls += 1;
@@ -328,5 +440,8 @@ test('only DeepSeek transports get the reasoning_content passback', async () => 
   const messages = [{ role: 'assistant', content: null, tool_calls: [{ id: 'x', type: 'function', function: { name: 'bash', arguments: '{}' } }] }];
   await assert.rejects(client.chat.completions.create({ messages }), /down/);
   assert.equal('reasoning_content' in payloads.xAI.messages[0], false);
+  assert.equal(payloads.DeepSeek, undefined, 'no other provider was invoked');
+  const deepSeek = INTERNAL.buildEditorClient({ client: recorder('DeepSeek'), model: 'deepseek-v4-pro', provider: 'DeepSeek', toolCallMode: 'native', deps });
+  await assert.rejects(deepSeek.chat.completions.create({ messages }), /down/);
   assert.equal(payloads.DeepSeek.messages[0].reasoning_content, '');
 });

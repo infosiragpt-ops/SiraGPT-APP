@@ -394,6 +394,7 @@ test('in-process fast path: source-preserving edit returns the card WITHOUT touc
   const events = [];
   let sandboxCalled = false;
   let spArgs = null;
+  const selectedLlm = { client: { chat: { completions: { create: async () => ({}) } } }, model: 'picked-model', provider: 'picked-provider' };
 
   const tool = buildDocumentEditTool({
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'informe.docx', filename: 'x.docx' }]),
@@ -424,7 +425,7 @@ test('in-process fast path: source-preserving edit returns the card WITHOUT touc
 
   const out = await tool.execute(
     { instruction: 'cambia la sección Conclusiones' },
-    baseCtx({ onEvent: (e) => events.push(e) }),
+    baseCtx({ onEvent: (e) => events.push(e), documentEditLlm: selectedLlm }),
   );
 
   assert.equal(out.ok, true);
@@ -432,6 +433,7 @@ test('in-process fast path: source-preserving edit returns the card WITHOUT touc
   assert.equal(sandboxCalled, false, 'sandbox doc-agent must be skipped when the in-process editor handles it');
   assert.equal(spArgs.fileIds[0], 'f1', 'in-process editor receives the confined file ids');
   assert.equal(spArgs.prompt, 'cambia la sección Conclusiones');
+  assert.equal(spArgs.llm, selectedLlm, 'the model that owns the chat must drive semantic Word editing');
   assert.equal(out.edited.length, 1);
   assert.equal(out.edited[0].downloadUrl, '/api/agent/artifact/art-inproc-1');
 

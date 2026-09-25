@@ -410,6 +410,7 @@ function buildDocumentEditTool(deps = {}) {
           prompt: args.instruction,
           displayPrompt: args.instruction,
           signal: ctx.signal,
+          llm: ctx.documentEditLlm || null,
         });
         if (inproc && inproc.clarification) {
           // Image-edit ambiguity (varias imágenes candidatas, falta la imagen

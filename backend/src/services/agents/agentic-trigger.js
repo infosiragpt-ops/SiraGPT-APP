@@ -149,7 +149,7 @@ const STRONG_EDIT_VERBS = new RegExp(
 // WEAK edit verbs: also used in chit-chat / Q&A follow-ups ("cambia de tema",
 // "actualízame", "arréglate"), so they only count as a document edit when a
 // document/file noun is also present.
-const WEAK_EDIT_VERBS = /\b(cambia\w*|c[aá]mbia\w*|c[aá]mbi[aá]le|actualiz\w*|arregl\w*|p[oó]nle|ponle|mejora\w*|ajusta\w*|update\w*|change\w*|fix the|improve\w*|adjust\w*|uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*)\b/i;
+const WEAK_EDIT_VERBS = /\b(complet\w*|llen[aeo]\w*|rellen\w*|diligenci\w*|cambia\w*|c[aá]mbia\w*|c[aá]mbi[aá]le|actualiz\w*|arregl\w*|p[oó]nle|ponle|mejora\w*|ajusta\w*|update\w*|change\w*|fix the|improve\w*|adjust\w*|uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*)\b/i;
 
 const STYLE_EDIT_VERBS = /\b(uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*|pasa\w*|pon(?:er|ga|le|me|lo|la)?|cambia\w*|haz\w*)\b/i;
 const STYLE_EDIT_NOUNS = /\b(color(?:es)?|fondo|fondos|background|paleta|tipograf\w*)\b/i;

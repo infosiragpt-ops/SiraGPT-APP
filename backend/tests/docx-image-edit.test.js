@@ -133,6 +133,111 @@ function prismaFakeFor(rows) {
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
+async function canonicalImageFixture(t, { pngs = [GREEN_PNG] } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'canonical-docx-image-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const original = await makeDocxWithImages([RED_PNG]);
+  const currentZip = new PizZip(await makeDocxWithImages(pngs));
+  currentZip.file('word/document.xml', currentZip.file('word/document.xml').asText().replace('Cierre del documento original.', 'Última versión del documento.'));
+  const current = currentZip.generate({ type: 'nodebuffer' });
+  fs.writeFileSync(path.join(dir, 'original.docx'), original);
+  fs.writeFileSync(path.join(dir, 'latest.docx'), current);
+  fs.writeFileSync(path.join(dir, 'aabbcc.json'), JSON.stringify({ filename: 'informe.docx', ownerUserId: 'owner', storedRelPath: 'latest.docx' }));
+  fs.writeFileSync(path.join(dir, 'blue.png'), BLUE_PNG);
+  fs.writeFileSync(path.join(dir, 'red.png'), RED_PNG);
+  const rows = [
+    { id: 'word', userId: 'owner', originalName: 'original.docx', mimeType: DOCX_MIME, path: path.join(dir, 'original.docx') },
+    { id: 'blue', userId: 'owner', originalName: 'blue.png', mimeType: 'image/png', path: path.join(dir, 'blue.png') },
+    { id: 'red', userId: 'owner', originalName: 'red.png', mimeType: 'image/png', path: path.join(dir, 'red.png') },
+    { id: 'foreign', userId: 'another-user', originalName: 'private.png', mimeType: 'image/png', path: '/must-not-read' },
+  ];
+  const calls = { reads: [], saved: [], queries: [], model: 0, legacy: 0 };
+  const prisma = {
+    file: { findMany: async ({ where }) => { calls.queries.push(where); return rows.filter((row) => where.id.in.includes(row.id) && row.userId === where.userId); } },
+    message: { findMany: async ({ where }) => {
+      assert.equal(where.chat.userId, 'owner');
+      assert.equal(where.chatId, 'owned-chat');
+      return [{ role: 'ASSISTANT', files: [{ artifactId: 'aabbcc' }] }, { role: 'USER', files: [{ id: 'word' }] }];
+    } },
+  };
+  const deps = {
+    artifactDir: dir,
+    readSourceBuffer: async (row) => { calls.reads.push(row.id); return { buffer: fs.readFileSync(row.path), cleanup: async () => {} }; },
+    tryDeterministicEdit: async () => { calls.legacy += 1; throw new Error('no legacy source selection'); },
+    docxEngine: { docxEngineEnabled: () => true, editWordDocument: async () => { calls.model += 1; throw new Error('no text engine for image operations'); } },
+    saveArtifact: (input) => {
+      calls.saved.push(input);
+      return { id: 'ddeeff', filename: input.filename, format: 'docx', mime: input.mime,
+        sizeBytes: Buffer.from(input.base64, 'base64').length, downloadUrl: '/api/agent/artifact/ddeeff' };
+    },
+  };
+  return { dir, original, current, calls, deps, run: (options = {}) => require('../src/services/document-editor/chat-document-editor').runChatDocumentEdit({
+    prisma, userId: 'owner', chatId: 'owned-chat', fileIds: [], instruction: 'cambia la primera imagen a azul', deps, ...options,
+  }) };
+}
+
+describe('canonical Word editor preserves the exact-source image adapter', () => {
+  test('recolors the latest delivered Word without touching its XML or revisiting the original upload', { skip: sharpSkip }, async (t) => {
+    const fixture = await canonicalImageFixture(t);
+    const result = await fixture.run();
+    assert.equal(result.ok, true, result.message);
+    assert.equal(fixture.calls.model, 0);
+    assert.equal(fixture.calls.legacy, 0);
+    assert.deepEqual(fixture.calls.reads, []);
+    const output = Buffer.from(fixture.calls.saved[0].base64, 'base64');
+    const before = zipEntriesSnapshot(fixture.current);
+    const after = zipEntriesSnapshot(output);
+    for (const [name, bytes] of before) {
+      if (!name.startsWith('word/media/')) assert.ok(bytes.equals(after.get(name)), `${name} must remain byte-identical`);
+    }
+    assert.ok(!adapter.listDocxImages(output)[0].bytes.equals(GREEN_PNG));
+    assert.match(after.get('word/document.xml').toString(), /Última versión/);
+    assert.ok(fs.readFileSync(path.join(fixture.dir, 'latest.docx')).equals(fixture.current));
+    assert.ok(fs.readFileSync(path.join(fixture.dir, 'original.docx')).equals(fixture.original));
+    assert.equal(result.artifacts[0].validation.passed, true);
+    assert.equal(result.artifacts[0].validation.checks.source_preserved, true);
+  });
+
+  test('an image-only follow-up replaces media in the latest owned artifact, never the original upload', async (t) => {
+    const fixture = await canonicalImageFixture(t);
+    const result = await fixture.run({ fileIds: ['blue'], instruction: 'reemplaza la primera imagen por la imagen adjunta' });
+    assert.equal(result.ok, true, result.message);
+    assert.deepEqual(fixture.calls.reads, ['blue']);
+    assert.equal(fixture.calls.model, 0);
+    assert.equal(fixture.calls.legacy, 0);
+    const output = Buffer.from(fixture.calls.saved[0].base64, 'base64');
+    assert.ok(adapter.listDocxImages(output)[0].bytes.equals(BLUE_PNG));
+    assert.ok(new PizZip(output).file('word/document.xml').asNodeBuffer().equals(new PizZip(fixture.current).file('word/document.xml').asNodeBuffer()));
+    assert.ok(fixture.calls.queries.every((where) => where.userId === 'owner'));
+    assert.ok(fs.readFileSync(path.join(fixture.dir, 'latest.docx')).equals(fixture.current));
+  });
+
+  test('ambiguous targets or replacement assets ask for precision and never fall through', async (t) => {
+    const targets = await canonicalImageFixture(t, { pngs: [RED_PNG, GREEN_PNG] });
+    const result = await targets.run({ instruction: 'cambia la imagen a azul' });
+    assert.equal(result.clarification, true);
+    assert.equal(targets.calls.saved.length, 0);
+    assert.equal(targets.calls.model, 0);
+    const assets = await canonicalImageFixture(t);
+    const ambiguous = await assets.run({ fileIds: ['blue', 'red'], instruction: 'reemplaza la primera imagen por la imagen adjunta' });
+    assert.equal(ambiguous.clarification, true);
+    assert.deepEqual(assets.calls.reads, []);
+    assert.equal(assets.calls.saved.length, 0);
+    const foreign = await assets.run({ fileIds: ['foreign'], instruction: 'reemplaza la primera imagen por la imagen adjunta' });
+    assert.equal(foreign.code, 'NO_DOCUMENT');
+    assert.deepEqual(assets.calls.reads, []);
+  });
+
+  test('a failed image proof never produces a downloadable artifact', { skip: sharpSkip }, async (t) => {
+    const fixture = await canonicalImageFixture(t);
+    fixture.deps.validateDocxImageEdit = async () => ({ passed: false });
+    const result = await fixture.run();
+    assert.equal(result.code, 'NO_VALID_OUTPUT');
+    assert.equal(fixture.calls.saved.length, 0);
+    assert.equal(fixture.calls.model, 0);
+  });
+});
+
 describe('docx-image-adapter — listDocxImages', () => {
   test('finds both embedded images in document order with extension, scope and alt text', async () => {
     const buffer = await makeDocxWithImages([RED_PNG, BLUE_PNG]);
