@@ -28,8 +28,11 @@ function docxEngineEnabled() { return true; }
 function editedFilename(name) {
   const ext = path.extname(String(name || 'documento.docx')) || '.docx';
   const base = path.basename(String(name || 'documento.docx'), ext);
-  const m = /^(.*) \(editado(?: v(\d+))?\)$/.exec(base);
-  if (!m) return `${base} (editado)${ext}`;
+  // Also recognise the artifact store's sanitised form ("x_-_editado_",
+  // "x_-_editado_v2_") so a follow-up edit bumps the version instead of
+  // stacking "(editado) (editado)".
+  const m = /^(.*?)[\s_]*[-_]?[\s_]*\(?editado(?:[\s_]+v(\d+))?\)?_?$/i.exec(base);
+  if (!m || !m[1]) return `${base} (editado)${ext}`;
   const next = m[2] ? Number(m[2]) + 1 : 2;
   return `${m[1]} (editado v${next})${ext}`;
 }

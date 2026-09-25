@@ -299,3 +299,16 @@ test('editedFilename versions the output name', () => {
   assert.equal(editedFilename('carta (editado).docx'), 'carta (editado v2).docx');
   assert.equal(editedFilename('carta (editado v2).doc'), 'carta (editado v3).doc');
 });
+
+test('follow-up versions bump instead of stacking, also for sanitised artifact names', () => {
+  const { editedFilename } = require('../src/services/docx-engine');
+  assert.equal(editedFilename('CARTA_rgp_-_editado_.docx'), 'CARTA_rgp (editado v2).docx');
+  assert.equal(editedFilename('CARTA rgp (editado v2).docx'), 'CARTA rgp (editado v3).docx');
+});
+
+test('agentic trigger routes subjunctive edit requests ("quiero que agregues …")', () => {
+  const { isDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
+  assert.equal(isDocumentEditRequest('DOCX quiero que agregues algunas observaciones a cada pregunta'), true);
+  assert.equal(isDocumentEditRequest('necesito que insertes una fila'), true);
+  assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
+});

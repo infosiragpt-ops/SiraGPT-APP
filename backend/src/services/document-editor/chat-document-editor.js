@@ -130,6 +130,41 @@ function readOwnedArtifactMetadata(artifactId, userId, deps) {
   return metadata;
 }
 
+/** "CARTA … rgp (editado v2).docx" / "CARTA_…_rgp_-_editado_.docx" → "carta…rgp". */
+function documentStem(name) {
+  return String(name || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{2,5}$/, '')
+    .replace(/[\s_]*[-_]?[\s_]*\(?editado(?:[\s_]+v\d+)?\)?_?$/, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+async function latestDerivedArtifact({ prisma, userId, chatId, upload, deps }) {
+  if (!chatId || !prisma?.message?.findMany) return null;
+  const stem = documentStem(upload.name);
+  const ext = extensionOf(upload.name).replace(/^doc$/, 'docx');
+  if (stem.length < 4) return null;
+  const messages = await prisma.message.findMany({
+    where: { chatId, role: 'ASSISTANT', deletedAt: null, chat: { userId } },
+    select: { role: true, files: true },
+    orderBy: { timestamp: 'desc' },
+    take: HISTORY_SCAN_MESSAGES,
+  }).catch(() => []);
+  for (const message of Array.isArray(messages) ? messages : []) {
+    for (const ref of parseMessageFiles(message.files)) {
+      const artifactId = artifactIdFromRef(ref);
+      if (!artifactId) continue;
+      const metadata = readOwnedArtifactMetadata(artifactId, userId, deps);
+      if (!metadata) continue;
+      if (documentStem(metadata.filename) === stem && extensionOf(metadata.filename) === ext) {
+        return { kind: 'artifact', name: metadata.filename, artifactId, metadata };
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Resolve which documents this turn edits. Explicit attachments win; a
  * follow-up scans the conversation newest-first and takes the latest document,
@@ -139,6 +174,13 @@ async function resolveEditSources({ prisma, userId, chatId, fileIds = [], preser
   const explicit = (Array.isArray(fileIds) ? fileIds : []).map(uploadIdFromRef).filter(Boolean);
   if (explicit.length) {
     const uploads = await loadOwnedUploads(prisma, userId, explicit);
+    if (uploads.length === 1) {
+      // Re-attaching the original upload on a follow-up ("en el mismo
+      // documento…") must continue from the latest version this chat already
+      // delivered for it, never silently restart from v1 and drop earlier edits.
+      const latest = await latestDerivedArtifact({ prisma, userId, chatId, upload: uploads[0], deps });
+      if (latest) return [latest];
+    }
     if (uploads.length || !allowImageOnlyFollowup) return preserveCandidates ? uploads : uploads.slice(0, MAX_SOURCES);
     // A newly attached replacement image is an asset, not a new Word base.
     // Only an entirely owned image-only attachment set may use chat history.
@@ -696,6 +738,7 @@ function resolveDeps(injected) {
 }
 
 module.exports = {
+  documentStem,
   runChatDocumentEdit,
   resolveEditSources,
   loadRecentUserText,
