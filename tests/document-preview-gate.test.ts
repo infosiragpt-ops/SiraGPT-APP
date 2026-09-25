@@ -11,6 +11,8 @@ import {
   isPreviewObjectReady,
   isRetryablePreviewError,
   isRetryablePreviewHttpStatus,
+  isTransientPreviewHttpStatus,
+  fetchWithTransientRetry,
   isStableServerFileId,
   resolvePreviewGate,
 } from "../lib/document-preview-gate"
@@ -131,4 +133,23 @@ test("progress is clamped to 0..100", () => {
   assert.equal(clampPreviewProgress(-4), 0)
   assert.equal(clampPreviewProgress(140), 100)
   assert.equal(clampPreviewProgress("nope"), 0)
+})
+
+test("transient gateway statuses are retried until the backend is back", async () => {
+  assert.equal(isTransientPreviewHttpStatus(502), true)
+  assert.equal(isTransientPreviewHttpStatus(503), true)
+  assert.equal(isTransientPreviewHttpStatus(404), false)
+  const statuses = [502, 502, 200]
+  let calls = 0
+  const res = await fetchWithTransientRetry(async () => new Response("ok", { status: statuses[calls++] }), [1, 1, 1], async () => {})
+  assert.equal(res.status, 200)
+  assert.equal(calls, 3)
+  let net = 0
+  const recovered = await fetchWithTransientRetry(async () => {
+    if (net++ === 0) throw new TypeError("Failed to fetch")
+    return new Response("ok", { status: 200 })
+  }, [1], async () => {})
+  assert.equal(recovered.status, 200)
+  const gaveUp = await fetchWithTransientRetry(async () => new Response("", { status: 502 }), [1, 1], async () => {})
+  assert.equal(gaveUp.status, 502)
 })

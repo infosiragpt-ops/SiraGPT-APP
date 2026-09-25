@@ -40,7 +40,7 @@ test("generated Office previews use the shared pdf.js renderer instead of a nati
     /import \{[^}]*PdfRenderer[^}]*\} from "@\/components\/viewers\/UnifiedDocumentViewer"/,
     "the generated preview must not pull the full document viewer into the eager chat bundle",
   )
-  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} toolbarContainer=\{toolbarContainer\} \/>/)
+  assert.match(source, /<PdfRenderer a=\{pdfPreviewAttachment\} toolbarContainer=\{toolbarContainer\} compactToolbar=\{inlineToolbar\} \/>/)
   assert.match(source, /state\.kind === "pdf" \? \{ name: filename, url: previewUrl \}/,
     "direct PDFs must share the real page/zoom renderer with converted Office files")
   assert.doesNotMatch(source, /state\.kind === "pdf" && \(\s*<iframe/,
@@ -126,4 +126,23 @@ test("preview header keeps title, controls and actions on one row, with a zoom d
   assert.match(source, /state\.kind !== "text" && \(<>/, "text files have no page navigation")
   assert.match(source, /data-testid="ppt-btn-copy"/)
   assert.match(source, /data-testid="document-preview-text-copy"/)
+})
+
+test("previews survive a backend restart: gateway 5xx retried, Reintentar button, actions pinned right", () => {
+  const source = readFileSync(generatedPreviewSourcePath, "utf8")
+  const viewer = viewerSource()
+  assert.match(source, /return fetchWithTransientRetry\(\(\) => \(/)
+  assert.match(viewer, /return fetchWithTransientRetry\(\(\) => \(/)
+  assert.match(source, /data-testid="document-preview-retry"/)
+  assert.match(source, /friendlyPreviewError\(state\.message\)/)
+  assert.match(source, /inlineToolbar && "col-start-3 justify-self-end"/,
+    "an empty toolbar slot must never pull the action buttons to the middle column")
+})
+
+test("unified viewer puts PDF page/zoom controls in the header row at button height", () => {
+  const viewer = viewerSource()
+  assert.match(viewer, /VIEWER_INLINE_TOOLBAR_MIN_WIDTH = 720/)
+  assert.match(viewer, /\{headerWide && \(\s*<div ref=\{setToolbarEl\} data-testid="unified-viewer-toolbar"/)
+  assert.match(viewer, /toolbarContainer: toolbarEl, inlineToolbar: headerWide/)
+  assert.match(viewer, /compactToolbar && "h-9 flex-nowrap/)
 })
