@@ -8528,6 +8528,10 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
     },
   });
   if (!sources.some((source) => docxEngine.isWordFilename(source.name))) return null;
+  // "en ambos Word…": one immutable edited copy per upload is the batch
+  // path's contract; the single-document engine must not claim it.
+  const wordSources = sources.filter((source) => docxEngine.isWordFilename(source.name));
+  if (wordSources.length > 1 && requestWantsBatchDocumentEdit(requestText, wordSources.map((source) => ({ originalName: source.name, filename: source.name, source: 'current_upload' })))) return null;
   const request = String(requestText || '').normalize('NFC').toLowerCase();
   const named = sources.filter((source) => request.includes(source.name.normalize('NFC').toLowerCase()));
   if (named.length === 1 && !docxEngine.isWordFilename(named[0].name)) return null;
