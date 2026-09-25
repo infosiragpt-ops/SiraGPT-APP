@@ -146,6 +146,7 @@ test('openai-chat (xAI): tool_call deltas split across chunks, parallel calls, t
   assert.equal(req.body.tool_choice, 'auto');
   assert.equal(req.body.tools[1].function.parameters.properties.mode.enum[1], 'approx');
   assert.equal(req.body.messages[0].role, 'system');
+  assert.deepEqual(req.body.stream_options, { include_usage: true });
   assert.equal(out.stopReason, 'tool_use');
   assert.equal(out.content[0].text, 'Consultando');
   assert.deepEqual(out.content.slice(1).map((b) => [b.id, b.name, b.input]), [

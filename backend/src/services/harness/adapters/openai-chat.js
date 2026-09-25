@@ -76,6 +76,8 @@ function toOpenAITools(tools) {
   }));
 }
 
+const STREAM_USAGE_PROVIDERS = new Set(['xAI', 'DeepSeek']);
+
 function buildOpenAIChatRequest({ provider, model, system, messages, tools, effort = {}, maxTokens, toolChoice }) {
   const oaTools = toOpenAITools(tools);
   const built = buildProviderChatPayload({
@@ -89,7 +91,11 @@ function buildOpenAIChatRequest({ provider, model, system, messages, tools, effo
     thinkingLevel: effort.level || null,
     thinkingLevelExplicit: Boolean(effort.explicit && effort.level),
   });
-  return built.payload;
+  const payload = built.payload;
+  // xAI and DeepSeek stream token usage only when asked; the gateway profile
+  // leaves it off for them, the harness needs it for budgets and telemetry.
+  if (STREAM_USAGE_PROVIDERS.has(provider) && !payload.stream_options) payload.stream_options = { include_usage: true };
+  return payload;
 }
 
 const FINISH_MAP = { stop: 'end_turn', tool_calls: 'tool_use', function_call: 'tool_use', length: 'max_tokens', content_filter: 'refusal' };
