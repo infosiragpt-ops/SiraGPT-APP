@@ -133,9 +133,11 @@ const STRONG_EDIT_VERBS = new RegExp(
       'borra', 'borre', 'borrar', 'elimin', 'quita', 'quite', 'quitar',
       'suprim', 'remov', 'remueve', 'tacha', 'descarta', 's[aá]cale', 's[aá]calo',
       // Spanish — insert / add
-      'agrega', 'agr[eé]ga', 'a[ñn]ad', 'inserta', 'incorpora', 'incluye',
+      // Stems, so subjunctive/polite forms route too ("quiero que agregues",
+      // "que insertes", "incorpores"), not only the bare imperative.
+      'agreg', 'agr[eé]g', 'a[ñn]ad', 'insert', 'incorpor', 'incluye', 'incluyas',
       // Spanish — edit / replace / restructure
-      'edita', 'edit[aá]', 'modific', 'corrig', 'correg', 'reemplaz', 'sustitu',
+      'edita', 'edit[aá]', 'edites', 'modific', 'corrig', 'correg', 'reemplaz', 'sustitu',
       'renombr', 'reescrib', 'reorganiz', 'reformate', 'reordena', 'reenumera',
       // English
       'delete', 'remove', 'erase', 'strip out', 'strike',

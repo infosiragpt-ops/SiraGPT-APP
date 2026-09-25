@@ -242,6 +242,11 @@ function describe(text, max = 80) {
 function opReplaceText(session, { find, replace = '', target = null, occurrence = null, all = false, match_case = false } = {}) {
   if (typeof find !== 'string' || !find.length) throw new DocxOpError('Indica en "find" el texto exacto que quieres reemplazar.', 'DOCX_ENGINE_BAD_ARGS');
   if (typeof replace !== 'string') throw new DocxOpError('"replace" debe ser texto.', 'DOCX_ENGINE_BAD_ARGS');
+  // A lone quote/dot/underscore is not a locator: it silently rewrote a stray
+  // «‘» in production. Such placeholders need an explicit paragraph/cell id.
+  if (!target && (find.match(/[\p{L}\p{N}]/gu) || []).length === 0) {
+    throw new DocxOpError(`«${describe(find)}» es demasiado corto para ubicarlo con seguridad. Indica "target" (id del párrafo o celda de doc_outline) o usa fill_field/set_cell.`, 'DOCX_ENGINE_BAD_ARGS');
+  }
   const scopes = session.scopeParagraphs(target);
   const hits = [];
   for (const { model, para } of scopes) {

@@ -271,7 +271,7 @@ test('Word semantic editing receives only bounded previous user data from the ow
     editWordDocument: async (options) => { seen = options; return { ok: false, status: 'needs_input', message: 'Falta la fecha.' }; },
   } });
   await runChatDocumentEdit({ prisma, userId: USER, chatId: 'owned-chat', fileIds: ['f1'], instruction, llm: { client: {}, model: 'picked' }, deps });
-  assert.deepEqual(prisma.calls.message[0], {
+  assert.deepEqual(prisma.calls.message.find((q) => q.where?.role === 'USER'), {
     where: { chatId: 'owned-chat', role: 'USER', deletedAt: null, chat: { userId: USER } },
     select: { role: true, content: true }, orderBy: { timestamp: 'desc' }, take: 8,
   });
@@ -444,4 +444,43 @@ test('only DeepSeek transports get the reasoning_content passback', async () => 
   const deepSeek = INTERNAL.buildEditorClient({ client: recorder('DeepSeek'), model: 'deepseek-v4-pro', provider: 'DeepSeek', toolCallMode: 'native', deps });
   await assert.rejects(deepSeek.chat.completions.create({ messages }), /down/);
   assert.equal(payloads.DeepSeek.messages[0].reasoning_content, '');
+});
+
+test('re-attaching the original upload continues from the latest delivered version (v2 → v3)', async () => {
+  const artifactDir = tempArtifactDir({
+    aaa111: { metadata: { id: 'aaa111', filename: 'CARTA_rgp_-_editado_.docx', ownerUserId: USER, storedRelPath: 'aaa111-v2.docx' }, bytes: Buffer.from('v2') },
+    bbb222: { metadata: { id: 'bbb222', filename: 'otro (editado).docx', ownerUserId: USER, storedRelPath: 'bbb222-x.docx' }, bytes: Buffer.from('x') },
+  });
+  const prisma = fakePrisma({
+    files: [{ id: 'f1', userId: USER, originalName: 'CARTA rgp.docx', path: '/tmp/x' }],
+    messages: [
+      { role: 'ASSISTANT', files: [{ artifactId: 'bbb222', filename: 'otro (editado).docx' }] },
+      { role: 'ASSISTANT', files: [{ artifactId: 'aaa111', filename: 'CARTA_rgp_-_editado_.docx' }] },
+      { role: 'USER', files: [{ id: 'f1' }] },
+    ],
+  });
+  const { deps } = baseDeps({ artifactDir });
+  const sources = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1'], deps });
+  assert.deepEqual(sources.map((s) => [s.kind, s.name]), [['artifact', 'CARTA_rgp_-_editado_.docx']]);
+  const fresh = await resolveEditSources({ prisma: fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'CARTA rgp.docx', path: '/tmp/x' }] }), userId: USER, chatId: 'chat-1', fileIds: ['f1'], deps });
+  assert.deepEqual(fresh.map((s) => s.kind), ['upload'], 'first edit still uses the upload');
+});
+
+test('agent-loop artifacts stored in the agent-task-state block are found as the latest version', async () => {
+  const artifactDir = tempArtifactDir({
+    '0f0639d747e79f60': { metadata: { id: '0f0639d747e79f60', filename: 'CARTA_rgp__editado_.docx', ownerUserId: USER, storedRelPath: 'v2.docx' }, bytes: Buffer.from('v2') },
+  });
+  const state = { steps: [], artifacts: [{ id: '0f0639d747e79f60', filename: 'CARTA_rgp__editado_.docx', downloadUrl: '/api/agent/artifact/0f0639d747e79f60?name=CARTA_rgp__editado_.docx' }] };
+  const prisma = fakePrisma({
+    files: [{ id: 'f1', userId: USER, originalName: 'CARTA rgp.docx', path: '/tmp/x' }],
+    messages: [
+      { role: 'ASSISTANT', files: null, content: '```agent-task-state\n' + JSON.stringify(state) + '\n```\nListo.' },
+      { role: 'USER', files: [{ id: 'f1' }] },
+    ],
+  });
+  const { deps } = baseDeps({ artifactDir });
+  const reattached = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1'], deps });
+  assert.deepEqual(reattached.map((s) => s.name), ['CARTA_rgp__editado_.docx']);
+  const followup = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', deps });
+  assert.deepEqual(followup.map((s) => s.name), ['CARTA_rgp__editado_.docx']);
 });

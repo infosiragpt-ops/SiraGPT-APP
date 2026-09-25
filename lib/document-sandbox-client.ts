@@ -70,13 +70,28 @@ export function documentAttachment(value: unknown): DocumentAttachment | null {
 export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
   const text = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
   if (/^no (?:cambies|cambiar|modifiques) nada\b/.test(text)) return true
+  if (clauseLooksLikeEdit(text)) return true
+  // Real follow-ups name the file first and ask later ("en el mismo documento
+  // ## CARTA…_editado_.docx\n\nDOCX quiero que agregues observaciones…").
+  // Drop file names/markdown and evaluate each sentence on its own.
+  const cleaned = text
+    .replace(/\\_/g, "_")
+    .replace(/#+\s*/g, " ")
+    .replace(/\S+\.(?:docx?|xlsx?|xlsm|pptx?|pdf|odt|ods|odp|csv|rtf)\b/g, " ")
+  return cleaned
+    .split(/[\n.;]+/)
+    .map((clause) => clause.replace(/^\s*(?:(?:el|la|mi|este|esta)\s+)?(?:docx|word|excel|xlsx|pptx|powerpoint|pdf|documento|archivo)\b\s*[,:]?\s*/, "").trim())
+    .some((clause) => clause.length > 0 && clause !== text && clauseLooksLikeEdit(clause))
+}
+
+function clauseLooksLikeEdit(text: string): boolean {
   let command = text.replace(/^[¿¡]\s*/, "").replace(/[?!]+$/, "").trim()
   if (/^(?:explica\b|describe\b|resume\b|analiza\b|revisa\b|que\b|como\b|por que\b|dime\b|no (?:edites|modifiques|reescribas)\b)/.test(command)) return false
   const polite = /^(?:puedes|podrias|podras|me puedes|me podrias)\s+/.test(command)
   command = command.replace(/^(?:(?:por favor|ahora|quiero que|necesito que|te pido que|deseo que|quiero|necesito|puedes|podrias|podras|me puedes|me podrias)\s*[, :]?\s*)+/, "")
   // A location before the verb is still a direct instruction, not an inferred edit.
   command = command.replace(/^(?:en|sobre)\s+(?:el|la|los|las|mi|este|esta)\s+(?:mismo\s+)?(?:titulo|portada|documento|word|archivo|informe|tabla|celda|hoja|diapositiva|pdf)\b[^,;.!?\n]{0,100}?(?=\s+(?:cambi|edit|modific|corrig|correg|reempla|sustitu|mejor|actualiz|pon|coloc))\s*[, :]?\s*/, "")
-  const action = /^(?:cambia(?:r|me|lo|la)?|cambies|edita(?:r|lo|la)?|edites|modifica(?:r|lo|la)?|modifiques|corrige(?:lo|la)?|corrijas|corregir|mejora(?:r|lo|la)?|mejores|reemplaza(?:r)?|reemplaces|sustituye|sustituyas|sustituir|renombra(?:r)?|renombres|borra(?:r)?|borres|elimina(?:r)?|elimines|quita(?:r)?|quites|agrega(?:r)?|agregues|anade|anadas|anadir|inserta(?:r)?|insertes|reescribe|reescribas|reescribir|actualiza(?:r)?|actualices|traduce|traduzcas|traducir|parafrasea(?:r)?|parafrasees|une|unas|unir|fusiona(?:r)?|fusiones|numera(?:r)?|numeres|rota(?:r)?|rotes|pon|poner|coloca(?:r)?|replace|edit|modify|rewrite|rename|remove|merge|rotate)\b/
+  const action = /^(?:cambia(?:r|me|lo|la)?|cambies|edita(?:r|lo|la)?|edites|modifica(?:r|lo|la)?|modifiques|corrige(?:lo|la)?|corrijas|corregir|mejora(?:r|lo|la)?|mejores|reemplaza(?:r)?|reemplaces|sustituye|sustituyas|sustituir|renombra(?:r)?|renombres|borra(?:r)?|borres|elimina(?:r)?|elimines|quita(?:r)?|quites|agrega(?:r)?|agregues|anade|anadas|anadir|inserta(?:r)?|insertes|reescribe|reescribas|reescribir|actualiza(?:r)?|actualices|traduce|traduzcas|traducir|parafrasea(?:r)?|parafrasees|une|unas|unir|fusiona(?:r)?|fusiones|numera(?:r)?|numeres|rota(?:r)?|rotes|pon|poner|coloca(?:r)?|completa(?:r|lo|la|me)?|completes|llena(?:r|lo|la)?|llenes|rellena(?:r|lo|la)?|rellenes|marca(?:r|lo|la)?|marques|incorpora(?:r)?|incorpores|incluye|incluyas|replace|edit|modify|rewrite|rename|remove|merge|rotate|fill)\b/
   const match = command.match(action)
   if (!match) return false
   // "¿Puedes editar documentos?" asks about capability; a concrete requested

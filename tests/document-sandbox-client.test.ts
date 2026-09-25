@@ -317,3 +317,20 @@ test("forbidden errors do not leak server payload or retry as another owner", as
   })
   assert.equal(calls, 1)
 })
+
+test("real follow-up edits that name the file first still route to the editor", () => {
+  const luis = "en el mismo docuemento word ## CARTA\\_PARA\\_LA\\_VALIDACION\\_DE\\_NUESTRO\\_INSTRUMENTO\\_DE\\_GUIA\\_DE\\_OBSERVACION\\_rgp\\_-\\_editado\\_.docx\n\nDOCX quiero que agregues algunas observaciones por que si estamos marcando con x bien con éxito a cada aunas de la sprgeuntas"
+  assert.equal(looksLikeExplicitDocumentEdit(luis), true)
+  const chip = [{ id: "upload-1", name: "CARTA PARA LA VALIDACION rgp.docx" }]
+  assert.equal(resolveDocumentSandboxAdmission(luis, { attachments: chip }).route, "edit")
+  assert.equal(resolveDocumentSandboxAdmission(luis, { historyAttachments: chip }).route, "edit")
+  for (const prompt of [
+    "completa el word con mis datos de magisterio soy Luis Carrera Salas",
+    "rellena la ficha con mi DNI 72792992",
+    "marca con X la columna SÍ en todas las preguntas",
+    "necesito que llenes las celdas vacías del excel",
+  ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), true, prompt)
+  for (const prompt of ["¿qué dice el documento?", "explica el word adjunto", "resume el archivo"]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+  }
+})
