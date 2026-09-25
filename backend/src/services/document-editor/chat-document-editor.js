@@ -70,6 +70,27 @@ function parseMessageFiles(files) {
   return [];
 }
 
+/**
+ * Assistant turns from the agent loop keep their delivered files inside the
+ * ```agent-task-state``` block of the content (message.files is NULL), so
+ * history lookups read both places.
+ */
+function assistantFileRefs(message = {}) {
+  const refs = [...parseMessageFiles(message.files)];
+  const content = typeof message.content === 'string' ? message.content : '';
+  const re = /```agent-task-state\s*\n([\s\S]*?)\n```/g;
+  let m;
+  while ((m = re.exec(content))) {
+    try {
+      const state = JSON.parse(m[1]);
+      for (const artifact of Array.isArray(state?.artifacts) ? state.artifacts : []) {
+        if (artifact && typeof artifact === 'object') refs.push({ artifactId: artifact.id, filename: artifact.filename, downloadUrl: artifact.downloadUrl });
+      }
+    } catch { /* malformed state block: ignore */ }
+  }
+  return refs;
+}
+
 function artifactIdFromRef(ref = {}) {
   const direct = String(ref.artifactId || '').trim();
   if (/^[a-f0-9]{6,40}$/i.test(direct)) return direct;
@@ -147,12 +168,13 @@ async function latestDerivedArtifact({ prisma, userId, chatId, upload, deps }) {
   if (stem.length < 4) return null;
   const messages = await prisma.message.findMany({
     where: { chatId, role: 'ASSISTANT', deletedAt: null, chat: { userId } },
-    select: { role: true, files: true },
+    select: { role: true, files: true, content: true },
     orderBy: { timestamp: 'desc' },
     take: HISTORY_SCAN_MESSAGES,
   }).catch(() => []);
   for (const message of Array.isArray(messages) ? messages : []) {
-    for (const ref of parseMessageFiles(message.files)) {
+    if (message.role && message.role !== 'ASSISTANT') continue;
+    for (const ref of assistantFileRefs(message)) {
       const artifactId = artifactIdFromRef(ref);
       if (!artifactId) continue;
       const metadata = readOwnedArtifactMetadata(artifactId, userId, deps);
@@ -190,12 +212,12 @@ async function resolveEditSources({ prisma, userId, chatId, fileIds = [], preser
   if (!chatId || !prisma?.message?.findMany) return [];
   const messages = await prisma.message.findMany({
     where: { chatId, deletedAt: null, chat: { userId } },
-    select: { role: true, files: true },
+    select: { role: true, files: true, content: true },
     orderBy: { timestamp: 'desc' },
     take: HISTORY_SCAN_MESSAGES,
   });
   for (const message of messages) {
-    const refs = parseMessageFiles(message.files);
+    const refs = message.role === 'ASSISTANT' ? assistantFileRefs(message) : parseMessageFiles(message.files);
     if (message.role === 'ASSISTANT') {
       const artifacts = [];
       const seen = new Set();
@@ -739,6 +761,7 @@ function resolveDeps(injected) {
 
 module.exports = {
   documentStem,
+  assistantFileRefs,
   runChatDocumentEdit,
   resolveEditSources,
   loadRecentUserText,
