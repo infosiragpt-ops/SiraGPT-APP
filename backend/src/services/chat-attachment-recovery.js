@@ -10,6 +10,7 @@ const {
   parseSpreadsheetCitationRows,
 } = require('./agents/agent-task-runner');
 const { evaluateResponse } = require('./quality-guard');
+const imageAttachmentVision = require('./image-attachment-vision');
 
 const FILE_READ_FAILURE_RE = /\b(?:no\s+pude\s+leer\w*|no\s+puedo\s+leer\w*|recib[ií]\s+tu\s+archivo.{0,80}no\s+pude\s+leer|no\s+(?:pude|puedo)\s+(?:procesar|abrir|analizar|acceder\s+al\s+contenido\s+de(?:l)?|acceder\s+a|ver)\s+(?:tu\s+)?(?:archivo|adjunto|documento|file)|no\s+encontr[eé]\s+texto|binary file|content not available|file content could not be extracted|no\s+tengo\s+acceso\s+al\s+(?:archivo|adjunto|documento)|cannot\s+(?:read|access)\s+(?:the\s+)?(?:file|attachment)|unable\s+to\s+(?:read|access))\b/i;
 const OPERATIONAL_DISCLOSURE_RE = /nota operativa|runtime principal|respuesta segura/i;
@@ -138,24 +139,24 @@ function shouldUseDirectExtractedFieldAnswer({ prompt = '', response = '', direc
   return !normalizedCurrent.includes(normalizedAnswer);
 }
 
-const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/i;
 function isImageAttachment(file) {
-  const mime = String(file?.mimeType || file?.type || '').toLowerCase();
-  if (mime.startsWith('image/')) return true;
-  return IMAGE_EXT_RE.test(String(file?.name || file?.originalName || file?.filename || ''));
+  return imageAttachmentVision.isImageAttachment(file);
 }
 
 function shouldRecoverAttachmentResponse({ prompt, response, processedFiles = [] }) {
   if (!Array.isArray(processedFiles) || processedFiles.length === 0) return false;
   const trimmed = String(response || '').trim();
-  if (!trimmed) return true;
   // Image-only attachments are answered by a vision model, not by the
-  // document pipeline. A short answer ("2", "un gato") is NOT weak and the
-  // canned «no encontré texto suficiente» fallback is simply wrong for a
-  // picture — only a generic stream failure justifies recovery here.
+  // document pipeline. A short answer ("2", "un gato") is NOT weak. Only an
+  // empty reply, a generic stream failure or a leaked «no text» copy
+  // justifies recovery — and recoverChatAttachmentResponse then re-asks a
+  // VISION model with the pixels, never the document «no encontré texto
+  // suficiente» fallback.
   if (processedFiles.every(isImageAttachment)) {
-    return GENERIC_STREAM_FAILURE_RE.test(trimmed);
+    if (!trimmed) return true;
+    return GENERIC_STREAM_FAILURE_RE.test(trimmed) || imageAttachmentVision.isNoTextFallback(trimmed);
   }
+  if (!trimmed) return true;
   if (OPERATIONAL_DISCLOSURE_RE.test(trimmed)) return true;
   if (FILE_READ_FAILURE_RE.test(trimmed)) return true;
   if (GENERIC_STREAM_FAILURE_RE.test(trimmed)) return true;
@@ -250,6 +251,38 @@ async function buildChatUploadedFileContext(prisma, { userId, processedFiles, pr
   return enrichedContext || buildProcessedFilesContext(processedFiles, prompt);
 }
 
+/**
+ * Image turns recover through VISION: the pixels go to the selected model
+ * when it can see, otherwise to the configured vision runtimes. The OCR text
+ * (if any) is passed only as a hint. Never returns the document «no encontré
+ * texto suficiente» copy: when no vision runtime answers, an image-specific
+ * notice explains that the vision service failed, not the file.
+ */
+async function recoverImageAttachmentResponse({
+  prompt,
+  imageFiles,
+  provider = '',
+  model = '',
+  visionAnswerer = null,
+}) {
+  const ocrHint = (imageFiles || [])
+    .map((file) => String(file?.extractedText || '').trim())
+    .filter((text) => text && !/^(no text found in image|no text detected|no content available|binary file|file content could not be extracted)/i.test(text))
+    .join('\n')
+    .slice(0, 2000);
+  let answer = '';
+  try {
+    const answerer = typeof visionAnswerer === 'function'
+      ? visionAnswerer
+      : (files, text, opts) => require('./ai-service').answerImagesWithVision(files, text, opts);
+    answer = String(await answerer(imageFiles, prompt, { provider, model, ocrHint }) || '').trim();
+  } catch (_) {
+    answer = '';
+  }
+  if (answer && !imageAttachmentVision.isNoTextFallback(answer)) return answer;
+  return imageAttachmentVision.buildImageVisionUnavailableAnswer();
+}
+
 async function recoverChatAttachmentResponse({
   prisma,
   userId,
@@ -257,7 +290,14 @@ async function recoverChatAttachmentResponse({
   processedFiles,
   uploadedFileContext = '',
   reason = '',
+  provider = '',
+  model = '',
+  visionAnswerer = null,
 }) {
+  const imageFiles = (processedFiles || []).filter(isImageAttachment);
+  if (imageFiles.length > 0 && imageFiles.length === (processedFiles || []).length) {
+    return recoverImageAttachmentResponse({ prompt, imageFiles, provider, model, visionAnswerer });
+  }
   const context = uploadedFileContext
     || await buildChatUploadedFileContext(prisma, { userId, processedFiles, prompt })
     || buildProcessedFilesContext(processedFiles, prompt);
@@ -307,6 +347,12 @@ async function recoverChatAttachmentResponse({
     }
   }
 
+  // Mixed turn (document + image): the «no text» document copy is only valid
+  // when there is no text AND no vision path. With an image attached, read it.
+  if (imageFiles.length > 0 && (!answer?.trim() || imageAttachmentVision.isNoTextFallback(answer))) {
+    return recoverImageAttachmentResponse({ prompt, imageFiles, provider, model, visionAnswerer });
+  }
+
   return answer;
 }
 
@@ -319,6 +365,7 @@ module.exports = {
   refreshProcessedFileExtracts,
   buildChatUploadedFileContext,
   recoverChatAttachmentResponse,
+  recoverImageAttachmentResponse,
   _internal: {
     isImageAttachment,
     buildDirectExtractedFieldAnswer,

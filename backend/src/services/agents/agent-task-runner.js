@@ -68,6 +68,7 @@ const {
   DEFAULT_THIN_THRESHOLD,
 } = require('./attachment-context-guard');
 const apa7 = require('../marco-teorico/apa7');
+const imageAttachmentVision = require('../image-attachment-vision');
 const { throwIfAborted } = require('../../utils/abort-signals');
 
 const prisma = (() => {
@@ -1033,7 +1034,8 @@ function buildBibliographyFallbackAnswer({ goal, uploadedFileContext }) {
   ].join('\n');
 }
 
-function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason = '' }) {
+function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason = '', imageAttachment = false }) {
+  if (imageAttachment) return imageAttachmentVision.buildImageVisionUnavailableAnswer();
   return (
     buildBibliographyFallbackAnswer({ goal, uploadedFileContext })
     || buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason })
@@ -1304,7 +1306,11 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   ].filter(Boolean).join('\n');
 }
 
-function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileContext = '' } = {}) {
+function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileContext = '', imageAttachment = false } = {}) {
+  // Images are read by a vision model, never by text extraction. The «no
+  // encontré texto suficiente» copy below is a DOCUMENT fallback (scanned PDF,
+  // empty sheet) and must never answer an image turn.
+  if (imageAttachment) return imageAttachmentVision.buildImageVisionUnavailableAnswer();
   const request = String(goal || '');
   if (wantsBibliographyAnswer(request)) {
     const partialRows = parseSpreadsheetCitationRows(uploadedFileContext);
@@ -1329,7 +1335,7 @@ function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileConte
     '**Qué puedes hacer ahora:**',
     mentionsExcel
       ? '- En Excel, confirma que la hoja correcta tiene datos en celdas (no solo formato o imágenes) y vuelve a subir el `.xlsx`.'
-      : '- Si es un PDF escaneado o una imagen, sube una versión más nítida o con OCR.',
+      : '- Si es un PDF escaneado, sube una versión más nítida o con OCR.',
     '- Si es Word, Excel o PDF con texto seleccionable, vuelve a subir el archivo original.',
     '- También puedes pegar aquí el fragmento clave y lo trabajo de inmediato.',
     '',
@@ -2152,6 +2158,42 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
     });
 
+  // ── Image-only turns go to VISION ─────────────────────────────────
+  // Live 2026-09-25: a handwritten "(a+b)^2 =" photo + "resolver" reached
+  // this runner, OCR produced ~3 characters and the turn ended in the
+  // document copy «no encontré texto suficiente». An image-only turn is
+  // answered by a vision model reading the pixels (below, before the
+  // thin-attachment guard); the document fallbacks never fire for it.
+  let imageOnlyAttachmentTurn = false;
+  let imageOnlyAttachmentRows = [];
+  if (!mediaBatchRows && !wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0) {
+    try {
+      const attachmentRows = await prisma.file.findMany({
+        where: { id: { in: files }, userId: user.id },
+        select: { id: true, filename: true, originalName: true, mimeType: true, path: true, extractedText: true },
+      });
+      if (Array.isArray(attachmentRows) && attachmentRows.length === files.length
+        && imageAttachmentVision.isImageOnlyAttachmentSet(attachmentRows)) {
+        imageOnlyAttachmentRows = attachmentRows
+          .map((row) => {
+            const resolvedPath = resolveStoredFilePath(row, user.id);
+            return resolvedPath
+              ? {
+                path: resolvedPath,
+                mimeType: imageAttachmentVision.imageMimeFor(row),
+                name: row.originalName || row.filename,
+                extractedText: row.extractedText || '',
+              }
+              : null;
+          })
+          .filter(Boolean);
+        imageOnlyAttachmentTurn = true;
+      }
+    } catch (imageRowsErr) {
+      console.warn('[agent-task] image-only detection failed:', imageRowsErr?.message || imageRowsErr);
+    }
+  }
+
   // ── Vision grounding para imágenes adjuntas ────────────────────────
   // Cuando la extracción de texto deja casi nada (logos, fotos, diagramas,
   // capturas sin OCR útil), el guard de adjunto-insuficiente rechazaría el
@@ -2159,7 +2201,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // Describimos las imágenes con el runtime de visión configurado y
   // anexamos la descripción al contexto: el guard deja de dispararse y el
   // agente responde con contexto visual real.
+  // Image-only analysis turns are answered by the vision model directly
+  // (see "Image-only analysis turn" below), so skip the extra describe call.
+  const imageOnlyAnalysisTurn = imageOnlyAttachmentTurn
+    && !(documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required');
   if (!mediaBatchRows && !wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0
+    && !imageOnlyAnalysisTurn
     && countUsefulWords(uploadedFileContext) < DEFAULT_THIN_THRESHOLD) {
     try {
       const fileRows = await prisma.file.findMany({
@@ -2499,6 +2546,58 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         mediaAnalysis: analysis?.summaries || [], mediaAnalysisUsage },
       });
     }
+    // ── Image-only analysis turn → answer with a vision model ─────────
+    // Runs before the AgentRunner / thin-attachment guard / attachment fast
+    // path: those read extracted TEXT, and for a photo of a handwritten
+    // exercise that text is nearly empty. The pixels go to the selected
+    // model when it can see, otherwise to a configured vision runtime.
+    // Deliverable requests (doc_required / autoGenerate) keep the loop, with
+    // the vision grounding above as context.
+    const imageDeliverableRequested = Boolean(documentPolicy?.autoGenerate)
+      || documentPolicy?.mode === 'doc_required';
+    if (imageOnlyAttachmentTurn && !imageDeliverableRequested) {
+      emit({ type: 'step_start', id: 's1', label: 'Analizando imagen', icon: 'file-text' });
+      let visionAnswer = '';
+      try {
+        const aiService = require('../ai-service');
+        const ocrHint = imageOnlyAttachmentRows
+          .map((row) => String(row.extractedText || '').trim())
+          .filter((text) => text && !/^(no text found in image|no text detected|no content available|binary file|file content could not be extracted)/i.test(text))
+          .join('\n');
+        visionAnswer = String(await aiService.answerImagesWithVision(
+          imageOnlyAttachmentRows,
+          displayGoal || goal,
+          {
+            provider: runtimeModelProfile.detected?.provider || '',
+            model: runtimeModelProfile.displayModel || model || '',
+            ocrHint,
+            signal: controller.signal,
+          },
+        ) || '').trim();
+      } catch (visionErr) {
+        throwIfAborted(controller.signal);
+        console.warn('[agent-task] image vision answer failed:', visionErr?.message || visionErr);
+      }
+      emit({ type: 'step_done', id: 's1', ok: Boolean(visionAnswer) });
+      stepIdCounter = Math.max(stepIdCounter, 1);
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: visionAnswer
+          ? 'Imagen analizada por un modelo de visión.'
+          : 'Servicio de visión no disponible en este intento.',
+      };
+      task.documentPolicy = documentPolicy;
+      return await finishDeterministicTask({
+        finalMarkdown: visionAnswer || imageAttachmentVision.buildImageVisionUnavailableAnswer(),
+        stoppedReason: visionAnswer ? 'image_vision_answer' : 'image_vision_unavailable',
+        steps: 1,
+        artifactsList: [],
+        metadata: { imageVision: true, sourceFileIds: files },
+      });
+    }
+
     // ── F2: AgentRunner PRIMARY on the durable agent-task entry ──────────
     // The chat UI's intent classifier still routes 'ppt'/document turns to
     // POST /api/agent/task, which used to create documents via the loop's
@@ -3016,7 +3115,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       files,
       userText: displayGoal || goal,
     });
-    if (attachmentStats.isThin) {
+    // An image is read as pixels (vision grounding / vision answer), so a
+    // near-empty OCR never makes an image turn "thin".
+    if (attachmentStats.isThin && !imageOnlyAttachmentTurn) {
       const thinBibliographyFallback = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
@@ -3171,6 +3272,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         reason: 'attachment_chat_fast_path',
       });
       const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        imageAttachment: imageOnlyAttachmentTurn,
         goal: displayGoal || goal,
         uploadedFileContext,
       });
@@ -3224,6 +3326,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         uploadedFileContext,
       });
       const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        imageAttachment: imageOnlyAttachmentTurn,
         goal: displayGoal || goal,
         uploadedFileContext,
       });
@@ -3594,6 +3697,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         reason: result.stoppedReason,
       });
       const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        imageAttachment: imageOnlyAttachmentTurn,
         goal: displayGoal || goal,
         uploadedFileContext: recoveryUploadedFileContext,
       });
@@ -3942,6 +4046,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         reason: err?.message,
       });
       const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        imageAttachment: imageOnlyAttachmentTurn,
         goal: displayGoal || goal,
         uploadedFileContext,
       });

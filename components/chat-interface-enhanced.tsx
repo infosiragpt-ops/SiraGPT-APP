@@ -187,7 +187,7 @@ import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { clampDeepSeekModel } from "@/lib/sse-client"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldQueueAttachmentAgentTask, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -11221,7 +11221,9 @@ REWRITTEN TEXT:`;
           // sandbox, which production does not have, and it renders the
           // downloadable card in the chat. Attachment-based work keeps the
           // durable agent task (source-preserving edits + validation).
-          if (filesToSend.length === 0) {
+          // Image-only turns stay on the vision path (/api/ai/generate reads
+          // the pixels); only real document attachments queue the agent task.
+          if (!shouldQueueAttachmentAgentTask(filesToSend)) {
             await runContextPipeline(intent);
           } else {
             await runClassifiedAgentTask();
@@ -11253,7 +11255,10 @@ REWRITTEN TEXT:`;
           }
           break;
         case 'doc':
-          if (filesToSend.length === 0) {
+          // A photo + "resolver" classified as 'doc' used to queue the
+          // text-only agent task, whose OCR found ~nothing and answered
+          // «no encontré texto suficiente». Image-only turns go to vision.
+          if (!shouldQueueAttachmentAgentTask(filesToSend)) {
             await runContextPipeline(intent);
           } else {
             await runClassifiedAgentTask();
@@ -11271,7 +11276,7 @@ REWRITTEN TEXT:`;
           await runContextPipeline(intent);
           break;
         default:
-          if (shouldRouteThroughAgenticRuntime(intent)) {
+          if (shouldRouteThroughAgenticRuntime(intent) && !isImageOnlyAttachmentTurn(filesToSend)) {
             await runClassifiedAgentTask();
           } else {
             await runContextPipeline(intent);

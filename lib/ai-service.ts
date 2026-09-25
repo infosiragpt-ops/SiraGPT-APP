@@ -453,6 +453,18 @@ export function isImageOnlyAttachmentTurn(files: any[] = []): boolean {
   return list.length > 0 && list.every(isImageLikeAttachment)
 }
 
+/**
+ * Attachment-bearing 'doc' / 'ppt' / agentic turns queue the durable agent
+ * task ONLY for real document attachments. Image-only turns must stay on the
+ * /api/ai/generate vision path: the queued runner reads extracted text, and a
+ * photo of a handwritten exercise has almost none (live 2026-09-25: «Recibí tu
+ * archivo, pero no encontré texto suficiente…» for "(a+b)^2 =" + "resolver").
+ */
+export function shouldQueueAttachmentAgentTask(files: any[] = []): boolean {
+  const list = Array.isArray(files) ? files.filter(Boolean) : []
+  return list.length > 0 && !isImageOnlyAttachmentTurn(list)
+}
+
 export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
   return (Array.isArray(conversationHistory) ? conversationHistory : []).some((item) => {
     if (isDocumentLikeAttachment(item)) return true
