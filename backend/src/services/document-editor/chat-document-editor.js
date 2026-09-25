@@ -445,6 +445,23 @@ function stageFor(event) {
 }
 
 /** The loop's final text talks about sandbox paths; the user only needs the change summary. */
+/**
+ * "agrega una diapositiva con tres viñetas", "añade observaciones", "inserta
+ * una sección de conclusiones": the assistant must author content, so the
+ * picked model edits the document. Literal replacements and pure structural
+ * ops (borra la diapositiva 3, renombra la hoja) stay eligible for the
+ * deterministic path.
+ */
+function isContentGeneratingOfficeRequest(instruction) {
+  const text = String(instruction || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const quoted = /"[^"\n]{2,}"|'[^'\n]{2,}'|«[^»\n]{2,}»|“[^”\n]{2,}”/g;
+  const literal = (text.match(quoted) || []).length >= 1 && /\b(?:reempla\w*|sustitu\w*|cambia\w*|pon|coloca\w*|escribe|escribir)\b/.test(text);
+  if (literal) return false;
+  const adds = /\b(?:agreg\w*|anad\w*|insert\w*|incorpor\w*|cre\w*|redact\w*|genera\w*|complet\w*|llen\w*|rellen\w*|desarroll\w*|escrib\w*|propon\w*|sugier\w*|amplia\w*|explica\w*|resum\w*|mejora\w*)\b/;
+  const content = /\b(?:diapositivas?|slides?|seccion(?:es)?|parrafos?|observacion(?:es)?|comentarios?|conclusion(?:es)?|introduccion|resumen|vinetas?|bullets?|filas?|columnas?|hojas?|tablas?|graficos?|notas?|texto|contenido|descripcion(?:es)?|ejemplos?|recomendacion(?:es)?|justificacion(?:es)?)\b/;
+  return adds.test(text) && content.test(text);
+}
+
 function cleanSummary(text) {
   return String(text || '')
     .replace(/\s*(?:en|in)\s+`?\/workspace\/[^\s`]*[^\s`.,;:]`?/gi, '')
@@ -633,7 +650,15 @@ async function runChatDocumentEdit({
     // requests needing interpretation, redesign/"modo reformateo",
     // unsupported formats — falls through to the LLM loop below, so current
     // behavior is fully preserved as fallback.
-    if (!wordFile && !deps.isReformateoRequest(instruction)) {
+    // Deterministic (model-less) office edits are only trusted for literal or
+    // structural requests on a fresh upload. Two production failures ruled the
+    // rest out: a follow-up on a delivered version re-resolved the ORIGINAL
+    // upload (dropping the earlier edits), and «agrega una diapositiva final
+    // titulada Próximos pasos…» appended a slide titled "PowerPoint
+    // presentation" in 1 s. Content the user expects the assistant to write
+    // goes to the picked model with the resolved (latest) files.
+    const followUpOnDelivered = sources.some((source) => source.kind === 'artifact');
+    if (!wordFile && !deps.isReformateoRequest(instruction) && !followUpOnDelivered && !isContentGeneratingOfficeRequest(instruction)) {
       try {
         const deterministic = await deps.tryDeterministicEdit({
           prisma, userId, chatId, fileIds, prompt: instruction, displayPrompt: instruction, signal,
@@ -690,8 +715,13 @@ async function runChatDocumentEdit({
 
     const artifacts = outputs.map((out) => {
       const ext = extensionOf(out.name);
+      // Follow-ups on a delivered version get v2, v3… instead of the same
+      // "-editado" name every time.
+      const versioned = followUpOnDelivered && sources.length === 1
+        ? (deps.docxEngine.editedFilename || require('../docx-engine').editedFilename)(sources[0].name.replace(/\.[^.]+$/, `.${ext}`))
+        : out.name;
       const saved = deps.saveArtifact({
-        filename: out.name,
+        filename: versioned,
         base64: out.buffer.toString('base64'),
         mime: MIME_BY_EXT[ext] || 'application/octet-stream',
         ownerUserId: userId,
@@ -761,6 +791,7 @@ function resolveDeps(injected) {
 
 module.exports = {
   documentStem,
+  isContentGeneratingOfficeRequest,
   assistantFileRefs,
   runChatDocumentEdit,
   resolveEditSources,

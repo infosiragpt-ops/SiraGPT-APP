@@ -312,3 +312,15 @@ test('agentic trigger routes subjunctive edit requests ("quiero que agregues …
   assert.equal(isDocumentEditRequest('necesito que insertes una fila'), true);
   assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
 });
+
+test('values written into table cells pass render verification even when pdftotext interleaves columns', async () => {
+  const s = createDocxSession(fixture());
+  s.apply('fill_field', { label: 'DNI:', value: 'Coherente con las variables de estudio' });
+  const out = await verifyEditedDocx({ originalBuffer: fixture(), editedBuffer: s.save(), changedParts: s.changedParts(),
+    expectedValues: ['Coherente con las variables de estudio', 'Valor que no existe en ningún lado'],
+    render: async () => ({ pages: 1, text: '5 ¿pregunta? X Coherente con las\nvariables 6 ¿otra? X de estudio' }),
+    originalRender: async () => ({ pages: 1, text: '' }) });
+  assert.equal(out.ok, false);
+  assert.ok(out.issues.some((issue) => /Valor que no existe/.test(issue)));
+  assert.ok(out.issues.every((issue) => !/Coherente/.test(issue)), JSON.stringify(out.issues));
+});
