@@ -22,9 +22,7 @@ function isWordFilename(name) {
   return /\.docx?$/i.test(String(name || ''));
 }
 
-function docxEngineEnabled(env = process.env) {
-  return !/^(?:0|false|off)$/i.test(String(env.SIRAGPT_DOCX_ENGINE || '1'));
-}
+function docxEngineEnabled() { return true; }
 
 /** Versioned output name: "x.docx" → "x (editado).docx" → "x (editado v2).docx". */
 function editedFilename(name) {
@@ -83,8 +81,9 @@ function buildUserSummary({ modelSummary, changes, verification, filename }) {
     else if (r.pagesBefore) facts.push(`${r.pagesAfter} página(s), igual que el original`);
     else facts.push(`${r.pagesAfter} página(s)`);
   }
-  if (r.totalEntries && r.identicalEntries === r.totalEntries - (r.changedParts || []).length) facts.push('diseño, encabezados, imágenes y estilos sin alterar');
   if (facts.length) lines.push('', `Verificado: ${facts.join('; ')}.`);
+  if (r.intent?.missing_information?.length) lines.push('', `Datos que faltan: ${r.intent.missing_information.join('; ')}.`);
+  lines.push('', 'El archivo original se conserva.');
   return lines.join('\n');
 }
 
@@ -100,6 +99,7 @@ async function editWordDocument({
   render: renderOverride,
   convert: convertOverride,
 } = {}) {
+  signal?.throwIfAborted();
   const isDoc = /\.doc$/i.test(filename);
   const convert = convertOverride || soffice;
   let workBuffer = buffer;
@@ -138,19 +138,40 @@ async function editWordDocument({
   if (isDoc) {
     try {
       outBuffer = await convert.docxToDoc(result.buffer);
+      signal?.throwIfAborted();
+      // Verify the DELIVERED legacy bytes, not just the intermediate DOCX.
+      const roundtrip = await convert.docToDocx(outBuffer);
+      if (typeof render === 'function') {
+        const finalRender = await render(roundtrip);
+        const workRender = await render(result.buffer);
+        const norm = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+        if (!Number.isSafeInteger(finalRender?.pages) || finalRender.pages < 1
+          || typeof finalRender.text !== 'string' || typeof workRender?.text !== 'string'
+          || finalRender.pages !== workRender.pages || norm(finalRender.text) !== norm(workRender.text))
+          throw new Error('La conversión final cambió el contenido o la paginación');
+      } else {
+        // No renderer means the converted binary cannot be proved usable.
+        throw new Error('La conversión final no pudo comprobarse');
+      }
       mime = DOC_MIME;
     } catch {
+      signal?.throwIfAborted();
       // Could not convert back: deliver the faithful .docx instead of failing.
       outName = editedFilename(filename.replace(/\.doc$/i, '.docx'));
+      outBuffer = result.buffer;
     }
   }
+  signal?.throwIfAborted();
   return {
     ok: true,
     status: 'done',
     buffer: outBuffer,
     filename: outName,
     mime,
-    summary: buildUserSummary({ modelSummary: result.summary, changes: result.changes, verification: result.verification, filename }),
+    summary: buildUserSummary({ modelSummary: result.summary, changes: result.changes, verification: result.verification, filename })
+      + (isDoc ? (mime === DOC_MIME
+        ? '\n\nEl archivo .doc requirió conversión para editarlo; se comprobó el contenido de la copia final.'
+        : '\n\nTe entrego la copia en .docx porque no pude verificar la conversión de vuelta a .doc.') : ''),
     changes: result.changes,
     verification: result.verification,
     iterations: result.iterations,

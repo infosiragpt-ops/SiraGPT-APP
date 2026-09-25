@@ -2159,6 +2159,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         thinkingLevelExplicit,
         ctx: {
           ...toolContext,
+          documentEditLlm: { client: openai, model, provider, toolCallMode },
           signal,
           provider,
           onEvent,

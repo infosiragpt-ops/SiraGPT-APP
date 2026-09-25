@@ -14,7 +14,7 @@ const { promisify } = require('node:util');
 const { buildSofficeConvertArgs, sofficeSpawnEnv } = require('../document-pipeline/soffice-pdf-export');
 
 const execFileAsync = promisify(execFile);
-const TIMEOUT_MS = Number(process.env.SIRAGPT_DOCX_ENGINE_SOFFICE_TIMEOUT_MS || 90_000);
+const TIMEOUT_MS = 90_000;
 let chain = Promise.resolve();
 let available = null;
 

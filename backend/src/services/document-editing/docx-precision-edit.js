@@ -428,4 +428,9 @@ function applyDocxPrecisionEdit(buffer, rawEdit) {
   };
 }
 
-module.exports = { applyDocxPrecisionEdit, verifyDocxPrecisionEdit, DocxPrecisionError };
+module.exports = {
+  applyDocxPrecisionEdit, verifyDocxPrecisionEdit, DocxPrecisionError,
+  // Shared lexical text primitives: both editors preserve unchanged characters
+  // in their original runs instead of flattening rich text into the first run.
+  INTERNAL: { characterChanges, rawBoundaries, applyPatches, preserveSpaceTag, xmlText, escapeText },
+};

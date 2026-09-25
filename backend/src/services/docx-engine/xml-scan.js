@@ -16,8 +16,8 @@
  * Text nodes are not materialized; callers read `innerText(source, node)`.
  */
 
-const MAX_TOKENS = 2_000_000;
-const MAX_DEPTH = 512;
+const MAX_TOKENS = 500_000;
+const MAX_DEPTH = 256;
 
 class XmlScanError extends Error {
   constructor(message) {
@@ -29,6 +29,7 @@ class XmlScanError extends Error {
 
 function scan(source) {
   const xml = String(source || '');
+  if (xml.length > 25 * 1024 * 1024 || /<!DOCTYPE|<!ENTITY/i.test(xml)) throw new XmlScanError('XML no compatible o demasiado grande.');
   const root = { name: '#root', start: 0, openEnd: 0, closeStart: xml.length, end: xml.length, selfClosing: false, parent: null, children: [] };
   const stack = [root];
   let i = 0;

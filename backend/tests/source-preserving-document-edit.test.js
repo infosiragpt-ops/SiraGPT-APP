@@ -27,6 +27,15 @@ const {
   buildDocumentDeliveryPolicy,
 } = require('../src/services/agents/document-delivery-policy');
 
+it('unresolved form completion cannot become an appendix or prompt dump without the selected model', () => {
+  const instruction = 'Completa mi Word con mis datos: soy Ana Torres y mi documento es 12345678';
+  const documentXml = '<w:document><w:body><w:p><w:r><w:t>Apellidos y nombres: __________</w:t></w:r></w:p></w:body></w:document>';
+  assert.throws(() => sourcePreservingInternals.planSourcePreservingOperations({ requestText: instruction, documentXml }),
+    { code: 'DOCX_EDIT_INTENT_UNRESOLVED' });
+  assert.throws(() => buildAppendixBlocks({ prompt: instruction, format: 'docx', originalName: 'formulario.docx' }),
+    { code: 'DOCX_EDIT_INTENT_UNRESOLVED' });
+});
+
 async function makeDocxBuffer() {
   const doc = new Document({
     sections: [{
@@ -1885,7 +1894,7 @@ describe('source-preserving document edit — document-understanding brain', () 
     assert.equal(confident('agrega al final el instrumento de tesis en anexos'), true);
     // Ambiguous — a table cue with no matching fill / no covered section → escalate.
     assert.equal(confident('pon el cronograma y agrega el cuestionario de mi tesis'), false);
-    assert.equal(confident('necesito que me ayudes con mi tesis'), false);
+    assert.throws(() => confident('necesito que me ayudes con mi tesis'), { code: 'DOCX_EDIT_INTENT_UNRESOLVED' });
   });
 
   it('keeps the smart planner deterministic (heuristic) when the model is unavailable', async () => {

@@ -1050,6 +1050,11 @@ function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '',
     }
     if (blocks.length) return blocks;
   }
+  if (format === 'docx') {
+    const error = new Error('No pude interpretar esa edición con el modelo seleccionado. El original no se modificó; no agregué la petición como un anexo.');
+    error.code = 'DOCX_EDIT_INTENT_UNRESOLVED';
+    throw error;
+  }
   const title = inferDocumentTitle(sourceText, originalName);
   return [
     block('pageBreak', ''),
@@ -5661,7 +5666,15 @@ function buildOperationFromClause(clauseNorm, documentXml) {
     return { kind: 'insert_table', tableKind: clauseWantsConsistencyMatrix(clauseNorm) ? 'consistency_matrix' : 'table' };
   }
   if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
-  if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
+  if (wantsInstrument) return { kind: 'append_generic', wantsInstrument };
+  if (append) {
+    // "Agrega mis datos" is not an instruction to manufacture an appendix.
+    // The selected-model Word editor owns open-ended location decisions;
+    // this legacy parser only executes concrete operations it understands.
+    const error = new Error('Esa edición requiere interpretar el documento con el modelo seleccionado. No cambié el archivo ni agregué un anexo.');
+    error.code = 'DOCX_EDIT_INTENT_UNRESOLVED';
+    throw error;
+  }
   if (fill) return null;
   return null;
 }
@@ -5673,6 +5686,8 @@ function operationKey(op) {
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
 
 function planSourcePreservingOperations({ requestText = '', documentXml = '', referenceFiles = [] } = {}) {
+  const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText) && referenceFiles.length > 0;
+  if (wantsReferenceIntegration && !parseTargetSectionRequest(requestText)) return [{ kind: 'integrate_references' }];
   const clauses = splitRequestClauses(requestText);
   const ops = [];
   const seen = new Set();
@@ -5762,7 +5777,6 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
     }
   }
 
-  const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText) && referenceFiles.length > 0;
   if (wantsReferenceIntegration && !ops.some((op) => op.kind === 'fill_section' || op.target)) {
     ops.length = 0;
     seen.clear();
@@ -5775,7 +5789,9 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
     } else if (requestWantsMinimalProofreading(norm)) {
       ops.push({ kind: 'proofread_minimal' });
     } else {
-      ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+      const error = new Error('Esa edición requiere interpretar el documento con el modelo seleccionado. No cambié el archivo ni agregué un anexo.');
+      error.code = 'DOCX_EDIT_INTENT_UNRESOLVED';
+      throw error;
     }
   }
   // Collapse repeated append_generic ops into ONE. A phrasing like "agregale
@@ -6185,7 +6201,7 @@ async function runAppendGenericOperation({ buffer, op, requestText, sourceText, 
   if (!blocks) {
     blocks = op.wantsInstrument
       ? buildInstrumentAppendix({ prompt: requestText, sourceText, originalName })
-      : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName });
+      : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName, format: 'docx' });
     mode = op.wantsInstrument ? 'instrument' : 'generic';
   }
   return {
@@ -6928,11 +6944,11 @@ async function runDocxImageEditFlow({ input, imageEdit, requestText, sourceFile,
     op.colorName = imageEdit.colorName || '';
   } else {
     const asset = (assetFiles || []).find((file) => normalizeText(file.mimeType).startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(String(file.name || '')));
-    if (!asset || !asset.absolutePath) {
+    if (!asset || (!Buffer.isBuffer(asset.buffer) && !asset.absolutePath)) {
       return { clarification: true, message: 'Para reemplazar la imagen necesito la imagen nueva: adjúntala (PNG o JPG) junto con la instrucción y hago el cambio de inmediato.' };
     }
     try {
-      op.replacementBytes = await fs.promises.readFile(asset.absolutePath);
+      op.replacementBytes = Buffer.isBuffer(asset.buffer) ? asset.buffer : await fs.promises.readFile(asset.absolutePath);
     } catch {
       return { clarification: true, message: `No pude leer la imagen adjunta «${asset.name || 'sin nombre'}». Vuelve a adjuntarla e inténtalo de nuevo.` };
     }
@@ -8504,29 +8520,42 @@ function buildBatchEditResult({ attempts = [], requestText = '' } = {}) {
 
 async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent }) {
   const docxEngine = require('./docx-engine');
-  if (!docxEngine.docxEngineEnabled()) return null;
   const editor = require('./document-editor/chat-document-editor');
   const sources = await editor.resolveEditSources({
-    prisma, userId, chatId, fileIds, deps: {
+    prisma, userId, chatId, fileIds, preserveCandidates: true, allowImageOnlyFollowup: Boolean(parseImageEditRequest(requestText)), deps: {
       artifactDir: require('./agents/task-tools').ARTIFACT_DIR,
       extractFileIds: require('./message-attachments').extractFileIdsFromMessageFiles,
     },
   });
-  if (sources.length !== 1 || !docxEngine.isWordFilename(sources[0].name)) return null;
+  if (!sources.some((source) => docxEngine.isWordFilename(source.name))) return null;
+  const request = String(requestText || '').normalize('NFC').toLowerCase();
+  const named = sources.filter((source) => request.includes(source.name.normalize('NFC').toLowerCase()));
+  if (named.length === 1 && !docxEngine.isWordFilename(named[0].name)) return null;
+  if (!docxEngine.docxEngineEnabled()) {
+    const error = new Error('La edición de Word no está disponible en este momento. El original no se modificó.');
+    error.code = 'DOCX_EDIT_UNAVAILABLE';
+    throw error;
+  }
   const edited = await editor.runChatDocumentEdit({
     prisma, userId, chatId, fileIds, instruction: requestText, signal, llm,
     onEvent: typeof onEvent === 'function' ? onEvent : () => {},
   });
+  if (edited?.clarification) return buildImageEditClarificationResult({ message: edited.message });
   if (!edited || !edited.ok) {
     const error = new Error((edited && edited.message) || 'No pude completar la edición del documento con el modelo seleccionado. El original no se modificó.');
     error.code = 'DOCX_EDIT_ENGINE_FAILED';
     throw error;
   }
-  const artifact = edited.artifacts[0];
+  const artifact = edited.artifacts?.[0];
+  if (!artifact || artifact.validation?.passed !== true) {
+    const error = new Error('La edición de Word no superó la verificación. No se entregó ningún documento.');
+    error.code = 'DOCX_EDIT_VALIDATION_FAILED';
+    throw error;
+  }
   return {
-    content: edited.summary, artifact, validation: { passed: true }, format: /\.doc$/i.test(artifact.filename) ? 'doc' : 'docx', previewHtml: null,
+    content: edited.summary, artifact, validation: artifact.validation, format: /\.doc$/i.test(artifact.filename) ? 'doc' : 'docx', previewHtml: null,
     file: { type: 'doc', format: 'docx', title: artifact.filename, filename: artifact.filename,
-      url: artifact.downloadUrl, mime: artifact.mime, size: artifact.sizeBytes, metrics: { passed: true } },
+      url: artifact.downloadUrl, mime: artifact.mime, size: artifact.sizeBytes, metrics: artifact.validation },
   };
 }
 
@@ -8545,7 +8574,7 @@ async function tryGenerateSourcePreservingDocumentEdit({
   // Word files with a live model: the docx engine edits the document in
   // place (the model reads its structure and fills/edits the right fields).
   // No annex/append fallback for Word — failure is reported honestly.
-  if (llm && llm.client) {
+  if (llm) {
     const engineHit = await tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent });
     if (engineHit) return engineHit;
   }

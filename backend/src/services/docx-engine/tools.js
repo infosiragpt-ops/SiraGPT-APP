@@ -106,7 +106,7 @@ const TOOL_SPECS = [
   },
   {
     name: 'replace_text',
-    description: 'Reemplaza un texto existente por otro (aunque esté partido en varios fragmentos de formato), conservando el formato del fragmento donde empieza. Si aparece varias veces, indica occurrence, target o all=true.',
+    description: 'Reemplaza un texto existente por otro (aunque esté partido en varios fragmentos de formato), conservando cada letra no modificada en su formato original. Si aparece varias veces, indica occurrence, target o all=true.',
     input_schema: {
       type: 'object',
       properties: {
@@ -244,13 +244,8 @@ function formatChanges(changes) {
  */
 function makeDocxToolExecutors(session, { onFinish, onEdit = () => {} } = {}) {
   const history = [];
-  const snapshot = () => new Map([...session.pkg.parts.values()].map((p) => [p.name, p.xml]));
-  const restore = (snap) => {
-    for (const [name, xml] of snap) {
-      const part = session.pkg.part(name);
-      if (part.xml !== xml) session.commit(name, [{ start: 0, end: part.xml.length, text: xml }]);
-    }
-  };
+  const snapshot = () => session.snapshot();
+  const restore = (snap) => session.restore(snap);
   const wrap = (fn) => async (args) => {
     try {
       return await fn(args || {});
@@ -284,6 +279,7 @@ function makeDocxToolExecutors(session, { onFinish, onEdit = () => {} } = {}) {
       const changeIndex = session.changes.length;
       const recorded = session.apply(name, args);
       history.push({ op: name, snap, changeIndex });
+      if (history.length > 10) history.shift();
       try { onEdit({ tool: name, changes: recorded }); } catch { /* UI relay only */ }
       return formatChanges(recorded);
     });

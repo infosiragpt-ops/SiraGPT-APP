@@ -6,6 +6,7 @@
  */
 
 const X = require('./xml-scan');
+const { XMLValidator } = require('fast-xml-parser');
 const M = require('./model');
 const { openDocxPackage, saveDocxPackage } = require('./package');
 const { OPS, DocxOpError, findAll, looseKey } = require('./ops');
@@ -21,10 +22,28 @@ function createDocxSession(buffer, { filename = 'documento.docx' } = {}) {
   const pkg = openDocxPackage(buffer);
   const models = new Map();
   const changes = [];
+  const identities = new Map();
+  const counters = new Map();
+  let operationCount = 0;
+  for (const name of pkg.parts.keys()) identities.set(name, new Map());
   const partNames = [...pkg.parts.keys()].sort((a, b) => PART_ORDER(a) - PART_ORDER(b) || a.localeCompare(b));
 
   const model = (partName) => {
-    if (!models.has(partName)) models.set(partName, M.buildPartModel(pkg.part(partName)));
+    if (!models.has(partName)) {
+      const registry = identities.get(partName);
+      const identify = (base, node, _index, suffix = '') => {
+        const key = `${base}:${node.start}${suffix}`;
+        if (registry.has(key)) return registry.get(key).id;
+        if (registry.size >= 30_000) throw new DocxOpError('El documento contiene demasiados elementos editables.', 'DOCX_ENGINE_TOO_LARGE');
+        const countKey = `${partName}:${base}`;
+        const next = counters.get(countKey) || 0;
+        counters.set(countKey, next + 1);
+        const id = `${base}${next}`;
+        registry.set(key, { id, base, suffix, start: node.start, end: node.end, name: node.name });
+        return id;
+      };
+      models.set(partName, M.buildPartModel(pkg.part(partName), identify));
+    }
     return models.get(partName);
   };
 
@@ -49,12 +68,55 @@ function createDocxSession(buffer, { filename = 'documento.docx' } = {}) {
 
   const commit = (partName, splices) => {
     if (!splices.length) return;
+    if (splices.length > 50_000) throw new DocxOpError('Demasiados cambios en una operación.', 'DOCX_ENGINE_TOO_LARGE');
     const part = pkg.part(partName);
+    model(partName); // Register all currently addressable original elements.
     const next = X.applySplices(part.xml, splices);
-    // Re-scan immediately: an op must never leave a part that does not parse.
+    if (Buffer.byteLength(next) > 25 * 1024 * 1024 || XMLValidator.validate(next) !== true)
+      throw new DocxOpError('La edición no produce XML válido dentro de los límites.', 'DOCX_ENGINE_INVALID_XML');
     X.scan(next);
+    // IDs survive offset shifts; deleted IDs are never reassigned to a different
+    // element. This keeps a batch targeting original p1/p2 safe after deleting p0.
+    const updated = new Map();
+    for (const record of identities.get(partName).values()) {
+      const covering = splices.find((p) => p.end > p.start && p.start <= record.start && record.start < p.end);
+      let moved;
+      if (covering) {
+        const sameElement = covering.start === record.start && covering.end === record.end
+          && new RegExp(`^<${record.name}(?:\\s|/?>)`).test(covering.text)
+          && !/cb$/.test(record.base);
+        if (!sameElement) continue;
+        const shift = splices.filter((p) => p !== covering && p.end <= record.start).reduce((n, p) => n + p.text.length - (p.end - p.start), 0);
+        moved = { ...record, start: record.start + shift, end: record.start + shift + covering.text.length };
+      } else {
+        const shiftStart = splices.filter((p) => p.end <= record.start).reduce((n, p) => n + p.text.length - (p.end - p.start), 0);
+        const shiftEnd = splices.filter((p) => p.start < record.end).reduce((n, p) => n + p.text.length - (p.end - p.start), 0);
+        moved = { ...record, start: record.start + shiftStart, end: record.end + shiftEnd };
+      }
+      updated.set(`${moved.base}:${moved.start}${moved.suffix}`, moved);
+    }
+    identities.set(partName, updated);
     part.xml = next;
     models.delete(partName);
+  };
+
+  const snapshot = () => {
+    for (const name of partNames) model(name);
+    return ({
+    parts: new Map([...pkg.parts.values()].map((p) => [p.name, p.xml])),
+    identities: new Map([...identities].map(([name, entries]) => [name, new Map([...entries].map(([key, value]) => [key, { ...value }]))])),
+    counters: new Map(counters), changes: [...changes],
+    });
+  };
+  const restore = (saved) => {
+    for (const [name, xml] of saved.parts) pkg.part(name).xml = xml;
+    identities.clear();
+    for (const [name, entries] of saved.identities) identities.set(name, new Map([...entries].map(([key, value]) => [key, { ...value }])));
+    // Never recycle IDs allocated by an undone edit: stale model calls then fail
+    // closed instead of editing a different newly inserted paragraph.
+    for (const [key, value] of saved.counters) counters.set(key, Math.max(counters.get(key) || 0, value));
+    changes.splice(0, changes.length, ...saved.changes);
+    models.clear();
   };
 
   const paragraphsOf = (hit) => {
@@ -132,6 +194,8 @@ function createDocxSession(buffer, { filename = 'documento.docx' } = {}) {
     model,
     resolve,
     commit,
+    snapshot,
+    restore,
     paragraphsOf,
     scopeParagraphs,
     suggest,
@@ -194,12 +258,9 @@ function createDocxSession(buffer, { filename = 'documento.docx' } = {}) {
 
     find(query, { regex = false, maxResults = 30 } = {}) {
       const results = [];
-      let re = null;
-      if (regex) {
-        try { re = new RegExp(String(query), 'giu'); } catch (err) { throw new DocxOpError(`Expresión regular inválida: ${err.message}`, 'DOCX_ENGINE_BAD_ARGS'); }
-      }
+      if (regex) throw new DocxOpError('Usa texto literal para buscar en el documento.', 'DOCX_ENGINE_BAD_ARGS');
       for (const { para } of scopeParagraphs(null)) {
-        const hits = re ? [...para.text.matchAll(re)].map((m) => ({ start: m.index, end: m.index + m[0].length })) : findAll(para.text, String(query));
+        const hits = findAll(para.text, String(query));
         for (const h of hits) {
           const from = Math.max(0, h.start - 40);
           results.push(`${para.cell || para.id}${para.cell ? ` (${para.id})` : ''}: …${M.clip(para.text.slice(from, h.end + 40), 120)}…`);
@@ -210,11 +271,30 @@ function createDocxSession(buffer, { filename = 'documento.docx' } = {}) {
     },
 
     apply(opName, args = {}) {
-      const op = OPS[opName];
+      const op = Object.prototype.hasOwnProperty.call(OPS, opName) ? OPS[opName] : null;
       if (!op) throw new DocxOpError(`Operación desconocida "${opName}".`, 'DOCX_ENGINE_BAD_ARGS');
-      const recorded = op(session, args || {});
-      changes.push(...recorded);
-      return recorded;
+      if (++operationCount > 500) throw new DocxOpError('La edición alcanzó el límite de operaciones.', 'DOCX_ENGINE_TOO_LARGE');
+      const encoded = JSON.stringify(args);
+      if (!encoded || encoded.length > 100_000 || Object.prototype.hasOwnProperty.call(args || {}, '_rpr'))
+        throw new DocxOpError('Argumentos de edición inválidos o demasiado grandes.', 'DOCX_ENGINE_BAD_ARGS');
+      const validate = (value, depth = 0) => {
+        if (depth > 8) throw new DocxOpError('Argumentos de edición demasiado anidados.', 'DOCX_ENGINE_BAD_ARGS');
+        if (typeof value === 'string' && (value.length > 12_000 || !value.isWellFormed() || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ufffe\uffff]/u.test(value)))
+          throw new DocxOpError('El texto de edición no es válido o es demasiado largo.', 'DOCX_ENGINE_BAD_ARGS');
+        if (value && typeof value === 'object') for (const nested of Object.values(value)) validate(nested, depth + 1);
+      };
+      validate(args);
+      const saved = snapshot();
+      try {
+        const recorded = op(session, args || {});
+        const modified = [...pkg.parts.values()].some((p) => p.xml !== saved.parts.get(p.name));
+        if (!modified) throw new DocxOpError('La operación no cambió el documento.', 'DOCX_ENGINE_NO_CHANGE');
+        changes.push(...recorded);
+        return recorded;
+      } catch (error) {
+        restore(saved);
+        throw error;
+      }
     },
 
     changedParts() {

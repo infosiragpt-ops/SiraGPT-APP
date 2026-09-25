@@ -14,6 +14,7 @@
 const X = require('./xml-scan');
 const M = require('./model');
 const R = require('./rpr');
+const P = require('../document-editing/docx-precision-edit').INTERNAL;
 
 class DocxOpError extends Error {
   constructor(message, code = 'DOCX_ENGINE_OP_FAILED') {
@@ -23,9 +24,7 @@ class DocxOpError extends Error {
   }
 }
 
-const RUN_CHILD_KEEP = new Set(['w:rPr', 'w:t', 'w:tab', 'w:br', 'w:cr', 'w:lastRenderedPageBreak', 'w:noBreakHyphen', 'w:softHyphen', 'w:sym']);
 const PARA_KEEP_ON_REWRITE = new Set(['w:pPr', 'w:bookmarkStart', 'w:bookmarkEnd', 'w:commentRangeStart', 'w:commentRangeEnd', 'w:permStart', 'w:permEnd']);
-const PLACEHOLDER_RE = /^[\s_.·…\-–—]*$/;
 const PLACEHOLDER_INLINE_RE = /(_{2,}|\.{3,}|…+|-{3,}|\[\s*\]|\(\s*\))/;
 
 function textToRunContent(text) {
@@ -54,12 +53,6 @@ function runOpenTag(xml, runNode) {
   return tag.endsWith('/>') ? `${tag.slice(0, -2)}>` : tag;
 }
 
-function tStartTagWithPreserve(xml, tNode, text) {
-  let tag = X.startTag(xml, tNode);
-  if (tag.endsWith('/>')) tag = `${tag.slice(0, -2)}>`;
-  if (/^\s|\s$/.test(text) && !/xml:space\s*=/.test(tag)) tag = tag.replace(/^<w:t\b/, '<w:t xml:space="preserve"');
-  return tag;
-}
 
 function normalizeForSearch(text) {
   return String(text).replace(/\u00a0/g, ' ');
@@ -99,50 +92,71 @@ function looseKey(text) {
  * formatting of the run where the match starts. Tabs/breaks inside the match
  * are removed; objects (images) cannot be crossed.
  */
+function assertEditable(modelOrXml, node, options) {
+  const xml = typeof modelOrXml === 'string' ? modelOrXml : modelOrXml.xml;
+  const fieldParagraph = typeof modelOrXml === 'object' && !options?.allowFormField
+    && modelOrXml.paragraphs.find((p) => p.protectedReason === 'campo automático' && p.node.start < node.end && p.node.end > node.start);
+  const reason = fieldParagraph?.protectedReason || M.protectedReason(xml, node, options);
+  if (reason) throw new DocxOpError(`Ese contenido no se puede editar sin alterar ${reason}. Entrega una copia limpia o elige otra ubicación.`, 'DOCX_ENGINE_PROTECTED');
+}
+
+function assertRewritable(xml, node) {
+  assertEditable(xml, node);
+  let unsafe = false;
+  const allowed = new Set(['w:p', 'w:pPr', 'w:r', 'w:rPr', 'w:t', 'w:tab', 'w:br', 'w:cr', 'w:noBreakHyphen', 'w:softHyphen', 'w:proofErr']);
+  X.walk(node, (n) => {
+    if (n.name === 'w:pPr' || n.name === 'w:rPr') return false;
+    if (!allowed.has(n.name)) unsafe = true;
+    return !unsafe;
+  });
+  if (unsafe) throw new DocxOpError('Esa celda contiene imágenes, campos, enlaces o referencias. Edita su texto con replace_text para conservar esos elementos.', 'DOCX_ENGINE_PROTECTED');
+}
+
 function textRangeSplices(xml, para, start, end, replacement) {
-  const touched = para.map.filter(({ seg }) => seg.end > start && seg.start < end);
-  const firstText = para.map.find(({ seg }) => seg.kind === 't' && seg.end >= start && seg.start <= start && (seg.end > start || seg.end === start));
-  if (touched.some(({ seg }) => seg.kind === 'object')) {
-    throw new DocxOpError('El texto buscado cruza una imagen u objeto; elige un fragmento que no incluya la imagen.', 'DOCX_ENGINE_CROSSES_OBJECT');
+  if (para.protectedReason) throw new DocxOpError(`Ese texto pertenece a ${para.protectedReason}.`, 'DOCX_ENGINE_PROTECTED');
+  assertEditable(xml, para.node);
+  if (para.map.some(({ seg }) => seg.kind === 'object' && start <= seg.start && seg.start < end))
+    throw new DocxOpError('El texto cruza una imagen u objeto; elige un fragmento sin la imagen.', 'DOCX_ENGINE_CROSSES_OBJECT');
+  const edits = new Map();
+  const loose = [];
+  for (const change of P.characterChanges(para.text.slice(start, end), replacement)) {
+    const from = start + change.start; const to = start + change.end;
+    const anchor = para.map.find(({ seg }) => seg.start <= from && from < seg.end)
+      || [...para.map].reverse().find(({ seg }) => seg.start < from && from <= seg.end);
+    if (!anchor) throw new DocxOpError('No encontré texto editable en esa posición.', 'DOCX_ENGINE_NO_TEXT');
+    const seg = anchor.seg;
+    if (to > seg.end) throw new DocxOpError('El cambio cruza un elemento no editable.', 'DOCX_ENGINE_PROTECTED');
+    if (from === to && seg.kind !== 't') {
+      loose.push({ start: seg.node.start, end: seg.node.start, text: textToRunContent(change.text) });
+      continue;
+    }
+    if (!edits.has(seg)) edits.set(seg, []);
+    edits.get(seg).push({ start: from - seg.start, end: to - seg.start, text: change.text });
   }
   const splices = [];
-  let inserted = false;
-  const anchor = touched.find(({ seg }) => seg.kind === 't') || firstText;
-  if (!anchor) throw new DocxOpError('No encontré texto editable en esa posición.', 'DOCX_ENGINE_NO_TEXT');
-  const writeT = (seg, newText) => {
-    const tag = tStartTagWithPreserve(xml, seg.node, newText);
-    if (/[\n\t]/.test(newText)) {
-      // Split into sibling w:t / w:br / w:tab elements inside the same run.
-      const pieces = String(newText).split(/(\n|\t)/).map((p) => {
-        if (p === '\n') return '<w:br/>';
-        if (p === '\t') return '<w:tab/>';
-        return `<w:t xml:space="preserve">${X.escapeText(p)}</w:t>`;
-      }).join('');
-      splices.push({ start: seg.node.start, end: seg.node.end, text: pieces });
-    } else {
-      splices.push({ start: seg.node.start, end: seg.node.end, text: `${tag}${X.escapeText(newText)}</w:t>` });
+  for (const [seg, changes] of edits) {
+    const text = P.applyPatches(seg.text, changes);
+    if (seg.kind !== 't' || /[\n\t]/.test(text)) {
+      splices.push({ start: seg.node.start, end: seg.node.end, text: text ? textToRunContent(text) : '' });
+      continue;
     }
-  };
-  if (!touched.length) {
-    // Pure insertion at a boundary.
-    const seg = anchor.seg;
-    const at = Math.max(0, Math.min(seg.text.length, start - seg.start));
-    writeT(seg, seg.text.slice(0, at) + replacement + seg.text.slice(at));
-    return splices;
+    const raw = X.innerXml(xml, seg.node);
+    const boundaries = P.rawBoundaries(raw);
+    const patches = changes.map((change) => {
+      if (boundaries[change.start] == null || boundaries[change.end] == null)
+        throw new DocxOpError('El cambio corta un carácter Unicode.', 'DOCX_ENGINE_BAD_ARGS');
+      return { start: boundaries[change.start], end: boundaries[change.end], text: X.escapeText(change.text) };
+    });
+    const payload = P.applyPatches(raw, patches);
+    const open = X.startTag(xml, seg.node).replace(/\/>$/, '>');
+    splices.push({ start: seg.node.start, end: seg.node.end,
+      text: `${P.preserveSpaceTag(open, text, seg.text)}${payload}</w:t>` });
   }
-  for (const { seg } of touched) {
-    if (seg.kind === 't') {
-      const keepBefore = seg.start < start ? seg.text.slice(0, start - seg.start) : '';
-      const keepAfter = seg.end > end ? seg.text.slice(end - seg.start) : '';
-      const add = !inserted ? replacement : '';
-      inserted = true;
-      writeT(seg, keepBefore + add + keepAfter);
-    } else {
-      // tab/br/sym fully or partly inside the match → removed.
-      splices.push({ start: seg.node.start, end: seg.node.end, text: '' });
-    }
+  // Multiple inserted characters at one boundary keep their model order.
+  for (const item of loose) {
+    const existing = splices.find((s) => s.start === item.start && s.end === item.end);
+    if (existing) existing.text += item.text; else splices.push(item);
   }
-  if (!inserted) writeT(anchor.seg, anchor.seg.text + replacement);
   return splices;
 }
 
@@ -299,16 +313,32 @@ function opSetCell(session, { cell, text = '', mode = 'replace', bold = undefine
   if (c.tables.length) throw new DocxOpError(`La celda ${cell} contiene una tabla anidada; edita las celdas de esa tabla (${c.tables.join(', ')}).`, 'DOCX_ENGINE_NESTED_TABLE');
   const paras = c.paragraphs.map((pid) => model.byId.get(pid).paragraph).filter((p) => !p.textbox);
   if (!paras.length) throw new DocxOpError(`La celda ${cell} no tiene párrafos editables.`, 'DOCX_ENGINE_BAD_TARGET');
+  for (const p of paras) {
+    if (p.protectedReason) throw new DocxOpError(`La celda contiene ${p.protectedReason}.`, 'DOCX_ENGINE_PROTECTED');
+    assertEditable(model, p.node);
+  }
   const beforeText = M.cellText(model, c);
+  if (!['replace', 'append'].includes(mode)) throw new DocxOpError('Modo de celda inválido.', 'DOCX_ENGINE_BAD_ARGS');
   if (mode === 'append') {
     const last = paras[paras.length - 1];
     let rPr = _rpr !== null ? _rpr : inheritedRPr(model, last, columnNeighbourPara(model, cellEntry));
     if (format_from) rPr = session.rPrFrom(format_from) ?? rPr;
     if (bold !== undefined) rPr = R.applyRunProps(rPr, { bold });
     const sep = last.text && !/\s$/.test(last.text) && !/^\s/.test(text) ? ' ' : '';
-    const splice = { start: last.node.closeStart, end: last.node.closeStart, text: newRun(rPr, sep + text) };
+    const splice = last.node.selfClosing
+      ? rewriteParagraphSplice(model.xml, last.node, newRun(rPr, text))
+      : { start: last.node.closeStart, end: last.node.closeStart, text: newRun(rPr, sep + text) };
     session.commit(partName, [splice]);
+  } else if (paras.length === 1 && paras[0].text && !/[\r\n]/.test(text)
+    && _rpr === null && !format_from && bold === undefined) {
+    const first = paras[0];
+    session.commit(partName, textRangeSplices(model.xml, first, 0, first.text.length, text));
+    if (align) opSetFormat(session, { target: cell, align });
   } else {
+    for (const p of paras) {
+      assertRewritable(model.xml, p.node);
+      if (p !== paras[0] && p.props.sectionBreak) throw new DocxOpError('El contenido contiene un salto de sección que debe conservarse.', 'DOCX_ENGINE_PROTECTED');
+    }
     const first = paras[0];
     let rPr = _rpr !== null ? _rpr : inheritedRPr(model, first, columnNeighbourPara(model, cellEntry));
     if (format_from) rPr = session.rPrFrom(format_from) ?? rPr;
@@ -347,8 +377,7 @@ function opSetCells(session, { cells } = {}) {
       errors.push(`${item && item.cell}: ${err.message}`);
     }
   }
-  if (errors.length && !changes.length) throw new DocxOpError(errors.join(' | '), 'DOCX_ENGINE_OP_FAILED');
-  if (errors.length) changes.push({ op: 'warning', target: 'set_cells', before: '', after: `No se aplicaron: ${errors.join(' | ')}` });
+  if (errors.length) throw new DocxOpError(errors.join(' | '), 'DOCX_ENGINE_OP_FAILED');
   return changes;
 }
 
@@ -394,6 +423,7 @@ function opFillField(session, { label, value, occurrence = null, target = null, 
     }
   }
   const { model, para } = hit;
+  assertEditable(model, para.node);
   const partName = model.part.name;
   // Label ends with ':'? Include it in the label span so the value goes after it.
   let labelEnd = hit.labelEnd;
@@ -424,7 +454,7 @@ function opFillField(session, { label, value, occurrence = null, target = null, 
           rPr = mark ? R.applyRunProps(mark, { bold: false }) : R.plainValueRPr(labelRPr);
         }
         if (bold !== undefined) rPr = R.applyRunProps(rPr, { bold });
-        const changes = opSetCell(session, { cell: right.id, text: value, _rpr: rPr });
+        const changes = opSetCell(session, { cell: right.id, text: value, ...(existing && bold === undefined ? {} : { _rpr: rPr }) });
         return changes.map((c) => ({ ...c, op: 'fill_field', label: describe(label, 60), value: describe(value, 120) }));
       }
     }
@@ -501,11 +531,13 @@ function opInsertParagraph(session, { after = null, before = null, text = '', st
   if (!hit || hit.entry.type !== 'paragraph') throw new DocxOpError(`"${anchorId}" no es un párrafo.`, 'DOCX_ENGINE_BAD_TARGET');
   const { model, partName } = hit;
   const anchor = hit.entry.paragraph;
+  assertEditable(model, anchor.node);
   let template = anchor;
   if (style_from) {
     const s = session.resolve(style_from);
     if (!s || s.entry.type !== 'paragraph' || s.partName !== partName) throw new DocxOpError(`"style_from" debe ser un párrafo de la misma parte (${style_from}).`, 'DOCX_ENGINE_BAD_TARGET');
     template = s.entry.paragraph;
+    assertEditable(model, template.node);
   }
   let rPr = inheritedRPr(model, template);
   if (bold !== undefined) rPr = R.applyRunProps(rPr, { bold });
@@ -522,20 +554,26 @@ function opInsertTableRow(session, { table, after_row = null, clone_row = null, 
   if (!hit || hit.entry.type !== 'table') throw new DocxOpError(`"${table}" no es una tabla.`, 'DOCX_ENGINE_BAD_TARGET');
   const { model, partName } = hit;
   const tbl = hit.entry.table;
-  const afterIdx = after_row === null || after_row === undefined ? tbl.rows.length - 1 : Number(String(after_row).replace(/^.*r/, ''));
-  const cloneIdx = clone_row === null || clone_row === undefined ? afterIdx : Number(String(clone_row).replace(/^.*r/, ''));
+  const rowIndex = (value) => tbl.rows.findIndex((r) => r.id === value || r.id === `${table}.${value}`);
+  const afterIdx = after_row == null ? tbl.rows.length - 1 : rowIndex(after_row);
+  const cloneIdx = clone_row == null ? afterIdx : rowIndex(clone_row);
   const afterRow = tbl.rows[afterIdx];
   const cloneRow = tbl.rows[cloneIdx];
   if (!afterRow || !cloneRow) throw new DocxOpError(`Fila fuera de rango (la tabla ${table} tiene ${tbl.rows.length} filas, r0…r${tbl.rows.length - 1}).`, 'DOCX_ENGINE_BAD_ARGS');
+  assertEditable(model, cloneRow.node);
+  for (const c of cloneRow.cells) {
+    if (c.vMerge || c.tables.length) throw new DocxOpError('No se puede clonar una fila con combinaciones verticales o tablas anidadas.', 'DOCX_ENGINE_PROTECTED');
+    for (const pid of c.paragraphs) assertRewritable(model.xml, model.byId.get(pid).paragraph.node);
+  }
   let rowXml = X.outerXml(model.xml, cloneRow.node);
   rowXml = rowXml.replace(/\s(?:w14:paraId|w14:textId|w:rsidR|w:rsidTr)="[^"]*"/g, '');
   session.commit(partName, [{ start: afterRow.node.end, end: afterRow.node.end, text: rowXml }]);
-  const newRowId = `${table}.r${afterIdx + 1}`;
+  const newRowId = session.resolve(table).entry.table.rows[afterIdx + 1].id;
   const fresh = session.resolve(newRowId);
   const changes = [];
   const n = fresh.entry.row.cells.length;
   for (let ci = 0; ci < n; ci += 1) {
-    const cellId = `${newRowId}.c${ci}`;
+    const cellId = fresh.entry.row.cells[ci].id;
     const value = Array.isArray(cells) && ci < cells.length ? String(cells[ci] ?? '') : '';
     const cellHit = session.resolve(cellId);
     if (cellHit.entry.cell.vMerge === 'continue') continue;
@@ -551,8 +589,13 @@ function opDelete(session, { target, text = null } = {}) {
   const hit = session.resolve(target);
   if (!hit) throw new DocxOpError(`No existe "${target}".`, 'DOCX_ENGINE_BAD_TARGET');
   const { model, partName, entry } = hit;
+  for (const para of session.paragraphsOf(hit)) {
+    if (para.protectedReason) throw new DocxOpError(`Ese contenido pertenece a ${para.protectedReason}.`, 'DOCX_ENGINE_PROTECTED');
+    assertEditable(model, para.node);
+  }
   if (entry.type === 'paragraph') {
     const para = entry.paragraph;
+    assertRewritable(model.xml, para.node);
     const cellParas = para.cell ? model.byId.get(para.cell).cell.paragraphs.length : 0;
     if (para.props.sectionBreak || (para.cell && cellParas <= 1) || isLastBodyParagraph(model, para)) {
       // A cell needs one paragraph; a section-break paragraph carries layout — clear instead.
@@ -583,6 +626,49 @@ function isLastBodyParagraph(model, para) {
   return blocks.length && blocks[blocks.length - 1] === para.node;
 }
 
+// Split only the selected text spans into runs. A whole-run style change
+// must not make adjacent unselected words bold/italic merely because Word had
+// stored them in one run. Unchanged entities retain their original spelling.
+function formatTextSplices(xml, para, text, runProps) {
+  const ranges = findAll(para.text, text);
+  if (!ranges.length) return [];
+  const splices = [];
+  for (const run of para.runs) {
+    if (!run.segments.some((seg) => seg.kind === 't' && ranges.some((h) => h.start < seg.end && h.end > seg.start))) continue;
+    if (run.node.children.some((n) => !['w:rPr', 'w:t'].includes(n.name)))
+      throw new DocxOpError('El fragmento de formato contiene un salto, campo o imagen. Selecciona texto dentro de un fragmento simple.', 'DOCX_ENGINE_PROTECTED');
+    const originalProps = rPrOf(xml, run.node);
+    const updatedProps = R.applyRunProps(originalProps, runProps);
+    const groups = [];
+    for (const seg of run.segments) {
+      const cuts = new Set([0, seg.text.length]);
+      for (const range of ranges) {
+        if (range.start > seg.start && range.start < seg.end) cuts.add(range.start - seg.start);
+        if (range.end > seg.start && range.end < seg.end) cuts.add(range.end - seg.start);
+      }
+      const boundaries = P.rawBoundaries(X.innerXml(xml, seg.node));
+      const raw = X.innerXml(xml, seg.node);
+      const sorted = [...cuts].sort((a, b) => a - b);
+      for (let i = 1; i < sorted.length; i += 1) {
+        const start = sorted[i - 1]; const end = sorted[i];
+        if (boundaries[start] == null || boundaries[end] == null)
+          throw new DocxOpError('El formato corta un carácter Unicode.', 'DOCX_ENGINE_BAD_ARGS');
+        const selected = ranges.some((h) => h.start < seg.start + end && h.end > seg.start + start);
+        const fragment = seg.text.slice(start, end);
+        const open = P.preserveSpaceTag(X.startTag(xml, seg.node), fragment, seg.text);
+        const payload = `${open}${raw.slice(boundaries[start], boundaries[end])}</w:t>`;
+        const last = groups[groups.length - 1];
+        if (last && last.selected === selected) last.payload += payload;
+        else groups.push({ selected, payload });
+      }
+    }
+    const open = runOpenTag(xml, run.node);
+    splices.push({ start: run.node.start, end: run.node.end,
+      text: groups.map((g) => `${open}${g.selected ? updatedProps : originalProps}${g.payload}</w:r>`).join('') });
+  }
+  return splices;
+}
+
 /** set_format: bold/italic/size/color/highlight/font/alignment on a paragraph, cell, row or table. */
 function opSetFormat(session, { target, text = null, bold, italic, underline, size_pt, color, highlight, font, align, style } = {}) {
   const hit = session.resolve(target);
@@ -593,11 +679,11 @@ function opSetFormat(session, { target, text = null, bold, italic, underline, si
   const hasRun = Object.values(runProps).some((v) => v !== undefined && v !== null);
   const splices = [];
   for (const para of paras) {
+    if (para.protectedReason) throw new DocxOpError(`Ese contenido pertenece a ${para.protectedReason}.`, 'DOCX_ENGINE_PROTECTED');
+    assertEditable(model, para.node);
     if (hasRun) {
-      const runs = text
-        ? para.runs.filter((r) => r.segments.some((s) => s.kind === 't' && findAll(para.text.slice(s.start, s.end), text).length))
-        : para.runs.filter((r) => r.segments.some((s) => s.kind === 't'));
-      for (const run of runs) {
+      if (text) splices.push(...formatTextSplices(model.xml, para, text, runProps));
+      else for (const run of para.runs.filter((r) => r.segments.some((s) => s.kind === 't'))) {
         const rPr = X.child(run.node, 'w:rPr');
         const updated = R.applyRunProps(rPr ? X.outerXml(model.xml, rPr) : '', runProps);
         if (rPr) splices.push({ start: rPr.start, end: rPr.end, text: updated });
@@ -626,6 +712,7 @@ function opSetCheckbox(session, { checkbox, checked = true } = {}) {
   if (!hit || hit.entry.type !== 'checkbox') throw new DocxOpError(`"${checkbox}" no es una casilla (ids cbN en doc_outline).`, 'DOCX_ENGINE_BAD_TARGET');
   const { model, partName } = hit;
   const cb = hit.entry.checkbox;
+  assertEditable(model, cb.node || cb.sdt.node, { allowFormField: cb.kind === 'formfield' });
   const xml = model.xml;
   const splices = [];
   const on = Boolean(checked);
@@ -668,6 +755,7 @@ function opFillContentControl(session, { control, text = '' } = {}) {
   }
   const { model, partName } = hit;
   const sdt = hit.entry.sdt;
+  assertEditable(model, sdt.node);
   if (sdt.checkbox) throw new DocxOpError('Ese control es una casilla; usa set_checkbox.', 'DOCX_ENGINE_BAD_TARGET');
   const xml = model.xml;
   const splices = [];
@@ -679,6 +767,7 @@ function opFillContentControl(session, { control, text = '' } = {}) {
   const sdtRPr = sdtPr && X.child(sdtPr, 'w:rPr');
   const cleanRPr = (rPrXml) => rPrXml.replace(/<w:rStyle\s+w:val="(?:PlaceholderText|Textodelmarcadordeposicin)"\s*\/>/gi, '').replace(/<w:rPr>\s*<\/w:rPr>/, '');
   if (sdt.paragraphs.length) {
+    for (const pid of sdt.paragraphs) assertRewritable(xml, model.byId.get(pid).paragraph.node);
     const first = model.byId.get(sdt.paragraphs[0]).paragraph;
     const rPr = cleanRPr(inheritedRPr(model, first));
     const lines = String(text).split(/\r?\n/);
@@ -690,6 +779,7 @@ function opFillContentControl(session, { control, text = '' } = {}) {
       splices.push({ start: p.node.start, end: p.node.end, text: '' });
     }
   } else {
+    assertRewritable(xml, content);
     const runs = M.paragraphRuns(content);
     const rPr = cleanRPr(runs.length ? rPrOf(xml, runs[0]) : (sdtRPr ? X.outerXml(xml, sdtRPr) : ''));
     splices.push({ start: content.openEnd, end: content.closeStart, text: newRun(rPr, text) });

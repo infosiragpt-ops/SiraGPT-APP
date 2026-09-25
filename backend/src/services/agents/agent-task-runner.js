@@ -1802,6 +1802,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     })
   );
   const runtimeModelProfile = normalizeAgentRuntimeModel(model);
+  // Word editing must keep the original picker identity even if the generic
+  // agent runtime later resolves a backup provider for unrelated tools.
+  const documentEditLlm = {
+    client: buildOpenAICompatibleClient(runtimeModelProfile.detected),
+    model: runtimeModelProfile.displayModel,
+    provider: runtimeModelProfile.detected?.provider || null,
+    toolCallMode: (() => {
+      try { return require('../agentic-chat-stream').resolveToolCallMode(runtimeModelProfile.detected?.provider, runtimeModelProfile.displayModel) === 'prompted' ? 'prompted' : 'native'; }
+      catch { return 'native'; }
+    })(),
+  };
 
   const executionProfile = buildExecutionProfile({ goal, fileIds: files, fileMetadata });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: files });
@@ -2646,7 +2657,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           // can actually cancel this pre-loop deterministic edit; the function
           // already accepts + propagates it to its LLM/sandbox calls.
           signal: controller.signal,
-          llm: openai ? { client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider, toolCallMode: (() => { try { return require('../agentic-chat-stream').resolveToolCallMode(runtimeModelProfile.runtimeProvider, runtimeModelProfile.runtimeModel) === 'prompted' ? 'prompted' : 'native'; } catch { return 'native'; } })() } : null,
+          llm: documentEditLlm,
           onEvent: (stage) => { try { emit({ type: 'checkpoint', label: stage.label, status: 'running', payload: stage.detail ? { detail: stage.detail } : {} }); } catch (_) { /* relay */ } },
         });
         if (preserved === null) {
@@ -3326,6 +3337,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       userEmail: user.email,
       clearance: user.clearance || 'authenticated',
       openai,
+      documentEditLlm,
       // The picked model, so tools that call the LLM (self_rag_answer…) use
       // the client's own model instead of a hard-coded OpenAI id.
       model: runtimeModelProfile.runtimeModel,
@@ -3697,7 +3709,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // Thread the run's abort signal so the runtimeTimer can cancel this
             // post-loop edit instead of letting it stall past maxRuntimeMs.
             signal: controller.signal,
-            llm: openai ? { client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider, toolCallMode: (() => { try { return require('../agentic-chat-stream').resolveToolCallMode(runtimeModelProfile.runtimeProvider, runtimeModelProfile.runtimeModel) === 'prompted' ? 'prompted' : 'native'; } catch { return 'native'; } })() } : null,
+            llm: documentEditLlm,
             onEvent: (stage) => { try { emit({ type: 'checkpoint', label: stage.label, status: 'running', payload: stage.detail ? { detail: stage.detail } : {} }); } catch (_) { /* relay */ } },
           });
           if (preserved?.clarification) {

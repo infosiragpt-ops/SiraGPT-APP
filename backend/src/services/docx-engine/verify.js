@@ -14,6 +14,7 @@
 const PizZip = require('pizzip');
 const { XMLValidator } = require('fast-xml-parser');
 const X = require('./xml-scan');
+const { assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
 
 function bytesEqual(a, b) {
   if (!a || !b || a.length !== b.length) return false;
@@ -70,12 +71,15 @@ async function verifyEditedDocx({
   let original;
   let edited;
   try {
+    assertBoundedOfficePackage(originalBuffer);
+    assertBoundedOfficePackage(editedBuffer);
     original = new PizZip(originalBuffer);
     edited = new PizZip(editedBuffer);
   } catch {
     return { ok: false, issues: ['El archivo editado no es un ZIP de Word válido.'], report };
   }
   const changed = new Set(changedParts);
+  let actualChanges = 0;
   for (const name of Object.keys(original.files)) {
     const a = original.file(name);
     if (!a || a.dir) continue;
@@ -85,12 +89,23 @@ async function verifyEditedDocx({
       issues.push(`Falta la parte ${name} en el archivo editado.`);
       continue;
     }
-    if (changed.has(name)) continue;
+    if (changed.has(name)) {
+      if (!bytesEqual(a.asUint8Array(), b.asUint8Array())) actualChanges += 1;
+      continue;
+    }
     if (bytesEqual(a.asUint8Array(), b.asUint8Array())) report.identicalEntries += 1;
     else issues.push(`La parte ${name} cambió sin que ninguna operación la editara.`);
   }
+  for (const name of Object.keys(edited.files)) {
+    if (!edited.files[name].dir && !original.file(name)) issues.push(`Se agregó una parte no autorizada: ${name}.`);
+  }
+  if (!actualChanges) issues.push('El documento no contiene ningún cambio efectivo respecto del original.');
   report.diff = {};
   for (const name of changed) {
+    if (!original.file(name) || !edited.file(name)) {
+      issues.push(`Falta la parte editada ${name}.`);
+      continue;
+    }
     const after = edited.file(name)?.asText() || '';
     const valid = XMLValidator.validate(after);
     if (valid !== true) {
@@ -105,19 +120,32 @@ async function verifyEditedDocx({
     }
   }
 
+  // Check claimed values in reopened story text even when no renderer exists.
+  const storyText = Object.keys(edited.files).filter((name) => /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(name))
+    .map((name) => {
+      const xml = edited.file(name).asText();
+      return [...xml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => X.decodeEntities(m[1])).join('');
+    }).join('\n');
+  const values = (expectedValues || []).map((v) => String(v || '').trim()).filter(Boolean);
+  for (const value of values) {
+    if (!normalizeText(storyText).includes(normalizeText(value))) issues.push(`El valor «${value.slice(0, 60)}» no aparece en el archivo editado.`);
+  }
+  report.rendered = false;
   if (typeof render === 'function') {
     try {
       const after = await render(editedBuffer);
+      if (!Number.isSafeInteger(after?.pages) || after.pages < 1 || typeof after.text !== 'string') throw new Error('Render sin páginas o texto válido');
       const before = originalRender ? await originalRender() : null;
       report.pagesAfter = after.pages;
       if (before) report.pagesBefore = before.pages;
-      if (before && after.pages > before.pages + 1) {
-        issues.push(`El documento pasó de ${before.pages} a ${after.pages} páginas. Revisa si agregaste contenido fuera de lugar o texto demasiado largo en una celda.`);
-      }
+      // Page growth can be explicitly requested or legitimate reflow. The
+      // intent reviewer checks unauthorized additions; page count is a fact,
+      // not a blanket rejection of valid long edits.
+      report.pageCountChanged = Boolean(before && after.pages !== before.pages);
       const rendered = normalizeText(after.text);
       const missing = (expectedValues || [])
         .map((v) => String(v || '').trim())
-        .filter((v) => v.length >= 2)
+        .filter(Boolean)
         .filter((v) => !rendered.includes(normalizeText(v)));
       if (missing.length) {
         issues.push(`Estos valores no aparecen en el documento renderizado: ${missing.map((v) => `«${v.slice(0, 60)}»`).join(', ')}. Verifica que la edición quedó en el lugar correcto.`);
@@ -126,6 +154,7 @@ async function verifyEditedDocx({
     } catch (err) {
       report.rendered = false;
       report.renderError = String(err?.message || err).slice(0, 200);
+      issues.push('No pude renderizar el archivo editado para comprobar que se abre y muestra los cambios.');
     }
   }
   return { ok: issues.length === 0, issues, report };

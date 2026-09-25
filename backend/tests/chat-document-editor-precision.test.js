@@ -196,8 +196,8 @@ test('the sixth explicit precision candidate is not truncated by the generic fiv
   assert.equal(calls.saved[0].filename, 'Documento6.docx');
 });
 
-test('nonprecision edits keep the existing first-history-document and five-upload selection', async (t) => {
-  const rows = Array.from({ length: 6 }, (_, index) => ({ id: `upload-${index + 1}`, userId: USER, originalName: `Documento${index + 1}.docx` }));
+test('non-Word edits keep the existing first-history-document and five-upload selection', async (t) => {
+  const rows = Array.from({ length: 6 }, (_, index) => ({ id: `upload-${index + 1}`, userId: USER, originalName: `Documento${index + 1}.xlsx` }));
   const historical = fixture(t, { rows, parse: () => null, messages: [{ role: 'USER', files: rows }] });
   assert.equal((await historical.run({ fileIds: [], instruction: 'Mejora el contenido' })).ok, true);
   assert.deepEqual(historical.calls.loaded, ['upload-1']);
@@ -285,9 +285,10 @@ test('an explicitly named spreadsheet is not hijacked by a Word attached as refe
 });
 
 test('precision errors raised by the generic bridge cannot fall through to the model either', async (t) => {
-  const { calls, run, deps } = fixture(t, { parse: () => null });
+  const { calls, run, deps } = fixture(t, { rows: [{ id: 'upload-1', userId: USER, originalName: 'Datos.xlsx' }], parse: () => null });
   deps.tryDeterministicEdit = async () => { throw Object.assign(new Error('Indica una sola coincidencia.'), { code: 'DOCX_EDIT_AMBIGUOUS' }); };
-  const result = await run();
+  deps.docxEngine = { docxEngineEnabled: () => false };
+  const result = await run({ llm: { client: {}, model: 'selected' } });
   assert.equal(result.code, 'DOCX_EDIT_AMBIGUOUS');
   assert.equal(calls.model, 0);
   assert.deepEqual(calls.saved, []);

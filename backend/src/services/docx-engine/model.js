@@ -53,7 +53,10 @@ function runSegments(xml, run) {
         segments.push({ kind: 'br', node: c, text: '\n' });
         break;
       case 'w:noBreakHyphen':
-        segments.push({ kind: 'sym', node: c, text: '-' });
+        segments.push({ kind: 'sym', node: c, text: '\u2011' });
+        break;
+      case 'w:softHyphen':
+        segments.push({ kind: 'sym', node: c, text: '\u00ad' });
         break;
       case 'w:sym': {
         const code = X.attr(xml, c, 'w:char');
@@ -145,7 +148,27 @@ function nearest(node, name) {
   return null;
 }
 
-function buildPartModel(part) {
+function protectedReason(xml, node, { allowFormField = false } = {}) {
+  const unsafe = (n) => {
+    if (/^w:(?:ins|del|moveFrom|moveTo|rPrChange|pPrChange|tcPrChange|trPrChange)$/.test(n.name)) return 'revisiones pendientes';
+    if (n.name === 'w:fldSimple' || n.name === 'w:instrText' || (!allowFormField && n.name === 'w:fldChar')) return 'campo automático';
+    if (n.name === 'mc:AlternateContent') return 'contenido alternativo';
+    if (n.name === 'w:sdt') {
+      const pr = X.child(n, 'w:sdtPr');
+      const lock = pr && X.child(pr, 'w:lock');
+      if (lock && X.attr(xml, lock, 'w:val') !== 'unlocked') return 'control bloqueado';
+      if (pr && X.child(pr, 'w:dataBinding')) return 'control vinculado a datos';
+    }
+    if (['w:vanish', 'w:webHidden'].includes(n.name) && !/^(?:0|false|off)$/i.test(X.attr(xml, n, 'w:val') || '')) return 'texto oculto';
+    return null;
+  };
+  let reason = unsafe(node);
+  for (let p = node.parent; p && !reason; p = p.parent) reason = unsafe(p);
+  X.walk(node, (n) => { reason ||= unsafe(n); return !reason; });
+  return reason;
+}
+
+function buildPartModel(part, identify = (base, _node, index) => `${base}${index}`) {
   const xml = part.xml;
   const root = X.scan(xml);
   const body = bodyOf(root);
@@ -160,16 +183,17 @@ function buildPartModel(part) {
 
   const allTables = X.descendants(body, 'w:tbl');
   allTables.forEach((tbl, ti) => {
-    const id = `${prefix}t${ti}`;
+    const id = identify(`${prefix}t`, tbl, ti);
     tableIndexByNode.set(tbl, id);
     const rows = X.childrenNamed(tbl, 'w:tr').map((tr, ri) => {
+      const rowId = identify(`${id}.r`, tr, ri);
       const cells = X.childrenNamed(tr, 'w:tc').map((tc, ci) => {
         const tcPr = X.child(tc, 'w:tcPr');
         const span = tcPr && X.child(tcPr, 'w:gridSpan');
         const vMerge = tcPr && X.child(tcPr, 'w:vMerge');
         const shd = tcPr && X.child(tcPr, 'w:shd');
         return {
-          id: `${id}.r${ri}.c${ci}`,
+          id: identify(`${rowId}.c`, tc, ci),
           node: tc,
           row: ri,
           col: ci,
@@ -180,7 +204,7 @@ function buildPartModel(part) {
           tables: [],
         };
       });
-      return { id: `${id}.r${ri}`, node: tr, index: ri, cells };
+      return { id: rowId, node: tr, index: ri, cells };
     });
     const table = { id, node: tbl, rows, parentCell: null };
     tables.push(table);
@@ -201,7 +225,7 @@ function buildPartModel(part) {
   }
 
   X.descendants(body, 'w:p').forEach((p, pi) => {
-    const id = `${prefix}p${pi}`;
+    const id = identify(`${prefix}p`, p, pi);
     paragraphIndexByNode.set(p, id);
     const runs = paragraphRuns(p).map((run) => ({ node: run, segments: runSegments(xml, run), format: runFormat(xml, run) }));
     let text = '';
@@ -226,6 +250,7 @@ function buildPartModel(part) {
       props: paragraphProps(xml, p),
       cell: cell ? cell.id : null,
       textbox: inTextbox,
+      protectedReason: protectedReason(xml, p),
       hasObject: runs.some((r) => r.segments.some((s) => s.kind === 'object')),
     };
     if (cell) cell.paragraphs.push(id);
@@ -233,8 +258,23 @@ function buildPartModel(part) {
     byId.set(id, { type: 'paragraph', paragraph: para });
   });
 
+  // Complex fields may span several paragraphs (TOCs are common). A result
+  // paragraph without its own fldChar still belongs to the automatic field.
+  const fieldStack = [];
+  const fieldRanges = [];
+  for (const fld of X.descendants(body, 'w:fldChar')) {
+    const kind = X.attr(xml, fld, 'w:fldCharType');
+    if (kind === 'begin') fieldStack.push(fld.start);
+    else if (kind === 'end' && fieldStack.length) fieldRanges.push([fieldStack.pop(), fld.end]);
+  }
+  for (const start of fieldStack) fieldRanges.push([start, xml.length]);
+  for (const para of paragraphs) {
+    if (fieldRanges.some(([start, end]) => start < para.node.end && end > para.node.start))
+      para.protectedReason ||= 'campo automático';
+  }
+
   X.descendants(body, 'w:sdt').forEach((sdt, si) => {
-    const id = `${prefix}sdt${si}`;
+    const id = identify(`${prefix}sdt`, sdt, si);
     const sdtPr = X.child(sdt, 'w:sdtPr');
     const tag = sdtPr && X.child(sdtPr, 'w:tag');
     const alias = sdtPr && X.child(sdtPr, 'w:alias');
@@ -285,14 +325,14 @@ function buildPartModel(part) {
         if (CHECKBOX_GLYPHS.has(ch)) {
           const insideSdt = checkboxes.some((c) => c.kind === 'sdt' && c.paragraph === para.id);
           if (!insideSdt) {
-            checkboxes.push({ kind: 'glyph', paragraph: para.id, offset: seg.start + k, glyph: ch, checked: CHECKBOX_GLYPHS.get(ch), label: para.text.slice(seg.start + k + 1, seg.start + k + 40).trim() });
+            checkboxes.push({ kind: 'glyph', node: seg.node, glyphIndex: k, paragraph: para.id, offset: seg.start + k, glyph: ch, checked: CHECKBOX_GLYPHS.get(ch), label: para.text.slice(seg.start + k + 1, seg.start + k + 40).trim() });
           }
         }
       }
     }
   }
   checkboxes.forEach((cb, i) => {
-    cb.id = `${prefix}cb${i}`;
+    cb.id = identify(`${prefix}cb`, cb.node || cb.sdt.node, i, cb.kind === 'glyph' ? `:${cb.glyphIndex}` : '');
     byId.set(cb.id, { type: 'checkbox', checkbox: cb });
   });
 
@@ -337,7 +377,7 @@ function outlineLines(model, { textWidth = 110 } = {}) {
   const lines = [];
   const emitParagraph = (para, indent = '') => {
     const fmt = fmtTag(dominantFormat(para));
-    const props = [para.props.style && `estilo ${para.props.style}`, para.props.align && `alineación ${para.props.align}`, para.props.list && 'lista', para.hasObject && 'contiene imagen', para.textbox && 'cuadro de texto']
+    const props = [para.props.style && `estilo ${para.props.style}`, para.props.align && `alineación ${para.props.align}`, para.props.list && 'lista', para.hasObject && 'contiene imagen', para.protectedReason && `no editable: ${para.protectedReason}`, para.textbox && 'cuadro de texto']
       .filter(Boolean).join(', ');
     const meta = [fmt, props].filter(Boolean).join('; ');
     lines.push(`${indent}${para.id}: ${para.text.trim() ? `"${clip(para.text, textWidth)}"` : '(vacío)'}${meta ? `  [${meta}]` : ''}`);
@@ -404,4 +444,5 @@ module.exports = {
   fmtTag,
   clip,
   CHECKBOX_GLYPHS,
+  protectedReason,
 };
