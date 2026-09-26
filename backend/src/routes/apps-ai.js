@@ -20,6 +20,7 @@
 const express = require('express');
 const { createCerebrasClient, getCerebrasConfig, isFreeIaConfigured } = require('../services/ai/cerebras-client');
 const { slidingWindowRateLimitMiddleware } = require('../utils/sliding-window-rate-limiter');
+const { createSSEWriter } = require('../utils/sse-writer');
 
 const MAX_MESSAGES = 30;
 const MAX_CONTENT_CHARS = 4000;
@@ -82,6 +83,13 @@ function buildAppsAiRouter(deps = {}) {
       // Streaming support: client sends { stream: true } → SSE token-by-token
       // like ChatGPT. Otherwise the classic JSON response (backwards compatible).
       const wantStream = req.body?.stream === true;
+      // Abort the upstream completion as soon as the client goes away —
+      // this endpoint is public, so an abandoned stream would otherwise
+      // burn free-tier tokens until MAX_OUTPUT_TOKENS.
+      const upstreamAbort = new AbortController();
+      res.on('close', () => {
+        if (!res.writableEnded) upstreamAbort.abort();
+      });
       try {
         const client = deps.createClient ? deps.createClient({ env }) : createCerebrasClient({ env });
         if (!client) return res.status(503).json({ ok: false, error: 'ai_unavailable' });
@@ -92,23 +100,19 @@ function buildAppsAiRouter(deps = {}) {
         ];
 
         if (wantStream) {
-          res.setHeader('Content-Type', 'text/event-stream');
-          res.setHeader('Cache-Control', 'no-cache');
-          res.setHeader('Connection', 'keep-alive');
-          res.flushHeaders();
-
+          const sse = createSSEWriter(res);
           const stream = await client.chat.completions.create({
             model, messages,
             max_tokens: MAX_OUTPUT_TOKENS,
             temperature: 0.7,
             stream: true,
-          });
+          }, { signal: upstreamAbort.signal });
           for await (const chunk of stream) {
+            if (sse.closed || upstreamAbort.signal.aborted) break;
             const delta = chunk?.choices?.[0]?.delta?.content;
-            if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+            if (delta) await sse.event({ delta });
           }
-          res.write('data: [DONE]\n\n');
-          res.end();
+          await sse.done();
         } else {
           const completion = await client.chat.completions.create({
             model, messages,
@@ -122,8 +126,8 @@ function buildAppsAiRouter(deps = {}) {
         const msg = String(err?.message || err).slice(0, 200);
         if (res.headersSent) {
           // Streaming already started — send the error as an SSE event.
-          res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
-          res.end();
+          try { res.write(`data: ${JSON.stringify({ error: msg })}\n\n`); } catch { /* client gone */ }
+          try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
         } else {
           return res.status(502).json({ ok: false, error: 'ai_error', message: msg });
         }
