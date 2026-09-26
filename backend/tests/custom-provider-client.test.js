@@ -110,17 +110,17 @@ test('publicPickerProvider hides Ollama / HuggingFace / Custom API', () => {
   assert.equal(publicPickerProvider('OpenAI'), 'OpenAI');
 });
 
-test('publicPickerModel: DeepSeek V4 Flash/Pro display as Sira Rápido / Sira Pro', () => {
+test('publicPickerModel: DeepSeek V4 Flash/Pro display their original names', () => {
   const flash = publicPickerModel({
     name: 'deepseek-v4-flash',
     displayName: 'Deepseek V4 Flash',
     provider: 'DeepSeek',
     description: 'DeepSeek direct API fast V4 model.',
   });
-  assert.equal(flash.displayName, 'Sira Rápido');
+  assert.equal(flash.displayName, 'DeepSeek V4 Flash');
   assert.equal(flash.provider, 'DeepSeek');
-  assert.equal(/deepseek/i.test(String(flash.displayName)), false);
-  assert.equal(/deepseek/i.test(String(flash.description)), false);
+  assert.equal(/deepseek[-_/:]|sira/i.test(String(flash.displayName)), false);
+  assert.equal(/openrouter|deepseek[-_/:]|sira/i.test(String(flash.description)), false);
 
   const pro = publicPickerModel({
     name: 'deepseek/deepseek-v4-pro',
@@ -128,9 +128,14 @@ test('publicPickerModel: DeepSeek V4 Flash/Pro display as Sira Rápido / Sira Pr
     provider: 'OpenRouter',
     description: 'Deepseek V4 PRO via OpenRouter.',
   });
-  assert.equal(pro.displayName, 'Sira Pro');
-  assert.equal(/deepseek/i.test(String(pro.displayName)), false);
-  assert.equal(/deepseek/i.test(String(pro.description)), false);
+  assert.equal(pro.displayName, 'DeepSeek V4 Pro');
+  assert.equal(/openrouter|deepseek[-_/:]|sira/i.test(String(pro.description)), false);
+
+  // Rows still stored with the legacy Sira aliases are re-labelled by id.
+  const stale = publicPickerModel({ name: 'deepseek-v4-flash', displayName: 'Sira Rápido', provider: 'DeepSeek' });
+  assert.equal(stale.displayName, 'DeepSeek V4 Flash');
+  const stalePro = publicPickerModel({ name: 'deepseek-v4-pro', displayName: 'Sira Pro', provider: 'DeepSeek' });
+  assert.equal(stalePro.displayName, 'DeepSeek V4 Pro');
 });
 
 test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace / gemma4', () => {
@@ -624,7 +629,7 @@ test('generateStream: Mini failure errors in Spanish and never swaps to DeepSeek
     const blob = frames.join('\n');
     assert.match(blob, /sira_mini_unavailable/);
     assert.match(blob, /SiraGPT Mini no está disponible/);
-    assert.equal(/deepseek-v4-flash|Sira Rápido/i.test(blob), false);
+    assert.equal(/deepseek-v4-flash|DeepSeek V4 Flash|Sira Rápido/i.test(blob), false);
   } finally {
     service.getClient = originalGetClient;
   }

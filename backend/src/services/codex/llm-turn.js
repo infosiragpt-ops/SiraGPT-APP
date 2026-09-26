@@ -8,8 +8,8 @@
  * real provider path here is exercised only in live runs / the F15 smoke.
  *
  * Engine order: DeepSeek V4 NATIVE tool calling (deepseek-turn) whenever
- * DEEPSEEK_API_KEY is configured — the product ships only Sira Rápido / Sira
- * Pro, i.e. DeepSeek V4 Flash / Pro — then Claude native for eligible tiers,
+ * DEEPSEEK_API_KEY is configured — the product ships DeepSeek V4 Flash / Pro
+ * — then Claude native for eligible tiers,
  * then the PROMPTED ladder: the tools are described in the system prompt and
  * the model emits fenced ```tool_call blocks, parsed back with the shared
  * prompted-tool-calling helpers. Any model can therefore drive the loop.

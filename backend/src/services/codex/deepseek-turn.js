@@ -9,8 +9,8 @@
  * encoded by the loop as `[TOOL_RESULT tool]` user messages) and returns
  * `{ text, reasoning, toolCalls, truncated, usage }`.
  *
- * Why this exists: the product policy is "solo DeepSeek V4 Flash/Pro" (alias
- * Sira Rápido / Sira Pro). Until now only Anthropic had a native tool-use
+ * Why this exists: the product policy is "solo DeepSeek V4 Flash/Pro" (shown
+ * with their original names). Until now only Anthropic had a native tool-use
  * path in codex; every other model — DeepSeek included — fell back to the
  * prompted protocol (tools described in the system prompt, JSON parsed out of
  * fenced blocks). Native `tool_calls` is measurably more reliable for the
@@ -45,7 +45,7 @@ function isDeepSeekV4Model(model) {
 /**
  * Map whatever the composer/run row carries to a DeepSeek model id, or null
  * when the request is not a DeepSeek choice (caller then uses the tier
- * default). Accepts the raw ids, the branded aliases (Sira Rápido / Sira Pro)
+ * default). Accepts the raw ids, the legacy Sira aliases (Sira Rápido / Sira Pro)
  * and OpenRouter-style `deepseek/...` slugs.
  */
 function normalizeDeepSeekModel(requested) {

@@ -1,20 +1,24 @@
 'use strict';
 
 /**
- * Public brand aliases for the CONSTRUIR MVP.
- * Server may receive a picker id; responses never echo raw vendor / model_id.
+ * Public model labels for the CONSTRUIR MVP: «DeepSeek V4 Flash» /
+ * «DeepSeek V4 Pro» (original names). The legacy Sira aliases (Sira Rápido /
+ * Sira Pro) are still accepted as input. Responses never echo a raw
+ * vendor id / model_id.
  */
 
 const {
-  SIRA_RAPIDO_DISPLAY_NAME,
-  SIRA_PRO_DISPLAY_NAME,
+  DEEPSEEK_FLASH_DISPLAY_NAME,
+  DEEPSEEK_PRO_DISPLAY_NAME,
 } = require('../ai/custom-provider-client');
 
-const ALIAS_RAPIDO = SIRA_RAPIDO_DISPLAY_NAME;
-const ALIAS_PRO = SIRA_PRO_DISPLAY_NAME;
+const ALIAS_RAPIDO = DEEPSEEK_FLASH_DISPLAY_NAME;
+const ALIAS_PRO = DEEPSEEK_PRO_DISPLAY_NAME;
 
 const ALIAS_TABLE = Object.freeze({
   '': 'rapido',
+  'deepseek v4 flash': 'rapido',
+  'deepseek v4 pro': 'pro',
   'sira rapido': 'rapido',
   'sira rápido': 'rapido',
   'sira-rapido': 'rapido',
@@ -76,7 +80,9 @@ function resolveConstruirBrand(alias) {
 
 function assertNoVendorLeak(payload) {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  if (/deepseek|openrouter|sk-|gho_|ghs_|github_pat_/i.test(text)) {
+  // The public model names are allowed; raw ids, aggregators and secrets are not.
+  const scrubbed = text.split(ALIAS_RAPIDO).join('').split(ALIAS_PRO).join('');
+  if (/deepseek|openrouter|sk-|gho_|ghs_|github_pat_/i.test(scrubbed)) {
     const err = new Error('vendor_or_secret_leak');
     err.code = 'E_CONTENT';
     throw err;

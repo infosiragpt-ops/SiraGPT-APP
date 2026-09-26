@@ -56,7 +56,7 @@ async function mockApi(page: Page, opts: { handoffActive?: boolean } = {}) {
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
     if (path === "/ai/models") {
       return fulfillJson(route, {
-        models: [{ id: "m1", name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek", type: "TEXT", isActive: true }],
+        models: [{ id: "m1", name: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", provider: "DeepSeek", type: "TEXT", isActive: true }],
       })
     }
     if (path === "/payments/subscription") {
@@ -168,7 +168,7 @@ test("captcha handoff expands overlay with Spanish captcha banner", async ({ pag
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
     if (path === "/ai/models") {
       return fulfillJson(route, {
-        models: [{ id: "m1", name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek", type: "TEXT", isActive: true }],
+        models: [{ id: "m1", name: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", provider: "DeepSeek", type: "TEXT", isActive: true }],
       })
     }
     if (path === "/payments/subscription") {

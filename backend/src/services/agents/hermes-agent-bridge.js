@@ -22,8 +22,11 @@ function fail(code, message) {
 
 function resolveHermesModel(raw) {
   const key = String(raw ?? '').trim().toLowerCase();
+  // Original names first; the legacy Sira aliases stay accepted as input.
   const aliases = {
     '': 'deepseek-v4-flash',
+    'deepseek v4 flash': 'deepseek-v4-flash',
+    'deepseek v4 pro': 'deepseek-v4-pro',
     'sira rápido': 'deepseek-v4-flash',
     'sira rapido': 'deepseek-v4-flash',
     'sira-rapido': 'deepseek-v4-flash',
@@ -32,7 +35,7 @@ function resolveHermesModel(raw) {
   };
   const model = Object.hasOwn(aliases, key) ? aliases[key] : key;
   if (!isDeepSeekV4ModelId(model)) {
-    throw fail('E_PARAMS', 'Elige Sira Rápido o Sira Pro para ejecutar el agente.');
+    throw fail('E_PARAMS', 'Elige DeepSeek V4 Flash o DeepSeek V4 Pro para ejecutar el agente.');
   }
   return model;
 }

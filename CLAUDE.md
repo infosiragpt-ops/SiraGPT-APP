@@ -52,8 +52,9 @@ npm run type-check     # TSC completo
 7. **Secretos:** jamás en el chat, en commits ni en docs. Viven en Replit Secrets y en el único
    `.env` de producción. Un secreto nuevo se pide a Luis por canal enmascarado.
 8. **Producto:** `/agentes` es la superficie canónica (`/chat` y `/code` redirigen; no revivir
-   `/code`). Modelos: solo DeepSeek V4 Flash/Pro, mostrados como "Sira Rápido" / "Sira Pro"
-   (nunca el model_id ni el proveedor); nada de OpenRouter u otros modelos. Una app cuenta como
+   `/code`). DeepSeek V4 Flash/Pro se muestran con sus nombres originales "DeepSeek V4 Flash" /
+   "DeepSeek V4 Pro" (decisión de Luis, 2026-09-26; los alias "Sira Rápido" / "Sira Pro" solo se
+   aceptan como entrada); nunca el model_id crudo; nada de OpenRouter en la UI. Una app cuenta como
    "Conectada" solo con token válido + health, nunca por abrir un navegador o un catálogo.
 
 ## Visual Tools Inventory (34 tools)

@@ -50,7 +50,7 @@ See `THIRD_PARTY_NOTICES.md` for the exact SHAs and files already attributed.
 
 Permitted licenses: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-2.0, PostgreSQL.
 Take **pattern** unless a later PR justifies a pinned `code` slice under §25.
-No OpenRouter. UI shows brand aliases only (`Sira Rápido`, `Sira Pro`, …).
+No OpenRouter. UI shows public model names only (`DeepSeek V4 Flash`, `DeepSeek V4 Pro`, …).
 
 These are the research-pass priorities **beyond** the already-fused trio.
 Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.

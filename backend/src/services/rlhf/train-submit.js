@@ -3,8 +3,8 @@
 /**
  * Optional post-prep submit of a scrubbed SFT/DPO JSONL.
  *
- * There is no in-repo fine-tune client for the Sira catalog models
- * (Sira Rápido / Sira Pro). This module therefore refuses to submit:
+ * There is no in-repo fine-tune client for the catalog models
+ * (DeepSeek V4 Flash / DeepSeek V4 Pro). This module therefore refuses to submit:
  * it never invents a third-party aggregator, never calls a paid API,
  * and never logs artifact bytes.
  *
@@ -67,7 +67,7 @@ async function trySubmit({ format, count, bytes, storage } = {}, env = process.e
 
 function brandHint(format) {
   const kind = format === 'dpo' || format === 'pairs' ? 'DPO' : 'SFT';
-  return `Upload the scrubbed ${kind} JSONL to Sira Rápido / Sira Pro via the recipe in docs/rlhf-phase3-train-pipeline.md`;
+  return `Upload the scrubbed ${kind} JSONL to DeepSeek V4 Flash / DeepSeek V4 Pro via the recipe in docs/rlhf-phase3-train-pipeline.md`;
 }
 
 module.exports = {

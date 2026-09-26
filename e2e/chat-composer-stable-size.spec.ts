@@ -26,11 +26,11 @@ const model = {
   contextLength: 500_000,
 }
 
-// Extra catalog rows for the model-menu contract: a Sira alias, a decision
+// Extra catalog rows for the model-menu contract: DeepSeek V4 Pro, a decision
 // model and an OpenRouter-synced row with no brand icon.
 const catalogModels = [
   model,
-  { id: "m-sira-pro", name: "deepseek/deepseek-v4-pro", displayName: "Sira Pro", provider: "DeepSeek", type: "TEXT" },
+  { id: "m-deepseek-pro", name: "deepseek/deepseek-v4-pro", displayName: "DeepSeek V4 Pro", provider: "DeepSeek", type: "TEXT" },
   { id: "m-grok", name: "x-ai/grok-4.6", displayName: "Grok 4.6", provider: "xAI", type: "TEXT" },
   { id: "m-dots", name: "dots/dots3-note-preview:free", displayName: "Dots Studio: Dots3-Note Preview (free)", provider: "OpenRouter", type: "TEXT" },
   { id: "m-jev", name: "typesafe/jev", displayName: "TypeSafe Jev", provider: "TypeSafe", type: "TEXT" },
