@@ -251,6 +251,39 @@ test('turn-failure hook: silent no-op without the tracker; reports once per (too
   assert.equal(await throwing({ tool: 'x', code: 'y' }), false, 'a broken tracker never breaks the turn');
 });
 
+test('turn-failure hook: speaks the tracker turn API — noteTurn(tool_failure) joins the current turn', async () => {
+  const notes = [];
+  const tracker = {
+    noteTurn: (kind, data) => { notes.push({ kind, data }); },
+    // When both exist the turn-context API wins (one note per failure).
+    recordTurnFailure: () => { throw new Error('must not be called when noteTurn exists'); },
+  };
+  const report = hook.createOfficeFailureReporter({ userId: 'u1', chatId: 'c1', loader: () => tracker });
+  assert.equal(await report({ tool: 'render_preview', code: 'engine_missing', error: 'no está el motor' }), true);
+  assert.equal(await report({ tool: 'render_preview', code: 'engine_missing', error: 'otra vez' }), false, 'deduped per turn');
+  assert.equal(await report(hook.verificationFailureFromSteps([
+    { tool: 'office_edit', ok: true },
+    { tool: 'verify_visual', ok: false, resultPreview: 'ERROR ✗' },
+  ])), true);
+  assert.deepEqual(notes.map((n) => n.kind), ['tool_failure', 'tool_failure']);
+  assert.equal(notes[0].data.tool, 'render_preview');
+  assert.equal(notes[0].data.reason, 'engine_missing');
+  assert.equal(notes[0].data.fatal, false, 'an infra failure the loop may recover from is context, not a failed turn');
+  assert.equal(notes[1].data.reason, 'verificacion_fallida');
+  assert.equal(notes[1].data.fatal, true, 'an edit delivered with its verification failed is a failed turn');
+  assert.equal(notes[1].data.detail.attempts, 1);
+
+  const brokenNote = hook.createOfficeFailureReporter({ loader: () => ({ noteTurn: () => { throw new Error('als gone'); } }) });
+  assert.equal(await brokenNote({ tool: 'x', code: 'y' }), false, 'a broken tracker never breaks the turn');
+
+  const noRenderer = hook.verificationFailureFromSteps([
+    { tool: 'office_edit', ok: true },
+    { tool: 'verify_visual', ok: false, renderUnavailable: true },
+  ]);
+  assert.equal(noRenderer.code, 'renderizador_no_disponible');
+  assert.equal(noRenderer.fatal, true);
+});
+
 test('turn-failure hook: a turn that ends with its last verify_visual failed is reportable', () => {
   const edited = { tool: 'office_edit', ok: true };
   assert.equal(hook.verificationFailureFromSteps([]), null);
@@ -264,6 +297,7 @@ test('turn-failure hook: a turn that ends with its last verify_visual failed is 
     { tool: 'verify_visual', ok: false, resultPreview: 'ERROR: verificación fallida ✗ 2025' },
   ]);
   assert.equal(failed.code, 'verificacion_fallida');
+  assert.equal(failed.fatal, true);
   assert.equal(failed.detail.attempts, 3);
   assert.equal(hook.verificationFailureFromSteps([{ tool: 'verify_visual', ok: false }]), null, 'no edit → nothing delivered unverified');
 });
@@ -271,6 +305,6 @@ test('turn-failure hook: a turn that ends with its last verify_visual failed is 
 test('runner wiring: executors get the per-turn reporter; failed final verification is reported', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/services/agent-runner/index.js'), 'utf8');
   assert.match(src, /const reportOfficeFailure = createOfficeFailureReporter\(\{ userId, chatId \}\);/);
-  assert.match(src, /makeToolExecutors\(sandbox, \{ office: \{ onFailure: reportOfficeFailure \} \}\)/);
+  assert.match(src, /makeToolExecutors\(sandbox, \{\s*office: \{\s*onFailure: reportOfficeFailure,/);
   assert.match(src, /verificationFailureFromSteps\(result && result\.steps\)/);
 });
