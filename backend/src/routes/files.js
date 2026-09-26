@@ -8,6 +8,7 @@ const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const mediaTranscription = require('../services/media-transcription-queue');
 const fileProcessor = require('../services/fileProcessor');
+const extractionSingleflight = require('../services/file-extraction-singleflight');
 const documentRenderer = require('../services/documentRenderer');
 const extractFastpath = require('../services/document-extract-fastpath');
 const officeImages = require('../services/office-image-extractor');
@@ -589,7 +590,7 @@ async function processFilesInParallel(files, userId, prismaClient) {
         // so a slow/down upstream never fails the upload.
         const extractStarted = Date.now();
         const [result, thumbnailPath, openaiFileId] = await Promise.all([
-          withTimeout(fileProcessor.processFile(file, extractProcessOptions()), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
+          withTimeout(extractionSingleflight.runExtractionOnce(fileRecord.id, () => fileProcessor.processFile(file, extractProcessOptions())), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
             .catch((extractErr) => {
               console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
               return { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -733,7 +734,9 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     const extractStarted = Date.now();
     try {
       const extractBudgetMs = /^(audio|video)\//i.test(String(file.mimetype || '')) ? ASYNC_EXTRACT_MEDIA_TIMEOUT_MS : ASYNC_EXTRACT_TIMEOUT_MS;
-      result = await withTimeout(fileProcessor.processFile(file, extractProcessOptions()), extractBudgetMs, `async text extraction (${file.originalname})`);
+      // Shared with any chat turn that needs this file's text meanwhile, so
+      // the same bytes are never extracted twice in parallel.
+      result = await withTimeout(extractionSingleflight.runExtractionOnce(fileRecord.id, () => fileProcessor.processFile(file, extractProcessOptions())), extractBudgetMs, `async text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };

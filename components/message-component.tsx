@@ -96,7 +96,7 @@ import MessageActionRail from "./MessageActionRail"
 import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
-import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
+import { appendUploadAuthToken, resolveImageAttachmentCandidates, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { OfficeFileIcon, officeKindForMime, officeKindForName, officeKindLabel } from "@/components/office-file-icon"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
@@ -331,12 +331,16 @@ const resolveSameOriginUploadUrl = (pathOrUrl: string) => {
     return raw;
 };
 
-const resolveUserImageAttachmentUrl = (file: any) => {
-    const imageUrl = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
-    if (!imageUrl) return "";
-    const sameOrigin = resolveSameOriginUploadUrl(imageUrl) || imageUrl;
+// Every source the bubble can try, local preview first, server copy next.
+const resolveUserImageAttachmentUrls = (file: any): string[] => {
     const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-    return appendUploadAuthToken(sameOrigin, token);
+    const out: string[] = [];
+    for (const candidate of resolveImageAttachmentCandidates(file, process.env.NEXT_PUBLIC_IMAGE_URL)) {
+        const sameOrigin = resolveSameOriginUploadUrl(candidate) || candidate;
+        const url = appendUploadAuthToken(sameOrigin, token);
+        if (url && !out.includes(url)) out.push(url);
+    }
+    return out;
 };
 
 const formatAgentTaskUserContent = (content: string) => {
@@ -458,10 +462,14 @@ function VideoCardStill({ url, variant }: { url: string; variant: "poster" | "th
 
 function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => void }) {
     const [failed, setFailed] = React.useState(false);
+    // A revoked composer blob or a stale path falls through to the server copy
+    // before the grey placeholder is shown.
+    const [attempt, setAttempt] = React.useState(0);
     const [naturalWidth, setNaturalWidth] = React.useState<number | null>(
         Number.isFinite(Number(file?.width)) ? Number(file.width) : null,
     );
-    const imageUrl = resolveUserImageAttachmentUrl(file);
+    const candidates = React.useMemo(() => resolveUserImageAttachmentUrls(file), [file]);
+    const imageUrl = candidates[attempt] || "";
     if (!imageUrl || failed) {
         return (
             <span
@@ -488,6 +496,10 @@ function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => v
                 if (width > 0) setNaturalWidth(width);
             }}
             onError={(event) => {
+                if (attempt + 1 < candidates.length) {
+                    setAttempt(attempt + 1);
+                    return;
+                }
                 event.currentTarget.removeAttribute("src");
                 setFailed(true);
             }}
