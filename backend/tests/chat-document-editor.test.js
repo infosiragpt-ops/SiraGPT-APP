@@ -394,6 +394,7 @@ test('stage relay maps loop events to Spanish progress labels', () => {
   assert.deepEqual(INTERNAL.stageFor({ type: 'phase', phase: 'validate' }), { label: 'Verificando el archivo editado' });
   assert.deepEqual(INTERNAL.stageFor({ type: 'phase', phase: 'execute', attempt: 2 }), { label: 'Corrigiendo la edición' });
   assert.equal(INTERNAL.stageFor({ type: 'llm_failover', from: 'xAI' }), null, 'provider names never reach the UI');
+  assert.deepEqual(INTERNAL.stageFor({ type: 'tool_call', tool: 'bash', preview: 'cd /workspace && python3 edit.py' }), { label: 'Editando el documento' }, 'sandbox commands never reach the UI');
 });
 
 test('transient provider errors retry only the picked model; hard errors do not', async () => {
