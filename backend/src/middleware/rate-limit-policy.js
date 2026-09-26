@@ -212,7 +212,23 @@ function isAuthSessionMaintenancePath(path) {
   return AUTH_SESSION_MAINTENANCE_RE.test(p);
 }
 
+/**
+ * Durable task recovery and existing artifact downloads are reads, not new
+ * generation work. Match only the known routes in agent-task.js: an unknown
+ * GET (especially artifact/:id/preview.pdf, which can run LibreOffice) keeps
+ * its expensive admission limit. Authentication and ownership stay in the
+ * route handlers; these requests must still consume the general API quota.
+ * Use originalUrl because Express strips /api/agent from req.path at the
+ * expensive mount, and strips /api at the general mount.
+ */
+function isAgentTaskReadRequest(req) {
+  if (req?.method !== 'GET' && req?.method !== 'HEAD') return false;
+  const pathname = String(req.originalUrl || '').split('?')[0];
+  return /^\/api\/agent\/(?:artifacts|artifact\/[a-f0-9]{1,40}|task\/[a-z0-9_-]+(?:\/events)?)\/?$/i.test(pathname);
+}
+
 module.exports = {
+  isAgentTaskReadRequest,
   isAuthSessionMaintenancePath,
   resolveRateLimitConfig,
   resolveSensitiveRateLimitPolicy,

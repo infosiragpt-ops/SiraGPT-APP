@@ -206,6 +206,126 @@ test('compound Word edits reach the selected engine intact and follow-ups retain
   }
 });
 
+for (const [scope, nextPrompt] of [
+  ['numbered', 'En los 4 documentos recién editados cambia solamente “Proyecto revisado” por “Proyecto final”. Conserva “Aprobado”, CONTROL_SIN_CAMBIOS, formatos y la fórmula de Excel. Devuélveme las 4 versiones finales.'],
+  ['all documents', 'En todos los documentos recién editados cambia solamente “Proyecto revisado” por “Proyecto final”. Conserva “Aprobado”, CONTROL_SIN_CAMBIOS, formatos y la fórmula de Excel. Devuélveme las cuatro versiones finales.'],
+]) test(`a mixed-format batch forwards two replacements sharing one verb and preserves them on ${scope} follow-up`, async (t) => {
+  const f = fixture(t, ['Prueba-Word.docx', 'Prueba-Excel.xlsx', 'Prueba-PowerPoint.pptx', 'Prueba-PDF.pdf']);
+  const firstPrompt = 'Prueba QA múltiple: edita los 4 documentos adjuntos. En cada uno cambia el título “Proyecto inicial” por “Proyecto revisado” y el estado “Pendiente” por “Aprobado”. Conserva CONTROL_SIN_CAMBIOS, formatos, encabezados y, en Excel, números y fórmula. Devuélveme los 4 archivos editados en su formato original.';
+  const engineCalls = [];
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  f.deps.readSourceBuffer = async (row) => ({ buffer: Buffer.from(`original:${row.id}|Proyecto inicial|Pendiente|CONTROL_SIN_CAMBIOS`), cleanup: async () => {} });
+  f.deps.applyDocxPrecisionEdit = () => assert.fail('a single replacement must not consume the compound request');
+  f.deps.tryApplyLiteralDocxTitleEdit = async () => null;
+  const apply = (options, file) => {
+    engineCalls.push({ model: options.model, instruction: options.instruction, source: file.buffer.toString(), name: file.name });
+    const isFirst = options.instruction.startsWith(firstPrompt);
+    assert.ok(isFirst || options.instruction.startsWith(nextPrompt), 'the selected engine receives the whole original request');
+    let content = file.buffer.toString();
+    content = isFirst ? content.replace('Proyecto inicial', 'Proyecto revisado').replace('Pendiente', 'Aprobado')
+      : content.replace('Proyecto revisado', 'Proyecto final');
+    return Buffer.from(content);
+  };
+  f.deps.docxEngine = { docxEngineEnabled: () => true, editWordDocument: async (options) => ({
+    ok: true, filename: options.filename, buffer: apply(options, { name: options.filename, buffer: options.buffer }),
+    verification: { ok: true }, changes: [], summary: 'Cambios completos.',
+  }) };
+  f.deps.runDocumentAgent = async (options) => ({ stoppedReason: 'final', finalText: 'Cambios completos.',
+    outputs: options.files.map((file) => ({ name: file.name, valid: true, buffer: apply(options, file) })) });
+  const first = await f.run({ instruction: firstPrompt });
+  assert.equal(first.ok, true, first.message);
+  assert.equal(first.artifacts.length, 4);
+  f.messages.unshift({ role: 'ASSISTANT', files: toAssistantFiles(first.artifacts) });
+  const next = await f.run({ fileIds: [], instruction: nextPrompt });
+  assert.equal(next.ok, true, next.message);
+  assert.equal(next.artifacts.length, 4);
+  assert.equal(engineCalls.length, 8);
+  assert.ok(engineCalls.every((call) => call.model === 'picked'));
+  assert.ok(engineCalls.slice(4).every((call) => call.source.includes('Proyecto revisado|Aprobado|CONTROL_SIN_CAMBIOS')));
+  assert.ok(f.calls.saved.slice(-4).every((saved) => Buffer.from(saved.base64, 'base64').toString().includes('Proyecto final|Aprobado|CONTROL_SIN_CAMBIOS')));
+});
+
+test('a numbered batch never guesses a subset when the requested document count differs', async (t) => {
+  const f = fixture(t, ['A.xlsx', 'B.pptx', 'C.pdf']);
+  const result = await f.run({ instruction: 'Edita los 2 documentos adjuntos y cambia los títulos.' });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
+  assert.deepEqual(f.calls.reads, []);
+  assert.deepEqual(f.calls.saved, []);
+});
+
+test('a document count inside quoted replacement text never authorizes a batch', async (t) => {
+  const f = fixture(t, ['A.docx', 'B.docx']);
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  const result = await f.run({ instruction: 'Cambia “Texto” por “los 2 documentos”.' });
+  assert.equal(result.code, 'DOCX_EDIT_SOURCE_AMBIGUOUS');
+  assert.equal(f.calls.edits.length, 0);
+  assert.deepEqual(f.calls.saved, []);
+});
+
+test('a replacement filename in an elided second pair never narrows an explicitly requested batch', async (t) => {
+  const f = fixture(t, ['A.docx', 'B.xlsx']);
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  const instruction = 'En ambos documentos cambia “Proyecto inicial” por “Proyecto final” y “Pendiente” por “B.xlsx”.';
+  const result = await f.run({ instruction });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.filename), ['A.docx', 'B.xlsx']);
+  assert.ok(f.calls.edits.every((edit) => edit.instruction.startsWith(instruction)));
+});
+
+test('an exterior filename still selects its source when replacement values mention a different file', async (t) => {
+  const f = fixture(t, ['A.docx', 'B.xlsx']);
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  const result = await f.run({ instruction: 'En “A.docx” cambia “Proyecto inicial” por “Proyecto final” y “Pendiente” por “B.xlsx”.' });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.filename), ['A.docx']);
+});
+
+test('filenames joined by con before an edit directive remain source selectors', async (t) => {
+  const f = fixture(t, ['A.docx', 'B.xlsx', 'Referencia.pdf']);
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  const result = await f.run({ instruction: 'Edita “A.docx” con “B.xlsx”; en ambos cambia el título y actualiza el estado.' });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.filename), ['A.docx', 'B.xlsx']);
+});
+
+test('filenames after a replacement remain exterior source selectors', async (t) => {
+  const f = fixture(t, ['A.xlsx', 'B.xlsx', 'Referencia.pdf']);
+  const result = await f.run({ instruction: 'En ambos cambia “Pendiente” por “Aprobado” en “A.xlsx” con “B.xlsx”.' });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.filename), ['A.xlsx', 'B.xlsx']);
+});
+
+test('counts describing new content or reference documents do not constrain the source set', async (t) => {
+  const cases = [
+    { names: ['Ventas.xlsx'], instruction: 'En Ventas.xlsx agrega una tabla que enumere los 3 documentos de referencia.' },
+    { names: ['A.xlsx', 'B.pptx'], instruction: 'En ambos documentos cambia 2025 por 2026 y agrega una lista de los 3 documentos de referencia.' },
+    { names: ['A.xlsx', 'B.pptx', 'C.pdf'], instruction: 'Edita los 3 documentos adjuntos y agrega una lista de los 2 documentos de referencia.' },
+  ];
+  for (const { names, instruction } of cases) {
+    const f = fixture(t, names);
+    const result = await f.run({ instruction });
+    assert.equal(result.ok, true, `${instruction}: ${result.message}`);
+    assert.deepEqual(result.artifacts.map((artifact) => artifact.filename), names);
+  }
+});
+
+test('counts of format subgroups never authorize editing every attached document', async (t) => {
+  const cases = [
+    { names: ['A.xlsx', 'B.xlsx', 'Referencia.pdf'], instruction: 'En los 2 Excel adjuntos cambia el título. El PDF es solo referencia.' },
+    { names: ['A.xlsx', 'Referencia.pdf'], instruction: 'En los 2 Excel adjuntos cambia el título. El PDF es solo referencia.' },
+    { names: ['A.docx', 'B.docx', 'C.xlsx', 'D.xlsx'], instruction: 'Edita los 2 documentos Word y los 2 Excel adjuntos.' },
+  ];
+  for (const { names, instruction } of cases) {
+    const f = fixture(t, names);
+    const result = await f.run({ instruction });
+    assert.equal(result.ok, false, 'subgroups need an explicit filename selection until supported');
+    assert.match(result.code, /SOURCE_AMBIGUOUS$/);
+    assert.deepEqual(f.calls.reads, []);
+    assert.deepEqual(f.calls.saved, []);
+  }
+});
+
 test('one exact replacement applies to both Word files without calling a content model', async (t) => {
   const { Document, Packer, Paragraph } = require('docx');
   const PizZip = require('pizzip');
