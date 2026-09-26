@@ -143,6 +143,7 @@ import { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "@/lib/api-base
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
+  ComposerDocumentRow,
 } from "@/components/chat/ComposerInlineDisplays"
 import {
   ChatComposerPrimaryAction,
@@ -162,8 +163,6 @@ import {
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import { FileProcessingStatusSync } from "@/components/file-processing-status-sync"
-import { DocumentPageThumb } from "@/components/document-page-thumb"
-import { isPagePreviewDocument } from "@/lib/document-first-page"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { describeComposerDocumentThumb, isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
@@ -2018,7 +2017,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
     if (typeof window === "undefined") return;
     const readyAttachments = viewerSiblings.filter((attachment, index) => {
       const file = uploadedFiles[index];
-      return file?.status !== "uploading" && file?.status !== "failed" && attachmentHasPreviewSource(attachment);
+      // Document rows don't render pages. Defer parsing their previews until
+      // the user opens one instead of warming every workbook in a batch.
+      const isMedia = String(file?.type || file?.mimeType || "").startsWith("image/")
+        || isAudioComposerFile(file) || isVideoComposerFile(file);
+      return isMedia && file?.status !== "uploading" && file?.status !== "failed" && attachmentHasPreviewSource(attachment);
     });
     if (readyAttachments.length === 0) return;
 
@@ -2049,11 +2052,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
       <div
         role="list"
         aria-label="Archivos adjuntos"
-        className="flex flex-wrap items-end gap-2"
+        className="flex flex-wrap items-end gap-x-2 gap-y-0.5"
       >
         <AnimatePresence initial={false}>
         {uploadedFiles.map((file, index) => {
-          const isImage = file.type?.startsWith('image/');
+          const isImage = String(file.type || file.mimeType || '').startsWith('image/');
           const fileId = file.id || file.tempId;
           const rawProgress = uploadProgress[fileId];
           const isUploading = file.status === 'uploading';
@@ -2080,8 +2083,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
           const isAudio = isAudioComposerFile(file);
           const isVideo = isVideoComposerFile(file);
-          const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
-            && isPagePreviewDocument(file.name, file.type || file.mimeType);
+          const isCompactDocument = !isImage && !isAudio && !isVideo && !longPasteMeta;
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
           const thumbProgress = describeComposerDocumentThumb({
             uploading: isUploading,
@@ -2090,7 +2092,6 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
             stage: getFileProcessingStage(file),
             error: file.processingError || file.uploadError,
           });
-          const docBusy = thumbProgress.busy;
           const handleReorder = (delta: -1 | 1) => {
             if (!moveFile) return;
             const target = index + delta;
@@ -2109,19 +2110,19 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
               transition={{ type: 'spring', stiffness: 420, damping: 30, mass: 0.7 }}
               className={cn(
                 "relative text-sm",
-                "border bg-background/90",
-                isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70",
+                !isCompactDocument && "border bg-background/90",
+                !isCompactDocument && (isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70"),
                 isImage
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
-                  : isDocPage
-                    ? "h-[7.75rem] w-[5.7rem] overflow-hidden rounded-[0.9rem] p-0 shadow-sm"
+                  : isCompactDocument
+                    ? "w-full min-w-0"
                     : isVideo
                       ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
                       : isAudio
                         ? "min-w-[14.5rem] max-w-[22rem] overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
                     : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
-                canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
+                !isCompactDocument && canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
               title={isFailed
@@ -2131,11 +2132,12 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                   : canPreview
                     ? (thumbProgress.busy && thumbProgress.label ? `Ver documento · ${thumbProgress.label}` : 'Ver documento')
                     : (thumbProgress.label || 'Preparando documento')}
-              onClick={openPreview}
+              onClick={isCompactDocument ? undefined : openPreview}
               role="listitem"
               aria-label={chipLabel}
-              tabIndex={0}
+              tabIndex={isCompactDocument ? undefined : 0}
               onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.target !== e.currentTarget) return;
                 if (e.key === 'Delete' || e.key === 'Backspace') {
                   e.preventDefault();
                   removeFile(index);
@@ -2201,53 +2203,37 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
                   </Button>
                 </>
-              ) : isDocPage ? (
+              ) : isCompactDocument ? (
                 <>
                   <FileProcessingStatusSync
-                    fileId={isUploading ? null : file.id}
+                    fileId={isUploading ? null : resolveUploadFileId(file)}
                     onReady={() => toast.success(`Documento listo: ${file.name}`)}
                     onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
                   />
-                  <DocumentPageThumb
-                    source={{
-                      id: file.id,
-                      name: file.name,
-                      mimeType: file.type || file.mimeType,
-                      size: file.size,
-                      file: getAttachmentLocalFile(file),
-                      url: file.url,
+                  <ComposerDocumentRow
+                    name={file.name || file.originalName || "Documento"}
+                    mimeType={file.type || file.mimeType}
+                    details={[describeAttachmentKind(file).label, formatChipBytes(file.size)].filter(Boolean).join(" · ")}
+                    uploading={isUploading}
+                    progress={thumbProgress}
+                    canPreview={canPreview}
+                    onOpen={openPreview}
+                    onRemove={() => removeFile(index)}
+                    onRetry={retryUpload ? () => retryUpload(file) : undefined}
+                    onKeyDown={(event) => {
+                      if (event.key === "Delete" || event.key === "Backspace") {
+                        event.preventDefault();
+                        removeFile(index);
+                        setReorderAnnouncement(`${file.name} eliminado`);
+                      } else if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowUp")) {
+                        event.preventDefault();
+                        handleReorder(-1);
+                      } else if (event.altKey && (event.key === "ArrowRight" || event.key === "ArrowDown")) {
+                        event.preventDefault();
+                        handleReorder(1);
+                      }
                     }}
-                    busy={docBusy}
-                    progress={isUploading ? progress : null}
-                    label={thumbProgress.label}
                   />
-                  {isFailed && retryUpload && (
-                    <div className="absolute inset-0 bg-red-900/55 flex flex-col items-center justify-center gap-1 rounded-[0.9rem]">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 rounded-full bg-white/95 hover:bg-white text-red-600"
-                        onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
-                        title="Reintentar subida"
-                        aria-label="Reintentar subida"
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      </Button>
-                      <span className="max-w-[90%] truncate px-1 text-center text-[9.5px] text-white font-medium">
-                        {thumbProgress.label || "Reintentar"}
-                      </span>
-                    </div>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
-                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
-                    title={isUploading ? "Cancelar subida" : "Quitar"}
-                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
-                  >
-                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
-                  </Button>
                 </>
               ) : isVideo ? (
                 <>

@@ -131,3 +131,97 @@ test('processFile reads xlsx content even when browser reports a generic MIME', 
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('processExcel preserves sparse late rows and original sheet coordinates within the populated-row budget', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-xlsx-sparse-'));
+  const filePath = path.join(dir, 'matrices.xlsx');
+  try {
+    const workbook = createWorkbook();
+    const sheet = workbook.addWorksheet('Derecho');
+    sheet.getRow(4).values = ['Código', 'Título', 'Puntaje'];
+    sheet.getRow(6200).values = ['DER-6200', 'Sucesión intestada', { formula: '1-1', result: 0 }];
+    const lastSheet = workbook.addWorksheet('Salud');
+    lastSheet.getRow(2).values = ['Código', 'Descripción'];
+    lastSheet.getRow(7000).values = ['SAL-7000', 'Valor con\ttabulación\ny otra línea'];
+    await fs.writeFile(filePath, await writeWorkbookBuffer(workbook));
+    const text = await fileProcessor.processExcel(filePath);
+    assert.match(text, /Header row: 4\. Column range: A:C/);
+    assert.match(text, /Row coordinates: 6200/);
+    assert.match(text, /DER-6200\tSucesión intestada\t0/);
+    assert.match(text, /Row coordinates: 7000/);
+    assert.match(text, /SAL-7000\tValor con\\ttabulación\\ny otra línea/);
+    assert.doesNotMatch(text, /truncated:/);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('processExcel reports column and populated-row truncation explicitly', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-xlsx-bounds-'));
+  const filePath = path.join(dir, 'bounded.xlsx');
+  try {
+    const workbook = createWorkbook();
+    const sheet = workbook.addWorksheet('Data');
+    sheet.addRow(['Código', 'Valor']);
+    for (let i = 1; i <= 5001; i += 1) sheet.addRow([`REG-${i}`, i]);
+    sheet.getCell('CC2').value = 'Fuera del límite de columnas';
+    await fs.writeFile(filePath, await writeWorkbookBuffer(workbook));
+    const text = await fileProcessor.processExcel(filePath);
+    assert.match(text, /REG-5000\t5000/);
+    assert.doesNotMatch(text, /REG-5001/);
+    assert.match(text, /truncated: 1 more populated row/);
+    assert.match(text, /truncated: columns after CB omitted/);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('DOCX table spans cannot allocate phantom rows or unlimited columns', () => {
+  const text = fileProcessor._htmlToMarkdown('<table><tr><td rowspan="99999999" colspan="99999999"><p>Un solo dato</p></td></tr></table>');
+  assert.ok(text.length < 3000);
+  assert.equal(text.split('\n').filter(line => line.startsWith('|')).length, 2);
+  assert.match(text, /truncated: table spans/);
+});
+
+test('extracted XLSX remains compatible with bibliography and quality readers', async () => {
+  const { parseSpreadsheetCitationRows } = require('../src/services/agents/agent-task-runner');
+  const { _internal: quality } = require('../src/services/document-analysis-quality');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-xlsx-citations-'));
+  const filePath = path.join(dir, 'bibliografia.xlsx');
+  try {
+    const workbook = createWorkbook();
+    const sheet = workbook.addWorksheet('Referencias');
+    sheet.addRow(['Título', 'Autores', 'Año', 'DOI']);
+    sheet.getRow(6200).values = ['Análisis de sarcopenia', 'García, M.', 2025, '10.1234/salud.2025'];
+    await fs.writeFile(filePath, await writeWorkbookBuffer(workbook));
+    const text = await fileProcessor.processExcel(filePath);
+    const references = parseSpreadsheetCitationRows(text);
+    assert.equal(references.length, 1);
+    assert.equal(references[0].title, 'Análisis de sarcopenia');
+    assert.equal(Number(references[0].year), 2025);
+    assert.match(JSON.stringify(references[0]), /10\.1234\/salud\.2025/);
+    const qualityRows = quality.parseSpreadsheetRows([{ originalName: 'bibliografia.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extractedText: text }]);
+    assert.equal(qualityRows.length, 1);
+    assert.deepEqual(qualityRows[0].cells, ['Análisis de sarcopenia', 'García, M.', '2025', '10.1234/salud.2025']);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('DOCX tables retain row relationships, merged cells, literal pipes and paragraph breaks for retrieval', async () => {
+  const { Document, Packer, Paragraph, Table, TableRow, TableCell } = require('docx');
+  const intelligence = require('../src/services/document-intelligence');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-docx-table-'));
+  const filePath = path.join(dir, 'matriz.docx');
+  const cell = (text, extra = {}) => new TableCell({ children: text.map(value => new Paragraph(value)), ...extra });
+  try {
+    const document = new Document({ sections: [{ children: [new Table({ rows: [
+      new TableRow({ children: [cell(['Categoría']), cell(['Indicador']), cell(['Resultado'])] }),
+      new TableRow({ children: [cell(['Gestión | sanitaria'], { rowSpan: 2 }), cell(['Ejecución']), cell(['Alta', 'Confirmada'])] }),
+      new TableRow({ children: [cell(['Riesgo']), cell(['Bajo'])] }),
+    ] })] }] });
+    await fs.writeFile(filePath, await Packer.toBuffer(document));
+    const text = await fileProcessor.processWord(filePath);
+    const tables = await intelligence.buildTables({ originalName: 'matriz.docx' }, text);
+    assert.equal(tables.length, 1);
+    assert.equal(tables[0].rowCount, 2);
+    assert.equal(tables[0].preview[0]['Categoría'], 'Gestión | sanitaria');
+    assert.equal(tables[0].preview[0].Resultado, 'Alta\nConfirmada');
+    assert.equal(tables[0].preview[1]['Categoría'], 'Gestión | sanitaria');
+    assert.equal(tables[0].preview[1].Indicador, 'Riesgo');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});

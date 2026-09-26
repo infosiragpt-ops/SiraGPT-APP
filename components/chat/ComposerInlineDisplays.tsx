@@ -1,27 +1,114 @@
 "use client"
 
 /**
- * ComposerInlineDisplays — small presentational sub-components that
- * used to live inline at the top of `chat-interface-enhanced.tsx`.
- *
- * Extracting them here is a pure-refactor: behaviour and styling are
- * preserved verbatim. The motivation is splitting the 8k+ LOC chat
- * shell into smaller compilable units so editors / type-checkers / tree
- * shakers can work with bounded pieces.
+ * Small presentational components used by the canonical chat composer.
  *
  * Components included:
  *   - ImageAspectRatioMark — small visual chip showing 1:1 / 16:9 / …
  *   - SelectedTextDisplay  — "AI Rewrite" callout above the composer
- *
- * Every prop here is exactly what the original inline declarations
- * expected; do not widen or rename them without updating the call site
- * in `chat-interface-enhanced.tsx`.
+ *   - ComposerDocumentRow — compact document name, state, and actions
  */
 
 import * as React from "react"
-import { X } from "lucide-react"
+import { FileText, RefreshCw, X } from "lucide-react"
 import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
+import { OfficeFileIcon, officeKindFor } from "@/components/office-file-icon"
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import type { ComposerDocumentThumbProgress } from "@/lib/file-processing-vocab"
 import { cn } from "@/lib/utils"
+
+type ComposerDocumentRowProps = {
+  name: string
+  mimeType?: string
+  details?: string
+  uploading: boolean
+  progress: ComposerDocumentThumbProgress
+  canPreview: boolean
+  onOpen: () => void
+  onRemove: () => void
+  onRetry?: () => void
+  onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>
+}
+
+/**
+ * A document stays one line; only an unfinished upload or processing needs extra copy.
+ * Dense rows set 28/32px targets explicitly, opting out of both the global
+ * 44px minimum and its expanding pseudo-element to keep adjacent rows separate.
+ */
+export function ComposerDocumentRow({
+  name,
+  mimeType,
+  details,
+  uploading,
+  progress,
+  canPreview,
+  onOpen,
+  onRemove,
+  onRetry,
+  onKeyDown,
+}: ComposerDocumentRowProps) {
+  const kind = officeKindFor({ name, mimeType })
+  const title = [name, details, progress.label].filter(Boolean).join(" · ")
+
+  return (
+    <div
+      className="group/document flex min-h-8 w-full max-w-[30rem] items-center gap-1 rounded-md px-1 hover:bg-muted/50 focus-within:bg-muted/50 sm:min-h-7"
+      data-testid="composer-document-row"
+    >
+      <button
+        type="button"
+        data-no-tap-target="true"
+        className="no-tap-expand flex min-h-8 min-w-0 flex-1 items-center gap-1.5 rounded-sm text-left text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-disabled:cursor-default sm:min-h-7"
+        aria-label={`Abrir ${name}`}
+        aria-disabled={!canPreview}
+        title={title}
+        onClick={() => { if (canPreview) onOpen() }}
+        onKeyDown={onKeyDown}
+      >
+        {kind
+          ? <OfficeFileIcon kind={kind} size={16} className="h-4 w-4" />
+          : <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+        <span className="min-w-0 truncate">{name}</span>
+      </button>
+      {progress.label && (
+        <span
+          className={cn(
+            "flex max-w-[42%] shrink-0 items-center gap-1 text-[10.5px] leading-4",
+            progress.failed ? "text-red-600 dark:text-red-400" : "text-muted-foreground",
+          )}
+          title={progress.label}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {progress.busy && <ThinkingIndicator size="xs" label={progress.label} />}
+          <span className="truncate">{progress.label}</span>
+        </span>
+      )}
+      {progress.failed && onRetry && (
+        <button
+          type="button"
+          data-no-tap-target="true"
+          className="no-tap-expand inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-red-600 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:text-red-400 sm:h-7 sm:w-7"
+          aria-label={`Reintentar ${name}`}
+          title="Reintentar subida"
+          onClick={onRetry}
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        data-no-tap-target="true"
+        className="no-tap-expand inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7 sm:opacity-0 sm:group-hover/document:opacity-100 sm:group-focus-within/document:opacity-100"
+        aria-label={`${uploading ? "Cancelar subida de" : "Quitar"} ${name}`}
+        title={uploading ? "Cancelar subida" : "Quitar archivo"}
+        onClick={onRemove}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+    </div>
+  )
+}
 
 export type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
 

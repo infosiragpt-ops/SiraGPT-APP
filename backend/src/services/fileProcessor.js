@@ -11,7 +11,7 @@ let visionAuthFailedUntil = 0;
 const VISION_AUTH_MEMO_MS = 10 * 60 * 1000;
 const mixedPdf = require('./document/mixed-pdf');
 const officeImages = require('./office-image-extractor');
-const { readXlsxFile, selectWorkbookWorksheets, worksheetRows, evaluateFormulas } = require('./xlsx-safe-workbook');
+const { readXlsxFile, selectWorkbookWorksheets, worksheetRowEntries, evaluateFormulas, excelColLetter, DEFAULT_MAX_COLUMNS } = require('./xlsx-safe-workbook');
 const rtfParser = require('./rtf-parser');
 const odfParser = require('./opendocument-parser');
 const epubParser = require('./epub-parser');
@@ -821,6 +821,51 @@ class FileProcessor {
   _htmlToMarkdown(html) {
     if (!html) return '';
     let md = html;
+    const tables = [];
+    // Mammoth puts paragraphs inside table cells. Convert those independently
+    // before the document paragraph pass, otherwise every cell becomes a new
+    // line and both the table parser and retrieval lose row relationships.
+    // Cheerio is already part of the backend; use its DOM for merged cells.
+    if (/<table\b/i.test(html)) {
+      const $ = require('cheerio').load(html, null, false);
+      let tokenPrefix = 'SIRA_TABLE_BLOCK_';
+      while (html.includes(tokenPrefix)) tokenPrefix += '_';
+      $('table').filter((_, table) => $(table).parents('table').length === 0).each((_, table) => {
+        const grid = [];
+        const tableRows = $(table).find('tr').filter((__, row) => $(row).closest('table')[0] === table);
+        let spansTruncated = false;
+        tableRows.each((rowIndex, row) => {
+          grid[rowIndex] ||= [];
+          let columnIndex = 0;
+          $(row).children('td,th').each((__, cell) => {
+            while (grid[rowIndex][columnIndex] !== undefined) columnIndex += 1;
+            const value = this._htmlToMarkdown($(cell).html() || '')
+              .replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n+/g, '<br>');
+            // Span expansion cannot create rows that do not exist in the
+            // source, and its total width stays within the extraction budget.
+            if (columnIndex >= DEFAULT_MAX_COLUMNS) { spansTruncated = true; return; }
+            const requestedColspan = Math.max(1, Number.parseInt($(cell).attr('colspan'), 10) || 1);
+            const colspan = Math.min(DEFAULT_MAX_COLUMNS - columnIndex, requestedColspan);
+            const requestedRowspan = Math.max(1, Number.parseInt($(cell).attr('rowspan'), 10) || 1);
+            const rowspan = Math.min(tableRows.length - rowIndex, requestedRowspan);
+            if (colspan < requestedColspan || rowspan < requestedRowspan) spansTruncated = true;
+            for (let r = rowIndex; r < rowIndex + rowspan; r += 1) {
+              grid[r] ||= [];
+              for (let c = columnIndex; c < columnIndex + colspan; c += 1) grid[r][c] = value;
+            }
+            columnIndex += colspan;
+          });
+        });
+        const width = grid.reduce((max, row) => Math.max(max, row.length), 0);
+        const rows = grid.map((row) => `| ${Array.from({ length: width }, (__, i) => row[i] || '').join(' | ')} |`);
+        if (rows.length) rows.splice(1, 0, `| ${Array(width).fill('---').join(' | ')} |`);
+        if (spansTruncated) rows.push('\n[truncated: table spans exceed source rows or column safety cap]');
+        const token = `${tokenPrefix}${tables.length}_END`;
+        tables.push({ token, markdown: rows.join('\n') });
+        $(table).replaceWith(`\n\n${token}\n\n`);
+      });
+      md = $.root().html();
+    }
     // Headings
     md = md.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n');
     md = md.replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n');
@@ -861,6 +906,7 @@ class FileProcessor {
     // Collapse runs of blank lines to at most two — mammoth loves to
     // emit empty paragraphs around headings.
     md = md.replace(/\n{3,}/g, '\n\n').trim();
+    for (const table of tables) md = md.replace(table.token, table.markdown);
     return md;
   }
 
@@ -873,8 +919,7 @@ class FileProcessor {
       const { worksheets, total, skipped, maxSheets } = selectWorkbookWorksheets(workbook);
       worksheets.forEach(worksheet => {
         const sheetName = worksheet.name;
-        const nonEmptyRows = worksheetRows(worksheet, { maxRows: MAX_DATA_ROWS_PER_SHEET + 1 })
-          .filter(row => Array.isArray(row) && row.length > 0);
+        const { rows: nonEmptyRows, totalRows, omittedColumns } = worksheetRowEntries(worksheet, { maxRows: MAX_DATA_ROWS_PER_SHEET + 1 });
 
         if (nonEmptyRows.length === 0) {
           sheetSummaries.push(`Sheet: ${sheetName}\n(empty)\n`);
@@ -882,19 +927,25 @@ class FileProcessor {
         }
 
         // First row is treated as header; everything after is data.
-        const [headerRow, ...dataRows] = nonEmptyRows;
-        const totalDataRows = Math.max(0, Number(worksheet.actualRowCount || nonEmptyRows.length) - 1);
+        const [headerEntry, ...dataRows] = nonEmptyRows;
+        const width = Math.min(DEFAULT_MAX_COLUMNS, Math.max(...nonEmptyRows.map(row => row.values.length)));
+        const escapeCell = value => String(value ?? '').replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\r?\n/g, '\\n').replace(/\r/g, '\\n');
+        const headerRow = Array.from({ length: width }, (_, i) => escapeCell(headerEntry.values[i] || `Columna ${excelColLetter(i + 1)}`).replace(/\|/g, '\\|'));
+        const totalDataRows = Math.max(0, totalRows - 1);
         const shown = dataRows.slice(0, Math.min(dataRows.length, MAX_DATA_ROWS_PER_SHEET));
         const truncated = totalDataRows > MAX_DATA_ROWS_PER_SHEET;
 
         let block = `Sheet: ${sheetName}\n`;
         block += `Columns (${headerRow.length}): ${headerRow.join(' | ')}\n`;
+        block += `Header row: ${headerEntry.rowNumber}. Column range: A:${excelColLetter(width)}. Cell escapes: \\t = tab, \\n = line break.\n`;
+        block += `Row coordinates: ${shown.map(row => row.rowNumber).join(',')}\n`;
         block += `Total data rows: ${totalDataRows}${truncated ? ` (showing first ${MAX_DATA_ROWS_PER_SHEET})` : ''}\n`;
         block += `---\n`;
-        shown.forEach(row => { block += row.join('\t') + '\n'; });
+        shown.forEach(row => { block += row.values.map(escapeCell).join('\t') + '\n'; });
         if (truncated) {
-          block += `... [${totalDataRows - MAX_DATA_ROWS_PER_SHEET} more row(s) omitted for context-window efficiency] ...\n`;
+          block += `... [truncated: ${totalDataRows - shown.length} more populated row(s) omitted by safety cap (${MAX_DATA_ROWS_PER_SHEET})] ...\n`;
         }
+        if (omittedColumns) block += `... [truncated: columns after ${excelColLetter(DEFAULT_MAX_COLUMNS)} omitted by safety cap (${DEFAULT_MAX_COLUMNS})] ...\n`;
         sheetSummaries.push(block);
       });
 

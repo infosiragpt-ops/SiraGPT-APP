@@ -70,7 +70,15 @@ function cellToText(cell, options = {}) {
 
 function rowToValues(row, maxColumns = DEFAULT_MAX_COLUMNS, options = {}) {
   const values = Array.isArray(row?.values) ? row.values.slice(1, maxColumns + 1) : [];
-  return Array.from(values, (cell) => cellToText(cell, options));
+  return Array.from(values, (cell, index) => {
+    // ExcelJS omits falsy cached formula results from row.values although the
+    // cell.result getter still exposes them. A real calculated zero is data.
+    if (cell && typeof cell === 'object' && (cell.formula || cell.sharedFormula)) {
+      const result = row.getCell?.(index + 1)?.result;
+      if (result !== undefined && result !== null) return cellToText(result, options);
+    }
+    return cellToText(cell, options);
+  });
 }
 
 function worksheetRows(worksheet, { maxRows = DEFAULT_MAX_ROWS, maxColumns = DEFAULT_MAX_COLUMNS, defangFormulas } = {}) {
@@ -91,6 +99,28 @@ function worksheetRows(worksheet, { maxRows = DEFAULT_MAX_ROWS, maxColumns = DEF
     if (values.some((value) => String(value).trim())) rows.push(values);
   }
   return rows;
+}
+
+// Extraction budgets count populated rows, not Excel row positions. A value in
+// A6000 after blank separators still belongs to a two-row document. Keep the
+// physical coordinates separately so citations never renumber sparse sheets.
+function worksheetRowEntries(worksheet, { maxRows = DEFAULT_MAX_ROWS, maxColumns = DEFAULT_MAX_COLUMNS, defangFormulas } = {}) {
+  const rows = [];
+  const cellOptions = defangFormulas === undefined ? {} : { enabled: Boolean(defangFormulas) };
+  const rowLimit = clampInt(maxRows, DEFAULT_MAX_ROWS, 1, 100_001);
+  const columnLimit = clampInt(maxColumns, DEFAULT_MAX_COLUMNS, 1, 16_384);
+  let totalRows = 0;
+  let omittedColumns = false;
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    totalRows += 1;
+    if (row.cellCount > columnLimit) omittedColumns = true;
+    if (rows.length >= rowLimit) return;
+    const values = rowToValues(row, columnLimit, cellOptions);
+    // Include rows whose only populated cells are beyond the column budget;
+    // the truncation marker explains their empty visible portion.
+    rows.push({ rowNumber, values });
+  });
+  return { rows, totalRows, omittedColumns, omittedRows: Math.max(0, totalRows - rows.length) };
 }
 
 function selectWorkbookWorksheets(workbook, { maxSheets = getXlsxMaxSheets() } = {}) {
@@ -391,5 +421,6 @@ module.exports = {
   selectWorkbookWorksheets,
   shouldDefangCellText,
   worksheetRows,
+  worksheetRowEntries,
   writeWorkbookBuffer,
 };

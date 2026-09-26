@@ -116,6 +116,8 @@ test('buildRuntimeContext indexes docs and builds a cited evidence block', async
   assert.equal(rag.calls.ingest.length, 1);
   assert.equal(rag.calls.retrieve.length, 1);
   assert.equal(rag.calls.retrieve[0].opts.useHybrid, true);
+  assert.equal(rag.calls.retrieve[0].opts.documentMode, true);
+  assert.deepEqual(rag.calls.retrieve[0].opts.allowedSources, ['file:doc1']);
   assert.equal(rag.calls.retrieve[0].opts.useExpansion, true);
   assert.equal(rag.calls.retrieve[0].opts.useMMR, true);
   assert.equal(rag.calls.retrieve[0].opts.useGraph, true);
@@ -258,7 +260,7 @@ function scriptedGraphRagOpenAI() {
   };
 }
 
-test('buildRuntimeContext builds GraphRAG on demand for first global long-document query', async () => {
+test('ensureGraphRagReady still builds an unscoped collection summary on demand', async () => {
   const uid = `og-${Math.random()}`;
   const chatId = 'graph-chat';
   const collection = `chat:${chatId}`;
@@ -273,25 +275,52 @@ test('buildRuntimeContext builds GraphRAG on demand for first global long-docume
     ],
   });
 
-  const out = await runtime.buildRuntimeContext({
+  const out = await runtime.ensureGraphRagReady({
     rag,
     userId: uid,
-    chatId,
-    prompt: 'Dame los temas principales de todos los documentos largos.',
-    processedFiles: [
-      { id: 'long1', originalName: 'Long Corpus.pdf', mimeType: 'application/pdf', extractedText: 'GraphRAG evidence '.repeat(900) },
+    collection,
+    query: 'Dame los temas principales de todos los documentos largos.',
+    docs: [
+      { source: 'file:long1', title: 'Long Corpus.pdf', chars: 15300, text: 'GraphRAG evidence '.repeat(900) },
     ],
     openai: scriptedGraphRagOpenAI(),
   });
 
-  assert.equal(out.active, true);
-  assert.equal(out.graphIndexResult.ready, true);
-  assert.equal(out.graphIndexResult.built, true);
+  assert.equal(out.ready, true);
+  assert.equal(out.built, true);
   assert.equal(rag.calls.ingestTriples.length, 1);
-  assert.equal(out.graphAnswer.themes.length, 3);
-  assert.match(out.contextBlock, /GraphRAG global synthesis/);
-  assert.match(out.contextBlock, /graphrag=true/);
-  assert.match(out.contextBlock, /Sintesis global/);
+});
+
+test('scoped document retrieval does not query or attribute cached GraphRAG communities to current files', async () => {
+  const userId = `graph-scope-${Math.random()}`;
+  const collection = 'chat:scoped';
+  const openai = scriptedGraphRagOpenAI();
+  await graphrag.buildIndex({
+    openai, userId, collection, entities: ['historical-policy', 'restricted-budget'],
+    edges: [{ a: 'historical-policy', b: 'restricted-budget', weight: 1 }],
+    getRelations: () => [{ subject: 'historical-policy', predicate: 'reveals', object: 'restricted-budget' }],
+  });
+  const originalQuery = graphrag.query;
+  let globalQueries = 0;
+  graphrag.query = async () => { globalQueries += 1; return { answer: 'STALE DOCUMENT EVIDENCE', stats: {} }; };
+  try {
+    const rag = fakeRag();
+    const out = await runtime.buildRuntimeContext({
+      rag, userId, chatId: 'scoped', openai,
+      prompt: 'Resume todos los documentos y sus temas principales.',
+      processedFiles: [{ id: 'doc1', originalName: 'Current.xlsx', extractedText: 'Current document evidence '.repeat(600) }],
+    });
+    assert.equal(out.active, true);
+    assert.equal(out.graphIndexResult.ready, false);
+    assert.equal(out.graphAnswer, null);
+    assert.equal(globalQueries, 0);
+    assert.equal(rag.calls.ingestTriples.length, 0);
+    assert.deepEqual(rag.calls.retrieve[0].opts.allowedSources, ['file:doc1']);
+    assert.doesNotMatch(out.contextBlock, /STALE DOCUMENT EVIDENCE|GraphRAG global synthesis/);
+  } finally {
+    graphrag.query = originalQuery;
+    graphrag.clearIndex(userId, collection);
+  }
 });
 
 test('buildEvidenceBlock can carry a GraphRAG synthesis even when vector hits are empty', () => {
