@@ -210,6 +210,7 @@ const memorySemantic = require('../services/memory-semantic');
 const memoryLlmExtract = require('../services/memory-llm-extract');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
+const imageAttachmentVision = require('../services/image-attachment-vision');
 const messageAttachments = require('../services/message-attachments');
 const {
   MESSAGE_IDEMPOTENCY_HASH_FIELD,
@@ -1165,6 +1166,12 @@ function resolveFileId(fileRef) {
 
 function isImageMime(mimeType) {
   return typeof mimeType === 'string' && mimeType.toLowerCase().startsWith('image/');
+}
+
+// Image by MIME **or** extension (HEIC / octet-stream uploads included), so
+// an image is never mistaken for a document and routed to text extraction.
+function isImageFileRecord(file) {
+  return imageAttachmentVision.isImageAttachment(file);
 }
 
 function routeSupportsVision(provider, model) {
@@ -6601,7 +6608,7 @@ router.post(
       // sanitizer strips it for every non-OpenRouter runtime.
       const __replayReasoningDetails = actualProvider === 'OpenRouter' && /anthropic\//i.test(String(actualModel || ''));
 
-      const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageMime(f.mimeType));
+      const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageFileRecord(f));
       // Decide once whether this turn's image(s) should be handed to a
       // vision model. Native-vision models always keep their images. When
       // the selected model is text-only we still route an *image-centric*
@@ -6610,7 +6617,7 @@ router.post(
       // the free text model. Document-centric turns keep the user's model
       // and drop loose images, preserving the existing document focus.
       const nativeVisionForTurn = routeSupportsVision(actualProvider, actualModel);
-      const keepImagesForVision = processedFiles.some(f => isImageMime(f.mimeType))
+      const keepImagesForVision = processedFiles.some(f => isImageFileRecord(f))
         && (nativeVisionForTurn
           || (!currentTurnHasNonImageFiles && routeCanReachVision(actualProvider, actualModel)));
       let messages = [systemInstruction];
@@ -6755,13 +6762,13 @@ router.post(
         // answer. Keep those images out of the text file context; the rest
         // (documents, or images on a no-vision turn) are described as usual.
         const visionImageFiles = keepImagesForVision
-          ? processedFiles.filter(f => isImageMime(f.mimeType))
+          ? processedFiles.filter(f => isImageFileRecord(f))
           : [];
         const rawFileContext = processedFiles.map(describeFileForText).join('\n\n');
         let fileContext;
         if (visionImageFiles.length > 0) {
           const textContextFiles = processedFiles.filter((f) => {
-            if (!isImageMime(f.mimeType)) return true;
+            if (!isImageFileRecord(f)) return true;
             return typeof f.extractedText === 'string' && f.extractedText.trim().length >= 8;
           });
           fileContext = textContextFiles.map(describeFileForText).join('\n\n');
@@ -7358,7 +7365,7 @@ router.post(
         // a text-only model never receives image content it can't read.
         const filesForVision = keepImagesForVision
           ? processedFiles
-          : processedFiles.filter(f => !isImageMime(f.mimeType));
+          : processedFiles.filter(f => !isImageFileRecord(f));
         if (filesForVision.length < processedFiles.length) {
           const skippedImages = processedFiles.filter(f => isImageMime(f.mimeType));
           generateLog.info('vision.images_stripped', { imageCount: skippedImages.length });
@@ -7943,10 +7950,16 @@ router.post(
               processedFiles,
               uploadedFileContext: uploadedFileContextForTurn,
               reason: 'chat_attachment_recovery',
+              provider: actualProvider,
+              model: actualModel,
             });
             const cleanRecovered = (recovered || '').trim();
-            const acceptShortRecovered = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
-              && cleanRecovered.length >= 1;
+            // A vision answer for an image turn can legitimately be short
+            // ("$a^2 + 2ab + b^2$"): accept it as-is.
+            const acceptShortRecovered = (
+              /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
+              || processedFiles.some((f) => isImageFileRecord(f))
+            ) && cleanRecovered.length >= 1;
             if (cleanRecovered && (cleanRecovered.length >= 40 || acceptShortRecovered)) {
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
@@ -8344,10 +8357,16 @@ router.post(
               processedFiles,
               uploadedFileContext: uploadedFileContextForTurn,
               reason: apiError?.message || 'stream_failed',
+              provider: actualProvider,
+              model: actualModel,
             });
             const cleanRecovered = (recovered || '').trim();
-            const acceptShortRecovered = /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
-              && cleanRecovered.length >= 1;
+            // A vision answer for an image turn can legitimately be short
+            // ("$a^2 + 2ab + b^2$"): accept it as-is.
+            const acceptShortRecovered = (
+              /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
+              || processedFiles.some((f) => isImageFileRecord(f))
+            ) && cleanRecovered.length >= 1;
             if (cleanRecovered.length >= 40 || acceptShortRecovered) {
               fullResponseContent = cleanRecovered;
               if (!res.writableEnded) {

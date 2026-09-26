@@ -209,6 +209,7 @@ const {
     selectVisionRuntime,
     shouldAttachVisionContent,
 } = require('./ai/vision-runtime');
+const imageAttachmentVision = require('./image-attachment-vision');
 
 /**
  * Classify a provider error as transient (safe to retry) vs terminal.
@@ -537,6 +538,44 @@ class AIService {
     }
 
     /**
+     * Answer an image turn directly with a vision model (non-streaming).
+     * Used by the recovery paths (chat stream failure, agent-task runner) so an
+     * image is ALWAYS read as pixels: the selected model when it can see,
+     * otherwise the configured vision runtimes. OCR text is only a hint.
+     * Returns the answer text or '' when no vision runtime answered.
+     * @param {Array<{path: string, mimeType?: string, name?: string}>} imageFiles
+     * @param {string} userText
+     * @param {{provider?: string, model?: string, ocrHint?: string, signal?: AbortSignal}} [opts]
+     */
+    async answerImagesWithVision(imageFiles, userText, opts = {}) {
+        let provider = opts.provider || '';
+        let model = opts.model || '';
+        try {
+            if (provider || model) {
+                provider = normalizeChatProvider(provider, model);
+                model = normalizeModelForProvider(provider, model);
+            }
+        } catch (_) { /* keep raw ids */ }
+        const result = await imageAttachmentVision.answerImageTurnWithVision({
+            prompt: userText,
+            imageFiles,
+            provider,
+            model,
+            ocrHint: opts.ocrHint || '',
+            signal: opts.signal || null,
+            prepareImage: (p, mime) => this.prepareImageForVision(p, mime),
+            getClient: (p) => this.getClient(p),
+            normalizeModel: (p, m) => normalizeModelForProvider(p, m),
+        });
+        if (result.text) {
+            console.log(`[image-vision] answered with ${result.provider}:${result.model}`);
+        } else if (result.attempts.length) {
+            console.warn(`[image-vision] no vision runtime answered (${result.attempts.length} attempt(s))`);
+        }
+        return result.text || '';
+    }
+
+    /**
      * TypeSafe Jev turn. Emits the same `text_delta` frames as a chat
      * completion so the SSE consumer, persistence and usage accounting stay
      * untouched, and returns the rendered card as the assistant content.
@@ -688,7 +727,9 @@ class AIService {
         try {
             // ✅ IMPROVED: Handle images properly for vision API
             if (files && files.length > 0) {
-                const imageFiles = files.filter(f => f.mimeType && f.mimeType.startsWith('image/'));
+                // MIME **or** extension: a HEIC/octet-stream upload is still an
+                // image and must reach the model as pixels, not as OCR text.
+                const imageFiles = imageAttachmentVision.imageAttachments(files);
 
                 if (imageFiles.length > 0) {
                     console.log(`📸 Processing ${imageFiles.length} image(s) for vision API`);
@@ -725,7 +766,7 @@ class AIService {
 
                     // Add all images to the content
                     for (const imageFile of imageFiles) {
-                        const imageContent = await this.prepareImageForVision(imageFile.path, imageFile.mimeType);
+                        const imageContent = await this.prepareImageForVision(imageFile.path, imageAttachmentVision.imageMimeFor(imageFile));
                         if (imageContent) {
                             contentArray.push(imageContent);
                             console.log(`✅ Added image to vision API: ${imageFile.name}`);
@@ -742,6 +783,14 @@ class AIService {
                                 visionFallbackModels = (visionRuntime.fallbacks || []).map((c) => c.model);
                             } else {
                                 console.log(`[vision] Using selected vision-capable runtime: ${provider}:${model}`);
+                                // The selected model can see, but if it fails before
+                                // streaming (timeout, 4xx on the image, empty answer)
+                                // the image turn walks the other vision runtimes
+                                // instead of ending in a canned "no text" fallback.
+                                visionFallbackModels = imageAttachmentVision
+                                    .visionRuntimesForTurn(provider, model)
+                                    .map((c) => c.model)
+                                    .filter((m) => m && m !== model);
                             }
                             lastMessage.content = contentArray;
                         } else {

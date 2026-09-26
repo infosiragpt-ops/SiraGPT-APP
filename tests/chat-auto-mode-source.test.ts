@@ -39,11 +39,13 @@ describe("composer auto mode wiring (source contract)", () => {
   it("creates new Word/PPT/Excel files through the in-process pipeline when nothing is attached", () => {
     assert.match(
       chatInterface,
-      /case 'ppt':[\s\S]{0,700}if \(filesToSend\.length === 0\) \{\s*await runContextPipeline\(intent\);\s*\} else \{\s*await runClassifiedAgentTask\(\);\s*\}\s*break;/,
+      // No attachment (or image-only: vision path) → in-process pipeline;
+      // real document attachments → durable agent task.
+      /case 'ppt':[\s\S]{0,900}if \(!shouldQueueAttachmentAgentTask\(filesToSend\)\) \{\s*await runContextPipeline\(intent\);\s*\} else \{\s*await runClassifiedAgentTask\(\);\s*\}\s*break;/,
     )
     assert.match(
       chatInterface,
-      /case 'doc':\s*if \(filesToSend\.length === 0\) \{\s*await runContextPipeline\(intent\);\s*\} else \{\s*await runClassifiedAgentTask\(\);\s*\}\s*break;/,
+      /case 'doc':[\s\S]{0,400}if \(!shouldQueueAttachmentAgentTask\(filesToSend\)\) \{\s*await runContextPipeline\(intent\);\s*\} else \{\s*await runClassifiedAgentTask\(\);\s*\}\s*break;/,
     )
   })
 
