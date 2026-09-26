@@ -54,7 +54,18 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   await page.route('**/qa-code-preview', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>Mi aplicación</h1>' }))
   // The header has no code button; the workspace opens from `?code=1`.
   await page.goto(opts.fresh ? '/agentes?code=1' : '/agentes?id=code-chat&code=1', { waitUntil: 'domcontentloaded' })
-  await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
+  if (opts.access === false) {
+    await expect(page.getByTestId('chat-coding-panel-status')).toContainText('Solicita acceso al administrador', { timeout: 90_000 })
+  } else {
+    // Wait for the requested surface, not the composer briefly painted before
+    // the query-string effect opens the full-screen workspace on mobile.
+    await expect(page.getByTestId('agentes-coding-ide')).toBeVisible({ timeout: 90_000 })
+  }
+  if ((page.viewportSize()?.width ?? 1440) < 768) {
+    await expect(page.getByTestId('chat-composer-surface')).toBeHidden()
+  } else {
+    await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
+  }
   return { files, generated, requests, errors }
 }
 
