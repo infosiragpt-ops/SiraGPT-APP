@@ -15,6 +15,7 @@ const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { withProgress } = require('./progress');
 const { snapshot } = require('./project-store');
+const { attachProof } = require('./isolated-preview');
 
 function emitStage(session, step, extra = {}) {
   const progress = withProgress(session, step, extra);
@@ -197,7 +198,8 @@ async function runPrompt(session, text, {
 
       if (calls.length === 0) {
         session.status = 'idle';
-        emitStage(session, 'done', { label: 'Listo' });
+        const proof = await attachProof(session).catch(() => session.proof);
+        emitStage(session, 'done', { label: 'Listo', proof });
         break;
       }
 
@@ -379,7 +381,8 @@ async function runPrompt(session, text, {
     emitStage(session, 'budgetExceeded', { label: 'Presupuesto agotado' });
   } else if (session.status === 'running') {
     session.status = 'idle';
-    emitStage(session, 'done', { label: 'Listo' });
+    const proof = await attachProof(session).catch(() => session.proof);
+    emitStage(session, 'done', { label: 'Listo', proof });
   }
   session.abort = null;
 
