@@ -62,8 +62,8 @@ orquestador live de #484 se conservó.
 
 | Fase | Qué | Estado |
 |---|---|---|
-| A | Motor `sira_office.py` en el sandbox + imagen con poppler y fuentes métricas + pruebas Python en CI | **IN_PROGRESS** (este PR). Se marca COMPLETED al reconstruir `siragpt-doc-sandbox:latest` en la Lenovo y verificar fuentes/poppler en un contenedor nuevo |
-| B | Tools del runner (`inspect_document`, `office_edit`, `render_preview` v2, `verify_visual`) + `description` | pendiente |
+| A | Motor `sira_office.py` en el sandbox + imagen con poppler y fuentes métricas + pruebas Python en CI | **COMPLETED** — PR #813 (`f7b85ba6`), en siragpt.com. CI shard 1: 34/34 pruebas Python con LibreOffice real. `siragpt-doc-sandbox:latest` reconstruida en la Lenovo (anterior: `:rollback-20260926`); contenedor nuevo: Calibri→Carlito, Times→Liberation Serif, Arial→Liberation Sans, pdftoppm 24.02, SMOKE PASS. Prueba en producción por el driver remoto real: «Lima, 2024→2025» → verify OK, 1 zona de 2×3 mm, 16 partes idénticas |
+| B | Tools del runner (`inspect_document`, `office_edit`, `render_preview` v2, `verify_visual`) + `description` + `callId` | **IN_PROGRESS** (este PR) |
 | C | Revisión con visión + gate de verificación v2 + contexto que no pierde el pedido | pendiente |
 | D | Eventos SSE enriquecidos (stage v2) + miniaturas + persistencia del trace | pendiente |
 | E | Timeline en el chat (UI, aprobada) | pendiente |
