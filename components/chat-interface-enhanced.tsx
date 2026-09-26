@@ -6532,6 +6532,20 @@ function ChatInterfaceContent() {
   const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
   const [isGeneratingWord, setIsGeneratingWord] = React.useState(false);
   const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; getHTML: () => string; } | null>(null);
+  const wordHydrationChatRef = React.useRef<string | null>(null);
+  const wordHydrationRef = React.useRef<{ chatId: string; target: NonNullable<typeof wordConnectorRef.current> } | null>(null);
+  const hydrateWordConnector = React.useCallback((chat: { id: string; wordContent?: string }) => {
+    if (currentChatRef.current?.id !== chat.id || wordHydrationChatRef.current !== chat.id) return false;
+    const target = wordConnectorRef.current;
+    if (!target) return false;
+    if (wordHydrationRef.current?.chatId === chat.id && wordHydrationRef.current.target === target) return true;
+    const html = target.getHTML();
+    if (!html) return false; // TipTap has not mounted yet.
+    wordHydrationRef.current = { chatId: chat.id, target };
+    // Do not replace content already typed or streamed while the editor mounted.
+    if (html === '<p></p>' && chat.wordContent) target.updateContent(chat.wordContent);
+    return true;
+  }, []);
   const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
   const [isRewriting, setIsRewriting] = React.useState(false);
 
@@ -8802,6 +8816,12 @@ But first, you need to connect your Spotify account securely using the button be
     setDocumentPreviewUrl(null)
     setSplitViewContent(null)
     setSelectedWordText(null);
+    const hydrationChatId = currentChat?.id;
+    let cancelled = false;
+    let hydrationTimer: ReturnType<typeof setTimeout> | undefined;
+    wordHydrationChatRef.current = null;
+    wordHydrationRef.current = null;
+    const isCurrentHydration = () => !cancelled && currentChatRef.current?.id === hydrationChatId;
 
     // Close all connectors first when switching chats, but keep the image
     // tool visibly selected while its request is still running.
@@ -8825,44 +8845,46 @@ But first, you need to connect your Spotify account securely using the button be
 
     // Use a small delay to ensure previous connector UI is fully closed
     const timer = setTimeout(() => {
+      if (!isCurrentHydration()) return;
       if (currentChat && (currentChat as any).isWordConnectorChat) {
         devLog('📄 Word Connector chat detected:', currentChat.id);
         devLog('📄 Has wordContent:', !!(currentChat as any).wordContent);
         devLog('📄 wordContent length:', (currentChat as any).wordContent?.length);
 
+        wordHydrationChatRef.current = currentChat.id;
         setIsWordConnectorActive(true);
 
         // Load existing Word content if available
         if ((currentChat as any).wordContent) {
           devLog('📄 Attempting to load Word content into editor...');
           // Wait longer for editor to be ready
-          setTimeout(() => {
-            if (wordConnectorRef.current) {
-              devLog('📄 Ref is ready, updating content...');
-              wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-            } else {
-              console.warn('📄 WordConnector ref not ready yet');
-            }
+          hydrationTimer = setTimeout(() => {
+            if (isCurrentHydration()) hydrateWordConnector(currentChat);
           }, 500);
         }
       } else if (currentChat && (currentChat as any).isExcelConnectorChat) {
         setIsExcelConnectorActive(true);
 
         if ((currentChat as any).excelContent) {
-          setTimeout(() => {
-            excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
+          hydrationTimer = setTimeout(() => {
+            if (isCurrentHydration()) excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
           }, 500);
         }
       }
     }, 150);
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearTimeout(hydrationTimer);
+      if (wordHydrationChatRef.current === hydrationChatId) wordHydrationChatRef.current = null;
+    };
     // Listing the full `currentChat` would re-fire this on every
     // message append; setChatType is a stable setter. The connector-
     // detect logic runs once per chat-id and shouldn't re-mount the
     // Word/Excel editors on each turn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat?.id, closeAllToolsAndConnectors]);
+  }, [currentChat?.id, closeAllToolsAndConnectors, hydrateWordConnector]);
 
 
   // Listen for "Nuevo chat" button click to reset all states
@@ -8889,14 +8911,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (isWordConnectorActive && currentChat && (currentChat as any).isWordConnectorChat && (currentChat as any).wordContent) {
       devLog('📄 Word Connector active, checking if ref is ready...');
       // Try loading content when panel becomes active
-      const loadContent = () => {
-        if (wordConnectorRef.current) {
-          devLog('📄 Loading content into active Word Connector...');
-          wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-          return true;
-        }
-        return false;
-      };
+      const loadContent = () => hydrateWordConnector(currentChat);
 
       // Try immediately
       if (!loadContent()) {
@@ -8909,7 +8924,7 @@ But first, you need to connect your Spotify account securely using the button be
     // every message append would re-load the Word doc, which loses the
     // user's in-flight edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isWordConnectorActive, currentChat?.id]);
+  }, [isWordConnectorActive, currentChat?.id, hydrateWordConnector]);
 
   React.useEffect(() => {
     if (chatCreationInitiated.current) {

@@ -97,6 +97,47 @@ test('a polite prefix never drops the first requested cell update', async () => 
   assert.equal(wb.getWorksheet(1).getCell('C3').value, 700);
 });
 
+test('unquoted assignment qualifiers and conditional prefixes never become unconditional cell values', async () => {
+  const input = await workbook();
+  for (const request of [
+    'En la hoja "Ventas Perú", pon la celda A1 en 20 si B2 es mayor que 30',
+    'En la hoja "Ventas Perú", pon la celda A1 en 20 sin alterar el formato',
+    'si B2>30, pon la celda A1 en 20',
+    'si B2>30, pon la celda A1 en "20"',
+    'Pon la celda A1 en "20" si B2 es mayor que 30',
+    'Pon la celda A1 en "20" o en "30"',
+    'Pon la celda A1 en "Revisado" con formato azul',
+    'Analiza los datos antes de poner la celda A1 en 20',
+    'Pon la celda B3 en 500; si B2>30, pon la celda A1 en 20',
+  ]) {
+    await assert.rejects(edit(input, 'xlsx', request), { code: 'OFFICE_EDIT_INTENT_UNRESOLVED' }, request);
+  }
+});
+
+test('quoted literal values may contain conditions and qualifiers as their actual text', async () => {
+  const input = await workbook();
+  const text = '20 si B2 es mayor que 30 y no cambies la celda C3 sin alterar el formato';
+  const { output, result } = await edit(input, 'xlsx', `Pon la celda E3 en "${text}" y la celda B3 en -20.25`);
+  assert.equal(result.validation.passed, true);
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(output);
+  assert.equal(wb.getWorksheet(1).getCell('E3').value, text);
+  assert.equal(wb.getWorksheet(1).getCell('B3').value, -20.25);
+  unchangedParts(input, output, ['xl/worksheets/sheet1.xml']);
+});
+
+test('quoted replacements and slide titles cannot hide conditions or unexplained extra instructions', async () => {
+  const input = await deck();
+  for (const request of [
+    'Si las ventas crecen cambia el título de la diapositiva 1 a "Nuevo"',
+    'En caso de que las ventas crezcan cambia el título de la diapositiva 1 a "Nuevo"',
+    'Cambia el título de la diapositiva 1 a "Nuevo" siempre que las ventas crezcan',
+    'En la diapositiva 1 cambia el título a "Nuevo" si las ventas crecen',
+    'Si las ventas crecen reemplaza "Resultado 2026" por "Resultado 2027"',
+    'Reemplaza "Resultado 2026" por "Resultado 2027" si las ventas crecen',
+    'Reemplaza "Resultado 2026" por "Resultado 2027" con formato grande',
+  ]) await assert.rejects(edit(input, 'pptx', request), { code: 'OFFICE_EDIT_INTENT_UNRESOLVED' }, request);
+});
+
 test('cell write and number format both apply to one workbook without losing the existing formula', async () => {
   const input = await workbook();
   const { output, result } = await edit(input, 'xlsx', 'Cambia la celda B3 a 500 y aplica formato de moneda al rango C2:C3');

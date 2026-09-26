@@ -7764,6 +7764,30 @@ function officeLocationClause(clause, format, sheets) {
   return /^(?:(?:diapositiva|l[aá]mina|slide)\s*(?:#\s*)?\d{1,3}|(?:primer[ao]?|segund[ao]|tercer[ao]?|cuart[ao]|quint[ao]|sext[ao]|s[eé]ptim[ao]|octav[ao]|noven[ao]|d[eé]cim[ao])\s+(?:diapositiva|l[aá]mina|slide)|portada|car[aá]tula)$/iu.test(location);
 }
 
+const OFFICE_QUOTED_LITERAL = /"[^"]*"|“[^”]*”|'[^']*'|‘[^’]*’|«[^»]*»/gu;
+
+function officeLiteralCommand(clause, format, sheets) {
+  let command = clause.replace(/^edita\s+(?:este|el|mi)\s+(?:excel|xlsx|archivo|documento)\s*:\s*/iu, '');
+  if (format === 'xlsx') {
+    const prefix = /^(?:en|in)\s+(?:(?:la|the)\s+)?(?:hoja|sheet|pesta[nñ]a)\s+/iu.exec(command);
+    if (prefix) {
+      const tail = command.slice(prefix[0].length);
+      const quoted = /^(?:"[^"]*"|“[^”]*”|'[^']*'|‘[^’]*’|«[^»]*»)/u.exec(tail);
+      const name = officeSheetCue(command, sheets);
+      const size = quoted?.[0].length || (name && tail.toLowerCase().startsWith(name.toLowerCase()) ? name.length : 0);
+      if (size) command = tail.slice(size).replace(/^\s*[:,]?\s*/u, '');
+    }
+  } else {
+    command = command.replace(/^(?:en|in)\s+(?:(?:la|el|the)\s+)?(?:(?:diapositiva|l[aá]mina|slide)\s*(?:#\s*)?\d{1,3}|(?:primer[ao]?|segund[ao]|tercer[ao]?|cuart[ao]|quint[ao]|sext[ao]|s[eé]ptim[ao]|octav[ao]|noven[ao]|d[eé]cim[ao])\s+(?:diapositiva|l[aá]mina|slide)|portada|car[aá]tula|todas\s+las\s+diapositivas)\b\s*[:,]?\s*/iu, '');
+  }
+  return command;
+}
+
+function isCompleteOfficeReplacement(command) {
+  const literal = '(?:"[^"\\n]*"|“[^”\\n]*”|\'[^\'\\n]*\'|‘[^’\\n]*’|«[^»\\n]*»)';
+  return new RegExp(`^(?:reemplaz\\w*|sustitu\\w*|cambi\\w*|modific\\w*|corrig\\w*)\\s+${literal}\\s+(?:por|con|al|a\\s+(?:la|el)|a)\\s+${literal}[.!]?$`, 'iu').test(command);
+}
+
 function planOfficeLiteralEdits({ requestText = '', format, input } = {}) {
   if (String(requestText).length > 12000) return { status: 'declined', operations: [] };
   const clauses = splitOfficeEditClauses(requestText);
@@ -7780,25 +7804,31 @@ function planOfficeLiteralEdits({ requestText = '', format, input } = {}) {
     // preservation/return instruction. The selected model must interpret the
     // entire turn, including those constraints, before any bytes are changed.
     if (OFFICE_PRESERVATION_OR_DELIVERY_PREFIX.test(clause)) return { status: 'declined', operations: [], unresolved: [clause] };
+    const outsideLiterals = normalizeText(clause.replace(OFFICE_QUOTED_LITERAL, ' '));
+    if (/\b(?:si|if|unless|cuando|when|while|mientras|aunque|pero|excepto|salvo|sin|no|ni|nunca|tampoco|en\s+caso|a\s+menos\s+que|siempre\s+que|a\s+condicion\s+de)\b/.test(outsideLiterals)) {
+      return { status: 'declined', operations: [], unresolved: [clause] };
+    }
+    const command = officeLiteralCommand(clause, format, sheets);
     let op = null;
     if (format === 'xlsx') {
       const nextSheet = officeSheetCue(clause, sheets);
       if (nextSheet) sheetCue = nextSheet;
-      const assignment = /\b(?:celda|cell|casilla)\s+([A-Z]{1,3}[1-9]\d{0,6})\s*(?:en|a|=|:|escrib\w*|pon|coloca\w*|con(?:\s+el\s+valor)?)\s*([\s\S]+)$/iu.exec(clause)
-        || /\b([A-Z]{1,3}[1-9]\d{0,6})\s*=\s*([\s\S]+)$/u.exec(clause);
+      const assignment = /\b(?:celda|cell|casilla)\s+([A-Z]{1,3}[1-9]\d{0,6})\s*(?:en|a|=|:|escrib\w*|pon|coloca\w*|con(?:\s+el\s+valor)?)\s*([\s\S]+)$/iu.exec(command)
+        || /\b([A-Z]{1,3}[1-9]\d{0,6})\s*=\s*([\s\S]+)$/u.exec(command);
       if (assignment) {
         sawLiteral = true;
         const ref = assignment[1].toUpperCase();
-        const quoted = /^(?:"([\s\S]*)"|“([\s\S]*)”|'([\s\S]*)'|«([\s\S]*)»)[.!]?$/u.exec(assignment[2].trim());
+        const quoted = /^(?:"([^"]*)"|“([^”]*)”|'([^']*)'|‘([^’]*)’|«([^»]*)»)[.!]?$/u.exec(assignment[2].trim());
         const value = quoted ? quoted.slice(1).find((item) => item !== undefined) : assignment[2].trim().replace(/[.!]$/, '');
+        const prefix = command.slice(0, assignment.index).trim();
+        const completePrefix = /^(?:(?:cambi\w*|actualiz\w*|escrib\w*|coloca\w*|pon|set|write)\s*)?(?:(?:en|in)\s*)?(?:la|the)?$/iu.test(prefix);
         // Ambiguous decimal/grouping notation belongs to the selected model;
-        // the surgical writer must not silently turn a decimal comma into 10x.
-        if (xlsxAdapterModule().colLetterToIndex(ref.replace(/\d+$/, '')) <= 16384
+        // so do unquoted prose/formulas and unexplained prefixes or suffixes.
+        // Never turn a condition such as "20 si B2 > 30" into a cell string.
+        if (completePrefix && (quoted || /^-?\d+(?:\.\d+)?$/.test(value))
+          && xlsxAdapterModule().colLetterToIndex(ref.replace(/\d+$/, '')) <= 16384
           && Number(ref.match(/\d+$/)[0]) <= 1048576
-          && !(/^-?\d[\d.,]*$/.test(value) && value.includes(','))
-          && !/\b(?:celda|cell|casilla)\s+[A-Z]{1,3}\d+/iu.test(value)
-          && (quoted || !/^(?:formato\b|moneda\b|porcentaje\b|negrita\b|cursiva\b|currency\b|percent\b|bold\b)/iu.test(value))
-          && (quoted || !/\b(?:en|in)\s+(?:(?:la|the)\s+)?(?:hoja|sheet)\b/iu.test(value))) {
+          && !(/^-?\d[\d.,]*$/.test(value) && value.includes(','))) {
           op = { kind: 'set_cell', cellRef: ref, value, sheetCue };
         }
       } else {
@@ -7806,7 +7836,10 @@ function planOfficeLiteralEdits({ requestText = '', format, input } = {}) {
         if (parsed?.kind === 'format_range') op = { ...parsed, sheetCue };
         const replacements = extractAllQuotedReplacementPairs(clause);
         if (replacements.length) sawLiteral = true;
-        if (replacements.length === 1) op = { kind: 'replace_text', ...replacements[0], sheetCue };
+        if (replacements.length === 1) {
+          if (!isCompleteOfficeReplacement(command)) return { status: 'declined', operations: [], unresolved: [clause] };
+          op = { kind: 'replace_text', ...replacements[0], sheetCue };
+        }
       }
     } else if (format === 'pptx') {
       const scope = resolveSlideScope(clause);
@@ -7814,6 +7847,7 @@ function planOfficeLiteralEdits({ requestText = '', format, input } = {}) {
       if (scope.slideNumber) slideNumber = scope.slideNumber;
       const title = parsePresentationEditRequest(clause, { slides });
       const replacements = extractAllQuotedReplacementPairs(clause);
+      if (replacements.length && !isCompleteOfficeReplacement(command)) return { status: 'declined', operations: [], unresolved: [clause] };
       if (title || replacements.length) sawLiteral = true;
       if (title) op = { ...title, slideNumber: title.slideNumber || slideNumber };
       else if (replacements.length === 1) op = { kind: 'replace_text', ...replacements[0], slideNumber: scope.allSlides ? null : slideNumber };
