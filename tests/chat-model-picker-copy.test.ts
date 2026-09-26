@@ -13,14 +13,16 @@ describe("composer model picker copy", () => {
   it("cleans OpenRouter catalog labels without touching product names", () => {
     assert.equal(brandModelLabel({ displayName: "Dots Studio: Dots3-Note Preview (free)", name: "x" }), "Dots3-Note Preview")
     assert.equal(brandModelLabel({ displayName: "Grok 4.6", name: "x-ai/grok-4.6" }), "Grok 4.6")
-    assert.equal(brandModelLabel({ displayName: "Sira Pro", name: "deepseek/deepseek-v4-pro" }), "Sira Pro")
-    assert.equal(brandModelLabel({ name: "deepseek-v4-flash" }), "Sira Rápido")
+    assert.equal(brandModelLabel({ displayName: "DeepSeek V4 Pro", name: "deepseek/deepseek-v4-pro" }), "DeepSeek V4 Pro")
+    assert.equal(brandModelLabel({ displayName: "Sira Pro", name: "deepseek/deepseek-v4-pro" }), "DeepSeek V4 Pro")
+    assert.equal(brandModelLabel({ name: "deepseek-v4-flash" }), "DeepSeek V4 Flash")
   })
 
   it("gives every model a short Spanish tagline", () => {
     const cases: Array<[Record<string, string>, string]> = [
       [{ displayName: "Claude Fable 5.1", provider: "Anthropic" }, "Para tus desafíos más difíciles"],
-      [{ displayName: "Sira Pro", name: "deepseek/deepseek-v4-pro" }, "Razonamiento para trabajo complejo"],
+      [{ displayName: "DeepSeek V4 Pro", name: "deepseek/deepseek-v4-pro" }, "Razonamiento para trabajo complejo"],
+      [{ displayName: "DeepSeek V4 Flash", name: "deepseek/deepseek-v4-flash" }, "Rápido para las tareas del día a día"],
       [{ displayName: "Sira Rápido", name: "deepseek/deepseek-v4-flash" }, "Rápido para las tareas del día a día"],
       [{ displayName: "Gemini 3.8 Flash", provider: "Gemini" }, "Rápido y multimodal"],
       [{ displayName: "TypeSafe Jev", provider: "TypeSafe" }, "Decisiones estructuradas y fiables"],

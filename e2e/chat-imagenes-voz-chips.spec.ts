@@ -23,7 +23,7 @@ const user = {
 const textModel = {
   id: "media-chips-text",
   name: "deepseek-v4-flash",
-  displayName: "Sira Rápido",
+  displayName: "DeepSeek V4 Flash",
   provider: "DeepSeek",
   type: "TEXT",
   isActive: true,

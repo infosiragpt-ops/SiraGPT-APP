@@ -21,7 +21,7 @@ Do **not** set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 ## How Luis tries it on https://siragpt.com/agentes
 
 1. Open **Conexiones** (`/conexiones`) and connect GitHub (OAuth `repo` + `read:user`).
-2. Back on `/agentes`, pick a catalog label (`Sira Rápido`, `Sira Pro`, or another picker name). Raw vendor / `model_id` are never shown.
+2. Back on `/agentes`, pick a catalog label (`DeepSeek V4 Flash`, `DeepSeek V4 Pro`, or another picker name). Raw vendor / `model_id` are never shown.
 3. Write something like:
 
    **«abre un PR en owner/repo que añada un README con instrucciones de arranque»**

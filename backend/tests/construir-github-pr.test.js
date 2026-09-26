@@ -249,11 +249,11 @@ describe('construir GitHub PR flow', () => {
     assert.equal(opened.ok, true);
     assert.equal(opened.flagRequired, false);
     assert.equal(opened.agentesCodingV2, false);
-    assert.equal(opened.brandLabel, 'Sira Rápido');
+    assert.equal(opened.brandLabel, 'DeepSeek V4 Flash');
     assert.equal(opened.fullName, 'luis/demo');
     assert.ok(opened.workspaceId.startsWith('cws_'));
     assert.ok(opened.files.includes('README.md'));
-    assert.doesNotMatch(JSON.stringify(opened), /TEST_TOKEN|Bearer|gho_|deepseek|openrouter/i);
+    assert.doesNotMatch(JSON.stringify(opened), /TEST_TOKEN|Bearer|gho_|deepseek[-_/:]|openrouter/i);
 
     const listed = await listRepoFiles({ userId: 'u1', chatId: 'c1' });
     assert.equal(listed.ok, true);
@@ -310,13 +310,13 @@ describe('construir GitHub PR flow', () => {
     assert.equal(pr.prUrl, 'https://github.com/luis/demo/pull/7');
     assert.equal(pr.number, 7);
     assert.equal(pr.branch, 'sira/feat-readme');
-    assert.equal(pr.brandLabel, 'Sira Rápido');
+    assert.equal(pr.brandLabel, 'DeepSeek V4 Flash');
     assert.equal(pr.flagRequired, false);
     assert.equal(saved.length, 1);
     assert.match(saved[0].rec.filename, /pr-luis-demo-7/);
     assert.equal(events.some((ev) => ev.type === 'file_artifact'), true);
     assert.ok(calls.some((c) => c.method === 'POST' && c.url.includes('/pulls')));
-    assert.doesNotMatch(JSON.stringify(pr), /TEST_TOKEN|Bearer|gho_|deepseek|openrouter/i);
+    assert.doesNotMatch(JSON.stringify(pr), /TEST_TOKEN|Bearer|gho_|deepseek[-_/:]|openrouter/i);
   });
 
   test('workspace is scoped to the user', async () => {
@@ -354,7 +354,7 @@ describe('construir GitHub PR flow', () => {
       },
     );
     assert.equal(out.ok, true);
-    assert.equal(out.brandLabel, 'Sira Pro');
+    assert.equal(out.brandLabel, 'DeepSeek V4 Pro');
   });
 });
 

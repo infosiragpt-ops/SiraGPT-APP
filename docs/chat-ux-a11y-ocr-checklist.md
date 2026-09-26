@@ -12,7 +12,7 @@ Maps each requested fix to the files that implement it. Scope is `/chat` only; `
 | 6 | Kill ~700px dead space: flex column `justify-end`, `overflow-anchor: auto`, `100dvh` | `app/globals.css` (`.chat-viewport`, `.chat-message-scroll-content`) |
 | 7 | Thinking disclosure as `<details><summary>` or `aria-expanded` + SVG rotate; `prefers-reduced-motion` | `components/claude-thinking-timeline.tsx`, `components/agent-trace.tsx`, `app/globals.css` (`.think-chevron`) |
 | 8 | Action bar: copy / regen / 👍 / 👎 primary; rest under `⋯`; every icon `aria-label` + `title` | `components/MessageActionRail.tsx` |
-| 9 | Brand aliases only — "Sira Pro" / "Sira Rápido". DeepSeek stays backend-only | `lib/chat/brand-label.ts`, `components/chat-interface-enhanced.tsx`, `components/MessageActionRail.tsx`, `components/message-component.tsx` |
+| 9 | Original names — "DeepSeek V4 Pro" / "DeepSeek V4 Flash" (since 2026-09-26; legacy "Sira Pro" / "Sira Rápido" accepted as input only). Raw ids stay backend-only | `lib/chat/brand-label.ts`, `components/chat-interface-enhanced.tsx`, `components/MessageActionRail.tsx`, `components/message-component.tsx` |
 | 10 | Design tokens `--brand`, `--chat-accent`, `--surface-1/2/3`; `color-scheme` + light/dark | `app/globals.css` (`:root` / `.dark`). Shadcn `--accent` (HSL components) is preserved so `hsl(var(--accent))` keeps working. |
 | 11 | Send button disabled only when empty/busy; active = `--brand`; `:focus-visible` 2px outline | `components/chat/ChatComposerSurface.tsx`, `app/globals.css` (`.composer-send-button`) |
 | 12 | Body line-height 1.6 + `clamp()` sizes; assistant paragraphs no longer ~2.0 | `app/globals.css`, `components/message-component.tsx` (`leading-[1.6]`) |

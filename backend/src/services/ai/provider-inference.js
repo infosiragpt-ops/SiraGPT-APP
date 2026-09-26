@@ -105,7 +105,7 @@ function inferProviderFromModelId(modelId) {
   if (m.startsWith('typesafe/') || m.startsWith('typesafe:') || /^jev(-|$)/.test(m)) return 'TypeSafe';
 
   // 0) Local SiraGPT Mini (Custom/Ollama). Never infer OpenAI/DeepSeek —
-  //    that silent swap sent Mini turns to Sira Rápido.
+  //    that silent swap sent Mini turns to DeepSeek V4 Flash.
   if (
     m === 'sira-mini' || m === 'siragpt-mini' || m === 'sira mini' || m === 'siragpt mini'
     || m === 'moondream' || m.startsWith('moondream:')
