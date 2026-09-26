@@ -7805,7 +7805,10 @@ function planOfficeLiteralEdits({ requestText = '', format, input } = {}) {
     // entire turn, including those constraints, before any bytes are changed.
     if (OFFICE_PRESERVATION_OR_DELIVERY_PREFIX.test(clause)) return { status: 'declined', operations: [], unresolved: [clause] };
     const outsideLiterals = normalizeText(clause.replace(OFFICE_QUOTED_LITERAL, ' '));
-    if (/\b(?:si|if|unless|cuando|when|while|mientras|aunque|pero|excepto|salvo|sin|no|ni|nunca|tampoco|en\s+caso|a\s+menos\s+que|siempre\s+que|a\s+condicion\s+de)\b/.test(outsideLiterals)) {
+    // "No" can belong to an entity ("Tema No Existente"). Within a
+    // clause, reject a negated action, not that nominal word on its own.
+    const negatedAction = /\b(?:no|ni|nunca|tampoco)\s+(?:[a-z]+\s+){0,6}(?:cambi\w*|actualiz\w*|modifi\w*|reempla\w*|sustitu\w*|escrib\w*|coloca\w*|pon\w*|agreg\w*|anad\w*|insert\w*|elimin\w*|borr\w*|quit\w*|aplic\w*|pint\w*|colore\w*|set|write|change|replace|delete)\b/.test(outsideLiterals);
+    if (negatedAction || /\b(?:si|if|unless|cuando|when|while|mientras|aunque|pero|excepto|salvo|sin|en\s+caso|a\s+menos\s+que|siempre\s+que|a\s+condicion\s+de)\b/.test(outsideLiterals)) {
       return { status: 'declined', operations: [], unresolved: [clause] };
     }
     const command = officeLiteralCommand(clause, format, sheets);

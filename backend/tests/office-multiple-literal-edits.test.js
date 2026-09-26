@@ -138,6 +138,17 @@ test('quoted replacements and slide titles cannot hide conditions or unexplained
   ]) await assert.rejects(edit(input, 'pptx', request), { code: 'OFFICE_EDIT_INTENT_UNRESOLVED' }, request);
 });
 
+test('nominal No remains title text while real negated slide edits are declined', async () => {
+  const input = await deck();
+  const { output, result } = await edit(input, 'pptx', 'En la diapositiva 1 cambia el título a Tema No Existente');
+  assert.equal(result.validation.passed, true);
+  assert.equal(slides.listPptxSlides(output)[0].title, 'Tema No Existente');
+  unchangedParts(input, output, ['ppt/slides/slide1.xml']);
+  for (const negation of ['no cambies', 'no le cambies', 'no quiero que cambies', 'no vuelvas a cambiar', 'no permitas que se cambie', 'nunca cambies', 'tampoco cambies']) {
+    await assert.rejects(edit(input, 'pptx', `En la diapositiva 1 ${negation} el título a "Nuevo"`), { code: 'OFFICE_EDIT_INTENT_UNRESOLVED' });
+  }
+});
+
 test('cell write and number format both apply to one workbook without losing the existing formula', async () => {
   const input = await workbook();
   const { output, result } = await edit(input, 'xlsx', 'Cambia la celda B3 a 500 y aplica formato de moneda al rango C2:C3');
