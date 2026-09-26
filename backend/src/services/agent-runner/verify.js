@@ -17,8 +17,15 @@ const EDIT_TOOLS = new Set([
   'write_file',
   'str_replace',
   'edit_file',
+  'apply_patch',
+  'patch_file',
   'set_slide_background',
   'create_presentation',
+  'create_pptx',
+  'add_slide',
+  'append_text_slide',
+  'delete_slide',
+  'set_cell',
 ]);
 
 function lastIndex(steps, pred) {
