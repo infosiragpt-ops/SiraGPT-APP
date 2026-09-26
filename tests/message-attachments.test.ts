@@ -222,9 +222,9 @@ describe("message attachments · agent task persistence", () => {
       maxChars: 6000,
     })
 
-    assert.match(context, /Contenido relevante recuperado desde todo el documento/)
+    assert.match(context, /Contenido relevante recuperado de los fragmentos disponibles del documento/)
     assert.match(context, /endomarketing fortalece la satisfaccion laboral/)
-    const evidenceBlock = context.split("Contenido relevante recuperado desde todo el documento:")[1]
+    const evidenceBlock = context.split("Contenido relevante recuperado de los fragmentos disponibles del documento:")[1]
       .split("[La evidencia")[0]
     assert.doesNotMatch(evidenceBlock, /FACULTAD DE NEGOCIOS/)
   })

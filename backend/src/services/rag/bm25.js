@@ -137,9 +137,13 @@ function createBm25Index(opts = {}) {
     }
     const cap = Number.isFinite(topK) && topK > 0 ? Math.floor(topK) : 10;
     const heap = [];
+    // RRF needs the full lexical ranking. When every candidate fits, defer
+    // sorting until the end instead of re-sorting N growing arrays.
+    const collectAll = cap >= candidates.size;
     for (const id of candidates) {
       const sc = scoreDoc(id, qt);
       if (sc <= 0) continue;
+      if (collectAll) { heap.push({ id, score: sc }); continue; }
       if (heap.length < cap) {
         heap.push({ id, score: sc });
         heap.sort((a, c) => a.score - c.score);

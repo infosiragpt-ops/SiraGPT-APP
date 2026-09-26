@@ -42,6 +42,7 @@ const { diverseTripleBeamSearch, flattenBeamsBFS } = require('./diverse-beam-sea
 const gistMemory = require('./gist-memory');
 const { runWithLock } = require('./agents/mutex');
 const ragStore = require('./rag-store');
+const { searchDocumentLexical, diversifyDocumentSources } = require('./rag/document-retrieval');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -182,11 +183,11 @@ function _noteDegraded(reason) {
 
 /** Shape a BM25-only pool like the semantic path's final hits (no rerank/MMR). */
 function finalizeDegradedHits(pool, k, opts = {}) {
-  const hits = pool.slice(0, Math.max(1, k)).map((h) => ({ ...h }));
-  if (opts.includeDiagnostics) {
-    return hits.map((h) => ({ ...h, diagnostics: { retrievalMode: 'bm25_degraded', reason: h.degradedReason || null } }));
-  }
-  return hits;
+  const candidates = opts.documentMode && opts.sourceDiversity ? diversifyDocumentSources(pool, k) : pool;
+  return candidates.slice(0, Math.max(1, k)).map(hit => ({
+    ...formatRetrievalHit(hit, { includeDiagnostics: opts.includeDiagnostics }),
+    retrievalMode: 'bm25_degraded',
+  }));
 }
 
 async function _embedUncached(texts) {
@@ -404,12 +405,24 @@ async function evictAndCleanOrphans(userId, collection) {
  *     to reuse their own instance / key.
  *   - overfetchK: number — how many to retrieve before reranking.
  *     Default: max(k * 3, 12), capped at 40.
+ *   - documentMode: boolean — accent-tolerant lexical matching over title
+ *     and text, retaining exact numbers/identifiers and query coverage.
+ *   - allowedSources: string[] — restrict every candidate path to these
+ *     source IDs within the existing user/collection; [] returns no hits.
+ *   - sourceDiversity: boolean — in documentMode, broad comparisons prefer
+ *     competitive evidence from distinct files within the retrieval pool.
  */
 async function retrieve(userId, collection, query, k = 5, opts = {}) {
   if (!query || typeof query !== 'string') return [];
   const startedAt = Date.now();
   const key = storeKey(userId, collection);
-  const entries = await ragStore.getAll(userId, collection);
+  const storedEntries = await ragStore.getAll(userId, collection);
+  // Apply the caller's authenticated document scope BEFORE all rankers,
+  // including lexical degradation and graph passage linking. [] is deny-all.
+  const allowedSources = Array.isArray(opts.allowedSources) ? new Set(opts.allowedSources) : null;
+  const entries = allowedSources
+    ? (storedEntries || []).filter(entry => allowedSources.has(entry.source))
+    : storedEntries;
   if (!entries || entries.length === 0) return [];
 
   const {
@@ -428,6 +441,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     cohereRerankModel,        // override services/rag/cohere-rerank DEFAULT_MODEL
     overfetchK,
     useHybrid = false,
+    documentMode = false,
     rrfK = 60,
     hybridWeights = { semantic: 1.0, bm25: 1.0 },
     // GEAR / SyncGE (Shen et al., ACL 2025) ─────────────────────────
@@ -461,6 +475,10 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     ? (overfetchK || Math.max(k * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR))
     : k;
   const cappedPool = Math.min(poolSize, OVERFETCH_CEILING, entries.length);
+  const lexicalSearch = limit => documentMode
+    ? searchDocumentLexical(entries, query, limit)
+    : bm25.searchIndex(bm25.buildIndex(entries.map((e, idx) => ({ text: e.text, _idx: idx }))), query, { k: limit })
+      .filter(hit => Number.isFinite(hit.score) && hit.score > 0);
 
   // Embed the query once, and optionally the keyword-expanded variant
   // once more. Max-similarity fusion keeps it a single cosine pass per
@@ -484,8 +502,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     _noteDegraded(degradedReason);
   }
   if (!queryVecs) {
-    const bmIndex = bm25.buildIndex(entries.map((e, idx) => ({ text: e.text, _idx: idx })));
-    const bmHits = bm25.searchIndex(bmIndex, query, { k: Math.max(1, cappedPool) });
+    const bmHits = lexicalSearch(Math.max(1, cappedPool));
     const degradedPool = bmHits
       .filter((h) => h && h.doc && Number.isInteger(h.doc._idx) && h.score > 0)
       .slice(0, Math.max(1, cappedPool))
@@ -501,9 +518,22 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
           textScore: h.score,
           fusionScore: h.score,
           retrievalMode: 'bm25_degraded',
-          degradedReason,
+          degradedReason: 'embeddings_unavailable',
         };
       });
+    if (__traceCollector && typeof __traceCollector === 'object') {
+      const trace = buildRetrievalTrace({
+        collection, query, requestedK: k, returnedK: Math.min(k, degradedPool.length),
+        totalEntries: entries.length, cappedPool, queryVariants: 0, expansionKeywords: [],
+        useExpansion: false, useHybrid: false, useMMR: false, mmrLambda,
+        rerank: false, useGraph: false, graphStats: null, rrfK, hybridWeights,
+        latencyMs: Date.now() - startedAt,
+      });
+      trace.mode = 'bm25_degraded';
+      trace.scoring.vector = false;
+      trace.scoring.text = true;
+      Object.assign(__traceCollector, trace);
+    }
     return finalizeDegradedHits(degradedPool, k, opts);
   }
 
@@ -537,8 +567,9 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     // so we don't need to normalise BM25 raw scores against cosine.
     // Previously: `entries.map(e => ({ text: e.text, _idx: entries.indexOf(e) }))`
     // which is O(n²) per retrieve. Carry the index positionally instead.
-    const bmIndex = bm25.buildIndex(entries.map((e, idx) => ({ text: e.text, _idx: idx })));
-    const bmHits = bm25.searchIndex(bmIndex, query, { k: entries.length });
+    // Zero-score documents are absent from the lexical ranking: assigning
+    // them an RRF vote made insertion order masquerade as text evidence.
+    const bmHits = lexicalSearch(entries.length);
 
     const fused = new Map(); // _idx → { scored-like, fusedScore }
     const wSem = hybridWeights.semantic ?? 1.0;
@@ -562,7 +593,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     bmHits.forEach((h, rank) => {
       const idx = h.doc._idx;
       const existing = fused.get(idx);
-      const contrib = wBm / (rrfK + (rank + 1));
+      const contrib = (wBm / (rrfK + (rank + 1))) * (documentMode ? h.coverage : 1);
       if (existing) {
         existing.textRank = rank + 1;
         existing.textScore = h.score;
@@ -674,7 +705,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   }
 
   if (useMMR) {
-    pool = mmrRerank(pool, { lambda: mmrLambda, k: Math.max(1, k) });
+    pool = mmrRerank(pool, { lambda: mmrLambda, k: documentMode && opts.sourceDiversity ? pool.length : Math.max(1, k) });
   }
 
   // Attribution rerank — opt-in final pass that boosts hits whose text
@@ -694,6 +725,8 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       pool = reranked.map((r) => r.original);
     } catch (_attrErr) { /* swallow — degrades to existing order */ }
   }
+
+  if (documentMode && opts.sourceDiversity) pool = diversifyDocumentSources(pool, Math.max(1, k));
 
   const hits = pool
     .slice(0, Math.max(1, k))

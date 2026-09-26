@@ -1,5 +1,6 @@
 const fs = require('fs');
 const hierarchicalChunker = require('./document/hierarchical-document-chunker');
+const { documentTokens, searchDocumentLexical } = require('./rag/document-retrieval');
 
 const OCR_PLACEHOLDER_RE = /^(no text found in image|no text detected(?: in image pdf)?|no content available|binary file|file content could not be extracted|file ".*?" uploaded successfully|error processing file:|unsupported file type)/i;
 
@@ -153,6 +154,103 @@ function splitBySpreadsheetSheets(text) {
   return parts;
 }
 
+function splitEscapedColumns(line, trimEdges = false) {
+  const cells = [];
+  let cell = '';
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === '\\' && /[\\|]/.test(line[i + 1] || '')) {
+      cell += line[++i];
+    } else if (line[i] === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else cell += line[i];
+  }
+  cells.push(cell.trim());
+  if (trimEdges && cells[0] === '') cells.shift();
+  if (trimEdges && cells[cells.length - 1] === '') cells.pop();
+  return cells;
+}
+
+function uniqueColumnNames(columns) {
+  const used = new Set();
+  return columns.map((column, index) => {
+    const base = column || `Columna ${index + 1}`;
+    let name = base;
+    let duplicate = 2;
+    while (used.has(name)) name = `${base} (${duplicate++})`;
+    used.add(name);
+    return name;
+  });
+}
+
+function spreadsheetChunks(sheet) {
+  const lines = sheet.text.split('\n');
+  const separator = lines.findIndex(line => line.trim() === '---');
+  if (separator < 0) return fallbackChunks(sheet.text, {}).map(chunk => ({ ...chunk, ...sheet, text: chunk.text }));
+  const coordinates = lines.find(line => /^Row coordinates:/.test(line));
+  const physicalRows = coordinates ? coordinates.replace(/^Row coordinates:\s*/, '').split(',').map(Number) : [];
+  const rawHeader = lines.slice(0, separator).filter(line => !/^Row coordinates:/.test(line)).join('\n') + '\n';
+  const headerTruncated = rawHeader.length > MAX_CHUNK_CHARS / 2;
+  const header = headerTruncated
+    ? rawHeader.slice(0, Math.floor(MAX_CHUNK_CHARS / 2) - 50) + '\n[truncated: oversized spreadsheet header]\n'
+    : rawHeader;
+  const headerFor = numbers => header + (numbers.length ? `Row coordinates: ${[...new Set(numbers)].join(',')}\n` : '') + '---\n';
+  const chunks = [];
+  let body = '';
+  let rowNumbers = [];
+  const flush = () => {
+    if (!body) return;
+    const rowStart = rowNumbers.length ? Math.min(...rowNumbers) : null;
+    const rowEnd = rowNumbers.length ? Math.max(...rowNumbers) : null;
+    const columns = rawHeader.match(/Column range:\s*([A-Z]+):([A-Z]+)/);
+    const cellRange = rowStart && columns ? `${columns[1]}${rowStart}:${columns[2]}${rowEnd}` : null;
+    chunks.push({
+      sourceType: 'sheet',
+      sheetName: sheet.sheetName,
+      sourceLabel: cellRange ? `${sheet.sheetName}!${cellRange}` : sheet.sourceLabel,
+      text: headerFor(rowNumbers) + body.replace(/\n$/, ''),
+      metadata: { sheetName: sheet.sheetName, rowStart, rowEnd, cellRange, headerTruncated },
+    });
+    body = '';
+    rowNumbers = [];
+  };
+  const dataLines = lines.slice(separator + 1);
+  let indexingTruncated = false;
+  for (let lineIndex = 0; lineIndex < dataLines.length; lineIndex += 1) {
+    const line = dataLines[lineIndex];
+    if (!line.trim()) continue;
+    const rowNumber = physicalRows[lineIndex] > 0 ? physicalRows[lineIndex] : null;
+    const nextRows = rowNumber ? [...rowNumbers, rowNumber] : rowNumbers;
+    if (headerFor(nextRows).length + body.length + line.length + 1 > MAX_CHUNK_CHARS) flush();
+    const singleRows = rowNumber ? [rowNumber] : [];
+    const budget = Math.max(1, MAX_CHUNK_CHARS - headerFor(singleRows).length - 1);
+    if (line.length + 1 <= budget) {
+      body += line + '\n';
+      if (rowNumber) rowNumbers.push(rowNumber);
+    } else {
+      // Long cells remain complete across continuations. Their metadata keeps
+      // the same physical row; TSV fields stay compatible with other readers.
+      for (let offset = 0; offset < line.length; offset += budget) {
+        body = line.slice(offset, offset + budget);
+        rowNumbers = singleRows;
+        flush();
+        if (chunks.length >= MAX_CHUNKS) {
+          indexingTruncated = offset + budget < line.length;
+          break;
+        }
+      }
+    }
+    if (chunks.length >= MAX_CHUNKS) {
+      indexingTruncated ||= lineIndex < dataLines.length - 1 || Boolean(body);
+      break;
+    }
+  }
+  if (chunks.length < MAX_CHUNKS) flush();
+  if (indexingTruncated && chunks.length) chunks[chunks.length - 1].metadata.indexingTruncated = true;
+  if (!chunks.length) chunks.push({ ...sheet, text: headerFor([]).trimEnd() });
+  return chunks;
+}
+
 function splitByMarkdownHeadings(text) {
   const source = String(text || '');
   const matches = Array.from(source.matchAll(/^#{1,6}\s+(.+)$/gm));
@@ -232,6 +330,22 @@ function buildChunks(file = {}, extractedText = '') {
   const text = cleanText(extractedText);
   if (!hasUsefulText(text)) return [];
 
+  // Worksheets are not prose headings. Parse them before the generic hierarchy
+  // so later chunks retain sheet identity, column names and exact row anchors.
+  const sheets = isSpreadsheet(file) ? splitBySpreadsheetSheets(text) : [];
+  if (sheets.length) {
+    const all = sheets.flatMap(spreadsheetChunks);
+    const selected = all.slice(0, MAX_CHUNKS);
+    if (all.length > selected.length && selected.length) {
+      selected[selected.length - 1].metadata = { ...selected[selected.length - 1].metadata, indexingTruncated: true };
+    }
+    return selected.map((chunk, index) => ({
+      ...chunk, ordinal: index + 1, pageNumber: null, slideNumber: null,
+      sectionTitle: null, sectionLevel: null, sectionPath: null,
+      charCount: chunk.text.length,
+    }));
+  }
+
   // Try hierarchical chunker first — produces section-aware chunks
   try {
     const hierarchy = hierarchicalChunker.buildHierarchicalStructure(file, text);
@@ -305,19 +419,26 @@ async function extractSpreadsheetTables(file = {}, extractedText = '') {
   }
   const sheets = splitBySpreadsheetSheets(extractedText);
   return sheets.map((sheet, index) => {
-    const lines = String(sheet.text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+    // Leading TSV tabs are empty cells, not whitespace to trim: removing them
+    // shifts every remaining value under the wrong column name.
+    const lines = String(sheet.text || '').split('\n').filter(line => line.trim());
     const columnsLine = lines.find((line) => /^Columns\s*\(/i.test(line));
     const columns = columnsLine
-      ? columnsLine.replace(/^Columns\s*\(\d+\):\s*/i, '').split('|').map(normalizeCell).filter(Boolean)
+      ? uniqueColumnNames(splitEscapedColumns(columnsLine.replace(/^Columns\s*\(\d+\):\s*/i, '')))
       : [];
     const totalMatch = lines.find((line) => /^Total data rows:/i.test(line))?.match(/Total data rows:\s*(\d+)/i);
     const dataStart = lines.findIndex((line) => line === '---');
     const dataLines = dataStart >= 0 ? lines.slice(dataStart + 1) : [];
     const preview = dataLines
-      .filter((line) => !/^\.\.\.\s*\[/.test(line))
+      .filter((line) => !/^(?:\.\.\.\s*)?\[truncated:|^\.\.\.\s*\[/i.test(line))
       .slice(0, MAX_TABLE_PREVIEW_ROWS)
       .map((line) => {
-        const values = line.split('\t').map(normalizeCell);
+        const values = line.split('\t').map(value => {
+          const decoded = /Cell escapes:/.test(sheet.text)
+            ? value.replace(/\\([\\nt])/g, (_, escaped) => ({ '\\': '\\', n: '\n', t: '\t' })[escaped])
+            : value;
+          return normalizeCell(decoded);
+        });
         const row = {};
         columns.forEach((col, idx) => { row[col] = values[idx] || ''; });
         return row;
@@ -416,9 +537,9 @@ function extractMarkdownTables(text) {
       tableLines.push(lines[i]);
       i += 1;
     }
-    const columns = header.split('|').map((cell) => cell.trim()).filter(Boolean);
+    const columns = uniqueColumnNames(splitEscapedColumns(header, true));
     const previewRows = tableLines.slice(2, 2 + MAX_TABLE_PREVIEW_ROWS).map((line) => {
-      const values = line.split('|').map((cell) => cell.trim()).filter((_, idx, arr) => !(idx === 0 && arr[idx] === '') && !(idx === arr.length - 1 && arr[idx] === ''));
+      const values = splitEscapedColumns(line, true).map(cell => cell.replace(/<br\s*\/?\s*>/gi, '\n'));
       const row = {};
       columns.forEach((col, idx) => { row[col] = values[idx] || ''; });
       return row;
@@ -510,7 +631,9 @@ async function buildTables(file = {}, extractedText = '') {
 
 function buildCoverage({ file, text, chunks, tables, ocr }) {
   const charCount = text.length;
-  const status = hasUsefulText(text) ? 'complete' : 'empty';
+  const partial = /\[truncated:|\[\d+ more row\(s\) omitted|\(partial —/i.test(text)
+    || chunks.some(chunk => chunk.metadata?.indexingTruncated || chunk.metadata?.headerTruncated);
+  const status = hasUsefulText(text) ? (partial ? 'partial' : 'complete') : 'empty';
   const usefulChars = (text.match(/[A-Za-z0-9ÁÉÍÓÚáéíóúÑñ]/g) || []).length;
   return {
     status,
@@ -525,7 +648,7 @@ function buildCoverage({ file, text, chunks, tables, ocr }) {
   };
 }
 
-function buildWarnings({ file, text, ocr, tables }) {
+function buildWarnings({ file, text, ocr, tables, chunks = [] }) {
   const warnings = [];
   if (!hasUsefulText(text)) {
     warnings.push({
@@ -539,6 +662,12 @@ function buildWarnings({ file, text, ocr, tables }) {
   }
   if (isSpreadsheet(file) && tables.length === 0) {
     warnings.push({ code: 'no_tables_detected', message: 'No se detectaron tablas estructuradas en la hoja de calculo.' });
+  }
+  if (/\[truncated:|\[\d+ more row\(s\) omitted|\(partial —/i.test(text)) {
+    warnings.push({ code: 'partial_extraction', message: 'El documento supera un límite de lectura. La información recuperada no representa todo el archivo.' });
+  }
+  if (chunks.some(chunk => chunk.metadata?.indexingTruncated || chunk.metadata?.headerTruncated)) {
+    warnings.push({ code: 'partial_index', message: 'El índice alcanzó un límite de seguridad. Conviene consultar una parte más pequeña del documento.' });
   }
   return warnings;
 }
@@ -648,7 +777,7 @@ async function analyzeFile(prisma, {
   const chunks = buildChunks(file, text);
   const tables = await buildTables(file, text);
   const counts = inferCounts(file, text);
-  const warnings = buildWarnings({ file, text, ocr, tables });
+  const warnings = buildWarnings({ file, text, ocr, tables, chunks });
   const textCoverage = buildCoverage({ file, text, chunks, tables, ocr });
   const status = hasUsefulText(text) ? 'ready' : 'empty';
   const summary = buildSummary(file, text, chunks, tables);
@@ -808,16 +937,18 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
   }
 
   // Fall back to building chunks from extracted text if no stored chunks
-  if (chunks.length === 0) {
+  const hasStructuredSheets = isSpreadsheet(file) && splitBySpreadsheetSheets(text).length > 0;
+  if (chunks.length === 0 || (hasStructuredSheets && chunks.some(chunk => !chunk.metadata?.sheetName))) {
     chunks = buildChunks(file, text);
   }
   const totalChunks = chunks.length;
 
   if (chunks.length === 0) return { evidence: [], totalChunks: 0 };
 
-  // Extract query terms — both original and normalized
-  const queryLower = String(query || '').toLowerCase().trim();
-  if (!queryLower || queryLower.length < 3) {
+  // Search uses a normalized copy only: short IDs, decimals and accents must
+  // not disappear, and returned evidence keeps the document's exact values.
+  const terms = [...new Set(documentTokens(String(query || '')))].slice(0, MAX_TERMS_FOR_EVIDENCE);
+  if (!terms.length) {
     return {
       evidence: chunks.slice(0, limit).map((chunk, idx) => ({
         ...chunk,
@@ -829,63 +960,26 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
     };
   }
 
-  // Extract significant terms from query (words 4+ chars, skip common words)
-  const stopWords = new Set([
-    'dame', 'para', 'como', 'este', 'esta', 'esto', 'con', 'por', 'que', 'del',
-    'las', 'los', 'una', 'uno', 'mas', 'pero', 'sino', 'todo', 'entre', 'sobre',
-    'cada', 'años', 'tiene', 'puede', 'hasta', 'desde', 'donde', 'análisis',
-    'resumen', 'documento', 'archivo', 'adjunto', 'quiere', 'necesito', 'sobre',
-    'también', 'tambien', 'información', 'informacion', 'requiere',
-    'página', 'pagina', 'buscar', 'encontrar', 'mostrar', 'decir', 'hacer',
-    'the', 'this', 'that', 'with', 'from', 'have', 'which', 'their', 'about',
-    'would', 'could', 'should', 'other', 'there', 'analysis', 'summary',
-    'document', 'information', 'search', 'find', 'show', 'tell', 'make',
-  ]);
-
-  const terms = Array.from(new Set(
-    (queryLower.match(/[a-záéíóúñ0-9]{4,}/g) || [])
-      .filter((t) => !stopWords.has(t))
-  )).slice(0, MAX_TERMS_FOR_EVIDENCE);
-
-  // Strategy 1: Exact term match in chunk text
-  const scored = chunks.map((chunk) => {
-    const chunkLower = (chunk.text || '').toLowerCase();
-    const chunkTitle = (chunk.sectionTitle || chunk.sourceLabel || '').toLowerCase();
-
-    let score = 0;
-    const matchedTerms = [];
-
-    for (const term of terms) {
-      // Title match is weighted higher
-      if (chunkTitle.includes(term)) {
-        score += 8;
-        matchedTerms.push(term);
-      }
-      // Content match
-      if (chunkLower.includes(term)) {
-        score += 3;
-        if (!matchedTerms.includes(term)) matchedTerms.push(term);
-      }
-    }
-
-    // Section path match (parent section relevance). Stored chunks keep the
-    // section path inside metadata (not a DB column), so fall back to it.
-    const sectionPath = String(
-      chunk.sectionPath || chunk.metadata?.sectionPath || ''
-    ).toLowerCase();
-    for (const term of terms) {
-      if (sectionPath.includes(term) && !matchedTerms.includes(term)) {
-        score += 5;
-        matchedTerms.push(term);
-      }
-    }
-
-    // Strategy 2: Term frequency bonus (denser matches = more relevant)
-    if (matchedTerms.length >= 2) {
-      score += matchedTerms.length * 2;
-    }
-
-    return { ...chunk, relevanceScore: score, matchedTerms };
+  const entries = chunks.map(chunk => ({
+    title: [chunk.sectionTitle, chunk.sourceLabel, chunk.sectionPath || chunk.metadata?.sectionPath].filter(Boolean).join(' '),
+    text: chunk.text || '',
+  }));
+  const lexicalHits = new Map(searchDocumentLexical(entries.map(entry => ({ text: entry.text })), terms.join(' '), chunks.length)
+    .map(hit => [hit.doc._idx, hit]));
+  const structuralHits = new Map(searchDocumentLexical(entries.map(entry => ({ text: entry.title })), terms.join(' '), chunks.length)
+    .map(hit => [hit.doc._idx, hit]));
+  // BM25 makes a specific case number stronger than boilerplate words shared
+  // by every passage. Structural labels and ancestor sections remain indexed.
+  const scored = chunks.map((chunk, index) => {
+    const hit = lexicalHits.get(index);
+    const structuralHit = structuralHits.get(index);
+    const tokens = new Set(documentTokens(`${entries[index].title}\n${entries[index].text}`));
+    const matchedTerms = terms.filter(term => tokens.has(term));
+    // Page 7 in a source label is weaker than Case 7 in the actual content.
+    // Section-path-only navigation still works through its separate score.
+    const relevanceScore = (hit ? hit.score * (1 + hit.coverage) : 0)
+      + (structuralHit ? 0.35 * structuralHit.score * (1 + structuralHit.coverage) : 0);
+    return { ...chunk, relevanceScore, matchedTerms };
   });
 
   // Sort by relevance score descending
@@ -908,7 +1002,9 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
       for (const candidate of [before, after]) {
         if (candidate && !neighborSet.has(candidate.ordinal)) {
           neighborSet.add(candidate.ordinal);
-          neighbors.push({ ...candidate, relevanceScore: 1, matchedTerms: ['context'] });
+          // Context is not a lexical hit. BM25 scores can be below 1, so a
+          // fixed bonus would let callers' score sorting evict real evidence.
+          neighbors.push({ ...candidate, relevanceScore: 0, matchedTerms: ['context'] });
         }
       }
     }
@@ -926,11 +1022,11 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
     const lastRelevant = lastChunk.relevanceScore > 0;
     if (firstRelevant && !neighborSet.has(firstChunk.ordinal)) {
       neighborSet.add(firstChunk.ordinal);
-      neighbors.push({ ...firstChunk, relevanceScore: 1, matchedTerms: ['overview'] });
+      neighbors.push({ ...firstChunk, matchedTerms: ['overview'] });
     }
     if (lastRelevant && !neighborSet.has(lastChunk.ordinal)) {
       neighborSet.add(lastChunk.ordinal);
-      neighbors.push({ ...lastChunk, relevanceScore: 1, matchedTerms: ['overview'] });
+      neighbors.push({ ...lastChunk, matchedTerms: ['overview'] });
     }
   }
 
@@ -946,8 +1042,9 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
   }
 
   // Restore original ordinal order for final output
-  const sorted = deduped.sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
-  const finalEvidence = sorted.slice(0, limit);
+  // Budget by relevance first. Sorting before slicing lets earlier neighbors
+  // displace the actual match, especially when callers request one passage.
+  const finalEvidence = deduped.slice(0, limit).sort((a, b) => (a.ordinal || 0) - (b.ordinal || 0));
 
   return { evidence: finalEvidence, totalChunks };
 }

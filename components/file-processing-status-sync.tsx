@@ -18,8 +18,8 @@ interface Props {
 }
 
 /**
- * Headless poller. PDF/Office composer chips render DocumentPageThumb
- * instead of FileUploadProgress, so they still need this to push
+ * Headless poller. Compact document rows and pasted-text composer chips
+ * render their own status, so they still need this to push
  * processing-status into the parent attachment record.
  */
 export function FileProcessingStatusSync({
