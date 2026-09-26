@@ -62,10 +62,23 @@ export function languageForPath(path: string): string {
   return EXT_LANG[ext] || "plaintext"
 }
 
-/** Normalise path separators and strip a leading slash. */
+/**
+ * Normalise path separators, strip a leading slash, and resolve `.` / `..`
+ * segments so the result always stays INSIDE the workspace root. Leftover
+ * `..` with no parent to pop are dropped: a workspace key can never escape
+ * the root (Zip Slip guard for exportWorkspaceAsZip).
+ */
 export function normalizePath(input: string): string {
   if (!input) return ""
-  return input.replace(/\\/g, "/").replace(/^\/+/, "").trim()
+  const raw = input.replace(/\\/g, "/").replace(/^\/+/, "").trim()
+  if (!raw) return ""
+  const segs: string[] = []
+  for (const seg of raw.split("/")) {
+    if (!seg || seg === ".") continue
+    if (seg === "..") segs.pop()
+    else segs.push(seg)
+  }
+  return segs.join("/")
 }
 
 /**
@@ -236,7 +249,10 @@ export function parseCodeBlocks(text: string): CodeBlock[] {
       } else if (first) {
         language = first
         const candidate = parts.slice(1).join(" ").trim()
-        if (candidate) path = normalizePath(candidate)
+        // Style 1 must look like a real path, same bar as the other
+        // styles — otherwise prose after the language ("```ts aquí va
+        // la explicación") becomes an apply target.
+        if (candidate && looksLikeSourcePath(candidate)) path = normalizePath(candidate)
       }
     }
 
@@ -286,8 +302,9 @@ export function computeLineDiff(before: string, after: string): DiffLine[] {
   const b = after === "" ? [] : after.split("\n")
 
   // Trivial common-prefix / common-suffix shortcut so identical files
-  // do not produce noise. The middle is rendered as a series of
-  // removed-then-added pairs which is good enough for short files.
+  // do not produce noise. The remaining middle is matched with a real
+  // LCS over lines so a single edited function inside a large file no
+  // longer renders as "delete everything + re-add everything".
   let prefix = 0
   while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++
 
@@ -311,11 +328,14 @@ export function computeLineDiff(before: string, after: string): DiffLine[] {
   const aMid = a.slice(prefix, a.length - suffix)
   const bMid = b.slice(prefix, b.length - suffix)
 
-  for (const line of aMid) {
-    result.push({ kind: "removed", text: line, oldNumber: oldNo++ })
-  }
-  for (const line of bMid) {
-    result.push({ kind: "added", text: line, newNumber: newNo++ })
+  // LCS DP table over the middle. Guarded by a cell budget: past it the
+  // table alone would be hundreds of MB, so we fall back to the old
+  // remove-all-then-add-all pairing (still correct, just coarser).
+  const cells = aMid.length * bMid.length
+  if (cells > MAX_DIFF_CELLS || cells === 0) {
+    emitFallback(aMid, bMid, result, () => oldNo++, () => newNo++)
+  } else {
+    emitLcs(aMid, bMid, result, () => oldNo++, () => newNo++)
   }
 
   for (let i = a.length - suffix; i < a.length; i++) {
@@ -323,6 +343,46 @@ export function computeLineDiff(before: string, after: string): DiffLine[] {
   }
 
   return result
+}
+
+/** Above this many DP cells the LCS falls back to coarse remove/add. */
+const MAX_DIFF_CELLS = 4_000_000
+
+function emitLcs(a: string[], b: string[], out: DiffLine[], nextOld: () => number, nextNew: () => number) {
+  const n = a.length
+  const m = b.length
+  // lcs[i][m] = 0 and lcs[n][j] = 0; stored row-major with m+1 columns.
+  const width = m + 1
+  const lcs = new Int32Array((n + 1) * width)
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i * width + j] =
+        a[i] === b[j] ? lcs[(i + 1) * width + j + 1] + 1 : Math.max(lcs[(i + 1) * width + j], lcs[i * width + j + 1])
+    }
+  }
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      out.push({ kind: "kept", text: a[i], oldNumber: nextOld(), newNumber: nextNew() })
+      i++
+      j++
+    } else if (lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) {
+      out.push({ kind: "removed", text: a[i], oldNumber: nextOld() })
+      i++
+    } else {
+      out.push({ kind: "added", text: b[j], newNumber: nextNew() })
+      j++
+    }
+  }
+  while (i < n) out.push({ kind: "removed", text: a[i++], oldNumber: nextOld() })
+  while (j < m) out.push({ kind: "added", text: b[j++], newNumber: nextNew() })
+}
+
+/** Old behaviour: all removed lines first, then all added lines. */
+function emitFallback(a: string[], b: string[], out: DiffLine[], nextOld: () => number, nextNew: () => number) {
+  for (const line of a) out.push({ kind: "removed", text: line, oldNumber: nextOld() })
+  for (const line of b) out.push({ kind: "added", text: line, newNumber: nextNew() })
 }
 
 /** Shallow check used by the chat to decide if "Apply" would be a no-op. */
