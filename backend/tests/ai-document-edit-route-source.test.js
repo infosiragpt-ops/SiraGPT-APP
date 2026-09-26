@@ -30,11 +30,11 @@ test('the picked model is resolved exactly like /generate and drives the editor 
   assert.match(route, /llm: \{ client, model: actualModel, provider: actualProvider, toolCallMode \}/);
 });
 
-test('only the explicit Stop aborts; every outcome is persisted to the chat', () => {
+test('only the explicit Stop aborts; edits use the persistence-confirmed delivery path', () => {
   assert.match(route, /streamControllers\.set\(controllerKey, controller\)/);
   assert.doesNotMatch(route, /res\.on\('close'[^)]*abort|req\.on\('aborted'[^)]*abort/);
-  assert.match(route, /const assistantMessageId = await persist\(result\.summary, files\)/);
-  assert.match(route, /const assistantMessageId = await persist\(result\.message\)/);
+  assert.match(route, /require\('\.\.\/services\/document-editor\/deliver-edit'\)/);
+  assert.match(route, /send\(await deliverDocumentEdit\(\{ result, files, persist, chatId \}\)\)/);
   assert.match(route, /const assistantMessageId = await persist\(content\)/);
   assert.match(route, /streamControllers\.delete\(controllerKey\)/);
 });

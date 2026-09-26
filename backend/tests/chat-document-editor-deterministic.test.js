@@ -107,7 +107,7 @@ test('deterministic hit serves the edit without spending model iterations', asyn
   assert.equal(result.summary, 'Listo. Agregué la diapositiva de ejemplo al final.');
 });
 
-test('deterministic batch results deliver every validated artifact', async () => {
+test('deterministic partial results retain validated files but never report complete success', async () => {
   const second = detArtifact({ id: 'det-artifact-2', filename: 'otro-editado.pptx' });
   const { deps, agentCalls } = baseDeps({
     tryDeterministicEdit: async () => ({
@@ -119,7 +119,9 @@ test('deterministic batch results deliver every validated artifact', async () =>
     }),
   });
   const result = await runEdit(deps);
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'DOCUMENT_EDIT_INCOMPLETE');
+  assert.equal(result.partial, true);
   assert.equal(agentCalls.length, 0);
   assert.deepEqual(result.artifacts.map((a) => a.id), ['det-artifact-1', 'det-artifact-2']);
 });

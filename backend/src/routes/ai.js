@@ -9998,14 +9998,9 @@ router.post(
         signal: controller.signal,
         onEvent: (stage) => send({ type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}) }),
       });
-      if (result.ok) {
-        const files = toAssistantFiles(result.artifacts);
-        const assistantMessageId = await persist(result.summary, files);
-        send({ type: 'done', ok: true, content: result.summary, files, assistantMessageId, chatId });
-      } else {
-        const assistantMessageId = await persist(result.message);
-        send({ type: 'done', ok: false, code: result.code, content: result.message, files: [], assistantMessageId, chatId });
-      }
+      const files = toAssistantFiles(result.artifacts || []);
+      const { deliverDocumentEdit } = require('../services/document-editor/deliver-edit');
+      send(await deliverDocumentEdit({ result, files, persist, chatId }));
     } catch (err) {
       const cancelled = controller.signal.aborted || isAbortError(err);
       const content = cancelled

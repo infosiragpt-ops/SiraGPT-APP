@@ -100,9 +100,10 @@ import {
 
 interface ExcelRibbonProps {
   spreadsheetRef: React.RefObject<SpreadsheetComponent | null>;
+  onWorkbookChange?: () => void;
 }
 
-export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
+export function ExcelRibbon({ spreadsheetRef, onWorkbookChange }: ExcelRibbonProps) {
   const [activeTab, setActiveTab] = useState("Home");
   const [fontFamily, setFontFamily] = useState("Calibri");
   const [fontSize, setFontSize] = useState("11");
@@ -202,6 +203,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         if (sheet) {
           spreadsheet.copy();
           spreadsheet.updateCell({ value: "" }, range);
+          onWorkbookChange?.();
         }
       }
     }
@@ -324,6 +326,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const newBoldState = !isBold;
         setIsBold(newBoldState);
         spreadsheet.cellFormat({ fontWeight: newBoldState ? "bold" : "normal" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Bold error:", e);
@@ -339,6 +342,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const newItalicState = !isItalic;
         setIsItalic(newItalicState);
         spreadsheet.cellFormat({ fontStyle: newItalicState ? "italic" : "normal" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Italic error:", e);
@@ -354,6 +358,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const newUnderlineState = !isUnderline;
         setIsUnderline(newUnderlineState);
         spreadsheet.cellFormat({ textDecoration: newUnderlineState ? "underline" : "none" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Underline error:", e);
@@ -367,6 +372,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ textAlign: "left" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Align left error:", e);
@@ -380,6 +386,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ textAlign: "center" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Align center error:", e);
@@ -393,6 +400,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ textAlign: "right" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Align right error:", e);
@@ -406,6 +414,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ verticalAlign: "top" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Vertical align top error:", e);
@@ -419,6 +428,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ verticalAlign: "middle" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Vertical align error:", e);
@@ -432,6 +442,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ verticalAlign: "bottom" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Vertical align bottom error:", e);
@@ -447,6 +458,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const newWrapState = !isWrapText;
         setIsWrapText(newWrapState);
         spreadsheet.cellFormat({ wrap: newWrapState }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Wrap text error:", e);
@@ -460,6 +472,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ textIndent: "1em" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Increase indent error:", e);
@@ -473,6 +486,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ textIndent: "0" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Decrease indent error:", e);
@@ -487,6 +501,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const range = getSelectedRange();
         spreadsheet.merge(range);
         spreadsheet.cellFormat({ textAlign: "center" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Merge & Center error:", e);
@@ -500,6 +515,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.numberFormat("$#,##0.00", range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Currency error:", e);
@@ -513,6 +529,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.numberFormat("0.00%", range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Percent error:", e);
@@ -526,6 +543,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.numberFormat("#,##0", range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Comma error:", e);
@@ -550,12 +568,15 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               const decimals = (currentFormat.match(/\./g) || []).length;
               const newFormat = currentFormat.replace(/\.0+$/, "") + "0";
               spreadsheet.numberFormat(newFormat, range);
+              onWorkbookChange?.();
             } else {
               spreadsheet.numberFormat("0.0", range);
+              onWorkbookChange?.();
             }
           } catch {
             // Fallback: just set a format with decimals
             spreadsheet.numberFormat("0.00", range);
+            onWorkbookChange?.();
           }
           spreadsheet.dataBind();
         }
@@ -579,11 +600,14 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
             if (currentFormat.includes(".")) {
               const newFormat = currentFormat.replace(/\.(\d*)0$/, ".$1").replace(/\.$/, "");
               spreadsheet.numberFormat(newFormat || "0", range);
+              onWorkbookChange?.();
             } else {
               spreadsheet.numberFormat("0", range);
+              onWorkbookChange?.();
             }
           } catch {
             spreadsheet.numberFormat("0", range);
+            onWorkbookChange?.();
           }
           spreadsheet.dataBind();
         }
@@ -599,6 +623,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.updateCell({ value: "" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Clear error:", e);
@@ -645,8 +670,10 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         }
         if (formatString === "General") {
           spreadsheet.cellFormat({ format: "" }, range);
+          onWorkbookChange?.();
         } else {
           spreadsheet.numberFormat(formatString, range);
+          onWorkbookChange?.();
         }
         spreadsheet.dataBind();
       } catch (e) {
@@ -768,6 +795,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ verticalAlign: "top" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Vertical align top error:", e);
@@ -781,6 +809,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ verticalAlign: "bottom" }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Vertical align bottom error:", e);
@@ -794,6 +823,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.cellFormat({ fontFamily: font }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Font change error:", e);
@@ -809,6 +839,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const sizeNum = parseInt(size);
         if (!isNaN(sizeNum) && sizeNum > 0) {
           spreadsheet.cellFormat({ fontSize: sizeNum }, range);
+          onWorkbookChange?.();
           spreadsheet.dataBind();
         }
       } catch (e) {
@@ -824,6 +855,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const range = getSelectedRange();
         setFillColor(color);
         spreadsheet.cellFormat({ backgroundColor: color }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Fill color error:", e);
@@ -838,6 +870,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         const range = getSelectedRange();
         setFontColor(color);
         spreadsheet.cellFormat({ color: color }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Font color error:", e);
@@ -856,6 +889,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
           border: "1px solid #000",
           backgroundColor: "#f0f0f0"
         }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Insert Table error:", e);
@@ -928,6 +962,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
             id: `chart_${Date.now()}`,
             theme: "Material"
           }]);
+          onWorkbookChange?.();
           spreadsheet.dataBind();
         } else {
           alert(`Insert ${chartType} Chart - Select data range: ${range}`);
@@ -950,6 +985,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
             value: url,
             hyperlink: url
           }, range);
+          onWorkbookChange?.();
           spreadsheet.dataBind();
         }
       } catch (e) {
@@ -974,6 +1010,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               value: spreadsheet.getCell(range)?.value || "",
               note: comment
             }, range);
+            onWorkbookChange?.();
           }
           spreadsheet.dataBind();
         }
@@ -991,6 +1028,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         if (text) {
           const range = getSelectedRange();
           spreadsheet.updateCell({ value: text }, range);
+          onWorkbookChange?.();
           spreadsheet.dataBind();
         }
       } catch (e) {
@@ -1009,6 +1047,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         if (symbol) {
           const range = getSelectedRange();
           spreadsheet.updateCell({ value: symbol }, range);
+          onWorkbookChange?.();
           spreadsheet.dataBind();
         }
       } catch (e) {
@@ -1166,6 +1205,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.updateCell({ formula: `=${functionName}()` }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (e) {
         console.error("Insert Function error:", e);
@@ -1452,6 +1492,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
 
       // Fallback: Insert "=" and start edit mode to show formula bar
       spreadsheet.updateCell({ formula: "=" }, range);
+      onWorkbookChange?.();
       spreadsheet.selectRange(range);
       spreadsheet.dataBind();
 
@@ -1480,6 +1521,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.updateCell({ formula: "=" }, range);
+        onWorkbookChange?.();
         spreadsheet.selectRange(range);
         spreadsheet.startEdit();
         spreadsheet.dataBind();
@@ -1497,6 +1539,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
     if (spreadsheet) {
       const range = getSelectedRange();
       spreadsheet.updateCell({ formula: `=${func}()` }, range);
+      onWorkbookChange?.();
       spreadsheet.dataBind();
       // Focus cell to start typing arguments
       spreadsheet.selectRange(range);
@@ -1614,6 +1657,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       const formula = rangeToSum ? `=${functionType}(${rangeToSum})` : `=${functionType}()`;
 
       spreadsheet.updateCell({ formula }, targetCell);
+      onWorkbookChange?.();
       spreadsheet.selectRange(targetCell);
       spreadsheet.dataBind();
 
@@ -1623,6 +1667,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
       try {
         const range = getSelectedRange();
         spreadsheet.updateCell({ formula: `=${functionType}()` }, range);
+        onWorkbookChange?.();
         spreadsheet.dataBind();
       } catch (err) {
         console.error("AutoSum fallback error:", err);
@@ -2900,4 +2945,3 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
     </div>
   );
 }
-

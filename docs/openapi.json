@@ -7231,6 +7231,44 @@
         ]
       }
     },
+    "/api/chats/{id}/excel-content": {
+      "put": {
+        "operationId": "put_api_chats_id_excel_content",
+        "summary": "PUT /api/chats/:id/excel-content",
+        "tags": [
+          "chats"
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Server error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/api/chats/{id}/word-content": {
       "put": {
         "operationId": "put_api_chats_id_word_content",

@@ -83,4 +83,20 @@ describe('generateWordStream — cross-read SSE frame reassembly', () => {
     expect(received.join('')).toBe('foobar')
     expect(closed).toBe(true)
   })
+
+  it.each([
+    { name: 'an error after document text', chunks: ['data: {"content":"Texto parcial"}\n\n', 'data: {"error":"No se pudo guardar"}\n\n'], message: 'No se pudo guardar' },
+    { name: 'EOF without a saved done frame', chunks: ['data: {"content":"Texto parcial"}\n\n'], message: 'confirmar el guardado' },
+  ])('does not confirm completion for $name', async ({ chunks, message }) => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, body: streamOfChunks(chunks) })
+    const close = vi.fn()
+    const error = vi.fn()
+    await api.generateWordStream(
+      { provider: 'p', model: 'm', prompt: 'x', streamId: 'failed' },
+      () => {}, close, error,
+    )
+    expect(close).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalledOnce()
+    expect(error.mock.calls[0][0].message).toContain(message)
+  })
 })

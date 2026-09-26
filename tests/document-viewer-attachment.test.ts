@@ -98,6 +98,12 @@ test("document viewer attachments accept generated artifact preview aliases", ()
   assert.equal(attachment.size, 4096)
   assert.equal(attachment.url, "/api/artifacts/artifact_pdf/preview")
 })
+test("document viewer attachments retain the generated artifact identity for a later edit", () => {
+  const attachment = toDocumentViewerAttachment({ artifactId: "abcdef123456", filename: "Informe.docx",
+    sourceFileId: "original-upload", url: "/api/agent/artifact/abcdef123456" })
+  assert.equal(attachment.artifactId, "abcdef123456")
+  assert.equal(attachment.id, null)
+})
 
 test("document viewer attachments carry composer upload status and progress", () => {
   const file = fakeFile("tesis.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 307000)

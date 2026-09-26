@@ -216,6 +216,8 @@ function iconForKind(kind: Kind) {
 export interface AttachmentLike {
   /** Stable id — used for caching and URL lookups. */
   id?: string | null
+  /** Generated version identity, retained when this preview becomes an edit target. */
+  artifactId?: string | null
   /** File name with extension. */
   name: string
   /** MIME type as reported by the browser / backend. */

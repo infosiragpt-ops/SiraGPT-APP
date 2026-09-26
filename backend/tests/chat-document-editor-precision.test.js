@@ -196,14 +196,14 @@ test('the sixth explicit precision candidate is not truncated by the generic fiv
   assert.equal(calls.saved[0].filename, 'Documento6.docx');
 });
 
-test('non-Word edits keep the existing first-history-document and five-upload selection', async (t) => {
+test('non-Word candidate sets require selection and never silently truncate six uploads', async (t) => {
   const rows = Array.from({ length: 6 }, (_, index) => ({ id: `upload-${index + 1}`, userId: USER, originalName: `Documento${index + 1}.xlsx` }));
   const historical = fixture(t, { rows, parse: () => null, messages: [{ role: 'USER', files: rows }] });
-  assert.equal((await historical.run({ fileIds: [], instruction: 'Mejora el contenido' })).ok, true);
-  assert.deepEqual(historical.calls.loaded, ['upload-1']);
+  assert.equal((await historical.run({ fileIds: [], instruction: 'Mejora el contenido' })).code, 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
+  assert.deepEqual(historical.calls.loaded, []);
   const explicit = fixture(t, { rows, parse: () => null });
-  assert.equal((await explicit.run({ fileIds: rows.map((row) => row.id), instruction: 'Mejora el contenido' })).ok, true);
-  assert.deepEqual(explicit.calls.loaded, rows.slice(0, 5).map((row) => row.id));
+  assert.equal((await explicit.run({ fileIds: rows.map((row) => row.id), instruction: 'Mejora todos los documentos' })).code, 'TOO_MANY_DOCUMENTS');
+  assert.deepEqual(explicit.calls.loaded, []);
 });
 
 test('strict .doc edits cannot convert or regenerate an original as .docx', async (t) => {

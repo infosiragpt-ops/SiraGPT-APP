@@ -264,7 +264,7 @@ import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkb
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
-import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
+import { parseDocumentJobPointer, DocumentSandboxClientError, documentEditReference, snapshotDocumentEditTargets } from "@/lib/document-sandbox-client"
 import { historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
 import { useDocumentEditorChat } from "@/lib/use-document-editor-chat"
 import { devLog } from "@/lib/dev-log"
@@ -6532,6 +6532,20 @@ function ChatInterfaceContent() {
   const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
   const [isGeneratingWord, setIsGeneratingWord] = React.useState(false);
   const wordConnectorRef = React.useRef<{ updateContent: (content: string) => void; replaceSelection: (content: string) => void; getHTML: () => string; } | null>(null);
+  const wordHydrationChatRef = React.useRef<string | null>(null);
+  const wordHydrationRef = React.useRef<{ chatId: string; target: NonNullable<typeof wordConnectorRef.current> } | null>(null);
+  const hydrateWordConnector = React.useCallback((chat: { id: string; wordContent?: string }) => {
+    if (currentChatRef.current?.id !== chat.id || wordHydrationChatRef.current !== chat.id) return false;
+    const target = wordConnectorRef.current;
+    if (!target) return false;
+    if (wordHydrationRef.current?.chatId === chat.id && wordHydrationRef.current.target === target) return true;
+    const html = target.getHTML();
+    if (!html) return false; // TipTap has not mounted yet.
+    wordHydrationRef.current = { chatId: chat.id, target };
+    // Do not replace content already typed or streamed while the editor mounted.
+    if (html === '<p></p>' && chat.wordContent) target.updateContent(chat.wordContent);
+    return true;
+  }, []);
   const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
   const [isRewriting, setIsRewriting] = React.useState(false);
 
@@ -8802,6 +8816,12 @@ But first, you need to connect your Spotify account securely using the button be
     setDocumentPreviewUrl(null)
     setSplitViewContent(null)
     setSelectedWordText(null);
+    const hydrationChatId = currentChat?.id;
+    let cancelled = false;
+    let hydrationTimer: ReturnType<typeof setTimeout> | undefined;
+    wordHydrationChatRef.current = null;
+    wordHydrationRef.current = null;
+    const isCurrentHydration = () => !cancelled && currentChatRef.current?.id === hydrationChatId;
 
     // Close all connectors first when switching chats, but keep the image
     // tool visibly selected while its request is still running.
@@ -8825,44 +8845,46 @@ But first, you need to connect your Spotify account securely using the button be
 
     // Use a small delay to ensure previous connector UI is fully closed
     const timer = setTimeout(() => {
+      if (!isCurrentHydration()) return;
       if (currentChat && (currentChat as any).isWordConnectorChat) {
         devLog('📄 Word Connector chat detected:', currentChat.id);
         devLog('📄 Has wordContent:', !!(currentChat as any).wordContent);
         devLog('📄 wordContent length:', (currentChat as any).wordContent?.length);
 
+        wordHydrationChatRef.current = currentChat.id;
         setIsWordConnectorActive(true);
 
         // Load existing Word content if available
         if ((currentChat as any).wordContent) {
           devLog('📄 Attempting to load Word content into editor...');
           // Wait longer for editor to be ready
-          setTimeout(() => {
-            if (wordConnectorRef.current) {
-              devLog('📄 Ref is ready, updating content...');
-              wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-            } else {
-              console.warn('📄 WordConnector ref not ready yet');
-            }
+          hydrationTimer = setTimeout(() => {
+            if (isCurrentHydration()) hydrateWordConnector(currentChat);
           }, 500);
         }
       } else if (currentChat && (currentChat as any).isExcelConnectorChat) {
         setIsExcelConnectorActive(true);
 
         if ((currentChat as any).excelContent) {
-          setTimeout(() => {
-            excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
+          hydrationTimer = setTimeout(() => {
+            if (isCurrentHydration()) excelConnectorRef.current?.loadWorkbook((currentChat as any).excelContent);
           }, 500);
         }
       }
     }, 150);
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearTimeout(hydrationTimer);
+      if (wordHydrationChatRef.current === hydrationChatId) wordHydrationChatRef.current = null;
+    };
     // Listing the full `currentChat` would re-fire this on every
     // message append; setChatType is a stable setter. The connector-
     // detect logic runs once per chat-id and shouldn't re-mount the
     // Word/Excel editors on each turn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat?.id, closeAllToolsAndConnectors]);
+  }, [currentChat?.id, closeAllToolsAndConnectors, hydrateWordConnector]);
 
 
   // Listen for "Nuevo chat" button click to reset all states
@@ -8889,14 +8911,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (isWordConnectorActive && currentChat && (currentChat as any).isWordConnectorChat && (currentChat as any).wordContent) {
       devLog('📄 Word Connector active, checking if ref is ready...');
       // Try loading content when panel becomes active
-      const loadContent = () => {
-        if (wordConnectorRef.current) {
-          devLog('📄 Loading content into active Word Connector...');
-          wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
-          return true;
-        }
-        return false;
-      };
+      const loadContent = () => hydrateWordConnector(currentChat);
 
       // Try immediately
       if (!loadContent()) {
@@ -8909,7 +8924,7 @@ But first, you need to connect your Spotify account securely using the button be
     // every message append would re-load the Word doc, which loses the
     // user's in-flight edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isWordConnectorActive, currentChat?.id]);
+  }, [isWordConnectorActive, currentChat?.id, hydrateWordConnector]);
 
   React.useEffect(() => {
     if (chatCreationInitiated.current) {
@@ -10225,8 +10240,17 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
-    const fileKey = composerFiles
-      .map((file: any) => resolveUploadFileId(file) || file?.id || file?.name || file?.originalName || "")
+    // Capture the visible document before a busy chat queues this turn. New
+    // attachments win; Word/Excel connectors keep their own open document.
+    const sandboxDecision = isWordConnectorActive || isExcelConnectorActive
+      ? { route: null, attachments: [] }
+      : resolveDocumentSandboxAdmission(msg, {
+        attachments: composerFiles,
+        historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+        previewAttachments: [documentPreviewUrl, composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      });
+    const fileKey = (composerFiles.length ? composerFiles : sandboxDecision.attachments)
+      .map((file: any) => documentEditReference(file) || resolveUploadFileId(file) || file?.id || file?.name || file?.originalName || "")
       .filter(Boolean)
       .sort()
       .join(",");
@@ -10324,7 +10348,7 @@ But first, you need to connect your Spotify account securely using the button be
         ownerId: queueOwnerId || "__session__",
         chatId: currentChat?.id ?? null,
         msg,
-        files: composerFiles,
+        files: composerFiles.length ? composerFiles : snapshotDocumentEditTargets(sandboxDecision.attachments),
         idempotencyKey,
       });
       pendingMsgQueueRef.current.push(queuedItem);
@@ -10348,16 +10372,6 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
-    // Document editor admission: the picked model edits the attached document,
-    // or the latest one of this chat on a follow-up. The Word/Excel connectors
-    // keep editing their own open document.
-    const sandboxDecision = isWordConnectorActive || isExcelConnectorActive
-      ? { route: null, attachments: [] }
-      : resolveDocumentSandboxAdmission(msg, {
-        attachments: composerFiles,
-        historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
-        previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
-      });
     if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
       setInput("");
       setSelectedMentionIds([]);
@@ -10602,9 +10616,9 @@ REWRITTEN TEXT:`;
               timestamp: new Date().toISOString(),
             };
             setCurrentChat(prevChat => {
-              if (!prevChat) return prevChat;
+              if (!prevChat || prevChat.id !== activeChat?.id) return prevChat;
               const updatedMessages = [...(prevChat.messages || []), aiMessage];
-              return { ...prevChat, messages: updatedMessages };
+              return { ...prevChat, wordContent: accumulatedContent, messages: updatedMessages };
             });
             // Refresh chat to get updated messages from database
             if (activeChat?.id) {
@@ -10719,9 +10733,9 @@ REWRITTEN TEXT:`;
             timestamp: new Date().toISOString(),
           };
           setCurrentChat(prevChat => {
-            if (!prevChat) return prevChat;
+            if (!prevChat || prevChat.id !== activeChat?.id) return prevChat;
             const updatedMessages = [...(prevChat.messages || []), aiMessage];
-            return { ...prevChat, messages: updatedMessages };
+            return { ...prevChat, excelContent: parsedResponse, messages: updatedMessages };
           });
 
           if (activeChat?.id) {

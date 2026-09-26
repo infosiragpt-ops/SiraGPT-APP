@@ -2388,6 +2388,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 url: `data:text/html;charset=utf-8,${encodeURIComponent(html)}`,
                 downloadUrl: getPPTDownloadUrl(),
                 filename: presentationData.filename,
+                artifactId: pptEntry.artifactId,
+                fileId: pptEntry.fileId,
             });
         };
 
@@ -3066,6 +3068,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                                 url: previewUrl,
                                                                 downloadUrl: resolvedDownloadUrl || undefined,
                                                                 filename: fileName,
+                                                                fileId: file.id,
+                                                                artifactId: file.artifactId,
                                                                 // High-fidelity: for file-backed generated docs
                                                                 // (esp. xlsx/pptx) render the real soffice→PDF
                                                                 // instead of a client HTML table. The /render

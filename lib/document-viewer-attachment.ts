@@ -1,5 +1,6 @@
 export interface DocumentViewerAttachment {
   id?: string | null
+  artifactId?: string | null
   name: string
   mimeType?: string | null
   size?: number | null
@@ -107,6 +108,7 @@ export function toDocumentViewerAttachment(
   ) || fallbackName
 
   return {
+    artifactId: firstString(record.artifactId),
     id: firstString(
       record.id,
       record.fileId,

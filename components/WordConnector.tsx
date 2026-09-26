@@ -4,7 +4,7 @@ import { OfficeFileIcon } from "@/components/office-file-icon"
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import Mathematics, { migrateMathStrings } from '@tiptap/extension-mathematics';
+import Mathematics, { createMathMigrateTransaction } from '@tiptap/extension-mathematics';
 import Placeholder from '@tiptap/extension-placeholder';
 import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
@@ -36,6 +36,7 @@ import {
     ImageRun, ExternalHyperlink, LevelFormat, VerticalAlign,
 } from 'docx';
 import { saveAs } from 'file-saver';
+import { useOfficeDraft } from '@/lib/use-office-draft';
 
 
 interface WordConnectorProps {
@@ -416,6 +417,11 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         const { currentChat } = useChat();
         const { user } = useAuth();
         const lastChatIdRef = useRef<string | null>(null);
+        const draft = useOfficeDraft('word');
+        const draftChangeRef = useRef(draft.change);
+        draftChangeRef.current = draft.change;
+        const applyingContentRef = useRef(false);
+        const contentLoadRef = useRef(0);
 
         const isBusy = isGenerating || isGeneratingExternal;
 
@@ -563,7 +569,10 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             },
             onCreate: ({ editor: currentEditor }) => {
                 // Migrate any existing LaTeX strings to math nodes
-                migrateMathStrings(currentEditor);
+                currentEditor.view.dispatch(createMathMigrateTransaction(currentEditor, currentEditor.state.tr).setMeta('preventUpdate', true));
+            },
+            onUpdate: ({ editor: currentEditor }) => {
+                if (!applyingContentRef.current) draftChangeRef.current(currentEditor.getHTML());
             },
         });
 
@@ -634,7 +643,8 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
             const currentChatId = currentChat?.id;
             if (editor && currentChatId && lastChatIdRef.current && lastChatIdRef.current !== currentChatId) {
                 // Chat has changed, clear the editor
-                editor.commands.setContent('');
+                contentLoadRef.current++;
+                editor.commands.setContent('', { emitUpdate: false });
             }
             lastChatIdRef.current = currentChatId || null;
         }, [currentChat?.id, editor]);
@@ -643,6 +653,8 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         React.useImperativeHandle(ref, () => ({
             updateContent: (content: string) => {
                 if (editor && content) {
+                    const loadId = ++contentLoadRef.current;
+                    applyingContentRef.current = true;
                     try {
                         // Clean content - remove markdown if present
                         let cleanContent = content;
@@ -706,12 +718,13 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         cleanContent = processedLines.join('');
 
                         // Replace entire content to prevent duplication
-                        editor.commands.setContent(cleanContent);
+                        // Hydration and streamed AI content are persisted by their producer.
+                        editor.commands.setContent(cleanContent, { emitUpdate: false });
 
                         // After setting content, migrate any remaining LaTeX strings
                         setTimeout(() => {
-                            if (editor) {
-                                migrateMathStrings(editor);
+                            if (!editor.isDestroyed && loadId === contentLoadRef.current) {
+                                editor.view.dispatch(createMathMigrateTransaction(editor, editor.state.tr).setMeta('preventUpdate', true));
                             }
                         }, 100);
                     } catch (error) {
@@ -720,8 +733,10 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         if (!editor.isEmpty) {
                             editor.chain().focus('end').insertContent(`<p>${content}</p>`).run();
                         } else {
-                            editor.commands.setContent(`<p>${content}</p>`);
+                            editor.commands.setContent(`<p>${content}</p>`, { emitUpdate: false });
                         }
+                    } finally {
+                        applyingContentRef.current = false;
                     }
                 }
             },
@@ -1036,6 +1051,9 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <OfficeFileIcon kind="word" size={20} className="h-5 w-5" title="Word" />
                         <h3 className="font-semibold text-sm text-foreground">Word Document</h3>
+                        <Button variant="ghost" size="sm" onClick={() => void draft.save()} disabled={isBusy || draft.status === 'saving'} aria-label="Guardar documento">
+                            <span role="status" className="text-xs">{draft.label}</span>
+                        </Button>
                     </div>
                     <div className="flex items-center gap-1">
                         {isGenerating && (
@@ -1068,7 +1086,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                             className="h-8 w-8 hover:bg-muted/60"
                             title="Cerrar"
                             aria-label="Cerrar"
-                            onClick={onClose}
+                            onClick={async () => { if (await draft.save()) onClose(); }}
                         >
                             <X className="h-4 w-4" />
                         </Button>

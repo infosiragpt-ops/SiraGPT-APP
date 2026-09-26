@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { createDocumentSandboxClient, documentJobState, isExplicitDocumentEdit, looksLikeExplicitDocumentEdit,
+import { collectDocumentEditReferences, documentEditReference, snapshotDocumentEditTargets, createDocumentSandboxClient, documentJobState, isExplicitDocumentEdit, looksLikeExplicitDocumentEdit,
   parseDocumentJobPointer, parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
 import { historyDocumentAttachments, mentionsDocumentTarget, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
+import { createPersistedComposerQueueItem } from "../lib/chat/composer-queue"
 
 // HTTP protocol fixtures test the client only. These are not editor, independent
 // validation or paid-provider E2E evidence; those gates run in the backend suite.
@@ -62,6 +63,73 @@ test("explicit follow-up naming a document target edits the chat's latest docume
   assert.equal(resolveDocumentSandboxAdmission("ahora agrega una fila Este con 70", {
     historyAttachments: [{ type: "doc", filename: "informe_editado.docx", url: "/api/agent/artifact/abc123" }],
   }).route, "edit")
+})
+test("opening an older document pins the follow-up to that document instead of the last chat file", () => {
+  const opened = { id: "uploaded-older", name: "presupuesto.xlsx" }
+  assert.deepEqual(resolveDocumentSandboxAdmission("cambia el título", {
+    previewAttachments: [opened],
+    historyAttachments: [{ id: "uploaded-newer", name: "informe.docx" }],
+  }), { route: "edit", attachments: [opened] })
+})
+test("an opened artifact pins its exact generated version without reattaching it", () => {
+  const opened = { artifactId: "abcdef123456", filename: "presentacion.pptx", url: "data:text/html,preview" }
+  assert.deepEqual(resolveDocumentSandboxAdmission("reemplaza la diapositiva 2", {
+    previewAttachments: [opened],
+  }), { route: "edit", attachments: [opened] })
+})
+test("new document attachments retain priority over an open document and chat history", () => {
+  const attachments = [{ id: "uploaded-new-1", name: "nuevo.docx" }, { id: "uploaded-new-2", name: "nuevo.xlsx" }]
+  assert.deepEqual(resolveDocumentSandboxAdmission("cambia el título en ambos documentos", {
+    attachments,
+    previewAttachments: [{ artifactId: "abcdef123456", filename: "anterior.pptx" }],
+    historyAttachments: [{ id: "uploaded-old", name: "anterior.docx" }],
+  }), { route: "edit", attachments })
+})
+test("a preview URL alone cannot identify a document for editing", () => {
+  for (const url of ["https://example.com/informe.docx", "/api/agent/artifact/abcdef123456"]) {
+    assert.deepEqual(resolveDocumentSandboxAdmission("cambia el título", {
+      previewAttachments: [{ filename: "informe.docx", url }],
+    }), { route: null, attachments: [] })
+  }
+})
+test("document edit references preserve selected artifacts and upload identities, never URLs or lineage", () => {
+  assert.equal(documentEditReference({ artifactId: "ABCDEF123456", sourceFileId: "original", id: "other" }), "artifact:abcdef123456")
+  assert.equal(documentEditReference({ fileId: "uploaded-1", id: "temporary" }), "uploaded-1")
+  assert.deepEqual(collectDocumentEditReferences([{ artifactId: "abcdef123456" }, "uploaded-1", "artifact:ABCDEF123456"]), ["artifact:abcdef123456", "uploaded-1"])
+  assert.deepEqual(collectDocumentEditReferences([]), [])
+  for (const source of [{ sourceFileId: "original" }, { url: "/api/agent/artifact/abcdef123456" },
+    { artifactId: "../abcdef123456", fileId: "uploaded-1" }, "https://example.com/file.docx", "artifact:invalid", "../uploaded-1"]) {
+    assert.equal(documentEditReference(source), null)
+    assert.throws(() => collectDocumentEditReferences([source]), code("E_PARAMS"))
+  }
+  assert.throws(() => collectDocumentEditReferences([{ id: "uploaded-1" }, { name: "missing-id.docx" }]), code("E_PARAMS"))
+})
+test("preview selection changes the edited source while questions and conversational tweaks remain ordinary chat", () => {
+  const first = { id: "uploaded-1", name: "primero.docx" }
+  const second = { id: "uploaded-2", name: "segundo.xlsx" }
+  for (const opened of [first, second]) {
+    assert.deepEqual(resolveDocumentSandboxAdmission('cambia "2025" por "2026"', {
+      previewAttachments: [opened], historyAttachments: [first, second],
+    }), { route: "edit", attachments: [opened] })
+    for (const prompt of ["cambia el tono de tu respuesta", "hola", "analiza el informe", "resume el documento"]) {
+      assert.equal(resolveDocumentSandboxAdmission(prompt, { previewAttachments: [opened] }).route, null, prompt)
+    }
+  }
+})
+test("a queued preview edit retains its exact artifact after serialization and navigation to another document", () => {
+  const decision = resolveDocumentSandboxAdmission("cambia el título", {
+    previewAttachments: [{ artifactId: "abcdef123456", filename: "Primera.pptx", url: `data:text/html,${"x".repeat(30_000)}` }],
+  })
+  const queued = createPersistedComposerQueueItem({ id: "queued-1", ownerId: "user-1", chatId: "chat-1",
+    msg: "cambia el título", files: snapshotDocumentEditTargets(decision.attachments), idempotencyKey: "turn-1" })
+  const restored = JSON.parse(JSON.stringify(queued))
+  const send = resolveDocumentSandboxAdmission(restored.msg, {
+    attachments: restored.files,
+    previewAttachments: [{ artifactId: "abcdef654321", filename: "Segunda.pptx" }],
+  })
+  assert.deepEqual(collectDocumentEditReferences(send.attachments), ["artifact:abcdef123456"])
+  assert.equal((send.attachments[0] as { name: string }).name, "Primera.pptx")
+  assert.equal((send.attachments[0] as { url: string }).url, "/api/agent/artifact/abcdef123456")
 })
 test("conversational tweaks never edit the chat document", () => {
   for (const prompt of ["cambia el tono de tu respuesta", "hola", "resume el documento"]) {

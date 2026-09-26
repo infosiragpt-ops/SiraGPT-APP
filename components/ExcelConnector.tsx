@@ -7,6 +7,7 @@ import { devLog } from "@/lib/dev-log";
 import { Download, FileSpreadsheet, X } from "lucide-react";
 import { toast } from "sonner";
 import { ExcelRibbon } from "./ExcelRibbon";
+import { useOfficeDraft } from '@/lib/use-office-draft';
 
 import { registerLicense } from "@syncfusion/ej2-base";
 import { SpreadsheetChart } from "@syncfusion/ej2-spreadsheet";
@@ -50,8 +51,64 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
   function ExcelConnector({ onClose, isGeneratingExternal = false }, ref) {
     const spreadsheetRef = React.useRef<SpreadsheetComponent | null>(null);
     const loadIdRef = React.useRef(0);
+    const draft = useOfficeDraft('excel');
+    const changeDraft = draft.change;
+    const workbookReadyRef = React.useRef(false);
+    const applyingWorkbookRef = React.useRef(false);
+    const pendingChartsRef = React.useRef(0);
+    const pendingManualSnapshotRef = React.useRef(false);
+    const [isApplyingCharts, setIsApplyingCharts] = React.useState(false);
+    const generatingRef = React.useRef(isGeneratingExternal);
+    generatingRef.current = isGeneratingExternal;
+    const snapshotIdRef = React.useRef(0);
+    const snapshotRunRef = React.useRef<Promise<boolean> | null>(null);
+    const captureDraft = React.useCallback((): Promise<boolean> => {
+      // Closing before hydration must never persist Syncfusion's empty initial sheet.
+      if (!workbookReadyRef.current || generatingRef.current || applyingWorkbookRef.current) return Promise.resolve(true);
+      if (pendingChartsRef.current > 0) return Promise.resolve(false);
+      snapshotIdRef.current++;
+      if (snapshotRunRef.current) return snapshotRunRef.current;
+      snapshotRunRef.current = (async () => {
+        try {
+          // Syncfusion's export listener supports one saveAsJson at a time.
+          // Coalesce fast edits, then capture again if a newer action arrived.
+          while (true) {
+            const snapshotId = snapshotIdRef.current;
+            const loadId = loadIdRef.current;
+            const result = await spreadsheetRef.current?.saveAsJson({ onlyValues: false });
+            if (loadId !== loadIdRef.current || generatingRef.current || !result) return false;
+            if (snapshotId !== snapshotIdRef.current) continue;
+            const payload = result as any;
+            changeDraft(payload.jsonObject?.Workbook ?? payload.jsonObject ?? payload.Workbook ?? payload);
+            return true;
+          }
+        } catch {
+          toast.error('No se pudieron preparar los cambios para guardarlos.');
+          return false;
+        }
+      })().finally(() => { snapshotRunRef.current = null; });
+      return snapshotRunRef.current;
+    }, [changeDraft]);
+    const handleWorkbookChange = React.useCallback(() => {
+      if (generatingRef.current || applyingWorkbookRef.current) return;
+      workbookReadyRef.current = true;
+      if (pendingChartsRef.current > 0) {
+        pendingManualSnapshotRef.current = true;
+        return;
+      }
+      void captureDraft();
+    }, [captureDraft]);
     const chartTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const chartLayoutRef = React.useRef<Map<number, { row: number; col: number; count: number }>>(new Map());
+
+    const invalidateWorkbook = React.useCallback(() => { loadIdRef.current++; }, []);
+    React.useEffect(() => {
+      workbookReadyRef.current = false;
+      pendingChartsRef.current = 0;
+      pendingManualSnapshotRef.current = false;
+      setIsApplyingCharts(false);
+      return invalidateWorkbook;
+    }, [changeDraft, invalidateWorkbook]);
 
     const DEFAULT_ROW_HEIGHT_PX = 20;
     const DEFAULT_CHART_HEIGHT_PX = 290;
@@ -128,16 +185,18 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
       return { sheetName: sheetHint, range: trimmed };
     }, []);
 
-    const insertChartWithLayout = React.useCallback((chartConfig: any) => {
+    const insertChartWithLayout = React.useCallback((chartConfig: any, onComplete?: () => void) => {
       const spreadsheet = spreadsheetRef.current as any;
       if (!spreadsheet) {
         // toast.error('Spreadsheet not initialized');
+        onComplete?.();
         return;
       }
 
       // Validate spreadsheet has sheets
       if (!spreadsheet.sheets || spreadsheet.sheets.length === 0) {
         console.error('No sheets available in spreadsheet');
+        onComplete?.();
         return;
       }
 
@@ -147,6 +206,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
       // Validate range exists
       if (!range || range.trim() === '') {
         console.error('Invalid chart range provided:', chartConfig?.range);
+        onComplete?.();
         return;
       }
 
@@ -160,9 +220,11 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
       // Switch to the target sheet and wait for it to be ready
       setActiveSheetIndex(targetSheetIndex);
+      const chartLoadId = loadIdRef.current;
 
       // Small delay to ensure sheet is active and ready
       setTimeout(() => {
+        if (chartLoadId !== loadIdRef.current) { onComplete?.(); return; }
         try {
           // Double-check sheet is still valid
           const sheet = spreadsheet.sheets?.[targetSheetIndex];
@@ -210,6 +272,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             ? `${sheetName}!${range}`
             : (chartConfig?.range ?? (sheetName && range ? `${sheetName}!${range}` : range));
 
+          applyingWorkbookRef.current = true;
           spreadsheet.insertChart([
             {
               type: chartConfig?.chartType || chartConfig?.type || 'Column',
@@ -227,6 +290,9 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         } catch (error) {
           console.error('Failed to insert chart:', error);
           // toast.error('Failed to insert chart');
+        } finally {
+          applyingWorkbookRef.current = false;
+          onComplete?.();
         }
       }, 100); // Small delay to ensure sheet is ready
     }, [getUsedRowIndex, parseSheetAndRange, setActiveSheetIndex, getSheetIndexByName]);
@@ -266,6 +332,11 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           }
 
           const currentLoadId = ++loadIdRef.current;
+          workbookReadyRef.current = false;
+          applyingWorkbookRef.current = true;
+          pendingManualSnapshotRef.current = false;
+          pendingChartsRef.current = 0;
+          setIsApplyingCharts(false);
 
           // Reset per-sheet chart layout tracking for this load.
           chartLayoutRef.current.clear();
@@ -285,19 +356,34 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             { file: formattedJson },
             { onlyValues: false }
           );
+          workbookReadyRef.current = true;
 
           devLog('Workbook loaded successfully');
 
           // Process chart actions if provided
-          if (effectiveActions && effectiveActions.length > 0) {
-            devLog('Processing chart actions:', effectiveActions);
+          const chartActions = effectiveActions?.filter((action: any) => action.type === 'insertChart') ?? [];
+          if (chartActions.length > 0) {
+            pendingChartsRef.current = chartActions.length;
+            setIsApplyingCharts(true);
+            const chartCompleted = () => {
+              if (loadIdRef.current !== currentLoadId) return;
+              pendingChartsRef.current--;
+              if (pendingChartsRef.current === 0) {
+                setIsApplyingCharts(false);
+                if (pendingManualSnapshotRef.current) {
+                  pendingManualSnapshotRef.current = false;
+                  void captureDraft();
+                }
+              }
+            };
+            devLog('Processing chart actions:', chartActions);
             chartTimeoutRef.current = setTimeout(() => {
               // Ignore stale async inserts if a newer workbook was loaded.
               if (loadIdRef.current !== currentLoadId) return;
 
               // Insert charts sequentially with delays to avoid race conditions
               let delay = 0;
-              effectiveActions.forEach((action: any, index: number) => {
+              chartActions.forEach((action: any, index: number) => {
                 if (action.type === 'insertChart') {
                   setTimeout(() => {
                     if (loadIdRef.current !== currentLoadId) return;
@@ -307,9 +393,10 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
                         ...action,
                         id: action.id || `chart_${Date.now()}_${index}`,
                         chartType: action.chartType || 'Column',
-                      });
+                      }, chartCompleted);
                       devLog(`✅ Chart ${index + 1} inserted:`, action.chartType, 'for range:', action.range);
                     } catch (chartError) {
+                      chartCompleted();
                       console.error('❌ Error inserting chart:', chartError);
                       toast.error(`Failed to insert chart ${index + 1}`);
                     }
@@ -322,11 +409,13 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         } catch (e) {
           console.error("Failed to load workbook JSON", e);
           toast.error("No se pudo cargar la hoja de cálculo generada");
+        } finally {
+          applyingWorkbookRef.current = false;
         }
       },
       saveAsJson: async () => {
         try {
-          const json = await spreadsheetRef.current?.saveAsJson({ onlyValues: true });
+          const json = await spreadsheetRef.current?.saveAsJson({ onlyValues: false });
           return (json as any) || null;
         } catch (e) {
           console.error("Failed to save spreadsheet as JSON", e);
@@ -388,6 +477,9 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <OfficeFileIcon kind="excel" size={20} className="h-5 w-5" title="Excel" />
             <h3 className="font-semibold text-sm text-foreground">Excel File</h3>
+            <Button variant="ghost" size="sm" onClick={async () => { if (await captureDraft()) await draft.save(); }} disabled={isGeneratingExternal || isApplyingCharts || draft.status === 'saving'} aria-label="Guardar hoja de cálculo">
+              <span role="status" className="text-xs">{isApplyingCharts ? 'Preparando gráficos…' : draft.label}</span>
+            </Button>
           </div>
           <div className="flex items-center gap-1">
             <Button
@@ -404,7 +496,8 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             <Button
               variant="ghost"
               size="icon"
-              onClick={onClose}
+              onClick={async () => { if (await captureDraft() && await draft.save()) onClose(); }}
+              disabled={isApplyingCharts}
               className="h-8 w-8 hover:bg-muted/60"
               title="Cerrar"
               aria-label="Cerrar"
@@ -415,7 +508,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         </div>
 
         {/* Custom Excel Ribbon */}
-        <ExcelRibbon spreadsheetRef={spreadsheetRef} />
+        <ExcelRibbon spreadsheetRef={spreadsheetRef} onWorkbookChange={handleWorkbookChange} />
 
         <div className="relative flex-1 min-w-0 overflow-hidden h-[calc(100vh-280px)]">
           {isGeneratingExternal && (
@@ -435,6 +528,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
               showFormulaBar={true}
               allowChart={true}
               allowSave={true}
+              actionComplete={handleWorkbookChange}
               saveUrl={spreadsheetSaveUrl}
               cssClass="e-spreadsheet-container"
             >

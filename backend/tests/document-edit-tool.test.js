@@ -66,6 +66,84 @@ function baseCtx(overrides = {}) {
   };
 }
 
+test('intermediate, empty-sibling and unconfirmed outputs never publish a successful edit', async (t) => {
+  const inputPath = tmpFileWith('original');
+  t.after(() => fs.rmSync(inputPath, { force: true }));
+  const valid = { name: 'edited.xlsx', buffer: Buffer.from('edited'), valid: true };
+  for (const result of [
+    { outputs: [valid], stoppedReason: 'max_iterations' },
+    { outputs: [valid] },
+    { outputs: [valid, { name: 'missing.xlsx', buffer: Buffer.alloc(0), valid: true }], stoppedReason: 'final' },
+  ]) {
+    let saves = 0;
+    const events = [];
+    const tool = buildDocumentEditTool({
+      sourcePreservingEdit: SP_NULL,
+      prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'book.xlsx' }]),
+      runDocumentAgent: async () => result,
+      saveArtifact: () => { saves++; },
+    });
+    const out = await tool.execute({ instruction: 'edita el documento' }, baseCtx({ onEvent: (event) => events.push(event) }));
+    assert.equal(out.ok, false);
+    assert.equal(out.code, 'DOCUMENT_EDIT_INCOMPLETE');
+    assert.equal(saves, 0);
+    assert.equal(events.length, 0);
+  }
+});
+
+test('sandbox batches use one baseline per source and save nothing when a later edit is missing', async (t) => {
+  const paths = [tmpFileWith('original-one'), tmpFileWith('original-two')];
+  t.after(() => paths.forEach((file) => fs.rmSync(file, { force: true })));
+  for (const complete of [false, true]) {
+    const calls = []; const saves = [];
+    const tool = buildDocumentEditTool({
+      sourcePreservingEdit: SP_NULL,
+      prisma: fakePrisma(paths.map((path, i) => ({ id: `f${i + 1}`, userId: 'u1', path, originalName: `book${i + 1}.xlsx` }))),
+      runDocumentAgent: async (options) => {
+        calls.push(options);
+        return { stoppedReason: 'final', finalText: 'Apliqué el cambio.', outputs: calls.length === 2 && !complete ? [] : [
+          { name: `edit${calls.length}.xlsx`, buffer: Buffer.from(`result-${calls.length}`), valid: true },
+        ] };
+      },
+      saveArtifact: (input) => {
+        saves.push(input);
+        return { id: `saved-${saves.length}`, filename: input.filename, downloadUrl: `/artifact/${saves.length}` };
+      },
+    });
+    const result = await tool.execute({ instruction: 'En ambos documentos mejora los títulos' }, baseCtx({ fileIds: ['f1', 'f2'] }));
+    assert.equal(result.ok, complete);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every((call) => call.files.length === 1));
+    assert.deepEqual(calls.map((call) => call.files[0].buffer.toString()), ['original-one', 'original-two']);
+    assert.equal(saves.length, complete ? 2 : 0);
+    if (complete) assert.deepEqual(saves.map((input) => input.validation.documentEdit.sourceFileId), ['f1', 'f2']);
+  }
+});
+
+test('sandbox document edits pin every model call to the selected provider and model', async () => {
+  const inputPath = tmpFileWith('source');
+  const calls = [];
+  const selected = { model: 'selected-model', provider: 'Custom', client: { chat: { completions: { create: async (payload) => {
+    calls.push(payload); throw Object.assign(new Error('provider billing failure'), { status: 402 });
+  } } } } };
+  const tool = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'book.xlsx' }]),
+    runDocumentAgent: async (opts) => {
+      assert.equal(opts.model, selected.model);
+      assert.equal(opts.route, 'sandbox');
+      await opts.client.chat.completions.create({ model: 'other-model', messages: [] });
+      throw new Error('unreachable');
+    },
+  });
+  try {
+    const result = await tool.execute({ instruction: 'Actualiza la fórmula y su formato' }, baseCtx({ documentEditLlm: selected }));
+    assert.equal(result.ok, false);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].model, 'selected-model');
+  } finally { fs.rmSync(inputPath, { force: true }); }
+});
+
 test('aggregate byte guard rejects oversized batches before any editor or blob read', async () => {
   let sourceEditorCalls = 0;
   let blobReads = 0;
@@ -204,7 +282,7 @@ test('model-named IDs outside the turn fall back to the REAL attachments (never 
     ], capture),
     runDocumentAgent: async (opts) => {
       agentFiles = opts.files;
-      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' };
+      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' };
     },
   });
   // The model invents an ID ("foreign" is NOT attached) → resolve to the
@@ -311,7 +389,7 @@ test('per-turn call budget: the 4th call on the SAME ctx is refused', async () =
   const tool = buildDocumentEditTool({
     sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a' }]),
-    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' }),
+    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' }),
   });
   const ctx = baseCtx();
   for (let i = 0; i < MAX_CALLS_PER_TURN; i += 1) {
@@ -543,7 +621,7 @@ test('source-preserving fast path emits and returns only artifacts with validati
     baseCtx({ fileIds: ['fvalid', 'finvalid'], onEvent: (event) => events.push(event) }),
   );
 
-  assert.equal(out.ok, true);
+  assert.equal(out.ok, false, 'a partially verified batch cannot report complete success');
   assert.equal(out.partial, true);
   assert.equal(sandboxCalled, false);
   assert.deepEqual(out.artifacts.map((artifact) => artifact.id), ['art-valid']);
@@ -778,7 +856,7 @@ test('in-process fast path falls through to the sandbox when the editor returns 
     sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => null },
     runDocumentAgent: async () => {
       sandboxCalls += 1;
-      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' };
+      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' };
     },
   });
   const outNull = await toolNull.execute({ instruction: 'edita algo' }, baseCtx());
@@ -790,7 +868,7 @@ test('in-process fast path falls through to the sandbox when the editor returns 
   const toolThrow = buildDocumentEditTool({
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'x.docx', filename: 'x.docx' }]),
     sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => { throw new Error('necesito un archivo DOCX con la sección solicitada'); } },
-    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok' }),
+    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' }),
   });
   const outThrow = await toolThrow.execute({ instruction: 'edita algo' }, baseCtx());
   assert.equal(outThrow.ok, true, 'a throw from the in-process editor must not fail the tool — sandbox takes over');
@@ -829,6 +907,7 @@ test('sandbox path materializes r2: attachments instead of fs.readFile on the re
       return {
         outputs: [{ name: 'informe-editado.docx', buffer: Buffer.from('edited'), valid: true }],
         finalText: 'ok',
+        stoppedReason: 'final',
         iterations: 1,
         driver: 'local',
       };

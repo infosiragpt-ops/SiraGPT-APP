@@ -1,6 +1,6 @@
 import { shouldEditExistingDocument } from "./ai-service"
 import { parseMessageFiles } from "./chat/composer-files"
-import { documentAttachment, looksLikeExplicitDocumentEdit, isExplicitDocumentEdit } from "./document-sandbox-client"
+import { documentAttachment, documentEditReference, looksLikeExplicitDocumentEdit, isExplicitDocumentEdit } from "./document-sandbox-client"
 
 export type DocumentSandboxRoute = "edit" | "clarify" | null
 export interface DocumentSandboxAdmission {
@@ -62,8 +62,8 @@ export function resolveDocumentSandboxAdmission(
   options: DocumentSandboxAdmissionOptions = {},
 ): DocumentSandboxAdmission {
   const composer = [...(options.attachments || [])].filter((item) => documentAttachment(item))
-  const context = [...(options.historyAttachments || []), ...(options.previewAttachments || [])]
-    .filter((item) => documentAttachment(item))
+  const history = [...(options.historyAttachments || [])].filter((item) => documentAttachment(item))
+  const preview = (options.previewAttachments || []).find((item) => documentAttachment(item) && documentEditReference(item))
   const explicit = looksLikeExplicitDocumentEdit(prompt)
 
   if (composer.length > 0) {
@@ -71,7 +71,11 @@ export function resolveDocumentSandboxAdmission(
     if (shouldEditExistingDocument(prompt, composer)) return { route: "clarify", attachments: composer }
     return { route: null, attachments: [] }
   }
-  // Follow-up without attachments: the server resolves the latest version.
-  if (explicit && context.length > 0 && (mentionsDocumentTarget(prompt) || hasLiteralDocumentReplacement(prompt))) return { route: "edit", attachments: [] }
+  if (explicit && (mentionsDocumentTarget(prompt) || hasLiteralDocumentReplacement(prompt))) {
+    // The visible document is the explicit target, even when a newer one lives
+    // in the chat. Only an unpinned follow-up delegates latest-version lookup.
+    if (preview) return { route: "edit", attachments: [preview] }
+    if (history.length > 0) return { route: "edit", attachments: [] }
+  }
   return { route: null, attachments: [] }
 }

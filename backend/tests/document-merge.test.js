@@ -226,21 +226,28 @@ test('document_edit NON-merge instruction still uses the normal editors', async 
   fs.writeFileSync(pa, await makeDocx(['hola']));
   const pb = path.join(os.tmpdir(), `merge-n2-${Date.now()}.docx`);
   fs.writeFileSync(pb, await makeDocx(['mundo']));
-  let docAgentCalled = false;
+  const docAgentCalls = [];
   const tool = buildDocumentEditTool({
     prisma: fakePrisma([
       { id: 'f1', userId: 'u1', path: pa, originalName: 'a.docx', filename: 'a.docx' },
       { id: 'f2', userId: 'u1', path: pb, originalName: 'b.docx', filename: 'b.docx' },
     ]),
     sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => null },
-    runDocumentAgent: async () => { docAgentCalled = true; return { outputs: [{ name: 'ed.docx', buffer: Buffer.from('x'), valid: true }] }; },
+    runDocumentAgent: async (options) => {
+      docAgentCalls.push(options);
+      return { stoppedReason: 'final', outputs: options.files.map((file) => ({
+        name: `edited-${file.name}`, buffer: Buffer.from(`edited:${file.name}`), valid: true,
+      })) };
+    },
   });
   const out = await tool.execute(
     { instruction: 'corrige la ortografía de ambos documentos' },
     { userId: 'u1', chatId: 'c1', fileIds: ['f1', 'f2'], signal: new AbortController().signal, onEvent: () => {} },
   );
-  assert.equal(docAgentCalled, true, 'non-merge edits keep the doc-agent path');
+  assert.equal(docAgentCalls.length, 2, 'non-merge edits validate each original separately');
+  assert.ok(docAgentCalls.every((call) => call.files.length === 1));
   assert.equal(out.ok, true);
+  assert.equal(out.edited.length, 2);
   fs.rmSync(pa, { force: true });
   fs.rmSync(pb, { force: true });
 });
