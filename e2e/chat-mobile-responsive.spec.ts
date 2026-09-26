@@ -287,7 +287,7 @@ test("390px mobile model and tools menus stay inside the viewport", async ({ pag
   await page.keyboard.press("Escape")
 
   await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
-  const toolsMenu = page.locator('[role="menu"]').filter({ hasText: /Subir archivos|Upload Files/ }).first()
+  const toolsMenu = page.locator('[role="menu"]').filter({ hasText: /Subir documento|Upload Files/ }).first()
   await expect(toolsMenu).toBeVisible()
   const appsMenuItem = toolsMenu.getByRole("menuitem", { name: /APPs/i })
   await expect(appsMenuItem).toBeVisible()

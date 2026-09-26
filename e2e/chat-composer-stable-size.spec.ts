@@ -561,7 +561,7 @@ for (const viewport of [
     await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).press("Enter")
 
     const toolsMenu = page.getByRole("menu", { name: "Adjuntar archivos y herramientas" })
-    for (const label of ["Subir archivos", "Imágenes", "Voz", "Video", "Música"]) {
+    for (const label of ["Subir documento", "Imágenes", "Voz", "Video", "Música", "Memoria"]) {
       await expect(toolsMenu.getByText(label, { exact: true })).toBeVisible()
     }
     for (const retiredLabel of [
