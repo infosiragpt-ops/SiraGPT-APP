@@ -98,7 +98,7 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "kimi", label: "Kimi (Moonshot) API" },
   { key: "together", label: "Together AI API" },
   { key: "fireworks", label: "Fireworks AI API" },
-  { key: "deepseek", label: "DeepSeek API" },
+  { key: "deepseek", label: "DeepSeek API (Sira Rápido · Sira Pro)" },
   { key: "xai", label: "xAI API" },
   { key: "meta", label: "Meta Model API" },
   { key: "typesafe", label: "TypeSafe AI API (Jev, decisiones)" },
@@ -123,11 +123,14 @@ const QUICK_PICK: Array<{ key: string; label: string }> = [
   { key: "anthropic", label: "Claude" },
   { key: "gemini", label: "Gemini" },
   { key: "xai", label: "Grok" },
+  { key: "deepseek", label: "DeepSeek" },
   { key: "openrouter", label: "OpenRouter" },
   { key: "groq", label: "GroqCloud" },
   { key: "cerebras", label: "Cerebras" },
   { key: "zai", label: "Z.ai" },
   { key: "kimi", label: "Kimi" },
+  { key: "together", label: "Together" },
+  { key: "fireworks", label: "Fireworks" },
   { key: "fal", label: "fal.ai" },
   { key: "mistral", label: "Mistral" },
   { key: "meta", label: "Meta" },
@@ -140,6 +143,8 @@ const QUICK_PICK: Array<{ key: string; label: string }> = [
   { key: "suno", label: "Suno" },
   { key: "perplexity", label: "Perplexity Search" },
   { key: "brave", label: "Brave Search" },
+  { key: "tavily", label: "Tavily Search" },
+  { key: "exa", label: "Exa Search" },
 ]
 
 type Connection = {
