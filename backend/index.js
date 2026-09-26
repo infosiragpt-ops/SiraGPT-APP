@@ -657,6 +657,7 @@ const idempotency = idempotencyMiddleware();
 const {
     resolveRateLimitConfig,
     isAuthSessionMaintenancePath,
+    isAgentTaskReadRequest,
     makeJwtAwareKeyGenerator,
     makeSuperAdminBypass,
 } = require('./src/middleware/rate-limit-policy');
@@ -722,7 +723,7 @@ const expensiveLimiter = rateLimit({
     ...makeLimiterCommon('expensive'),
     windowMs: rateLimitCfg.windowMs,
     max: rateLimitCfg.expensive,
-    skip: skipForSuperAdmin,
+    skip: (req) => skipForSuperAdmin(req) || isAgentTaskReadRequest(req),
     message: 'Too many expensive operations, please slow down.',
 });
 
@@ -743,6 +744,9 @@ const apiLimiter = rateLimit({
     max: rateLimitCfg.api,
     skip: (req) => {
         if (skipForSuperAdmin(req)) return true;
+        // These known agent reads skip generation admission, but never skip
+        // rate limiting altogether. Preview conversion stays in the costly tier.
+        if (isAgentTaskReadRequest(req)) return false;
         if (req.originalUrl.startsWith('/api/auth')) return !isAuthSessionMaintenancePath(req.originalUrl);
         return apiLimiterSpecificPrefixes.some((prefix) => req.originalUrl.startsWith(prefix));
     },

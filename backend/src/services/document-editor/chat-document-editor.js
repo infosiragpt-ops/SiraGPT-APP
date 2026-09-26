@@ -525,15 +525,38 @@ function unquotedInstruction(instruction) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
+function explicitBatchCounts(instruction) {
+  // Only an editing scope at the start of a clause can authorize every source.
+  // Counts within requested content, references or format subgroups are not
+  // the size of the attachment set ("enumera los 3 documentos de referencia").
+  const text = unquotedInstruction(instruction);
+  const start = '(?:^|[.!?:;]\\s*)(?:(?:por favor|quiero que|necesito que)\\s+)?';
+  const action = '(?:edita\\w*|modifica\\w*|corrig\\w*|actualiza\\w*|cambia\\w*|reemplaza\\w*|mejora\\w*|completa\\w*|revisa\\w*)';
+  const nextAction = `(?:${action}|agrega\\w*|incluye\\w*|conserva\\w*|manten\\w*)`;
+  const target = '(?:los|las)\\s+(\\d+)\\s+(?:archivos|documentos)(?:\\s+(?:adjuntos|subidos|cargados|originales|recien\\s+editados))?';
+  const direct = new RegExp(`${start}${action}\\s+${target}(?=\\s*(?:[.!?:;,]|$)|\\s+(?:[ye]\\s+)?${nextAction}\\b)`, 'g');
+  const located = new RegExp(`${start}en\\s+${target}(?=\\s*,?\\s*(?:(?:solo|solamente)\\s+)?${nextAction}\\b)`, 'g');
+  return [...text.matchAll(direct), ...text.matchAll(located)].map((match) => Number(match[1]));
+}
+
 function isExplicitBatch(instruction) {
   const text = unquotedInstruction(instruction);
-  return /\b(?:ambos|ambas|(?:todos|todas)(?:\s+(?:los|las))?\s+(?:archivos|documentos|words?|excels?|powerpoints?|presentaciones)|cada\s+(?:archivo|documento|word|excel|powerpoint|presentacion)|both|all\s+(?:files|documents)|each\s+(?:file|document))\b/.test(text);
+  return explicitBatchCounts(instruction).some((count) => count > 1)
+    || /\b(?:ambos|ambas|(?:todos|todas)(?:\s+(?:los|las))?\s+(?:archivos|documentos|words?|excels?|powerpoints?|presentaciones)|cada\s+(?:archivo|documento|word|excel|powerpoint|presentacion)|both|all\s+(?:files|documents)|each\s+(?:file|document))\b/.test(text);
+}
+
+function quotedReplacementCount(instruction) {
+  // Count replacement pairs, not verbs: "cambia A por B y C por D" has
+  // two mutations. Quoted contents stay opaque, including "por" or filenames.
+  const text = String(instruction || '').replace(/"[^"\r\n]*"|“[^”\r\n]*”|«[^»\r\n]*»|'[^'\r\n]*'|‘[^’\r\n]*’|`[^`\r\n]*`/gu, '\uE000');
+  return [...text.matchAll(/\uE000\s*(?:por|con|a|to|with|→|->)\s*\uE000/giu)].length;
 }
 
 function isMultiOperationRequest(instruction) {
   const text = unquotedInstruction(precisionInstruction(instruction))
     .replace(/\b(?:sin\s+(?:cambiar|alterar|modificar|perder|tocar)|no\s+(?:cambies|alteres|modifiques|toques))\b/g, ' conservar ');
-  return (text.match(/\b(?:agreg\w*|anad\w*|insert\w*|borr\w*|elimin\w*|reescrib\w*|traduc\w*|resum\w*|corrig\w*|reempla[zc]\w*|sustitu\w*|modific\w*|cambi\w*|revis\w*|mejora\w*|replace|change)\b/g) || []).length > 1;
+  return quotedReplacementCount(instruction) > 1
+    || (text.match(/\b(?:agreg\w*|anad\w*|insert\w*|borr\w*|elimin\w*|reescrib\w*|traduc\w*|resum\w*|corrig\w*|reempla[zc]\w*|sustitu\w*|modific\w*|cambi\w*|revis\w*|mejora\w*|replace|change)\b/g) || []).length > 1;
 }
 
 // Batch scope chooses the files, not a second mutation. Remove only recognized
@@ -544,9 +567,24 @@ function precisionInstruction(instruction) {
 }
 
 function sourceSelectionText(instruction) {
+  const text = String(instruction || '');
   const value = '(?:"[^"\\r\\n]*"|“[^”\\r\\n]*”|«[^»\\r\\n]*»|\'[^\'\\r\\n]*\'|‘[^’\\r\\n]*’|`[^`\\r\\n]*`)';
-  const pair = new RegExp(`\\b(?:reempla[zc]\\w*|sustitu\\w*|cambi\\w*|modifi(?:c|q)\\w*|corrig\\w*|replace|change)\\s+(?:(?:de|del|el|la|los|las|texto|frase|palabra|letra|caracter|valor|exacto|exacta)\\s+)*${value}\\s*(?:por|con|a|to|with|→|->)\\s*${value}`, 'giu');
-  return String(instruction || '').replace(pair, ' ').normalize('NFC').toLowerCase();
+  // Later pairs may share the first verb: "cambia A por B y C por D".
+  // Inspect only the gap before each pair. A later "en A.docx con B.xlsx"
+  // remains a source selector even when preceded by a literal replacement.
+  const pair = new RegExp(`${value}\\s*(?:por|con|a|to|with|→|->)\\s*${value}`, 'giu');
+  const labels = '(?:(?:de|del|el|la|los|las|texto|frase|palabra|letra|caracter|valor|exacto|exacta|titulo|estado)\\s+)*';
+  const direct = new RegExp(`\\b(?:reempla[zc]\\w*|sustitu\\w*|cambi\\w*|modifi(?:c|q)\\w*|corrig\\w*|replace|change)\\s+${labels}$`, 'u');
+  const continuation = new RegExp(`^\\s*[,;]?\\s*(?:y|e|and)\\s+${labels}$`, 'u');
+  let priorEnd = 0;
+  let priorWasReplacement = false;
+  return text.replace(pair, (match, offset) => {
+    const gap = unquotedInstruction(text.slice(priorEnd, offset));
+    const replacement = direct.test(gap) || (priorWasReplacement && continuation.test(gap));
+    priorEnd = offset + match.length;
+    priorWasReplacement = replacement;
+    return replacement ? ' ' : match;
+  }).normalize('NFC').toLowerCase();
 }
 
 function sourceNames(source) {
@@ -655,6 +693,12 @@ async function runResolvedDocumentEdit({
     // The exact parser deliberately supports one operation. Compound edits
     // belong to the selected-model engine as a whole, never to its first pair.
     if (wordSources && isMultiOperationRequest(instruction)) precision = null;
+    // A mixed/broad batch can include a complete quoted replacement plus
+    // instructions for preserving other formats. The single-Word grammar
+    // cannot compile that whole request; let each selected editor interpret it
+    // intact instead of allowing one Word candidate to reject every file.
+    if (precision?.error?.code === 'DOCX_EDIT_INSTRUCTION_REQUIRED'
+      && isExplicitBatch(instruction) && quotedReplacementCount(instruction) > 0) precision = null;
     let selected = sources.length === 1 ? sources[0] : null;
     if (precision?.sourceFilename) {
       // Only the parser's filename OUTSIDE the quoted edit is authoritative.
@@ -693,6 +737,12 @@ async function runResolvedDocumentEdit({
       };
       if (named.length) sources = named;
     }
+    const batchCounts = explicitBatchCounts(instruction);
+    const batchSize = resolved?.batchNames?.length || sources.length;
+    if (batchCounts.some((count) => !Number.isSafeInteger(count) || count !== batchSize)) return {
+      ok: false, code: 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
+      message: `La cantidad de documentos indicada no coincide con los ${batchSize} disponibles. Indica los nombres o adjunta exactamente los archivos que deseas editar; no modifiqué ninguno.`,
+    };
     if (sources.length > MAX_SOURCES) return { ok: false, code: 'TOO_MANY_DOCUMENTS', message: MESSAGES.TOO_MANY_DOCUMENTS };
     emit({ label: 'Abriendo el documento', detail: sources.map((source) => source.name).join(', ') });
     const files = resolved?.files || await loadSourceFiles(sources, deps);
