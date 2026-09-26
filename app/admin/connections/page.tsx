@@ -98,7 +98,7 @@ const PROVIDERS: Array<{ key: string; label: string }> = [
   { key: "kimi", label: "Kimi (Moonshot) API" },
   { key: "together", label: "Together AI API" },
   { key: "fireworks", label: "Fireworks AI API" },
-  { key: "deepseek", label: "DeepSeek API (Sira Rápido · Sira Pro)" },
+  { key: "deepseek", label: "DeepSeek API" },
   { key: "xai", label: "xAI API" },
   { key: "meta", label: "Meta Model API" },
   { key: "typesafe", label: "TypeSafe AI API (Jev, decisiones)" },
