@@ -12,6 +12,7 @@
  */
 
 const { DocxOpError } = require('./ops');
+const { normalizeChecklist, formatChecklist } = require('./checklist');
 
 const ID_HINT = 'Ids de doc_outline: p12 (párrafo), t0 (tabla), t0.r2 (fila), t0.r2.c1 (celda), h1.p0 (encabezado), f1.p0 (pie), sdt3 (control), cb0 (casilla).';
 
@@ -204,6 +205,53 @@ const TOOL_SPECS = [
     },
   },
   {
+    name: 'plan_checklist',
+    description: 'PRIMER PASO, antes de editar: convierte la petición en una checklist verificable. Cada punto se comprueba al final mirando la captura del documento; el usuario recibe ✓/✗ por punto. Incluye: los cambios explícitos pedidos (uno por punto), el punto implícito «nada más cambia» y las ambigüedades que resolviste mirando el documento (qué decidiste y por qué).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['explicit', 'implicit', 'ambiguity'] },
+              text: { type: 'string', description: 'El requisito, concreto y verificable (p. ej. «Apellidos y nombres del experto → Carrera Salas, Luis»).' },
+              verify: { type: 'string', description: 'Cómo se comprobará en la captura o en el registro de cambios.' },
+            },
+            required: ['kind', 'text'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['items'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'render_preview',
+    description: 'Renderiza el documento en su estado actual y te devuelve la captura de las páginas indicadas (por defecto las primeras) para que la mires. Úsala cuando necesites ver cómo queda algo (texto cortado, celda que desborda, salto de página) antes de terminar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pages: { type: 'array', items: { type: 'integer' }, description: 'Páginas a renderizar (1 = primera). Por defecto, las primeras.' },
+        dpi: { type: 'integer', description: 'Resolución (36–200). Por defecto 110.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'verify_visual',
+    description: 'Compara la captura del documento editado con la del original, página por página: te devuelve las zonas que cambiaron (enmarcadas en rojo en la captura) y confirma que el resto es idéntico. finish ya la ejecuta; llámala antes si quieres comprobar un cambio intermedio.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pages: { type: 'array', items: { type: 'integer' }, description: 'Páginas a comparar. Por defecto, las primeras.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'undo',
     description: 'Deshace la última operación de edición (si te equivocaste de celda o de texto).',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
@@ -224,6 +272,15 @@ const TOOL_SPECS = [
   },
 ];
 
+// Every call carries a short, user-facing phrase written by the model in the
+// user's language; the chat timeline shows it next to the step icon.
+const STEP_DESCRIPTION_PROPERTY = {
+  description: { type: 'string', description: 'Frase breve para el usuario (≤80 caracteres, en su idioma) que describe este paso, p. ej. «Escribir el nombre del experto en la matriz».' },
+};
+for (const spec of TOOL_SPECS) {
+  spec.input_schema.properties = { ...STEP_DESCRIPTION_PROPERTY, ...spec.input_schema.properties };
+}
+
 const EDIT_TOOLS = new Set(['fill_field', 'set_cell', 'set_cells', 'replace_text', 'insert_paragraph', 'insert_table_row', 'delete', 'set_format', 'set_checkbox', 'fill_content_control']);
 
 function toOpenAiTools(specs = TOOL_SPECS) {
@@ -242,13 +299,21 @@ function formatChanges(changes) {
  * Executors bound to a session. `onFinish` receives the finish args and must
  * return the verification text; the loop stops once it reports success.
  */
-function makeDocxToolExecutors(session, { onFinish, onEdit = () => {} } = {}) {
+function makeDocxToolExecutors(session, {
+  onFinish,
+  onEdit = () => {},
+  onChecklist = () => {},
+  renderPages = null,
+  originalRenderPages = null,
+  attachImages = () => {},
+} = {}) {
   const history = [];
   const snapshot = () => session.snapshot();
   const restore = (snap) => session.restore(snap);
   const wrap = (fn) => async (args) => {
     try {
-      return await fn(args || {});
+      const { description: _description, ...rest } = args || {};
+      return await fn(rest);
     } catch (err) {
       if (err instanceof DocxOpError || err?.code?.startsWith?.('DOCX_ENGINE')) return `ERROR: ${err.message}`;
       return `ERROR: ${err?.message || String(err)}`;
@@ -263,6 +328,35 @@ function makeDocxToolExecutors(session, { onFinish, onEdit = () => {} } = {}) {
     doc_find: wrap(({ query, regex = false }) => {
       const found = session.find(String(query || ''), { regex: Boolean(regex) });
       return found.length ? found.join('\n') : `Sin resultados para «${query}».`;
+    }),
+    plan_checklist: wrap((args) => {
+      const items = normalizeChecklist(args);
+      try { onChecklist(items); } catch { /* state relay only */ }
+      return `Checklist registrada (${items.length} puntos). Cada punto se comprobará al final:\n${items.map((item) => `- [${item.id}] (${item.kind}) ${item.text}`).join('\n')}`;
+    }),
+    render_preview: wrap(async ({ pages = null, dpi = undefined }) => {
+      if (typeof renderPages !== 'function') return 'ERROR: no hay renderizador disponible en este entorno. Usa finish: la verificación estructural y de texto sigue activa.';
+      const buffer = session.changedParts().length ? session.save() : session.pkg.sourceBuffer;
+      const rendered = await renderPages(buffer, { pages, dpi });
+      if (!rendered.length) return 'ERROR: el renderizador no produjo páginas.';
+      try {
+        attachImages(rendered.map((p) => ({ page: p.page, png: p.png })), { note: `Captura actual del documento (página${rendered.length === 1 ? '' : 's'} ${rendered.map((p) => p.page).join(', ')}).` });
+      } catch { /* image relay only */ }
+      return `Renderizada${rendered.length === 1 ? '' : 's'} ${rendered.length} página${rendered.length === 1 ? '' : 's'} (${rendered.map((p) => p.page).join(', ')}). La captura va en el siguiente mensaje: revísala y corrige lo que no se vea bien.`;
+    }),
+    verify_visual: wrap(async ({ pages = null }) => {
+      if (typeof renderPages !== 'function') return 'ERROR: no hay renderizador disponible en este entorno. Usa finish: la verificación estructural y de texto sigue activa.';
+      if (!session.changedParts().length) return 'Todavía no hay cambios que comparar.';
+      const { comparePageSets } = require('./visual-diff');
+      const [before, after] = await Promise.all([
+        originalRenderPages ? originalRenderPages({ pages }) : renderPages(session.pkg.sourceBuffer, { pages }),
+        renderPages(session.save(), { pages }),
+      ]);
+      const compared = await comparePageSets(before, after, { annotate: true });
+      try {
+        if (compared.annotated.length) attachImages(compared.annotated, { note: 'Captura del documento editado con las zonas cambiadas enmarcadas en rojo.' });
+      } catch { /* image relay only */ }
+      return compared.summary;
     }),
     undo: wrap(() => {
       const last = history.pop();
@@ -287,4 +381,4 @@ function makeDocxToolExecutors(session, { onFinish, onEdit = () => {} } = {}) {
   return executors;
 }
 
-module.exports = { TOOL_SPECS, EDIT_TOOLS, toOpenAiTools, makeDocxToolExecutors, formatChanges };
+module.exports = { TOOL_SPECS, EDIT_TOOLS, toOpenAiTools, makeDocxToolExecutors, formatChanges, formatChecklist, STEP_DESCRIPTION_PROPERTY };

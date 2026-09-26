@@ -14,6 +14,8 @@
 const path = require('node:path');
 const { runDocxEngineEdit } = require('./agent');
 const soffice = require('./soffice');
+const { sharedDocxRenderer, pdftoppmAvailable } = require('./render');
+const { formatChecklist } = require('./checklist');
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const DOC_MIME = 'application/msword';
@@ -85,9 +87,28 @@ function buildUserSummary({ modelSummary, changes, verification, filename }) {
     else facts.push(`${r.pagesAfter} página(s)`);
   }
   if (facts.length) lines.push('', `Verificado: ${facts.join('; ')}.`);
+  if (Array.isArray(r.checklist) && r.checklist.length) {
+    lines.push('', '**Comprobación punto por punto (mirando la captura del documento):**');
+    for (const line of formatChecklist(r.checklist).split('\n')) lines.push(`- ${line}`);
+  }
+  if (r.visual && typeof r.visual.summary === 'string' && r.visual.summary.trim()) {
+    lines.push('', `Captura comparada con el original: ${r.visual.summary.split('\n').filter(Boolean).slice(0, 3).join(' ')}`);
+  }
   if (r.intent?.missing_information?.length) lines.push('', `Datos que faltan: ${r.intent.missing_information.join('; ')}.`);
   lines.push('', 'El archivo original se conserva.');
   return lines.join('\n');
+}
+
+/** Persisted verification: keep facts, drop the page bitmaps (they only serve the loop and the live UI). */
+function compactVerification(verification) {
+  if (!verification || !verification.report) return verification;
+  const { visual, ...rest } = verification.report;
+  const report = { ...rest };
+  if (visual) {
+    const { annotated: _annotated, ...facts } = visual;
+    report.visual = facts;
+  }
+  return { ...verification, report };
 }
 
 async function editWordDocument({
@@ -100,6 +121,8 @@ async function editWordDocument({
   onEvent = () => {},
   extraContext = '',
   render: renderOverride,
+  renderPages: renderPagesOverride,
+  vision = undefined,
   convert: convertOverride,
 } = {}) {
   signal?.throwIfAborted();
@@ -111,11 +134,19 @@ async function editWordDocument({
     workBuffer = await convert.docToDocx(buffer);
   }
   let render = renderOverride;
+  let renderPages = renderPagesOverride;
   if (render === undefined) {
-    render = (await soffice.sofficeAvailable())
-      ? async (buf) => soffice.pdfInfo(await soffice.renderDocxToPdf(buf))
-      : null;
+    if (await soffice.sofficeAvailable()) {
+      const renderer = sharedDocxRenderer();
+      render = (buf) => renderer.render(buf);
+      // Page bitmaps need pdftoppm (poppler) next to LibreOffice; without it
+      // the loop still verifies structure and rendered text.
+      if (renderPages === undefined) renderPages = (await pdftoppmAvailable()) ? (buf, opts) => renderer.pages(buf, opts) : null;
+    } else {
+      render = null;
+    }
   }
+  if (renderPages === undefined) renderPages = null;
   const result = await runDocxEngineEdit({
     buffer: workBuffer,
     filename: isDoc ? filename.replace(/\.doc$/i, '.docx') : filename,
@@ -125,6 +156,8 @@ async function editWordDocument({
     signal,
     onEvent,
     render,
+    renderPages,
+    vision,
     extraContext,
   });
   if (!result.ok) {
@@ -133,7 +166,7 @@ async function editWordDocument({
       : result.status === 'cannot'
         ? (result.summary || 'No es posible hacer ese cambio en este documento.')
         : 'No pude completar la edición del documento con el modelo seleccionado. El original no se modificó; inténtalo de nuevo o reformula el cambio.';
-    return { ok: false, status: result.status, message: fallback, changes: result.changes, verification: result.verification };
+    return { ok: false, status: result.status, message: fallback, changes: result.changes, verification: compactVerification(result.verification), checklist: result.checklist || null };
   }
   let outBuffer = result.buffer;
   let outName = editedFilename(filename);
@@ -176,7 +209,8 @@ async function editWordDocument({
         ? '\n\nEl archivo .doc requirió conversión para editarlo; se comprobó el contenido de la copia final.'
         : '\n\nTe entrego la copia en .docx porque no pude verificar la conversión de vuelta a .doc.') : ''),
     changes: result.changes,
-    verification: result.verification,
+    verification: compactVerification(result.verification),
+    checklist: result.checklist || null,
     iterations: result.iterations,
   };
 }
@@ -187,6 +221,7 @@ module.exports = {
   docxEngineEnabled,
   editedFilename,
   buildUserSummary,
+  compactVerification,
   describeChangeForUser,
   DOCX_MIME,
 };

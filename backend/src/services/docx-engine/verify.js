@@ -3,10 +3,14 @@
 /**
  * Verification of an edited package before it is delivered:
  *   1. structural: every ZIP entry outside the edited parts is byte-identical;
- *      edited parts are well-formed XML.
+ *      edited parts are well-formed XML; parts that must never change as a
+ *      side effect (styles, numbering, theme, settings, the section setup)
+ *      are guarded unless an operation explicitly targeted them.
  *   2. diff: which paragraphs/rows changed, compared with what the ops touched.
  *   3. render: LibreOffice renders the result; page count vs the original and
  *      every value the model says it wrote is visible in the rendered text.
+ *   4. visual: the rendered pages are compared pixel by pixel with the
+ *      original — changed zones are boxed for the model and the user.
  * Returns { ok, issues[], report } — issues are Spanish, actionable sentences
  * the agent receives to self-correct.
  */
@@ -15,6 +19,9 @@ const PizZip = require('pizzip');
 const { XMLValidator } = require('fast-xml-parser');
 const X = require('./xml-scan');
 const { assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
+
+/** Parts an edit must not touch unless an op deliberately targets them. */
+const PROTECTED_PART_RE = /^word\/(?:styles|numbering|settings|fontTable|webSettings|stylesWithEffects)\.xml$|^word\/theme\//;
 
 function bytesEqual(a, b) {
   if (!a || !b || a.length !== b.length) return false;
@@ -53,8 +60,25 @@ function diffCount(a, b) {
 function normalizeText(text) {
   return String(text || '')
     .toLocaleLowerCase('es')
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[\s\u00ad]+/g, '');
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[\s­]+/g, '');
+}
+
+/** The body-level section properties (page size, margins, orientation, columns). */
+function bodySectPr(xml) {
+  const matches = [...String(xml || '').matchAll(/<w:sectPr(?:\s[^>]*)?(?:\/>|>[\s\S]*?<\/w:sectPr>)/g)];
+  if (!matches.length) return '';
+  // The document-level sectPr is the last child of w:body; paragraph-level
+  // ones (section breaks) live inside w:pPr and come earlier.
+  return matches[matches.length - 1][0];
+}
+
+function collectStoryText(zip) {
+  return Object.keys(zip.files).filter((name) => /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(name))
+    .map((name) => {
+      const xml = zip.file(name).asText();
+      return [...xml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => X.decodeEntities(m[1])).join('');
+    }).join('\n');
 }
 
 async function verifyEditedDocx({
@@ -64,6 +88,10 @@ async function verifyEditedDocx({
   expectedValues = [],
   render = null,
   originalRender = null,
+  renderPages = null,
+  originalRenderPages = null,
+  authorizedParts = [],
+  allowSectionChange = false,
 } = {}) {
   const issues = [];
   const report = { changedParts, identicalEntries: 0, totalEntries: 0 };
@@ -79,6 +107,7 @@ async function verifyEditedDocx({
     return { ok: false, issues: ['El archivo editado no es un ZIP de Word válido.'], report };
   }
   const changed = new Set(changedParts);
+  const authorized = new Set(authorizedParts);
   let actualChanges = 0;
   for (const name of Object.keys(original.files)) {
     const a = original.file(name);
@@ -89,11 +118,17 @@ async function verifyEditedDocx({
       issues.push(`Falta la parte ${name} en el archivo editado.`);
       continue;
     }
+    const identical = bytesEqual(a.asUint8Array(), b.asUint8Array());
     if (changed.has(name)) {
-      if (!bytesEqual(a.asUint8Array(), b.asUint8Array())) actualChanges += 1;
+      if (!identical) {
+        actualChanges += 1;
+        if (PROTECTED_PART_RE.test(name) && !authorized.has(name)) {
+          issues.push(`La parte ${name} (estilos, numeración, tema o configuración) cambió sin que la petición lo requiriera. Deshaz ese cambio: solo se editan las partes necesarias.`);
+        }
+      }
       continue;
     }
-    if (bytesEqual(a.asUint8Array(), b.asUint8Array())) report.identicalEntries += 1;
+    if (identical) report.identicalEntries += 1;
     else issues.push(`La parte ${name} cambió sin que ninguna operación la editara.`);
   }
   for (const name of Object.keys(edited.files)) {
@@ -113,6 +148,10 @@ async function verifyEditedDocx({
       continue;
     }
     const before = original.file(name)?.asText() || '';
+    if (name === 'word/document.xml' && !allowSectionChange && bodySectPr(before) !== bodySectPr(after)) {
+      report.sectionChanged = true;
+      issues.push('La configuración de sección del documento (tamaño de página, márgenes u orientación) cambió. Restaura la sección original: la edición debe limitarse al contenido pedido.');
+    }
     try {
       report.diff[name] = diffCount(paragraphSignatures(before), paragraphSignatures(after));
     } catch {
@@ -121,11 +160,7 @@ async function verifyEditedDocx({
   }
 
   // Check claimed values in reopened story text even when no renderer exists.
-  const storyText = Object.keys(edited.files).filter((name) => /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(name))
-    .map((name) => {
-      const xml = edited.file(name).asText();
-      return [...xml.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => X.decodeEntities(m[1])).join('');
-    }).join('\n');
+  const storyText = collectStoryText(edited);
   const values = (expectedValues || []).map((v) => String(v || '').trim()).filter(Boolean);
   for (const value of values) {
     if (!normalizeText(storyText).includes(normalizeText(value))) issues.push(`El valor «${value.slice(0, 60)}» no aparece en el archivo editado.`);
@@ -172,7 +207,36 @@ async function verifyEditedDocx({
       issues.push('No pude renderizar el archivo editado para comprobar que se abre y muestra los cambios.');
     }
   }
+
+  // Visual comparison: look at the pages, not only the text.
+  if (report.rendered && typeof renderPages === 'function' && actualChanges > 0) {
+    try {
+      const { comparePageSets, pngDataUri } = require('./visual-diff');
+      const afterPages = await renderPages(editedBuffer);
+      const beforePages = originalRenderPages ? await originalRenderPages() : [];
+      const compared = await comparePageSets(beforePages, afterPages, {
+        annotate: true, pagesBefore: report.pagesBefore ?? null, pagesAfter: report.pagesAfter ?? null,
+      });
+      const comparedPages = compared.pages.map((p) => p.page);
+      const maxCompared = comparedPages.length ? Math.max(...comparedPages) : 0;
+      const partial = Number.isInteger(report.pagesAfter) && report.pagesAfter > maxCompared;
+      report.visual = {
+        summary: compared.summary + (partial ? `\n(Se compararon las primeras ${maxCompared} páginas de ${report.pagesAfter}.)` : ''),
+        anyChange: compared.anyChange,
+        partial,
+        pages: compared.pages.map((p) => (p.diff
+          ? { page: p.page, identical: p.diff.identical, changedRatio: Number(p.diff.changedRatio.toFixed(4)), regions: p.diff.regions, width: p.diff.width, height: p.diff.height }
+          : { page: p.page, missing: p.missing })),
+        annotated: compared.annotated.map((a) => ({ page: a.page, dataUri: pngDataUri(a.png) })),
+      };
+      if (!compared.anyChange && !partial) {
+        issues.push('Ninguna página muestra cambios visibles respecto del original. Comprueba que la edición quedó en el lugar correcto y se ve en el documento.');
+      }
+    } catch (err) {
+      report.visual = { error: String(err?.message || err).slice(0, 200) };
+    }
+  }
   return { ok: issues.length === 0, issues, report };
 }
 
-module.exports = { verifyEditedDocx, diffCount, paragraphSignatures };
+module.exports = { verifyEditedDocx, diffCount, paragraphSignatures, bodySectPr, PROTECTED_PART_RE };

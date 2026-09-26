@@ -62,6 +62,41 @@ function textBlocks(content) {
   return text ? [{ type: 'text', text }] : [];
 }
 
+const IMAGE_DATA_URI_RE = /^data:(image\/(?:png|jpeg|jpg|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/i;
+
+/** OpenAI `image_url` data-URI part → Anthropic base64 image block (null for anything else). */
+function imageBlockOf(part) {
+  if (!part || typeof part !== 'object' || part.type !== 'image_url') return null;
+  const url = typeof part.image_url === 'string' ? part.image_url : part.image_url && part.image_url.url;
+  const m = IMAGE_DATA_URI_RE.exec(String(url || ''));
+  if (!m) return null;
+  const mediaType = m[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : m[1].toLowerCase();
+  return { type: 'image', source: { type: 'base64', media_type: mediaType, data: m[2].replace(/\s+/g, '') } };
+}
+
+/** User/tool content with text AND image parts, in order (text-only content collapses to one block). */
+function contentBlocks(content) {
+  if (!Array.isArray(content)) return textBlocks(content);
+  const blocks = [];
+  let pendingText = [];
+  const flush = () => {
+    const text = pendingText.filter(Boolean).join('\n');
+    if (text) blocks.push({ type: 'text', text });
+    pendingText = [];
+  };
+  for (const part of content) {
+    const image = imageBlockOf(part);
+    if (image) { flush(); blocks.push(image); continue; }
+    if (typeof part === 'string') pendingText.push(part);
+    else if (part && typeof part === 'object') {
+      if (typeof part.text === 'string') pendingText.push(part.text);
+      else if (typeof part.content === 'string') pendingText.push(part.content);
+    }
+  }
+  flush();
+  return blocks;
+}
+
 /** Convert an OpenAI transcript into Anthropic's strict role/block format. */
 function toAnthropicTranscript(messages) {
   const systemParts = [];
@@ -93,21 +128,24 @@ function toAnthropicTranscript(messages) {
 
     if (message.role === 'tool') {
       const toolUseId = String(message.tool_call_id || '').trim();
+      const blocks = contentBlocks(message.content);
+      const hasImage = blocks.some((b) => b.type === 'image');
       const text = contentAsText(message.content);
       if (toolUseId) {
         appendTurn(turns, 'user', [{
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: text || 'Tool completed successfully with no textual output.',
+          // Images belong inside the tool_result (a screenshot the tool took).
+          content: hasImage ? blocks : (text || 'Tool completed successfully with no textual output.'),
         }]);
-      } else if (text) {
-        appendTurn(turns, 'user', [{ type: 'text', text: `[Tool result]\n${text}` }]);
+      } else if (blocks.length) {
+        appendTurn(turns, 'user', hasImage ? [{ type: 'text', text: '[Tool result]' }, ...blocks] : [{ type: 'text', text: `[Tool result]\n${text}` }]);
       }
       continue;
     }
 
     if (message.role === 'user' || message.role === 'function') {
-      appendTurn(turns, 'user', textBlocks(message.content));
+      appendTurn(turns, 'user', contentBlocks(message.content));
     }
   }
 

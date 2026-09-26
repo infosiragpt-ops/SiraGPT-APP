@@ -467,6 +467,16 @@ function withDeepSeekToolTranscript(client) {
  * Pin every request to the selected model and its own client. A failing
  * provider is reported, never substituted by a configured model ladder.
  */
+/** Whether the picked model accepts image parts (capability registry, conservative default false). */
+function modelCanSeeImages({ model, provider } = {}) {
+  try {
+    const { resolveModelCapabilities } = require('../agent-harness/model-capabilities');
+    return Boolean(resolveModelCapabilities(String(model || ''), { provider: String(provider || '') }).supportsImages);
+  } catch {
+    return false;
+  }
+}
+
 function buildEditorClient({ client, model, provider, toolCallMode, deps }) {
   const pickedProvider = String(provider || '').trim().toLowerCase();
   const adapt = (base, providerName) => (String(providerName || '').toLowerCase() === 'deepseek' ? withDeepSeekToolTranscript(base) : base);
@@ -771,6 +781,9 @@ async function runResolvedDocumentEdit({
           instruction: batchContext ? `${instruction}\n\nAlcance del paso: ${batchContext}` : instruction,
           client,
           model: llm.model,
+          // Vision-capable models look at the rendered pages to verify;
+          // text-only models get the diff summary and structural evidence.
+          vision: llm.vision !== undefined ? Boolean(llm.vision) : modelCanSeeImages(llm),
           extraContext,
           signal,
           onEvent: emit,
@@ -966,5 +979,5 @@ module.exports = {
   toAssistantFiles,
   cleanSummary,
   MESSAGES,
-  INTERNAL: { buildEditorClient, stageFor, artifactIdFromRef, withTransientRetry, withDeepSeekToolTranscript },
+  INTERNAL: { buildEditorClient, stageFor, artifactIdFromRef, withTransientRetry, withDeepSeekToolTranscript, modelCanSeeImages },
 };

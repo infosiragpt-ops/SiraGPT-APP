@@ -9996,7 +9996,20 @@ router.post(
         instruction: prompt,
         llm: { client, model: actualModel, provider: actualProvider, toolCallMode },
         signal: controller.signal,
-        onEvent: (stage) => send({ type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}) }),
+        onEvent: (stage) => send({
+          type: 'stage',
+          label: stage.label,
+          ...(stage.detail ? { detail: stage.detail } : {}),
+          // Live process (spec «edición milimétrica»): icon family, the
+          // model-written phrase, step state and evidence (screenshot
+          // thumbnail with boxed changes, checklist ✓/✗, applied changes).
+          ...(stage.id ? { id: stage.id } : {}),
+          ...(stage.kind ? { kind: stage.kind } : {}),
+          ...(stage.tool ? { tool: stage.tool } : {}),
+          ...(stage.description ? { description: stage.description } : {}),
+          ...(stage.status ? { status: stage.status } : {}),
+          ...(stage.evidence ? { evidence: stage.evidence } : {}),
+        }),
       });
       const files = toAssistantFiles(result.artifacts || []);
       const { deliverDocumentEdit } = require('../services/document-editor/deliver-edit');
