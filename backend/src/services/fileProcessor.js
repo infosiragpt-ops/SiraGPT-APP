@@ -1206,7 +1206,16 @@ class FileProcessor {
         : (visionRuntimeCandidates()[0] || { provider: 'OpenAI', model: 'gpt-5.6-sol' });
       const config = visionClientConfig(candidate.provider);
       const OpenAI = require('openai');
-      openai = new OpenAI({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) });
+      // Background enrichment only: bound it. The SDK default (10 min timeout,
+      // 2 retries with backoff) kept a 43 KB PNG "extracting" for ~75 s when
+      // the vision runtime answered 429 (prod 2026-09-26).
+      const visionTimeoutMs = Number(process.env.SIRAGPT_VISION_DOC_TIMEOUT_MS);
+      openai = new OpenAI({
+        apiKey: config.apiKey,
+        ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+        timeout: Number.isFinite(visionTimeoutMs) && visionTimeoutMs >= 1000 ? visionTimeoutMs : 25_000,
+        maxRetries: 1,
+      });
       parseOptions.model = candidate.model;
       parseOptions.useStrictSchema = config.strictJsonSchema;
     }

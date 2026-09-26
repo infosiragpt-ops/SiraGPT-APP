@@ -409,6 +409,18 @@ class AIService {
     async prepareImageForVision(imagePath, mimeType) {
         let tempFile = null;
         try {
+            // A turn may hold the pre-offload local path while the upload
+            // pipeline has already moved the binary to R2 and deleted the
+            // local copy: resolve it to the current R2 ref instead of failing.
+            if (typeof imagePath === 'string' && imagePath && !objectStorage.isRemote(imagePath)) {
+                const localCandidate = path.isAbsolute(imagePath)
+                    ? imagePath
+                    : path.join(__dirname, '../../', imagePath);
+                if (!fs.existsSync(localCandidate)) {
+                    const resolved = await objectStorage.resolveReadableRef(localCandidate);
+                    if (objectStorage.isRemote(resolved)) imagePath = resolved;
+                }
+            }
             // R2 refs ("r2:<key>") point to object storage, not the local disk —
             // materialize a temp copy first or fs.existsSync below always fails.
             if (objectStorage.isRemote(imagePath)) {
@@ -770,6 +782,11 @@ class AIService {
                         if (imageContent) {
                             contentArray.push(imageContent);
                             console.log(`✅ Added image to vision API: ${imageFile.name}`);
+                        } else if (res && typeof res === 'object') {
+                            // The turn-outcome guard in the generate route reads
+                            // this to explain an empty turn as a lost attachment.
+                            res.locals = res.locals || {};
+                            res.locals.imageLoadFailures = (res.locals.imageLoadFailures || 0) + 1;
                         }
                     }
 

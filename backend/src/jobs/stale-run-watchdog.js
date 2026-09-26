@@ -195,7 +195,8 @@ async function scanStaleRuns(opts = {}) {
   if (prisma.agentTask) {
     const rows = await scanStaleRows(
       prisma.agentTask,
-      { status: { nin: Array.from(TERMINAL_AGENT_TASK) } },
+      // Prisma's operator is `notIn` (`nin` threw «Unknown argument» on every sweep).
+      { status: { notIn: Array.from(TERMINAL_AGENT_TASK) } },
       null,
       thresholdsOpts,
     );
