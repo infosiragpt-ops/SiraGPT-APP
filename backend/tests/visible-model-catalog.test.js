@@ -20,8 +20,10 @@ test('no allowlist → returns the full curated catalog', () => {
   assert.ok(names.includes('openai/gpt-5.5'));
   const pro = all.find((m) => m.name === 'deepseek/deepseek-v4-pro');
   assert.ok(pro);
-  assert.equal(pro.displayName, 'Sira Pro');
-  assert.equal(/deepseek/i.test(String(pro.displayName)), false);
+  // Original name shown; legacy «Sira Pro» still resolves as an alias.
+  assert.equal(pro.displayName, 'DeepSeek V4 Pro');
+  assert.equal(/deepseek[-_/:]/i.test(String(pro.displayName)), false);
+  assert.ok(pro.aliases.includes('Sira Pro'));
 });
 
 test('VISIBLE_MODELS_ALLOWLIST restricts the catalog to listed names', () => {

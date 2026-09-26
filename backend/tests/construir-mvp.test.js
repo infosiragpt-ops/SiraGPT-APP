@@ -73,12 +73,14 @@ describe('construir-mvp scaffold', () => {
 
 describe('construir-mvp brand', () => {
   test('maps picker aliases and hides raw vendor ids', () => {
-    assert.equal(resolveConstruirBrand('Sira Rápido').brandLabel, 'Sira Rápido');
-    assert.equal(resolveConstruirBrand('Sira Pro').brandLabel, 'Sira Pro');
-    assert.equal(resolveConstruirBrand('deepseek-v4-flash').brandLabel, 'Sira Rápido');
-    assert.equal(resolveConstruirBrand('deepseek-v4-pro').brandLabel, 'Sira Pro');
+    // Original names are the public labels; legacy Sira aliases stay accepted as input.
+    assert.equal(resolveConstruirBrand('Sira Rápido').brandLabel, 'DeepSeek V4 Flash');
+    assert.equal(resolveConstruirBrand('Sira Pro').brandLabel, 'DeepSeek V4 Pro');
+    assert.equal(resolveConstruirBrand('DeepSeek V4 Pro').brandLabel, 'DeepSeek V4 Pro');
+    assert.equal(resolveConstruirBrand('deepseek-v4-flash').brandLabel, 'DeepSeek V4 Flash');
+    assert.equal(resolveConstruirBrand('deepseek-v4-pro').brandLabel, 'DeepSeek V4 Pro');
     assert.equal(looksLikeRawVendor('deepseek-v4-flash'), true);
-    assert.equal(looksLikeRawVendor('Sira Rápido'), false);
+    assert.equal(looksLikeRawVendor('DeepSeek V4 Flash'), false);
     assert.equal(resolveConstruirBrand('Claude').brandLabel, 'Claude');
   });
 });
@@ -101,7 +103,7 @@ describe('construir-mvp happy path', () => {
       env: { AGENTES_CODING_V2: '0', NODE_ENV: 'production' },
     });
     assert.equal(out.ok, true);
-    assert.equal(out.brandLabel, 'Sira Rápido');
+    assert.equal(out.brandLabel, 'DeepSeek V4 Flash');
     assert.equal(out.flagRequired, false);
     assert.equal(out.agentesCodingV2, false);
     assert.equal(saved.length, 2);
@@ -110,7 +112,7 @@ describe('construir-mvp happy path', () => {
     assert.equal(saved[1].rec.mime, 'application/zip');
     assert.equal(events.filter((ev) => ev.type === 'file_artifact').length, 2);
     assert.match(out.footer, /Descargar/);
-    assert.doesNotMatch(JSON.stringify(out), /deepseek|openrouter|sk-|gho_/i);
+    assert.doesNotMatch(JSON.stringify(out), /deepseek[-_/:]|openrouter|sk-|gho_/i);
     assert.equal(isSoftwareBuildRequest('créame una web de ventas'), true);
     const zip = Buffer.from(saved[1].args.base64, 'base64');
     assert.equal(zip[0], 0x50);
@@ -233,7 +235,7 @@ describe('construir-mvp tools + webdev hook + route', () => {
       { userId: 'u', chatId: 'c', modelAlias: 'Sira Pro', saveArtifact },
     );
     assert.equal(out.ok, true);
-    assert.equal(out.brandLabel, 'Sira Pro');
+    assert.equal(out.brandLabel, 'DeepSeek V4 Pro');
     assert.equal(saved.length, 2);
   });
 
@@ -277,7 +279,7 @@ describe('construir-mvp tools + webdev hook + route', () => {
     assert.equal(payload.body.enabled, true);
     assert.equal(payload.body.flagRequired, false);
     assert.equal(payload.body.agentesCodingV2, false);
-    assert.deepEqual(payload.body.brandAliases, ['Sira Rápido', 'Sira Pro']);
+    assert.deepEqual(payload.body.brandAliases, ['DeepSeek V4 Flash', 'DeepSeek V4 Pro']);
   });
 
   test('index.js mounts /api/construir-mvp and generate-webdev attaches the hook', () => {

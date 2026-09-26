@@ -97,7 +97,7 @@ Same helper as uploads / documents (`backend/src/services/object-storage.js`):
 GDPR deleted-user scrub removes those bytes best-effort. Job rows stay
 for audit (status + pointers, no raw text).
 
-## Upload recipe — Sira Rápido / Sira Pro
+## Upload recipe — DeepSeek V4 Flash / DeepSeek V4 Pro
 
 There is **no** in-repo fine-tune client for the Sira catalog. Do not
 point this JSONL at a third-party aggregator. Prep-only is the supported
@@ -114,7 +114,7 @@ python -c "import pathlib; p=pathlib.Path('sft.jsonl'); print(sum(1 for _ in p.o
 ```
 
 Then train with your usual local recipe (TRL SFT / DPO, Axolotl, etc.)
-against the **Sira Rápido** or **Sira Pro** checkpoint you already operate.
+against the **DeepSeek V4 Flash** or **DeepSeek V4 Pro** checkpoint you already operate.
 Keep the resulting adapter private; serve it through the existing catalog
 map (brand label on the server, never a raw model id in UI).
 

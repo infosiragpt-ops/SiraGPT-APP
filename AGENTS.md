@@ -413,8 +413,8 @@ Marca = lo que ve el usuario. `model_id` = lo que ve el servidor.
 
 | Superficie | Label DEBE |
 |---|---|
-| Texto default | **Sira Rápido** |
-| Texto fuerte | **Sira Pro** |
+| Texto default | **DeepSeek V4 Flash** (nombre original; decisión de Luis 2026-09-26 — «Sira Rápido» solo se acepta como entrada) |
+| Texto fuerte | **DeepSeek V4 Pro** (nombre original; «Sira Pro» solo se acepta como entrada) |
 | Carril imagen | **Sira Imagen** / **Sira Imagen Pro** |
 | Carril voz | **Sira Voz** / **Sira Voz Pro** |
 | Carril video | **Sira Video** / **Sira Video Pro** |

@@ -283,9 +283,10 @@ describe('submit adapter', () => {
     assert.equal(trainSubmit.isSubmitAvailable(), false);
     const src = fs.readFileSync(path.join(__dirname, '../src/services/rlhf/train-submit.js'), 'utf8');
     assert.doesNotMatch(src, /require\([^)]*openrouter/i);
-    assert.doesNotMatch(src, /deepseek/i);
-    assert.match(src, /Sira Rápido/);
-    assert.match(src, /Sira Pro/);
+    // Original model names only; never a raw id or a DeepSeek fine-tune client.
+    assert.doesNotMatch(src, /deepseek[-_/:]|require\([^)]*deepseek/i);
+    assert.match(src, /DeepSeek V4 Flash/);
+    assert.match(src, /DeepSeek V4 Pro/);
   });
 });
 

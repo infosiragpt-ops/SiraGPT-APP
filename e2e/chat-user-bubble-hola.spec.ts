@@ -18,7 +18,7 @@ const user = {
 const model = {
   id: "hola-bubble-model",
   name: "deepseek-v4-flash",
-  displayName: "Sira Rápido",
+  displayName: "DeepSeek V4 Flash",
   provider: "DeepSeek",
   type: "TEXT",
 }

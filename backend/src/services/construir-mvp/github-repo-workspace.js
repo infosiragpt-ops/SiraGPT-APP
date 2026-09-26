@@ -8,6 +8,7 @@
 
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { ALIAS_RAPIDO } = require('./brand');
 
 const WORKSPACE_ROOT = '/workspace';
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -209,7 +210,7 @@ function createSession(opts = {}) {
     baseSha: opts.baseSha || null,
     baseTreeSha: opts.baseTreeSha || null,
     htmlUrl: opts.htmlUrl || null,
-    brandLabel: opts.brandLabel || 'Sira Rápido',
+    brandLabel: opts.brandLabel || ALIAS_RAPIDO,
     createdAt: Date.now(),
     sandbox,
     originals,

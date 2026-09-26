@@ -82,12 +82,13 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'deepseek/deepseek-v4-pro',
-    displayName: 'Sira Pro',
+    displayName: 'DeepSeek V4 Pro',
     provider: 'DeepSeek',
     type: 'TEXT',
     icon: 'DeepseekLogo',
-    description: 'Sira Pro para razonamiento profesional, codigo y documentos complejos.',
-    aliases: ['deepseek-v4-pro', 'deepseek/deepseek-v4-pro', 'sira-pro', 'Sira Pro'],
+    description: 'DeepSeek V4 Pro para razonamiento profesional, codigo y documentos complejos.',
+    // Legacy Sira aliases stay so older picks keep resolving.
+    aliases: ['deepseek-v4-pro', 'deepseek/deepseek-v4-pro', 'DeepSeek V4 Pro', 'sira-pro', 'Sira Pro'],
   },
   {
     name: 'gpt-4o',

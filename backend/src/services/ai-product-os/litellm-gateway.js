@@ -551,7 +551,7 @@ function applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExp
     return;
   }
   if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) return;
-  // Composer "Bajo" on Sira Rápido/Pro: answer without the thinking phase.
+  // Composer "Bajo" on DeepSeek V4 Flash/Pro: answer without the thinking phase.
   if (isDisabledThinkingLevel(thinkingLevel) || isExplicitLowDeepSeekLevel(thinkingLevel, thinkingLevelExplicit)) {
     payload.thinking = { type: "disabled" };
     delete payload.reasoning_effort;

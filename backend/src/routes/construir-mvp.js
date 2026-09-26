@@ -16,6 +16,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { isAgentesCodingV2Enabled } = require('../services/agentes-coding/flags');
 const mvp = require('../services/construir-mvp');
+const { ALIAS_RAPIDO, ALIAS_PRO } = require('../services/construir-mvp/brand');
 
 function createConstruirMvpRouter(deps = {}) {
   const router = express.Router();
@@ -34,7 +35,7 @@ function createConstruirMvpRouter(deps = {}) {
       enabled: true,
       flagRequired: false,
       agentesCodingV2: isAgentesCodingV2Enabled(deps.env || process.env),
-      brandAliases: ['Sira Rápido', 'Sira Pro'],
+      brandAliases: [ALIAS_RAPIDO, ALIAS_PRO],
       githubPrFlow: true,
       tools: [
         'github_open_repo',

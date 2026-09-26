@@ -1195,7 +1195,7 @@ class AIService {
             }
 
             // User-selected catalog model: honest Spanish error. Never recover
-            // by swapping to another vendor / DeepSeek Flash / Sira Rápido.
+            // by swapping to another vendor / DeepSeek V4 Flash.
             // Write error + [DONE] + end so Caddy does not turn an incomplete
             // SSE body into HTTP 502 (Meta 400 unknown parameter reasoning).
             if (isPinnedUserGenerate(provider, model) || providerHttpError) {

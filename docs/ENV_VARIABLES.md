@@ -19,7 +19,7 @@
 | `CEREBRAS_API_KEY` | Cerebras Inference | Ultra-fast inference | `llama-3.3-70b` |
 | `MISTRAL_API_KEY` | Mistral La Plateforme | Mistral Large, Small, Codestral | `mistral-large-latest` |
 | `TYPESAFE_API_KEY` | TypeSafe AI (System One) | Jev decision model: `typesafe/jev-latest`, `typesafe/jev-1.13` in the picker, `decide_with_jev` agent tool, RLCD media-intent refinement (`SIRAGPT_RLCD_JEV`, `SIRAGPT_RLCD_JEV_TIMEOUT_MS`, `SIRAGPT_RLCD_JEV_MODEL`); optional `TYPESAFE_BASE_URL`, `TYPESAFE_TIMEOUT_MS`, `TYPESAFE_RETRIES` | `jev-latest` |
-| `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek V4 Flash / Pro (alias Sira Rápido / Sira Pro); also the codex coding agent's native tool-calling engine | `deepseek-v4-flash` |
+| `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek V4 Flash / Pro (shown with these original names); also the codex coding agent's native tool-calling engine | `deepseek-v4-flash` |
 
 ### Codex coding agent — DeepSeek native engine
 
