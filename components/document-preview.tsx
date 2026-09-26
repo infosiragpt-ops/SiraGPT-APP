@@ -66,6 +66,9 @@ export type DocumentPreviewTarget =
       url: string
       downloadUrl?: string
       filename?: string
+      // Keep the opened source explicit for chat edits; never infer access from a URL.
+      fileId?: string
+      artifactId?: string
       // Explicit high-fidelity preview endpoint (server-side soffice→PDF). When
       // set, the viewer renders THIS as a real PDF (pages/zoom, Excel looks like
       // Excel) before any client-side fallback. Used for message-attached

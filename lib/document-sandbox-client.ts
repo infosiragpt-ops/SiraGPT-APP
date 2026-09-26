@@ -6,6 +6,7 @@ import { composerBlocksTools, readComposerPermission, type ComposerPermissionId 
 import type { AgentTaskState } from "./agent-task-service"
 
 const ID = /^[A-Za-z0-9_-]{1,200}$/
+const ARTIFACT_ID = /^[a-f0-9]{6,40}$/i
 const KEY = /^[A-Za-z0-9_.:-]{1,200}$/
 const SHA = /^[a-f0-9]{64}$/
 const STATUSES = ["queued", "inspecting", "planning", "editing", "validating", "done", "failed", "cancelled"] as const
@@ -64,6 +65,42 @@ export function documentAttachment(value: unknown): DocumentAttachment | null {
   const id = [source.fileId, source.id].find((item) => typeof item === "string" && ID.test(item))
   if (typeof name !== "string" || !/\.(?:docx?|xlsx?|xlsm|pptx?|pdf|txt|md|csv|json|html)$/i.test(name)) return null
   return { name, id: typeof id === "string" ? id : "", localFile }
+}
+
+/** Explicit identities only; the server checks ownership. URLs and lineage are not edit targets. */
+export function documentEditReference(value: unknown): string | null {
+  const source = record(value)
+  if (typeof source.artifactId === "string" && source.artifactId.trim()) {
+    const artifactId = source.artifactId.trim()
+    return ARTIFACT_ID.test(artifactId) ? `artifact:${artifactId.toLowerCase()}` : null
+  }
+  const candidate = typeof value === "string" ? value : [source.fileId, source.id, source.attachmentId]
+    .find((item) => typeof item === "string" && item.trim())
+  if (typeof candidate !== "string") return null
+  const reference = candidate.trim()
+  if (reference.startsWith("artifact:")) {
+    const artifactId = reference.slice("artifact:".length)
+    return ARTIFACT_ID.test(artifactId) ? `artifact:${artifactId.toLowerCase()}` : null
+  }
+  return ID.test(reference) ? reference : null
+}
+
+export function collectDocumentEditReferences(attachments: readonly unknown[]): string[] {
+  const references = attachments.map(documentEditReference)
+  // An unresolved selected file must not silently become "latest in this chat".
+  if (references.some((reference) => !reference)) throw new DocumentSandboxClientError("E_PARAMS")
+  return [...new Set(references as string[])]
+}
+
+/** A queued edit keeps the selected identity even if the user closes or changes the preview. */
+export function snapshotDocumentEditTargets(attachments: readonly unknown[]): Array<{ id: string; name: string; url?: string }> {
+  return attachments.map((source) => {
+    const id = documentEditReference(source)
+    const attachment = documentAttachment(source)
+    if (!id || !attachment) throw new DocumentSandboxClientError("E_PARAMS")
+    return { id, name: attachment.name,
+      ...(id.startsWith("artifact:") ? { url: `/api/agent/artifact/${id.slice("artifact:".length)}` } : {}) }
+  })
 }
 
 /** Language-only explicit-edit detector. Attachments are resolved by the admission helper. */

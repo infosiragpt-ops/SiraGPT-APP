@@ -264,7 +264,7 @@ import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkb
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
-import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
+import { parseDocumentJobPointer, DocumentSandboxClientError, documentEditReference, snapshotDocumentEditTargets } from "@/lib/document-sandbox-client"
 import { historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
 import { useDocumentEditorChat } from "@/lib/use-document-editor-chat"
 import { devLog } from "@/lib/dev-log"
@@ -10225,8 +10225,17 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
-    const fileKey = composerFiles
-      .map((file: any) => resolveUploadFileId(file) || file?.id || file?.name || file?.originalName || "")
+    // Capture the visible document before a busy chat queues this turn. New
+    // attachments win; Word/Excel connectors keep their own open document.
+    const sandboxDecision = isWordConnectorActive || isExcelConnectorActive
+      ? { route: null, attachments: [] }
+      : resolveDocumentSandboxAdmission(msg, {
+        attachments: composerFiles,
+        historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+        previewAttachments: [documentPreviewUrl, composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      });
+    const fileKey = (composerFiles.length ? composerFiles : sandboxDecision.attachments)
+      .map((file: any) => documentEditReference(file) || resolveUploadFileId(file) || file?.id || file?.name || file?.originalName || "")
       .filter(Boolean)
       .sort()
       .join(",");
@@ -10324,7 +10333,7 @@ But first, you need to connect your Spotify account securely using the button be
         ownerId: queueOwnerId || "__session__",
         chatId: currentChat?.id ?? null,
         msg,
-        files: composerFiles,
+        files: composerFiles.length ? composerFiles : snapshotDocumentEditTargets(sandboxDecision.attachments),
         idempotencyKey,
       });
       pendingMsgQueueRef.current.push(queuedItem);
@@ -10348,16 +10357,6 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
-    // Document editor admission: the picked model edits the attached document,
-    // or the latest one of this chat on a follow-up. The Word/Excel connectors
-    // keep editing their own open document.
-    const sandboxDecision = isWordConnectorActive || isExcelConnectorActive
-      ? { route: null, attachments: [] }
-      : resolveDocumentSandboxAdmission(msg, {
-        attachments: composerFiles,
-        historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
-        previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
-      });
     if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
       setInput("");
       setSelectedMentionIds([]);
@@ -10602,9 +10601,9 @@ REWRITTEN TEXT:`;
               timestamp: new Date().toISOString(),
             };
             setCurrentChat(prevChat => {
-              if (!prevChat) return prevChat;
+              if (!prevChat || prevChat.id !== activeChat?.id) return prevChat;
               const updatedMessages = [...(prevChat.messages || []), aiMessage];
-              return { ...prevChat, messages: updatedMessages };
+              return { ...prevChat, wordContent: accumulatedContent, messages: updatedMessages };
             });
             // Refresh chat to get updated messages from database
             if (activeChat?.id) {
@@ -10719,9 +10718,9 @@ REWRITTEN TEXT:`;
             timestamp: new Date().toISOString(),
           };
           setCurrentChat(prevChat => {
-            if (!prevChat) return prevChat;
+            if (!prevChat || prevChat.id !== activeChat?.id) return prevChat;
             const updatedMessages = [...(prevChat.messages || []), aiMessage];
-            return { ...prevChat, messages: updatedMessages };
+            return { ...prevChat, excelContent: parsedResponse, messages: updatedMessages };
           });
 
           if (activeChat?.id) {

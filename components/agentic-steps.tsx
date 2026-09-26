@@ -801,8 +801,9 @@ function ArtifactCard({
       url: previewUrl,
       downloadUrl: href,
       filename: artifact.filename,
+      artifactId: artifact.id,
     })
-  }, [artifact.filename, artifact.previewHtml, href, onDocumentPreview])
+  }, [artifact.id, artifact.filename, artifact.previewHtml, href, onDocumentPreview])
 
   return (
     <>

@@ -453,7 +453,8 @@ function buildDocumentEditTool(deps = {}) {
             }
           }
           return {
-            ok: true,
+            ok: !inproc.partial && rejectedResults.length === 0 && !(inproc.failures?.length),
+            ...(inproc.partial || rejectedResults.length || inproc.failures?.length ? { code: 'DOCUMENT_EDIT_INCOMPLETE' } : {}),
             engine: 'in-process',
             batch: Boolean(inproc.batch || artifactResults.length > 1),
             partial: Boolean(inproc.partial || rejectedResults.length > 0),
@@ -554,35 +555,75 @@ function buildDocumentEditTool(deps = {}) {
 
       // Run the verified pipeline (remote sandbox in prod, auto-fallback).
       let result;
+      let pinnedClient;
+      const selected = ctx.documentEditLlm;
+      let batchScope;
       try {
         const runDocumentAgent = deps.runDocumentAgent || require('../../doc-agent').runDocumentAgent;
-        result = await runDocumentAgent({
-          files,
-          instruction: args.instruction,
-          signal: ctx.signal,
-          maxIterations: DOC_AGENT_MAX_ITERATIONS,
-          onEvent: () => {},
+        if (selected && (!selected.client || !selected.model)) {
+          return { ok: false, error: 'provider_unavailable', code: 'E_PROVIDER', message: 'No pude iniciar la edición con el modelo elegido. Reintenta sin cambiar de modelo.' };
+        }
+        pinnedClient = selected
+          ? require('../../document-editor/chat-document-editor').INTERNAL.buildEditorClient({
+            ...selected,
+            deps: { createPromptedToolClient: require('../../document-editor/prompted-tool-client').createPromptedToolClient },
+          })
+          : undefined;
+        const { composeAbortSignals } = require('../../../utils/abort-signals');
+        batchScope = composeAbortSignals([ctx.signal], {
+          timeoutMs: require('../../doc-agent').resolveMaxRuntimeMs(), timeoutReason: 'document_agent_timeout',
         });
+        const prepared = [];
+        for (let index = 0; index < files.length; index += 1) {
+          batchScope.signal.throwIfAborted();
+          const step = await runDocumentAgent({
+            // Each file gets its own original for the existing OOXML diff.
+            // A multi-file sandbox has no unambiguous validation baseline.
+            files: [files[index]],
+            instruction: files.length === 1 ? args.instruction : `${args.instruction}\n\nEdita únicamente ${JSON.stringify(files[index].name)} del conjunto ${JSON.stringify(files.map((file) => file.name))}. Aplica solo lo solicitado para ese archivo; no inventes datos de los otros documentos.`,
+            ...(selected ? { client: pinnedClient, model: selected.model, route: 'sandbox' } : {}),
+            signal: batchScope.signal,
+            maxIterations: DOC_AGENT_MAX_ITERATIONS,
+            onEvent: () => {},
+          });
+          if (files.length === 1) { result = step; break; }
+          if (step?.stoppedReason !== 'final' || step.outputs?.length !== 1 || step.outputs[0]?.valid !== true
+            || !Buffer.isBuffer(step.outputs[0]?.buffer) || !step.outputs[0].buffer.length) {
+            return { ok: false, error: 'document_edit_incomplete', code: 'DOCUMENT_EDIT_INCOMPLETE', edited: [],
+              message: `No pude verificar el lote completo. Revisa la petición para ${files[index].name}; no publiqué una edición parcial.` };
+          }
+          prepared.push(step);
+        }
+        if (files.length > 1) result = {
+          outputs: prepared.flatMap((step) => step.outputs), stoppedReason: 'final',
+          finalText: prepared.map((step, index) => `${files[index].name}: ${step.finalText || 'Edición verificada.'}`).join('\n'),
+          iterations: prepared.reduce((count, step) => count + (step.iterations || 0), 0),
+          driver: prepared[0]?.driver,
+        };
+        batchScope.signal.throwIfAborted();
       } catch (err) {
         return { ok: false, error: 'doc_agent_failed', message: String(err && err.message || err).slice(0, 300) };
+      } finally {
+        batchScope?.cleanup();
       }
 
-      const outputs = (result.outputs || []).filter((o) => o && o.buffer && o.buffer.length > 0);
-      if (!outputs.length) {
-        return { ok: false, error: 'no_output', summary: String(result.finalText || '').slice(0, 500), hint: 'El agente de documentos no produjo un archivo editado. Reintenta con una instrucción más específica.' };
+      const outputs = Array.isArray(result?.outputs) ? result.outputs : [];
+      if (!outputs.some((out) => Buffer.isBuffer(out?.buffer) && out.buffer.length)) {
+        return { ok: false, error: 'no_output', hint: 'El agente de documentos no produjo un archivo editado. Reintenta con una instrucción más específica.' };
       }
 
       // runDocumentAgent structurally validates every collected output. Treat
       // anything other than an explicit `valid: true` as untrusted and reject
       // it BEFORE saveArtifact: an invalid OOXML blob must never obtain a
       // download URL, emit a chat card, or make the tool report success.
-      const validatedOutputs = outputs.filter((out) => out.valid === true);
+      const validOutput = (out) => out?.valid === true && Buffer.isBuffer(out.buffer) && out.buffer.length > 0;
+      const validatedOutputs = outputs.filter(validOutput);
       const rejectedOutputs = outputs
-        .filter((out) => out.valid !== true)
+        .filter((out) => !validOutput(out))
         .map((out) => ({
-          filename: String(out.name || 'documento'),
+          filename: String(out?.name || 'documento'),
           error: 'validation_failed',
-          reason: out.valid === false ? 'ooxml_structure' : 'validation_not_passed',
+          reason: out?.valid === false ? 'ooxml_structure' : 'validation_not_passed',
         }));
       if (!validatedOutputs.length) {
         return {
@@ -598,13 +639,18 @@ function buildDocumentEditTool(deps = {}) {
           hint: 'No entregué ningún archivo porque la validación final no pasó. El documento original permanece intacto.',
         };
       }
+      if (result.stoppedReason !== 'final' || outputs.length !== files.length || rejectedOutputs.length) {
+        return { ok: false, error: 'document_edit_incomplete', code: 'DOCUMENT_EDIT_INCOMPLETE', edited: [],
+          failures: rejectedOutputs, hint: 'La edición no terminó con todos los archivos verificados. Los originales se conservan; no publiqué resultados intermedios.' };
+      }
 
       // Persist + announce every deliverable through the existing card plumbing.
       const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveArtifact;
       const edited = [];
-      for (const out of validatedOutputs) {
+      for (const [index, out] of validatedOutputs.entries()) {
         const ext = String(out.name).split('.').pop().toLowerCase();
-        const validation = { ok: true, passed: true };
+        const validation = { ok: true, passed: true,
+          documentEdit: { sourceFileId: rows[index].id, sourceFilename: files[index].name, parentArtifactId: null } };
         let saved;
         try {
           saved = saveArtifact({
@@ -641,7 +687,7 @@ function buildDocumentEditTool(deps = {}) {
       }
 
       return {
-        ok: edited.some((e) => !e.error),
+        ok: edited.length > 0 && rejectedOutputs.length === 0 && edited.every((e) => !e.error),
         partial: rejectedOutputs.length > 0 || edited.some((e) => e.error),
         edited,
         failures: rejectedOutputs,

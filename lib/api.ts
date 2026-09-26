@@ -2822,8 +2822,7 @@ class ApiClient {
           if (batchBuffer.trim()) {
             onData(batchBuffer);
           }
-          onClose();
-          break;
+          throw new Error('La generación del documento se interrumpió antes de confirmar el guardado. Vuelve a intentarlo.');
         }
 
         frameBuffer += decoder.decode(value, { stream: true });
@@ -2835,32 +2834,35 @@ class ApiClient {
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
+            let jsonData: any;
             try {
-              const jsonData = JSON.parse(line.substring(6));
-              if (jsonData.content) {
-                batchBuffer += jsonData.content;
-                const timeSinceLastProcess = Date.now() - lastProcessTime;
-                const shouldProcess =
-                  batchBuffer.length >= 150 ||
-                  timeSinceLastProcess >= batchProcessingDelay ||
-                  jsonData.content.includes('\n');
-
-                if (shouldProcess && batchBuffer.trim()) {
-                  onData(batchBuffer);
-                  batchBuffer = '';
-                  lastProcessTime = Date.now();
-                }
-              } else if (jsonData.error) {
-                onError(new Error(jsonData.error));
-              } else if (jsonData.done) {
-                if (batchBuffer.trim()) {
-                  onData(batchBuffer);
-                }
-                onClose();
-                return;
-              }
+              jsonData = JSON.parse(line.substring(6));
             } catch (e) {
               console.warn('Failed to parse streaming data:', e);
+              continue;
+            }
+            if (jsonData.content) {
+              batchBuffer += jsonData.content;
+              const timeSinceLastProcess = Date.now() - lastProcessTime;
+              const shouldProcess =
+                batchBuffer.length >= 150 ||
+                timeSinceLastProcess >= batchProcessingDelay ||
+                jsonData.content.includes('\n');
+
+              if (shouldProcess && batchBuffer.trim()) {
+                onData(batchBuffer);
+                batchBuffer = '';
+                lastProcessTime = Date.now();
+              }
+            } else if (jsonData.error) {
+              await reader.cancel().catch(() => {});
+              throw new Error(jsonData.error);
+            } else if (jsonData.done === true) {
+              if (batchBuffer.trim()) {
+                onData(batchBuffer);
+              }
+              onClose();
+              return;
             }
           }
         }
@@ -4788,6 +4790,13 @@ class ApiClient {
     return this.request(`/chats/${chatId}/word-content`, {
       method: 'PUT',
       body: JSON.stringify({ content }),
+    });
+  }
+
+  async saveOfficeDraft(chatId: string, kind: 'word' | 'excel', content: unknown, expectedContent: unknown) {
+    return this.request(`/chats/${encodeURIComponent(chatId)}/${kind}-content`, {
+      method: 'PUT',
+      body: JSON.stringify({ content, expectedContent }),
     });
   }
 

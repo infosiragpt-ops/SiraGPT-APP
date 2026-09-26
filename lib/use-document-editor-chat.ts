@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef } from "react"
 import { apiClient, type DocumentEditStreamEvent } from "./api"
 import type { useChat } from "./chat-context-integrated"
-import { collectUploadFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
+import { snapshotComposerFilesForMessage } from "./chat/composer-files"
+import { collectDocumentEditReferences } from "./document-sandbox-client"
 import { readComposerPermission } from "./chat/composer-session"
 import { safeUUID } from "./safe-uuid"
 import { DOCUMENT_EDIT_STOPPED, advanceDocumentEditSteps, documentEditTaskState, failDocumentEditSteps } from "./document-editor-progress"
@@ -40,6 +41,7 @@ export function useDocumentEditorChat(options: Options) {
   const start = useCallback(async (prompt: string, attachments: readonly unknown[], idempotencyKey: string, signal?: AbortSignal,
     onChatReady?: (chatId: string) => void): Promise<boolean> => {
     const context = latest.current
+    const fileIds = collectDocumentEditReferences(attachments)
     let chat: Chat | null = context.currentChat
     if (chat && runs.current.has(chat.id)) throw new Error("Ya hay una edición de documento en curso en esta conversación.")
     if (!chat || chat.id.startsWith("temp-chat-")) {
@@ -73,7 +75,7 @@ export function useDocumentEditorChat(options: Options) {
     }
     try {
       await apiClient.editDocumentStream({
-        prompt, chatId, fileIds: collectUploadFileIds([...attachments]), model: context.selectedModel,
+        prompt, chatId, fileIds, model: context.selectedModel,
         provider: context.selectProvider, streamId: run.streamId, idempotencyKey, permission: readComposerPermission(),
       }, (event: DocumentEditStreamEvent) => {
         if (event.type === "start") { started = true; return }

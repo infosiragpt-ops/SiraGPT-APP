@@ -164,6 +164,7 @@ async function tryDocEngineAfterSelection({
       content: 'Documento transplantado a la plantilla (sectPr, headers y footers de la plantilla intactos). El contenido fuente reemplazó los placeholders XXXXXXXX.',
       file: {
         type: 'doc',
+        artifactId: artifact.id,
         format: 'docx',
         title: `${base} formato`,
         explanation: 'Se copió la plantilla como base y se transplantó el cuerpo fuente.',

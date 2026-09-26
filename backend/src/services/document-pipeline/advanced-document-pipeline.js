@@ -3695,6 +3695,7 @@ async function* streamAdvancedDocumentPipeline(opts = {}) {
     }
     const file = {
       type: 'doc',
+      artifactId: result.artifact.id,
       format: result.plan.format,
       title: result.plan.title,
       explanation: explanationParts.join(' '),

@@ -102,12 +102,16 @@ test('real PPTX title containing a slide number edits only slide 1; compound edi
   }
 });
 
-test('the source-preserving entry clarifies ambiguous slide scopes without an artifact or source modification', async () => {
+test('the source-preserving entry applies distinct explicit slide clauses together without source modification', async () => {
   const input = await makeDeck(), filePath = path.join(fixtureDir, 'ambiguous.pptx');
   fs.writeFileSync(filePath, input);
   const result = await editor.generateSourcePreservingDocumentEdit({ sourceFile: { path: filePath, originalName: 'ambiguous.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }, prompt: ambiguousScopes[0], userId: 'fixture-owner', chatId: 'fixture-chat' });
-  assert.equal(result.clarification, true);
-  assert.equal(result.artifact, null);
+  assert.equal(result.validation.passed, true);
+  const output = fs.readFileSync(result.artifact.path);
+  const edited = adapter.listPptxSlides(output);
+  assert.match(edited[0].textSnippet, /2027/);
+  assert.match(edited[1].textSnippet, /2028/);
+  assert.match(edited[2].textSnippet, /2026/);
   assert.deepEqual(fs.readFileSync(filePath), input);
 });
 

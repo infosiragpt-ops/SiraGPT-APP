@@ -40,6 +40,8 @@ interface DocFile {
   title?: string
   explanation?: string
   filename: string
+  artifactId?: string
+  fileId?: string
   // Phase 3 (ArtifactUrlResolver): the doc-pipeline now persists
   // bytes and hands the chat a real `/api/agent/artifact/<id>` URL.
   // `dataUrl` stays for backward compat with messages persisted
@@ -107,6 +109,8 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
         url: htmlPreviewDataUrl(doc.htmlPreview as string),
         downloadUrl: sourceUrl || undefined,
         filename: doc.filename,
+        ...(doc.artifactId ? { artifactId: doc.artifactId } : {}),
+        ...(doc.fileId ? { fileId: doc.fileId } : {}),
       })
       return
     }
@@ -115,6 +119,8 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
         url: sourceUrl,
         downloadUrl: sourceUrl,
         filename: doc.filename,
+        ...(doc.artifactId ? { artifactId: doc.artifactId } : {}),
+        ...(doc.fileId ? { fileId: doc.fileId } : {}),
       })
       return
     }

@@ -4738,42 +4738,57 @@ async function extractVisibleTextForFormat(buffer, format) {
   return '';
 }
 
-async function readXlsxCellVisibleValue(buffer, { sheetName = '', address = '' } = {}) {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
-  let sheet = null;
-  if (sheetName) {
-    const wanted = normalizeText(sheetName);
-    sheet = workbook.worksheets.find((candidate) => normalizeText(candidate.name) === wanted)
-      || workbook.getWorksheet(sheetName);
-  }
-  sheet = sheet || workbook.worksheets[0];
+function readXlsxCellVisibleValue(buffer, { sheetName = '', address = '' } = {}, snapshot = null) {
+  // Reopen the saved OOXML, including workbooks whose charts/tables ExcelJS
+  // cannot round-trip. A formula is verified as a formula, not its stale cache.
+  const zip = snapshot?.zip || new PizZip(buffer);
+  const sheets = snapshot?.sheets || xlsxAdapterModule().listXlsxSheets(buffer);
+  const sheet = sheetName ? sheets.find((item) => normalizeText(xmlUnescape(item.name)) === normalizeText(xmlUnescape(sheetName))) : sheets[0];
   if (!sheet) return '';
-  const value = sheet.getCell(String(address || '').toUpperCase()).value;
-  if (value == null) return '';
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value.richText)) return value.richText.map((part) => part.text || '').join('');
-  if (value.text) return String(value.text);
-  if (value.result != null) return String(value.result);
-  return String(value);
+  let cell;
+  if (snapshot) {
+    if (!snapshot.cells.has(sheet.partName)) snapshot.cells.set(sheet.partName, xlsxCells(zip.file(sheet.partName)?.asText() || ''));
+    cell = snapshot.cells.get(sheet.partName).get(String(address).toUpperCase()) || '';
+  } else {
+    const xml = zip.file(sheet.partName)?.asText() || '';
+    cell = xml.match(new RegExp(`<c\\b[^>]*\\br="${escapeRegExp(String(address).toUpperCase())}"[^>]*(?:/>|>[\\s\\S]*?</c>)`))?.[0] || '';
+  }
+  const formula = cell.match(/<f\b[^>]*>([\s\S]*?)<\/f>/)?.[1];
+  if (formula != null) return `=${xmlUnescape(formula)}`;
+  const value = cell.match(/<v\b[^>]*>([\s\S]*?)<\/v>/)?.[1];
+  if (/\bt="s"/.test(cell)) {
+    const strings = snapshot?.strings || [...(zip.file('xl/sharedStrings.xml')?.asText() || '').matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)];
+    if (snapshot) snapshot.strings = strings;
+    return [...(strings[Number(value)]?.[1] || '').matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => xmlUnescape(match[1])).join('');
+  }
+  if (/\bt="inlineStr"/.test(cell)) return [...cell.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => xmlUnescape(match[1])).join('');
+  return value == null ? '' : xmlUnescape(value);
 }
 
 async function validateOfficeOperationCriteria(buffer, format, operations = [], blocks = []) {
   const text = await extractVisibleTextForFormat(buffer, format);
   const checks = [];
   for (const op of operations || []) {
+    const scopedText = op.literalProof && format === 'pptx' && op.slideNumber
+      ? extractTextFromPptxXml(new PizZip(buffer).file(pptxAdapterModule().listPptxSlides(buffer).find((slide) => slide.number === op.slideNumber)?.partName)?.asText() || '')
+      : text;
     if (op.kind === 'replace_text') {
+      let exactCells = null;
+      if (op.literalProof && format === 'xlsx' && Array.isArray(op.locations)) {
+        const snapshot = { zip: new PizZip(buffer), sheets: xlsxAdapterModule().listXlsxSheets(buffer), cells: new Map() };
+        exactCells = op.locations.every((location) => readXlsxCellVisibleValue(buffer, location, snapshot) === location.value);
+      }
       checks.push({
         id: `${format}_specific_text_replaced`,
         label: 'Texto específico reemplazado',
-        passed: !normalizedTextIncludes(text, op.needle) && normalizedTextIncludes(text, op.replacement),
+        passed: exactCells ?? ((normalizedTextIncludes(op.replacement, op.needle) || !normalizedTextIncludes(scopedText, op.needle)) && normalizedTextIncludes(scopedText, op.replacement)),
         details: { needle: compact(op.needle, 120), replacement: compact(op.replacement, 120) },
       });
     } else if (op.kind === 'delete_text') {
       checks.push({
         id: `${format}_specific_text_deleted`,
         label: 'Texto específico eliminado',
-        passed: !normalizedTextIncludes(text, op.needle),
+        passed: !normalizedTextIncludes(scopedText, op.needle),
         details: { needle: compact(op.needle, 120) },
       });
     } else if (op.kind === 'set_cell') {
@@ -4781,7 +4796,7 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
       checks.push({
         id: 'xlsx_cell_written',
         label: 'Celda Excel actualizada',
-        passed: normalizedTextIncludes(cellValue, op.value),
+        passed: op.literalProof ? cellValue === String(op.value) : normalizedTextIncludes(cellValue, op.value),
         details: { address: op.address, sheetName: op.sheetName || null, value: compact(cellValue, 120) },
       });
     } else if (op.kind === 'rotate_pages' || op.kind === 'remove_pages' || op.kind === 'extract_pages' || op.kind === 'merge_pdfs') {
@@ -4810,7 +4825,9 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
       checks.push({
         id: 'pptx_slide_title_changed',
         label: 'Título de diapositiva actualizado',
-        passed: normalizedTextIncludes(text, op.title),
+        passed: op.literalProof
+          ? pptxAdapterModule().listPptxSlides(buffer).find((slide) => slide.number === op.slideNumber)?.title === op.title
+          : normalizedTextIncludes(text, op.title),
         details: { slideNumber: op.slideNumber || null, title: compact(op.title, 120) },
       });
     } else if (op.kind === 'set_slide_background' && format === 'pptx') {
@@ -4867,7 +4884,7 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
       checks.push({
         id: 'xlsx_range_formatted',
         label: 'Formato aplicado al rango',
-        passed: stylesHasCode && Number(op.cellsChanged || 0) > 0,
+        passed: op.literalProof ? verifyXlsxLiteralFormat(buffer, op) : stylesHasCode && Number(op.cellsChanged || 0) > 0,
         details: { formatCode: op.formatCode || null, cellsChanged: op.cellsChanged || 0, sheetName: op.sheetName || null },
       });
     } else if (op.kind === 'add_slide' && format === 'pptx') {
@@ -4954,6 +4971,15 @@ function countXmlNodes(xml = '', tag = '') {
 function assessSourcePreservation(beforeBuffer, afterBuffer, format, operations = []) {
   if (!Buffer.isBuffer(beforeBuffer) || !Buffer.isBuffer(afterBuffer) || !beforeBuffer.length || !afterBuffer.length) {
     return { passed: false, reason: 'missing_source_or_output_buffer' };
+  }
+
+  if (operations.length && operations.every((op) => op.literalProof && Array.isArray(op.allowedPartNames))) {
+    try {
+      const outputSha256 = createHash('sha256').update(afterBuffer).digest('hex');
+      if (operations.some((op) => op.literalOutputSha256 !== outputSha256)) return { passed: false, reason: 'literal_output_changed_after_verification' };
+      assertOfficePartsPreserved(beforeBuffer, afterBuffer, [...new Set(operations.flatMap((op) => op.allowedPartNames))]);
+      return { passed: true, scope: 'literal_operations_and_unchanged_other_parts' };
+    } catch { return { passed: false, reason: 'unrequested_package_changes' }; }
   }
 
   if (format === 'pptx' && operations.length === 1 && operations[0]?.kind === 'set_slide_title') {
@@ -7085,9 +7111,13 @@ async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
   // Ambiguity: 2+ sheets and no explicit sheet cue → ask which one.
   let targetSheet = null;
   if (sheetEdit.sheetCue) {
-    const norm = (s) => String(s || '').trim().toLowerCase();
-    targetSheet = sheets.find((s) => norm(s.name) === norm(sheetEdit.sheetCue))
-      || sheets.find((s) => norm(s.name).includes(norm(sheetEdit.sheetCue)));
+    const norm = (s) => normalizeText(xmlUnescape(s));
+    targetSheet = sheets.find((s) => norm(s.name) === norm(sheetEdit.sheetCue));
+    if (!targetSheet) {
+      const candidates = sheets.filter((s) => norm(s.name).includes(norm(sheetEdit.sheetCue)));
+      if (candidates.length > 1) return { clarification: true, message: `Varias hojas coinciden con «${sheetEdit.sheetCue}»: ${candidates.map((sheet) => `«${xmlUnescape(sheet.name)}»`).join(', ')}. Indica el nombre completo; no modifiqué el archivo.` };
+      targetSheet = candidates[0];
+    }
     if (!targetSheet) {
       return { clarification: true, message: `No encontré una hoja llamada «${sheetEdit.sheetCue}» en «${docName}». Las hojas disponibles son: ${sheets.map((s) => `«${s.name}»`).join(', ')}. ¿Cuál deseas editar?` };
     }
@@ -7115,7 +7145,7 @@ async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
       return {
         buffer: result.buffer,
         steps: [{ kind: 'format_range', label: `${result.sheetName}!${where}`, count: result.cellsChanged }],
-        operation: { kind: 'format_range', formatCode: result.formatCode, cellsChanged: result.cellsChanged, sheetName: result.sheetName },
+        operation: { kind: 'format_range', formatCode: result.formatCode, cellsChanged: result.cellsChanged, sheetName: result.sheetName, partName: result.partName, range: sheetEdit.range || null, column: sheetEdit.column || null },
         suffix: 'formato_actualizado',
         titleSuffix: 'formato actualizado',
         summary: `apliqué formato de ${fmtLabel} a ${result.cellsChanged} celda(s) de ${where} en la hoja «${result.sheetName}»`,
@@ -7134,7 +7164,7 @@ async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
         operation: { kind: 'set_cell', address: result.address, sheetName: result.sheetName, value: sheetEdit.value },
         suffix: 'celda_actualizada',
         titleSuffix: 'celda actualizada',
-        summary: `escribí «${sheetEdit.value}» en ${result.sheetName}!${result.address}`,
+        summary: `actualicé la celda ${result.sheetName}!${result.address} con «${sheetEdit.value}»`,
       };
     }
   } catch (err) {
@@ -7659,6 +7689,308 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
   }
 }
 
+function officeIntentUnresolved() {
+  const error = new Error('No pude convertir todos los cambios de Office en operaciones precisas. No modifiqué el original ni añadí un anexo.');
+  error.code = 'OFFICE_EDIT_INTENT_UNRESOLVED';
+  return error;
+}
+
+// Keep the original spelling/accents and literal values. The older splitter
+// normalizes the whole prompt and only notices repeated verbs, losing both
+// "C3 a 700" and the location preceding the next PowerPoint action.
+function splitOfficeEditClauses(requestText = '') {
+  const raw = String(requestText);
+  let masked = ''; let quote = ''; let depth = 0;
+  const closing = { '"': '"', "'": "'", '“': '”', '«': '»', '‘': '’' };
+  for (const char of raw) {
+    if (quote) {
+      if (char === quote) quote = '';
+      masked += '~'.repeat(char.length);
+    } else if (closing[char]) {
+      quote = closing[char]; masked += '~';
+    } else if (char === '(') {
+      depth += 1; masked += '~';
+    } else if (char === ')' && depth) {
+      depth -= 1; masked += '~';
+    } else masked += depth ? '~'.repeat(char.length) : char;
+  }
+  if (quote || depth) return null;
+  const boundary = /[;\n]+|\s+(?:y|e|and|adem[aá]s|luego|despu[eé]s)\s+|[,\.](?=\s+(?:en\b|in\b|cambia\w*\b|reempla\w*\b|pon\b|aplica\w*\b|formatea\w*\b|conserva\w*\b|sin\b|no\b|devu[eé]lv\w*\b))/giu;
+  const clauses = []; let start = 0;
+  for (const match of masked.matchAll(boundary)) {
+    const value = raw.slice(start, match.index).trim();
+    if (value) clauses.push(value);
+    start = match.index + match[0].length;
+  }
+  const last = raw.slice(start).trim();
+  if (last) clauses.push(last);
+  return clauses.length <= 30 ? clauses : null;
+}
+
+const OFFICE_PRESERVATION_OR_DELIVERY_PREFIX = /^(?:(?:conserv\w*|manten\w*|mant[eé]n|preserv\w*)\b|(?:sin|no|ni|nunca|tampoco|evit\w*)\b|(?:devu[eé]lv\w*|entr[eé]g\w*|retorna\w*)\b)/iu;
+
+function officePreservationClause(clause) {
+  const text = normalizeText(clause).replace(/[.!]+$/, '').trim();
+  if (/^(?:por favor|gracias)$/.test(text)) return true;
+  // Only a complete, simple constraint is ignorable. Matching its prefix
+  // swallowed additional work after "pero", "excepto", etc. and published
+  // a partial edit as though the whole instruction had been implemented.
+  const target = '(?:el|la|los|las|su)\\s+(?:formato|diseno|estilos?|estructura|resto)(?:\\s+(?:original(?:es)?|actual(?:es)?|intact[oa]s?))?';
+  if (new RegExp(`^(?:(?:conserv\\w*|manten\\w*|preserv\\w*)\\s+${target}|(?:sin|no)\\s+(?:cambi\\w*|alter\\w*|modifi\\w*|tocar|toques)\\s+${target})$`).test(text)) return true;
+  return /^(?:devuelv(?:e|eme|a|ame)|entrega(?:me)?|retorna(?:me)?)\s+(?:el|la|los|las|un|una|ambos|ambas)\s+(?:(?:mismo|misma|mismos|mismas)\s+)?(?:archivos?|documentos?|excel|xlsx|word|docx|powerpoint|pptx|presentacion(?:es)?)(?:\s+(?:complet[oa]s?|editad[oa]s?|actualizad[oa]s?|corregid[oa]s?))?$/.test(text);
+}
+
+function officeSheetCue(clause, sheets) {
+  const cue = /\b(?:hoja|sheet|pesta[nñ]a)\s+/iu.exec(clause);
+  if (!cue) return null;
+  const tail = clause.slice(cue.index + cue[0].length);
+  const quoted = /^(?:"([^"]+)"|“([^”]+)”|'([^']+)'|«([^»]+)»)/u.exec(tail);
+  if (quoted) return quoted.slice(1).find(Boolean);
+  const found = [...sheets].sort((a, b) => b.name.length - a.name.length)
+    .find((sheet) => new RegExp(`^${escapeRegExp(xmlUnescape(sheet.name))}(?=\\s|[,;.]|$)`, 'iu').test(tail));
+  return found ? xmlUnescape(found.name) : tail.match(/^[^\s,;.]+/)?.[0] || null;
+}
+
+function officeLocationClause(clause, format, sheets) {
+  const match = /^(?:en|in)\s+((?:(?:el|la|este|esta|mismo|misma)\s+)*)(.+?)\s*[,.:]?$/iu.exec(clause);
+  if (!match) return false;
+  const location = match[2].trim();
+  if (/^(?:excel|xlsx|powerpoint|pptx?|archivo|documento|presentaci[oó]n)$/iu.test(location)
+    || /^(?:"[^"]+\.(?:pptx|xlsx)"|“[^”]+\.(?:pptx|xlsx)”|[^\s,;]+\.(?:pptx|xlsx))$/iu.test(location)) return true;
+  if (format === 'xlsx') {
+    const sheet = /^(?:hoja|sheet|pesta[nñ]a)\s+(.+)$/iu.exec(location)?.[1];
+    return Boolean(sheet && normalizeText(sheet.replace(/^["“'«]|["”'»]$/g, '')) === normalizeText(officeSheetCue(clause, sheets)));
+  }
+  return /^(?:(?:diapositiva|l[aá]mina|slide)\s*(?:#\s*)?\d{1,3}|(?:primer[ao]?|segund[ao]|tercer[ao]?|cuart[ao]|quint[ao]|sext[ao]|s[eé]ptim[ao]|octav[ao]|noven[ao]|d[eé]cim[ao])\s+(?:diapositiva|l[aá]mina|slide)|portada|car[aá]tula)$/iu.test(location);
+}
+
+function planOfficeLiteralEdits({ requestText = '', format, input } = {}) {
+  if (String(requestText).length > 12000) return { status: 'declined', operations: [] };
+  const clauses = splitOfficeEditClauses(requestText);
+  if (!clauses) return { status: 'declined', operations: [] };
+  assertBoundedOfficePackage(input);
+  const sheets = format === 'xlsx' ? xlsxAdapterModule().listXlsxSheets(input) : [];
+  const slides = format === 'pptx' ? pptxAdapterModule().listPptxSlides(input) : [];
+  const operations = []; const unresolved = []; let sawLiteral = false;
+  let sheetCue = null; let slideNumber = null;
+  for (const raw of clauses) {
+    const clause = raw.replace(/^\s*(?:[-•]|\d+[.)])\s*/u, '').replace(/^por favor[,\s]+/iu, '').replace(/,?\s+por favor[.!]?$/iu, '').trim();
+    if (!clause || officePreservationClause(clause)) continue;
+    // Do not mine a positive assignment out of a negation or an unresolved
+    // preservation/return instruction. The selected model must interpret the
+    // entire turn, including those constraints, before any bytes are changed.
+    if (OFFICE_PRESERVATION_OR_DELIVERY_PREFIX.test(clause)) return { status: 'declined', operations: [], unresolved: [clause] };
+    let op = null;
+    if (format === 'xlsx') {
+      const nextSheet = officeSheetCue(clause, sheets);
+      if (nextSheet) sheetCue = nextSheet;
+      const assignment = /\b(?:celda|cell|casilla)\s+([A-Z]{1,3}[1-9]\d{0,6})\s*(?:en|a|=|:|escrib\w*|pon|coloca\w*|con(?:\s+el\s+valor)?)\s*([\s\S]+)$/iu.exec(clause)
+        || /\b([A-Z]{1,3}[1-9]\d{0,6})\s*=\s*([\s\S]+)$/u.exec(clause);
+      if (assignment) {
+        sawLiteral = true;
+        const ref = assignment[1].toUpperCase();
+        const quoted = /^(?:"([\s\S]*)"|“([\s\S]*)”|'([\s\S]*)'|«([\s\S]*)»)[.!]?$/u.exec(assignment[2].trim());
+        const value = quoted ? quoted.slice(1).find((item) => item !== undefined) : assignment[2].trim().replace(/[.!]$/, '');
+        // Ambiguous decimal/grouping notation belongs to the selected model;
+        // the surgical writer must not silently turn a decimal comma into 10x.
+        if (xlsxAdapterModule().colLetterToIndex(ref.replace(/\d+$/, '')) <= 16384
+          && Number(ref.match(/\d+$/)[0]) <= 1048576
+          && !(/^-?\d[\d.,]*$/.test(value) && value.includes(','))
+          && !/\b(?:celda|cell|casilla)\s+[A-Z]{1,3}\d+/iu.test(value)
+          && (quoted || !/^(?:formato\b|moneda\b|porcentaje\b|negrita\b|cursiva\b|currency\b|percent\b|bold\b)/iu.test(value))
+          && (quoted || !/\b(?:en|in)\s+(?:(?:la|the)\s+)?(?:hoja|sheet)\b/iu.test(value))) {
+          op = { kind: 'set_cell', cellRef: ref, value, sheetCue };
+        }
+      } else {
+        const parsed = parseSpreadsheetEditRequest(clause);
+        if (parsed?.kind === 'format_range') op = { ...parsed, sheetCue };
+        const replacements = extractAllQuotedReplacementPairs(clause);
+        if (replacements.length) sawLiteral = true;
+        if (replacements.length === 1) op = { kind: 'replace_text', ...replacements[0], sheetCue };
+      }
+    } else if (format === 'pptx') {
+      const scope = resolveSlideScope(clause);
+      if (scope.ambiguous) { unresolved.push(clause); continue; }
+      if (scope.slideNumber) slideNumber = scope.slideNumber;
+      const title = parsePresentationEditRequest(clause, { slides });
+      const replacements = extractAllQuotedReplacementPairs(clause);
+      if (title || replacements.length) sawLiteral = true;
+      if (title) op = { ...title, slideNumber: title.slideNumber || slideNumber };
+      else if (replacements.length === 1) op = { kind: 'replace_text', ...replacements[0], slideNumber: scope.allSlides ? null : slideNumber };
+      else if (clauseIsDelete(normalizeText(clause))) {
+        const values = extractQuotedValues(clause);
+        if (values.length === 1) op = { kind: 'delete_text', needle: values[0], slideNumber: scope.allSlides ? null : slideNumber };
+      } else {
+        const style = parseDeckStyleRequest(clause);
+        if (style) op = { ...style, slideNumber: scope.allSlides ? null : slideNumber, allSlides: scope.allSlides || !slideNumber };
+      }
+    }
+    if (op) operations.push(op);
+    else if (!officeLocationClause(clause, format, sheets)) unresolved.push(clause);
+  }
+  // Preserve the existing explicit color + add-slide contract. Both clauses
+  // have recognized operations in the structural planner; no unknown tail is
+  // being discarded. Authored content still belongs to the selected model.
+  if (format === 'pptx' && operations.length && operations.every((op) => ['set_slide_background', 'replace_text', 'delete_text'].includes(op.kind))
+    && unresolved.length && unresolved.every((clause) => parseOfficeUserIntent(clause, { format })?.kind === 'add_slides')) {
+    return { status: 'none', operations: [] };
+  }
+  const partial = unresolved.length && (sawLiteral || operations.length || (clauses.length > 1 && !parseOfficeUserIntent(requestText, { format })));
+  return { status: partial ? 'declined' : operations.length ? 'complete' : 'none', operations, unresolved };
+}
+
+function assertOfficePartsPreserved(before, after, allowed) {
+  const a = assertBoundedOfficePackage(before); const b = assertBoundedOfficePackage(after);
+  const names = ooxmlPartNames(a);
+  if (JSON.stringify(names) !== JSON.stringify(ooxmlPartNames(b))
+    || names.some((name) => !allowed.includes(name) && !a.file(name).asNodeBuffer().equals(b.file(name).asNodeBuffer()))) {
+    const error = new Error('La edición alteró partes no autorizadas del archivo. No se guardó una copia.');
+    error.code = 'SOURCE_PRESERVING_VALIDATION_FAILED';
+    throw error;
+  }
+  const { XMLValidator } = require('fast-xml-parser');
+  if (allowed.some((name) => name.endsWith('.xml') && XMLValidator.validate(b.file(name)?.asText() || '') !== true)) throw officeIntentUnresolved();
+}
+
+function officeCellInScope(ref, op) {
+  if (Array.isArray(op.locations)) return op.locations.some((location) => location.address === ref);
+  if (op.kind === 'set_cell') return ref === op.address;
+  const adapter = xlsxAdapterModule(); const cell = adapter.splitCellRef(ref);
+  if (!cell) return false;
+  if (op.column) return cell.col === op.column && cell.row >= 2;
+  const [a, b = a] = String(op.range || '').split(':').map((value) => adapter.splitCellRef(value));
+  return Boolean(a && b && cell.row >= Math.min(a.row, b.row) && cell.row <= Math.max(a.row, b.row)
+    && cell.colIndex >= Math.min(a.colIndex, b.colIndex) && cell.colIndex <= Math.max(a.colIndex, b.colIndex));
+}
+
+function xlsxCells(xml) {
+  return new Map([...String(xml).matchAll(/<c\b[^>]*\br="([A-Za-z]+\d+)"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)].map((match) => [match[1], match[0]]));
+}
+
+function assertXlsxCellsPreserved(before, after, op, partName) {
+  const original = new PizZip(before).file(partName)?.asText() || '';
+  const edited = new PizZip(after).file(partName)?.asText() || '';
+  const originalCells = xlsxCells(original); const editedCells = xlsxCells(edited);
+  const mask = (xml) => xml.replace(/<c\b[^>]*\br="([A-Za-z]+\d+)"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g, (whole, ref) => officeCellInScope(ref, op) ? '' : whole)
+    .replace(/<row\b[^>]*>\s*<\/row>/g, '');
+  if (mask(original) !== mask(edited)) throw officeIntentUnresolved();
+  const attributes = (cell) => Object.fromEntries([...(cell.match(/^<c\b[^>]*>/)?.[0] || '').matchAll(/\b([\w:]+)="([^"]*)"/g)].map((match) => [match[1], match[2]]));
+  const body = (cell) => cell.replace(/^<c\b[^>]*>/, '').replace(/<\/c>$/, '');
+  for (const [ref, old] of originalCells) {
+    if (!officeCellInScope(ref, op)) continue;
+    const next = editedCells.get(ref);
+    if (!next) throw officeIntentUnresolved();
+    const nextAttrs = attributes(next);
+    for (const [name, value] of Object.entries(attributes(old))) {
+      if (name === (op.kind === 'format_range' ? 's' : 't')) continue;
+      if (nextAttrs[name] !== value) throw officeIntentUnresolved();
+    }
+    if (op.kind === 'format_range' && body(old) !== body(next)) throw officeIntentUnresolved();
+  }
+}
+
+function verifyXlsxLiteralFormat(buffer, op) {
+  try {
+    const zip = new PizZip(buffer); const styles = zip.file('xl/styles.xml')?.asText() || '';
+    const formats = new Map([...styles.matchAll(/<numFmt\b[^>]*numFmtId="(\d+)"[^>]*formatCode="([^"]*)"[^>]*\/>/g)].map((match) => [match[1], xmlUnescape(match[2])]));
+    const xfs = [...(styles.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] || '').matchAll(/<xf\b[^>]*>/g)];
+    const cells = [...xlsxCells(zip.file(op.partName)?.asText() || '')].filter(([ref]) => officeCellInScope(ref, op));
+    return cells.length === op.cellsChanged && cells.length > 0 && cells.every(([, xml]) => {
+      const index = Number(xml.match(/\bs="(\d+)"/)?.[1] || 0);
+      const formatId = xfs[index]?.[0].match(/\bnumFmtId="(\d+)"/)?.[1];
+      return formats.get(formatId) === op.formatCode;
+    });
+  } catch { return false; }
+}
+
+function replaceXlsxLiteralText(input, op) {
+  const zip = assertBoundedOfficePackage(input);
+  const sheets = xlsxAdapterModule().listXlsxSheets(input);
+  const wanted = op.sheetCue ? sheets.filter((sheet) => normalizeText(xmlUnescape(sheet.name)) === normalizeText(op.sheetCue)) : sheets;
+  if (!wanted.length) throw officeIntentUnresolved();
+  const strings = [...(zip.file('xl/sharedStrings.xml')?.asText() || '').matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((match) => match[1]);
+  const locations = [];
+  for (const sheet of wanted) {
+    const original = zip.file(sheet.partName)?.asText() || '';
+    const edited = original.replace(/<c\b([^>]*\br="([A-Za-z]+\d+)"[^>]*)>([\s\S]*?)<\/c>/g, (whole, attrs, address, body) => {
+      if (/<f\b/.test(body)) return whole;
+      let textXml;
+      if (/\bt="s"/.test(attrs)) textXml = strings[Number(body.match(/<v\b[^>]*>(\d+)<\/v>/)?.[1])];
+      else if (/\bt="inlineStr"/.test(attrs)) textXml = body;
+      else return whole;
+      const text = [...String(textXml || '').matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((match) => xmlUnescape(match[1])).join('');
+      if (!normalizedTextIncludes(text, op.needle)) return whole;
+      // A rich-text replacement needs run-aware editing. Decline the whole
+      // request instead of flattening its fonts/colors into one inline value.
+      if (/<r\b/.test(textXml)) throw officeIntentUnresolved();
+      const replacement = replaceNeedleText(text, op.needle, op.replacement);
+      if (replacement === text) return whole;
+      if (locations.length >= 1000) throw officeIntentUnresolved();
+      locations.push({ sheetName: xmlUnescape(sheet.name), partName: sheet.partName, address, value: replacement });
+      return `<c${attrs.replace(/\s+t="[^"]*"/, '')} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(replacement)}</t></is></c>`;
+    });
+    if (edited !== original) zip.file(sheet.partName, edited);
+  }
+  if (!locations.length) {
+    const error = new Error(`No encontré el texto «${op.needle}» en el Excel.`);
+    error.code = 'XLSX_REPLACE_TEXT_NOT_FOUND';
+    throw error;
+  }
+  return { buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    operation: { ...op, locations }, steps: [{ kind: 'replace_text', mode: 'xlsx_safe_replace', changedCount: locations.length }],
+    summary: `reemplacé el texto específico en ${locations.length} celda(s)`, suffix: 'editado', titleSuffix: 'editado' };
+}
+
+async function executeOfficeLiteralEdits({ input, plan, format, sourceFile }) {
+  if (plan?.status !== 'complete' || !plan.operations?.length) throw officeIntentUnresolved();
+  let buffer = input;
+  const operations = []; const steps = []; const summaries = [];
+  let single;
+  for (const op of plan.operations) {
+    const before = buffer;
+    let result; let allowed;
+    if (format === 'xlsx') {
+      result = op.kind === 'replace_text' ? replaceXlsxLiteralText(before, op)
+        : await runXlsxSurgicalEditFlow({ input: before, sheetEdit: op, sourceFile });
+      if (result.clarification) return result;
+      const targets = result.operation.locations
+        ? [...new Set(result.operation.locations.map((item) => item.partName))]
+        : [xlsxAdapterModule().listXlsxSheets(result.buffer).find((item) => item.name === result.operation.sheetName).partName];
+      allowed = [...targets, ...(op.kind === 'format_range' ? ['xl/styles.xml'] : [])];
+      for (const partName of targets) assertXlsxCellsPreserved(before, result.buffer, { ...result.operation,
+        ...(result.operation.locations ? { locations: result.operation.locations.filter((item) => item.partName === partName) } : {}),
+      }, partName);
+      if (op.kind === 'set_cell' && await readXlsxCellVisibleValue(result.buffer, result.operation) !== String(op.value)) throw officeIntentUnresolved();
+      if (op.kind === 'format_range' && !verifyXlsxLiteralFormat(result.buffer, result.operation)) throw officeIntentUnresolved();
+    } else if (op.kind === 'set_slide_title') {
+      result = await runPptxSurgicalEditFlow({ input: before, slideEdit: op, sourceFile });
+      if (result.clarification) return result;
+      if (!verifySlideTitleEdit(before, result.buffer, result.operation).passed) throw officeIntentUnresolved();
+      allowed = [pptxAdapterModule().listPptxSlides(before).find((item) => item.number === result.operation.slideNumber).partName];
+    } else if (op.kind === 'set_slide_background') {
+      result = await runPptxStyleEditFlow({ input: before, styleEdit: op, sourceFile });
+      if (result.clarification) return result;
+      allowed = pptxAdapterModule().listPptxSlides(before).filter((item) => op.allSlides || item.number === op.slideNumber).map((item) => item.partName);
+    } else {
+      const replacement = op.kind === 'delete_text' ? '' : op.replacement;
+      const edited = op.slideNumber
+        ? pptxAdapterModule().replaceSlideText({ buffer: before, ...op, replacement })
+        : replaceTextInPptxBuffer(before, op.needle, replacement);
+      allowed = pptxAdapterModule().listPptxSlides(before).filter((item) => !op.slideNumber || item.number === op.slideNumber).map((item) => item.partName);
+      result = { buffer: edited.buffer, operation: { ...op, replacement }, steps: [{ kind: op.kind, changedCount: edited.changedCount, slideNumber: op.slideNumber }], summary: `actualicé ${edited.changedCount} texto(s)${op.slideNumber ? ` de la diapositiva ${op.slideNumber}` : ''}` };
+    }
+    assertOfficePartsPreserved(before, result.buffer, allowed);
+    buffer = result.buffer;
+    operations.push({ ...result.operation, literalProof: true, allowedPartNames: allowed });
+    steps.push(...result.steps); summaries.push(result.summary); single = result;
+  }
+  const literalOutputSha256 = createHash('sha256').update(buffer).digest('hex');
+  for (const operation of operations) operation.literalOutputSha256 = literalOutputSha256;
+  return { buffer, operations, steps, summary: joinSpanishList(summaries),
+    suffix: operations.length === 1 ? single.suffix || 'editado' : 'editado',
+    titleSuffix: operations.length === 1 ? single.titleSuffix || 'editado' : 'editado' };
+}
+
 function planGenericOfficeOperations({ requestText = '', format = '', sourceText = '', originalName = '' } = {}) {
   const clauses = splitRequestClauses(requestText);
   const ops = [];
@@ -7775,9 +8107,7 @@ async function executeXlsxOperations({ input, ops, blocks }) {
       for (const r of op.rows.slice(0, 5)) validationBlocks.push(block('normal', r.join(' ')));
       steps.push({ kind: 'add_sheet', mode: 'xlsx_new_sheet', label: result.sheetName, count: result.added });
     } else {
-      buffer = await appendToXlsxBuffer(buffer, appendBlocks);
-      validationBlocks.push(...appendBlocks);
-      steps.push({ kind: 'append_generic', mode: 'xlsx_new_sheet' });
+      throw officeIntentUnresolved();
     }
   }
   return { buffer, steps, validationBlocks: validationBlocks.length ? validationBlocks : appendBlocks };
@@ -7827,16 +8157,7 @@ function executePptxOperations({ input, ops, blocks }) {
         colorName: op.colorName,
       });
     } else {
-      const dump = looksLikePromptDump(appendBlocks.map((item) => item.text).join('\n'));
-      const safeBlocks = dump
-        ? [
-          block('heading1', op.title || 'Continuación profesional'),
-          block('normal', '• Decisión, evidencia y próximo paso — sin copiar la petición del usuario.'),
-        ]
-        : appendBlocks;
-      buffer = appendToPptxBuffer(buffer, safeBlocks);
-      validationBlocks.push(...safeBlocks);
-      steps.push({ kind: 'append_generic', mode: 'pptx_new_slide' });
+      throw officeIntentUnresolved();
     }
   }
   return { buffer, steps, validationBlocks: validationBlocks.length ? validationBlocks : appendBlocks };
@@ -8004,7 +8325,22 @@ async function generateSourcePreservingDocumentEdit({
   let orchestration = null;
   let operations = [];
 
-  if (isDocxFile(sourceFile)) {
+  const officeFormat = isXlsxFile(sourceFile) ? 'xlsx' : isPptxFile(sourceFile) ? 'pptx' : null;
+  const literalPlan = officeFormat ? planOfficeLiteralEdits({ requestText, format: officeFormat, input }) : null;
+  if (literalPlan?.status === 'declined') throw officeIntentUnresolved();
+  if (literalPlan?.status === 'complete') {
+    const result = await executeOfficeLiteralEdits({ input, plan: literalPlan, format: officeFormat, sourceFile });
+    if (result.clarification) return buildImageEditClarificationResult({ message: result.message, format: officeFormat });
+    format = officeFormat;
+    output = result.buffer;
+    operations = result.operations;
+    validationBlocks = [];
+    suffix = result.suffix;
+    titleSuffix = result.titleSuffix;
+    explanation = `Se conservó el ${format.toUpperCase()} original; ${result.summary}.`;
+    content = `Listo. Conservé el ${format.toUpperCase()} original y ${result.summary}.`;
+    orchestration = buildDocumentOrchestrationPlan({ requestText, sourceFile, referenceFiles, operations, selectionReason });
+  } else if (isDocxFile(sourceFile)) {
     format = 'docx';
     // Image-edit fast path — resolved BEFORE the text planner because the text
     // heuristics misread image requests ("cambia el logo a rojo" used to parse
@@ -8104,7 +8440,7 @@ async function generateSourcePreservingDocumentEdit({
         : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
     }
   } else {
-    const blocks = buildAppendixBlocks({
+    const blocks = officeFormat ? [] : buildAppendixBlocks({
       prompt: requestText,
       sourceText: sourceText || sourceFile.extractedText || '',
       originalName: sourceFile.originalName || sourceFile.filename,
@@ -8148,10 +8484,7 @@ async function generateSourcePreservingDocumentEdit({
       // LLM planner read the real workbook and build a concrete plan
       // (set_cell / append_rows / add_sheet / replace_text). Heuristic hits
       // stay authoritative — they are exact by construction.
-      if (operations.every((op) => op.kind === 'append_generic')) {
-        const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
-        if (smart) operations = smart;
-      }
+      if (operations.some((op) => op.kind === 'append_generic')) throw officeIntentUnresolved();
       operations = await enrichOfficeContentOperations(operations, {
         requestText,
         sourceText: sourceText || sourceFile.extractedText || '',
@@ -8241,10 +8574,7 @@ async function generateSourcePreservingDocumentEdit({
         await sourceRead.cleanup().catch(() => {});
         return buildImageEditClarificationResult({ format, message: 'Identifiqué una edición dentro de una diapositiva, pero no el cambio exacto. Indica el texto actual y el texto nuevo; no añadí diapositivas ni regeneré el archivo.' });
       }
-      if (operations.every((op) => op.kind === 'append_generic')) {
-        const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
-        if (smart) operations = smart;
-      }
+      if (operations.some((op) => op.kind === 'append_generic')) throw officeIntentUnresolved();
       operations = await enrichOfficeContentOperations(operations, {
         requestText,
         sourceText: livePptxText,
@@ -8373,6 +8703,12 @@ async function generateSourcePreservingDocumentEdit({
     error.validation = validation;
     throw error;
   }
+  const priorDocumentEdit = sourceFile.validation?.documentEdit || {};
+  validation.documentEdit = {
+    sourceFileId: priorDocumentEdit.sourceFileId || (sourceFile.artifactId ? null : sourceFile.id || null),
+    sourceFilename: priorDocumentEdit.sourceFilename || sourceFile.originalName || sourceFile.filename,
+    parentArtifactId: sourceFile.artifactId || null,
+  };
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -8528,10 +8864,19 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
     },
   });
   if (!sources.some((source) => docxEngine.isWordFilename(source.name))) return null;
-  // "en ambos Word…": one immutable edited copy per upload is the batch
-  // path's contract; the single-document engine must not claim it.
-  const wordSources = sources.filter((source) => docxEngine.isWordFilename(source.name));
-  if (wordSources.length > 1 && requestWantsBatchDocumentEdit(requestText, wordSources.map((source) => ({ originalName: source.name, filename: source.name, source: 'current_upload' })))) return null;
+  // The canonical editor owns batches too: it resolves the latest version,
+  // keeps the selected client, and verifies every source before publishing.
+  // Preserve an explicit family scope ("ambos Word" + a reference PDF) using
+  // these exact owned versions, never reload their older upload rows.
+  const candidates = sources.map((source) => ({ originalName: source.name, filename: source.name,
+    source: 'current_upload', identity: source.kind === 'artifact' ? `artifact:${source.artifactId}` : source.row?.id }));
+  let selectedFileIds = fileIds;
+  if (requestWantsBatchDocumentEdit(requestText, candidates)) {
+    const scoped = selectBatchDocumentSources(requestText, candidates);
+    if (scoped.length < candidates.length && scoped.every((source) => source.identity)) {
+      selectedFileIds = scoped.map((source) => source.identity);
+    }
+  }
   const request = String(requestText || '').normalize('NFC').toLowerCase();
   const named = sources.filter((source) => request.includes(source.name.normalize('NFC').toLowerCase()));
   if (named.length === 1 && !docxEngine.isWordFilename(named[0].name)) return null;
@@ -8541,25 +8886,40 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
     throw error;
   }
   const edited = await editor.runChatDocumentEdit({
-    prisma, userId, chatId, fileIds, instruction: requestText, signal, llm,
+    prisma, userId, chatId, fileIds: selectedFileIds, instruction: requestText, signal, llm,
     onEvent: typeof onEvent === 'function' ? onEvent : () => {},
   });
   if (edited?.clarification) return buildImageEditClarificationResult({ message: edited.message });
-  if (!edited || !edited.ok) {
+  const artifacts = Array.isArray(edited?.artifacts) ? edited.artifacts : [];
+  if (!edited || (!edited.ok && !artifacts.length)) {
     const error = new Error((edited && edited.message) || 'No pude completar la edición del documento con el modelo seleccionado. El original no se modificó.');
     error.code = 'DOCX_EDIT_ENGINE_FAILED';
     throw error;
   }
-  const artifact = edited.artifacts?.[0];
-  if (!artifact || artifact.validation?.passed !== true) {
+  if (!artifacts.length || artifacts.some((artifact) => !artifact?.id || artifact.validation?.passed !== true)) {
     const error = new Error('La edición de Word no superó la verificación. No se entregó ningún documento.');
     error.code = 'DOCX_EDIT_VALIDATION_FAILED';
     throw error;
   }
+  const files = editor.toAssistantFiles(artifacts);
+  const content = edited.ok ? edited.summary : edited.message;
+  const results = artifacts.map((artifact, index) => ({
+    content, artifact, validation: artifact.validation, format: artifact.format || path.extname(artifact.filename).slice(1), previewHtml: null,
+    sourceFileId: artifact.validation.documentEdit?.sourceFileId || null,
+    file: { ...files[index], metrics: artifact.validation },
+  }));
+  const partial = !edited.ok;
+  const format = results.every((result) => result.format === results[0].format) ? results[0].format : 'multiple';
   return {
-    content: edited.summary, artifact, validation: artifact.validation, format: /\.doc$/i.test(artifact.filename) ? 'doc' : 'docx', previewHtml: null,
-    file: { type: 'doc', format: 'docx', title: artifact.filename, filename: artifact.filename,
-      url: artifact.downloadUrl, mime: artifact.mime, size: artifact.sizeBytes, metrics: artifact.validation },
+    ...results[0],
+    ok: edited.ok, content, batch: results.length > 1 || partial, partial,
+    ...(edited.code ? { code: edited.code } : {}),
+    results, artifacts, files: results.map((result) => result.file), format,
+    failures: partial ? [{ error: edited.message || 'No se completó la entrega de todos los archivos.' }] : [],
+    validation: results.length === 1 && !partial ? results[0].validation : {
+      passed: edited.ok === true, partial, format,
+      checks: { every_document_validated: edited.ok === true, edited_artifact_created: true },
+    },
   };
 }
 
@@ -8715,7 +9075,9 @@ async function tryGenerateSourcePreservingDocumentEdit({
     const needed = targetedSection ? 'un archivo DOCX con la sección solicitada' : `un archivo editable compatible (${supportedSourceEditLabel()})`;
     throw new Error(`Para conservar el documento original necesito ${needed}. Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
-  const result = await generateSourcePreservingDocumentEdit({
+  let result;
+  try {
+  result = await generateSourcePreservingDocumentEdit({
     sourceFile: supported,
     sourceFiles: selection.sourceFiles,
     referenceFiles: selection.referenceFiles,
@@ -8727,6 +9089,12 @@ async function tryGenerateSourcePreservingDocumentEdit({
     chatId,
     signal,
   });
+  } catch (error) {
+    // Let the caller's selected-model editor interpret the ENTIRE request.
+    // Never hand it a partially edited/persisted copy or a fabricated annex.
+    if (error?.code === 'OFFICE_EDIT_INTENT_UNRESOLVED') return null;
+    throw error;
+  }
 
   // Non-destructive version history (best-effort): the original upload is
   // never mutated; the new immutable artifact becomes the next version.
@@ -8757,6 +9125,9 @@ module.exports = {
   resolveStoredFilePath,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
+    splitOfficeEditClauses,
+    planOfficeLiteralEdits,
+    executeOfficeLiteralEdits,
     addSheetToXlsxBuffer,
     appendRowsToXlsxBuffer,
     buildXlsxSummaryForPrompt,

@@ -12,13 +12,14 @@
  * failures never silently switch the edit to a different provider.
  *
  * Sources: the documents attached to this turn; on a follow-up without
- * attachments, the most recent document of the conversation — an edited copy
+ * attachments, the most recent selected document set of the conversation — an edited copy
  * delivered earlier wins over the original upload, so "ahora cambia X" keeps
  * iterating on the latest version.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { composeAbortSignals } = require('../../utils/abort-signals');
 
 const EDITABLE_EXT_RE = /\.(?:docx?|xlsx?|xlsm|pptx?|pdf|csv|txt|md)$/i;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -54,6 +55,8 @@ const MESSAGES = Object.freeze({
   FILE_UNAVAILABLE: 'No pude leer el documento guardado. Vuelve a adjuntarlo y pide el cambio otra vez.',
   NO_VALID_OUTPUT: 'No pude entregar un archivo editado que superara la verificación. El documento original no se modificó; intenta describir el cambio con más detalle.',
   ENGINE_FAILED: 'El modelo seleccionado no pudo completar la edición. El documento original no se modificó; inténtalo de nuevo o elige otro modelo.',
+  TOO_MANY_DOCUMENTS: 'Puedo editar hasta 5 documentos por petición. Selecciona los archivos que deseas editar; no modifiqué ninguno.',
+  DOCUMENT_EDIT_INCOMPLETE: 'No pude verificar todos los archivos solicitados. No entregué el lote como terminado; los originales se conservan.',
 });
 
 function parseMessageFiles(files) {
@@ -161,52 +164,72 @@ function documentStem(name) {
     .replace(/[^a-z0-9]+/g, '');
 }
 
-async function latestDerivedArtifact({ prisma, userId, chatId, upload, deps }) {
-  if (!chatId || !prisma?.message?.findMany) return null;
-  const stem = documentStem(upload.name);
-  const ext = extensionOf(upload.name).replace(/^doc$/, 'docx');
-  if (stem.length < 4) return null;
+async function latestDerivedArtifacts({ prisma, userId, chatId, uploads, deps }) {
+  if (!chatId || !prisma?.message?.findMany || !uploads.length) return uploads;
   const messages = await prisma.message.findMany({
     where: { chatId, role: 'ASSISTANT', deletedAt: null, chat: { userId } },
     select: { role: true, files: true, content: true },
     orderBy: { timestamp: 'desc' },
     take: HISTORY_SCAN_MESSAGES,
   }).catch(() => []);
-  for (const message of Array.isArray(messages) ? messages : []) {
-    if (message.role && message.role !== 'ASSISTANT') continue;
-    for (const ref of assistantFileRefs(message)) {
+  const artifacts = (Array.isArray(messages) ? messages : [])
+    .filter((message) => !message.role || message.role === 'ASSISTANT')
+    .flatMap(assistantFileRefs)
+    .map((ref) => {
       const artifactId = artifactIdFromRef(ref);
-      if (!artifactId) continue;
-      const metadata = readOwnedArtifactMetadata(artifactId, userId, deps);
-      if (!metadata) continue;
-      if (documentStem(metadata.filename) === stem && extensionOf(metadata.filename) === ext) {
-        return { kind: 'artifact', name: metadata.filename, artifactId, metadata };
-      }
+      const metadata = artifactId && readOwnedArtifactMetadata(artifactId, userId, deps);
+      return metadata ? { kind: 'artifact', name: metadata.filename, artifactId, metadata } : null;
+    }).filter(Boolean);
+  return uploads.map((upload) => {
+    // New edits record the real upload identity. A same-name artifact with a
+    // different lineage can never replace this source.
+    const exact = artifacts.find((artifact) => artifact.metadata.validation?.documentEdit?.sourceFileId === upload.row.id);
+    if (exact) return { ...exact, originalName: upload.name };
+    const stem = documentStem(upload.name);
+    const ext = extensionOf(upload.name).replace(/^doc$/, 'docx');
+    // Compatibility for older delivered files, only when this source name is
+    // unambiguous. Never choose one of two same-name legacy candidates.
+    if (stem.length < 4 || uploads.filter((item) => documentStem(item.name) === stem).length !== 1) return upload;
+    for (const message of Array.isArray(messages) ? messages : []) {
+      if (message.role && message.role !== 'ASSISTANT') continue;
+      const ids = new Set(assistantFileRefs(message).map(artifactIdFromRef).filter(Boolean));
+      const matches = artifacts.filter((artifact) => ids.has(artifact.artifactId)
+        && !artifact.metadata.validation?.documentEdit?.sourceFileId
+        && documentStem(artifact.name) === stem && extensionOf(artifact.name) === ext);
+      if (matches.length > 1) return upload;
+      if (matches.length === 1) return { ...matches[0], originalName: upload.name, sourceFileId: upload.row.id };
     }
-  }
-  return null;
+    return upload;
+  });
 }
 
 /**
  * Resolve which documents this turn edits. Explicit attachments win; a
- * follow-up scans the conversation newest-first and takes the latest document,
+ * follow-up scans the conversation newest-first and takes the latest document set,
  * whether it was delivered by the assistant or uploaded by the user.
  */
-async function resolveEditSources({ prisma, userId, chatId, fileIds = [], preserveCandidates = false, allowImageOnlyFollowup = false, deps }) {
-  const explicit = (Array.isArray(fileIds) ? fileIds : []).map(uploadIdFromRef).filter(Boolean);
+async function resolveEditSources({ prisma, userId, chatId, fileIds = [], allowImageOnlyFollowup = false, includeRelatedSources = false, deps }) {
+  const explicit = [...new Set((Array.isArray(fileIds) ? fileIds : []).map(uploadIdFromRef).filter(Boolean))];
   if (explicit.length) {
-    const uploads = await loadOwnedUploads(prisma, userId, explicit);
-    if (uploads.length === 1) {
-      // Re-attaching the original upload on a follow-up ("en el mismo
-      // documento…") must continue from the latest version this chat already
-      // delivered for it, never silently restart from v1 and drop earlier edits.
-      const latest = await latestDerivedArtifact({ prisma, userId, chatId, upload: uploads[0], deps });
-      if (latest) return [latest];
+    const uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
+    const latest = await latestDerivedArtifacts({ prisma, userId, chatId, uploads, deps });
+    const byId = new Map(uploads.map((upload, index) => [upload.row.id, latest[index]]));
+    const images = allowImageOnlyFollowup ? await loadOwnedImageRows(prisma, userId, explicit) : [];
+    const imageIds = new Set(images.map((row) => row.id));
+    const selected = [];
+    for (const id of explicit) {
+      const match = /^artifact:([a-f0-9]{6,40})$/i.exec(id);
+      if (match) {
+        const artifactId = match[1].toLowerCase();
+        const metadata = readOwnedArtifactMetadata(artifactId, userId, deps);
+        if (!metadata) return [];
+        selected.push({ kind: 'artifact', name: metadata.filename, artifactId, metadata });
+      } else if (byId.has(id)) selected.push(byId.get(id));
+      else if (!imageIds.has(id)) return [];
     }
-    if (uploads.length || !allowImageOnlyFollowup) return preserveCandidates ? uploads : uploads.slice(0, MAX_SOURCES);
+    if (selected.length || !allowImageOnlyFollowup) return selected;
     // A newly attached replacement image is an asset, not a new Word base.
     // Only an entirely owned image-only attachment set may use chat history.
-    const images = await loadOwnedImageRows(prisma, userId, explicit);
     if (new Set(images.map((row) => row.id)).size !== new Set(explicit).size) return [];
   }
   if (!chatId || !prisma?.message?.findMany) return [];
@@ -216,6 +239,26 @@ async function resolveEditSources({ prisma, userId, chatId, fileIds = [], preser
     orderBy: { timestamp: 'desc' },
     take: HISTORY_SCAN_MESSAGES,
   });
+  const recentSources = [];
+  const sameSource = (a, b) => {
+    const aId = sourceLineage(a).sourceFileId;
+    const bId = sourceLineage(b).sourceFileId;
+    if (aId && bId) return aId === bId;
+    return documentStem(sourceLineage(a).sourceFilename) === documentStem(sourceLineage(b).sourceFilename)
+      && extensionOf(a.name).replace(/^doc$/, 'docx') === extensionOf(b.name).replace(/^doc$/, 'docx');
+  };
+  const selectHistory = (candidates) => {
+    if (!includeRelatedSources || (!recentSources.length && candidates.length > 1)) return candidates;
+    // A later single-file edit updates its member of the last related batch.
+    // Do not combine unrelated files just because they are nearby in history.
+    if (candidates.length > 1 && candidates.some((candidate) => sameSource(candidate, recentSources[0]))) {
+      return candidates.map((candidate) => recentSources.find((source) => sameSource(source, candidate)) || candidate);
+    }
+    for (const candidate of candidates) {
+      if (!recentSources.some((source) => sameSource(source, candidate))) recentSources.push(candidate);
+    }
+    return null;
+  };
   for (const message of messages) {
     const refs = message.role === 'ASSISTANT' ? assistantFileRefs(message) : parseMessageFiles(message.files);
     if (message.role === 'ASSISTANT') {
@@ -228,16 +271,21 @@ async function resolveEditSources({ prisma, userId, chatId, fileIds = [], preser
         const metadata = readOwnedArtifactMetadata(artifactId, userId, deps);
         if (metadata) {
           artifacts.push({ kind: 'artifact', name: metadata.filename, artifactId, metadata });
-          if (!preserveCandidates) return artifacts;
         }
       }
-      if (artifacts.length) return artifacts;
+      if (artifacts.length) {
+        const selected = selectHistory(artifacts);
+        if (selected) return selected;
+      }
       continue;
     }
     const uploads = await loadOwnedUploads(prisma, userId, deps.extractFileIds(message.files));
-    if (uploads.length) return preserveCandidates ? uploads : uploads.slice(0, 1);
+    if (uploads.length) {
+      const selected = selectHistory(uploads);
+      if (selected) return selected;
+    }
   }
-  return [];
+  return recentSources.slice(0, 1);
 }
 
 /** Previous messages provide facts only; the current request authorizes edits. */
@@ -352,8 +400,7 @@ async function editDocxImage({ wordFile, imageEdit, instruction, prisma, userId,
   const validation = { passed: true, format: 'docx', checks: proof.checks, details: proof.details };
   const saved = deps.saveArtifact({ filename: wordFile.name, base64: edited.buffer.toString('base64'), mime: MIME_BY_EXT.docx,
     ownerUserId: userId, chatId, category: 'agent_artifact', validation });
-  const artifact = { id: saved.id, filename: saved.filename, format: saved.format, mime: saved.mime,
-    sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl, validation };
+  const artifact = savedArtifact(saved, saved.validation || validation);
   return { ok: true, artifacts: [artifact], summary: `Listo. ${imageEdit.kind === 'recolor_image' ? 'Recoloreé' : 'Reemplacé'} la imagen indicada en ${wordFile.name}, conservando el resto del documento. El original se conserva.` };
 }
 
@@ -473,12 +520,102 @@ function extensionOf(name) {
   return String(name || '').split('.').pop().toLowerCase();
 }
 
+function unquotedInstruction(instruction) {
+  return String(instruction || '').replace(/"[^"\r\n]*"|“[^”\r\n]*”|«[^»\r\n]*»|'[^'\r\n]*'|‘[^’\r\n]*’|`[^`\r\n]*`/gu, ' ')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function isExplicitBatch(instruction) {
+  const text = unquotedInstruction(instruction);
+  return /\b(?:ambos|ambas|(?:todos|todas)(?:\s+(?:los|las))?\s+(?:archivos|documentos|words?|excels?|powerpoints?|presentaciones)|cada\s+(?:archivo|documento|word|excel|powerpoint|presentacion)|both|all\s+(?:files|documents)|each\s+(?:file|document))\b/.test(text);
+}
+
+function isMultiOperationRequest(instruction) {
+  const text = unquotedInstruction(instruction)
+    .replace(/\b(?:sin\s+(?:cambiar|alterar|modificar|perder|tocar)|no\s+(?:cambies|alteres|modifiques|toques))\b/g, ' conservar ');
+  return (text.match(/\b(?:agreg\w*|anad\w*|insert\w*|borr\w*|elimin\w*|reescrib\w*|traduc\w*|resum\w*|corrig\w*|reempla[zc]\w*|sustitu\w*|modific\w*|cambi\w*|revis\w*|mejora\w*|replace|change)\b/g) || []).length > 1;
+}
+
+function sourceSelectionText(instruction) {
+  const value = '(?:"[^"\\r\\n]*"|“[^”\\r\\n]*”|«[^»\\r\\n]*»|\'[^\'\\r\\n]*\'|‘[^’\\r\\n]*’|`[^`\\r\\n]*`)';
+  const pair = new RegExp(`\\b(?:reempla[zc]\\w*|sustitu\\w*|cambi\\w*|modifi(?:c|q)\\w*|corrig\\w*|replace|change)\\s+(?:(?:de|del|el|la|los|las|texto|frase|palabra|letra|caracter|valor|exacto|exacta)\\s+)*${value}\\s*(?:por|con|a|to|with|→|->)\\s*${value}`, 'giu');
+  return String(instruction || '').replace(pair, ' ').normalize('NFC').toLowerCase();
+}
+
+function sourceNames(source) {
+  return [...new Set([source.name, source.originalName, source.metadata?.validation?.documentEdit?.sourceFilename].filter(Boolean))];
+}
+
+function sourceLineage(source) {
+  const prior = source.metadata?.validation?.documentEdit || {};
+  return {
+    sourceFileId: source.kind === 'upload' ? source.row.id : prior.sourceFileId || source.sourceFileId || null,
+    sourceFilename: prior.sourceFilename || source.originalName || source.name,
+    parentArtifactId: source.kind === 'artifact' ? source.artifactId : null,
+  };
+}
+
+function savedArtifact(saved, validation) {
+  return { id: saved.id, filename: saved.filename, format: saved.format, mime: saved.mime,
+    sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl, ...(validation ? { validation } : {}) };
+}
+
+/** Prepare every source independently; publish only after the entire set passes. */
+async function runDocumentEditBatch(options, sources, files, deps) {
+  // Reuse the document agent's existing runtime ceiling for the entire batch,
+  // instead of multiplying that ceiling by the number of selected files.
+  const scope = composeAbortSignals([options.signal], {
+    timeoutMs: require('../doc-agent').resolveMaxRuntimeMs(), timeoutReason: 'document_agent_timeout',
+  });
+  try {
+    return await prepareAndPublishDocumentBatch({ ...options, signal: scope.signal }, sources, files, deps);
+  } finally {
+    scope.cleanup();
+  }
+}
+
+async function prepareAndPublishDocumentBatch(options, sources, files, deps) {
+  const prepared = [];
+  const summaries = [];
+  for (let index = 0; index < sources.length; index += 1) {
+    options.signal?.throwIfAborted();
+    const start = prepared.length;
+    const result = await runResolvedDocumentEdit({ ...options, deps: {
+      ...deps,
+      // The legacy deterministic entry point resolves the originals again
+      // and saves immediately. A batch must use these already selected bytes.
+      tryDeterministicEdit: async () => null,
+      saveArtifact: (input) => {
+        prepared.push(input);
+        return { id: `prepared-${prepared.length}`, filename: input.filename, format: extensionOf(input.filename), mime: input.mime,
+          sizeBytes: Buffer.from(input.base64, 'base64').length, downloadUrl: '' };
+      },
+    } }, { sources: [sources[index]], files: [files[index]], batchNames: sources.map((source) => source.name) });
+    if (!result?.ok || prepared.length !== start + 1) {
+      return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', message: `${MESSAGES.DOCUMENT_EDIT_INCOMPLETE} Revisa la petición para ${sources[index].name}.` };
+    }
+    summaries.push(result.summary);
+  }
+  options.signal?.throwIfAborted();
+  const artifacts = [];
+  try {
+    for (const input of prepared) artifacts.push(savedArtifact(deps.saveArtifact(input), input.validation));
+  } catch (err) {
+    // Artifact storage is not transactional. Surface already published files
+    // rather than falsely claiming rollback or hiding their usable identity.
+    deps.log('batch_artifact_save_failed', { savedArtifactIds: artifacts.map((artifact) => artifact.id), expected: prepared.length });
+    return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', partial: artifacts.length > 0, artifacts,
+      message: `Verifiqué los cambios, pero solo pude guardar ${artifacts.length} de ${prepared.length} archivos. El lote no está completo; los originales se conservan.` };
+  }
+  return { ok: true, artifacts, summary: `Apliqué y verifiqué los cambios en ${artifacts.length} documentos.\n${summaries.map((summary, i) => `${sources[i].name}: ${summary}`).join('\n')}` };
+}
+
 /**
  * precisionOnly is used by legacy callers to share the owner/version resolver
  * without recursively invoking their generic editor. A declined request is null.
  * @returns {Promise<{ ok: true, artifacts: object[], summary: string } | { ok: false, code: string, message: string } | null>}
  */
-async function runChatDocumentEdit({
+async function runResolvedDocumentEdit({
   prisma,
   userId,
   chatId = null,
@@ -489,7 +626,7 @@ async function runChatDocumentEdit({
   precisionOnly = false,
   onEvent = () => {},
   deps: injected = {},
-} = {}) {
+} = {}, resolved = null) {
   const deps = resolveDeps(injected);
   const emit = (stage) => { try { onEvent(stage); } catch { /* UI relay never breaks the edit */ } };
   try {
@@ -497,7 +634,8 @@ async function runChatDocumentEdit({
     // it before parsing would turn an ambiguous precise follow-up into an edit
     // of the first attachment. Only the selected source is read below.
     const imageEdit = deps.parseDocxImageRequest(instruction);
-    let sources = await resolveEditSources({ prisma, userId, chatId, fileIds, preserveCandidates: true, allowImageOnlyFollowup: Boolean(imageEdit), deps });
+    let sources = resolved?.sources || await resolveEditSources({ prisma, userId, chatId, fileIds,
+      includeRelatedSources: isExplicitBatch(instruction), allowImageOnlyFollowup: Boolean(imageEdit), deps });
     if (!sources.length) {
       if (precisionOnly && !deps.parseDocxPrecisionRequest(instruction)) return null;
       return { ok: false, code: 'NO_DOCUMENT', message: MESSAGES.NO_DOCUMENT };
@@ -507,11 +645,14 @@ async function runChatDocumentEdit({
     // the latest delivered version, never silently return to its upload.
     const wordSources = sources.some((source) => /\.docx?$/i.test(source.name));
     let precision = wordSources ? deps.parseDocxPrecisionRequest(instruction) : null;
+    // The exact parser deliberately supports one operation. Compound edits
+    // belong to the selected-model engine as a whole, never to its first pair.
+    if (wordSources && (isMultiOperationRequest(instruction) || isExplicitBatch(instruction))) precision = null;
     let selected = sources.length === 1 ? sources[0] : null;
     if (precision?.sourceFilename) {
       // Only the parser's filename OUTSIDE the quoted edit is authoritative.
       // A filename in the needle/replacement is document content, not a selector.
-      const explicitlyNamed = sources.filter((source) => source.name.normalize('NFC').toLowerCase() === precision.sourceFilename.normalize('NFC').toLowerCase());
+      const explicitlyNamed = sources.filter((source) => sourceNames(source).some((name) => name.normalize('NFC').toLowerCase() === precision.sourceFilename.normalize('NFC').toLowerCase()));
       selected = explicitlyNamed.length === 1 ? explicitlyNamed[0] : null;
       if (!selected) return precisionFailure({
         code: 'DOCX_EDIT_SOURCE_AMBIGUOUS',
@@ -521,7 +662,7 @@ async function runChatDocumentEdit({
     }
     if (precisionOnly && !precision) return null;
     if (precision?.error) return precisionFailure(precision.error);
-    if (precision) {
+    if (precision && !(sources.length > 1 && !precision.sourceFilename && isExplicitBatch(instruction))) {
       if (!selected) return precisionFailure({
         code: 'DOCX_EDIT_SOURCE_AMBIGUOUS',
         message: 'No pude identificar un único documento con ese nombre. Adjunta el archivo o indica su nombre exacto; no modifiqué ninguno.',
@@ -531,25 +672,32 @@ async function runChatDocumentEdit({
         message: 'La edición exacta de Word conserva archivos .docx. No convertí ni reconstruí el original; adjunta su versión .docx para aplicar este cambio.',
       });
       sources = [selected];
-    } else if (wordSources && sources.length > 1) {
+    } else if (sources.length > 1) {
       // Semantic edits need the same full candidate set as literal edits.
       // Never silently choose the first historic artifact or append to a
       // different document because its filename was not considered.
-      const request = String(instruction || '').normalize('NFC').toLowerCase();
-      const named = sources.filter((source) => request.includes(source.name.normalize('NFC').toLowerCase()));
-      if (named.length !== 1) return precisionFailure({
-        code: 'DOCX_EDIT_SOURCE_AMBIGUOUS',
+      const request = sourceSelectionText(instruction);
+      const named = sources.filter((source) => sourceNames(source).some((name) => request.includes(name.normalize('NFC').toLowerCase())));
+      const mentionedNames = new Set(named.flatMap(sourceNames).map((name) => name.normalize('NFC').toLowerCase()).filter((name) => request.includes(name)));
+      if ((!named.length || mentionedNames.size < named.length) && !isExplicitBatch(instruction)) return {
+        ok: false,
+        code: wordSources ? 'DOCX_EDIT_SOURCE_AMBIGUOUS' : 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
         message: 'Hay varios documentos posibles. Indica el nombre del archivo que deseas editar o adjunta solamente ese documento; no modifiqué ninguno.',
-      });
-      sources = named;
-    } else {
-      // Broader editing retains its established selection/cap; the precision
-      // path above must not inherit either truncation.
-      const explicit = (Array.isArray(fileIds) ? fileIds : []).some(uploadIdFromRef);
-      sources = sources.slice(0, explicit ? MAX_SOURCES : 1);
+      };
+      if (named.length) sources = named;
     }
+    if (sources.length > MAX_SOURCES) return { ok: false, code: 'TOO_MANY_DOCUMENTS', message: MESSAGES.TOO_MANY_DOCUMENTS };
     emit({ label: 'Abriendo el documento', detail: sources.map((source) => source.name).join(', ') });
-    const files = await loadSourceFiles(sources, deps);
+    const files = resolved?.files || await loadSourceFiles(sources, deps);
+    if (sources.length > 1) return runDocumentEditBatch({ prisma, userId, chatId, fileIds, instruction, llm, signal, precisionOnly, onEvent }, sources, files, deps);
+    const originalSaveArtifact = deps.saveArtifact;
+    deps.saveArtifact = (input) => {
+      const validation = { ...input.validation, documentEdit: sourceLineage(sources[0]) };
+      return { ...originalSaveArtifact({ ...input, validation }), validation };
+    };
+    const batchContext = resolved?.batchNames
+      ? `Este paso edita únicamente ${JSON.stringify(sources[0].name)} del conjunto ${JSON.stringify(resolved.batchNames)}. Aplica solo los cambios que la petición autoriza para este archivo; si requiere datos de otro archivo que no están disponibles, indica la limitación y no inventes contenido.`
+      : '';
 
     if (precision) {
       try {
@@ -570,11 +718,7 @@ async function runChatDocumentEdit({
           category: 'agent_artifact',
           validation: edited.validation,
         });
-        const artifact = {
-          id: saved.id, filename: saved.filename, format: saved.format,
-          mime: saved.mime, sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl,
-          validation: edited.validation,
-        };
+        const artifact = savedArtifact(saved, saved.validation);
         return {
           ok: true,
           artifacts: [artifact],
@@ -599,13 +743,13 @@ async function runChatDocumentEdit({
     if (wordFile && !llm.client) return { ok: false, code: 'ENGINE_FAILED', message: MESSAGES.ENGINE_FAILED };
     if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env)) {
       const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
-      const extraContext = await loadRecentUserText({ prisma, userId, chatId, instruction });
+      const extraContext = [await loadRecentUserText({ prisma, userId, chatId, instruction }), batchContext].filter(Boolean).join('\n');
       let edited;
       try {
         edited = await deps.docxEngine.editWordDocument({
           buffer: wordFile.buffer,
           filename: wordFile.name,
-          instruction,
+          instruction: batchContext ? `${instruction}\n\nAlcance del paso: ${batchContext}` : instruction,
           client,
           model: llm.model,
           extraContext,
@@ -636,10 +780,7 @@ async function runChatDocumentEdit({
         category: 'agent_artifact',
         validation,
       });
-      const artifact = {
-        id: saved.id, filename: saved.filename, format: saved.format, mime: saved.mime,
-        sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl, validation,
-      };
+      const artifact = savedArtifact(saved, saved.validation);
       return { ok: true, artifacts: [artifact], summary: edited.summary };
     }
 
@@ -661,7 +802,7 @@ async function runChatDocumentEdit({
     if (!wordFile && !deps.isReformateoRequest(instruction) && !followUpOnDelivered && !isContentGeneratingOfficeRequest(instruction)) {
       try {
         const deterministic = await deps.tryDeterministicEdit({
-          prisma, userId, chatId, fileIds, prompt: instruction, displayPrompt: instruction, signal,
+          prisma, userId, chatId, fileIds: sources.map((source) => source.row.id), prompt: instruction, displayPrompt: instruction, signal,
         });
         const candidates = Array.isArray(deterministic?.results) && deterministic.results.length
           ? deterministic.results
@@ -678,7 +819,11 @@ async function runChatDocumentEdit({
             mime: item.artifact.mime,
             sizeBytes: item.artifact.sizeBytes,
             downloadUrl: item.artifact.downloadUrl,
+            validation: item.validation || item.artifact.validation,
           }));
+          if (served.length !== candidates.length || deterministic.partial || deterministic.failures?.length || served.length !== sources.length) {
+            return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', partial: true, artifacts, message: MESSAGES.DOCUMENT_EDIT_INCOMPLETE };
+          }
           const names = artifacts.map((artifact) => artifact.filename).join(', ');
           const summary = cleanSummary(deterministic.content || served.map((item) => item.content).find(Boolean))
             || `Listo. Apliqué los cambios y te dejo el archivo editado: ${names}.`;
@@ -697,9 +842,10 @@ async function runChatDocumentEdit({
     try {
       result = await deps.runDocumentAgent({
         files,
-        instruction,
+        instruction: batchContext ? `${instruction}\n\nAlcance del paso: ${batchContext}` : instruction,
         client,
         model: llm.model,
+        route: 'sandbox', // A global route override cannot replace the picked provider.
         signal,
         maxIterations: DOC_AGENT_MAX_ITERATIONS,
         onEvent: (event) => { const stage = stageFor(event); if (stage) emit(stage); },
@@ -710,8 +856,12 @@ async function runChatDocumentEdit({
       return { ok: false, code: 'ENGINE_FAILED', message: MESSAGES.ENGINE_FAILED };
     }
 
-    const outputs = (result?.outputs || []).filter((out) => out && out.valid === true && Buffer.isBuffer(out.buffer) && out.buffer.length > 0);
+    const candidates = Array.isArray(result?.outputs) ? result.outputs : [];
+    const outputs = candidates.filter((out) => out && out.valid === true && Buffer.isBuffer(out.buffer) && out.buffer.length > 0);
     if (!outputs.length) return { ok: false, code: 'NO_VALID_OUTPUT', message: MESSAGES.NO_VALID_OUTPUT };
+    if (outputs.length !== candidates.length || outputs.length !== 1 || (result.stoppedReason && result.stoppedReason !== 'final')) {
+      return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', message: MESSAGES.DOCUMENT_EDIT_INCOMPLETE };
+    }
 
     const artifacts = outputs.map((out) => {
       const ext = extensionOf(out.name);
@@ -729,14 +879,7 @@ async function runChatDocumentEdit({
         category: 'agent_artifact',
         validation: { passed: true, ...(out.changeReport ? { changes: out.changeReport } : {}) },
       });
-      return {
-        id: saved.id,
-        filename: saved.filename,
-        format: saved.format,
-        mime: saved.mime,
-        sizeBytes: saved.sizeBytes,
-        downloadUrl: saved.downloadUrl,
-      };
+      return savedArtifact(saved, saved.validation);
     });
     const names = artifacts.map((artifact) => artifact.filename).join(', ');
     const summary = cleanSummary(result.finalText) || `Listo. Apliqué los cambios y te dejo el archivo editado: ${names}.`;
@@ -745,6 +888,10 @@ async function runChatDocumentEdit({
     if (err instanceof DocumentEditError) return { ok: false, code: err.code, message: err.message };
     throw err;
   }
+}
+
+function runChatDocumentEdit(options) {
+  return runResolvedDocumentEdit(options);
 }
 
 /** Chat message `files` entries for the delivered documents (render as document cards). */

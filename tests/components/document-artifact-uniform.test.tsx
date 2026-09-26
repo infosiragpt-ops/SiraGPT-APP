@@ -71,6 +71,22 @@ describe("uniform document artifact cards", () => {
     expect(screen.getByTestId("generated-document-card").querySelector("iframe")).toBeNull()
     expect(screen.getByRole("button", { name: "Descargar documento: Informe.docx" })).toBeDisabled()
   })
+  it.each([undefined, "<p>Vista previa</p>"])("pins a generated document's identity with or without HTML preview", (htmlPreview) => {
+    const preview = vi.fn()
+    render(<DocArtifactDisplay files={[{ type: "doc", format: "pptx", filename: "Presentación.pptx",
+      artifactId: "abcdef123456", url: "/api/agent/artifact/abcdef123456", htmlPreview }]} onDocumentPreview={preview} />)
+    fireEvent.click(screen.getByRole("button", { name: "Ver documento: Presentación.pptx" }))
+    expect(preview.mock.calls[0][0]).toMatchObject({ artifactId: "abcdef123456", filename: "Presentación.pptx" })
+  })
+  it("pins the exact edited artifact rather than its original upload when opening its card", () => {
+    const preview = vi.fn()
+    const edited = state("docx", "Informe editado.docx")
+    edited.artifacts[0].id = "abcdef123456"
+    render(<AgenticStepsRenderer state={edited} onDocumentPreview={preview} />)
+    fireEvent.click(screen.getByRole("button", { name: "Ver documento: Informe editado.docx" }))
+    expect(preview.mock.calls[0][0]).toMatchObject({ artifactId: "abcdef123456", filename: "Informe editado.docx" })
+    expect(preview.mock.calls[0][0]).not.toHaveProperty("fileId")
+  })
   it("retains loading/disabled download state and prevents duplicate downloads", async () => {
     let resolve!: () => void
     download.mockImplementation(() => new Promise<void>((done) => { resolve = done }))
