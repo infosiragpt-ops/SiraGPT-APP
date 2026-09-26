@@ -102,6 +102,32 @@ function loadOfficeHelpersPy({ dir } = {}) {
   return text;
 }
 
+// sira_office.py — office engine for millimetric edits with visual
+// verification (docs/specs/edicion-milimetrica/SPEC.md, Fase A). Same
+// lazy/fail-open contract as office_helpers.py: a missing file never breaks
+// the runner, the agent just keeps using execute_python.
+const SIRA_OFFICE_ENGINE_REL = 'tmp/sira_office.py';
+let siraOfficePyCache;
+function loadSiraOfficePy({ dir } = {}) {
+  const fromDefaultDir = !dir;
+  if (fromDefaultDir && siraOfficePyCache !== undefined) return siraOfficePyCache;
+  let text = null;
+  try {
+    text = fs.readFileSync(path.join(dir || __dirname, 'sira_office.py'), 'utf8');
+  } catch (_) {
+    text = null;
+  }
+  if (fromDefaultDir) siraOfficePyCache = text;
+  return text;
+}
+
+async function installSiraOfficeEngine(sandbox, { dir } = {}) {
+  const py = loadSiraOfficePy({ dir });
+  if (!py || !sandbox || typeof sandbox.writeFile !== 'function') return false;
+  await sandbox.writeFile(SIRA_OFFICE_ENGINE_REL, py);
+  return true;
+}
+
 const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
 
@@ -374,6 +400,8 @@ async function runAgentRunner({
     if (officeHelpersPy) {
       try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
     }
+    // Fail-open: without the engine the agent still edits with execute_python.
+    try { await installSiraOfficeEngine(sandbox); } catch (_) { /* fail-open */ }
 
     // ── F8 hook: memoria recall (DATA) + tools extra (skills / MCP) ────────
     const f8 = await prepareF8Extras({
@@ -958,6 +986,9 @@ module.exports = {
   canCallLlm,
   defaultModel,
   loadOfficeHelpersPy,
+  loadSiraOfficePy,
+  installSiraOfficeEngine,
+  SIRA_OFFICE_ENGINE_REL,
   MAX_ITERATIONS_DEFAULT,
   MAX_OUTPUT_RETRIES,
   CREATE_DOC_RE,

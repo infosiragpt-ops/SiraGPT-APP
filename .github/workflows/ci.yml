@@ -286,6 +286,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
           python -m pip install --disable-pip-version-check --no-cache-dir -r ../infra/doc-validation/requirements-test.txt
 
+      # Edición milimétrica (docs/specs/edicion-milimetrica/SPEC.md, Fase A):
+      # the office engine that runs inside the document sandbox. Shard 1 has
+      # LibreOffice + poppler + metric fonts, so the render/verify tests run
+      # for real here instead of skipping.
+      - name: Office engine (sira_office.py) — edición milimétrica
+        if: matrix.shard == 1
+        env:
+          SIRA_FIXTURES_DIR: ${{ github.workspace }}/backend/tests/fixtures/office
+        run: python -m unittest tests/python/test_sira_office.py -v
+
       - name: Configure Redis for auth-security readiness
         run: |
           docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET maxmemory 268435456
