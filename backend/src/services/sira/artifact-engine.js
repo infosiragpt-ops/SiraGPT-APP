@@ -14,6 +14,7 @@
 const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, WidthType } = require("docx");
 const PptxGenJS = require("pptxgenjs");
 const PDFDocument = require("pdfkit");
+const { registerUnicodeFont } = require("../document/pdf-fonts");
 const {
   writeXlsxStream,
 } = require("../xlsx-safe-workbook");
@@ -222,6 +223,10 @@ async function renderPptx({ title, sections }) {
 
 async function renderPdf({ title, sections }) {
   const doc = new PDFDocument({ margin: 56, size: "A4" });
+  // Helvetica is WinAnsi-only and corrupts every non-Latin-1 character
+  // (typographic quotes, Greek/math symbols, other scripts). Registering
+  // an embedded TTF keeps the text layer correct AND selectable.
+  registerUnicodeFont(doc);
   const chunks = [];
   doc.on("data", chunk => chunks.push(chunk));
   const done = new Promise(resolve => doc.on("end", resolve));
