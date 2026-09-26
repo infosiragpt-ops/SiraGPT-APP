@@ -107,6 +107,8 @@ import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
+import type { SectionKey } from "@/components/settings/settings-panel"
+import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from "@/lib/chat/open-settings"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
@@ -557,6 +559,11 @@ export function AppSidebar() {
   // Settings now open as a floating Claude-style modal (the /settings
   // route still exists for deep-links / command palette).
   const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [settingsSection, setSettingsSection] = React.useState<SectionKey>("general")
+  const openSettings = React.useCallback((section: SectionKey = "general") => {
+    setSettingsSection(section)
+    setSettingsOpen(true)
+  }, [])
 
   // ── Global keyboard shortcut: ⌘K / Ctrl+K toggles ChatSearchDialog ──
   // Capture-phase so this wins over the global command-palette listener
@@ -567,7 +574,7 @@ export function AppSidebar() {
       const isCmdComma = (event.metaKey || event.ctrlKey) && event.key === ","
       if (isCmdComma) {
         event.preventDefault()
-        setSettingsOpen(true)
+        openSettings("general")
         return
       }
       if (!isCmdK) return
@@ -578,7 +585,16 @@ export function AppSidebar() {
     }
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
-  }, [])
+  }, [openSettings])
+
+  React.useEffect(() => {
+    const onOpenSettings = (event: Event) => {
+      const section = (event as CustomEvent<OpenSettingsDetail>).detail?.section
+      openSettings(section === "personalization" || section === "capabilities" ? section : "general")
+    }
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings)
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings)
+  }, [openSettings])
 
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
   // #44 — reemplaza window.confirm() por AlertDialog accesible.
@@ -2438,7 +2454,7 @@ export function AppSidebar() {
                       // grabs focus (avoids a Radix focus-trap race).
                       e.preventDefault()
                       if (isMobile) setOpenMobile(false)
-                      setTimeout(() => setSettingsOpen(true), 0)
+                      setTimeout(() => openSettings("general"), 0)
                     }}
                     className={LG_ITEM}
                   >
@@ -2539,7 +2555,7 @@ export function AppSidebar() {
       />
 
       {/* Floating settings modal (Claude-style) — opened from the user menu */}
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
 
       {/* #44 — Confirmación accesible de borrado de chat. Sustituye al
           window.confirm() nativo: foco teclado correcto, ESC y click

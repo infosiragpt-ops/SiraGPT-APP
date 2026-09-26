@@ -21,6 +21,7 @@ import {
   Palette,
   Plus,
   Music,
+  Brain,
   FileSpreadsheet,
   File as FileIcon,
   ArrowUp,
@@ -79,6 +80,7 @@ import {
   resolveDictationLanguage,
   shouldRestartNativeDictation,
 } from "@/lib/chat/composer-dictation"
+import { openSettingsSection } from "@/lib/chat/open-settings"
 import { motion, AnimatePresence } from "framer-motion"
 import { dedupeMessages, mergeChatPreservingUserMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -1618,9 +1620,9 @@ const ActionsDropdown = ({
                 <Paperclip className="h-4 w-4 text-blue-600 dark:text-blue-400" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">Subir archivos</div>
+                <div className="liquid-label font-medium text-sm">Subir documento</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isUploading ? 'Subiendo…' : 'Cualquier formato: documentos, código, datos, imágenes, audio, video'}
+                  {isUploading ? 'Subiendo…' : 'Documentos, imágenes y archivos'}
                 </div>
               </div>
             </div>
@@ -1847,6 +1849,26 @@ const ActionsDropdown = ({
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
+            </div>
+          </DropdownMenuItem>
+
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onClick={() => {
+              setIsOpen(false)
+              window.setTimeout(() => openSettingsSection("capabilities"), 0)
+            }}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Brain className={MEDIA_MENU_ICON_GLYPH_CLASS} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">Memoria</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  Lo que Sira recuerda de ti
+                </div>
+              </div>
             </div>
           </DropdownMenuItem>
 
