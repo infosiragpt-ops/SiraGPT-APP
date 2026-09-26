@@ -47,6 +47,9 @@ function prettyFallbackLabel(model) {
   const raw = String(model || '').trim();
   if (!raw) return '';
   if (/openrouter/i.test(raw)) return '';
+  // DeepSeek V4 pair: original names (legacy Sira aliases resolve here too).
+  if (/deepseek[-_/ ]?v?4[-_ ]?pro|^sira[-_ ]?pro$/i.test(raw) && !/flash/i.test(raw)) return 'DeepSeek V4 Pro';
+  if (/deepseek[-_/ ]?v?4[-_ ]?flash|^sira[-_ ]?r[aá]pido$/i.test(raw)) return 'DeepSeek V4 Flash';
   if (/deepseek/i.test(raw) && !/v4[-_ ]?(flash|pro)/i.test(raw)) return '';
   const stripped = raw.replace(/^(x-ai|xai|anthropic|google|openai|moonshotai|meta|z-ai)\//i, '').trim();
   if (!stripped) return '';

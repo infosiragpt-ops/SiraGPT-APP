@@ -19,7 +19,7 @@ Enable it later only if you want the experimental IDE.
 ## How Luis tries it
 
 1. Open https://siragpt.com/agentes (after publish of this SHA).
-2. Pick a model in the existing picker (`Sira Rápido`, `Sira Pro`, or another catalog label). Raw vendor ids are never shown.
+2. Pick a model in the existing picker (`DeepSeek V4 Flash`, `DeepSeek V4 Pro`, or another catalog label). Raw vendor ids are never shown.
 3. Write: **«créame una web de ventas»** or **«créame una app de notas»**.
 4. You should get:
    - previewable HTML in the message (not a `.docx`)

@@ -1,16 +1,19 @@
 import {
-  SIRA_PRO_LABEL,
-  SIRA_RAPIDO_LABEL,
+  DEEPSEEK_FLASH_LABEL,
+  DEEPSEEK_PRO_LABEL,
   brandModelLabel,
   isFlashGenerationModel,
   isProGenerationModel,
   looksLikeRawVendorModelId,
+  prettifyDeepSeekModelId,
   type BrandLabelSource,
 } from "./brand-label"
 import { readMessageGenerationUsage } from "./composer-context-usage"
 
 const VENDOR_PREFIX_RE = /^(x-ai|xai|anthropic|google|openai|moonshotai|meta|z-ai|qwen|cohere|mistralai|nousresearch)\//i
-const FORBIDDEN_UI_RE = /openrouter|deepseek/i
+// DeepSeek is a public name; only its raw id forms (deepseek-chat, deepseek/…)
+// and the OpenRouter aggregator are kept out of the badge.
+const FORBIDDEN_UI_RE = /openrouter|^deepseek$|deepseek[-_/:.]/i
 const RAW_ID_RE = /[\/:]/
 
 export type ReplyBadgeCatalogModel = {
@@ -68,17 +71,18 @@ function titleCaseModelToken(token: string): string {
 }
 
 /**
- * Human picker-style label from a catalog id. Never returns DeepSeek,
- * OpenRouter, or a raw vendor slug (`x-ai/…`). Empty / unknown → "".
+ * Human picker-style label from a catalog id. DeepSeek ids become their
+ * original names («DeepSeek V4 Flash», «DeepSeek Reasoner»); never returns
+ * OpenRouter or a raw vendor slug (`x-ai/…`). Empty / unknown → "".
  */
 export function prettifyPickedModelLabel(raw: string): string {
   const trimmed = String(raw || "").trim()
   if (!trimmed) return ""
-  if (isProGenerationModel(trimmed)) return SIRA_PRO_LABEL
-  if (isFlashGenerationModel(trimmed)) return SIRA_RAPIDO_LABEL
-  if (FORBIDDEN_UI_RE.test(trimmed) && !isFlashGenerationModel(trimmed) && !isProGenerationModel(trimmed)) {
-    return ""
-  }
+  if (isProGenerationModel(trimmed)) return DEEPSEEK_PRO_LABEL
+  if (isFlashGenerationModel(trimmed)) return DEEPSEEK_FLASH_LABEL
+  const deepseek = prettifyDeepSeekModelId(trimmed)
+  if (deepseek) return deepseek
+  if (FORBIDDEN_UI_RE.test(trimmed)) return ""
 
   const stripped = trimmed.replace(VENDOR_PREFIX_RE, "").trim()
   if (!stripped || FORBIDDEN_UI_RE.test(stripped)) return ""
@@ -105,6 +109,9 @@ export function resolveCatalogDisplayName(
     sameModelId(row.name, wanted) || sameModelId(row.displayName, wanted)
   ))
   const display = firstString(match?.displayName)
+  // Stale catalog rows may still carry the legacy «Sira Rápido/Sira Pro».
+  if (display && isProGenerationModel(display)) return DEEPSEEK_PRO_LABEL
+  if (display && isFlashGenerationModel(display)) return DEEPSEEK_FLASH_LABEL
   if (display && !looksLikeRawVendorModelId(display) && !FORBIDDEN_UI_RE.test(display)) {
     return display
   }
@@ -119,8 +126,9 @@ function sourceModelId(source: BrandLabelSource): string {
 
 /**
  * Label shown under an assistant reply. Matches the composer picker:
- * Grok → Grok, Claude → Claude. Only in-house DeepSeek Flash/Pro keep
- * Sira Rápido / Sira Pro. Missing model → no badge (never invent Sira Rápido).
+ * Grok → Grok, Claude → Claude, DeepSeek V4 Flash/Pro → their original names
+ * (also for older replies stored with the legacy Sira aliases). Missing
+ * model → no badge (never invent DeepSeek V4 Flash).
  */
 export function resolveReplyBadgeLabel(
   message: ReplyBadgeMessage | null | undefined,
@@ -150,13 +158,14 @@ export function resolveReplyBadgeLabel(
     displayName: display || undefined,
     provider: typeof explicit === "object" && explicit ? explicit.provider : undefined,
   })
-  if (!branded || branded === SIRA_RAPIDO_LABEL) {
+  if (!branded || branded === DEEPSEEK_FLASH_LABEL) {
     if (!modelId || isFlashGenerationModel({ name: modelId, displayName: display })) {
-      return isFlashGenerationModel({ name: modelId, displayName: display }) ? SIRA_RAPIDO_LABEL : ""
+      return isFlashGenerationModel({ name: modelId, displayName: display }) ? DEEPSEEK_FLASH_LABEL : ""
     }
-    if (isProGenerationModel({ name: modelId, displayName: display })) return SIRA_PRO_LABEL
+    if (isProGenerationModel({ name: modelId, displayName: display })) return DEEPSEEK_PRO_LABEL
     return display || prettifyPickedModelLabel(modelId)
   }
+  if (branded === DEEPSEEK_PRO_LABEL) return branded
   if (FORBIDDEN_UI_RE.test(branded) || looksLikeRawVendorModelId(branded) || RAW_ID_RE.test(branded)) {
     return display || prettifyPickedModelLabel(modelId)
   }

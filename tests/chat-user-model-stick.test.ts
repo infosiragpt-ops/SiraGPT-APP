@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { brandModelLabel, SIRA_RAPIDO_LABEL } from "../lib/chat/brand-label"
+import { brandModelLabel, DEEPSEEK_FLASH_LABEL } from "../lib/chat/brand-label"
 import { resolveCatalogModel } from "../lib/chat/catalog-model"
 import { resolveReplyBadgeLabel } from "../lib/chat/reply-badge-model"
 import { clampDeepSeekModel } from "../lib/sse-client"
@@ -29,7 +29,7 @@ describe("user-selected model always wins", () => {
     assert.notEqual(payloadModel, "deepseek-v4-flash")
 
     assert.equal(brandModelLabel(mini), "SiraGPT Mini")
-    assert.notEqual(brandModelLabel(mini), SIRA_RAPIDO_LABEL)
+    assert.notEqual(brandModelLabel(mini), DEEPSEEK_FLASH_LABEL)
   })
 
   it("keeps Mini on an empty catalog snapshot and routes it as Custom", () => {
@@ -56,14 +56,14 @@ describe("user-selected model always wins", () => {
     )
     assert.notEqual(
       resolveReplyBadgeLabel({ generationUsage: { model: grok.name } }, [grok]),
-      SIRA_RAPIDO_LABEL,
+      DEEPSEEK_FLASH_LABEL,
     )
   })
 
-  it("does not fall back to Sira Rápido when a valid selection exists", () => {
+  it("does not fall back to DeepSeek V4 Flash when a valid selection exists", () => {
     const resolved = resolveCatalogModel("sira-gpt-mini", catalog, "DeepSeek")
     assert.equal(resolved.replaced, false)
-    assert.notEqual(brandModelLabel({ name: resolved.name, displayName: "SiraGPT Mini" }), SIRA_RAPIDO_LABEL)
+    assert.notEqual(brandModelLabel({ name: resolved.name, displayName: "SiraGPT Mini" }), DEEPSEEK_FLASH_LABEL)
     assert.notEqual(clampDeepSeekModel(resolved.name), "deepseek-v4-flash")
   })
 })

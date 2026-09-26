@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Sira Rápido / Sira Pro keep answering when DeepSeek direct is out of
+ * DeepSeek V4 Flash / Pro keep answering when DeepSeek direct is out of
  * credit: a 402/401/403 on chat.completions.create is retried ONCE on the
  * OpenRouter client with the OpenRouter slug; transient errors are not.
  */

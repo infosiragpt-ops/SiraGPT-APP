@@ -64,7 +64,7 @@ async function delegateTask(opts = {}) {
   } catch (err) {
     const code = ['E_PARAMS', 'E_PROVIDER', 'E_CANCELLED'].includes(err?.code) ? err.code : 'E_PROVIDER';
     const error = code === 'E_PARAMS'
-      ? 'Elige Sira Rápido o Sira Pro con una conexión permitida para ejecutar el agente.'
+      ? 'Elige DeepSeek V4 Flash o DeepSeek V4 Pro con una conexión permitida para ejecutar el agente.'
       : code === 'E_CANCELLED'
         ? 'La ejecución del agente fue cancelada.'
         : 'La ejecución del agente no pudo completarse. Reintenta.';

@@ -109,7 +109,7 @@ for (const thinking of ['low', 'medium', 'high']) {
 test('Hermes rejects foreign models and providers before constructing transport', async () => {
   for (const opts of [{ model: 'gpt-4o' }, { model: 'deepseek/deepseek-v4-pro' }, { model: 'deepseek-chat' }, { model: 'anything-pro' }, { model: 'Sira Pro', provider: 'openrouter' }]) {
     const h = harness();
-    await assert.rejects(() => h.load('agents/hermes-agent-bridge.js').runTurn({ userId: 'synthetic-owner', prompt: 'Prueba', ...opts }), (err) => err.code === 'E_PARAMS' && !/gpt|deepseek|openrouter/i.test(err.message));
+    await assert.rejects(() => h.load('agents/hermes-agent-bridge.js').runTurn({ userId: 'synthetic-owner', prompt: 'Prueba', ...opts }), (err) => err.code === 'E_PARAMS' && !/gpt|deepseek[-_/:]|openrouter/i.test(err.message));
     assert.equal(h.clients.length, 0);
     assert.equal(h.calls.length, 0);
   }
@@ -186,7 +186,8 @@ test('Hermes sync delegate validation resolves a safe error for the HTTP handler
   assert.equal(result.code, 'E_PARAMS');
   assert.equal(h.records.length, 0);
   assert.equal(h.calls.length, 0);
-  assert.doesNotMatch(result.error, /gpt|openai|deepseek/i);
+  assert.doesNotMatch(result.error, /gpt|openai|deepseek[-_/:]/i);
+  assert.match(result.error, /DeepSeek V4 Flash o DeepSeek V4 Pro/);
 });
 
 test('Hermes retries transient failures on the same selected native model', async () => {

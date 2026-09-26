@@ -31,7 +31,7 @@ async function setup(page: Page, ready = true) {
     else if (path === '/users/me/notifications') body = { items: [], unreadCount: 0 }
     else if (path === '/cowork/approvals') body = { approvals: [] }
     else if (path === '/health') body = { status: 'healthy' }
-    else if (path === '/ai/models') body = { models: [{ id: 'm1', name: 'deepseek-v4-flash', displayName: 'Sira Rápido', provider: 'DeepSeek', type: 'TEXT', isActive: true }, { id: 'a2', name: 'ElevenLabs', displayName: 'ElevenLabs', provider: 'ElevenLabs', type: 'AUDIO', isActive: true }, { id: 'a1', name: 'sira-voz', displayName: 'Sira Voz', provider: 'VoiceStudio', type: 'AUDIO', isActive: true }] }
+    else if (path === '/ai/models') body = { models: [{ id: 'm1', name: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', provider: 'DeepSeek', type: 'TEXT', isActive: true }, { id: 'a2', name: 'ElevenLabs', displayName: 'ElevenLabs', provider: 'ElevenLabs', type: 'AUDIO', isActive: true }, { id: 'a1', name: 'sira-voz', displayName: 'Sira Voz', provider: 'VoiceStudio', type: 'AUDIO', isActive: true }] }
     else if (path === '/payments/subscription') body = { plan: 'PRO', status: 'active', apiUsage: 0, monthlyLimit: 100000 }
     else if (path === '/chats') body = req.method() === 'POST' ? { chat } : { chats: [], pagination: { page: 1, total: 0, pages: 0 } }
     else if (path === '/voice-studio/status') body = { ok: ready, configured: true, status: ready ? 'ready' : 'unreachable', limits: { maxVoices: 30 } }

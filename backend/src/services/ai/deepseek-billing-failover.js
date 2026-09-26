@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * deepseek-billing-failover — keep «Sira Rápido / Sira Pro» answering when the
+ * deepseek-billing-failover — keep «DeepSeek V4 Flash / Pro» answering when the
  * DeepSeek direct account is out of credit or its key is rejected.
  *
  * Live failure (2026-09-18): api.deepseek.com answered `402 Insufficient
