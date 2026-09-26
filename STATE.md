@@ -1,6 +1,6 @@
 # STATE — Estado del programa Frontier Agent
 
-- **Última actualización:** 2026-08-28
+- **Última actualización:** 2026-09-26
 - **Owner:** SiraGPT / Luis Carrera
 - **Repo:** `infosiragpt-ops/SiraGPT-APP`
 
@@ -41,6 +41,33 @@ provision`, run 33201966689). `docker build` de `sira-desktop` + contenedor +
 `GET :9000/health` `{status:"ok",display:":0"}` + screenshot PNG. Interfaz
 `DesktopProvider` + LocalGvisor stub + imagen `infra/desktop`. El
 orquestador live de #484 se conservó.
+
+---
+
+## Pista aprobada en paralelo — Edición milimétrica con verificación visual
+
+- **Spec:** `docs/specs/edicion-milimetrica/SPEC.md` (paquete de Luis con el
+  motor de referencia ya probado en `docs/specs/edicion-milimetrica/referencia/`).
+- **Aprobación:** Luis aprobó por escrito TODAS las fases, incluida la **E (UI)**,
+  el 2026-09-26 en el chat de trabajo («quiero que integres esto en nuestro
+  software… déjalo listo en producción»; «todo esto quiero que pueda hacer
+  nuestro software de siragpt.com»). Extiende el contrato de F1
+  (`render_preview` y la regla de verificación); no reabre F7.
+- **Orden:** A → B → C → D → E → F, una fase por PR, cada una con su gate.
+- **Ajustes vigentes sobre el SPEC** (mandan las reglas y decisiones más nuevas):
+  la regla «solo DeepSeek» quedó superada — los motores siguen al modelo elegido
+  en el composer y la revisión con visión usa una escalera de proveedores con
+  visión; DeepSeek se muestra con sus nombres originales (decisión de Luis,
+  2026-09-26).
+
+| Fase | Qué | Estado |
+|---|---|---|
+| A | Motor `sira_office.py` en el sandbox + imagen con poppler y fuentes métricas + pruebas Python en CI | **IN_PROGRESS** (este PR). Se marca COMPLETED al reconstruir `siragpt-doc-sandbox:latest` en la Lenovo y verificar fuentes/poppler en un contenedor nuevo |
+| B | Tools del runner (`inspect_document`, `office_edit`, `render_preview` v2, `verify_visual`) + `description` | pendiente |
+| C | Revisión con visión + gate de verificación v2 + contexto que no pierde el pedido | pendiente |
+| D | Eventos SSE enriquecidos (stage v2) + miniaturas + persistencia del trace | pendiente |
+| E | Timeline en el chat (UI, aprobada) | pendiente |
+| F | Evals (10 escenarios), métricas y flags | pendiente |
 
 ---
 
