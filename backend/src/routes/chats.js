@@ -1533,6 +1533,30 @@ router.post('/messages/:messageId/feedback', [
             console.warn('[chats] misunderstanding-signal record failed:', e?.message || e);
           }
         });
+        // Turn failure tracker: a thumbs-down is the user telling us the
+        // answer failed them — it lands in Admin → Logs as «usuario_reporto».
+        setImmediate(async () => {
+          try {
+            const priorUser = await prisma.message.findFirst({
+              where: { chatId: message.chatId, role: 'USER', timestamp: { lt: message.timestamp } },
+              orderBy: { timestamp: 'desc' },
+              select: { content: true },
+            }).catch(() => null);
+            const meta = parseMessageMetadata(message.metadata) || {};
+            const model = meta.selectedModel || meta.model || meta.runtimeModel || meta.modelDisplayName || null;
+            await require('../services/observability/turn-failures').recordFeedbackFailure({
+              userId: req.user.id,
+              userEmail: req.user.email || null,
+              chatId: message.chatId,
+              messageId: message.id,
+              reasonCode: reasons.reasonCode || null,
+              notes: reasons.notes || null,
+              prompt: priorUser?.content || '',
+              response: message.content || '',
+              model: typeof model === 'string' ? model : null,
+            });
+          } catch (_) { /* observability never affects feedback */ }
+        });
       }
     }
 

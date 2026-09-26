@@ -13,7 +13,12 @@ import {
   authenticatedFetch,
   prepareAuthenticatedRequest,
 } from "./authenticated-fetch"
-import { reportClientLog } from "./client-logs"
+import { reportClientLog, type ClientTurnReason } from "./client-logs"
+import type {
+  AdminTurnFailureList,
+  AdminTurnFailureRecent,
+  AdminTurnFailureStats,
+} from "./admin/turn-failures-types"
 import { safeUUID } from "./safe-uuid"
 import { pinGenerateRequest } from "./chat/catalog-model"
 import {
@@ -2101,9 +2106,59 @@ class ApiClient {
       }
     };
 
+    // Turn failure tracker (Admin → Logs → «Fallos de respuesta»): what the
+    // browser saw fail is reported once per reason, ids only (never the
+    // prompt/answer). The server merges it into its own row for this turn.
+    const turnStartedAt = Date.now();
+    let lastTurnActivityAt = turnStartedAt;
+    const reportedTurnReasons = new Set<string>();
+    const reportTurn = (reason: ClientTurnReason, message: string, extra: { status?: number | null; elapsedMs?: number } = {}) => {
+      if (reportedTurnReasons.has(reason) || signal?.aborted) return;
+      reportedTurnReasons.add(reason);
+      try {
+        reportClientLog({
+          source: "api",
+          severity: "error",
+          action: `turn_${reason}`,
+          message,
+          endpoint: "/ai/generate",
+          status: extra.status ?? null,
+          turn: {
+            reason,
+            chatId: data.chatId || null,
+            streamId: data.streamId || null,
+            idempotencyKey: turnKey,
+            model: data.model || null,
+            hasContent: hasDeliveredAnyContent,
+            elapsedMs: extra.elapsedMs ?? (Date.now() - turnStartedAt),
+          },
+        });
+      } catch { /* observability never affects the stream */ }
+    };
+    // «Pensando» with no real frame (heartbeat comments don't count) for
+    // 90 s is reported live, before the turn eventually ends.
+    const NO_ACTIVITY_REPORT_MS = 90_000;
+    const scheduleActivityWatch = () => {
+      const timer: any = setTimeout(() => {
+        if (streamFinished || terminalErrorDelivered || signal?.aborted) return;
+        const idle = Date.now() - lastTurnActivityAt;
+        if (idle >= NO_ACTIVITY_REPORT_MS) {
+          reportTurn('no_activity', `Sin actividad durante ${Math.round(idle / 1000)} s`, { elapsedMs: idle });
+          return;
+        }
+        scheduleActivityWatch();
+      }, 15_000);
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    };
+    scheduleActivityWatch();
+
     const deliverStreamError = (error: Error) => {
       if (terminalErrorDelivered || streamFinished) return;
       terminalErrorDelivered = true;
+      reportTurn(
+        /No se pudo conectar/i.test(String(error?.message || '')) ? 'connect_failed' : 'stream_error',
+        String(error?.message || 'stream error'),
+      );
       onError(error);
     };
 
@@ -2284,6 +2339,7 @@ class ApiClient {
                 lastError = new Error('Empty model stream');
                 break;
               }
+              reportTurn('empty_close', 'El stream cerró sin contenido');
               streamFinished = true;
               onClose();
               return;
@@ -2341,6 +2397,7 @@ class ApiClient {
               continue;
             }
             const payload = dataLine;
+            lastTurnActivityAt = Date.now();
             // Sentinel the backend emits at the very end of every stream,
             // including error / recovered cases. Flush pending buffer,
             // close, and return — anything after is a leftover from a
@@ -2366,6 +2423,7 @@ class ApiClient {
               // [DONE] is emitted after persist. Never spend the reconnect
               // budget on a contentless terminator — recover or close now.
               if (doneAction !== "retry" || hasDeliveredAnyContent || !lastEventId) {
+                if (!hasDeliveredAnyContent) reportTurn('empty_close', 'El stream cerró sin contenido');
                 streamFinished = true;
                 onClose();
                 return;
@@ -3450,6 +3508,57 @@ class ApiClient {
     }
 
     return response.text();
+  }
+
+  // ── Turn failure tracker (Admin → Logs → «Fallos de respuesta») ─────────
+  private _cleanParams(params?: Record<string, unknown>): string {
+    const entries = Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    return new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString()
+  }
+
+  async getAdminTurnFailures(params?: {
+    id?: string
+    page?: number
+    limit?: number
+    category?: string
+    model?: string
+    user?: string
+    q?: string
+    from?: string
+    to?: string
+  }): Promise<AdminTurnFailureList> {
+    const query = this._cleanParams(params)
+    return this.request(`/admin/turn-failures${query ? `?${query}` : ''}`)
+  }
+
+  async getAdminTurnFailureStats(): Promise<AdminTurnFailureStats> {
+    return this.request('/admin/turn-failures/stats')
+  }
+
+  async getAdminTurnFailuresRecent(since?: string | null): Promise<AdminTurnFailureRecent> {
+    const query = this._cleanParams({ since: since || undefined })
+    return this.request(`/admin/turn-failures/recent${query ? `?${query}` : ''}`)
+  }
+
+  async exportAdminTurnFailuresCsv(params?: {
+    category?: string
+    model?: string
+    user?: string
+    q?: string
+    from?: string
+    to?: string
+  }): Promise<string> {
+    const query = this._cleanParams(params)
+    const response = await this.authenticatedFetch(`${this.baseURL}/admin/turn-failures.csv${query ? `?${query}` : ''}`, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    })
+    if (!response.ok) {
+      const error = await response.text().catch(() => 'No se pudo exportar')
+      throw new Error(error || `HTTP ${response.status}`)
+    }
+    return response.text()
   }
 
   async getAdminSoftwareErrors(params?: {

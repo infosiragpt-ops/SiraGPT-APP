@@ -85,6 +85,10 @@ const FAILED_EMAIL_RETRY_SCHEDULE = process.env.SYSTEM_CRON_FAILED_EMAIL_RETRY_S
 // deleteMany — they can co-fire). Hard-deletes rows that are
 // (read AND readAt < now-30d) OR (unread AND createdAt < now-90d).
 const NOTIFICATION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_NOTIFICATION_SWEEP_SCHEDULE || '45 4 * * *';
+// Turn failure tracker retention (Admin → Logs → «Fallos de respuesta»).
+// Rows carry prompt excerpts, so they live SIRAGPT_TURN_FAILURE_RETENTION_DAYS
+// (default 30) instead of the 1-year audit window. Default 04:50 UTC.
+const TURN_FAILURE_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_TURN_FAILURE_SWEEP_SCHEDULE || '50 4 * * *';
 // Ratchet 45 — PartialSession (TOTP/SMS handoff) retention sweep.
 // PartialSession rows have a 5-minute TTL and are single-use; this
 // sweep hard-deletes expired rows plus consumed rows older than 1h.
@@ -680,6 +684,40 @@ function start(opts = {}) {
     schedule: NOTIFICATION_SWEEP_SCHEDULE,
     task: notificationSweepTask,
     meta: notificationSweepMeta,
+  });
+
+  let turnFailureSweepRunning = false;
+  const turnFailureSweepMeta = {};
+  const turnFailureSweepTask = cron.schedule(
+    TURN_FAILURE_SWEEP_SCHEDULE,
+    async () => {
+      if (turnFailureSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-turn-failures — previous run still active');
+        return;
+      }
+      turnFailureSweepRunning = true;
+      const finish = recordRun(turnFailureSweepMeta, 'sweep-turn-failures');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const store = require('../services/observability/turn-failures').getStore();
+        const res = await store.sweepExpired();
+        logger.info?.(`[system-cron] sweep-turn-failures done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-turn-failures failed: ${err && err.message}`);
+      } finally {
+        turnFailureSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-turn-failures',
+    schedule: TURN_FAILURE_SWEEP_SCHEDULE,
+    task: turnFailureSweepTask,
+    meta: turnFailureSweepMeta,
   });
 
   // Ratchet 45 — failed-email retry queue drain (06:00 UTC).

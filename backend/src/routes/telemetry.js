@@ -45,6 +45,15 @@ router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req,
       .catch(() => {});
   }
 
+  // Browser-side turn failure (stream error, no activity, empty close,
+  // render crash on a chat): merge into the same «Fallos de respuesta» row
+  // the server finalizer writes for that turn (chatId + idempotencyKey).
+  if (body.turn && typeof body.turn === 'object' && req.user) {
+    Promise.resolve()
+      .then(() => require('../services/observability/turn-failures').recordClientSignal(body, req))
+      .catch(() => {});
+  }
+
   const responseBody = { accepted: true };
   const requestId = req.requestId || req.headers?.['x-request-id'] || null;
   if (requestId) responseBody.requestId = requestId;

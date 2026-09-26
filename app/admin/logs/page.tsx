@@ -10,7 +10,10 @@
  * mismatch, a denied admin op) and resolving them fast:
  *   - ALWAYS LIVE: an adaptive poller (self-rescheduling, backoff, tab-hidden
  *     pause) keeps page 1 streaming with a connection indicator — no toggle.
- *   - NEW-ERROR ALERTS: new error events fire a toast, an optional beep, a
+ *   - FALLOS DE RESPUESTA (default tab): every user question the platform
+ *     failed, live, with «Causas principales». The error chime and the
+ *     «Logs» badge are admin-wide (lib/admin/turn-failure-alerts.tsx).
+ *   - NEW-ERROR ALERTS (audit tab): new error events fire a toast, a
  *     "nuevos errores" counter and a brief row highlight (watermark-seeded so
  *     the initial backlog never alerts).
  *   - SELECT + COPY: per-row checkboxes + one-click copy (TSV, paste-ready).
@@ -42,7 +45,10 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiClient } from "@/lib/api"
+import { useTurnFailureAlerts } from "@/lib/admin/turn-failure-alerts"
+import { TurnFailuresPanel } from "@/components/admin/turn-failures/turn-failures-panel"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -84,9 +90,29 @@ function formatTimestamp(iso: string): string {
   }
 }
 
+/** Client-side warn-level signals (expected 4xx, retries…): collapsed by default. */
+function isWarnClientEvent(row: AuditLogRow): boolean {
+  if (!/_error_reported$/.test(row.action)) return false
+  const m = row.metadata as Record<string, unknown> | null | undefined
+  if (!m) return false
+  const tags = Array.isArray(m.tags) ? (m.tags as unknown[]).map(String) : []
+  return m.severity === "warn" && !tags.includes("server-error")
+}
+
 function metadataSummary(metadata: Record<string, unknown> | null | undefined): string {
   if (!metadata || typeof metadata !== "object") return ""
   const parts: string[] = []
+  // Browser-reported errors: show what failed, not just who reported it.
+  if (typeof metadata.endpoint === "string" || typeof metadata.message === "string" || typeof metadata.page === "string") {
+    const method = typeof metadata.method === "string" ? metadata.method : ""
+    const status = typeof metadata.status === "number" ? String(metadata.status) : ""
+    const endpoint = typeof metadata.endpoint === "string" ? metadata.endpoint : ""
+    const head = [status, method, endpoint].filter(Boolean).join(" ")
+    if (head) parts.push(head)
+    if (typeof metadata.message === "string") parts.push(metadata.message)
+    if (!endpoint && typeof metadata.page === "string") parts.push(metadata.page)
+    if (parts.length) return parts.join(" · ").slice(0, 140)
+  }
   if (typeof metadata.reason === "string") parts.push(metadata.reason)
   if (typeof metadata.ip === "string") parts.push(String(metadata.ip))
   if (parts.length === 0) {
@@ -119,6 +145,15 @@ const rowTime = (r: AuditLogRow): number => {
 }
 
 export default function AdminLogsPage() {
+  const alerts = useTurnFailureAlerts()
+  const [tab, setTab] = useState<string>("fallos")
+  // ?tab=auditoria deep-links the audit feed (desktop notifications open ?tab=fallos).
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("tab") === "auditoria") setTab("auditoria")
+    } catch { /* ignore */ }
+  }, [])
+  const [showWarnings, setShowWarnings] = useState(false)
   const [rows, setRows] = useState<AuditLogRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -138,7 +173,6 @@ export default function AdminLogsPage() {
   // Live engine
   const [connState, setConnState] = useState<ConnState>("live")
   const [newErrorCount, setNewErrorCount] = useState(0)
-  const [soundOn, setSoundOn] = useState(false)
   const [recentlyNew, setRecentlyNew] = useState<Set<string>>(new Set())
 
   // AI diagnosis
@@ -153,34 +187,7 @@ export default function AdminLogsPage() {
   const inFlight = useRef(false)
   const failuresRef = useRef(0)
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const audioCtxRef = useRef<any>(null)
-  const soundOnRef = useRef(soundOn)
-  soundOnRef.current = soundOn
   const diagAbort = useRef<AbortController | null>(null)
-
-  const beep = useCallback(() => {
-    if (!soundOnRef.current) return
-    try {
-      const Ctor = (window as any).AudioContext || (window as any).webkitAudioContext
-      if (!Ctor) return
-      if (!audioCtxRef.current) audioCtxRef.current = new Ctor()
-      const ctx = audioCtxRef.current
-      if (ctx.state === "suspended") ctx.resume().catch(() => {})
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = "sine"
-      osc.frequency.value = 880
-      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.01)
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18)
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.start()
-      osc.stop(ctx.currentTime + 0.2)
-    } catch {
-      /* SSR / autoplay-policy safe */
-    }
-  }, [])
 
   const flashRows = useCallback((ids: string[]) => {
     if (ids.length === 0) return
@@ -260,11 +267,12 @@ export default function AdminLogsPage() {
       watermark.current = maxTs
 
       if (seededRef.current && fresh.length > 0) {
-        const freshErrors = fresh.filter((r) => isErrorAction(r.action))
+        // Warn-level client signals are noise here; failed user turns have
+        // their own tab, badge and error chime.
+        const freshErrors = fresh.filter((r) => isErrorAction(r.action) && !isWarnClientEvent(r))
         if (freshErrors.length > 0) {
           const n = freshErrors.length
           toast.error(`${n} nuevo${n > 1 ? "s" : ""} error${n > 1 ? "es" : ""} · ${freshErrors[0].action}`, { duration: 6000 })
-          beep()
           setNewErrorCount((c) => c + n)
         }
         flashRows(fresh.map((r) => r.id))
@@ -286,7 +294,7 @@ export default function AdminLogsPage() {
     } finally {
       inFlight.current = false
     }
-  }, [fetchPage, ingest, beep, flashRows])
+  }, [fetchPage, ingest, flashRows])
 
   // Always-on adaptive poller (self-rescheduling setTimeout → supports backoff,
   // never overlaps). Runs for the life of the page.
@@ -334,9 +342,12 @@ export default function AdminLogsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, actionFilter, fromDate, toDate])
 
+  const hiddenWarnings = useMemo(() => rows.filter(isWarnClientEvent).length, [rows])
   const visibleRows = useMemo(
-    () => (errorsOnly ? rows.filter((r) => isErrorAction(r.action)) : rows),
-    [rows, errorsOnly],
+    () => rows
+      .filter((r) => showWarnings || !isWarnClientEvent(r))
+      .filter((r) => !errorsOnly || isErrorAction(r.action)),
+    [rows, errorsOnly, showWarnings],
   )
 
   const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.id))
@@ -501,11 +512,27 @@ Devuelve:
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
           <p className="text-sm text-muted-foreground">
-            Auditoría del sistema en vivo: sesiones, cambios de roles, acciones administrativas y errores.
+            Rastreador en vivo: cada pregunta que la plataforma no respondió bien, más la auditoría del sistema.
           </p>
         </div>
       </div>
 
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="fallos" data-testid="logs-tab-fallos">
+            Fallos de respuesta
+            {alerts && alerts.unseen > 0 && tab !== "fallos" && (
+              <span className="ml-1.5 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold leading-4 text-white tabular-nums">{alerts.unseen}</span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="auditoria" data-testid="logs-tab-auditoria">Registro de auditoría</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="fallos" className="mt-0">
+          {tab === "fallos" && <TurnFailuresPanel />}
+        </TabsContent>
+
+        <TabsContent value="auditoria" className="mt-0">
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -604,11 +631,18 @@ Devuelve:
               Solo errores
             </label>
 
-            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground" title="Sonar al detectar un error nuevo">
-              <Switch checked={soundOn} onCheckedChange={(v) => { setSoundOn(!!v); if (v) beep() }} />
-              {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
-              Sonido
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground" title="Suena en todo el panel solo cuando un usuario no recibe una respuesta correcta">
+              <Switch checked={!!alerts?.soundOn} onCheckedChange={(v) => { void alerts?.setSoundOn(!!v) }} />
+              {alerts?.soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+              Sonido de errores: {alerts?.soundOn ? "activado" : "desactivado"}
             </label>
+
+            {hiddenWarnings > 0 || showWarnings ? (
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground" title="Avisos del navegador de nivel «warn» (errores esperados, reintentos)">
+                <Switch checked={showWarnings} onCheckedChange={(v) => setShowWarnings(!!v)} />
+                {showWarnings ? "Mostrando avisos" : `${hiddenWarnings} aviso${hiddenWarnings === 1 ? "" : "s"} ocultos`}
+              </label>
+            ) : null}
 
             <div className="ml-auto flex items-center gap-2">
               {someSelected && (
@@ -761,6 +795,9 @@ Devuelve:
           </div>
         </CardContent>
       </Card>
+
+        </TabsContent>
+      </Tabs>
 
       {/* Event detail — full record + AI diagnosis. */}
       <Dialog open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailRow(null) }}>

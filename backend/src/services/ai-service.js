@@ -18,6 +18,12 @@ const {
     classifyProviderError,
 } = require('./ai-product-os/litellm-gateway');
 const { applyAnthropicCacheToMessages } = require('./anthropic-cache-formatter');
+
+// Turn failure tracker context (Admin → Logs → «Fallos de respuesta»). The
+// notes only matter when the turn fails; they never alter a response.
+function noteTurnContext(kind, data) {
+    try { require('./observability/turn-failures').noteTurn(kind, data); } catch (_) { /* advisory */ }
+}
 const { attachConversationSummary } = require('./conversation-summarizer');
 const objectStorage = require('./object-storage');
 
@@ -422,6 +428,7 @@ class AIService {
 
             if (!fs.existsSync(fullPath)) {
                 console.error(`Image file not found: ${fullPath}`);
+                noteTurnContext('attachment_missing', { kind: 'image', file: path.basename(String(fullPath)) });
                 return null;
             }
 
@@ -830,6 +837,7 @@ class AIService {
             };
 
             console.log(`🤖 Generating with primary=${provider}:${model}, fallback=[${fallbackModels.join(', ') || 'none'}]`);
+            noteTurnContext('model', { provider, model, fallbacks: fallbackModels.slice(0, 6) });
             console.log(`📝 Messages count: ${workingMessages.length}`);
 
             // Outer loop: walk the model chain. Inner loop: retry each
@@ -1114,6 +1122,14 @@ class AIService {
                         const classified = classifyProviderError(err);
                         const reason = isOurTimeout ? 'first-byte timeout' : (classified.error_class || err.status || err.code || err.name || 'unknown');
                         console.warn(`⚠️ ${currentProvider}:${currentRuntimeModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
+                        noteTurnContext('provider_attempt_failed', {
+                            provider: currentProvider,
+                            model: currentRuntimeModel,
+                            attempt,
+                            status: Number(err && (err.status || err.statusCode)) || null,
+                            reason: String(reason || '').slice(0, 60),
+                            message: String((err && err.message) || '').slice(0, 200),
+                        });
 
                         if (!retryable || isLastAttemptForModel) break; // break attempt loop → try next model
 
@@ -1136,6 +1152,7 @@ class AIService {
                 && !providerHttpError
             ) {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
+                noteTurnContext('provider_aborted', { provider, model, streamedChars: String(fullResponseContent || '').length });
                 return fullResponseContent;
             }
             console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
@@ -1144,6 +1161,15 @@ class AIService {
             // failure into routing-feedback + sira_rlhf_* telemetry. Advisory,
             // never throws, never changes what the user sees.
             const reportProviderFailure = (code) => {
+                noteTurnContext('provider_failure', {
+                    code,
+                    provider,
+                    model,
+                    status: Number(apiError && (apiError.status || apiError.statusCode)) || null,
+                    reason: String(apiError?.code || apiError?.status || apiError?.name || 'error').slice(0, 48),
+                    message: String(apiError?.message || '').slice(0, 200),
+                    partial: hasStreamedAnyContent === true,
+                });
                 if (typeof onProviderFailure !== 'function') return;
                 try {
                     onProviderFailure({

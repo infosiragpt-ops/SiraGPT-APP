@@ -305,6 +305,8 @@ const {
   classifyGenerateError,
 } = require('../services/ai/generate-sse-close');
 const { createClientGoneWriter } = require('../services/ai/sse-client-gone');
+// Live tracker of failed user turns (Admin → Logs → «Fallos de respuesta»).
+const turnFailures = require('../services/observability/turn-failures');
 const {
   isCustomProvider,
   isLocalVisionModel,
@@ -2231,6 +2233,22 @@ router.post(
     // so retries, preflight, model dispatch and the actual stream are
     // all counted toward the same observation.
     const __generateStartedAt = Date.now();
+    // Turn failure tracker: observes every frame this turn sends (installed
+    // before the mirror guard captures res.write as _siraRawWrite) and
+    // records the turn only if the user got an error / nothing / garbage.
+    const __turnTap = turnFailures.beginTurn(req, res, {
+      route: 'generate',
+      startedAt: __generateStartedAt,
+      context: {
+        chatId: req.body && typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null,
+        idempotencyKey: req.body && typeof req.body.idempotencyKey === 'string' ? req.body.idempotencyKey.trim().slice(0, 200) : null,
+        streamId: req.body && typeof req.body.streamId === 'string' ? req.body.streamId.trim().slice(0, 200) : null,
+        prompt: req.body && typeof req.body.prompt === 'string' ? req.body.prompt : '',
+        modelPicked: req.body && typeof req.body.model === 'string' ? req.body.model : null,
+        requestedFiles: req.body && Array.isArray(req.body.files) ? req.body.files.length : 0,
+        loadedFiles: req.body && Array.isArray(req.body.files) ? req.body.files.length : 0,
+      },
+    });
     // SSE heartbeat handle. Allocated after flushHeaders, cleared in
     // the outer finally so a long upstream pause (e.g. tool call,
     // model thinking) plus a silently-dropped client TCP connection
@@ -2384,6 +2402,7 @@ router.post(
       const honoredPick = honorPickerModel(model, { provider });
       const pickerModel = honoredPick.model || String(model || '').trim();
       const pickerDisplayName = lookupPickerDisplayName(pickerModel);
+      if (__turnTap) __turnTap.set({ modelLabel: pickerDisplayName || pickerModel || null, modelPicked: pickerModel || null });
       if (honoredPick.model) {
         model = honoredPick.model;
         provider = honoredPick.provider || provider;
@@ -2684,6 +2703,7 @@ router.post(
           if (activeWait.outcome === 'replay') {
             fullResponseContent = activeWait.turn.assistantMessage.content || '';
             generateLog.info('idempotency.active_turn_replayed', { hasChat: Boolean(chatId) });
+            if (__turnTap) __turnTap.set({ replay: true });
             return streamDuplicateTurnReplay(res, activeWait.turn, model);
           }
           if (activeWait.error) {
@@ -2750,6 +2770,7 @@ router.post(
               hasChat: Boolean(chatId),
               success: true,
             });
+            if (__turnTap) __turnTap.set({ replay: true });
             return streamDuplicateTurnReplay(res, duplicateTurn, model);
           }
         } catch (duplicateErr) {
@@ -3271,6 +3292,21 @@ router.post(
           } catch (attachCtxErr) {
             generateLog.warnError('documents.uploaded_context_failed', attachCtxErr);
           }
+        }
+        if (__turnTap) {
+          __turnTap.set({
+            loadedFiles: processedFiles.length,
+            attachments: processedFiles.slice(0, 10).map((f) => ({
+              name: f && (f.originalName || f.name) ? String(f.originalName || f.name).slice(0, 160) : null,
+              type: f && f.mimeType ? String(f.mimeType).slice(0, 80) : null,
+              kind: f && f.attachmentKind ? f.attachmentKind : null,
+              textChars: f && f.extractedText ? String(f.extractedText).length : 0,
+            })),
+            attachmentTexts: processedFiles
+              .filter((f) => f && typeof f.extractedText === 'string' && f.extractedText.length > 200)
+              .slice(0, 3)
+              .map((f) => f.extractedText.slice(0, 20000)),
+          });
         }
       }
 
@@ -8937,6 +8973,15 @@ router.post(
         });
       } catch (_) { /* fully swallowed */ }
 
+      if (__turnTap) {
+        try {
+          __turnTap.set({
+            finalText: typeof finalContent === 'string' ? finalContent : '',
+            artifactsCount: (typeof newFiles !== 'undefined' && Array.isArray(newFiles)) ? newFiles.length : 0,
+          });
+        } catch (_) { /* tracker context is advisory */ }
+      }
+
       // ── Emit a final `usage` event so the client can show tokens /
       // cost for this turn and we have a structured trailer for SSE
       // observability. Best-effort: any error is swallowed.
@@ -9013,7 +9058,27 @@ router.post(
       // A follower response is owned by the original generation. It must stay
       // open until that owner broadcasts the terminal frame, and it must not
       // mark the shared resume record complete/failed a second time.
-      if (streamResumeFollower) return;
+      if (streamResumeFollower) {
+        if (__turnTap) turnFailures.finishTurn(__turnTap, { replay: true });
+        return;
+      }
+      if (__turnTap) {
+        // Classify what the user actually got. Records nothing for a normal
+        // answer; never throws; persistence is fire-and-forget.
+        turnFailures.finishTurn(__turnTap, {
+          ttfbAborted: __ttfbAbortedAt != null,
+          userStopped: Boolean(signal && signal.aborted && controller && controller.__siraStopReason),
+          signalAborted: Boolean(signal && signal.aborted),
+          streamCompleted,
+          endReason: streamCompleted
+            ? 'completed'
+            : (__ttfbAbortedAt != null ? 'ttfb_abort' : (streamFailureMessage ? 'error' : (signal && signal.aborted ? 'aborted' : 'ended'))),
+          finalText: typeof __turnTap.context.finalText === 'string' && __turnTap.context.finalText
+            ? __turnTap.context.finalText
+            : (typeof fullResponseContent === 'string' ? fullResponseContent : ''),
+          statusCode: res.statusCode,
+        });
+      }
 
       keepAlive = stopGenerateSseHeartbeat(keepAlive);
       if (__firstByteWatchdog) {
@@ -9876,6 +9941,19 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
+    // Turn failure tracker for the chat document editor (Word/Excel/PPT).
+    const __docTurnTap = turnFailures.beginTurn(req, res, {
+      route: 'document-edit',
+      context: {
+        chatId: String(req.body.chatId || '').trim() || null,
+        idempotencyKey: String(req.body.idempotencyKey || req.body.streamId || '').trim().slice(0, 200) || null,
+        streamId: String(req.body.streamId || '').trim().slice(0, 200) || null,
+        prompt: String(req.body.prompt || ''),
+        modelPicked: String(req.body.model || '').trim() || null,
+        modelLabel: lookupPickerDisplayName(String(req.body.model || '').trim()) || String(req.body.model || '').trim() || null,
+      },
+    });
+
     const userId = req.user.id;
     const prompt = String(req.body.prompt || '').trim();
     const chatId = String(req.body.chatId || '').trim();
@@ -10011,6 +10089,21 @@ router.post(
       send({ type: 'done', ok: false, code: cancelled ? 'CANCELLED' : 'FAILED', content, files: [], assistantMessageId, chatId });
     } finally {
       clearInterval(heartbeat);
+      if (__docTurnTap) {
+        turnFailures.finishTurn(__docTurnTap, {
+          userStopped: Boolean(controller.signal.aborted && controller.__siraStopReason),
+          signalAborted: Boolean(controller.signal.aborted),
+          // fileIds can reference previous versions/artifacts the editor
+          // resolves itself — never infer «adjunto perdido» from them here.
+          attachments: processedFiles.slice(0, 10).map((f) => ({
+            name: f && (f.originalName || f.name) ? String(f.originalName || f.name).slice(0, 160) : null,
+            type: f && f.mimeType ? String(f.mimeType).slice(0, 80) : null,
+            kind: f && f.attachmentKind ? f.attachmentKind : null,
+          })),
+          providerUsed: actualProvider,
+          modelUsed: actualModel,
+        });
+      }
       if (streamControllers.get(controllerKey) === controller) streamControllers.delete(controllerKey);
       if (!res.writableEnded) {
         try { res.end(); } catch (_) { /* already closed */ }
@@ -10036,6 +10129,9 @@ router.post('/stop-stream', authenticateToken, async (req, res) => {
     console.log(`>>> Aborting stream with ID: ${streamId}`);
     controller.abort();
     streamControllers.delete(`${req.user.id}:${streamId}`);
+    // Turn failure tracker: an explicit Stop is the user's choice (read by
+    // the generate finally, which runs after this synchronous block).
+    controller.__siraStopReason = String(req.body?.reason || 'user').slice(0, 40);
     try {
       const adStop = require('../services/agent-runner/engine-adapter');
       if (typeof adStop.abortCascade === 'function') {

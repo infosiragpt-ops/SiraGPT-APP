@@ -1,0 +1,119 @@
+import { act, cleanup, render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+vi.mock("@/lib/api", () => ({ apiClient: { getAdminTurnFailuresRecent: vi.fn() } }))
+
+import {
+  ERROR_SOUND_STORAGE_KEY,
+  SEEN_AT_STORAGE_KEY,
+  TurnFailureAlertsProvider,
+  useTurnFailureAlerts,
+} from "@/lib/admin/turn-failure-alerts"
+import type { AdminTurnFailureRecent } from "@/lib/admin/turn-failures-types"
+
+function Probe() {
+  const alerts = useTurnFailureAlerts()
+  return (
+    <div>
+      <span data-testid="unseen">{alerts?.unseen ?? -1}</span>
+      <span data-testid="sound">{alerts?.soundOn ? "on" : "off"}</span>
+      <button type="button" onClick={() => alerts?.markSeen()}>visto</button>
+    </div>
+  )
+}
+
+function instrumentedAudio() {
+  const started: number[] = []
+  const factory = vi.fn(() => ({
+    currentTime: 0,
+    state: "running",
+    destination: {},
+    resume: vi.fn(async () => undefined),
+    createOscillator: () => ({
+      type: "",
+      frequency: { setValueAtTime: (f: number) => { started.push(f) } },
+      connect: () => undefined,
+      start: () => undefined,
+      stop: () => undefined,
+    }),
+    createGain: () => ({ gain: { setValueAtTime: () => undefined, exponentialRampToValueAtTime: () => undefined }, connect: () => undefined }),
+  }))
+  return { factory, started }
+}
+
+const item = (id: string, category = "sin_respuesta") => ({
+  id,
+  createdAt: new Date().toISOString(),
+  category: category as any,
+  categoryLabel: "Sin respuesta",
+  severity: "critical" as const,
+  sound: "strong" as const,
+  cause: "Respuesta vacía del modelo",
+  userEmail: "luis@example.com",
+  model: "Grok 4.7",
+})
+
+describe("TurnFailureAlertsProvider (admin-wide listener)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    window.localStorage.clear()
+    document.title = "Admin · SiraGPT"
+  })
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+  })
+
+  it("seeds the unseen count from the backlog without sounding, then counts and chimes new failures", async () => {
+    window.localStorage.setItem(ERROR_SOUND_STORAGE_KEY, "1")
+    window.localStorage.setItem(SEEN_AT_STORAGE_KEY, new Date(Date.now() - 60_000).toISOString())
+    const responses: AdminTurnFailureRecent[] = [
+      { serverTime: new Date().toISOString(), count: 2, items: [item("a"), item("b")] },
+      { serverTime: new Date().toISOString(), count: 1, items: [item("c", "colgado")] },
+      { serverTime: new Date().toISOString(), count: 1, items: [item("d", "usuario_reporto")] },
+    ]
+    const fetchRecent = vi.fn(async () => responses.shift() || { serverTime: new Date().toISOString(), count: 0, items: [] })
+    const audio = instrumentedAudio()
+    render(
+      <TurnFailureAlertsProvider pollMs={1000} fetchRecent={fetchRecent} audioFactory={audio.factory}>
+        <Probe />
+      </TurnFailureAlertsProvider>,
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId("unseen").textContent).toBe("2")
+    expect(screen.getByTestId("sound").textContent).toBe("on")
+    expect(audio.started).toHaveLength(0)
+    expect(document.title).toBe("(2) Admin · SiraGPT")
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(screen.getByTestId("unseen").textContent).toBe("3")
+    // Strong chime: three oscillators scheduled.
+    expect(audio.started).toEqual([880, 698.46, 587.33])
+
+    // A second batch 1 s later is throttled (≥5 s between chimes).
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(screen.getByTestId("unseen").textContent).toBe("4")
+    expect(audio.started).toHaveLength(3)
+
+    await act(async () => { screen.getByText("visto").click() })
+    expect(screen.getByTestId("unseen").textContent).toBe("0")
+    expect(document.title).toBe("Admin · SiraGPT")
+  })
+
+  it("stays silent while the sound toggle is off", async () => {
+    const fetchRecent = vi
+      .fn()
+      .mockResolvedValueOnce({ serverTime: new Date().toISOString(), count: 0, items: [] })
+      .mockResolvedValueOnce({ serverTime: new Date().toISOString(), count: 1, items: [item("x")] })
+      .mockResolvedValue({ serverTime: new Date().toISOString(), count: 0, items: [] })
+    const audio = instrumentedAudio()
+    render(
+      <TurnFailureAlertsProvider pollMs={1000} fetchRecent={fetchRecent} audioFactory={audio.factory}>
+        <Probe />
+      </TurnFailureAlertsProvider>,
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(screen.getByTestId("unseen").textContent).toBe("1")
+    expect(audio.factory).not.toHaveBeenCalled()
+  })
+})

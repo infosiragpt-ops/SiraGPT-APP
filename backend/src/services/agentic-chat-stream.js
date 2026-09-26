@@ -946,6 +946,18 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           : reason.startsWith('project_')
             ? 'project_clone_repo'
             : 'document_edit';
+      // Turn failure tracker: an honest failure answer is still a failed
+      // turn for the admin log (the user did not get the edit/preview).
+      if (/(_failed|_error)$/.test(reason)) {
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: reason.startsWith('agent_runner') ? 'agent_runner' : preloopTool,
+            reason,
+            fatal: true,
+            message: finalAnswer.slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
+      }
       return {
         finalAnswer,
         persistedContent: buildPersistedContent({

@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { useTurnFailureAlerts } from "@/lib/admin/turn-failure-alerts"
 import { cn } from "@/lib/utils"
 
 const adminMenuItems = [
@@ -82,6 +83,8 @@ export function AdminSidebar() {
   const { state, toggleSidebar, isMobile, setOpenMobile } = useSidebar()
   const initials = getInitials(user?.name, user?.email)
   const expanded = state === "open" || isMobile
+  // Failed user turns the admin hasn't looked at yet (Logs → Fallos de respuesta).
+  const unseenFailures = useTurnFailureAlerts()?.unseen ?? 0
 
   const handleNavigation = (url: string) => {
     router.push(url)
@@ -165,6 +168,19 @@ export function AdminSidebar() {
                   >
                     <item.icon className="!h-4 !w-4 shrink-0" strokeWidth={1.75} />
                     {expanded && <span className="truncate">{item.title}</span>}
+                    {item.url === "/admin/logs" && unseenFailures > 0 && (
+                      <span
+                        data-testid="admin-logs-failure-badge"
+                        aria-label={`${unseenFailures} fallos de respuesta sin revisar`}
+                        title={`${unseenFailures} fallos de respuesta sin revisar`}
+                        className={cn(
+                          "ml-auto inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-red-600 px-1.5 text-[10px] font-semibold leading-5 text-white tabular-nums",
+                          !expanded && "absolute right-0.5 top-0.5 ml-0 min-w-[1rem] px-1 text-[9px] leading-4",
+                        )}
+                      >
+                        {unseenFailures > 99 ? "99+" : unseenFailures}
+                      </span>
+                    )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
