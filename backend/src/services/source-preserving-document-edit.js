@@ -8854,6 +8854,36 @@ function buildBatchEditResult({ attempts = [], requestText = '' } = {}) {
   };
 }
 
+// A single, fully parsed title replacement can use the existing surgical
+// writer and its byte/operation proofs without asking a content model. Unknown
+// qualifiers or a second action decline the whole shortcut.
+async function tryApplyLiteralDocxTitleEdit({ input, requestText = '' } = {}) {
+  const value = '(?:"[^"\\r\\n]+"|“[^”\\r\\n]+”|«[^»\\r\\n]+»|\\d{3,12})';
+  const grammar = new RegExp(`^\\s*(?:cambia|reemplaza|sustituye)\\s+(?:en\\s+)?(?:el\\s+)?t[ií]tulo\\s+(?:de\\s+)?(${value})\\s+(?:al?|por)\\s+(${value})(?:\\s+en\\s+(?:mi|el|este)\\s+(?:mismo\\s+)?(?:word|documento))?[\\s.!]*$`, 'iu');
+  const match = grammar.exec(requestText);
+  if (!match) return null;
+  assertBoundedOfficePackage(input);
+  const literal = (value) => /^["“«]/u.test(value) ? value.slice(1, -1) : value;
+  const replacement = { needle: literal(match[1]), replacement: literal(match[2]) };
+  const titles = extractDocxParagraphs(readDocxDocumentXml(input)).filter(isDocxTitleParagraph)
+    .filter((paragraph) => findNeedleSpanInText(paragraph.text, replacement.needle));
+  if (titles.length !== 1) {
+    const error = new Error('No pude identificar un único título con ese texto. No apliqué el cambio.');
+    error.code = 'DOCX_EDIT_SOURCE_AMBIGUOUS';
+    throw error;
+  }
+  const edited = replaceTextInDocxBuffer(input, replacement.needle, replacement.replacement, { scope: 'title' });
+  const operations = [{ kind: 'replace_text', ...replacement, scope: 'title', changedCount: edited.changedCount }];
+  const exactRequest = `cambia en el título de ${JSON.stringify(replacement.needle)} por ${JSON.stringify(replacement.replacement)}`;
+  const validation = await validateEditedBuffer(edited.buffer, 'docx', [], { beforeBuffer: input, operations, requestText: exactRequest });
+  if (validation.passed !== true) {
+    const error = new Error('No pude verificar el cambio exacto del título. No guardé ningún archivo.');
+    error.code = 'DOCX_EDIT_VALIDATION_FAILED';
+    throw error;
+  }
+  return { buffer: edited.buffer, validation };
+}
+
 async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent }) {
   const docxEngine = require('./docx-engine');
   const editor = require('./document-editor/chat-document-editor');
@@ -8908,6 +8938,11 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
     sourceFileId: artifact.validation.documentEdit?.sourceFileId || null,
     file: { ...files[index], metrics: artifact.validation },
   }));
+  for (const result of results) {
+    if (result.sourceFileId) await recordSourcePreservingVersion(prisma, {
+      result, sourceFile: { id: result.sourceFileId }, userId, chatId,
+    });
+  }
   const partial = !edited.ok;
   const format = results.every((result) => result.format === results[0].format) ? results[0].format : 'multiple';
   return {
@@ -9125,6 +9160,7 @@ module.exports = {
   resolveStoredFilePath,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
+    tryApplyLiteralDocxTitleEdit,
     splitOfficeEditClauses,
     planOfficeLiteralEdits,
     executeOfficeLiteralEdits,

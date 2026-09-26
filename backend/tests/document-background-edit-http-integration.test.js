@@ -335,6 +335,7 @@ test('real HTTP upload -> background edit -> authenticated download preserves tw
   assert.equal(terminal?.type, 'done', JSON.stringify(events.slice(-8), null, 2));
   const artifacts = events.filter((event) => event.type === 'file_artifact').map((event) => event.artifact);
   assert.equal(artifacts.length, 2, JSON.stringify(events.slice(-12), null, 2));
+  assert.equal(openAiCalls.content, 0, 'a verified literal edit in both documents must not require a content model');
   assert.deepEqual(artifacts.map((artifact) => artifact.sourceFileId), fileIds);
   assert.equal(new Set(artifacts.map((artifact) => artifact.id)).size, 2);
   assert.ok(artifacts.every((artifact) => artifact.validation?.passed === true));

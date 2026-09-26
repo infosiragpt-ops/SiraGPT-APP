@@ -206,6 +206,57 @@ test('compound Word edits reach the selected engine intact and follow-ups retain
   }
 });
 
+test('one exact replacement applies to both Word files without calling a content model', async (t) => {
+  const { Document, Packer, Paragraph } = require('docx');
+  const PizZip = require('pizzip');
+  const f = fixture(t, ['Carta.docx', 'Informe.docx']);
+  const source = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph('2026 Norte')] }] }));
+  f.deps.readSourceBuffer = async () => ({ buffer: source, cleanup: async () => {} });
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  f.deps.applyDocxPrecisionEdit = require('../src/services/document-editing/docx-precision-edit').applyDocxPrecisionEdit;
+  f.deps.docxEngine = { docxEngineEnabled: () => true, editWordDocument: async () => assert.fail('literal batch must not call a content model') };
+  const result = await f.run({ instruction: 'En ambos Word cambia "2026" por "2027". Solo modifica ello.' });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.artifacts.length, 2);
+  assert.deepEqual(f.calls.saved.map((item) => item.validation.documentEdit.sourceFileId), ['file-0', 'file-1']);
+  for (const item of f.calls.saved) assert.match(new PizZip(Buffer.from(item.base64, 'base64')).file('word/document.xml').asText(), /2027 Norte/);
+});
+
+test('a literal title change in both Word files preserves body text and does not require a model', async (t) => {
+  const { Document, Packer, Paragraph, TextRun } = require('docx');
+  const PizZip = require('pizzip');
+  const f = fixture(t, ['Carta.docx', 'Informe.docx']);
+  const source = await Packer.toBuffer(new Document({ sections: [{ children: [
+    new Paragraph({ style: 'Title', children: [new TextRun({ text: 'Informe 2026', bold: true })] }),
+    new Paragraph('Cuerpo 2026 intacto'),
+  ] }] }));
+  f.deps.readSourceBuffer = async () => ({ buffer: source, cleanup: async () => {} });
+  f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
+  f.deps.docxEngine = { docxEngineEnabled: () => true, editWordDocument: async () => assert.fail('literal titles must not call a content model') };
+  const result = await f.run({ instruction: 'en ambos Word cambia en el título de 2026 al 2027 en mi mismo Word. Solo modifica ello.' });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(f.calls.saved.length, 2);
+  for (const item of f.calls.saved) {
+    const zip = new PizZip(Buffer.from(item.base64, 'base64'));
+    const xml = zip.file('word/document.xml').asText();
+    assert.match(xml, /Informe 2027/);
+    assert.match(xml, /Cuerpo 2026 intacto/);
+    assert.doesNotMatch(xml, /en mi mismo word|solo modifica ello/i);
+    assert.match(xml, /<w:b\/>/);
+    assert.equal(item.validation.passed, true);
+  }
+  assert.match(new PizZip(source).file('word/document.xml').asText(), /Informe 2026/);
+});
+
+test('the title shortcut declines a second action or an unsupported condition as a whole', async () => {
+  const { tryApplyLiteralDocxTitleEdit } = require('../src/services/source-preserving-document-edit').INTERNAL;
+  for (const requestText of [
+    'cambia en el título de 2026 al 2027 y traduce el cuerpo',
+    'cambia en el título de 2026 al 2027 solo si el total es mayor que 20',
+    'cambia en el título de 2026 al 2027. Conserva el formato pero borra la tabla',
+  ]) assert.equal(await tryApplyLiteralDocxTitleEdit({ input: Buffer.alloc(0), requestText }), null);
+});
+
 test('a quoted batch word never selects all sources', async (t) => {
   const f = fixture(t, ['A.docx', 'B.docx']);
   f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;

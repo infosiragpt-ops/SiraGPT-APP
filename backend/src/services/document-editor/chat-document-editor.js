@@ -531,9 +531,16 @@ function isExplicitBatch(instruction) {
 }
 
 function isMultiOperationRequest(instruction) {
-  const text = unquotedInstruction(instruction)
+  const text = unquotedInstruction(precisionInstruction(instruction))
     .replace(/\b(?:sin\s+(?:cambiar|alterar|modificar|perder|tocar)|no\s+(?:cambies|alteres|modifiques|toques))\b/g, ' conservar ');
   return (text.match(/\b(?:agreg\w*|anad\w*|insert\w*|borr\w*|elimin\w*|reescrib\w*|traduc\w*|resum\w*|corrig\w*|reempla[zc]\w*|sustitu\w*|modific\w*|cambi\w*|revis\w*|mejora\w*|replace|change)\b/g) || []).length > 1;
+}
+
+// Batch scope chooses the files, not a second mutation. Remove only recognized
+// scope/closing phrases outside quoted document values before the strict parser.
+function precisionInstruction(instruction) {
+  return String(instruction || '').replace(/"[^"\r\n]*"|“[^”\r\n]*”|«[^»\r\n]*»|'[^'\r\n]*'|‘[^’\r\n]*’|`[^`\r\n]*`|\b(?:en\s+)?(?:ambos|ambas|(?:todos|todas)(?:\s+(?:los|las))?|cada)\s+(?:archivos?|documentos?|words?|docx)\b|\b(?:solo|solamente|[uú]nicamente)\s+(?:modifica|cambia|corrige)\s+(?:ello|eso|esto)(?=[\s.!]*$)/giu,
+    (match) => /^["“«'‘`]/u.test(match) ? match : ' ');
 }
 
 function sourceSelectionText(instruction) {
@@ -644,10 +651,10 @@ async function runResolvedDocumentEdit({
     // resolved sources, not a second history lookup: a follow-up must patch
     // the latest delivered version, never silently return to its upload.
     const wordSources = sources.some((source) => /\.docx?$/i.test(source.name));
-    let precision = wordSources ? deps.parseDocxPrecisionRequest(instruction) : null;
+    let precision = wordSources ? deps.parseDocxPrecisionRequest(precisionInstruction(instruction)) : null;
     // The exact parser deliberately supports one operation. Compound edits
     // belong to the selected-model engine as a whole, never to its first pair.
-    if (wordSources && (isMultiOperationRequest(instruction) || isExplicitBatch(instruction))) precision = null;
+    if (wordSources && isMultiOperationRequest(instruction)) precision = null;
     let selected = sources.length === 1 ? sources[0] : null;
     if (precision?.sourceFilename) {
       // Only the parser's filename OUTSIDE the quoted edit is authoritative.
@@ -737,6 +744,18 @@ async function runResolvedDocumentEdit({
     // claims every Word edit — a failure is reported honestly, never replaced
     // by an annex/rebuild fallback.
     const wordFile = files.length === 1 && /\.docx?$/i.test(files[0].name) ? files[0] : null;
+    if (wordFile && /\.docx$/i.test(wordFile.name) && !imageEdit) {
+      signal?.throwIfAborted();
+      const titleEdit = await deps.tryApplyLiteralDocxTitleEdit({ input: wordFile.buffer,
+        requestText: precisionInstruction(instruction) });
+      if (titleEdit) {
+        signal?.throwIfAborted();
+        const saved = deps.saveArtifact({ filename: wordFile.name, base64: titleEdit.buffer.toString('base64'),
+          mime: MIME_BY_EXT.docx, ownerUserId: userId, chatId, category: 'agent_artifact', validation: titleEdit.validation });
+        return { ok: true, artifacts: [savedArtifact(saved, saved.validation)],
+          summary: `Apliqué el cambio literal en el título de ${wordFile.name}, conservando el resto del documento.` };
+      }
+    }
     if (wordFile && /\.docx$/i.test(wordFile.name) && imageEdit) {
       return await editDocxImage({ wordFile, imageEdit, instruction, prisma, userId, chatId, fileIds, signal, deps, emit });
     }
@@ -923,6 +942,7 @@ function resolveDeps(injected) {
     tryDeterministicEdit: lazy('tryDeterministicEdit', () => require('../source-preserving-document-edit').tryGenerateSourcePreservingDocumentEdit),
     parseDocxPrecisionRequest: lazy('parseDocxPrecisionRequest', () => (...args) => require('../document-editing/docx-precision-intent').parseDocxPrecisionRequest(...args)),
     applyDocxPrecisionEdit: lazy('applyDocxPrecisionEdit', () => (...args) => require('../document-editing/docx-precision-edit').applyDocxPrecisionEdit(...args)),
+    tryApplyLiteralDocxTitleEdit: lazy('tryApplyLiteralDocxTitleEdit', () => (...args) => require('../source-preserving-document-edit').INTERNAL.tryApplyLiteralDocxTitleEdit(...args)),
     parseDocxImageRequest: lazy('parseDocxImageRequest', () => require('../source-preserving-document-edit').parseImageEditRequest),
     runDocxImageEditFlow: lazy('runDocxImageEditFlow', () => require('../source-preserving-document-edit').INTERNAL.runDocxImageEditFlow),
     validateDocxImageEdit: lazy('validateDocxImageEdit', () => require('../source-preserving-document-edit').INTERNAL.validateEditedBuffer),
