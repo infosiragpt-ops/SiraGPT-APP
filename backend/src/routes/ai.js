@@ -1267,9 +1267,20 @@ function sanitizeErrorForUser(error) {
   return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
 }
 
+// Public URL of an upload. It mirrors the R2 key, so it stays valid after the
+// post-extract offload moves the binary off disk (File.path then becomes
+// "r2:uploads/…"): the chat bubble can always render the image from it.
+function uploadPublicUrl(file) {
+  if (!file || !file.userId || !file.filename) return undefined;
+  const storedPath = String(file.path || '').replace(/\\/g, '/');
+  if (!/(^|\/|r2:)uploads\//.test(storedPath)) return undefined;
+  return `/uploads/${file.userId}/${file.filename}`;
+}
+
 function toProcessedFile(file) {
   if (!file) return null;
   const attachmentKind = isImageMime(file.mimeType) ? 'image' : 'document';
+  const url = uploadPublicUrl(file);
   return {
     id: file.id,
     name: file.originalName,
@@ -1279,7 +1290,8 @@ function toProcessedFile(file) {
     type: attachmentKind,
     attachmentKind,
     openaiFileId: file.openaiFileId,
-    path: file.path
+    path: file.path,
+    ...(url ? { url } : {}),
   };
 }
 
@@ -2261,6 +2273,11 @@ router.post(
     let __firstByteAt = null;
     let __firstByteWatchdog = null;
     let __ttfbAbortedAt = null;
+    // The first-byte budget measures the PROVIDER, not server-side prep: it
+    // restarts once attachments are ready. Counting a slow attachment step
+    // against it aborted a turn before the model was even called (prod
+    // 2026-09-26: 77 s preparing an image → aborted at 45 s → empty turn).
+    let __ttfbClockStartedAt = __generateStartedAt;
 
     // A reconnect must never replace the original owner's stop controller.
     // The follower is attached to the in-process stream fanout below after
@@ -3180,7 +3197,12 @@ router.post(
       // Live #388 startCommentHeartbeat on the generate stream (ChatRun
       // `: ping` 15s is a different path). 5s interval keeps proxy/edge
       // from timing out during enrichment. Cleared in the outer finally.
-      keepAlive = startGenerateSseHeartbeat(res, { intervalMs: 5000, signal });
+      // Pings stop when the connection closes, NOT when the turn controller
+      // aborts: a watchdog abort that silenced the pings made the browser
+      // think the stream had stalled and reconnect mid-turn (prod 2026-09-26).
+      const __heartbeatStop = new AbortController();
+      res.once('close', () => { try { __heartbeatStop.abort(); } catch (_) { /* already stopped */ } });
+      keepAlive = startGenerateSseHeartbeat(res, { intervalMs: 5000, signal: __heartbeatStop.signal });
       // Claude-style live activity: one short Spanish line per phase. The
       // client folds the sequence into the thinking timeline (done rows +
       // the active row with its elapsed time) instead of a bare "Pensando…".
@@ -3205,7 +3227,7 @@ router.post(
           __firstByteWatchdog = setInterval(function () {
             try {
               const hit = adTtfb.abortIfFirstByteOver45s({
-                startedAt: __generateStartedAt,
+                startedAt: __ttfbClockStartedAt,
                 now: Date.now(),
                 firstByteAt: __firstByteAt,
               });
@@ -3310,6 +3332,9 @@ router.post(
           generateLog.warnError('documents.history_recovery_failed', recoverErr);
         }
       }
+
+      // Attachments are ready: the first-byte budget now measures the model.
+      __ttfbClockStartedAt = Date.now();
 
       // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
       // Projects use the same injection pattern as CustomGpts (persona
@@ -8383,6 +8408,31 @@ router.post(
           }
         } else {
           throw apiError;
+        }
+      }
+
+      // ── Turn contract: never end a turn in silence ─────────────────────
+      // A model call cancelled by the system, an empty completion or a lost
+      // image used to leave «Pensando…» with no reply and nothing saved. Write
+      // an honest message (persisted below as the assistant reply). A user
+      // Stop or a closed tab is not a failure — nothing to write then.
+      if (!String(fullResponseContent || '').trim() && !clientGone && !res.writableEnded) {
+        const turnOutcome = require('../services/turn-outcome');
+        const __emptyTurn = turnOutcome.classifyEmptyTurn({
+          userCancelled: Boolean(signal && signal.aborted && __ttfbAbortedAt == null),
+          ttfbAborted: __ttfbAbortedAt != null,
+          imageLoadFailures: Number(res.locals && res.locals.imageLoadFailures) || 0,
+        });
+        if (__emptyTurn) {
+          try { res.write(`data: ${JSON.stringify({ content: __emptyTurn.message })}\n\n`); } catch (_) { /* socket gone */ }
+          fullResponseContent = __emptyTurn.message;
+          turnOutcome.logTurnOutcome({
+            reason: __emptyTurn.category,
+            chatId: canPersist ? chatId : null,
+            messageId: streamId || null,
+            reqId: req.requestId || req.id || null,
+            model: actualModel || model || null,
+          });
         }
       }
 

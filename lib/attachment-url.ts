@@ -116,6 +116,31 @@ export function resolveImageAttachmentUrl(file: any, baseUrl?: string | null) {
 }
 
 /**
+ * Ordered, de-duplicated sources for an image attachment. The composer's local
+ * preview (blob:/data:) comes first so a just-sent image paints instantly; the
+ * server copy (/uploads/…, served from disk or R2) follows so a revoked blob or
+ * a stale storage path still renders instead of a grey placeholder (prod
+ * 2026-09-26: the bubble of a (a+b)² screenshot stayed grey after its turn).
+ */
+export function resolveImageAttachmentCandidates(file: any, baseUrl?: string | null): string[] {
+  const out: string[] = [];
+  const push = (value: unknown) => {
+    const url = String(value || "").trim();
+    if (url && !out.includes(url)) out.push(url);
+  };
+  push(resolveImageAttachmentUrl(file, baseUrl));
+  for (const key of ["url", "imageUrl", "thumbnailUrl"]) {
+    const raw = String(file?.[key] || "").trim();
+    if (raw && !/^(blob:|data:)/i.test(raw)) push(resolveImageAttachmentUrl({ url: raw }, baseUrl));
+  }
+  if (file?.path) {
+    const relativePath = String(file.path).replace(/\\/g, "/").split("uploads/")[1];
+    if (relativePath) push(resolveBackendAssetUrl(`/uploads/${relativePath}`, baseUrl));
+  }
+  return out;
+}
+
+/**
  * @deprecated Session JWTs must never be copied into URLs. Same-origin upload
  * requests authenticate with the HttpOnly cookie. A caller that cannot use
  * that cookie must request a path-scoped capability from
