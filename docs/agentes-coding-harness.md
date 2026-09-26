@@ -62,7 +62,8 @@ POST (auth) starts a turn on an existing session. The runner:
    wins** (tests stay offline). When the flag is on and nothing is
    injected, `harness/llm.js` talks to the existing native catalog
    client. Flag off keeps the local stub. Optional body `modelAlias`
-   (`Sira Rápido` / `Sira Pro`). Unknown aliases → `E_PARAMS`. Public
+   (`DeepSeek V4 Flash` / `DeepSeek V4 Pro`; the legacy `Sira Rápido` /
+   `Sira Pro` are still accepted). Unknown aliases → `E_PARAMS`. Public
    JSON carries `modelAlias` only — never a raw model id
 3. Executes at most the sandbox quartet: `readFile` / `writeFile` / `exec` / `listFiles`. Paths go through `jailRelPath`
 4. Stores steps in-process on the session (same store pattern as export/deploy). **Phase 4c:** when a jobs backend is injected or `REDIS_URL` is on that env, the same row is snapshotted and enqueued
@@ -82,7 +83,7 @@ POST (auth) starts a turn on an existing session. The runner:
       { "seq": 4, "kind": "done", "label": "Listo" }
     ],
     "text": "…",
-    "modelAlias": "Sira Rápido",
+    "modelAlias": "DeepSeek V4 Flash",
     "tokensEstimate": 120,
     "pendingPermissions": [],
     "createdAt": 1710000000000
@@ -95,7 +96,7 @@ Caps (env or body): `AGENTES_CODING_HARNESS_MAX_STEPS` (default 8),
 `AGENTES_CODING_HARNESS_TIMEOUT_MS` (default 30s),
 `AGENTES_CODING_HARNESS_LLM_TIMEOUT_MS` (default 20s, per completion).
 `AGENTES_CODING_HARNESS_MODEL` may set the default brand alias
-(`Sira Rápido` or `Sira Pro`). One running or awaiting-permission turn
+(`DeepSeek V4 Flash` or `DeepSeek V4 Pro`). One running or awaiting-permission turn
 per session. Destroying the session forgets the store. HITL wait does
 not consume the timeout.
 

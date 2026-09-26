@@ -1,20 +1,20 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { SIRA_PRO_LABEL, SIRA_RAPIDO_LABEL } from "../lib/chat/brand-label"
+import { DEEPSEEK_FLASH_LABEL, DEEPSEEK_PRO_LABEL } from "../lib/chat/brand-label"
 import {
   prettifyPickedModelLabel,
   resolvePickerBadgeSource,
   resolveReplyBadgeLabel,
 } from "../lib/chat/reply-badge-model"
 
-describe("reply badge follows the picker, not Sira Rápido", () => {
+describe("reply badge follows the picker, not DeepSeek V4 Flash by default", () => {
   const catalog = [
     { name: "x-ai/grok-4.5", displayName: "Grok 4.5", provider: "xAI" },
     { name: "anthropic/claude-sonnet-5", displayName: "Claude Sonnet 5", provider: "Anthropic" },
     { name: "google/gemini-3.5-flash", displayName: "Gemini 3.5 Flash", provider: "Gemini" },
-    { name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek" },
-    { name: "deepseek-v4-pro", displayName: "Sira Pro", provider: "DeepSeek" },
+    { name: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", provider: "DeepSeek" },
+    { name: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", provider: "DeepSeek" },
   ]
 
   it("labels persisted grok-4.5 (DB passthrough) Grok 4.5, not curated Grok 4.2", () => {
@@ -37,13 +37,13 @@ describe("reply badge follows the picker, not Sira Rápido", () => {
     )
   })
 
-  it("labels a Grok reply Grok 4.5, never Sira Rápido", () => {
+  it("labels a Grok reply Grok 4.5, never DeepSeek V4 Flash", () => {
     const label = resolveReplyBadgeLabel({
       generationUsage: { model: "x-ai/grok-4.5" },
       metadata: { generationUsage: { model: "x-ai/grok-4.5" }, pickerModel: "x-ai/grok-4.5" },
     }, catalog)
     assert.equal(label, "Grok 4.5")
-    assert.notEqual(label, SIRA_RAPIDO_LABEL)
+    assert.notEqual(label, DEEPSEEK_FLASH_LABEL)
   })
 
   it("labels Claude / Gemini from persisted usage metadata after reload", () => {
@@ -61,28 +61,60 @@ describe("reply badge follows the picker, not Sira Rápido", () => {
     )
   })
 
-  it("keeps Sira aliases only for in-house Flash / Pro", () => {
+  it("labels DeepSeek V4 Flash / Pro replies with their original names", () => {
     assert.equal(
       resolveReplyBadgeLabel({ generationUsage: { model: "deepseek-v4-flash" } }, catalog),
-      SIRA_RAPIDO_LABEL,
+      DEEPSEEK_FLASH_LABEL,
     )
     assert.equal(
       resolveReplyBadgeLabel({ generationUsage: { model: "deepseek-v4-pro" } }, catalog),
-      SIRA_PRO_LABEL,
+      DEEPSEEK_PRO_LABEL,
+    )
+    assert.equal(DEEPSEEK_FLASH_LABEL, "DeepSeek V4 Flash")
+    assert.equal(DEEPSEEK_PRO_LABEL, "DeepSeek V4 Pro")
+  })
+
+  it("re-labels older replies stored with the legacy Sira aliases", () => {
+    const legacyCatalog = [
+      { name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek" },
+      { name: "deepseek-v4-pro", displayName: "Sira Pro", provider: "DeepSeek" },
+    ]
+    assert.equal(
+      resolveReplyBadgeLabel({ generationUsage: { model: "deepseek-v4-pro" } }, legacyCatalog),
+      DEEPSEEK_PRO_LABEL,
+    )
+    assert.equal(
+      resolveReplyBadgeLabel({
+        metadata: { generationUsage: { model: "deepseek-v4-flash" }, pickerModel: "deepseek-v4-flash", pickerDisplayName: "Sira Rápido" },
+      }, legacyCatalog),
+      DEEPSEEK_FLASH_LABEL,
+    )
+    assert.equal(
+      resolveReplyBadgeLabel({ metadata: { pickerModel: "deepseek-v4-pro", pickerDisplayName: "Sira Pro" } }),
+      DEEPSEEK_PRO_LABEL,
+    )
+    assert.deepEqual(
+      resolvePickerBadgeSource("deepseek-v4-flash", legacyCatalog, "DeepSeek"),
+      { name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek" },
     )
   })
 
-  it("does not invent Sira Rápido when the message has no model", () => {
+  it("does not invent DeepSeek V4 Flash when the message has no model", () => {
     assert.equal(resolveReplyBadgeLabel({ content: "Hola" } as never, catalog), "")
     assert.equal(resolveReplyBadgeLabel({}, catalog), "")
     assert.equal(resolveReplyBadgeLabel(null, catalog), "")
   })
 
-  it("never leaks DeepSeek, OpenRouter, or a raw vendor slug", () => {
+  it("never leaks a raw DeepSeek id, OpenRouter, or a raw vendor slug", () => {
     assert.equal(prettifyPickedModelLabel("x-ai/grok-4.5"), "Grok 4.5")
     assert.equal(prettifyPickedModelLabel("anthropic/claude-sonnet-5"), "Claude Sonnet 5")
     assert.equal(prettifyPickedModelLabel("openrouter/gpt-4o"), "")
+    assert.equal(prettifyPickedModelLabel("deepseek/deepseek-v4-pro"), DEEPSEEK_PRO_LABEL)
+    assert.equal(prettifyPickedModelLabel("deepseek-reasoner"), "DeepSeek Reasoner")
     assert.doesNotMatch(prettifyPickedModelLabel("x-ai/grok-4.5"), /openrouter|deepseek|x-ai\//i)
+    for (const raw of ["deepseek-v4-flash", "deepseek/deepseek-v4-pro", "deepseek-chat"]) {
+      assert.doesNotMatch(resolveReplyBadgeLabel({ generationUsage: { model: raw } }, catalog), /deepseek[-_/:]|openrouter/i, raw)
+    }
     assert.equal(
       resolveReplyBadgeLabel({ generationUsage: { model: "x-ai/grok-4.5" } }),
       "Grok 4.5",

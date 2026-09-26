@@ -90,7 +90,7 @@ async function seed() {
       monthlyLimit: 1000000n, monthlyCallLimit: 100n, emailVerifiedAt: new Date(), locale: 'es',
     }, update: { password } });
     await db.aiModel.upsert({ where: { name: MODEL }, create: {
-      name: MODEL, displayName: 'Sira Pro', provider: 'Anthropic', type: 'TEXT', isActive: true, tags: ['test'],
+      name: MODEL, displayName: 'Claude Haiku 4.5', provider: 'Anthropic', type: 'TEXT', isActive: true, tags: ['test'],
     }, update: { isActive: true } });
     console.log(JSON.stringify({ seeded: true, account: OWNER, migrations: migrations.length, paidCalls: 0 }));
   } finally { await db.$disconnect(); }

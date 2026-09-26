@@ -33,10 +33,14 @@ const SIRA_MINI_NATIVE_CHAT_PATH = '/api/chat';
 const SIRA_MINI_KEEP_ALIVE = -1;
 const SIRA_MINI_THINK = false;
 const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de SiraGPT.';
-const SIRA_RAPIDO_DISPLAY_NAME = 'Sira Rápido';
-const SIRA_PRO_DISPLAY_NAME = 'Sira Pro';
-const SIRA_RAPIDO_DESCRIPTION = 'Modelo rápido de SiraGPT para chat cotidiano y tareas cortas.';
-const SIRA_PRO_DESCRIPTION = 'Modelo profesional de SiraGPT para razonamiento, código y documentos.';
+// DeepSeek V4 Flash/Pro show their original names (decisión de producto
+// 2026-09-26). The legacy Sira aliases (Sira Rápido / Sira Pro) are still
+// accepted as INPUT by the alias tables that import these names; they are
+// never displayed.
+const DEEPSEEK_FLASH_DISPLAY_NAME = 'DeepSeek V4 Flash';
+const DEEPSEEK_PRO_DISPLAY_NAME = 'DeepSeek V4 Pro';
+const DEEPSEEK_FLASH_DESCRIPTION = 'Rápido para chat cotidiano y tareas cortas.';
+const DEEPSEEK_PRO_DESCRIPTION = 'Razonamiento profesional, código y documentos.';
 const SIRA_MINI_UNAVAILABLE_MESSAGE =
   'SiraGPT Mini no está disponible ahora. No cambié el modelo. Revisa la conexión Custom en Admin → Conexiones e inténtalo de nuevo.';
 const SIRA_MINI_ALIASES = Object.freeze([
@@ -589,12 +593,14 @@ function publicPickerProvider(provider) {
   return raw;
 }
 
-function isSiraProRow(model) {
+// Matched by id, so rows whose stored displayName is still the legacy
+// «Sira Rápido/Sira Pro» are re-labelled too.
+function isDeepSeekProRow(model) {
   const hay = `${model && model.name ? model.name : ''} ${model && model.displayName ? model.displayName : ''}`;
   return /deepseek/i.test(hay) && /v4[-_\s]?pro/i.test(hay) && !/flash/i.test(hay);
 }
 
-function isSiraRapidoRow(model) {
+function isDeepSeekFlashRow(model) {
   const hay = `${model && model.name ? model.name : ''} ${model && model.displayName ? model.displayName : ''}`;
   return /deepseek/i.test(hay) && /v4[-_\s]?flash/i.test(hay);
 }
@@ -608,12 +614,12 @@ function publicPickerModel(model) {
     next.displayName = SIRA_MINI_DISPLAY_NAME;
     next.provider = 'Sira';
     next.description = SIRA_MINI_DESCRIPTION;
-  } else if (isSiraProRow(model)) {
-    next.displayName = SIRA_PRO_DISPLAY_NAME;
-    next.description = SIRA_PRO_DESCRIPTION;
-  } else if (isSiraRapidoRow(model)) {
-    next.displayName = SIRA_RAPIDO_DISPLAY_NAME;
-    next.description = SIRA_RAPIDO_DESCRIPTION;
+  } else if (isDeepSeekProRow(model)) {
+    next.displayName = DEEPSEEK_PRO_DISPLAY_NAME;
+    next.description = DEEPSEEK_PRO_DESCRIPTION;
+  } else if (isDeepSeekFlashRow(model)) {
+    next.displayName = DEEPSEEK_FLASH_DISPLAY_NAME;
+    next.description = DEEPSEEK_FLASH_DESCRIPTION;
   } else if (next.description && HIDDEN_VENDOR_RE.test(String(next.description))) {
     next.description = String(next.description).replace(HIDDEN_VENDOR_RE, 'Sira');
   }
@@ -657,8 +663,8 @@ module.exports = {
   SIRA_MINI_KEEP_ALIVE,
   SIRA_MINI_THINK,
   SIRA_MINI_UNAVAILABLE_MESSAGE,
-  SIRA_RAPIDO_DISPLAY_NAME,
-  SIRA_PRO_DISPLAY_NAME,
+  DEEPSEEK_FLASH_DISPLAY_NAME,
+  DEEPSEEK_PRO_DISPLAY_NAME,
   isCustomProvider,
   isCustomConnectionRow,
   isOpenAiCompatibleUrl,

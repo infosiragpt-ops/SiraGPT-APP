@@ -115,6 +115,11 @@ test('alias table resolves brand names and rejects unknowns', () => {
   assert.equal(resolveCodingModel('').alias, ALIAS_RAPIDO);
   assert.equal(resolveCodingModel(null).alias, ALIAS_RAPIDO);
   assert.deepEqual(listCodingModelAliases(), [ALIAS_RAPIDO, ALIAS_PRO]);
+  // Original names are the public labels; legacy Sira aliases stay accepted.
+  assert.equal(ALIAS_RAPIDO, 'DeepSeek V4 Flash');
+  assert.equal(ALIAS_PRO, 'DeepSeek V4 Pro');
+  assert.equal(resolveCodingModel('DeepSeek V4 Pro').tier, 'pro');
+  assert.equal(resolveCodingModel('deepseek-v4-flash').alias, ALIAS_RAPIDO);
   assert.throws(() => resolveCodingModel('gpt-4o'), (err) => spanishError(err, 'E_PARAMS'));
   assert.throws(() => resolveCodingModel('claude-sonnet'), (err) => spanishError(err, 'E_PARAMS'));
   assert.throws(() => resolveCodingModel('unknown-model'), (err) => spanishError(err, 'E_PARAMS'));
@@ -123,7 +128,7 @@ test('alias table resolves brand names and rejects unknowns', () => {
     return null;
   })();
   assert.equal(unknown.message, UNKNOWN_ALIAS);
-  assert.doesNotMatch(unknown.message, /gpt-4o|deepseek|model_id/i);
+  assert.doesNotMatch(unknown.message, /gpt-4o|deepseek[-_/:]|model_id/i);
 });
 
 test('toProviderMessages flattens tool rows as data', () => {
@@ -272,7 +277,7 @@ test('runSession without llmTurn uses the adapter when the flag is on', async ()
   assert.equal(out.status, 'done');
   assert.equal(out.text, 'desde el adaptador');
   assert.equal(out.modelAlias, ALIAS_RAPIDO);
-  assert.doesNotMatch(JSON.stringify(out), /model_id|deepseek|sk-/i);
+  assert.doesNotMatch(JSON.stringify(out), /model_id|deepseek[-_/:]|sk-/i);
 });
 
 test('injected llmTurn still wins on runForRequest', async () => {
@@ -288,7 +293,7 @@ test('injected llmTurn still wins on runForRequest', async () => {
   });
   assert.equal(out.run.text, 'inyectado');
   assert.equal(out.run.modelAlias, ALIAS_PRO);
-  assert.doesNotMatch(JSON.stringify(out), /deepseek|model_id|sk-/i);
+  assert.doesNotMatch(JSON.stringify(out), /deepseek[-_/:]|model_id|sk-/i);
 });
 
 test('unknown modelAlias is E_PARAMS and does not start a run', async () => {
@@ -357,13 +362,13 @@ test('HTTP modelAlias unknown is 400; injectable still wins', { skip: !express }
     const bad = await request({ prompt: 'hola', modelAlias: 'gpt-4o' });
     assert.equal(bad.status, 400);
     assert.equal(bad.json.error, 'E_PARAMS');
-    assert.doesNotMatch(JSON.stringify(bad.json), /gpt-4o|deepseek|sk-/i);
+    assert.doesNotMatch(JSON.stringify(bad.json), /gpt-4o|deepseek[-_/:]|sk-/i);
 
     const ok = await request({ prompt: 'hola', modelAlias: 'Sira Pro' });
     assert.equal(ok.status, 201);
     assert.equal(ok.json.run.text, 'http-inyectado');
     assert.equal(ok.json.run.modelAlias, ALIAS_PRO);
-    assert.doesNotMatch(JSON.stringify(ok.json), /deepseek|model_id|sk-/i);
+    assert.doesNotMatch(JSON.stringify(ok.json), /deepseek[-_/:]|model_id|sk-/i);
   } finally {
     await new Promise((r) => server.close(r));
   }

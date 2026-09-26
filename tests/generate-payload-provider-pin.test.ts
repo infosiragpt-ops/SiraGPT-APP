@@ -16,8 +16,8 @@ describe("generate payload keeps the selected catalog model", () => {
     { name: "moonshotai/kimi-k2.6", displayName: "Kimi K2.6", provider: "Kimi" },
     { name: "moonshotai/kimi-k2.7-code", displayName: "MoonshotAI Kimi K2.7 Code", provider: "Kimi" },
     { name: "x-ai/grok-4.5", displayName: "Grok 4.5", provider: "xAI" },
-    { name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek" },
-    { name: "deepseek-v4-pro", displayName: "Sira Pro", provider: "DeepSeek" },
+    { name: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", provider: "DeepSeek" },
+    { name: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", provider: "DeepSeek" },
   ]
 
   const cases = [

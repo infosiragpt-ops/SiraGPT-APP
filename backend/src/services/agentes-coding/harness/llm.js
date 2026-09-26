@@ -5,8 +5,9 @@
  *
  * Same `llmTurn({ messages, tools, signal }) → { text, toolCalls }`
  * contract the runner already uses. Flag-gated. Injectable `complete` /
- * `createClient` keep CI offline. Brand aliases only on the public
- * surface (`Sira Rápido`, `Sira Pro`). Server map stays here.
+ * `createClient` keep CI offline. Public model names only on the public
+ * surface (`DeepSeek V4 Flash`, `DeepSeek V4 Pro`); the legacy Sira aliases
+ * are still accepted as input. Server map stays here.
  *
  * Reuses the in-repo native client + brand labels. No aggregator hop,
  * no new npm dep, no host FS.
@@ -16,14 +17,14 @@ const { isAgentesCodingV2Enabled } = require('../flags');
 const { fail, CodingSandboxError } = require('../coding-sandbox/errors');
 const { parsePositiveInt } = require('../coding-sandbox/limits');
 const {
-  SIRA_RAPIDO_DISPLAY_NAME,
-  SIRA_PRO_DISPLAY_NAME,
+  DEEPSEEK_FLASH_DISPLAY_NAME,
+  DEEPSEEK_PRO_DISPLAY_NAME,
 } = require('../../ai/custom-provider-client');
 const { redactString } = require('../../../utils/secret-redactor');
 
 const DEFAULT_LLM_TIMEOUT_MS = 20_000;
-const ALIAS_RAPIDO = SIRA_RAPIDO_DISPLAY_NAME;
-const ALIAS_PRO = SIRA_PRO_DISPLAY_NAME;
+const ALIAS_RAPIDO = DEEPSEEK_FLASH_DISPLAY_NAME;
+const ALIAS_PRO = DEEPSEEK_PRO_DISPLAY_NAME;
 
 const PROVIDER_DOWN = 'El modelo no pudo completar la solicitud. Reintenta o cambia de modelo.';
 const PROVIDER_MISSING = 'El modelo no está configurado. Reintenta o cambia de modelo.';
@@ -32,6 +33,10 @@ const UNKNOWN_ALIAS = `El alias de modelo no es válido. Usa ${ALIAS_RAPIDO} o $
 
 const ALIAS_TABLE = Object.freeze({
   '': 'rapido',
+  'deepseek v4 flash': 'rapido',
+  'deepseek-v4-flash': 'rapido',
+  'deepseek v4 pro': 'pro',
+  'deepseek-v4-pro': 'pro',
   'sira rápido': 'rapido',
   'sira rapido': 'rapido',
   'sira-rapido': 'rapido',

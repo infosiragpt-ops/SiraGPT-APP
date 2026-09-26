@@ -27,7 +27,7 @@ const { resolveDocAgentCandidates, createFailoverClient } = require('./llm-runti
 
 // Production 2026-09: gpt-4o-mini is retired and the OpenAI key answers 401;
 // the document agent writes python-docx / openpyxl / python-pptx code, so it
-// needs a current coding model. DeepSeek V4 Pro (the "Sira Pro" tier) via
+// needs a current coding model. DeepSeek V4 Pro via
 // OpenRouter is the default; override with SIRAGPT_DOC_AGENT_MODEL.
 const DEFAULT_MODEL = process.env.SIRAGPT_DOC_AGENT_MODEL || 'deepseek/deepseek-v4-pro';
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000;
