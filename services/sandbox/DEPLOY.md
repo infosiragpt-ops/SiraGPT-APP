@@ -26,7 +26,9 @@ a dedicated server is "the muscle of the sandbox".
 - `server.js` — zero-dependency HTTP API (`/health` public; everything else Bearer).
 - `lib/docker-sandbox.js` — one ephemeral container per session.
 - `runner/Dockerfile` — the runner image (python-docx/openpyxl/python-pptx/pypdf/
-  mammoth + LibreOffice headless), built as `siragpt-doc-sandbox:latest`.
+  mammoth + LibreOffice headless + poppler + metric fonts), built as
+  `siragpt-doc-sandbox:latest`. It is the **only** Dockerfile that builds that
+  tag — see «Runner image» below.
 - `siragpt-sandbox.service` — systemd unit (binds 127.0.0.1 only, auto-restart).
 - `scripts/smoke.js` — post-deploy validation.
 - `.env.example` — config template (the real `.env` lives only on the host).
@@ -94,6 +96,43 @@ SANDBOX_API_KEY=<same key>
 set — the backend container itself needs neither the Docker CLI nor the
 socket. The runner image is built once on the host:
 `docker build -t siragpt-doc-sandbox:latest services/sandbox/runner`.
+
+## Runner image — single builder (edición milimétrica, Fase A)
+
+`services/sandbox/runner/Dockerfile` is the one and only builder of
+`siragpt-doc-sandbox:latest`. Until 2026-09-26 `infra/sandbox/Dockerfile` built
+the same tag with a different package list (poppler + metric fonts there,
+pandas here), so the fonts in production depended on which image was built
+last (docs/specs/edicion-milimetrica/SPEC.md, hallazgo 13). The two lists were
+merged into the runner Dockerfile and `infra/sandbox/Dockerfile` was removed;
+`backend/tests/sandbox-runner-image-contract.test.js` keeps it that way.
+
+What the office engine (`backend/src/services/agent-runner/sira_office.py`)
+needs from the image, and why:
+
+| Package | Why |
+|---|---|
+| `libreoffice` | Renders docx/xlsx/pptx to PDF and recalculates xlsx copies |
+| `poppler-utils` | `pdftoppm` rasterizes EVERY page (the old preview only saw page 1); `pdftotext`/`pdfinfo` for text checks and page counts |
+| `fonts-crosextra-carlito` / `-caladea` | Metric twins of Calibri / Cambria |
+| `fonts-liberation` / `fonts-liberation2` | Metric twins of Arial / Times New Roman / Courier New |
+| `pillow`, `lxml` | Before/after composites with zoom; surgical XML edits |
+
+The auto-publish (`publish.sh`) does **not** rebuild this image. After a merge
+that changes `runner/Dockerfile`, rebuild it on the Lenovo, keeping the
+previous image for rollback:
+
+```bash
+cd /home/user/SiraGPT-APP            # at the merged commit
+docker tag siragpt-doc-sandbox:latest siragpt-doc-sandbox:rollback-$(date +%Y%m%d)
+docker build -t siragpt-doc-sandbox:latest -f services/sandbox/runner/Dockerfile services/sandbox/runner
+# verify in a fresh container (expected: Carlito, Liberation Serif, Liberation Sans, pdftoppm version)
+docker run --rm siragpt-doc-sandbox:latest sh -c 'fc-match Calibri; fc-match "Times New Roman"; fc-match Arial; pdftoppm -v 2>&1 | head -1; python3 -c "import lxml, PIL; print(\"py ok\")"'
+docker exec siragpt-sandbox node scripts/smoke.js      # → SMOKE PASS
+```
+
+Rollback: `docker tag siragpt-doc-sandbox:rollback-<date> siragpt-doc-sandbox:latest`
+(new sessions pick it up immediately; running sessions are ephemeral).
 
 ## Validate from anywhere
 ```bash

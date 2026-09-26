@@ -13,7 +13,7 @@
  * so callers can launch on the fast route and swap the engine later without
  * touching the frontend:
  *   Route A — Anthropic sandbox (see ./anthropic-route.js)
- *   Route B — own Docker sandbox (see ./sandbox.js + infra/sandbox/Dockerfile)
+ *   Route B — own Docker sandbox (see ./sandbox.js + services/sandbox/runner/Dockerfile)
  *
  * This module is pure (no I/O, no deps) so it is cheap to unit-test and safe
  * to inject into system prompts.
