@@ -8921,6 +8921,8 @@ async function tryApplyLiteralDocxTitleEdit({ input, requestText = '' } = {}) {
   return { buffer: edited.buffer, validation };
 }
 
+const NAMED_NON_WORD_DOCUMENT = Symbol('named_non_word_document');
+
 async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent }) {
   const docxEngine = require('./docx-engine');
   const editor = require('./document-editor/chat-document-editor');
@@ -8945,9 +8947,21 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
     }
   }
   const request = String(requestText || '').normalize('NFC').toLowerCase();
-  const named = sources.filter((source) => request.includes(source.name.normalize('NFC').toLowerCase()));
-  if (named.length === 1 && !docxEngine.isWordFilename(named[0].name)) return null;
-  if (!docxEngine.docxEngineEnabled()) {
+  const named = sources.filter((source) => [source.name, source.originalName,
+    source.metadata?.validation?.documentEdit?.sourceFilename]
+    .filter(Boolean).some((name) => request.includes(String(name).normalize('NFC').toLowerCase())));
+  // A Word in the chat history must not make the Word-only precision parser
+  // reject an explicitly named PDF, spreadsheet or presentation later.
+  const namedNonWord = named.length === 1 && !docxEngine.isWordFilename(named[0].name);
+  // Page operations keep the existing PDF adapter. Text changes need the
+  // selected-model editor that already handles PDFs in mixed-file batches.
+  const namedPdfTextEdit = namedNonWord && /\.pdf$/i.test(named[0].name) && !parsePdfEditRequest(requestText);
+  if (namedNonWord && !namedPdfTextEdit) return NAMED_NON_WORD_DOCUMENT;
+  if (namedPdfTextEdit) {
+    const target = named[0];
+    selectedFileIds = [target.kind === 'artifact' ? `artifact:${target.artifactId}` : target.row.id];
+  }
+  if (!namedPdfTextEdit && !docxEngine.docxEngineEnabled()) {
     const error = new Error('La edición de Word no está disponible en este momento. El original no se modificó.');
     error.code = 'DOCX_EDIT_UNAVAILABLE';
     throw error;
@@ -9010,11 +9024,13 @@ async function tryGenerateSourcePreservingDocumentEdit({
   // Word files with a live model: the docx engine edits the document in
   // place (the model reads its structure and fills/edits the right fields).
   // No annex/append fallback for Word — failure is reported honestly.
+  let namedNonWordDocument = false;
   if (llm) {
     const engineHit = await tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent });
-    if (engineHit) return engineHit;
+    namedNonWordDocument = engineHit === NAMED_NON_WORD_DOCUMENT;
+    if (engineHit && !namedNonWordDocument) return engineHit;
   }
-  if (parseDocxPrecisionRequest(requestText)) {
+  if (!namedNonWordDocument && parseDocxPrecisionRequest(requestText)) {
     // Reuse the canonical ownership/version resolver. The legacy heuristic
     // selector can prefer a historical upload based on extracted-text guesses;
     // an exact edit must use the explicit upload or latest owned delivered copy.
