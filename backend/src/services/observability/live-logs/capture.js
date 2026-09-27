@@ -54,6 +54,18 @@ function resolveCommit(env = process.env) {
   return (m ? m[0].slice(0, 8) : raw.slice(0, 12)).toLowerCase();
 }
 
+// userId → email learned from lines that carry both (request context), so
+// lines that only know the user id (request-logger, workers) show the email.
+const EMAIL_CACHE_MAX = 1000;
+const emailByUser = new Map();
+
+function rememberEmail(userId, email) {
+  if (!userId || !email) return;
+  if (emailByUser.has(userId)) emailByUser.delete(userId);
+  emailByUser.set(userId, email);
+  if (emailByUser.size > EMAIL_CACHE_MAX) emailByUser.delete(emailByUser.keys().next().value);
+}
+
 /** Internal diagnostics go straight to stderr, never back into the capture. */
 function internalNote(text) {
   const now = Date.now();
@@ -154,8 +166,12 @@ function captureText(text, method = 'stdout') {
   const ctx = readContext();
   const redacted = redactText(clean);
   const cls = classifyLine({ text: redacted, method, ctx });
-  if (!cls) return null;
+  if (!cls || cls.drop) return null;
   const jc = cls.jsonCtx || {};
+  const userId = (ctx && ctx.userId) || jc.userId || null;
+  let email = (ctx && ctx.email) || null;
+  if (userId && email) rememberEmail(userId, email);
+  else if (userId && !email) email = emailByUser.get(userId) || null;
   const event = {
     ts: Date.now(),
     level: cls.level,
@@ -165,8 +181,8 @@ function captureText(text, method = 'stdout') {
     body: cls.body && cls.body !== cls.msg ? cls.body : null,
     status: cls.status,
     reqId: (ctx && ctx.reqId) || jc.reqId || null,
-    userId: (ctx && ctx.userId) || jc.userId || null,
-    email: (ctx && ctx.email) || null,
+    userId,
+    email,
     chatId: (ctx && ctx.chatId) || jc.chatId || null,
     route: (ctx && ctx.route) || null,
     queue: (ctx && ctx.queue) || null,
@@ -272,4 +288,5 @@ module.exports = {
   setEnabled,
   _state: state,
   _hookStream: hookStream,
+  _emailByUser: emailByUser,
 };
