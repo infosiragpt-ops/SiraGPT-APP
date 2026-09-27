@@ -29,9 +29,11 @@ test("Logs opens on «Fallos de respuesta» with the global error-sound toggle",
   assert.match(page, /\{ value: "auditoria", label: "Auditoría", render: \(\) => auditPanel \}/)
   assert.match(page, /value: "errores",\s*label: "Errores del sistema",/)
   assert.match(page, /render: \(\) => <SystemIssuesPanel \/>/)
-  // Tab order: Fallos de respuesta · Errores del sistema · Auditoría
+  assert.match(page, /\{ value: "vivo", label: "Registros en vivo", render: \(\) => <LiveLogsPanel \/> \}/)
+  // Tab order: Fallos de respuesta · Errores del sistema · Registros en vivo · Auditoría
   assert.ok(page.indexOf('value: "fallos"') < page.indexOf('value: "errores"'))
-  assert.ok(page.indexOf('value: "errores"') < page.indexOf('value: "auditoria"'))
+  assert.ok(page.indexOf('value: "errores"') < page.indexOf('value: "vivo"'))
+  assert.ok(page.indexOf('value: "vivo"') < page.indexOf('value: "auditoria"'))
   assert.match(page, /\{logsTabs\.map\(\(t\) => \(\s*<TabsTrigger key=\{t\.value\} value=\{t\.value\}/)
   assert.match(page, /render: \(\) => <TurnFailuresPanel \/>/)
   assert.match(page, /Sonido de errores: \{alerts\?\.soundOn \? "activado" : "desactivado"\}/)
@@ -65,7 +67,7 @@ test("the alerts provider sounds only failures, throttled, and unlocks audio on 
 test("the failure detail offers the request's backend log lines only when that endpoint exists", () => {
   const detail = read("components/admin/turn-failures/turn-failure-detail.tsx")
   assert.match(detail, /apiClient\.getAdminRequestLogs\(reqId\)/)
-  assert.match(detail, /if \(!lines\) return null/, "hidden until GET /admin/logs/request/:reqId answers")
+  assert.match(detail, /if \(!lines \|\| lines\.length === 0\) return null/, "hidden until GET /admin/logs/request/:reqId answers with lines")
   const api = read("lib/api.ts")
   assert.match(api, /\/admin\/logs\/request\/\$\{encodeURIComponent\(reqId\)\}`, \{ suppressFailureLog: true, maxRetries: 0 \}/)
 })

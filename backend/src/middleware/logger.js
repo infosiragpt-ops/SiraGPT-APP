@@ -117,6 +117,19 @@ function redactLogMethod(inputArgs, method) {
   return method.apply(this, inputArgs.map(arg => redactPayloadDeep(arg)));
 }
 
+// Live logs tap: pino writes through sonic-boom (fd 1), bypassing
+// process.stdout.write, so the admin «Registros en vivo» capture observes
+// the serialized line here. Returns the line unchanged.
+let _liveLogsTap = null;
+function tapLiveLogs(line) {
+  try {
+    if (!_liveLogsTap) _liveLogsTap = require('../services/observability/live-logs/capture').tapPinoLine;
+    return _liveLogsTap(line);
+  } catch (_err) {
+    return line;
+  }
+}
+
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   redact: {
@@ -131,6 +144,7 @@ const logger = pino({
   },
   hooks: {
     logMethod: redactLogMethod,
+    streamWrite: tapLiveLogs,
   },
   mixin: traceCorrelationMixin,
 });

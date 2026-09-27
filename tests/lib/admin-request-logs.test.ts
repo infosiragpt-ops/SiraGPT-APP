@@ -10,6 +10,9 @@ describe("request log lines («Registros de esta petición»)", () => {
     expect(extractRequestLogLines({ entries: [{ message: "hola" }] })).toEqual(["hola"])
     expect(extractRequestLogLines([{ level: "warn", text: "lento" }])).toEqual(["WARN  lento"])
     expect(extractRequestLogLines({ nothing: true })).toEqual([])
+    // «Registros en vivo» shape: { reqId, summary, lines: [{ ts(ms), level, tag, msg }] }
+    expect(extractRequestLogLines({ reqId: "r1", summary: {}, lines: [{ ts: Date.parse("2026-09-26T21:04:05.123Z"), level: "warn", tag: "ai-service", msg: "Image file not found" }] }))
+      .toEqual(["21:04:05.123 WARN  [ai-service] Image file not found"])
     expect(extractRequestLogLines(null)).toEqual([])
   })
 
