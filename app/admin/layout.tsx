@@ -4,6 +4,7 @@ import { AdminSidebar } from "@/components/admin-sidebar"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { AuthGuard } from "@/components/auth-guard"
 import { TurnFailureAlertsProvider } from "@/lib/admin/turn-failure-alerts"
+import { AdminLightTheme } from "@/components/admin/admin-light-theme"
 
 export default function AdminLayout({
   children,
@@ -12,6 +13,8 @@ export default function AdminLayout({
 }) {
   return (
     <AuthGuard requireAdmin={true}>
+      {/* The admin shell is light-only: keep the global dark theme out of it. */}
+      <AdminLightTheme />
       {/* Live failed-turn listener: badge + tab title + error chime on every admin page. */}
       <TurnFailureAlertsProvider>
       <SidebarProvider defaultOpen={true}>

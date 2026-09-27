@@ -13,6 +13,15 @@ test("admin layout mounts the admin-wide failed-turn listener inside the admin g
   assert.ok(guard > 0 && provider > guard, "the listener polls admin-only endpoints: it must live inside the admin guard")
 })
 
+test("the admin shell stays light under the global dark theme", () => {
+  const layout = read("app/admin/layout.tsx")
+  assert.match(layout, /import \{ AdminLightTheme \} from "@\/components\/admin\/admin-light-theme"/)
+  assert.match(layout, /<AdminLightTheme \/>/)
+  const theme = read("components/admin/admin-light-theme.tsx")
+  assert.match(theme, /html\.classList\.remove\("dark"\)/)
+  assert.match(theme, /new MutationObserver\(strip\)/)
+})
+
 test("the «Logs» menu item shows the unseen failure badge", () => {
   const sidebar = read("components/admin-sidebar.tsx")
   assert.match(sidebar, /useTurnFailureAlerts\(\)\?\.totalUnseen/, "failed turns + new system issues")
