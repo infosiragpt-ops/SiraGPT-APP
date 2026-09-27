@@ -4,6 +4,25 @@ import { collectDocumentEditReferences, documentEditReference, snapshotDocumentE
   parseDocumentJobPointer, parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
 import { historyDocumentAttachments, mentionsDocumentTarget, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
 import { createPersistedComposerQueueItem } from "../lib/chat/composer-queue"
+import { aiService, shouldRouteTextPromptThroughAgenticRuntime, shouldUseExistingDocumentFileContext } from "../lib/ai-service"
+
+const savReadbackPrompt = "Sin crear ni modificar archivos: abre participantes.sav y participantes.xlsx que acabas de entregar. Usa pyreadstat.read_sav y openpyxl para comparar celda por celda las 20×20 respuestas P01–P20. Informa el número exacto de diferencias entre los 400 valores y cuántas etiquetas de variable conserva el SAV. Si no puedes acceder o leer uno, dilo expresamente; no deduzcas la igualdad de la respuesta anterior."
+const savReadbackQuestion = "¿Cuántas diferencias hay entre los 400 valores P01–P20 de participantes.sav y participantes.xlsx que entregaste en este chat? Compruébalo leyendo los dos archivos y dime también cuántas etiquetas de variables tiene el SAV."
+
+test("read-only follow-ups on a generated SAV/XLSX pair never enter either document editor or generator", async () => {
+  for (const prompt of [savReadbackPrompt, savReadbackQuestion]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+    assert.equal(resolveDocumentSandboxAdmission(prompt, {
+      historyAttachments: [{ id: "existing-xlsx", name: "participantes.xlsx" }],
+    }).route, null, prompt)
+    assert.equal(await aiService.classifyIntent(prompt), "agent_task", prompt)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, []), false, prompt)
+    assert.equal(shouldUseExistingDocumentFileContext(prompt, [{
+      role: "ASSISTANT", files: [{ id: "older-upload", name: "participantes.xlsx" }],
+    }]), false, prompt)
+  }
+  assert.equal(looksLikeExplicitDocumentEdit("Abre el Excel que acabas de entregar y luego edita participantes.xlsx"), true)
+})
 
 // HTTP protocol fixtures test the client only. These are not editor, independent
 // validation or paid-provider E2E evidence; those gates run in the backend suite.

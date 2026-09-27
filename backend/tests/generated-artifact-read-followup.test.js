@@ -47,6 +47,11 @@ test('files:[] comparison recovers both validated SAV and XLSX from this owner a
 
   assert.deepEqual(queriedWhere, { userId: ownerUserId, chatId });
   assert.deepEqual(refs.map(({ id }) => id), [xlsx.id, sav.id]);
+  const readbackQuestion = '¿Cuántas diferencias hay entre los 400 valores P01–P20 de participantes.sav y participantes.xlsx que entregaste en este chat? Compruébalo leyendo los dos archivos y dime también cuántas etiquetas de variables tiene el SAV.';
+  assert.equal(isReadOnlyGeneratedArtifactFollowup(readbackQuestion), true);
+  assert.deepEqual((await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
+    userId: ownerUserId, chatId, providedFileIds: [], goal: readbackQuestion,
+  })).map(({ id }) => id), [xlsx.id, sav.id]);
   assert.deepEqual(await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
     userId: ownerUserId, chatId, providedFileIds: ['new-upload'], goal: 'Compara el SAV y Excel anteriores',
   }), []);
