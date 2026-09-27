@@ -555,6 +555,9 @@ const generateMusic = {
 
 const AUDIO_MEDIA_TOOLS = [generateSpeech, generateMusic];
 
+// Speech / music generations log their outcome for Admin → Logs.
+require('../observability/generation-outcome').instrumentGenerationTools(AUDIO_MEDIA_TOOLS, { only: ['generate_speech', 'generate_music'] });
+
 module.exports = {
   AUDIO_MEDIA_TOOLS,
   generateSpeech,

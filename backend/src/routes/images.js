@@ -449,8 +449,26 @@ async function requireImageLeaseOwnership(req) {
   return ownership;
 }
 
+function logImageJobOutcome(spec, outcome, startedAt) {
+  try {
+    require('../services/observability/generation-outcome').logGenerationOutcome({
+      kind: 'image',
+      ok: Boolean(outcome && outcome.ok),
+      code: outcome && outcome.code,
+      error: outcome && !outcome.ok ? (outcome.reason || outcome.code || 'fallo del proveedor') : null,
+      provider: outcome && outcome.providerUsed,
+      model: spec && spec.model,
+      count: outcome && Array.isArray(outcome.assets) ? outcome.assets.length : undefined,
+      degenerate: outcome && outcome.ok && Array.isArray(outcome.assets) && outcome.assets.length === 0 ? 'el proveedor no devolvió imágenes' : null,
+      prompt: spec && spec.prompt,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (_) { /* logging never affects the job */ }
+}
+
 async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
   // Mark RUNNING, hit provider, then fence all provider-result persistence.
+  const generationStartedAt = Date.now();
   try {
     await requireImageLeaseOwnership(req);
     await prisma.generatedImage.update({
@@ -458,6 +476,7 @@ async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
       data: { status: 'RUNNING' },
     });
     const result = await imageProvider.generate({ ...spec, signal });
+    logImageJobOutcome(spec, result, generationStartedAt);
     if (signal?.aborted) throw signal.reason;
     await requireImageLeaseOwnership(req);
     if (!result.ok) {
@@ -485,6 +504,7 @@ async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
       throw signal?.reason || err;
     }
     if (err?.code === 'REFUND_PENDING') throw err;
+    logImageJobOutcome(spec, { ok: false, code: err?.code || 'PROVIDER_ERROR', reason: err && err.message }, generationStartedAt);
     await requireImageLeaseOwnership(req);
     let row;
     try {

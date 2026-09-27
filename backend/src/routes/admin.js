@@ -2751,6 +2751,13 @@ router.get('/turn-failures.csv', async (req, res) => {
     res.status(500).json({ error: 'Failed to export turn failures' });
   }
 });
+// ── Registros en vivo (live backend logs) ───────────────────────────
+// Every line the backend prints, redacted and tagged with its request
+// context. Handlers live in routes/admin-live-logs.js.
+const adminLiveLogs = require('./admin-live-logs');
+router.get('/logs/live', adminLiveLogs.live);
+router.get('/logs/search', adminLiveLogs.search);
+router.get('/logs/request/:reqId', adminLiveLogs.request);
 
 async function runAuditLogQuery(req) {
   const { query: auditQuery } = require('../services/audit-query');
