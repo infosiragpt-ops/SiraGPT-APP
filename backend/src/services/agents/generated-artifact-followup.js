@@ -182,6 +182,100 @@ function requireGeneratedArtifactRead(profile, refs = []) {
   };
 }
 
+// This narrowly scoped question has a deterministic answer in the two binary
+// files. Run the existing owner/chat-checked Python tool before asking a model
+// to choose it: a slow or tool-incompatible provider must not turn a 20x20
+// comparison into an unverified guess or an indefinite "Pensando…" turn.
+function isGeneratedSavXlsxComparison(goal, refs = []) {
+  const text = normalized(goal);
+  if (!isReadOnlyGeneratedArtifactFollowup(goal)
+    || !/\b(?:compara\w*|contrasta\w*|coincid\w*|difier\w*|diferenc\w*)\b/.test(text)
+    || !requestedFormats(goal).has('sav')
+    || !requestedFormats(goal).has('xlsx')) return false;
+  return Array.isArray(refs) && refs.length === 2
+    && new Set(refs.map((ref) => String(ref?.format || '').toLowerCase())).size === 2
+    && refs.some((ref) => ref?.format === 'sav')
+    && refs.some((ref) => ref?.format === 'xlsx');
+}
+
+const SAV_XLSX_COMPARISON_SOURCE = [
+  'import json, numbers, pandas as pd, pyreadstat',
+  'from decimal import Decimal',
+  'from openpyxl import load_workbook',
+  'files = list(ARTIFACT_FILES.values())',
+  'sav_path = next(item["path"] for item in files if item["filename"].lower().endswith(".sav"))',
+  'xlsx_path = next(item["path"] for item in files if item["filename"].lower().endswith(".xlsx"))',
+  'frame, metadata = pyreadstat.read_sav(sav_path)',
+  'book = load_workbook(xlsx_path, read_only=True, data_only=True)',
+  'try:',
+  '    sheet = book.active',
+  '    rows = sheet.iter_rows(values_only=True)',
+  '    headers = [str(value) if value is not None else "" for value in next(rows, ())]',
+  '    sav_headers = [str(value) for value in frame.columns]',
+  '    same_headers = len(headers) == len(sav_headers) and len(set(headers)) == len(headers) and set(headers) == set(sav_headers)',
+  '    differences = 0 if same_headers else None',
+  '    compared = 0',
+  '    positions = {name: index for index, name in enumerate(headers)} if same_headers else {}',
+  '    def normalized_cell(value):',
+  '        if pd.isna(value): return ("null", "")',
+  '        if isinstance(value, numbers.Number): return ("number", Decimal(str(value)))',
+  '        return ("text", str(value))',
+  '    excel_row_count = 0',
+  '    for excel_row in rows:',
+  '        if same_headers and excel_row_count < len(frame):',
+  '            differences += sum(normalized_cell(frame.iloc[excel_row_count, col]) != normalized_cell(excel_row[positions[name]]) for col, name in enumerate(sav_headers))',
+  '            compared += len(sav_headers)',
+  '        excel_row_count += 1',
+  '    comparable = same_headers and excel_row_count == len(frame)',
+  '    if not comparable: differences, compared = None, 0',
+  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "comparedCells": compared, "differentCells": differences, "labelCount": sum(bool(label) for label in metadata.column_labels), "headersMatch": same_headers, "matrixComparable": comparable, "columnsMatchP01P20": sav_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
+  'finally:',
+  '    book.close()',
+].join('\n');
+
+async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } = {}) {
+  if (!isGeneratedSavXlsxComparison(goal, refs)) return null;
+  const { INTERNAL } = require('./task-tools');
+  const failed = {
+    ok: false,
+    answer: 'No pude abrir y comparar los bytes del SAV y el Excel de este chat. No puedo concluir si coinciden; vuelve a intentarlo.',
+  };
+  let execution;
+  try {
+    execution = await INTERNAL.pythonExec.execute({
+      source: SAV_XLSX_COMPARISON_SOURCE,
+      timeoutMs: 30000,
+    }, {
+      userId,
+      chatId,
+      generatedArtifactRefs: refs,
+      onEvent,
+    });
+  } catch { return failed; }
+  if (!execution?.ok) return failed;
+  let result;
+  try { result = JSON.parse(String(execution.stdout || '').trim().split('\n').at(-1)); }
+  catch { return failed; }
+  const fields = ['savRows', 'savColumns', 'excelRows', 'excelColumns', 'labelCount', 'comparedCells'];
+  if (!result || fields.some((field) => !Number.isSafeInteger(result[field]) || result[field] < 0)) return failed;
+  if (result.matrixComparable !== true) {
+    return {
+      ok: false,
+      answer: `Abrí los archivos de este chat. SAV: ${result.savRows} × ${result.savColumns}; Excel: ${result.excelRows} × ${result.excelColumns}. Las filas o columnas no coinciden, así que no puedo calcular un número fiable de diferencias celda por celda. El SAV conserva ${result.labelCount} etiquetas de variables.`,
+    };
+  }
+  if (!Number.isSafeInteger(result.differentCells) || result.differentCells < 0
+    || result.comparedCells !== result.savRows * result.savColumns
+    || result.differentCells > result.comparedCells) return failed;
+  const columnNote = result.columnsMatchP01P20 === true
+    ? 'Las columnas son P01–P20.'
+    : 'Las columnas del SAV no son exactamente P01–P20.';
+  return {
+    ok: true,
+    answer: `Verificación directa de los archivos de este chat: SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias. El SAV conserva ${result.labelCount} etiquetas de variables.`,
+  };
+}
+
 module.exports = {
   isReadOnlyGeneratedArtifactFollowup,
   resolveReadOnlyGeneratedArtifactFollowup,
@@ -189,4 +283,6 @@ module.exports = {
   buildGeneratedArtifactReadContext,
   missingRequestedArtifactFormats,
   requireGeneratedArtifactRead,
+  isGeneratedSavXlsxComparison,
+  compareGeneratedSavXlsx,
 };

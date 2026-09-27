@@ -144,8 +144,9 @@ async function createAndVerify(filename, python, expectedFormat, events) {
     savShape: [20, 20], excelShape: [20, 20], mismatches: 0, labelCount: 20,
   });
   // The real /agentes route enters agentic-chat-stream, not /api/agent/task.
-  // Reopen the same saved delivery with files:[] through that chat runner and
-  // prove its first model-selected tool sees both R2-hydrated binaries.
+  // Reopen the same saved delivery with files:[] through that chat runner.
+  // The explicit 20x20 parity question must read both R2-hydrated binaries
+  // deterministically even when the selected provider cannot call a tool.
   const cards = saved.map((artifact) => ({ id: artifact.artifactId, filename: artifact.filename }));
   const chatPrisma = {
     generatedArtifact: { findMany: async () => [] },
@@ -159,18 +160,10 @@ async function createAndVerify(filename, python, expectedFormat, events) {
   response.on('data', () => {});
   response.flushHeaders = () => {};
   response.setHeader = () => {};
-  let firstToolChoice = null;
   let calls = 0;
-  const selectedModel = { chat: { completions: { create: async (args) => {
-    if (calls++ === 0) {
-      firstToolChoice = args.tool_choice;
-      return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
-        id: 'compare-pair', type: 'function', function: { name: 'python_exec', arguments: JSON.stringify({ source: comparisonSource, timeoutMs: 30000 }) },
-      }] } }] };
-    }
-    return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
-      id: 'finish', type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: 'Comparé las 20 preguntas en los 20 registros: 400 de 400 valores coinciden.', confidence: 'high' }) },
-    }] } }] };
+  const selectedModel = { chat: { completions: { create: async () => {
+    calls += 1;
+    throw new Error('provider unavailable');
   } } } };
   const chatRun = await require('../src/services/agentic-chat-stream').runAgenticChat({
     openai: selectedModel,
@@ -180,15 +173,13 @@ async function createAndVerify(filename, python, expectedFormat, events) {
     selection: { decision: { intent: 'data_analysis' }, signals: { hasFiles: false } },
     toolContext: { userId: 'spss-runtime-smoke', chatId: 'spss-excel-pair', fileIds: [], prisma: chatPrisma },
   });
-  assert.equal(firstToolChoice?.function?.name, 'python_exec');
-  const chatRead = chatRun.steps.find((step) => step.actions?.some((action) => action.tool === 'python_exec'));
-  const chatOutput = chatRead?.actions?.find((action) => action.tool === 'python_exec')?.observation;
-  assert.equal(chatOutput?.ok, true, chatOutput?.stderr || 'chat did not read both files');
-  assert.deepEqual(JSON.parse(chatOutput.stdout.trim().split('\n').at(-1)), {
-    savShape: [20, 20], excelShape: [20, 20], mismatches: 0, labelCount: 20,
-  });
-  assert.match(chatRun.finalAnswer, /400 de 400 valores coinciden/);
-  process.stdout.write('create_document + normal-chat follow-up: R2-hydrated SAV/XLSX 20 x 20 and 400 values verified\n');
+  assert.equal(calls, 0, 'deterministic parity must not depend on the selected provider');
+  assert.equal(chatRun.stoppedReason, 'generated_artifact_compare_verified');
+  assert.match(chatRun.finalAnswer, /SAV 20 × 20; Excel 20 × 20/);
+  assert.match(chatRun.finalAnswer, /400 valores: 0 diferencias/);
+  assert.match(chatRun.finalAnswer, /20 etiquetas de variables/);
+  assert.doesNotMatch(chatRun.finalAnswer, /[a-f0-9]{16}|\/app\/uploads\/agent-artifacts/i);
+  process.stdout.write('create_document + normal-chat follow-up: R2-hydrated SAV/XLSX 20 x 20 and 400 values compared without provider\n');
 })().catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);
   process.exitCode = 1;

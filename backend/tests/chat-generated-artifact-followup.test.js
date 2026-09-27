@@ -15,6 +15,7 @@ const { saveArtifact, INTERNAL } = require('../src/services/agents/task-tools');
 const { resolveChatGeneratedArtifactFollowup } = require('../src/services/agents/generated-artifact-followup');
 const { runAgenticChat } = require('../src/services/agentic-chat-stream');
 const PRODUCTION_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.';
+const MODEL_DRIVEN_READ_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl e informa si ambos son legibles. Si no puedes acceder a uno, dilo explícitamente.';
 
 function deliveredMessage(id, artifacts) {
   return {
@@ -100,7 +101,7 @@ test('normal chat follow-up forces byte reading via selected model and R2, witho
     openai,
     model: 'grok-4.7',
     provider: 'xAI',
-    userQuery: PRODUCTION_GOAL,
+    userQuery: MODEL_DRIVEN_READ_GOAL,
     history: [
       { role: 'user', content: 'Crea los dos archivos.' },
       { role: 'assistant', ...deliveredMessage('delivery', [sav, xlsx]) },
@@ -119,6 +120,81 @@ test('normal chat follow-up forces byte reading via selected model and R2, witho
   assert.doesNotMatch(modelPrompts.join(''), new RegExp(`${sav.id}|${xlsx.id}|\/app\/uploads\/agent-artifacts|agent-task-state`));
 });
 
+test('an explicit SAV/XLSX parity request reads the validated bytes even when the selected model is unavailable', async (t) => {
+  const [sav, xlsx] = artifactPair();
+  const taskTools = require('../src/services/agents/task-tools');
+  const originalExecute = taskTools.INTERNAL.pythonExec.execute;
+  t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
+  let pythonCalls = 0;
+  taskTools.INTERNAL.pythonExec.execute = async (args, ctx) => {
+    pythonCalls += 1;
+    assert.match(args.source, /pyreadstat\.read_sav/);
+    assert.match(args.source, /openpyxl/);
+    assert.equal(ctx.userId, 'owner');
+    assert.equal(ctx.chatId, 'chat-a');
+    assert.deepEqual(ctx.generatedArtifactRefs.map(({ id }) => id), [sav.id, xlsx.id]);
+    return {
+      ok: true,
+      stdout: JSON.stringify({
+        savRows: 20, savColumns: 20, excelRows: 20, excelColumns: 20,
+        comparedCells: 400, differentCells: 0, labelCount: 20,
+        headersMatch: true, matrixComparable: true, columnsMatchP01P20: true,
+      }),
+    };
+  };
+  let modelCalls = 0;
+  const openai = { chat: { completions: { create: async () => {
+    modelCalls += 1;
+    throw new Error('selected provider unavailable');
+  } } } };
+  const response = new PassThrough();
+  response.on('data', () => {});
+  response.flushHeaders = () => {};
+  response.setHeader = () => {};
+  const result = await runAgenticChat({
+    openai, model: 'grok-4.7', provider: 'xAI', userQuery: PRODUCTION_GOAL,
+    res: response,
+    toolContext: {
+      userId: 'owner', chatId: 'chat-a', fileIds: [],
+      prisma: chatPrisma('owner', 'chat-a', [deliveredMessage('delivery', [sav, xlsx])]),
+    },
+  });
+  assert.equal(pythonCalls, 1);
+  assert.equal(modelCalls, 0);
+  assert.match(result.finalAnswer, /20\s*[×x]\s*20/);
+  assert.match(result.finalAnswer, /400/);
+  assert.match(result.finalAnswer, /0 diferencias/);
+  assert.match(result.finalAnswer, /20 etiquetas/);
+  assert.doesNotMatch(result.finalAnswer, new RegExp(`${sav.id}|${xlsx.id}|\/app\/uploads\/agent-artifacts`));
+  assert.doesNotMatch(result.persistedContent, /grok-4\.7/);
+});
+
+test('deterministic SAV/XLSX comparison reports a read error instead of inventing parity', async (t) => {
+  const [sav, xlsx] = artifactPair();
+  const taskTools = require('../src/services/agents/task-tools');
+  const originalExecute = taskTools.INTERNAL.pythonExec.execute;
+  t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
+  taskTools.INTERNAL.pythonExec.execute = async () => ({ ok: false, error: 'unavailable', stdout: '' });
+  let modelCalls = 0;
+  const openai = { chat: { completions: { create: async () => { modelCalls += 1; throw new Error('provider unavailable'); } } } };
+  const response = new PassThrough();
+  response.on('data', () => {});
+  response.flushHeaders = () => {};
+  response.setHeader = () => {};
+  const result = await runAgenticChat({
+    openai, model: 'grok-4.7', provider: 'xAI', userQuery: PRODUCTION_GOAL,
+    res: response,
+    toolContext: {
+      userId: 'owner', chatId: 'chat-a', fileIds: [],
+      prisma: chatPrisma('owner', 'chat-a', [deliveredMessage('delivery', [sav, xlsx])]),
+    },
+  });
+  assert.equal(modelCalls, 0);
+  assert.equal(result.stoppedReason, 'generated_artifact_compare_failed');
+  assert.match(result.finalAnswer, /No pude abrir y comparar/);
+  assert.doesNotMatch(result.finalAnswer, /0 diferencias|400 valores idénticos|[a-f0-9]{16}/i);
+});
+
 test('normal chat never claims equality when the byte-reading tool is unavailable', async () => {
   const [sav, xlsx] = artifactPair();
   const response = new PassThrough();
@@ -134,7 +210,7 @@ test('normal chat never claims equality when the byte-reading tool is unavailabl
   }) } } };
   const result = await runAgenticChat({
     openai, model: 'grok-4.7', provider: 'xAI',
-    userQuery: PRODUCTION_GOAL,
+    userQuery: MODEL_DRIVEN_READ_GOAL,
     res: response, maxSteps: 3,
     toolsOverride: [{ name: 'read_file', description: 'not the artifact tool', parameters: { type: 'object', properties: {} }, execute: async () => ({ ok: false }) }],
     toolContext: { userId: 'owner', chatId: 'chat-a', fileIds: [], prisma: chatPrisma('owner', 'chat-a', [deliveredMessage('delivery', [sav, xlsx])]) },
