@@ -35,9 +35,13 @@ npm run type-check     # TSC completo
 2. **Trabajar en:** agentes, herramientas de generación, pipelines, sistema de archivos, backend
 3. **Nunca push a `main`.** Todo cambio = rama + PR a `production-main` en
    `https://github.com/infosiragpt-ops/SiraGPT-APP`, esperar el check
-   "CI · required checks passed", squash-merge. Auto-merge está deshabilitado y la
-   protección exige la rama al día: tras cada fusión, `gh pr update-branch <n>` en el
-   siguiente PR y esperar su CI otra vez. No usar `--admin` con CI rojo.
+   "CI · required checks passed", squash-merge (`gh pr merge <n> --squash`). Desde
+   2026-09-26 la protección ya **no** exige la rama al día (el merge queue de GitHub no
+   existe para repos de cuenta personal): no hace falta `gh pr update-branch` tras cada
+   fusión ajena. La integración la valida el CI del push a `production-main`, que la
+   publicación espera; si el PR estaba al día, la publicación reutiliza el CI del PR
+   (árbol git idéntico) y arranca sin esperar. Un PR con cambios que dependan de otro
+   recién fusionado sí conviene actualizarlo antes. No usar `--admin` con CI rojo.
 4. **Cada cambio debe mantener CI verde** — correr los tests afectados (`node --test`),
    `git diff --check` y `bash scripts/verify-ui-lock.sh` antes de abrir el PR.
 5. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código.

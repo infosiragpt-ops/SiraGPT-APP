@@ -6,7 +6,10 @@ name: Publish production (Lenovo)
 # branch protection) is published by the self-hosted runner installed on
 # the Lenovo (deploy/lenovo-runner). The job reuses the reviewed
 # /home/user/deployments/iliagpt/publish.sh with ALL of its gates:
-#   · push CI green for the exact merged SHA (waited for below)
+#   · CI green for the exact tree being published: either the PR run whose
+#     head has the IDENTICAL git tree and already contains the previous
+#     production-main (squash of an up-to-date PR), or — otherwise — the push
+#     CI for the exact merged SHA (waited for below)
 #   · clean checkout, fast-forward only (live must be an ancestor of target)
 #   · no schema/migration diffs (the script refuses them)
 #   · health baseline before, atomic activation, rollback on failure
@@ -27,6 +30,9 @@ on:
 permissions:
   actions: read
   contents: read
+  # Read-only: find the merged PR of a commit to reuse its CI result when the
+  # published tree is byte-identical to the tree that PR's CI tested.
+  pull-requests: read
 
 # One publication at a time; never cancel a running publish.
 concurrency:
@@ -55,14 +61,58 @@ jobs:
           echo "sha=$target" >> "$GITHUB_OUTPUT"
           echo "Target: $target"
 
-      - name: Wait for push CI on the exact commit
+      - name: Confirm CI for the exact tree (PR run on the identical tree, else push CI)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
+          api() {
+            curl -fsS --max-time 20 \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/$1"
+          }
+          # Fast path. A squash merge of a PR that already contains the previous
+          # production-main produces EXACTLY the PR head's tree, and every CI run
+          # on that head tested that tree (merge of an older production-main
+          # into a head that already contains it). Accept only when all hold:
+          #   1. the merged PR's final head has the same git tree as TARGET;
+          #   2. TARGET's parent (production-main before the merge) is an
+          #      ancestor of that head (compare status ahead/identical);
+          #   3. the newest completed CI run for that head concluded success.
+          # Anything else falls through to waiting for the push CI (as before).
+          pr_ci_verified() {
+            local target_commit target_tree parent prs pr head head_tree status state
+            target_commit=$(api "git/commits/${TARGET}") || return 1
+            target_tree=$(jq -r '.tree.sha' <<<"$target_commit")
+            parent=$(jq -r '.parents[0].sha // empty' <<<"$target_commit")
+            [[ "$target_tree" =~ ^[0-9a-f]{40}$ && "$parent" =~ ^[0-9a-f]{40}$ ]] || return 1
+            prs=$(api "commits/${TARGET}/pulls") || return 1
+            while read -r pr head; do
+              [[ "$pr" =~ ^[0-9]+$ && "$head" =~ ^[0-9a-f]{40}$ ]] || continue
+              head_tree=$(api "git/commits/${head}" | jq -r '.tree.sha') || continue
+              if [[ "$head_tree" != "$target_tree" ]]; then
+                echo "PR #$pr: head tree differs from $TARGET (merged behind production-main) — push CI required"; continue
+              fi
+              status=$(api "compare/${parent}...${head}" | jq -r '.status') || continue
+              if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+                echo "PR #$pr: head does not contain production-main@${parent:0:9} ($status) — push CI required"; continue
+              fi
+              state=$(api "actions/workflows/ci.yml/runs?event=pull_request&head_sha=${head}&per_page=20" \
+                | jq -r '[.workflow_runs[]? | select(.status=="completed")] | sort_by(.run_number) | last | .conclusion // "none"') || continue
+              if [[ "$state" != "success" ]]; then
+                echo "PR #$pr: newest completed CI on its head is '$state' — push CI required"; continue
+              fi
+              echo "Tree of $TARGET already passed CI on PR #$pr (head ${head:0:9}, identical tree, contains production-main@${parent:0:9})"
+              printf 'CI: identical tree verified on PR #%s (no push-CI wait)\n' "$pr" >> "$GITHUB_STEP_SUMMARY"
+              return 0
+            done < <(jq -r '.[] | select(.merged_at != null) | "\(.number) \(.head.sha)"' <<<"$prs")
+            return 1
+          }
           for attempt in $(seq 1 100); do
+            # The commit↔PR association can lag a few seconds after the merge.
+            if [ "$attempt" -le 6 ] && pr_ci_verified; then exit 0; fi
             runs=$(curl -fsS --max-time 20 \
               -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=production-main&event=push&head_sha=${TARGET}&per_page=10" || echo '{}')
