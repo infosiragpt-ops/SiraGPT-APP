@@ -782,9 +782,13 @@ async function editImage(spec = {}) {
   return { ok: false, code: 'E_PROVIDER', error: 'No se pudo editar con el modelo seleccionado. Reintenta o elige otro modelo.', attempts };
 }
 
+// Every generation/edit leaves one structured line in Admin → Logs →
+// «Registros en vivo» (failures keep the prompt; blank/uniform images warn).
+const { instrumentImageEngine } = require('../observability/generation-outcome');
+
 module.exports = {
-  generateImage,
-  editImage,
+  generateImage: instrumentImageEngine('image', generateImage),
+  editImage: instrumentImageEngine('image-edit', editImage),
   canEditImage,
   resolveImageModelRoute,
   listConfiguredProviders,
