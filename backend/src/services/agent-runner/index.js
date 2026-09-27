@@ -22,6 +22,7 @@ const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
+const { agentThumbsEnabled } = require('./trace');
 
 // Edición milimétrica (Fase C): the before/after image is reviewed by a
 // separate vision model (multimodal/vision-ladder.js). Off under
@@ -469,6 +470,8 @@ async function runAgentRunner({
             onFailover: (info) => { try { onEvent({ type: 'vision_failover', ...info }); } catch (_) { /* trace only */ } },
           }),
           attachImages: loopSeesImages(),
+          // Stage v2 thumbnails (render / verify) for the timeline.
+          thumbs: agentThumbsEnabled(),
           onVerify: (v) => { lastVerify = v; },
         },
       }),

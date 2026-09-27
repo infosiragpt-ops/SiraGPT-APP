@@ -23,9 +23,9 @@
  * Contrato con loop.js
  *   - Un executor devuelve un string, o un objeto
  *       { text, __f7Image?: { base64, mediaType }, __thumbs?: [{ base64, mediaType }] }
- *     IMPORTANTE: el hook F7 de loop.js hoy solo convierte a texto los objetos que
- *     traen __f7Image. Antes de activar thumbs (opción `thumbs: true`) aplica el
- *     parche de loop.js descrito en el SPEC (Fase D), o el loop verá "[object Object]".
+ *     El hook de loop.js (Fase D) convierte cualquier objeto a su `text`; las
+ *     miniaturas (opción `thumbs: true`, flag SIRAGPT_AGENT_THUMBS) viajan en el
+ *     evento stage v2 del timeline, nunca al modelo.
  *   - Nunca lanza: los errores vuelven como 'ERROR: …' → el paso queda ok:false.
  */
 
@@ -283,7 +283,7 @@ const OFFICE_TOOL_DEFINITIONS = [
  * @param {object} [opts]
  * @param {Function|null} [opts.visionVerifier]  de multimodal/visual-verifier.js (null = sin visión)
  * @param {boolean} [opts.attachImages]  adjuntar la imagen al loop (solo si el modelo del loop tiene visión)
- * @param {boolean} [opts.thumbs]        devolver miniaturas para el timeline (requiere el parche de loop.js)
+ * @param {boolean} [opts.thumbs]        devolver miniaturas para el timeline (stage v2)
  * @param {Function|null} [opts.onFailure]  ({ tool, code, error }) para fallas de INFRAESTRUCTURA
  *   (motor ausente, salida inválida, timeout, sandbox caído) — las que afectan la respuesta al
  *   usuario. Nunca para errores de la operación que el modelo puede corregir. Fail-open.

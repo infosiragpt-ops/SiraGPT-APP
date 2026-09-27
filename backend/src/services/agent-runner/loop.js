@@ -10,6 +10,7 @@ const {
   isRendererUnavailable,
 } = require('./verify');
 const { OUTPUTS_SNAPSHOT, changedOutputs: diffOutputSnapshots } = require('./tools.office');
+const { labelForToolCall, agentThumbsEnabled } = require('./trace');
 const {
   repairToolArgs,
   isTransientLlmError,
@@ -894,6 +895,43 @@ function toolCallDescription(args) {
   return clean || undefined;
 }
 
+// Stage v2 thumbnails (SPEC §7 D.1): ≤2 per tool_result, ≤80 KB each,
+// only real image payloads.
+const MAX_STAGE_THUMBS = 2;
+const MAX_STAGE_THUMB_BYTES = 80 * 1024;
+const THUMB_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+function thumbsToDataUrls(thumbs) {
+  if (!Array.isArray(thumbs)) return undefined;
+  const out = [];
+  for (const t of thumbs) {
+    if (out.length >= MAX_STAGE_THUMBS) break;
+    if (!t || typeof t.base64 !== 'string' || !t.base64) continue;
+    const mediaType = String(t.mediaType || '').toLowerCase();
+    if (!THUMB_MEDIA_TYPES.has(mediaType)) continue;
+    const bytes = Number.isFinite(Number(t.bytes)) ? Number(t.bytes) : Math.floor((t.base64.length * 3) / 4);
+    if (bytes > MAX_STAGE_THUMB_BYTES) continue;
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(t.base64)) continue;
+    out.push(`data:${mediaType};base64,${t.base64}`);
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * Text the model sees for an object result ({ text, __f7Image?, __thumbs? }
+ * or any other object a tool returns) — never "[object Object]".
+ */
+function objectResultText(result, hasImage) {
+  if (result.text != null) return String(result.text);
+  if (hasImage) return '[imagen capturada]';
+  const visible = {};
+  for (const [k, v] of Object.entries(result)) {
+    if (!k.startsWith('__')) visible[k] = v;
+  }
+  if (!Object.keys(visible).length) return '[resultado sin texto]';
+  try { return JSON.stringify(visible); } catch (_) { return '[resultado sin texto]'; }
+}
+
 function previewOf(value, max = 200) {
   const s = typeof value === 'string' ? value : JSON.stringify(value);
   if (!s) return '';
@@ -982,8 +1020,11 @@ async function runAgentLoop({
   // Output tokens per model call; null = SIRAGPT_AGENT_RUNNER_MAX_TOKENS /
   // default. Document turns pass 8192 (a paraphrase batch must not be cut).
   maxTokens = null,
+  // Stage v2 thumbnails on tool_result events; null = SIRAGPT_AGENT_THUMBS.
+  thumbs = null,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
+  const thumbsEnabled = thumbs == null ? agentThumbsEnabled() : Boolean(thumbs);
   // Pinned for compaction (hallazgo 6): the user's literal request + the last
   // document map. Captured once; restored verbatim after every compaction.
   const pinnedContext = {
@@ -2452,7 +2493,7 @@ async function runAgentLoop({
         tool: mapped,
         args,
         preview: previewOf(args.code || args.command || args.path || args.color || args),
-        label: description || (mapped === 'render_preview' ? 'Verificando resultado' : 'Ejecutando código'),
+        label: description || labelForToolCall(mapped),
         description,
         callId: call && call.id,
         viaReact,
@@ -2651,16 +2692,20 @@ async function runAgentLoop({
         }
       }
 
-      // ── F7 (multimodal) hook ────────────────────────────────────────────
-      // A tool may return an image payload instead of a plain string
-      // ({ __f7Image: { base64, mediaType }, text }). The text goes into the
-      // tool_result message as usual; the pixels are attached to the NEXT
-      // LLM call as a real vision content block, framed as DATA — never as
-      // instructions.
+      // ── F7 (multimodal) hook — any object result ───────────────────────
+      // A tool may return an object instead of a plain string
+      // ({ text, __f7Image?: { base64, mediaType }, __thumbs?: [...] }).
+      // The text goes into the tool_result message as usual; the pixels of
+      // __f7Image are attached to the NEXT LLM call as a real vision content
+      // block, framed as DATA — never as instructions; __thumbs only travel
+      // to the timeline (stage v2). Every object becomes text here, so the
+      // model never reads "[object Object]".
       let f7Image = null;
-      if (result && typeof result === 'object' && result.__f7Image) {
-        f7Image = result.__f7Image;
-        result = String(result.text || '[imagen capturada]');
+      let resultThumbs = null;
+      if (result && typeof result === 'object') {
+        f7Image = result.__f7Image || null;
+        resultThumbs = Array.isArray(result.__thumbs) ? result.__thumbs : null;
+        result = objectResultText(result, Boolean(f7Image));
       }
       // ── end F7 hook ─────────────────────────────────────────────────────
 
@@ -2819,7 +2864,9 @@ async function runAgentLoop({
         ok,
         preview: previewOf(result, 400),
         label: ok ? 'Verificando resultado' : 'Reintentando',
+        description,
         callId: call && call.id,
+        thumbs: thumbsEnabled ? thumbsToDataUrls(resultThumbs) : undefined,
       });
       messages.push({
         role: 'tool',
@@ -2967,6 +3014,8 @@ module.exports = {
   MAX_VERIFICATION_RETRIES,
   MAX_TOKENS_DEFAULT,
   resolveContextBudgetTokens,
+  thumbsToDataUrls,
+  objectResultText,
   restorePinnedMessages,
   LLM_RETRY_MAX,
   STREAM_STALL_MS_DEFAULT,
