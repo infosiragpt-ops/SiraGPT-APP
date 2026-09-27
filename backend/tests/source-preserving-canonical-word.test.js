@@ -87,3 +87,29 @@ test('the chosen provider error propagates without entering the legacy provider 
   assert.equal(f.calls.length, 1);
   assert.equal(f.legacyReads, 0);
 });
+
+test('an explicitly named PDF in mixed history never enters Word precision validation', async (t) => {
+  const sources = [
+    { kind: 'upload', name: 'Prueba-Word.docx', row: { id: 'word-1' } },
+    { kind: 'artifact', name: 'Prueba-PDF-editado.pdf', artifactId: 'aabb33',
+      metadata: { validation: { documentEdit: { sourceFilename: 'Prueba-PDF.pdf', sourceFileId: 'pdf-1' } } } },
+  ];
+  const calls = [];
+  t.mock.method(editor, 'resolveEditSources', async () => sources);
+  t.mock.method(editor, 'runChatDocumentEdit', async (options) => {
+    calls.push(options);
+    if (options.precisionOnly) return { ok: false, code: 'DOCX_EDIT_INSTRUCTION_REQUIRED', message: 'Indica el cambio literal entre comillas.' };
+    return { ok: true, summary: 'PDF editado.', artifacts: [{ id: 'aabb44', filename: 'Prueba-PDF-final.pdf',
+      format: 'pdf', mime: 'application/pdf', sizeBytes: 20, downloadUrl: '/api/agent/artifact/aabb44',
+      validation: { passed: true } }] };
+  });
+  const prisma = { file: { findMany: async () => [] }, generatedArtifact: { findMany: async () => [] }, message: { findMany: async () => [] } };
+  const request = 'En el PDF Prueba-PDF.pdf recién editado cambia solamente «Proyecto revisado» por «Proyecto final». Conserva «Aprobado», CONTROL_SIN_CAMBIOS y el formato. Devuélveme el PDF final.';
+  const result = await tryGenerateSourcePreservingDocumentEdit({ prisma, userId: 'owner', chatId: 'chat', fileIds: [], prompt: request,
+    displayPrompt: request, llm: { client: {}, model: 'picked' } });
+  assert.equal(calls.length, 1, 'the Word-only parser cannot reject a PDF edit');
+  assert.equal(calls[0].precisionOnly, undefined);
+  assert.deepEqual(calls[0].fileIds, ['artifact:aabb33']);
+  assert.equal(calls[0].llm.model, 'picked');
+  assert.equal(result.artifact.filename, 'Prueba-PDF-final.pdf');
+});
