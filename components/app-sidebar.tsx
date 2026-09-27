@@ -1324,6 +1324,7 @@ export function AppSidebar() {
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   return (
+    <>
     <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
       <SidebarHeader
         className={cn(
@@ -2566,9 +2567,6 @@ export function AppSidebar() {
         }}
       />
 
-      {/* Floating settings modal (Claude-style) — opened from the user menu */}
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
-
       {/* #44 — Confirmación accesible de borrado de chat. Sustituye al
           window.confirm() nativo: foco teclado correcto, ESC y click
           fuera para cancelar, botón rojo destacado, texto en español. */}
@@ -2773,5 +2771,8 @@ export function AppSidebar() {
         </DialogContent>
       </Dialog>
     </Sidebar>
+    {/* Keep settings mounted when the mobile sidebar sheet is closed. */}
+    <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
+    </>
   )
 }
