@@ -9,7 +9,7 @@
   "display": "standalone",
   "orientation": "any",
   "background_color": "#ffffff",
-  "theme_color": "#05070a",
+  "theme_color": "#2E7D32",
   "categories": ["productivity", "utilities", "education"],
   "icons": [
     {
@@ -25,16 +25,10 @@
       "purpose": "any"
     },
     {
-      "src": "/sira-gpt-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/sira-gpt-512.png",
+      "src": "/brand/clover-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "maskable"
     }
   ],
   "shortcuts": [

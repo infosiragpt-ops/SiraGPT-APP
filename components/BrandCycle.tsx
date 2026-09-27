@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion } from "framer-motion"
 import { useEffect, useState, useCallback, type CSSProperties } from "react"
+import { CloverMark } from "@/components/brand"
 
 /**
  * Brand showcase cycling through AI providers + feature demos.
@@ -122,7 +123,7 @@ const ImagesVisual = () => {
   return (
     <div
       className="relative h-[360px] w-[360px] overflow-hidden rounded-2xl md:h-[400px] md:w-[400px]"
-      style={{ boxShadow: "0 20px 50px -14px rgba(99,102,241,0.35), 0 0 0 1px rgba(15,23,42,0.06)" }}
+      style={{ boxShadow: "0 20px 50px -14px rgba(46,125,50,0.35), 0 0 0 1px rgba(15,23,42,0.06)" }}
     >
       <AnimatePresence mode="wait">
         <motion.img
@@ -704,8 +705,8 @@ const WebsVisual = () => (
 // GitHub + MCP — octocat mark connected to Sira core via animated link
 const GitHubMCPVisual = ({ color }: { color: string }) => (
   <div
-    className="relative flex h-[360px] w-[400px] items-center justify-center overflow-hidden rounded-3xl border border-slate-200/60 bg-gradient-to-b from-white/80 to-white/40 p-8 shadow-[0_24px_60px_-20px_rgba(79,70,229,0.35)] dark:border-white/10 dark:from-white/[0.07] dark:to-white/[0.02] dark:shadow-[0_28px_70px_-24px_rgba(99,102,241,0.45)] md:h-[400px] md:w-[460px]"
-    style={{ boxShadow: "0 24px 60px -20px rgba(79,70,229,0.28), 0 0 0 1px rgba(255,255,255,0.06) inset" }}
+    className="relative flex h-[360px] w-[400px] items-center justify-center overflow-hidden rounded-3xl border border-slate-200/60 bg-gradient-to-b from-white/80 to-white/40 p-8 shadow-[0_24px_60px_-20px_rgba(46,125,50,0.35)] dark:border-white/10 dark:from-white/[0.07] dark:to-white/[0.02] dark:shadow-[0_28px_70px_-24px_rgba(46,125,50,0.45)] md:h-[400px] md:w-[460px]"
+    style={{ boxShadow: "0 24px 60px -20px rgba(46,125,50,0.28), 0 0 0 1px rgba(255,255,255,0.06) inset" }}
   >
     <div
       aria-hidden
@@ -715,7 +716,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
     <div
       aria-hidden
       className="pointer-events-none absolute -right-12 top-1/3 h-36 w-36 rounded-full opacity-60 blur-3xl dark:opacity-80"
-      style={{ background: "radial-gradient(circle, rgba(99,102,241,0.45) 0%, transparent 70%)" }}
+      style={{ background: "radial-gradient(circle, rgba(46,125,50,0.45) 0%, transparent 70%)" }}
     />
 
     {/* Connection line with glow + traveling dot */}
@@ -801,8 +802,8 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
       }}
       className="absolute right-6 top-1/2 z-[1] -translate-y-1/2 flex h-[5.5rem] w-[5.5rem] items-center justify-center rounded-full"
       style={{
-        background: `radial-gradient(circle at 30% 25%, ${color} 0%, #6366f1 42%, #312e81 100%)`,
-        boxShadow: `0 18px 44px -12px rgba(67,56,202,0.55), 0 0 0 2px rgba(255,255,255,0.22) inset, 0 0 40px -8px ${color}66`,
+        background: `radial-gradient(circle at 30% 25%, ${color} 0%, #2E7D32 42%, #1B5E20 100%)`,
+        boxShadow: `0 18px 44px -12px rgba(27,94,32,0.55), 0 0 0 2px rgba(255,255,255,0.22) inset, 0 0 40px -8px ${color}66`,
       }}
     >
       <motion.span
@@ -811,7 +812,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
         animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.06, 1] }}
         transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
       />
-      <img src="/sira-gpt.png" alt="" className="relative z-[1] h-12 w-12 rounded-lg object-contain" />
+      <CloverMark size={48} className="relative z-[1] text-white" />
     </motion.div>
   </div>
 )

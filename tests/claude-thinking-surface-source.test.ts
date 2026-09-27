@@ -6,14 +6,15 @@ import path from "node:path"
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
 describe("Claude-style thinking surface", () => {
-  it("ships one animated asterisk glyph in the terracotta think accent", () => {
+  it("ships one animated clover glyph in the clover think accent", () => {
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /export function ClaudeAsterisk/)
     assert.match(asterisk, /data-claude-asterisk=\{active \? "active" : "idle"\}/)
     assert.match(asterisk, /claude-asterisk--active/)
-    assert.match(asterisk, /\[0, 45, 90, 135, 180, 225, 270, 315\]/)
+    assert.match(asterisk, /\[0, 90, 180, 270\]/)
+    assert.match(asterisk, /data-brand="clover"/)
     const loaders = source("lib/thinking-loaders.ts")
-    assert.match(loaders, /export const CLAUDE_THINK_ACCENT = "#D97757"/)
+    assert.match(loaders, /export const CLAUDE_THINK_ACCENT = "#2E7D32"/)
     const bars = source("components/pensando-bars.tsx")
     assert.match(bars, /<ClaudeAsterisk size=\{size\} active/)
     assert.doesNotMatch(bars, /Dotm3x3_15|SIRA_CELESTE/)
@@ -21,9 +22,9 @@ describe("Claude-style thinking surface", () => {
 
   it("uses the think accent for every running step and animates only when motion is allowed", () => {
     const css = source("app/globals.css")
-    assert.match(css, /--think-accent: #D97757;/)
+    assert.match(css, /--think-accent: #2E7D32;/)
     assert.match(css, /--step-running: var\(--think-accent\);/)
-    assert.match(css, /--step-running: var\(--think-accent, #D97757\);/)
+    assert.match(css, /--step-running: var\(--think-accent, #2E7D32\);/)
     assert.match(css, /@keyframes claude-asterisk-spin/)
     assert.match(css, /@keyframes claude-asterisk-breathe/)
     assert.match(css, /\.claude-asterisk--active,\s*\.claude-asterisk--active > g \{ animation: none; \}/)

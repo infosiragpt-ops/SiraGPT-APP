@@ -361,7 +361,7 @@ function PaneRow({
             "absolute inset-y-1 left-0 w-[2px] rounded-r-full transition-opacity",
             highlighted ? "opacity-100" : "opacity-0",
           )}
-          style={{ backgroundColor: "hsl(var(--accent-violet, 262 83% 66%))" }}
+          style={{ backgroundColor: "hsl(var(--accent-violet, 123 46% 34%))" }}
         />
         <span
           className={cn(

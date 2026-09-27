@@ -13,7 +13,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
     data-loader-src="/loaders/pensando.svg"
     data-pensando-bars="1"
     data-thinking-loader="pensando"
-    style="color: var(--think-accent, #D97757);"
+    style="color: var(--think-accent, #2E7D32);"
   >
     <span
       aria-hidden="true"
@@ -30,53 +30,40 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
         <svg
           aria-hidden="true"
           class="claude-asterisk claude-asterisk--active"
+          data-brand="clover"
           data-claude-asterisk="active"
           data-claude-asterisk-weight="fine"
           height="16"
-          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #D97757);"
-          viewBox="0 0 40 40"
+          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #2E7D32);"
+          viewBox="0 0 512 512"
           width="16"
         >
           <g
             fill="currentColor"
           >
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(0 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(45 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(90 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(135 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(180 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(225 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(270 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(315 20 20)"
-            />
-            <circle
-              cx="20"
-              cy="20"
-              r="2.1"
-            />
+            <g
+              transform="translate(256 244)"
+            >
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(0)"
+              />
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(90)"
+              />
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(180)"
+              />
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(270)"
+              />
+              <path
+                d="M -6 12 C -2 70, 4 120, 22 170 C 34 202, 62 216, 82 200 C 92 192, 86 178, 74 182 C 54 190, 44 178, 36 156 C 22 118, 16 70, 12 12 Z"
+              />
+            </g>
           </g>
         </svg>
       </span>
@@ -113,7 +100,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
     data-loader-src="/loaders/pensando.svg"
     data-pensando-bars="1"
     data-thinking-loader="pensando"
-    style="color: var(--think-accent, #D97757);"
+    style="color: var(--think-accent, #2E7D32);"
   >
     <span
       aria-hidden="true"
@@ -130,53 +117,40 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
         <svg
           aria-hidden="true"
           class="claude-asterisk claude-asterisk--active"
+          data-brand="clover"
           data-claude-asterisk="active"
           data-claude-asterisk-weight="fine"
           height="16"
-          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #D97757);"
-          viewBox="0 0 40 40"
+          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #2E7D32);"
+          viewBox="0 0 512 512"
           width="16"
         >
           <g
             fill="currentColor"
           >
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(0 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(45 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(90 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(135 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(180 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(225 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(270 20 20)"
-            />
-            <path
-              d="M20 2.4c1.05 0 1.9.85 1.9 1.9l-.65 12.9c-.05.7-.6 1.25-1.25 1.25s-1.2-.55-1.25-1.25L18.1 4.3c0-1.05.85-1.9 1.9-1.9z"
-              transform="rotate(315 20 20)"
-            />
-            <circle
-              cx="20"
-              cy="20"
-              r="2.1"
-            />
+            <g
+              transform="translate(256 244)"
+            >
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(0)"
+              />
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(90)"
+              />
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(180)"
+              />
+              <path
+                d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"
+                transform="rotate(270)"
+              />
+              <path
+                d="M -6 12 C -2 70, 4 120, 22 170 C 34 202, 62 216, 82 200 C 92 192, 86 178, 74 182 C 54 190, 44 178, 36 156 C 22 118, 16 70, 12 12 Z"
+              />
+            </g>
           </g>
         </svg>
       </span>

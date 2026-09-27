@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import Image from "next/image"
+import { CloverMark } from "@/components/brand"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, Check, Eye, EyeOff } from "lucide-react"
@@ -210,7 +210,7 @@ function RegisterPageContent() {
 
         <div className="relative flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
-            <Image src="/sira-gpt.png" alt="" width={28} height={28} className="rounded-md object-contain" />
+            <CloverMark size={28} className="text-white" />
           </div>
           <span className="text-lg font-semibold tracking-tight">SiraGPT</span>
         </div>
@@ -257,13 +257,7 @@ function RegisterPageContent() {
               data-testid="register-logo"
               className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white"
             >
-              <Image
-                src="/sira-gpt.png"
-                alt=""
-                width={40}
-                height={40}
-                className="rounded-lg object-contain"
-              />
+              <CloverMark size={40} className="text-[color:var(--brand)]" />
             </div>
             <div aria-hidden="true" />
           </div>

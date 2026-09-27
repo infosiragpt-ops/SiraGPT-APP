@@ -2341,7 +2341,7 @@ with open(OUT_PATH, "rb") as f:
 }
 
 const coverAccentPngCache = new Map();
-async function buildCoverAccentPng(accent = '2563EB', accent2 = '06B6D4') {
+async function buildCoverAccentPng(accent = '2E7D32', accent2 = '66BB6A') {
   const key = `${accent}:${accent2}`;
   if (coverAccentPngCache.has(key)) return coverAccentPngCache.get(key);
   let output;
@@ -2880,7 +2880,7 @@ async function buildPdf(plan, outputPath) {
     const doc = new PDFDocument({ size: 'A4', margin: 54, info: { Title: plan.title, Author: 'siraGPT Document Pipeline' }, bufferPages: true, compress: false });
     const stream = fs.createWriteStream(outputPath);
     doc.pipe(stream);
-    doc.fontSize(10).fillColor('#2563eb').text('siraGPT DOCUMENT PIPELINE', { align: 'right' });
+    doc.fontSize(10).fillColor('#2E7D32').text('siraGPT DOCUMENT PIPELINE', { align: 'right' });
     doc.moveDown(1.2);
     doc.fontSize(26).fillColor('#0f172a').text(plan.title, { lineGap: 4 });
     doc.moveDown();

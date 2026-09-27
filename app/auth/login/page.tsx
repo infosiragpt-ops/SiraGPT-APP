@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import Image from "next/image"
+import { CloverMark } from "@/components/brand"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, Check, Eye, EyeOff} from "lucide-react"
@@ -226,13 +226,13 @@ function LoginPageContent() {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(55% 45% at 12% 12%, rgba(255,0,0,0.30), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(255,0,0,0.16), transparent 70%)",
+              "radial-gradient(55% 45% at 12% 12%, rgba(46,125,50,0.30), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(46,125,50,0.16), transparent 70%)",
           }}
         />
 
         <div className="relative flex items-center gap-3">
           <div className="auth-red-brandmark flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
-            <Image src="/sira-gpt.png" alt="" width={28} height={28} className="rounded-md object-contain" />
+            <CloverMark size={28} className="text-white" />
           </div>
           <span className="text-lg font-semibold tracking-tight">SiraGPT</span>
         </div>
@@ -279,13 +279,7 @@ function LoginPageContent() {
               data-testid="login-logo"
               className="auth-red-logo flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white"
             >
-              <Image
-                src="/sira-gpt.png"
-                alt=""
-                width={40}
-                height={40}
-                className="rounded-lg object-contain"
-              />
+              <CloverMark size={40} className="text-[color:var(--brand)]" />
             </div>
             <div aria-hidden="true" />
           </div>
@@ -459,57 +453,57 @@ function LoginPageContent() {
       </main>
       <style jsx global>{`
         .auth-red-brandmark {
-          background: rgba(255, 0, 0, 0.16);
-          box-shadow: 0 18px 55px rgba(255, 0, 0, 0.16);
+          background: rgba(46, 125, 50, 0.16);
+          box-shadow: 0 18px 55px rgba(46, 125, 50, 0.16);
         }
 
         .auth-red-check {
-          background: rgba(255, 0, 0, 0.20);
-          box-shadow: 0 0 0 1px rgba(255, 0, 0, 0.28) inset;
+          background: rgba(46, 125, 50, 0.20);
+          box-shadow: 0 0 0 1px rgba(46, 125, 50, 0.28) inset;
         }
 
         .auth-red-card {
-          box-shadow: 0 24px 64px -16px rgba(255, 0, 0, 0.16), 0 18px 54px -32px rgba(0, 0, 0, 0.32);
+          box-shadow: 0 24px 64px -16px rgba(46, 125, 50, 0.16), 0 18px 54px -32px rgba(0, 0, 0, 0.32);
         }
 
         .auth-red-logo {
-          border-color: rgba(255, 0, 0, 0.22);
-          box-shadow: 0 12px 32px rgba(255, 0, 0, 0.08);
+          border-color: rgba(46, 125, 50, 0.22);
+          box-shadow: 0 12px 32px rgba(46, 125, 50, 0.08);
         }
 
         .auth-red-back:hover,
         .auth-red-link:hover {
-          color: #ff0000;
+          color: #2E7D32;
         }
 
         .auth-red-back:hover,
         .auth-red-outline:hover {
-          border-color: rgba(255, 0, 0, 0.42);
+          border-color: rgba(46, 125, 50, 0.42);
         }
 
         .auth-red-link:hover {
-          text-decoration-color: #ff0000;
+          text-decoration-color: #2E7D32;
         }
 
         .auth-red-focus:focus-visible {
-          border-color: #ff0000 !important;
-          box-shadow: 0 0 0 3px rgba(255, 0, 0, 0.12) !important;
+          border-color: #2E7D32 !important;
+          box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.12) !important;
         }
 
         .auth-red-submit {
-          background: #ff0000 !important;
-          box-shadow: 0 16px 32px rgba(255, 0, 0, 0.20);
+          background: #2E7D32 !important;
+          box-shadow: 0 16px 32px rgba(46, 125, 50, 0.20);
         }
 
         .auth-red-submit:hover {
-          background: #e60000 !important;
+          background: #1B5E20 !important;
         }
 
         .auth-red-submit:focus-visible,
         .auth-red-outline:focus-visible,
         .auth-red-back:focus-visible,
         .auth-red-link:focus-visible {
-          outline: 2px solid #ff0000;
+          outline: 2px solid #2E7D32;
           outline-offset: 3px;
         }
       `}</style>

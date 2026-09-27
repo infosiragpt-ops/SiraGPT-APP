@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
+import { CloverMark } from "@/components/brand"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1380,11 +1381,10 @@ export function AppSidebar() {
             onClick={toggleSidebar}
             aria-label="Expandir barra lateral ⌘B"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/sira-gpt.png"
-              alt="SiraGPT"
-              className="h-5 w-5 shrink-0 rounded-md object-contain transition-opacity group-hover:opacity-0"
+            <CloverMark
+              size={20}
+              title="SiraGPT"
+              className="h-5 w-5 shrink-0 text-[color:var(--brand)] transition-opacity group-hover:opacity-0"
             />
             <SidebarOvalIcon className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
