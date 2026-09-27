@@ -1265,8 +1265,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           fileIds: preloopFileIds,
           instruction: userQuery,
           model,
-          // Engines follow the model picked in the composer (first rung of
-          // the runner ladder; failover only on provider errors).
+          // Keep document generation on the model and provider picked in the composer.
           pickedModel: require('./agent-runner').runnerModelSpec(provider, model),
           signal,
           onEvent: (ev) => {
@@ -1489,7 +1488,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         answer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
           + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
       }
-      if (runnerOnly) {
+      if (runnerOnly || agentRunnerFailure.reason === 'E_PROVIDER') {
         await writeSse(res, { replace: true, content: answer });
         logDocRouting('agent_runner_failed', agentRunnerFailure.reason);
         return finishSourcePreservingPreloop('agent_runner_failed', answer, []);

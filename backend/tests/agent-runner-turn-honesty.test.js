@@ -99,7 +99,35 @@ test('the runner follows the picked model on /api/doc/generate, /api/agent/task 
   const index = read('src/services/agent-runner/index.js');
   assert.match(index, /pickedModel: params\.pickedModel \|\| null,/);
   assert.match(read('src/services/agent-runner/queue.js'), /pickedModel: data\.pickedModel \|\| null,/);
+  const orchestrator = read('src/services/agent-runner/orchestrator/index.js');
+  assert.match(orchestrator, /llm = createRunnerLlmClient\(\{ pickedModel \}\);/);
+  assert.match(orchestrator, /const run = await runOrchestrator\(\{[\s\S]*?pickedModel,/);
   assert.equal(runner.runnerModelSpec('DeepSeek', 'deepseek-v4-pro'), 'DeepSeek:deepseek-v4-pro');
+});
+
+test('a failed selected provider stops the document loop with E_PROVIDER', async () => {
+  const events = [];
+  const client = { chat: { completions: { create: async () => {
+    const error = new Error('provider failed');
+    error.code = 'E_PROVIDER';
+    error.status = 402;
+    throw error;
+  } } } };
+  const run = await runner.runAgentRunner({
+    files: [],
+    instruction: 'crea un documento Word sobre el ciclo del agua',
+    client,
+    driver: 'local',
+    requireFileOutput: false,
+    persistMemory: false,
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(run.stoppedReason, 'E_PROVIDER');
+  assert.equal(run.errorCode, 'E_PROVIDER');
+  assert.match(run.errorMessage, /modelo seleccionado/i);
+  assert.equal(events.filter((event) => event.type === 'error' && event.code === 'E_PROVIDER').length, 1);
+  assert.equal(events.filter((event) => event.type === 'retry').length, 0);
+  assert.equal(events.filter((event) => event.type === 'outputs').length, 0);
 });
 
 test('/api/doc/generate streams the runner rows as stage v2 and stores the timeline with the reply', () => {
@@ -108,6 +136,7 @@ test('/api/doc/generate streams the runner rows as stage v2 and stores the timel
   assert.match(doc, /persistSuccess\(chatId, req\.user\.id, displayPrompt, content, file, \{\s*agentMetadata: docTrace\.toMetadata\(\),/);
   assert.match(doc, /persistFailure\(chatId, req\.user\.id, displayPrompt, reason, \{\s*agentMetadata: docTrace\.toMetadata\(\),/);
   assert.match(doc, /\.\.\.\(agentMetadata \? \{ agentMetadata \} : \{\}\),/);
+  assert.match(doc, /code: agentRunnerResult\.reason === 'E_PROVIDER' \? 'E_PROVIDER' : 'agent_runner_failed'/);
 });
 
 test('a turn in a chat workspace starts with an empty outputs/: the previous files move to tmp/previous-outputs', async (t) => {

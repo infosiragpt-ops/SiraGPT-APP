@@ -1754,7 +1754,7 @@ test('runAgenticChat precision ambiguity ends without model fallback, tools, or 
   }
 });
 
-test('runAgenticChat forces document_edit and drops create_document on attachment edit turns', async () => {
+test('runAgenticChat forces document_edit after a non-provider runner failure on attachment edit turns', async () => {
   let firstArgs = null;
   let calls = 0;
   const openai = {
@@ -1774,10 +1774,24 @@ test('runAgenticChat forces document_edit and drops create_document on attachmen
   const { res } = makeFakeRes();
   // Bypass the pre-loop by making isSourcePreservingEditRequest return false
   // while isDocumentEditRequest still matches (via the real detector on the
-  // userQuery). We stub the source-preserving module so the pre-loop no-ops.
+  // userQuery). A verification failure can continue with the same selected
+  // model; a provider failure must stop instead.
   const Module = require('module');
   const originalLoad = Module._load;
+  const realAgentRunner = require('../src/services/agent-runner');
   Module._load = function patched(request, parent, isMain) {
+    if (request === './agent-runner' || request.endsWith('/agent-runner')) {
+      return {
+        ...realAgentRunner,
+        executeAgentRunnerTurn: async () => ({
+          ok: false,
+          skipped: false,
+          artifacts: [],
+          stoppedReason: 'verification_failed',
+        }),
+        hasConversationArtifacts: async () => false,
+      };
+    }
     if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
       return {
         isSourcePreservingEditRequest: () => false,
@@ -1792,6 +1806,7 @@ test('runAgenticChat forces document_edit and drops create_document on attachmen
     await fresh.runAgenticChat({
       openai,
       model: 'gpt-4o-mini',
+      provider: 'OpenAI',
       userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
       history: [],
       res,
@@ -1862,6 +1877,45 @@ test('runAgenticChat forces document_edit and drops create_document on attachmen
     Module._load = originalLoad;
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
   }
+});
+
+test('runAgenticChat does not switch pipelines after E_PROVIDER on an attachment edit', async () => {
+  let modelCalls = 0;
+  let editCalls = 0;
+  const { res, frames } = makeFakeRes();
+  await withStubbedAgentRunner({
+    executeAgentRunnerTurn: async () => ({
+      ok: false,
+      skipped: false,
+      artifacts: [],
+      stoppedReason: 'E_PROVIDER',
+      errorMessage: 'El modelo seleccionado no está disponible.',
+    }),
+  }, async (fresh) => {
+    const result = await fresh.runAgenticChat({
+      openai: { chat: { completions: { create: async () => {
+        modelCalls += 1;
+        return finalizeMessage('must not run');
+      } } } },
+      model: 'gpt-4o-mini',
+      provider: 'OpenAI',
+      userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'] },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit attached document',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => { editCalls += 1; return { ok: true }; },
+      }],
+    });
+    assert.equal(modelCalls, 0);
+    assert.equal(editCalls, 0);
+    assert.deepEqual(result.artifacts, []);
+    assert.match(result.finalAnswer, /^E_PROVIDER:/);
+    assert.match(String(frames().filter((frame) => frame?.replace).pop()?.content || ''), /^E_PROVIDER:/);
+  });
 });
 
 test('turnPolicy observe mode attaches summary without changing behaviour', async () => {

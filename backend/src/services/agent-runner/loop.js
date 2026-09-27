@@ -1591,6 +1591,19 @@ async function runAgentLoop({
         ttftMs: modelTtfbMs,
       });
       if (signal?.aborted) bail(iteration);
+      if (err?.code === 'E_PROVIDER') {
+        const message = 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
+        onEvent({ type: 'error', code: 'E_PROVIDER', message, retryable: true, iteration });
+        return {
+          finalText: '',
+          iterations: iteration,
+          steps,
+          stoppedReason: 'E_PROVIDER',
+          verificationAttempts,
+          errorCode: 'E_PROVIDER',
+          errorMessage: message,
+        };
+      }
       try {
         const w65ds = loadEngine3h65();
         const adDs = loadEngineAdapter();
