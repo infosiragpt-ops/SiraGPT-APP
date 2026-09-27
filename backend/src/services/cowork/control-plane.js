@@ -17,6 +17,19 @@ const PLAN_LIMITS = Object.freeze({
   ENTERPRISE: { concurrency: 12, maxSteps: 160, maxCostUsd: 50 },
 });
 
+// A run that stops receiving updates is a leak, not work in progress: the
+// backend was recycled mid-turn (every publish does that) or the request died
+// before finishRun ran. Prod 2026-09-27: three «Task started» runs from two
+// days earlier were still `running`, and every chat turn hit the plan's
+// 12-slot concurrency limit («run bootstrap failed … Your plan allows 12 …»).
+// Runs touch `updatedAt` on every step; no update for this long means
+// abandoned. Runs waiting for the user's approval get a longer grace.
+function staleWindowMs(envName, fallbackMs) {
+  const n = Number(process.env[envName]);
+  return Number.isFinite(n) && n >= 60_000 ? n : fallbackMs;
+}
+const STALE_RUN_LAST_EVENT = 'Cerrada automáticamente: la tarea quedó sin actividad (el servidor se reinició o la petición terminó sin cerrarla).';
+
 class CoworkControlError extends Error {
   constructor(code, message, status = 400, details = null) {
     super(message);
@@ -120,6 +133,40 @@ async function getOwnedRun(prisma, { runId, userId, include = null }) {
   return run;
 }
 
+async function reapStaleRuns(prisma, { userId, now = new Date() }) {
+  const activeBefore = new Date(now.getTime() - staleWindowMs('SIRAGPT_COWORK_STALE_RUN_MS', 2 * 60 * 60 * 1000));
+  const approvalBefore = new Date(now.getTime() - staleWindowMs('SIRAGPT_COWORK_STALE_APPROVAL_MS', 24 * 60 * 60 * 1000));
+  const stale = await prisma.coworkRun.findMany({
+    where: {
+      userId: String(userId),
+      OR: [
+        { status: { in: ['queued', 'running', 'paused'] }, updatedAt: { lt: activeBefore } },
+        { status: 'waiting_approval', updatedAt: { lt: approvalBefore } },
+      ],
+    },
+    select: { id: true, status: true, updatedAt: true, workspaceId: true },
+  });
+  if (!Array.isArray(stale) || stale.length === 0) return [];
+  const ids = stale.map((run) => run.id);
+  await prisma.coworkRun.updateMany({
+    where: { id: { in: ids }, status: { in: ACTIVE_STATUSES } },
+    data: { status: 'failed', finishedAt: now, lastEvent: STALE_RUN_LAST_EVENT },
+  });
+  for (const run of stale) {
+    await appendAudit(prisma, {
+      userId,
+      workspaceId: run.workspaceId,
+      runId: run.id,
+      action: 'cowork.run.reaped',
+      targetType: 'cowork_run',
+      targetId: run.id,
+      resultSummary: STALE_RUN_LAST_EVENT,
+      metadata: { previousStatus: run.status, lastUpdateAt: run.updatedAt },
+    }).catch(() => {});
+  }
+  return stale;
+}
+
 async function createRun(prisma, {
   userId,
   chatId = null,
@@ -133,6 +180,8 @@ async function createRun(prisma, {
   status = 'running',
 }) {
   const limits = await loadUserLimits(prisma, userId);
+  // Abandoned runs must not hold a slot against this user (see reapStaleRuns).
+  await reapStaleRuns(prisma, { userId }).catch(() => []);
   let workspace = null;
   if (workspaceId) {
     workspace = await workspaceStore.getWorkspace(prisma, { workspaceId, userId });
@@ -662,6 +711,8 @@ async function getCostSummary(prisma, { userId, workspaceId = null, days = 30 })
 }
 
 module.exports = {
+  reapStaleRuns,
+  STALE_RUN_LAST_EVENT,
   CoworkControlError,
   ACTIVE_STATUSES,
   TERMINAL_STATUSES,

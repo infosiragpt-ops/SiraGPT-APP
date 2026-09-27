@@ -54,3 +54,20 @@ test('non-health routes are 404 while the flag is off', async () => {
     assert.equal(res.status, 404, path);
   }
 });
+
+// Prod 2026-09-27 (every boot): «agentes_coding_terminal_ws_init_failed —
+// Maximum call stack size exceeded». `module.exports = router` aliased the
+// module and the router, so the exported attach wrapper overwrote the router's
+// own attach and called itself forever. The terminal socket never attached.
+test('attachTerminalWebSocket attaches once to a bare http server instead of recursing', () => {
+  const http = require('http');
+  const server = http.createServer();
+  try {
+    buildApp();
+    const router = require('../src/routes/agentes-coding');
+    assert.doesNotThrow(() => router.attachTerminalWebSocket(server));
+    assert.ok(server.listenerCount('upgrade') >= 1, 'the upgrade handler must be registered');
+  } finally {
+    server.close();
+  }
+});

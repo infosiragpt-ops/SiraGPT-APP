@@ -284,3 +284,70 @@ test('processImage swallows vision-side failures and returns Tesseract result', 
   assert.equal(out.extractedText, 'fallback tesseract text');
   assert.equal(out.ocr.provider, 'tesseract');
 });
+
+// ── vision runtime ladder ────────────────────────────────────────────────
+// Prod 2026-09-27: the first configured runtime answered 429/503 for an hour
+// and every scanned page lost its vision text although the other runtimes
+// were healthy. The ladder must move on to the next runtime.
+
+test('_extractWithVision walks the ladder: 429 on the first runtime → the next one answers', async () => {
+  await withEnv({
+    SIRAGPT_VISION_FALLBACK_ENABLED: '1', SIRAGPT_VISION_DOC_MODEL: undefined, SIRAGPT_VISION_DOC_LADDER_MAX: undefined,
+    GEMINI_API_KEY: 'g-key', XAI_API_KEY: 'x-key', OPENAI_API_KEY: undefined, OPENROUTER_API_KEY: undefined,
+    MODEL_API_KEY: undefined, META_API_KEY: undefined, LLAMA_API_KEY: undefined,
+  }, async () => {
+    const seen = [];
+    const original = fileProcessor._createVisionClient;
+    fileProcessor._createVisionClient = (config) => ({
+      chat: { completions: { create: async ({ model }) => {
+        seen.push(`${config.baseURL}|${model}`);
+        if (/googleapis/.test(config.baseURL)) {
+          const err = new Error('429 status code (no body)');
+          err.status = 429;
+          throw err;
+        }
+        return { choices: [{ message: { content: JSON.stringify({ elements: [{ type: 'paragraph', text: 'texto desde xAI' }] }) } }] };
+      } } },
+    });
+    try {
+      const text = await fileProcessor._extractWithVision(tempImage(), 'image/png');
+      assert.match(text, /texto desde xAI/);
+      assert.equal(seen.length, 2, seen.join(' ; '));
+      assert.match(seen[0], /googleapis.*gemini/);
+      assert.match(seen[1], /api\.x\.ai.*grok/);
+    } finally {
+      fileProcessor._createVisionClient = original;
+    }
+  });
+});
+
+test('_extractWithVision surfaces the last error when every runtime fails', async () => {
+  await withEnv({
+    SIRAGPT_VISION_FALLBACK_ENABLED: '1', SIRAGPT_VISION_DOC_MODEL: undefined,
+    GEMINI_API_KEY: 'g-key', XAI_API_KEY: undefined, OPENAI_API_KEY: undefined, OPENROUTER_API_KEY: undefined,
+    MODEL_API_KEY: undefined, META_API_KEY: undefined, LLAMA_API_KEY: undefined,
+  }, async () => {
+    const original = fileProcessor._createVisionClient;
+    fileProcessor._createVisionClient = () => ({
+      chat: { completions: { create: async () => { const err = new Error('503 status code (no body)'); err.status = 503; throw err; } } },
+    });
+    try {
+      await assert.rejects(fileProcessor._extractWithVision(tempImage(), 'image/png'), /503 status code/);
+    } finally {
+      fileProcessor._createVisionClient = original;
+    }
+  });
+});
+
+test('_visionRuntimeLadder honours the explicit model pin and the ladder cap', async () => {
+  await withEnv({ SIRAGPT_VISION_DOC_MODEL: 'gpt-4o-mini', SIRAGPT_VISION_DOC_PROVIDER: undefined }, () => {
+    assert.deepEqual(fileProcessor._visionRuntimeLadder(), [{ provider: 'OpenAI', model: 'gpt-4o-mini' }]);
+  });
+  await withEnv({
+    SIRAGPT_VISION_DOC_MODEL: undefined, SIRAGPT_VISION_DOC_LADDER_MAX: '2',
+    GEMINI_API_KEY: 'g', XAI_API_KEY: 'x', OPENAI_API_KEY: 'o', OPENROUTER_API_KEY: 'r',
+    MODEL_API_KEY: undefined, META_API_KEY: undefined, LLAMA_API_KEY: undefined,
+  }, () => {
+    assert.deepEqual(fileProcessor._visionRuntimeLadder().map((c) => c.provider), ['Gemini', 'xAI']);
+  });
+});

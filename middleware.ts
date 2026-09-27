@@ -10,6 +10,7 @@ import {
 } from './lib/i18n/locales'
 import { countryCodeFromHeaders } from './lib/i18n/locale-resolution'
 import { applyNextApiCorsHeaders, buildNextApiPreflightResponse } from './lib/next-api-cors'
+import { hstsHeaderValueFor, insecureCanonicalRedirectTarget } from './server/transport-security'
 
 const LOCALE_COOKIE = 'NEXT_LOCALE'
 const ONE_YEAR = 60 * 60 * 24 * 365
@@ -25,6 +26,19 @@ const ALLOW_FRAME_PREVIEW = process.env.ALLOW_REPLIT_PREVIEW === '1'
 const SERVER_ACTION_ID_RE = /^[a-f0-9]{40}$/
 
 export async function middleware(request: NextRequest) {
+  // siragpt.com is also reachable over plain http at the edge; a page loaded
+  // that way then fails every API call on CORS (Origin http://siragpt.com).
+  // Send such page loads to https once and pin the browser with HSTS.
+  // See server/transport-security.ts — only Cloudflare's CF-Visitor is trusted.
+  const secureTarget = insecureCanonicalRedirectTarget(request)
+  if (secureTarget) return NextResponse.redirect(secureTarget, 308)
+  const response = await routeMiddleware(request)
+  const hsts = hstsHeaderValueFor(request.headers)
+  if (hsts) response.headers.set('Strict-Transport-Security', hsts)
+  return response
+}
+
+async function routeMiddleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // /code is not a product surface. Computer + Empresas live on /agentes.

@@ -181,7 +181,8 @@ function htmlToReadableText(html, baseUrl) {
   try {
     const { JSDOM } = require('jsdom');
     const { Readability } = require('@mozilla/readability');
-    const dom = new JSDOM(html, { url: baseUrl });
+    const { quietVirtualConsole } = require('../../../utils/jsdom-quiet');
+    const dom = new JSDOM(html, { url: baseUrl, virtualConsole: quietVirtualConsole() });
     const article = new Readability(dom.window.document).parse();
     if (article && article.content) {
       const TurndownService = require('turndown');

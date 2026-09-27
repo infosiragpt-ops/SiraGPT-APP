@@ -176,7 +176,16 @@ function makeOriginCallback(allowed) {
     if (!origin) return callback(null, true);
     if (allowAnyOrigin) return callback(null, true);
     if (allowSet.has(origin)) return callback(null, true);
-    return callback(new Error(`CORS: origin not allowed (${origin})`));
+    // A foreign Origin is the browser's request to refuse, not a backend
+    // failure: answer 403 with a stable code. As a bare Error it reached the
+    // error handler as a 500 and showed up in Admin → Logs → Errores del
+    // sistema (prod 2026-09-27: `http://siragpt.com` → /api/users/settings).
+    const error = new Error(`CORS: origin not allowed (${origin})`);
+    error.status = 403;
+    error.statusCode = 403;
+    error.code = 'cors_origin_not_allowed';
+    error.expose = true;
+    return callback(error);
   };
 }
 

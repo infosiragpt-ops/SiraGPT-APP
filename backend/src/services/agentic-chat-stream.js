@@ -1717,7 +1717,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           },
         });
       } catch (coworkError) {
-        try { console.warn('[cowork] run bootstrap failed (legacy chat continues):', coworkError.message); } catch (_) { /* noop */ }
+        try {
+          const d = coworkError && coworkError.details;
+          const slots = d && d.concurrency != null ? ` (activas=${d.active}, límite=${d.concurrency}, plan=${d.plan})` : '';
+          console.warn('[cowork] run bootstrap failed (legacy chat continues):', `${coworkError.message}${slots}`);
+        } catch (_) { /* noop */ }
       }
     }
 

@@ -227,6 +227,24 @@ describe("makeOriginCallback", () => {
     const { err } = await decide(cb, "https://evil.example.com");
     assert.ok(err instanceof Error);
     assert.match(err.message, /CORS: origin not allowed \(https:\/\/evil\.example\.com\)/);
+    // Prod 2026-09-27: as a bare Error this reached the error handler as a
+    // 500 and was filed under Admin → Logs → Errores del sistema.
+    assert.equal(err.status, 403);
+    assert.equal(err.statusCode, 403);
+    assert.equal(err.code, 'cors_origin_not_allowed');
+    assert.equal(err.expose, true);
+  });
+
+  test("a rejected origin answers 403 through the real error handler, never 500", async () => {
+    const { globalErrorHandler } = require("../src/middleware/error-handler");
+    const app = express();
+    app.use(cors(createCredentialedCorsOptions(["https://app.example.com"])));
+    app.get("/api/users/settings", (_req, res) => res.json({ ok: true }));
+    app.use(globalErrorHandler());
+    const res = await request(app).get("/api/users/settings").set("Origin", "http://siragpt.com");
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, "cors_origin_not_allowed");
+    assert.match(String(res.body.message), /origin not allowed \(http:\/\/siragpt\.com\)/);
   });
 
   test("empty allowlist rejects every browser request but still allows server-to-server", async () => {
