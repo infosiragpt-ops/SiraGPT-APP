@@ -32,6 +32,14 @@ const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|
 const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const SOURCE_MAP_CHAT_RE = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/i;
 
+function isAttachedFactQuestion(requestText, files = []) {
+  if (!Array.isArray(files) || files.length === 0) return false;
+  if (hasExplicitDocumentOutputRequest(requestText)) return false;
+  const text = normalizeIntentText(requestText);
+  return /\b(?:documento|archivo|adjunto|word|docx|excel|xlsx|pdf|pptx|presentacion)\b/.test(text)
+    && /\b(?:cual(?:es)?|quien(?:es)?|cuanto|cuanta|cuantos|cuantas|donde|cuando|por que|como se llama|que (?:es|fue|fecha|numero|nombre))\b/.test(text);
+}
+
 function normalizeIntentText(value) {
   return String(value || '')
     .toLowerCase()
@@ -215,6 +223,7 @@ function attachmentKindsFrom(files = [], fileMetadata = []) {
 
 function classifyMode(requestText, estimatedWords, format, files = [], options = {}) {
   if (options.transcriptionOnly || options.chatOnlyDirective) return 'chat_only';
+  if (isAttachedFactQuestion(requestText, files)) return 'chat_only';
   if (isSoftwareBuildRequest(requestText) && !isExplicitDocumentRequest(requestText)) {
     return 'chat_only';
   }
@@ -404,6 +413,7 @@ function buildDocumentDeliveryPolicy({
 module.exports = {
   PALETTES,
   buildDocumentDeliveryPolicy,
+  isAttachedFactQuestion,
   normalizeDocumentPolicyCoherence,
   detectComplexity,
   detectFormat,
