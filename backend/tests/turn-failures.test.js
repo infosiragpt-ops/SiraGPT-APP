@@ -698,6 +698,21 @@ describe('turn lifecycle — beginTurn / noteTurn / finishTurn', () => {
     assert.equal(m.whatUserSaw, 'DeepSeek API 400: unsupported model');
   });
 
+  it('a completed task that refused the turn as thin_attachment_context is a lost attachment', async () => {
+    const seen = 'El material adjunto solo contiene 0 palabras útiles, lo que no me alcanza para responder tu pregunta con confianza.';
+    await turnFailures.recordAgentTaskFailure({
+      taskId: 't-thin', userId: 'u1', chatId: 'c-thin', model: 'grok-4.7', displayGoal: 'transcribir en un docuemnto word', fileIds: ['md-1'],
+      streamState: { done: true, stoppedReason: 'thin_attachment_context', finalText: seen, artifacts: [], steps: [] },
+    }, 'completed');
+    assert.equal(prisma.rows.length, 1);
+    const m = prisma.rows[0].metadata;
+    assert.equal(m.category, 'adjunto_perdido');
+    assert.equal(m.cause, 'Adjunto sin texto útil: la tarea se rechazó sin usar el archivo');
+    assert.equal(m.endReason, 'thin_attachment_context');
+    assert.match(m.whatUserSaw, /0 palabras útiles/);
+    assert.deepEqual(m.attachments, [{ id: 'md-1' }]);
+  });
+
   it('agent tasks: failed and partial transcription are recorded, success is not', async () => {
     await turnFailures.recordAgentTaskFailure({ taskId: 't1', userId: 'u1', chatId: 'c6', displayGoal: 'transcribir el video', stats: { stoppedReason: 'media_batch_failed' } }, 'error');
     await turnFailures.recordAgentTaskFailure({ taskId: 't2', userId: 'u1', chatId: 'c6', stats: { stoppedReason: 'media_batch_partial' } }, 'completed');

@@ -973,7 +973,14 @@ async function buildUploadedFileContext(prisma, {
       : row.documentText;
     // Exact fact lookups ("¿cuánto?", identifiers, years, cell values) need
     // retrieval as much as summaries. No keyword gate on "analiza/extrae".
-    const retrieval = String(query || '').trim() && !genericOverview
+    // A transcription («transcribe…», «transcribir en un documento word»)
+    // asks for the document's OWN text, not for passages that match the
+    // request's words. Prod 2026-09-27: the retriever searched the .md for
+    // «transcribir / docuemnto / word», found nothing, replaced the file with
+    // «No se encontró evidencia…» and the runner refused the whole turn as
+    // thin_attachment_context (0 palabras útiles) although the file had text.
+    const transcriptionRequest = isTranscriptionRequest(query);
+    const retrieval = String(query || '').trim() && !genericOverview && !transcriptionRequest
       ? await retrieveRelevantEvidence(prisma, {
         userId,
         row,
