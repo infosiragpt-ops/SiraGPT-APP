@@ -27,6 +27,7 @@ const { request } = require('undici');
 const dns = require('node:dns');
 const net = require('node:net');
 const { JSDOM } = require('jsdom');
+const { quietVirtualConsole } = require('../../utils/jsdom-quiet');
 const { Readability, isProbablyReaderable } = require('@mozilla/readability');
 const TurndownService = require('turndown');
 
@@ -431,6 +432,7 @@ async function execute(args = {}, _ctx = {}) {
       contentType: 'text/html',
       runScripts: 'outside-only',
       pretendToBeVisual: false,
+      virtualConsole: quietVirtualConsole(),
     });
     const doc = dom.window.document;
 

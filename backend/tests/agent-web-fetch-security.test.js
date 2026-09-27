@@ -146,3 +146,24 @@ test('agent web fetch pins every validated redirect host into its dispatcher', a
   assert.equal(result.finalUrl, 'https://www.tesis20.com/');
   assert.match(result.text, /Asesoría y acompañamiento/);
 });
+
+// Prod 2026-09-27: jsdom's default virtual console printed «Error: Could not
+// parse CSS stylesheet» for a page with broken CSS and it was filed as a
+// backend error in Admin → Logs. Readers only extract text; jsdom's own
+// diagnostics must stay silent.
+test('htmlToReadableText keeps jsdom CSS-parse errors off console.error', () => {
+  const { htmlToReadableText } = require('../src/services/agent-harness/tools/web-fetch-tool');
+  const html = '<html><head><style>.a{color:red}}</style><style>.b{content:"x}</style></head>'
+    + '<body><article><h1>Título</h1><p>' + 'texto legible '.repeat(80) + '</p></article></body></html>';
+  const printed = [];
+  const original = console.error;
+  console.error = (...args) => { printed.push(args.map(String).join(' ')); };
+  let text;
+  try {
+    text = htmlToReadableText(html, 'https://example.com/');
+  } finally {
+    console.error = original;
+  }
+  assert.match(JSON.stringify(text), /texto legible/);
+  assert.deepEqual(printed.filter((line) => /Could not parse CSS/.test(line)), []);
+});

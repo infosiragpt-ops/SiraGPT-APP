@@ -24,6 +24,7 @@
     "../lib/auth.ts",
     "../lib/auth/auth-guard-rules.ts",
     "../lib/next-api-cors.ts",
+    "../server/transport-security.ts",
     "../lib/app-wrapper-routes.ts",
     "../lib/agents-home-path.ts",
     "../lib/gpts-apps-connect.ts",

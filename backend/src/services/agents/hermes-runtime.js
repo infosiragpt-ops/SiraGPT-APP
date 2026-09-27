@@ -56,7 +56,10 @@ function bootHermesRuntime(opts = {}) {
   }
 
   _booted = true;
-  console.log(`[hermes-runtime] booted — gateway=${gateway.config.enabled ? 'on' : 'degraded'} cron=${cronBridge.status().enabled ? 'on' : 'off'} delegate=${delegateBridge.status().total} plugins=${pluginBridge.HERMES_PLUGIN_CATALOG.length}`);
+  const gatewayState = gateway.config.enabled
+    ? 'on'
+    : (gateway.config.openclaw && gateway.config.openclaw.enabled === false ? 'off (OpenClaw sin configurar)' : 'off');
+  console.log(`[hermes-runtime] booted — gateway=${gatewayState} cron=${cronBridge.status().enabled ? 'on' : 'off'} delegate=${delegateBridge.status().total} plugins=${pluginBridge.HERMES_PLUGIN_CATALOG.length}`);
 
   return getHermesRuntimeStatus();
 }

@@ -1190,44 +1190,87 @@ class FileProcessor {
    * `openaiClient` is injectable for tests. In production, callers
    * pass nothing and we lazily build a client from OPENAI_API_KEY.
    */
+  /**
+   * OpenAI-compatible client for ONE vision runtime. Overridable so tests can
+   * exercise the ladder without the network.
+   */
+  _createVisionClient(config) {
+    const OpenAI = require('openai');
+    // Background enrichment only: bound it. The SDK default (10 min timeout,
+    // 2 retries with backoff) kept a 43 KB PNG "extracting" for ~75 s when
+    // the vision runtime answered 429 (prod 2026-09-26).
+    const visionTimeoutMs = Number(process.env.SIRAGPT_VISION_DOC_TIMEOUT_MS);
+    return new OpenAI({
+      apiKey: config.apiKey,
+      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+      timeout: Number.isFinite(visionTimeoutMs) && visionTimeoutMs >= 1000 ? visionTimeoutMs : 25_000,
+      maxRetries: 1,
+    });
+  }
+
+  /**
+   * Vision runtimes to try, in order. SIRAGPT_VISION_DOC_MODEL pins a single
+   * runtime; otherwise every configured runtime qualifies (Gemini → Meta →
+   * xAI → OpenRouter → OpenAI), capped by SIRAGPT_VISION_DOC_LADDER_MAX
+   * (default 3) so one page never waits behind five providers.
+   */
+  _visionRuntimeLadder() {
+    const { visionRuntimeCandidates } = require('./ai/vision-runtime');
+    const explicitModel = process.env.SIRAGPT_VISION_DOC_MODEL;
+    if (explicitModel) {
+      return [{ provider: process.env.SIRAGPT_VISION_DOC_PROVIDER || 'OpenAI', model: explicitModel }];
+    }
+    const candidates = visionRuntimeCandidates();
+    const rawMax = Number.parseInt(process.env.SIRAGPT_VISION_DOC_LADDER_MAX, 10);
+    const max = Number.isFinite(rawMax) && rawMax >= 1 ? rawMax : 3;
+    return (candidates.length > 0 ? candidates : [{ provider: 'OpenAI', model: 'gpt-5.6-sol' }]).slice(0, max);
+  }
+
   async _extractWithVision(filePath, mimeType, openaiClient) {
     const fs = require('fs');
     const visionParser = require('./rag/vision-doc-parser');
+    const buf = await fs.promises.readFile(filePath);
+    const image = { base64: buf.toString('base64'), mediaType: mimeType || 'image/png' };
 
-    let openai = openaiClient;
-    const parseOptions = {};
-    if (!openai) {
-      // Prefer a runtime that works in this deployment (Gemini first); the
-      // model id and the JSON-schema strictness follow the chosen provider.
-      const { visionRuntimeCandidates, visionClientConfig } = require('./ai/vision-runtime');
-      const explicitModel = process.env.SIRAGPT_VISION_DOC_MODEL;
-      const candidate = explicitModel
-        ? { provider: process.env.SIRAGPT_VISION_DOC_PROVIDER || 'OpenAI', model: explicitModel }
-        : (visionRuntimeCandidates()[0] || { provider: 'OpenAI', model: 'gpt-5.6-sol' });
-      const config = visionClientConfig(candidate.provider);
-      const OpenAI = require('openai');
-      // Background enrichment only: bound it. The SDK default (10 min timeout,
-      // 2 retries with backoff) kept a 43 KB PNG "extracting" for ~75 s when
-      // the vision runtime answered 429 (prod 2026-09-26).
-      const visionTimeoutMs = Number(process.env.SIRAGPT_VISION_DOC_TIMEOUT_MS);
-      openai = new OpenAI({
-        apiKey: config.apiKey,
-        ...(config.baseURL ? { baseURL: config.baseURL } : {}),
-        timeout: Number.isFinite(visionTimeoutMs) && visionTimeoutMs >= 1000 ? visionTimeoutMs : 25_000,
-        maxRetries: 1,
-      });
-      parseOptions.model = candidate.model;
-      parseOptions.useStrictSchema = config.strictJsonSchema;
+    if (openaiClient) {
+      const layout = await visionParser.parseDocumentPage({ openai: openaiClient, image, options: {} });
+      return this._flattenLayoutToText(layout);
     }
 
-    const buf = await fs.promises.readFile(filePath);
-    const base64 = buf.toString('base64');
-    const layout = await visionParser.parseDocumentPage({
-      openai,
-      image: { base64, mediaType: mimeType || 'image/png' },
-      options: parseOptions,
-    });
-    return this._flattenLayoutToText(layout);
+    // Ladder over the configured vision runtimes. Prod 2026-09-27: the first
+    // runtime answered 429/503 for an hour and every scanned page lost its
+    // vision text («vision fallback failed: … 429 status code (no body)»)
+    // while the other runtimes were healthy. A key the provider rejects
+    // (401/403) is memoised via provider-key-health so the next page skips it.
+    const keyHealth = require('../utils/provider-key-health');
+    const { visionClientConfig } = require('./ai/vision-runtime');
+    const ladder = this._visionRuntimeLadder();
+    let lastError = null;
+    for (let i = 0; i < ladder.length; i += 1) {
+      const candidate = ladder[i];
+      const config = visionClientConfig(candidate.provider);
+      if (!config.apiKey) continue;
+      if (keyHealth.isRejected(candidate.provider, config.apiKey)) continue;
+      try {
+        const layout = await visionParser.parseDocumentPage({
+          openai: this._createVisionClient(config),
+          image,
+          options: { model: candidate.model, useStrictSchema: config.strictJsonSchema },
+        });
+        return this._flattenLayoutToText(layout);
+      } catch (err) {
+        lastError = err;
+        const cause = err && err.cause ? err.cause : err;
+        if (keyHealth.isInvalidKeyError(cause)) keyHealth.markRejected(candidate.provider, config.apiKey, cause);
+        const status = Number(cause?.status || cause?.statusCode || 0) || null;
+        const more = i < ladder.length - 1 ? ' — probando el siguiente runtime' : '';
+        console.warn(`[fileProcessor] vision runtime ${candidate.provider}:${candidate.model} failed${status ? ` (${status})` : ''}: ${String((err && err.message) || err).slice(0, 200)}${more}`);
+      }
+    }
+    if (lastError) throw lastError;
+    const none = new Error('no vision runtime configured');
+    none.code = 'vision_runtime_unavailable';
+    throw none;
   }
 
   /**

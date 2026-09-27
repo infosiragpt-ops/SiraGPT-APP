@@ -769,12 +769,19 @@ function createAgentesCodingRouter(opts = {}) {
 }
 
 const defaultRouter = createAgentesCodingRouter();
+// `module.exports = defaultRouter` makes the module and the router the SAME
+// object, so assigning `module.exports.attachTerminalWebSocket` below also
+// replaced `defaultRouter.attachTerminalWebSocket`: the wrapper called itself
+// until «Maximum call stack size exceeded» at every prod boot
+// (`agentes_coding_terminal_ws_init_failed`) and the terminal socket was never
+// attached. Capture the router's own attach (bound to its hub/env) first.
+const defaultAttachTerminalWebSocket = defaultRouter.attachTerminalWebSocket;
 module.exports = defaultRouter;
 module.exports.createAgentesCodingRouter = createAgentesCodingRouter;
 module.exports.createCodingSandbox = createCodingSandbox;
 module.exports.attachTerminalWebSocket = (httpServer, extra = {}) => {
-  if (typeof defaultRouter.attachTerminalWebSocket === 'function') {
-    return defaultRouter.attachTerminalWebSocket(httpServer, extra);
+  if (typeof defaultAttachTerminalWebSocket === 'function') {
+    return defaultAttachTerminalWebSocket(httpServer, extra);
   }
   return attachTerminalWebSocket(httpServer, extra);
 };

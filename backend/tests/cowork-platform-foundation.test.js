@@ -768,3 +768,70 @@ describe('Cowork approvals and connector catalog', () => {
     assert.equal(Object.hasOwn(account, 'configEncrypted'), false);
   });
 });
+
+// Prod 2026-09-27: runs left `running` by a backend restart held the plan's
+// concurrency slots for days («Your plan allows 12 concurrent Cowork task(s)»
+// on every chat turn). createRun must close abandoned runs before counting.
+describe('cowork stale-run reaping', () => {
+  function buildPrisma(rows, plan) {
+    const ACTIVE = new Set(['queued', 'running', 'paused', 'waiting_approval']);
+    const matches = (cond, row) => {
+      const st = cond.status;
+      const statusOk = typeof st === 'string' ? row.status === st : st.in.includes(row.status);
+      return statusOk && row.updatedAt < cond.updatedAt.lt;
+    };
+    const updates = [];
+    const prisma = {
+      user: { findUnique: async () => ({ id: 'u1', plan, isAdmin: false, isSuperAdmin: false }) },
+      coworkRun: {
+        findMany: async ({ where }) => rows.filter((row) => row.userId === where.userId && where.OR.some((cond) => matches(cond, row))),
+        updateMany: async ({ where, data }) => {
+          updates.push({ where, data });
+          let count = 0;
+          for (const row of rows) {
+            if (where.id.in.includes(row.id) && ACTIVE.has(row.status)) { Object.assign(row, data); count += 1; }
+          }
+          return { count };
+        },
+        count: async ({ where }) => rows.filter((row) => row.userId === where.userId && ACTIVE.has(row.status)).length,
+        create: async ({ data }) => ({ id: 'r-new', ...data }),
+      },
+      agentAuditLog: { create: async () => ({}) },
+      $transaction: async (callback) => callback(prisma),
+    };
+    return { prisma, updates };
+  }
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600_000);
+
+  test('abandoned runs are closed as failed; live and recently-waiting runs are untouched', async () => {
+    const rows = [
+      { id: 'stale-1', userId: 'u1', status: 'running', updatedAt: hoursAgo(3), workspaceId: 'w1' },
+      { id: 'fresh-1', userId: 'u1', status: 'running', updatedAt: hoursAgo(0.1), workspaceId: 'w1' },
+      { id: 'approval-old', userId: 'u1', status: 'waiting_approval', updatedAt: hoursAgo(30), workspaceId: 'w1' },
+      { id: 'approval-fresh', userId: 'u1', status: 'waiting_approval', updatedAt: hoursAgo(3), workspaceId: 'w1' },
+      { id: 'other-user', userId: 'u2', status: 'running', updatedAt: hoursAgo(50), workspaceId: 'w2' },
+    ];
+    const { prisma, updates } = buildPrisma(rows, 'PRO');
+    const run = await controlPlane.createRun(prisma, { userId: 'u1', prompt: 'x' });
+    assert.equal(run.id, 'r-new');
+    assert.equal(updates.length, 1);
+    assert.deepEqual([...updates[0].where.id.in].sort(), ['approval-old', 'stale-1']);
+    assert.equal(updates[0].data.status, 'failed');
+    assert.equal(updates[0].data.lastEvent, controlPlane.STALE_RUN_LAST_EVENT);
+    assert.equal(rows.find((r) => r.id === 'fresh-1').status, 'running');
+    assert.equal(rows.find((r) => r.id === 'approval-fresh').status, 'waiting_approval');
+    assert.equal(rows.find((r) => r.id === 'other-user').status, 'running');
+  });
+
+  test('a slot held only by an abandoned run is free again (FREE plan, concurrency 1)', async () => {
+    const stale = [{ id: 'stale-1', userId: 'u1', status: 'running', updatedAt: hoursAgo(3), workspaceId: 'w1' }];
+    const run = await controlPlane.createRun(buildPrisma(stale, 'FREE').prisma, { userId: 'u1', prompt: 'x' });
+    assert.equal(run.id, 'r-new');
+
+    const live = [{ id: 'live-1', userId: 'u1', status: 'running', updatedAt: hoursAgo(0.5), workspaceId: 'w1' }];
+    await assert.rejects(
+      controlPlane.createRun(buildPrisma(live, 'FREE').prisma, { userId: 'u1', prompt: 'x' }),
+      (error) => error.code === 'cowork_concurrency_limit' && error.details.active === 1 && error.details.concurrency === 1,
+    );
+  });
+});
