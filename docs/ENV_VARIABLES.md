@@ -592,3 +592,18 @@ Every file type is accepted in the `/agentes` composer. Defaults need no configu
 | `UNIVERSAL_ARCHIVE_MAX_LISTED` | `500` | Archive entries listed in the inventory |
 | `UNIVERSAL_ARCHIVE_MAX_UNPACKED_BYTES` | `2147483648` | Above this declared unpacked size only the index is shown |
 | `UNIVERSAL_EXTRACT_TIMEOUT_MS` | `90000` | Per-command timeout (LibreOffice gets at least 120 s) |
+
+## Turn failure tracker — Admin → Logs → «Fallos de respuesta» (optional)
+
+One `AuditLog` row (`action = turn_failed`) per user question the platform failed:
+error shown, no answer, hang, turn never finalized, lost attachment, failed tool,
+unusable answer (leaked markup, echo, claimed file not delivered…) or thumbs-down.
+Normal turns write nothing. All defaults are safe for production.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIRAGPT_TURN_FAILURES` | on (off under `NODE_ENV=test`) | `0` disables recording and the non-2xx middleware |
+| `SIRAGPT_TURN_FAILURE_RETENTION_DAYS` | `30` | Rows older than this are deleted by the `sweep-turn-failures` cron (they carry prompt excerpts) |
+| `SIRAGPT_TURN_FAILURE_RATE_LIMIT` | `30` | Max new rows per identical cause per minute (floods are counted, not stored) |
+| `SIRAGPT_TURN_SIN_CIERRE_MS` | `600000` | A turn with no activity and no finalize for this long is recorded as «Turno sin cerrar» |
+| `SYSTEM_CRON_TURN_FAILURE_SWEEP_SCHEDULE` | `50 4 * * *` | Retention sweep schedule (UTC) |

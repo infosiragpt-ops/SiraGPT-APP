@@ -115,6 +115,7 @@ describe('system-cron', () => {
         'sweep-old-audit-archives',
         'sweep-old-notifications',
         'sweep-stale-system-settings',
+        'sweep-turn-failures',
         'sweep-webhook-secret-grace',
       ]);
       // Default schedules — scrub @ 02:30 UTC, hard-delete @ 03:00 UTC,

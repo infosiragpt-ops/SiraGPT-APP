@@ -2687,6 +2687,70 @@ router.get('/audit-logs.csv', async (req, res) => {
   }
 });
 
+// ── Turn failure tracker (Admin → Logs → «Fallos de respuesta») ─────────
+// One row per user turn the platform failed (error, no answer, hang, lost
+// attachment, failed tool, unusable answer, thumbs-down). Normal turns are
+// never written. `recent` is the cheap poll the admin shell uses to sound
+// the error chime on any admin page.
+function turnFailureListParams(req) {
+  return {
+    id: req.query.id || null,
+    from: req.query.from || null,
+    to: req.query.to || null,
+    category: req.query.category || null,
+    model: req.query.model || null,
+    user: req.query.user || null,
+    q: req.query.q || null,
+    page: req.query.page,
+    limit: req.query.limit,
+  };
+}
+
+router.get('/turn-failures', async (req, res) => {
+  try {
+    const store = require('../services/observability/turn-failures').getStore();
+    res.json(await store.list(turnFailureListParams(req)));
+  } catch (err) {
+    console.error('[admin/turn-failures] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to query turn failures' });
+  }
+});
+
+router.get('/turn-failures/stats', async (_req, res) => {
+  try {
+    const store = require('../services/observability/turn-failures').getStore();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await store.stats());
+  } catch (err) {
+    console.error('[admin/turn-failures/stats] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to compute turn failure stats' });
+  }
+});
+
+router.get('/turn-failures/recent', async (req, res) => {
+  try {
+    const store = require('../services/observability/turn-failures').getStore();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await store.recent({ since: req.query.since || null }));
+  } catch (err) {
+    console.error('[admin/turn-failures/recent] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to poll turn failures' });
+  }
+});
+
+router.get('/turn-failures.csv', async (req, res) => {
+  try {
+    const turnFailures = require('../services/observability/turn-failures');
+    const params = { ...turnFailureListParams(req), limit: 200, page: 1 };
+    const { items } = await turnFailures.getStore().list(params);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="fallos-de-respuesta-${Date.now()}.csv"`);
+    res.send(turnFailures.itemsToCsv(items));
+  } catch (err) {
+    console.error('[admin/turn-failures.csv] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to export turn failures' });
+  }
+});
 // ── Registros en vivo (live backend logs) ───────────────────────────
 // Every line the backend prints, redacted and tagged with its request
 // context. Handlers live in routes/admin-live-logs.js.

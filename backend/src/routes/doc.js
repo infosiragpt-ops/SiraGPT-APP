@@ -298,6 +298,17 @@ router.post(
     const prompt = req.body.prompt.trim();
     const displayPrompt = (req.body.displayPrompt || prompt).trim();
     const { chatId } = req.body;
+    // Turn failure tracker (Admin → Logs → «Fallos de respuesta»).
+    const __docGenTurnTap = require('../services/observability/turn-failures').beginTurn(req, res, {
+      route: 'doc-generate',
+      context: {
+        chatId: typeof chatId === 'string' && chatId.trim() ? chatId.trim() : null,
+        idempotencyKey: typeof req.body.idempotencyKey === 'string' ? req.body.idempotencyKey.trim().slice(0, 200) : null,
+        prompt: displayPrompt,
+        modelPicked: typeof req.body.model === 'string' ? req.body.model : null,
+        modelLabel: typeof req.body.model === 'string' ? req.body.model : null,
+      },
+    });
     const operation = await beginDocumentOperation({
       userId: req.user.id,
       route: 'doc.generate',
@@ -591,6 +602,12 @@ router.post(
       });
     }
 
+    if (__docGenTurnTap) {
+      require('../services/observability/turn-failures').finishTurn(__docGenTurnTap, {
+        signalAborted: Boolean(controller && controller.signal && controller.signal.aborted),
+        userStopped: Boolean(controller && controller.signal && controller.signal.aborted && controller.__siraStopReason),
+      });
+    }
     try { res.end(); } catch {}
   }
 );

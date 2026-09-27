@@ -175,6 +175,37 @@ describe('api client core', () => {
     expect(reportClientLog).not.toHaveBeenCalled()
   })
 
+  it('never reports provider-not-configured answers as user-facing errors (any status)', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'ElevenLabs API key not configured', code: 'provider_not_configured' }),
+    })
+    await expect((api as any).request('/elevenlabs/text-to-speech', { method: 'POST', body: '{}' })).rejects.toThrow('not configured')
+
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 424,
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'Feature disabled on this server' }),
+    })
+    await expect((api as any).request('/some/feature', { method: 'POST', body: '{}' })).rejects.toThrow('Feature disabled')
+
+    expect(reportClientLog).not.toHaveBeenCalled()
+  })
+
+  it('suppressFailureLog silences 4xx failures too, not only the final 5xx', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'Not found' }),
+    })
+    await expect(api.getAdminRequestLogs('req-1')).rejects.toThrow('Not found')
+    expect(reportClientLog).not.toHaveBeenCalled()
+  })
+
   it('still reports unexpected API failures', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,

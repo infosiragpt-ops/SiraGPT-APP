@@ -16,10 +16,71 @@ type ClientLogPayload = {
   endpoint?: string
   extra?: Record<string, unknown> | null
   digest?: string | null
+  /**
+   * Turn failure seen in the browser (Admin → Logs → «Fallos de respuesta»).
+   * The server merges it into the same row as its own finalizer by
+   * chatId + idempotencyKey. Ids only — never the prompt or the answer.
+   */
+  turn?: ClientTurnSignal | null
+}
+
+export type ClientTurnReason =
+  | "stream_error"
+  | "connect_failed"
+  | "http_error"
+  | "render_crash"
+  | "no_activity"
+  | "stalled"
+  | "empty_close"
+  | "no_response"
+
+export type ClientTurnSignal = {
+  reason: ClientTurnReason
+  chatId?: string | null
+  streamId?: string | null
+  idempotencyKey?: string | null
+  model?: string | null
+  attempts?: number | null
+  hasContent?: boolean
+  elapsedMs?: number | null
 }
 
 const MAX_MESSAGE = 700
 const SENSITIVE_KEY_RE = /password|passwd|secret|token|authorization|cookie|api[_-]?key|private[_-]?key|session|csrf|bearer|deepseek|email|prompt|completion|access_token|refresh_token|id_token|client_secret|mailto|ssn|iban|cvv|phone|card|credit[_-]?card|passport|dob|date[_-]?of[_-]?birth|address|national[_-]?id|routing[_-]?number|tax[_-]?id|driver[_-]?license|bank[_-]?account|swift|bic|ruc|dni|cpf|curp|rfc|(?:^|_|-)pin(?:$|_|-)|national[_-]?insurance|clabe|cci|cuit|cuil|nie|nif|(?:^|_|-)nss(?:$|_|-)|jwt|sessionid|set[_-]?cookie|x[_-]?csrf|auth[_-]?header/i
+
+const TURN_ID_RE = /^[A-Za-z0-9:_\-.]{1,150}$/
+
+function cleanTurnId(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const text = value.trim()
+  return TURN_ID_RE.test(text) ? text : null
+}
+
+function cleanTurn(turn: ClientTurnSignal | null | undefined): ClientTurnSignal | null {
+  if (!turn || typeof turn !== "object" || typeof turn.reason !== "string") return null
+  return {
+    reason: turn.reason,
+    chatId: cleanTurnId(turn.chatId),
+    streamId: cleanTurnId(turn.streamId),
+    idempotencyKey: cleanTurnId(turn.idempotencyKey),
+    model: typeof turn.model === "string" ? turn.model.slice(0, 80) : null,
+    attempts: typeof turn.attempts === "number" && Number.isFinite(turn.attempts) ? turn.attempts : null,
+    hasContent: turn.hasContent === true,
+    elapsedMs: typeof turn.elapsedMs === "number" && Number.isFinite(turn.elapsedMs) ? Math.round(turn.elapsedMs) : null,
+  }
+}
+
+/** Chat id of the /agentes conversation on screen, if any. */
+function chatIdFromLocation(): string | null {
+  if (typeof window === "undefined") return null
+  const match = /\/agentes\/([A-Za-z0-9_-]{8,})/.exec(window.location.pathname || "")
+  if (match) return match[1]
+  try {
+    return cleanTurnId(new URLSearchParams(window.location.search || "").get("id"))
+  } catch {
+    return null
+  }
+}
 
 function currentPage(): string {
   if (typeof window === "undefined") return "server"
@@ -86,6 +147,7 @@ export function reportClientLog(payload: ClientLogPayload): void {
     method: cleanString(payload.method || "", 20),
     endpoint: cleanString(payload.endpoint || "", 300),
     extra: cleanExtra(payload.extra || null),
+    ...(payload.turn ? { turn: cleanTurn(payload.turn) } : {}),
   }
 
   const token = window.localStorage?.getItem("auth-token")
@@ -109,6 +171,7 @@ export function reportErrorBoundary(
   extra?: { requestId?: string | null; digest?: string | null },
 ): void {
   const digest = extra?.digest || error.digest || null
+  const chatId = chatIdFromLocation()
   reportClientLog({
     source: "render",
     severity: "error",
@@ -119,6 +182,9 @@ export function reportErrorBoundary(
     requestId: extra?.requestId || null,
     digest,
     extra: digest ? { digest } : null,
+    // A crash while a chat is on screen means the user could not read the
+    // answer: it also counts as a failed turn for the admin tracker.
+    ...(chatId ? { turn: { reason: "render_crash" as const, chatId } } : {}),
   })
 }
 
@@ -127,6 +193,23 @@ export function redactBoundaryMessage(message: unknown): string {
 }
 
 
+
+/**
+ * Report a turn the browser saw fail (stream error, no activity, empty
+ * close…). Never throws; rate-limited with every other client log.
+ */
+export function reportTurnFailure(turn: ClientTurnSignal, message?: string, extra?: { status?: number | null; endpoint?: string; requestId?: string | null }): void {
+  reportClientLog({
+    source: "api",
+    severity: "error",
+    action: `turn_${turn.reason}`,
+    message: message || turn.reason,
+    endpoint: extra?.endpoint || "/ai/generate",
+    status: extra?.status ?? null,
+    requestId: extra?.requestId || null,
+    turn,
+  })
+}
 
 /** 3H-FE-003 — nested extra PII (email/prompt) never leaves the browser. */
 export function stripPiiExtra(extra: unknown): unknown {

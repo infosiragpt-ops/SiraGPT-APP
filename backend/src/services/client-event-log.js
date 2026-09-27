@@ -1,5 +1,7 @@
 'use strict';
 
+const { isConfigStateMessage } = require('./observability/config-state');
+
 const MAX_STRING = 500;
 const MAX_STACK = 1800;
 
@@ -178,10 +180,21 @@ function isExpectedQuotaClientEvent(event = {}) {
     || endpoint === '/generate-document';
 }
 
+// «ElevenLabs API key not configured», «Stripe not configured», a disabled
+// feature… — a configuration state, not an error the user hit. Old bundles
+// still report them (any status), so the intake drops them server-side.
+function isExpectedConfigClientEvent(event = {}) {
+  if (!event || event.source !== 'api') return false;
+  const status = Number(event.status);
+  if (!Number.isFinite(status) || status < 400) return false;
+  return isConfigStateMessage(event.message, event.extra);
+}
+
 module.exports = {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,
   isExpectedQuotaClientEvent,
+  isExpectedConfigClientEvent,
   redactText,
 };

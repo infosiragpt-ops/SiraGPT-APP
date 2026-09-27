@@ -85,35 +85,50 @@ const upload = multer({
   }
 });
 
-// ElevenLabs API configuration
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+// ElevenLabs API key — read per request, never captured at module load: the
+// admin-connections bridge applies a key saved in Admin → Conexiones into
+// process.env at runtime, after this router has been required.
+function elevenLabsApiKey() {
+  return String(process.env.ELEVENLABS_API_KEY || '').trim();
+}
+
+// Uniform «not configured» answer for the action endpoints. The stable code
+// lets observability treat it as a configuration state, not a user-facing
+// failure (see services/observability/config-state.js).
+function elevenLabsNotConfigured(res) {
+  return res.status(400).json({ error: 'ElevenLabs API key not configured', code: 'provider_not_configured' });
+}
 
 // Lazy ElevenLabs client init — instantiating at module load crashes the
 // whole backend when ELEVENLABS_API_KEY is missing in dev. Defer until
-// the first request actually needs it.
+// the first request actually needs it; rebuild when the key rotates.
 let elevenlabsClient = null;
+let elevenlabsClientKey = '';
 function elevenlabs() {
-  if (!ELEVENLABS_API_KEY) return null;
-  if (!elevenlabsClient) elevenlabsClient = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY });
+  const apiKey = elevenLabsApiKey();
+  if (!apiKey) return null;
+  if (!elevenlabsClient || elevenlabsClientKey !== apiKey) {
+    elevenlabsClient = new ElevenLabsClient({ apiKey });
+    elevenlabsClientKey = apiKey;
+  }
   return elevenlabsClient;
 }
 
-// Get available voices
+// Get available voices. Catalog reads answer 200 even without a key: the
+// /agentes voice pickers ask for the list, and «no key» simply means an
+// empty catalog (`configured: false`), not an error on every page load.
 router.get('/voices', authenticateToken, async (req, res) => {
   try {
-    console.log('ElevenLabs API Key configured:', !!ELEVENLABS_API_KEY);
-
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return res.json({ configured: false, voices: [] });
     }
 
-    console.log('Fetching voices from ElevenLabs...');
     const voices = await elevenlabs().voices.getAll();
 
     // ElevenLabs API might return { voices: [...] } or just [...]
     // Ensure we always return { voices: [...] } format
     const voicesArray = voices?.voices || voices || [];
-    res.json({ voices: voicesArray });
+    res.json({ configured: true, voices: voicesArray });
   } catch (error) {
     console.error('Error fetching voices:', error);
     res.status(500).json({ error: error.message });
@@ -122,15 +137,13 @@ router.get('/voices', authenticateToken, async (req, res) => {
 
 router.get('/models', authenticateToken, async (req, res) => {
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return res.json({ configured: false, models: [] });
     }
-    console.log('Fetching models from ElevenLabs...');
     const models = await elevenlabs().models.list();
-    console.log('Models fetched:', models?.length || 0);
 
     // API seedha array return karti hai, hum use object mein wrap kar rahe hain
-    res.json({ models: models || [] });
+    res.json({ configured: true, models: models || [] });
   } catch (error) {
     console.error('Error fetching models:', error);
     res.status(500).json({ error: error.message });
@@ -196,8 +209,8 @@ router.post('/text-to-speech', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
 
     const {
@@ -326,7 +339,7 @@ router.post('/speech-to-text', authenticateToken, markVoiceTranscriptionTier, up
     if (!req.file) {
       return res.status(400).json({ error: 'Audio file is required' });
     }
-    if (!ELEVENLABS_API_KEY || req.freeVoiceTranscription) {
+    if (!elevenLabsApiKey() || req.freeVoiceTranscription) {
       return freeSpeechToText(req, res);
     }
 
@@ -342,7 +355,6 @@ router.post('/speech-to-text', authenticateToken, markVoiceTranscriptionTier, up
     });
 
     // Check if ElevenLabs STT is actually available
-    console.log('ElevenLabs API Key present:', !!ELEVENLABS_API_KEY);
     console.log('File size in MB:', (req.file.size / 1024 / 1024).toFixed(2));
 
     // Use the official ElevenLabs client method
@@ -547,8 +559,8 @@ router.get('/audio/:filename', (req, res) => {
 // Get voice settings for a specific voice
 router.get('/voices/:voice_id/settings', authenticateToken, async (req, res) => {
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
 
     const { voice_id } = req.params;
@@ -571,15 +583,15 @@ router.get('/voices/:voice_id/settings', authenticateToken, async (req, res) => 
 // Test ElevenLabs STT availability
 router.get('/test-stt', authenticateToken, async (req, res) => {
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
 
     // Test if STT endpoint exists
     const testResponse = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
       method: 'OPTIONS',
       headers: {
-        'xi-api-key': ELEVENLABS_API_KEY,
+        'xi-api-key': elevenLabsApiKey(),
       },
       signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000),
     });
@@ -601,13 +613,13 @@ router.get('/test-stt', authenticateToken, async (req, res) => {
 // Get user's subscription info
 router.get('/user/subscription', authenticateToken, async (req, res) => {
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
 
     const subscriptionResponse = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
       headers: {
-        'xi-api-key': ELEVENLABS_API_KEY,
+        'xi-api-key': elevenLabsApiKey(),
         accept: 'application/json',
       },
       signal: AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000),
@@ -670,7 +682,7 @@ function elevenLabsDetail(data, fallback) {
 }
 
 async function proxyElevenLabs(res, targetPath, { method = 'GET', json, form, timeoutMs } = {}) {
-  const headers = { 'xi-api-key': ELEVENLABS_API_KEY, accept: 'application/json' };
+  const headers = { 'xi-api-key': elevenLabsApiKey(), accept: 'application/json' };
   let body;
   if (form) {
     Object.assign(headers, form.getHeaders());
@@ -702,8 +714,8 @@ router.post('/pvc/voices', [
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
     }
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     const { name, language = 'es' } = req.body;
     return await proxyElevenLabs(res, '/v1/voices/pvc', { method: 'POST', json: { name, language } });
@@ -721,8 +733,8 @@ router.post('/pvc/voices/:voiceId/samples', authenticateToken, requirePaidPlan({
     return;
   }
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'Sube al menos un archivo de audio o vídeo' });
@@ -759,8 +771,8 @@ router.post('/pvc/voices/:voiceId/train', [
     }
     const voiceId = pvcVoiceId(req, res);
     if (!voiceId) return;
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     const { model_id } = req.body;
     return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/train`, {
@@ -779,11 +791,11 @@ router.get('/pvc/voices/:voiceId', authenticateToken, requirePaidPlan({ feature:
   try {
     const voiceId = pvcVoiceId(req, res);
     if (!voiceId) return;
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     const encoded = encodeURIComponent(voiceId);
-    const headers = { 'xi-api-key': ELEVENLABS_API_KEY, accept: 'application/json' };
+    const headers = { 'xi-api-key': elevenLabsApiKey(), accept: 'application/json' };
     const timeout = AbortSignal.timeout(Number(process.env.ELEVENLABS_TIMEOUT_MS) || 30000);
     // El shell en entrenamiento se lee en /v1/voices/pvc/:id; una vez
     // entrenada, la lectura canónica es /v1/voices/:id.
@@ -815,8 +827,8 @@ router.delete('/pvc/voices/:voiceId/samples/:sampleId', authenticateToken, requi
     if (!sampleId || sampleId.length > 120) {
       return res.status(400).json({ error: 'sampleId inválido' });
     }
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/samples/${encodeURIComponent(sampleId)}`, { method: 'DELETE' });
   } catch (error) {
@@ -830,8 +842,8 @@ router.get('/pvc/voices/:voiceId/captcha', authenticateToken, requirePaidPlan({ 
   try {
     const voiceId = pvcVoiceId(req, res);
     if (!voiceId) return;
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/captcha`);
   } catch (error) {
@@ -844,8 +856,8 @@ router.post('/pvc/voices/:voiceId/verification', authenticateToken, requirePaidP
   try {
     const voiceId = pvcVoiceId(req, res);
     if (!voiceId) return;
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    if (!elevenLabsApiKey()) {
+      return elevenLabsNotConfigured(res);
     }
     return await proxyElevenLabs(res, `/v1/voices/pvc/${encodeURIComponent(voiceId)}/verification`, { method: 'POST', json: {} });
   } catch (error) {
@@ -872,7 +884,7 @@ router.post('/generate-music', [
     }
 
     if (!elevenLabsMusic.isElevenLabsConfigured()) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+      return elevenLabsNotConfigured(res);
     }
 
     const {

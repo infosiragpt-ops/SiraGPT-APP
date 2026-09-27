@@ -70,6 +70,8 @@ async function harness({ source = true, chatOwned = true, editable = true } = {}
       return { imageUrl: `/uploads/images/result-${calls.saves.length}.png`, fileId: `result-${calls.saves.length}`, width, height };
     },
     recordApiUsage: async () => ({}), usagePayloadFor: () => ({}), classifyImageGenError,
+    // «Fallos de respuesta» hooks (turn-failures) — advisory, stubbed here.
+    turnFailures: { recordGenerationFailure: async () => ({}), recordBlankImagesIfAny: async () => false },
     IMAGE_ASPECT_RATIOS: { '1:1': {}, '3:4': {}, '16:9': {}, '9:16': {} },
   };
   vm.runInNewContext(routeSource.slice(routeStart, routeEnd), context, { filename: routeFile });

@@ -3,6 +3,7 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { AdminSidebar } from "@/components/admin-sidebar"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { AuthGuard } from "@/components/auth-guard"
+import { TurnFailureAlertsProvider } from "@/lib/admin/turn-failure-alerts"
 
 export default function AdminLayout({
   children,
@@ -11,6 +12,8 @@ export default function AdminLayout({
 }) {
   return (
     <AuthGuard requireAdmin={true}>
+      {/* Live failed-turn listener: badge + tab title + error chime on every admin page. */}
+      <TurnFailureAlertsProvider>
       <SidebarProvider defaultOpen={true}>
         <div className="admin-shell admin-shell-v20260815 flex h-[100dvh] min-h-0 w-full max-w-full overflow-hidden bg-zinc-50/80">
           <AdminSidebar />
@@ -19,6 +22,7 @@ export default function AdminLayout({
           </SidebarInset>
         </div>
       </SidebarProvider>
+      </TurnFailureAlertsProvider>
     </AuthGuard>
   )
 }

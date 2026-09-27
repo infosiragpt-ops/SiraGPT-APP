@@ -24,12 +24,15 @@ const {
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,
   isExpectedQuotaClientEvent,
+  isExpectedConfigClientEvent,
 } = require('../services/client-event-log');
 
 router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req, res) => {
   const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
   const event = sanitizeClientEvent(body, req);
-  const expectedClientNoise = isExpectedAuthClientEvent(event) || isExpectedQuotaClientEvent(event);
+  const expectedClientNoise = isExpectedAuthClientEvent(event)
+    || isExpectedQuotaClientEvent(event)
+    || isExpectedConfigClientEvent(event);
   if (!expectedClientNoise) {
     // Fire-and-forget — never block the client on alerting I/O.
     Promise.resolve().then(() => alerting.notifyFrontendError({
@@ -42,6 +45,15 @@ router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req,
 
     Promise.resolve()
       .then(() => writeAuditLog(prisma, buildClientEventAuditEntry(event, req)))
+      .catch(() => {});
+  }
+
+  // Browser-side turn failure (stream error, no activity, empty close,
+  // render crash on a chat): merge into the same «Fallos de respuesta» row
+  // the server finalizer writes for that turn (chatId + idempotencyKey).
+  if (body.turn && typeof body.turn === 'object' && req.user) {
+    Promise.resolve()
+      .then(() => require('../services/observability/turn-failures').recordClientSignal(body, req))
       .catch(() => {});
   }
 
