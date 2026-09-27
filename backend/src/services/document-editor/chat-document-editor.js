@@ -203,15 +203,71 @@ async function latestDerivedArtifacts({ prisma, userId, chatId, uploads, deps })
   });
 }
 
+function namesExactVisibleArtifact(instruction, filename) {
+  const name = String(filename || '').normalize('NFC').toLowerCase();
+  if (!name) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}_.-])${escaped}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu')
+    .test(sourceSelectionText(instruction));
+}
+
+function requestsEditedVersion(instruction) {
+  const text = String(instruction || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // "La última versión" asks for the newest lineage member even if its
+  // filename changed. "Prueba-PDF.pdf recién editado" names that copy itself.
+  return /\b(?:recien\s+editad[oa]s?|que\s+(?:acabas|acabamos)\s+de\s+editar)\b/.test(text);
+}
+
+async function exactNamedEditedArtifact({ prisma, userId, chatId, instruction, deps }) {
+  if (!requestsEditedVersion(instruction) || !chatId || !prisma?.message?.findMany) return null;
+  const messages = await prisma.message.findMany({
+    where: { chatId, role: 'ASSISTANT', deletedAt: null, chat: { userId } },
+    select: { role: true, files: true, content: true },
+    orderBy: { timestamp: 'desc' },
+    take: HISTORY_SCAN_MESSAGES,
+  }).catch(() => []);
+  const named = new Map();
+  for (const message of messages) {
+    if (message.role && message.role !== 'ASSISTANT') continue;
+    for (const ref of assistantFileRefs(message)) {
+      const artifactId = artifactIdFromRef(ref);
+      const metadata = artifactId && readOwnedArtifactMetadata(artifactId, userId, deps);
+      if (!metadata || !namesExactVisibleArtifact(instruction, metadata.filename)) continue;
+      const key = metadata.filename.normalize('NFC').toLowerCase();
+      // Messages are newest-first. Repeated filenames keep the latest bytes.
+      if (!named.has(key)) named.set(key, { kind: 'artifact', name: metadata.filename, artifactId, metadata });
+    }
+  }
+  return named.size === 1 ? named.values().next().value : null;
+}
+
 /**
  * Resolve which documents this turn edits. Explicit attachments win; a
  * follow-up scans the conversation newest-first and takes the latest document set,
  * whether it was delivered by the assistant or uploaded by the user.
  */
-async function resolveEditSources({ prisma, userId, chatId, fileIds = [], allowImageOnlyFollowup = false, includeRelatedSources = false, deps }) {
+async function resolveEditSources({ prisma, userId, chatId, fileIds = [], instruction = '', allowImageOnlyFollowup = false, includeRelatedSources = false, deps }) {
+  // An explicit, visible filename plus "recién editado" identifies a specific
+  // delivered version. A newer output with a different name may share its
+  // lineage, but must not silently replace the file the user named.
   const explicit = [...new Set((Array.isArray(fileIds) ? fileIds : []).map(uploadIdFromRef).filter(Boolean))];
+  const namedEdited = includeRelatedSources || isExplicitBatch(instruction) ? null
+    : await exactNamedEditedArtifact({ prisma, userId, chatId, instruction, deps });
+  let uploads = null;
+  if (namedEdited) {
+    uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
+    const sourceFileId = String(namedEdited.metadata?.validation?.documentEdit?.sourceFileId || '');
+    const sameName = (name) => String(name || '').normalize('NFC').toLowerCase()
+      === namedEdited.name.normalize('NFC').toLowerCase();
+    if (uploads.some((upload) => sameName(upload.name)
+      && (!sourceFileId || String(upload.row.id) !== sourceFileId))) {
+      throw new DocumentEditError('DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
+        `Hay otro archivo adjunto llamado ${namedEdited.name}. Indica cuál deseas editar; no modifiqué ninguno.`);
+    }
+    return [namedEdited];
+  }
   if (explicit.length) {
-    const uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
+    uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
     const latest = await latestDerivedArtifacts({ prisma, userId, chatId, uploads, deps });
     const byId = new Map(uploads.map((upload, index) => [upload.row.id, latest[index]]));
     const images = allowImageOnlyFollowup ? await loadOwnedImageRows(prisma, userId, explicit) : [];
@@ -682,7 +738,7 @@ async function runResolvedDocumentEdit({
     // it before parsing would turn an ambiguous precise follow-up into an edit
     // of the first attachment. Only the selected source is read below.
     const imageEdit = deps.parseDocxImageRequest(instruction);
-    let sources = resolved?.sources || await resolveEditSources({ prisma, userId, chatId, fileIds,
+    let sources = resolved?.sources || await resolveEditSources({ prisma, userId, chatId, fileIds, instruction,
       includeRelatedSources: isExplicitBatch(instruction), allowImageOnlyFollowup: Boolean(imageEdit), deps });
     if (!sources.length) {
       if (precisionOnly && !deps.parseDocxPrecisionRequest(instruction)) return null;
@@ -733,12 +789,15 @@ async function runResolvedDocumentEdit({
       const request = sourceSelectionText(instruction);
       const named = sources.filter((source) => sourceNames(source).some((name) => request.includes(name.normalize('NFC').toLowerCase())));
       const mentionedNames = new Set(named.flatMap(sourceNames).map((name) => name.normalize('NFC').toLowerCase()).filter((name) => request.includes(name)));
-      if ((!named.length || mentionedNames.size < named.length) && !isExplicitBatch(instruction)) return {
+      const batchRequested = isExplicitBatch(instruction);
+      if ((!named.length || mentionedNames.size < named.length) && !batchRequested) return {
         ok: false,
         code: wordSources ? 'DOCX_EDIT_SOURCE_AMBIGUOUS' : 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
         message: 'Hay varios documentos posibles. Indica el nombre del archivo que deseas editar o adjunta solamente ese documento; no modifiqué ninguno.',
       };
-      if (named.length) sources = named;
+      // A plural request that names only one member still includes the other
+      // documents. Two or more explicit names can scope "ambos" to that set.
+      if (named.length && (!batchRequested || named.length > 1)) sources = named;
     }
     const batchCounts = explicitBatchCounts(instruction);
     const batchSize = resolved?.batchNames?.length || sources.length;
@@ -1011,6 +1070,7 @@ function resolveDeps(injected) {
 
 module.exports = {
   documentStem,
+  isExplicitBatchRequest: isExplicitBatch,
   isContentGeneratingOfficeRequest,
   assistantFileRefs,
   runChatDocumentEdit,

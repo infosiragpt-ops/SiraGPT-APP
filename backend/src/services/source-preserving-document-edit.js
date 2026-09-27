@@ -8926,8 +8926,10 @@ const NAMED_NON_WORD_DOCUMENT = Symbol('named_non_word_document');
 async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent }) {
   const docxEngine = require('./docx-engine');
   const editor = require('./document-editor/chat-document-editor');
+  const batchRequested = editor.isExplicitBatchRequest(requestText);
   const sources = await editor.resolveEditSources({
-    prisma, userId, chatId, fileIds, preserveCandidates: true, allowImageOnlyFollowup: Boolean(parseImageEditRequest(requestText)), deps: {
+    prisma, userId, chatId, fileIds, instruction: requestText, includeRelatedSources: batchRequested,
+    preserveCandidates: true, allowImageOnlyFollowup: Boolean(parseImageEditRequest(requestText)), deps: {
       artifactDir: require('./agents/task-tools').ARTIFACT_DIR,
       extractFileIds: require('./message-attachments').extractFileIdsFromMessageFiles,
     },
@@ -8940,6 +8942,10 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
   const candidates = sources.map((source) => ({ originalName: source.name, filename: source.name,
     source: 'current_upload', identity: source.kind === 'artifact' ? `artifact:${source.artifactId}` : source.row?.id }));
   let selectedFileIds = fileIds;
+  if (batchRequested && sources.length > 1) {
+    selectedFileIds = sources.map((source) => source.kind === 'artifact'
+      ? `artifact:${source.artifactId}` : source.row?.id).filter(Boolean);
+  }
   if (requestWantsBatchDocumentEdit(requestText, candidates)) {
     const scoped = selectBatchDocumentSources(requestText, candidates);
     if (scoped.length < candidates.length && scoped.every((source) => source.identity)) {
@@ -8955,9 +8961,9 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
   // though the PDF it names belongs to an earlier multi-file delivery.
   // Recover that related batch by chat ownership and select its latest PDF
   // artifact before the Word-only precision parser can reject the request.
-  if (named.length !== 1 && /\.(?:pdf|xlsx?|xlsm|pptx?)\b/i.test(request)) {
+  if (!batchRequested && named.length !== 1 && /\.(?:pdf|xlsx?|xlsm|pptx?)\b/i.test(request)) {
     const related = await editor.resolveEditSources({
-      prisma, userId, chatId, fileIds: [], includeRelatedSources: true,
+      prisma, userId, chatId, fileIds: [], instruction: requestText, includeRelatedSources: true,
       deps: {
         artifactDir: require('./agents/task-tools').ARTIFACT_DIR,
         extractFileIds: require('./message-attachments').extractFileIdsFromMessageFiles,
@@ -8968,7 +8974,7 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
   }
   // A Word in the chat history must not make the Word-only precision parser
   // reject an explicitly named PDF, spreadsheet or presentation later.
-  const namedNonWord = named.length === 1 && !docxEngine.isWordFilename(named[0].name);
+  const namedNonWord = !batchRequested && named.length === 1 && !docxEngine.isWordFilename(named[0].name);
   // Page operations keep the existing PDF adapter. Text changes need the
   // selected-model editor that already handles PDFs in mixed-file batches.
   const namedPdfTextEdit = namedNonWord && /\.pdf$/i.test(named[0].name) && !parsePdfEditRequest(requestText);
