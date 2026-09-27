@@ -344,6 +344,7 @@ function buildProviderChatPayload({
   applyStreamingUsage(payload, runtime);
   applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExplicit);
   stripUnsupportedThinkingFields(payload, runtime);
+  stripUnsupportedSamplingFields(payload, runtime);
 
   return {
     schema_version: "sira.provider_chat_payload.v1",
@@ -352,6 +353,17 @@ function buildProviderChatPayload({
     payload,
     runtime,
   };
+}
+
+function stripUnsupportedSamplingFields(payload, runtime) {
+  // GPT-6 Sol's first-party API accepts only its default temperature. Chat
+  // supplies 0.55 by default, including its non-streaming corrective pass.
+  // Omitting the field keeps the selected model and lets the API use its
+  // default rather than failing the entire turn with a 400.
+  if (runtime.provider === "openai" && runtime.model_id === "gpt-6-sol") {
+    delete payload.temperature;
+  }
+  return payload;
 }
 
 function applyResponseFormat(payload, responseFormat, runtime, extra) {
