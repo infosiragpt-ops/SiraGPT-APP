@@ -756,6 +756,9 @@ interface AddMessageOptions {
       loop loads those apps' tools on every message, not just when the
       user types an explicit @mention. */
   pinnedAppIds?: string[]
+  /** «Búsqueda web» chip on a non-academic ask: the turn searches the web
+      before answering, whatever the wording. */
+  webSearchMode?: 'dedicated'
 }
 interface ChatContextType {
   chats: Chat[]
@@ -765,7 +768,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     content?: string,
     files?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated' }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
@@ -1358,6 +1361,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
               ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }
               : {}),
+            ...(options?.webSearchMode === 'dedicated' ? { webSearchMode: 'dedicated' } : {}),
           };
       const pendingMessage = options?.reusePending
         ? null
@@ -2621,7 +2625,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated' }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !isAuthenticated || !chatModel) return;
@@ -2759,7 +2763,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               break;
             default:
-              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality });
+              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality, webSearchMode: options?.webSearchMode });
               break;
           }
         } catch (error) {

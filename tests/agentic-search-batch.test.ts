@@ -73,6 +73,50 @@ describe("agentic search batch", () => {
     assert.ok(events.some(evt => evt.type === "collection_done" && evt.totalCollected === 5))
   })
 
+  // Prod 2026-09-27: the browser gave up during a silent LLM re-ranking and
+  // the run still re-ranked and saved a report into the chat 2.5 min later.
+  it("stops before re-ranking or reporting once the client is gone", async () => {
+    const papers = Array.from({ length: 5 }, (_, index) => ({
+      source: "crossref",
+      title: `Paper ${index}`,
+      doi: `10.1000/paper-${index}`,
+      url: `https://doi.org/10.1000/paper-${index}`,
+      authors: [],
+      providerRank: index,
+    }))
+    for (const leaveAt of ["collection_done", "rerank"] as const) {
+      const controller = new AbortController()
+      let reranked = false
+      const events: AgenticBatchEvent[] = []
+      for await (const evt of runAgenticBatch({
+        query: "multisensory disruptive behavior",
+        target: 5,
+        batchSize: 5,
+        topK: 5,
+        providers: ["crossref"],
+        signal: controller.signal,
+        resolveDois: false,
+        deps: {
+          retrieve: async () => papers,
+          rerank: async ({ results }: any) => {
+            reranked = true
+            if (leaveAt === "rerank") controller.abort()
+            return { results, reranked: false }
+          },
+          sleep: async () => undefined,
+        },
+      })) {
+        events.push(evt)
+        if (leaveAt === "collection_done" && evt.type === "collection_done") controller.abort()
+      }
+      const aborted = events.find(evt => evt.type === "aborted") as (AgenticBatchEvent & { stage?: string }) | undefined
+      assert.equal(aborted?.reason, "client_disconnect", leaveAt)
+      assert.equal(aborted?.stage, leaveAt === "rerank" ? "validation" : "ranking", leaveAt)
+      assert.equal(reranked, leaveAt === "rerank", `${leaveAt}: no LLM re-ranking after the client left`)
+      assert.ok(!events.some(evt => evt.type === "summary" || evt.type === "done"), `${leaveAt}: nothing left to persist`)
+    }
+  })
+
   it("passes offsets to providers that support real pagination", async () => {
     const g = globalThis as typeof globalThis & { fetch: any }
     const originalFetch = g.fetch

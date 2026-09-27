@@ -250,7 +250,7 @@ const VoiceStudioModal = dynamic(
   { ssr: false, loading: () => null },
 )
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
-import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
+import { isAcademicResearchPrompt, shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
   RESEARCH_FOLLOW_UP_EVENT,
   buildScientificPapersMessage,
@@ -11008,7 +11008,11 @@ REWRITTEN TEXT:`;
       // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
       // For new chats, `createNewChat` will handle creating the chat, and the context will replace the temp chat.
 
-      if (isWebSearchActive || shouldUseAcademicSearch) {
+      // «Búsqueda web» runs the academic batch (arXiv, Crossref…) only for
+      // scholarly asks. News, prices and everything else answer in the chat
+      // with a forced web search: «noticias de hoy en Lima» used to search
+      // academic indexes and die at 136 s with «Búsqueda fallida».
+      if (shouldUseAcademicSearch || (isWebSearchActive && isAcademicResearchPrompt(msg))) {
         await handleWebSearch(msg);
         markQueuedSendSucceeded();
         return;
@@ -11203,16 +11207,19 @@ REWRITTEN TEXT:`;
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
         const pins = appPins.pinnedAppIds
         const imageSettings = selectedImageModel ? { imageModel: selectedImageModel, imageProvider: providerForSelectedImageModel(selectedImageModel), imageQuality: selectedImageQuality } : {}
+        const webSearchSettings = isWebSearchActive ? { webSearchMode: 'dedicated' as const } : {}
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, {
             initialIntent: pipelineIntent,
             ...imageSettings,
+            ...webSearchSettings,
             idempotencyKey,
             pinnedAppIds: pins,
           });
         } else {
           await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
             ...imageSettings,
+            ...webSearchSettings,
             idempotencyKey,
             mentionedApps: mentionPayload.mentionedApps,
             codingWorkspace,
