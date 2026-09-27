@@ -621,7 +621,6 @@ async function runDocumentEditBatch(options, sources, files, deps) {
 
 async function prepareAndPublishDocumentBatch(options, sources, files, deps) {
   const prepared = [];
-  const summaries = [];
   for (let index = 0; index < sources.length; index += 1) {
     options.signal?.throwIfAborted();
     const start = prepared.length;
@@ -639,7 +638,6 @@ async function prepareAndPublishDocumentBatch(options, sources, files, deps) {
     if (!result?.ok || prepared.length !== start + 1) {
       return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', message: `${MESSAGES.DOCUMENT_EDIT_INCOMPLETE} Revisa la petición para ${sources[index].name}.` };
     }
-    summaries.push(result.summary);
   }
   options.signal?.throwIfAborted();
   const artifacts = [];
@@ -652,7 +650,12 @@ async function prepareAndPublishDocumentBatch(options, sources, files, deps) {
     return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', partial: artifacts.length > 0, artifacts,
       message: `Verifiqué los cambios, pero solo pude guardar ${artifacts.length} de ${prepared.length} archivos. El lote no está completo; los originales se conservan.` };
   }
-  return { ok: true, artifacts, summary: `Apliqué y verifiqué los cambios en ${artifacts.length} documentos.\n${summaries.map((summary, i) => `${sources[i].name}: ${summary}`).join('\n')}` };
+  // Per-file model replies are scoped to isolated workspaces. Concatenating
+  // them makes each reply appear to contradict the completed batch ("the
+  // other files are missing"), even when all outputs were saved. Report only
+  // the delivery facts that the coordinator has verified.
+  const delivered = artifacts.map((artifact, i) => `${sources[i].name} → ${artifact.filename}`).join('\n');
+  return { ok: true, artifacts, summary: `El proceso de edición produjo ${artifacts.length} archivos y adjunto una versión por original:\n${delivered}\nLos originales se conservan.` };
 }
 
 /**
@@ -753,7 +756,7 @@ async function runResolvedDocumentEdit({
       return { ...originalSaveArtifact({ ...input, validation }), validation };
     };
     const batchContext = resolved?.batchNames
-      ? `Este paso edita únicamente ${JSON.stringify(sources[0].name)} del conjunto ${JSON.stringify(resolved.batchNames)}. Aplica solo los cambios que la petición autoriza para este archivo; si requiere datos de otro archivo que no están disponibles, indica la limitación y no inventes contenido.`
+      ? `Este paso edita únicamente ${JSON.stringify(sources[0].name)} del conjunto ${JSON.stringify(resolved.batchNames)}. Los demás archivos se procesan en pasos separados y se entregan juntos; no afirmes que faltan ni pidas volver a adjuntarlos. Aplica solo los cambios autorizados para este archivo. Si un cambio concreto exige datos de otro documento que no están en este paso, identifica esa dependencia específica sin inventar contenido.`
       : '';
 
     if (precision) {
