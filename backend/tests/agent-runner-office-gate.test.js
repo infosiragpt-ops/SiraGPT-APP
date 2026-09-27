@@ -75,6 +75,83 @@ test('gate: read-only execute_python does not re-arm it; one that rewrote a docx
   assert.equal(needsVerification([{ tool: 'set_slide_background', ok: true }, { tool: 'render_preview', ok: true }], { strict: true }).needed, false);
 });
 
+test('gate: a new XLSX still needs verify_visual; no-before verification is accepted', () => {
+  const created = { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/datos.xlsx'] };
+  assert.equal(needsVerification([created, { tool: 'render_preview', ok: true }], { strict: true }).reason,
+    'missing_visual_verify');
+  const verified = { tool: 'verify_visual', ok: true, args: { after: 'outputs/datos.xlsx', checklist: ['20 filas'] } };
+  const inspected = { tool: 'inspect_document', ok: true, args: { path: 'outputs/datos.xlsx' } };
+  assert.equal(needsVerification([created, verified], { strict: true }).reason, 'missing_document_inspection');
+  assert.deepEqual(needsVerification([created, verified, inspected], { strict: true }),
+    { needed: false, reason: null });
+  assert.equal(needsVerification([created, verified,
+    { tool: 'inspect_document', ok: true, args: { path: 'outputs/otro.xlsx' } }],
+  { strict: true }).reason, 'missing_document_inspection');
+  assert.equal(needsVerification([created,
+    { tool: 'verify_visual', ok: true, args: { after: 'outputs/otro.xlsx' } }],
+  { strict: true }).reason, 'missing_visual_verify');
+  const two = { tool: 'execute_python', ok: true, mutated: true,
+    changedOutputs: ['outputs/a.xlsx', 'outputs/b.xlsx'] };
+  const verifiedA = { tool: 'verify_visual', ok: true, args: { after: 'outputs/a.xlsx' } };
+  const verifiedB = { tool: 'verify_visual', ok: true, args: { after: '/workspace/outputs/b.xlsx' } };
+  assert.equal(needsVerification([two, verifiedA], { strict: true }).needed, true);
+  assert.equal(needsVerification([two, verifiedA, verifiedB], { strict: true }).reason,
+    'missing_document_inspection');
+  assert.equal(needsVerification([two, verifiedA, verifiedB,
+    { tool: 'inspect_document', ok: true, args: { path: 'outputs/a.xlsx' } }],
+  { strict: true }).reason, 'missing_document_inspection');
+  assert.deepEqual(needsVerification([two, verifiedA, verifiedB,
+    { tool: 'inspect_document', ok: true, args: { path: 'outputs/a.xlsx' } },
+    { tool: 'inspect_document', ok: true, args: { path: 'outputs/b.xlsx' } }], { strict: true }),
+    { needed: false, reason: null });
+  assert.equal(needsVerification([created, verifiedA, created], { strict: true }).reason,
+    'missing_visual_verify', 'verification must be after the latest write');
+});
+
+test('gate: SAV-only creation skips visual preview but invalid SAV bytes are rejected at collection', async () => {
+  const savSteps = [
+    { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/muestra.sav'] },
+    { tool: 'execute_python', ok: true, mutated: false, changedOutputs: [] },
+  ];
+  assert.deepEqual(needsVerification(savSteps, { strict: true }),
+    { needed: false, reason: null });
+  assert.equal(needsVerification([
+    { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/muestra.sav', 'outputs/datos.xlsx'] },
+  ], { strict: true }).reason, 'missing_visual_verify');
+  const outputs = await runner.collectValidOutputs({
+    collectOutputs: async () => [{ name: 'muestra.sav', buffer: Buffer.from('$FL2invalid') }],
+    putFile: async () => {},
+    exec: async (command) => command.startsWith('python3 ')
+      ? { exitCode: 0, stdout: '{"ok":false,"reason":"sav_unreadable"}\n' }
+      : { exitCode: 0 },
+  });
+  assert.equal(outputs[0].valid, false);
+  assert.equal(outputs[0].validation?.reason, 'sav_unreadable');
+});
+
+test('gate: a verified XLSX and a SAV need no SAV preview in either creation order', () => {
+  const excel = { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/datos.xlsx'] };
+  const sav = { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/datos.sav'] };
+  const verifiedExcel = { tool: 'verify_visual', ok: true, args: { after: 'outputs/datos.xlsx' } };
+  const inspectedExcel = { tool: 'inspect_document', ok: true, args: { path: 'outputs/datos.xlsx' } };
+  assert.deepEqual(needsVerification([excel, verifiedExcel, inspectedExcel, sav], { strict: true }),
+    { needed: false, reason: null });
+  assert.deepEqual(needsVerification([sav, excel, verifiedExcel, inspectedExcel], { strict: true }),
+    { needed: false, reason: null });
+  assert.equal(needsVerification([excel, sav], { strict: true }).reason, 'missing_visual_verify');
+});
+
+test('delivery: a parseable SAV at the iteration limit is incomplete, even without a visual gate', () => {
+  const sav = { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/datos.sav'] };
+  assert.deepEqual(runner.assessDelivery({ stoppedReason: 'max_iterations', steps: [sav] }),
+    { complete: false, verificationNeeded: false, blocked: true });
+  assert.deepEqual(runner.assessDelivery({ stoppedReason: 'final', steps: [sav] }),
+    { complete: true, verificationNeeded: false, blocked: false });
+  assert.deepEqual(runner.assessDelivery({ stoppedReason: 'surgical_edit', outputs: [{ valid: true, validation: { passed: true } }] }),
+    { complete: true, verificationNeeded: false, blocked: false });
+  assert.equal(runner.assessDelivery({ stoppedReason: 'surgical_edit', outputs: [{ valid: true }] }).blocked, true);
+});
+
 test('gate: SIRAGPT_OFFICE_ENGINE=0 keeps the previous gate exactly', () => {
   const cases = [
     [],
@@ -104,7 +181,8 @@ test('gate: SIRAGPT_OFFICE_ENGINE=0 keeps the previous gate exactly', () => {
 
 test('nudges name the right tool', () => {
   assert.match(verificationNudge(1, 'missing_visual_verify'), /verify_visual NOW/);
-  assert.match(verificationNudge(2, 'visual_checks_failed'), /Fix ONLY those items with office_edit/);
+  assert.match(verificationNudge(1, 'missing_document_inspection'), /inspect_document NOW/);
+  assert.match(verificationNudge(2, 'visual_checks_failed'), /office_edit for an existing file, execute_python for a new file/);
   assert.match(verificationNudge(1, 'missing_preview'), /render_preview/);
 });
 
@@ -141,11 +219,13 @@ test('loop: exec snapshot marks read-only vs rewrote-a-docx', async () => {
     { toolCalls: [{ name: 'execute_python', args: { code: 'print(open("outputs/t.docx","rb").read()[:4])' } }] },
     { toolCalls: [{ name: 'execute_python', args: { code: 'rewrite()' } }] },
     { toolCalls: [{ name: 'verify_visual', args: { after: 'outputs/t.docx', checklist: ['x'] } }] },
+    { toolCalls: [{ name: 'inspect_document', args: { path: 'outputs/t.docx' } }] },
     { content: 'Listo.' },
   ]);
   const executors = {
     async execute_python() { return 'ok\n[exit 0]'; },
     async verify_visual() { return 'VEREDICTO: VERIFICADO'; },
+    async inspect_document() { return '{"paragraphs":[{"text":"x"}]}'; },
     [OUTPUTS_SNAPSHOT]: async () => snapshots[Math.min(n++, snapshots.length - 1)],
   };
   const result = await runAgentLoop({
@@ -160,6 +240,34 @@ test('loop: exec snapshot marks read-only vs rewrote-a-docx', async () => {
   assert.equal(result.stoppedReason, 'final');
   assert.deepEqual(changedOutputs({ a: '1' }, { a: '1', b: '2' }), ['b']);
   assert.equal(changedOutputs(null, {}), null);
+});
+
+test('loop: new XLSX from execute_python can finish after verify_visual without before', async () => {
+  let n = 0;
+  const snapshots = [{}, { 'outputs/datos.xlsx': '100 1' },
+    { 'outputs/datos.xlsx': '100 1' }, { 'outputs/datos.xlsx': '100 1' }];
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'execute_python', args: { code: 'create_workbook()' } }] },
+    { toolCalls: [{ name: 'verify_visual', args: { after: 'outputs/datos.xlsx', checklist: ['20 filas'], expect: { cells: { 'Datos!A1': 1 } } } }] },
+    { toolCalls: [{ name: 'inspect_document', args: { path: 'outputs/datos.xlsx' } }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'reopen_and_assert()' } }] },
+    { content: 'Creé y comprobé datos.xlsx.' },
+  ]);
+  const events = [];
+  const result = await runAgentLoop({
+    client, model: 'x', messages: [{ role: 'user', content: 'crea un Excel' }],
+    tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+    executors: {
+      async execute_python() { return 'ok\n[exit 0]'; },
+      async verify_visual() { return 'VEREDICTO: VERIFICADO'; },
+      async inspect_document() { return '{"sheets":[{"name":"Datos","range":"A1:T21"}]}'; },
+      [OUTPUTS_SNAPSHOT]: async () => snapshots[Math.min(n++, snapshots.length - 1)],
+    },
+    maxIterations: 8, onEvent: (event) => events.push(event),
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.equal(result.verificationAttempts, 0);
+  assert.equal(events.some((event) => event.type === 'retry'), false);
 });
 
 test('loop: no renderer in the sandbox ends honestly as «Sin verificación visual»', async () => {
@@ -335,6 +443,64 @@ test('prompt: office workflow with the engine on; previous rules verbatim with i
   const off = buildAgentRunnerPrompt({ fileNames: ['t.docx'], officeEngine: false });
   assert.doesNotMatch(off, /MANDATORY WORKFLOW/);
   assert.match(off, /a\) call render_preview on the output file/);
+});
+
+test('prompt: a new SAV and Excel pair can be created and verified without an existing Office source', () => {
+  const create = buildAgentRunnerPrompt({ officeEngine: true });
+  assert.doesNotMatch(create, /MANDATORY WORKFLOW/);
+  assert.match(create, /call inspect_document with path=<that exact output>/);
+  assert.doesNotMatch(create, /Never rewrite whole files with/);
+  assert.match(create, /openpyxl/);
+  assert.match(create, /pyreadstat\.write_sav/);
+  assert.match(create, /pyreadstat\.read_sav/);
+  assert.match(create, /render_preview/);
+  assert.match(create, /verify_visual with after=<output>.*NO before/);
+  assert.match(create, /compare.*values/i);
+
+  const editPriorWorkbook = buildAgentRunnerPrompt({ priorArtifactNames: ['datos.xlsx'], officeEngine: true });
+  assert.match(editPriorWorkbook, /OFFICE FILES \(docx\/xlsx\/pptx\) — MANDATORY WORKFLOW/);
+  const createUsingPriorWorkbook = buildAgentRunnerPrompt({
+    priorArtifactNames: ['datos.xlsx'], officeEngine: true, creatingNewFile: true,
+  });
+  assert.doesNotMatch(createUsingPriorWorkbook, /OFFICE FILES \(docx\/xlsx\/pptx\) — MANDATORY WORKFLOW/);
+  assert.match(createUsingPriorWorkbook, /verify_visual with after=<output>.*NO before/);
+});
+
+test('runner passes explicit creation intent to the prompt even with a prior workbook', async () => {
+  let system = '';
+  const client = { chat: { completions: { create: async (payload) => {
+    system = String(payload.messages?.[0]?.content || '');
+    return { choices: [{ message: { content: 'No produje un archivo.' } }] };
+  } } } };
+  await runner.runAgentRunner({
+    files: [{ name: 'datos.xlsx', buffer: Buffer.from('prior workbook'), isPriorArtifact: true }],
+    instruction: 'Crea un nuevo Excel con otra muestra.',
+    client, driver: 'local', maxIterations: 1, requireFileOutput: false,
+  });
+  assert.doesNotMatch(system, /OFFICE FILES \(docx\/xlsx\/pptx\) — MANDATORY WORKFLOW/);
+  assert.match(system, /inspect_document with path=<that exact output>/);
+  assert.match(system, /verify_visual with after=<output>.*NO before/);
+});
+
+test('runner keeps surgical editing for a requested copy of the attached Office file', async () => {
+  for (const instruction of [
+    'Crea una copia de este Word corrigiendo el año.',
+    'Crea una versión corregida de este Word.',
+    'Crea una copia editada del documento.',
+  ]) {
+    let system = '';
+    const client = { chat: { completions: { create: async (payload) => {
+      system = String(payload.messages?.[0]?.content || '');
+      return { choices: [{ message: { content: 'No produje un archivo.' } }] };
+    } } } };
+    await runner.runAgentRunner({
+      files: [{ name: 'tesis.docx', buffer: Buffer.from('source document') }],
+      instruction,
+      client, driver: 'local', maxIterations: 1, requireFileOutput: false,
+    });
+    assert.match(system, /OFFICE FILES \(docx\/xlsx\/pptx\) — MANDATORY WORKFLOW/, instruction);
+    assert.match(system, /verify_visual with before=<source>, after=<output>/, instruction);
+  }
 });
 
 test('a sandbox without LibreOffice is reported to the turn-failure tracker', async () => {

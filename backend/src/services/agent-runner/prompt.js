@@ -33,6 +33,7 @@ function officeEngineOn(env = process.env) {
 
 function buildAgentRunnerPrompt({
   fileNames = [], priorArtifactNames = [], memoryBlock = '', officeEngine = officeEngineOn(),
+  creatingNewFile = false,
 } = {}) {
   const files = fileNames.length
     ? fileNames.map((n) => `- ${n}`).join('\n')
@@ -44,6 +45,11 @@ function buildAgentRunnerPrompt({
   // framed by agent-runner/memory buildAgentMemoryBlock; empty = no section).
   const memory = String(memoryBlock || '').trim();
   const memorySection = memory ? `\n${memory}\n` : '';
+  // Surgical Office edits require a source and a before/after comparison.
+  // New files need authoring libraries and verification by reopening them.
+  const hasOfficeSource = [...fileNames, ...priorArtifactNames]
+    .some((name) => /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i.test(String(name)));
+  const officeEditWorkflow = officeEngine && hasOfficeSource && !creatingNewFile;
 
   return `You are SiraGPT's generic agent (Claude-style). You solve ANY request by writing and running your own code with tools. There is no hardcoded list of supported requests: white, pink, a hex, add a thanks slide, fix a comma, rewrite a paragraph — all of them are just code you write.
 
@@ -65,9 +71,14 @@ TOOLS
 - read_file / write_file / list_files: inspect and edit workspace text files.
 - edit_file: surgical EXACT string replace (old_str must occur exactly once).
 - glob / grep: find files by pattern / search text inside files before editing.
-${officeEngine
+${officeEditWorkflow
     ? `- inspect_document / office_edit / verify_visual: the office workflow below (docx/xlsx/pptx).
 - render_preview: render every page of a docx/xlsx/pptx/pdf to PNG to LOOK at it; for other files (md, html…) it converts with LibreOffice. To check an office edit use verify_visual.
+`
+    : officeEngine
+      ? `- inspect_document: reopen each NEW docx/xlsx/pptx from outputs/ after its last write and inspect the returned structure/content.
+- verify_visual: for each NEW docx/xlsx/pptx, pass after=<file in outputs/> and a checklist; omit before. It renders the generated file and applies explicit expect checks.
+- render_preview: preview a new PDF or other renderable file. For SAV, use pyreadstat.read_sav instead of a visual preview.
 `
     : `- render_preview: convert pptx/docx to PNG via LibreOffice headless and report per-slide brightness. REQUIRED after every edit. If it reports soffice unavailable, it is skipped HONESTLY — you must then verify via execute_python (XML inspection).
 `}- create_presentation: high-level tool to create a NEW pptx. You MUST pass \`outline\` (slide titles + bullets) with REAL content. Use for "crea una ppt…".
@@ -80,13 +91,17 @@ CONTENT RULES (documents the user asks you to CREATE)
 - When using create_presentation, always pass \`outline\` with the full slide plan (titles + bullets in Spanish unless asked otherwise).
 - For SPSS .sav, use the installed pyreadstat library: pyreadstat.write_sav(dataframe, output_path), then pyreadstat.read_sav(output_path) to verify it. Never fabricate a .sav by writing its $FL2 header, and never replace a requested SAV with a JSON description.
 
-${officeEngine ? `${OFFICE_WORKFLOW}
+${officeEditWorkflow ? `${OFFICE_WORKFLOW}
 
 ` : ''}HARD RULES
 1. Execute the user's request COMPLETELY on the real files. Never dump code into the chat as the answer.
-${officeEngine
+${officeEditWorkflow
     ? `2. NEVER declare success without verification: office files follow the OFFICE FILES workflow above (verify_visual).
 3. Any other file you create or edit: call render_preview on it (or verify_visual) and check it; if it fails, retry (max 3 attempts), then report honestly in Spanish — never pretend it worked.
+`
+    : officeEngine
+      ? `2. NEVER declare success without verification. For each NEW DOCX/XLSX/PPTX, author the complete file with execute_python, then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell checks> and NO before. Reopen the saved file with execute_python to assert its content and dimensions. For a new PDF, render_preview and reopen it.
+3. For a new SPSS .sav, use pyreadstat.write_sav and reopen it with pyreadstat.read_sav; check dimensions and variable labels. SAV has no visual preview. If several outputs represent the same data, reopen every file and compare their actual values before claiming they match. If any check fails, report it honestly.
 `
     : `2. NEVER declare success without verification. Claiming "listo" while the preview is still dark is a failure.
 3. After EVERY edit you MUST, in this order:
@@ -100,7 +115,7 @@ ${officeEngine
 
 COMPLETION CHECKLIST (mandatory)
 - List each requested change.
-- Confirm each one is present in the output (${officeEngine ? 'verify_visual for office files, render_preview for the rest' : 'programmatic inspect + render_preview'}).
+- Confirm each one is present in the output (${officeEditWorkflow ? 'verify_visual for Office edits, render_preview for the rest' : officeEngine ? 'inspect_document + verify_visual(after only) and reopen new Office files; pyreadstat.read_sav for SAV; compare values across paired files' : 'programmatic inspect + render_preview'}).
 - Only then finish.`;
 }
 

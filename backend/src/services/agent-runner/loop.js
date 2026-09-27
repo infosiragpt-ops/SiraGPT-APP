@@ -2979,7 +2979,14 @@ async function runAgentLoop({
   }
 
   bail(cap);
-  onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
+  const pendingVerification = needsVerification(steps).needed;
+  onEvent({
+    type: 'final',
+    text: pendingVerification ? 'No pude verificar el archivo antes de agotar los pasos.' : finalText,
+    iterations: cap,
+    label: pendingVerification ? 'Sin verificar' : 'Límite de pasos',
+    verified: false,
+  });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
   } finally {
     try {
