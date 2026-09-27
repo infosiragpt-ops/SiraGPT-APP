@@ -324,6 +324,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, fo
 }
 
 module.exports = {
+  SAV_XLSX_COMPARISON_SOURCE,
   isReadOnlyGeneratedArtifactFollowup,
   resolveReadOnlyGeneratedArtifactFollowup,
   resolveChatGeneratedArtifactFollowup,
