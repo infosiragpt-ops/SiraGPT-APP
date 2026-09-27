@@ -12,6 +12,7 @@ const originalEnv = {
   STALE_RUN_WARN_MINUTES: process.env.STALE_RUN_WARN_MINUTES,
   STALE_RUN_CRITICAL_MINUTES: process.env.STALE_RUN_CRITICAL_MINUTES,
   STALE_RUN_ALERT_COOLDOWN_MINUTES: process.env.STALE_RUN_ALERT_COOLDOWN_MINUTES,
+  STALE_RUN_ABANDON_HOURS: process.env.STALE_RUN_ABANDON_HOURS,
 };
 
 function restoreEnv() {
@@ -189,4 +190,171 @@ test('owner notification is suppressed when one was already sent inside the cool
   watchdog._resetForTests();
   await watchdog.scanStaleRuns({ prisma });
   assert.equal(notificationsCreated.length, 1, 'no second inbox row for the same user+cooldown');
+});
+
+// ── Zombie runs (prod 2026-09-26: a codex-run silent > 2000 h and an agent
+// task 478 h re-alerted `critical` on every sweep — ~25 red lines per restart).
+
+function auditLogStore() {
+  const rows = [];
+  return {
+    rows,
+    auditLog: {
+      findMany: async ({ where }) => rows.filter((r) => r.action === where.action
+        && (!where.resourceType || r.resourceType === where.resourceType)
+        && (!where.resourceId || !where.resourceId.in || where.resourceId.in.includes(r.resourceId))),
+      create: async ({ data }) => { rows.push({ id: `al-${rows.length + 1}`, ...data }); return rows[rows.length - 1]; },
+    },
+  };
+}
+
+function withUpdateMany(model, rows) {
+  model.updateMany = async ({ where, data }) => {
+    let count = 0;
+    for (const row of rows) {
+      if (row.id !== where.id || row.status !== where.status) continue;
+      if (where.updatedAt && Date.parse(row.updatedAt) !== new Date(where.updatedAt).getTime()) continue;
+      Object.assign(row, data);
+      count += 1;
+    }
+    return { count };
+  };
+}
+
+test('zombie runs are closed as «abandonado» once, recorded, and never alerted', async () => {
+  const agentTaskRows = [
+    { id: 'task-zombie', userId: 'user-1', status: 'running', updatedAt: isoAgo(478 * 60), createdAt: isoAgo(480 * 60) },
+    { id: 'task-stale', userId: 'user-2', status: 'running', updatedAt: isoAgo(50), createdAt: isoAgo(55) },
+  ];
+  const codexRunRows = [
+    { id: 'run-zombie', userId: 'user-3', status: 'running', updatedAt: isoAgo(2000 * 60), createdAt: isoAgo(2001 * 60) },
+  ];
+  const { prisma } = fakePrisma({ agentTaskRows, codexRunRows });
+  withUpdateMany(prisma.agentTask, agentTaskRows);
+  withUpdateMany(prisma.codexRun, codexRunRows);
+  const audit = auditLogStore();
+  prisma.auditLog = audit.auditLog;
+  const captured = captureAlerts();
+  try {
+    const first = await watchdog.scanStaleRuns({ prisma });
+    assert.equal(first.abandoned, 2);
+    assert.equal(first.alerted, 1, 'only the genuinely stale (not zombie) task alerts');
+    assert.deepEqual(captured.alerts.map((a) => a.context.runId), ['task-stale']);
+    assert.equal(agentTaskRows[0].status, 'failed', 'an agent task that never finished is closed as failed');
+    assert.ok(agentTaskRows[0].failedAt instanceof Date);
+    assert.equal(codexRunRows[0].status, 'error', 'a codex run stuck running is closed as error');
+    assert.match(codexRunRows[0].error, /^abandonado: sin actividad desde hace 2000 h/);
+    const abandoned = audit.rows.filter((r) => r.action === watchdog.ABANDONED_ACTION).map((r) => r.resourceId).sort();
+    assert.deepEqual(abandoned, ['agent_task:task-zombie', 'codex_run:run-zombie']);
+
+    // A restart forgets the in-memory cooldown: the persisted record still
+    // prevents a second alert, and the closed zombies are no longer scanned.
+    watchdog._resetForTests();
+    const second = await watchdog.scanStaleRuns({ prisma });
+    assert.equal(second.abandoned, 0);
+    assert.equal(second.alerted, 0);
+    assert.equal(second.alreadyAlerted, 1);
+    assert.equal(captured.alerts.length, 1);
+  } finally {
+    captured.unload();
+  }
+});
+
+test('one alert per run and severity (persisted); the owner hears once', async () => {
+  const agentTaskRows = [
+    { id: 'task-escalating', userId: 'user-7', status: 'running', updatedAt: isoAgo(20), createdAt: isoAgo(25) },
+  ];
+  const { prisma, notificationsCreated } = fakePrisma({ agentTaskRows });
+  const audit = auditLogStore();
+  prisma.auditLog = audit.auditLog;
+  const captured = captureAlerts();
+  try {
+    await watchdog.scanStaleRuns({ prisma });
+    watchdog._resetForTests();
+    await watchdog.scanStaleRuns({ prisma });
+    assert.equal(captured.alerts.length, 1, 'same severity after a restart: no second alert');
+
+    // It keeps stalling past the critical line: exactly one escalation.
+    agentTaskRows[0].updatedAt = isoAgo(60);
+    watchdog._resetForTests();
+    await watchdog.scanStaleRuns({ prisma });
+    watchdog._resetForTests();
+    await watchdog.scanStaleRuns({ prisma });
+    assert.deepEqual(captured.alerts.map((a) => a.severity), ['warn', 'critical']);
+    assert.equal(notificationsCreated.length, 1, 'the owner is notified on the first alert only');
+  } finally {
+    captured.unload();
+  }
+});
+
+test('a zombie that moved since the scan is not closed; abandonment can be turned off', async () => {
+  const agentTaskRows = [
+    { id: 'task-racing', userId: 'user-1', status: 'running', updatedAt: isoAgo(30 * 60), createdAt: isoAgo(31 * 60) },
+  ];
+  const { prisma } = fakePrisma({ agentTaskRows });
+  prisma.agentTask.updateMany = async () => ({ count: 0 }); // it progressed meanwhile
+  const captured = captureAlerts();
+  try {
+    const res = await watchdog.scanStaleRuns({ prisma });
+    assert.equal(res.abandoned, 0);
+    assert.equal(agentTaskRows[0].status, 'running');
+    assert.equal(watchdog.abandonMs({ STALE_RUN_ABANDON_HOURS: '0' }), 0);
+    assert.equal(watchdog.abandonMs({}), 24 * 3600 * 1000);
+    assert.equal(watchdog.abandonMs({ STALE_RUN_ABANDON_HOURS: '72' }), 72 * 3600 * 1000);
+    watchdog._resetForTests();
+    const off = await watchdog.scanStaleRuns({ prisma, env: { ...process.env, STALE_RUN_ABANDON_HOURS: '0' } });
+    assert.equal(off.abandoned, 0);
+  } finally {
+    captured.unload();
+  }
+});
+
+test('every real status value: terminal ones are never scanned, alerted or rewritten', async () => {
+  // AgentTask writers: agent-task-persistence TERMINAL_STATUSES + task-store validStatuses.
+  const persistence = require('../src/services/agents/agent-task-persistence');
+  for (const status of ['completed', 'failed', 'cancelled']) {
+    assert.equal(persistence.INTERNAL.isTerminalStatus(status), true, status);
+    assert.ok(watchdog.TERMINAL_AGENT_TASK.has(status), `watchdog must treat ${status} as terminal`);
+  }
+  assert.ok(watchdog.TERMINAL_AGENT_TASK.has('error'), 'task-store writes error for failed runs');
+  const taskStoreSrc = require('fs').readFileSync(require.resolve('../src/services/agents/task-store.js'), 'utf8');
+  const valid = /const validStatuses = new Set\(\[([^\]]+)\]\)/.exec(taskStoreSrc);
+  assert.ok(valid, 'task-store validStatuses found');
+  for (const status of valid[1].match(/'([a-z_]+)'/g).map((q) => q.slice(1, -1))) {
+    const live = status === 'queued' || status === 'running';
+    assert.equal(watchdog.TERMINAL_AGENT_TASK.has(status), !live, `agent task status ${status}`);
+  }
+  // CodexRun: queued | running | waiting_approval | done | error | cancelled.
+  for (const status of ['done', 'error', 'cancelled']) assert.ok(watchdog.TERMINAL_CODEX_RUN.has(status));
+  for (const status of ['running', 'waiting_approval']) assert.ok(watchdog.NON_TERMINAL_CODEX_RUN.has(status));
+
+  const old = isoAgo(300); // 5 h: stale, below the 24 h abandon line
+  const agentTaskRows = ['queued', 'running', 'completed', 'failed', 'cancelled', 'error', 'timeout', 'aborted']
+    .map((status) => ({ id: `task-${status}`, userId: 'user-1', status, updatedAt: old, createdAt: old }));
+  const codexRunRows = ['queued', 'running', 'waiting_approval', 'done', 'error', 'cancelled']
+    .map((status) => ({ id: `run-${status}`, userId: 'user-2', status, updatedAt: old, createdAt: old }));
+  const { prisma } = fakePrisma({ agentTaskRows, codexRunRows });
+  withUpdateMany(prisma.agentTask, agentTaskRows);
+  withUpdateMany(prisma.codexRun, codexRunRows);
+  const captured = captureAlerts();
+  try {
+    const res = await watchdog.scanStaleRuns({ prisma });
+    assert.deepEqual(captured.alerts.map((a) => a.context.runId).sort(), ['run-running', 'run-waiting_approval', 'task-queued', 'task-running']);
+    assert.equal(res.abandoned, 0, '5 h is below the 24 h abandon threshold');
+    // Past the threshold only the live ones are closed; terminal rows keep their status.
+    for (const row of [...agentTaskRows, ...codexRunRows]) row.updatedAt = isoAgo(30 * 60);
+    watchdog._resetForTests();
+    const late = await watchdog.scanStaleRuns({ prisma });
+    assert.equal(late.abandoned, 4);
+    const status = Object.fromEntries([...agentTaskRows, ...codexRunRows].map((r) => [r.id, r.status]));
+    assert.deepEqual(status, {
+      'task-queued': 'failed', 'task-running': 'failed',
+      'task-completed': 'completed', 'task-failed': 'failed', 'task-cancelled': 'cancelled', 'task-error': 'error',
+      'task-timeout': 'timeout', 'task-aborted': 'aborted',
+      'run-queued': 'queued', 'run-running': 'error', 'run-waiting_approval': 'cancelled',
+      'run-done': 'done', 'run-error': 'error', 'run-cancelled': 'cancelled',
+    });
+  } finally {
+    captured.unload();
+  }
 });
