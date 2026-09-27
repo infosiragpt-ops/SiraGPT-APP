@@ -9,6 +9,7 @@ import remarkMath from "remark-math"
 
 import { CALLOUT_KINDS, remarkCallouts } from "./markdown/remark-callouts"
 import { remarkDemoteOverlongHeadings } from "./markdown/remark-demote-overlong-headings"
+import { remarkRestoreStrayDirectives } from "./markdown/remark-restore-stray-directives"
 
 const agenticSearchClassNames = [
   "agentic-search-status",
@@ -115,6 +116,8 @@ export const markdownRemarkPlugins = [
   remarkMath,
   remarkDirective,
   remarkCallouts,
+  // Directives exist for callouts only: «16:44», «9:00», «Juan 3:16» are text.
+  remarkRestoreStrayDirectives,
   // A one-paragraph answer wrapped in heading syntax by the model must read
   // as body text, not as a 300-character title.
   remarkDemoteOverlongHeadings,
