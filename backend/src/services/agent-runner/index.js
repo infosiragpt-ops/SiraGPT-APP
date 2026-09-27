@@ -23,6 +23,7 @@ const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
 const { agentThumbsEnabled } = require('./trace');
+const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 
 // Edición milimétrica (Fase C): the before/after image is reviewed by a
 // separate vision model (multimodal/vision-ladder.js). Off under
@@ -461,6 +462,7 @@ async function runAgentRunner({
     ];
 
     let lastVerify = null;
+    const verifies = [];
     const executors = {
       ...makeToolExecutors(sandbox, {
         office: {
@@ -472,7 +474,7 @@ async function runAgentRunner({
           attachImages: loopSeesImages(),
           // Stage v2 thumbnails (render / verify) for the timeline.
           thumbs: agentThumbsEnabled(),
-          onVerify: (v) => { lastVerify = v; },
+          onVerify: (v) => { lastVerify = v; verifies.push(v); recordVerify(v); },
         },
       }),
       ...f8.executors,
@@ -653,6 +655,8 @@ async function runAgentRunner({
       const verifyFailure = verificationFailureFromSteps(result && result.steps);
       if (verifyFailure) reportOfficeFailure(verifyFailure);
     } catch (_) { /* reporting never breaks a turn */ }
+    // F.2 metrics + one [office-edit] line per document turn.
+    recordOfficeTurn({ steps: result && result.steps, stoppedReason: result && result.stoppedReason, verifies, chatId });
     if (result && result.stoppedReason === 'final') {
       result = { ...result, finalText: withVisionHonesty(result.finalText, lastVerify) };
     }
