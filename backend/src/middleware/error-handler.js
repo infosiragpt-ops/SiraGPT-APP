@@ -286,9 +286,40 @@ function errorToResponse(err, req, { exposeStack = false } = {}) {
   return { statusCode, body };
 }
 
+/**
+ * The client closed the connection before its request body could be read
+ * (body-parser/raw-body: `request.aborted`, or `stream.not.readable` on a
+ * destroyed socket). Prod 2026-09-27: 8 of these hit /api/ai/generate while a
+ * deploy recycled the backend and were logged as 500 «Internal server error».
+ * Nobody is waiting for that response: it is a client abort, not a failure.
+ */
+function isClientAbortedBody(err, req) {
+  if (!err) return false;
+  if (err.type === 'request.aborted') return true;
+  if (err.type !== 'stream.not.readable') return false;
+  return Boolean(req && (req.destroyed || req.aborted || req.readableAborted || (req.socket && req.socket.destroyed)));
+}
+
 function globalErrorHandler({ logger = defaultLogger, captureException = null, stdout = null } = {}) {
   return (err, req, res, next) => {
     if (res.headersSent) return next(err);
+
+    if (isClientAbortedBody(err, req)) {
+      const log = req.log || logger;
+      log.warn({
+        method: req.method || '',
+        path: redactPreviewUrl((req.originalUrl || req.url || '').split('?')[0]),
+        reqId: getRequestId(req) || '',
+        reason: err.type,
+      }, 'request_aborted');
+      try {
+        if (!res.writableEnded && !(res.socket && res.socket.destroyed)) {
+          res.statusCode = 499;
+          res.end();
+        }
+      } catch { /* socket already gone */ }
+      return undefined;
+    }
 
     const { statusCode, body } = errorToResponse(err, req, {
       exposeStack: process.env.NODE_ENV !== 'production',

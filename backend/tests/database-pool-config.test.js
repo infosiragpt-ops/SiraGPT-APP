@@ -100,7 +100,7 @@ test('client options use canonical PRISMA_DATABASE_URL, fall back to DATABASE_UR
     DATABASE_POOL_TIMEOUT_MS: '1500',
   });
 
-  assert.deepEqual(canonical.log, ['error']);
+  assert.deepEqual(canonical.log, [{ emit: 'event', level: 'error' }]);
   assert.equal(new URL(canonical.datasources.db.url).hostname, 'primary.internal');
   assert.equal(new URL(canonical.datasources.db.url).searchParams.get('connection_limit'), '9');
   assert.equal(new URL(canonical.datasources.db.url).searchParams.get('pool_timeout'), '2');
@@ -663,4 +663,19 @@ test('database role and boot timeout variables are documented in examples and en
   assert.match(files[2], /baseline-migration-history\.js/);
   assert.match(files[2], /I_REVIEWED_PRODUCTION_SCHEMA/);
   assert.match(files[3], /baseline-migration-history\.js/);
+});
+
+// Prod 2026-09-27: a cowork run creation that lost a Serializable race was
+// retried successfully, yet Prisma printed it as `prisma:error`.
+test('Prisma write conflicts are logged as warnings; every other Prisma error stays an error', () => {
+  const lines = [];
+  const sink = { warn: (m) => lines.push(['warn', m]), error: (m) => lines.push(['error', m]) };
+  assert.equal(database.logPrismaError({
+    message: 'Invalid `prisma.coworkRun.create()` invocation:\n\n\nTransaction failed due to a write conflict or a deadlock. Please retry your transaction',
+  }, sink), 'conflict');
+  assert.equal(database.logPrismaError({ message: 'Invalid `prisma.user.findMany()` invocation: Can\'t reach database server' }, sink), 'error');
+  assert.deepEqual(lines, [
+    ['warn', 'prisma:warn transaction conflict (retried by the caller) in prisma.coworkRun.create()'],
+    ['error', "prisma:error Invalid `prisma.user.findMany()` invocation: Can't reach database server"],
+  ]);
 });

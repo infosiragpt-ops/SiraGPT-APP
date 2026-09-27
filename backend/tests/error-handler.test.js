@@ -216,3 +216,44 @@ describe('common API error handling', () => {
     }
   });
 });
+
+// Prod 2026-09-27: 8 POST /api/ai/generate hit «stream is not readable» while a
+// deploy recycled the backend and were logged as 500 errors. The client had
+// already gone; it is an abort, not a server failure.
+describe('client aborts while the body is read', () => {
+  function abortCase(err, reqPatch = {}) {
+    const { req, res, events } = createReqRes({ method: 'POST', url: '/api/ai/generate', requestId: 'req-abort' });
+    Object.assign(req, reqPatch);
+    let ended = false;
+    res.end = () => { ended = true; };
+    const stdout = [];
+    let forwarded = null;
+    globalErrorHandler({ logger: req.log, stdout: (line) => stdout.push(line) })(err, req, res, (e) => { forwarded = e; });
+    return { res, events, stdout, ended, forwarded };
+  }
+  const notReadable = () => Object.assign(new Error('stream is not readable'), { type: 'stream.not.readable', status: 500, expose: false });
+
+  test('a destroyed request stream is logged as request_aborted (499, warn), never as a 500', () => {
+    const { res, events, stdout, ended } = abortCase(notReadable(), { destroyed: true });
+    assert.equal(res.statusCode, 499);
+    assert.equal(ended, true);
+    assert.deepEqual(events.map((e) => [e.level, e.message]), [['warn', 'request_aborted']]);
+    assert.equal(events[0].payload.reason, 'stream.not.readable');
+    assert.equal(events[0].payload.path, '/api/ai/generate');
+    assert.equal(stdout.length, 0, 'no error line for the access-log pipeline');
+  });
+
+  test('raw-body request.aborted is a client abort too', () => {
+    const err = Object.assign(new Error('request aborted'), { type: 'request.aborted', code: 'ECONNABORTED', status: 400 });
+    const { res, events } = abortCase(err);
+    assert.equal(res.statusCode, 499);
+    assert.deepEqual(events.map((e) => [e.level, e.message]), [['warn', 'request_aborted']]);
+  });
+
+  test('an unreadable stream on a live connection is still a server error', () => {
+    const { res, events } = abortCase(notReadable());
+    assert.equal(res.statusCode, 500);
+    assert.equal(events[0].level, 'error');
+    assert.equal(events[0].message, 'request_failed');
+  });
+});
