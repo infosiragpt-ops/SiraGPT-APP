@@ -25,6 +25,7 @@ const { createOfficeFailureReporter, verificationFailureFromSteps } = require('.
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
+const { applySavXlsxDeliveryGate } = require('./sav-xlsx-delivery');
 const { needsVerification } = require('./verify');
 
 function assessDelivery(run = {}) {
@@ -424,8 +425,11 @@ function missingRequestedSavExcel(instruction, artifacts = []) {
     .map(([, label]) => label);
 }
 
-function completedSavExcelSummary(artifacts = []) {
+function completedSavExcelSummary(artifacts = [], verification = null) {
   const names = artifacts.map((artifact) => artifact.filename).filter(Boolean).join(', ');
+  if (verification?.comparedCells) {
+    return `Entregué ${names}. Verifiqué ${verification.rows} filas × ${verification.columns} preguntas en ambos archivos, ${verification.labelCount} etiquetas en el SAV y ${verification.comparedCells} valores idénticos.`;
+  }
   return `Entregué ${names}. El SAV se pudo abrir; todavía no he comparado sus valores con los del Excel, así que no puedo afirmar que coincidan.`;
 }
 
@@ -942,6 +946,16 @@ async function runAgentRunner({
     }
     outputs = dropIntermediateOutputs(outputs, result && result.steps);
 
+    // Compare the exact output bytes before persistence or file_artifact SSE.
+    // A readable SAV plus an OOXML workbook is insufficient for an explicit
+    // 20 × 20 request unless all 400 values and 20 SAV labels agree.
+    const pairGate = await applySavXlsxDeliveryGate({ instruction: task, outputs, result, sandbox });
+    result = pairGate.result;
+    outputs = pairGate.outputs;
+    if (pairGate.active && !pairGate.ok && result.stoppedReason === 'verification_failed') {
+      onEvent({ type: 'output_invalid', name: 'SAV/Excel', reason: 'sav_xlsx_matrix_invalid' });
+    }
+
     // An edit that ends with its visual verification failed reaches the user
     // unverified: surface it to the admin turn-failure tracker.
     try {
@@ -1072,7 +1086,7 @@ async function runAgentRunnerForChat({
     ? `No pude completar los dos archivos solicitados: falta ${missingFormats.join(' y ')}. ${artifacts.length ? `Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}.` : 'No entregué archivos.'} Inténtalo de nuevo; no asumiré que el archivo faltante existe.`
     : persistenceFailed ? 'La edición no pudo guardarse como archivo descargable. No entregué un resultado; vuelve a intentarlo.'
     : rejectedEdit ? 'No pude verificar el cambio solicitado en el documento original. No entregué una copia sin cambios ni una edición incorrecta.'
-    : requestedPair && artifacts.length ? completedSavExcelSummary(artifacts)
+    : requestedPair && artifacts.length ? completedSavExcelSummary(artifacts, run.savXlsxVerification)
     : artifacts.length ? (String(run.finalText || '').trim() || `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`)
       : run.stoppedReason === 'edit_not_applied' ? String(run.finalText || 'No se aplicó la edición.')
         : 'No pude producir un archivo verificado. No entregué un resultado sin comprobar.';

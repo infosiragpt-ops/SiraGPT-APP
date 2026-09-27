@@ -925,6 +925,7 @@ test('runAgenticChat blocks finalize until every requested artifact is created a
 });
 
 test('SAV and Excel generation cannot finalize at 1×1 and can repair to a verified 20×20 pair', async (t) => {
+  // Keep the generic loop contract covered with a synonym outside AgentRunner's direct-file claim.
   const followup = require('../src/services/agents/generated-artifact-followup');
   const inspected = [];
   t.mock.method(followup, 'compareGeneratedSavXlsx', async ({ refs, forDeliveryValidation }) => {
@@ -957,7 +958,7 @@ test('SAV and Excel generation cannot finalize at 1×1 and can repair to a verif
   const { res } = makeFakeRes();
   const result = await agenticStream.runAgenticChat({
     openai: makeFakeOpenAI(script), model: 'gpt-4o-mini',
-    userQuery: 'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
+    userQuery: 'prepara un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
     res, maxSteps: 12,
     toolContext: { userId: 'owner', chatId: 'chat-a' },
     toolsOverride: [
@@ -1009,7 +1010,7 @@ test('SAV and Excel byte comparison satisfies computation proof without a redund
   const { res } = makeFakeRes();
   const result = await agenticStream.runAgenticChat({
     openai: makeFakeOpenAI(script), model: 'gpt-4o-mini',
-    userQuery: 'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel. Usa solo datos sintéticos.',
+    userQuery: 'prepara un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel. Usa solo datos sintéticos.',
     res, maxSteps: 8,
     toolContext: { userId: 'owner', chatId: 'chat-a' },
     toolsOverride: [
