@@ -17,9 +17,45 @@
  * row is the eventually-consistent source of truth.
  */
 
-const prisma = (() => {
+let prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
 })();
+
+// Per-run append queue. goal-worker persists every research-agent event
+// fire-and-forget, so one run emits dozens of CONCURRENT appends for the
+// same goalRunId. Each append is a Serializable findFirst(max seq)+create:
+// run concurrently they all hit serialization conflicts (P2034), and
+// immediate retries collide again until events are dropped (prod
+// 2026-09-27: bursts of 86 conflicts per second, «append failed», lost
+// steps on re-attach). Chaining appends per run in-process removes that
+// contention entirely — production runs a single backend instance — and
+// keeps events in emission order. The Serializable transaction plus
+// jittered retries remain the safety net across processes.
+const appendQueues = new Map();
+
+function enqueueForRun(goalRunId, task) {
+  const key = String(goalRunId);
+  const previous = appendQueues.get(key) || Promise.resolve();
+  const run = previous.then(task);
+  const tail = run.then(() => undefined, () => undefined);
+  appendQueues.set(key, tail);
+  tail.then(() => {
+    if (appendQueues.get(key) === tail) appendQueues.delete(key);
+  });
+  return run;
+}
+
+const MAX_APPEND_ATTEMPTS = 8;
+
+function retryDelayMs(attempt) {
+  // 15, 30, 60, 120, 240, 480, 500 ms with ±50% jitter so colliding
+  // writers from different processes spread out instead of retrying in
+  // lockstep.
+  const base = Math.min(500, 15 * 2 ** attempt);
+  return Math.round(base * (0.5 + Math.random()));
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
@@ -59,9 +95,9 @@ function phaseFromEvent(event = {}) {
  * Append a single event to the run's log. Best-effort: on persistence
  * failure we log a warning (outside tests) and return `{ ok:false }`.
  *
- * Retries up to 3x on P2002 (unique seq conflict) by re-reading the
- * current event count and bumping seq — covers the rare case where
- * two concurrent appends race on the same run.
+ * Appends for the same run are serialized in-process (see enqueueForRun),
+ * so events keep their emission order and never race each other. Across
+ * processes, P2002/P2034 conflicts are retried with jittered backoff.
  */
 async function appendEvent({ goalRunId, type, payload } = {}) {
   if (!hasModel('goalRunEvent') || !hasModel('goalRun')) {
@@ -70,11 +106,15 @@ async function appendEvent({ goalRunId, type, payload } = {}) {
   if (!goalRunId || !type) return { ok: false, reason: 'invalid_input' };
 
   const safePayload = safeJson(payload, { type });
+  return enqueueForRun(goalRunId, () => appendEventNow({ goalRunId, type, safePayload }));
+}
+
+async function appendEventNow({ goalRunId, type, safePayload }) {
 
   // Retry loop: P2002 = unique seq conflict (concurrent append), P2034 =
   // serialization failure (concurrent serializable tx). Both are transient —
   // the next attempt will see the correct max seq and succeed.
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt += 1) {
     try {
       // Serializable transaction: the findFirst+create pair is atomic at
       // the DB level, so two concurrent appends can never pick the same seq.
@@ -117,7 +157,8 @@ async function appendEvent({ goalRunId, type, payload } = {}) {
         err?.code === 'P2002' || // unique seq conflict
         err?.code === 'P2034' || // serialization failure
         String(err?.message || '').includes('serializ'); // fallback for raw PG 40001
-      if (isRetryable && attempt < 7) {
+      if (isRetryable && attempt < MAX_APPEND_ATTEMPTS - 1) {
+        await sleep(retryDelayMs(attempt));
         continue;
       }
       if (process.env.NODE_ENV !== 'test') {
@@ -213,6 +254,9 @@ module.exports = {
   listEventsSince,
   markCancelRequested,
   _internal: {
+    appendQueues,
+    retryDelayMs,
+    setPrismaForTests(next) { prisma = next; },
     counterDeltaForType,
     isTerminalStatus,
     phaseFromEvent,
