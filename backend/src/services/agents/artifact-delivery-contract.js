@@ -42,6 +42,24 @@ function parseActionArgs(value) {
   }
 }
 
+function requestedSavXlsxMatrix(text, requested) {
+  if (!requested.some((item) => item.format === 'sav')
+    || !requested.some((item) => item.format === 'xlsx')) return null;
+  const sample = String(text).match(/\b(?:muestra\s+de|participantes?|encuestados?|casos?)\s+(\d{1,5})\b/i)
+    || String(text).match(/\b(\d{1,5})\s+(?:participantes?|encuestados?|casos?)\b/i);
+  const questions = String(text).match(/\b(\d{1,3})\s+preguntas?\b/i);
+  // “muestra de 20 preguntas” contains only one number; it does not specify
+  // 20 participants as well. Require independent numeric spans.
+  if (sample && questions
+    && sample.index < questions.index + questions[0].length
+    && questions.index < sample.index + sample[0].length) return null;
+  const rows = Number(sample?.[1]);
+  const columns = Number(questions?.[1]);
+  return Number.isSafeInteger(rows) && rows > 0 && Number.isSafeInteger(columns) && columns > 0
+    ? { rows, columns }
+    : null;
+}
+
 function buildArtifactDeliveryContract(prompt, policy = {}) {
   const text = String(prompt || '');
   // SPSS + Excel is an explicit two-file request even in the default chat.
@@ -84,6 +102,7 @@ function buildArtifactDeliveryContract(prompt, policy = {}) {
     expectedCount,
     requested: bounded,
     maxArtifacts,
+    savXlsxMatrix: requestedSavXlsxMatrix(text, bounded),
   };
 }
 
@@ -127,7 +146,9 @@ function validateArtifactDelivery(contract, { artifacts = [], steps = [], unavai
   const selected = [];
   const missing = [];
   for (const request of contract.requested || []) {
-    const candidates = request.format ? (deliveredByFormat.get(request.format) || []) : delivered;
+    // A repair creates a newer artifact in the same format. Validate the
+    // newest candidate so an obsolete file cannot pass (or block) delivery.
+    const candidates = (request.format ? (deliveredByFormat.get(request.format) || []) : delivered).slice().reverse();
     const available = candidates.filter((artifact) => !selected.includes(artifact));
     selected.push(...available.slice(0, request.count));
     if (available.length < request.count) {
@@ -170,6 +191,66 @@ function validateArtifactDelivery(contract, { artifacts = [], steps = [], unavai
   };
 }
 
+async function validateSavXlsxDelivery(contract, { artifacts = [], inspectPair } = {}) {
+  const expected = contract?.savXlsxMatrix;
+  if (!contract?.active || !expected) return { ok: true, active: false };
+  const refs = ['sav', 'xlsx'].map((format) => {
+    const artifact = (Array.isArray(artifacts) ? artifacts : [])
+      .slice().reverse().find((item) => item?.downloadUrl && extensionOf(item) === format);
+    return artifact && {
+      id: String(artifact.id || artifact.artifactId || ''),
+      filename: String(artifact.filename || ''),
+      format,
+    };
+  });
+  if (refs.some((ref) => !ref?.id || !ref.filename)) {
+    return {
+      ok: false, active: true, missingTools: ['create_document'],
+      message: 'Finalization blocked: faltan el SAV o el Excel solicitados.',
+      repairInstructions: 'Crea ambos archivos descargables y verifica cada uno antes de finalizar.',
+    };
+  }
+  let inspected;
+  try {
+    inspected = typeof inspectPair === 'function' ? await inspectPair(refs) : null;
+  } catch (_) { /* A failed byte read never becomes a successful delivery. */ }
+  const metrics = inspected?.metrics;
+  if (!inspected?.ok || !metrics || metrics.matrixComparable !== true || metrics.headersMatch !== true) {
+    return {
+      ok: false, active: true, missingTools: ['python_exec'],
+      message: 'Finalization blocked: no se pudo abrir y comparar el SAV con el Excel.',
+      repairInstructions: 'Reabre los dos archivos originales, compara las celdas y repara cualquier diferencia antes de finalizar.',
+    };
+  }
+  const correctShape = metrics.savRows === expected.rows
+    && metrics.excelRows === expected.rows
+    && metrics.savColumns === expected.columns
+    && metrics.excelColumns === expected.columns;
+  if (!correctShape) {
+    return {
+      ok: false, active: true, missingTools: ['create_document'],
+      message: `Finalization blocked: el SAV y el Excel deben contener ${expected.rows} filas × ${expected.columns} preguntas.`,
+      repairInstructions: 'Regenera ambos archivos con la muestra y el número de preguntas solicitados; luego vuelve a verificarlos.',
+    };
+  }
+  if (metrics.labelCount !== expected.columns) {
+    return {
+      ok: false, active: true, missingTools: ['create_document'],
+      message: `Finalization blocked: el SAV debe conservar ${expected.columns} etiquetas de variables.`,
+      repairInstructions: 'Añade una etiqueta por variable al SAV, vuelve a abrirlo y verifica las etiquetas.',
+    };
+  }
+  const expectedCells = expected.rows * expected.columns;
+  if (metrics.comparedCells !== expectedCells || metrics.differentCells !== 0) {
+    return {
+      ok: false, active: true, missingTools: ['create_document'],
+      message: `Finalization blocked: hay diferencias entre el SAV y el Excel; deben coincidir los ${expectedCells} valores.`,
+      repairInstructions: 'Repara los datos de ambos archivos y compara cada celda antes de finalizar.',
+    };
+  }
+  return { ok: true, active: true, comparedCells: expectedCells, labelCount: metrics.labelCount };
+}
+
 function buildArtifactDeliveryPrompt(contract) {
   if (!contract?.active) return '';
   const requested = (contract.requested || [])
@@ -181,6 +262,9 @@ function buildArtifactDeliveryPrompt(contract) {
     '- Crea un archivo separado por cada entregable solicitado, con nombre único y extensión correcta.',
     '- Después de CADA create_document llama verify_artifact con el id devuelto. Repara cualquier archivo vacío, corrupto o incompleto.',
     '- No finalices hasta que todos los entregables aparezcan como tarjetas descargables y todos hayan sido verificados.',
+    ...(contract.savXlsxMatrix
+      ? [`- El SAV y el Excel deben contener ${contract.savXlsxMatrix.rows} filas de datos y ${contract.savXlsxMatrix.columns} preguntas, con una etiqueta por variable en el SAV. Reabre ambos y compara todos sus valores celda por celda.`]
+      : []),
   ].join('\n');
 }
 
@@ -192,4 +276,5 @@ module.exports = {
   parseActionArgs,
   successfulVerificationIds,
   validateArtifactDelivery,
+  validateSavXlsxDelivery,
 };

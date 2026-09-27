@@ -194,6 +194,10 @@ function isGeneratedSavXlsxComparison(goal, refs = []) {
     || !requestedFormats(goal).has('sav')
     || !requestedFormats(goal).has('xlsx')
     || requestedFormats(goal).size !== 2) return false;
+  return hasSavXlsxPair(refs);
+}
+
+function hasSavXlsxPair(refs) {
   return Array.isArray(refs) && refs.length === 2
     && new Set(refs.map((ref) => String(ref?.format || '').toLowerCase())).size === 2
     && refs.some((ref) => ref?.format === 'sav')
@@ -277,8 +281,8 @@ function executorFailureStage(execution) {
   return 'executor';
 }
 
-async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } = {}) {
-  if (!isGeneratedSavXlsxComparison(goal, refs)) return null;
+async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, forDeliveryValidation = false } = {}) {
+  if (forDeliveryValidation ? !hasSavXlsxPair(refs) : !isGeneratedSavXlsxComparison(goal, refs)) return null;
   const { INTERNAL } = require('./task-tools');
   let execution;
   try {
@@ -302,6 +306,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } =
   if (result.matrixComparable !== true) {
     return {
       ok: false,
+      metrics: result,
       answer: `Abrí los archivos de este chat. SAV: ${result.savRows} × ${result.savColumns}; Excel: ${result.excelRows} × ${result.excelColumns}. Las filas o columnas no coinciden, así que no puedo calcular un número fiable de diferencias celda por celda. El SAV conserva ${result.labelCount} etiquetas de variables.`,
     };
   }
@@ -313,6 +318,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } =
     : 'Las columnas del SAV no son exactamente P01–P20.';
   return {
     ok: true,
+    metrics: result,
     answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias. El SAV conserva ${result.labelCount} etiquetas de variables.`,
   };
 }

@@ -33,6 +33,78 @@ describe('multi-artifact delivery contract', () => {
     assert.match(onlyExcel.message, /SPSS/);
   });
 
+  test('a 20-person, 20-question SAV and Excel delivery rejects undersized or divergent matrices', async () => {
+    const contract = contractService.buildArtifactDeliveryContract(
+      'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
+      { multipleArtifacts: false },
+    );
+    const artifacts = [
+      { id: 'sav-1', filename: 'muestra.sav', format: 'sav', downloadUrl: '/sav-1' },
+      { id: 'excel-1', filename: 'muestra.xlsx', format: 'xlsx', downloadUrl: '/excel-1' },
+    ];
+    const verified = [verifiedStep('sav-1'), verifiedStep('excel-1')];
+    assert.equal(contractService.validateArtifactDelivery(contract, { artifacts, steps: verified }).ok, true);
+    assert.deepEqual(contract.savXlsxMatrix, { rows: 20, columns: 20 });
+    assert.equal(contractService.buildArtifactDeliveryContract(
+      'dame SPSS y Excel con una muestra de 20 preguntas', { multipleArtifacts: false },
+    ).savXlsxMatrix, null, 'one number does not define both respondents and questions');
+
+    const undersized = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 1, savColumns: 1, excelRows: 1, excelColumns: 1,
+        comparedCells: 1, differentCells: 0, labelCount: 1,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(undersized.ok, false);
+    assert.match(undersized.message, /20.*20/);
+
+    const divergent = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 20, savColumns: 20, excelRows: 20, excelColumns: 20,
+        comparedCells: 400, differentCells: 1, labelCount: 20,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(divergent.ok, false);
+    assert.match(divergent.message, /diferencia/i);
+
+    const missingLabels = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 20, savColumns: 20, excelRows: 20, excelColumns: 20,
+        comparedCells: 400, differentCells: 0, labelCount: 0,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(missingLabels.ok, false);
+    assert.match(missingLabels.message, /etiquetas/i);
+
+    const complete = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async (refs) => {
+        assert.deepEqual(refs.map((ref) => ref.format).sort(), ['sav', 'xlsx']);
+        return { ok: true, metrics: {
+          savRows: 20, savColumns: 20, excelRows: 20, excelColumns: 20,
+          comparedCells: 400, differentCells: 0, labelCount: 20,
+          headersMatch: true, matrixComparable: true,
+        } };
+      },
+    });
+    assert.equal(complete.ok, true);
+    assert.equal(complete.comparedCells, 400);
+
+    const repairedArtifacts = [
+      ...artifacts,
+      { id: 'sav-2', filename: 'muestra-corregida.sav', format: 'sav', downloadUrl: '/sav-2' },
+      { id: 'excel-2', filename: 'muestra-corregida.xlsx', format: 'xlsx', downloadUrl: '/excel-2' },
+    ];
+    const pendingRepair = contractService.validateArtifactDelivery(contract, { artifacts: repairedArtifacts, steps: verified });
+    assert.equal(pendingRepair.ok, false, 'an old verified pair cannot certify a newer unverified repair');
+  });
+
   test('detects distinct Word, PDF and PowerPoint deliverables', () => {
     const contract = contractService.buildArtifactDeliveryContract(
       'Crea el informe en Word, una copia PDF y una presentación PowerPoint',

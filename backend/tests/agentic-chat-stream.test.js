@@ -924,6 +924,64 @@ test('runAgenticChat blocks finalize until every requested artifact is created a
   assert.ok(result.steps.length >= 6, 'guard should force the missing PDF workflow before finalizing');
 });
 
+test('SAV and Excel generation cannot finalize at 1×1 and can repair to a verified 20×20 pair', async (t) => {
+  const followup = require('../src/services/agents/generated-artifact-followup');
+  const inspected = [];
+  t.mock.method(followup, 'compareGeneratedSavXlsx', async ({ refs, forDeliveryValidation }) => {
+    assert.equal(forDeliveryValidation, true);
+    inspected.push(refs.map((ref) => ref.id));
+    const repaired = refs.every((ref) => ref.id.endsWith('new'));
+    const n = repaired ? 20 : 1;
+    return { ok: true, metrics: {
+      savRows: n, savColumns: n, excelRows: n, excelColumns: n,
+      labelCount: n, comparedCells: n * n, differentCells: 0,
+      headersMatch: true, matrixComparable: true,
+    } };
+  });
+  const artifacts = Object.fromEntries([
+    ['draft.sav', 'savold', 'sav'], ['draft.xlsx', 'xlsxold', 'xlsx'],
+    ['repaired.sav', 'savnew', 'sav'], ['repaired.xlsx', 'xlsxnew', 'xlsx'],
+  ].map(([filename, id, format]) => [filename, { id, filename, format, downloadUrl: `/${id}` }]));
+  const script = [
+    toolCallMessage('create_document', { filename: 'draft.sav' }),
+    toolCallMessage('verify_artifact', { artifactId: 'savold' }),
+    toolCallMessage('create_document', { filename: 'draft.xlsx' }),
+    toolCallMessage('verify_artifact', { artifactId: 'xlsxold' }),
+    finalizeMessage('Los 400 valores están verificados.'),
+    toolCallMessage('create_document', { filename: 'repaired.sav' }),
+    toolCallMessage('verify_artifact', { artifactId: 'savnew' }),
+    toolCallMessage('create_document', { filename: 'repaired.xlsx' }),
+    toolCallMessage('verify_artifact', { artifactId: 'xlsxnew' }),
+    finalizeMessage('Los 400 valores están verificados.'),
+  ];
+  const { res } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai: makeFakeOpenAI(script), model: 'gpt-4o-mini',
+    userQuery: 'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
+    res, maxSteps: 12,
+    toolContext: { userId: 'owner', chatId: 'chat-a' },
+    toolsOverride: [
+      {
+        name: 'create_document', description: 'create file',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+        execute: async ({ filename }, ctx) => {
+          const artifact = artifacts[filename];
+          ctx.onEvent({ type: 'file_artifact', artifact });
+          return { ok: true, ...artifact };
+        },
+      },
+      {
+        name: 'verify_artifact', description: 'verify file',
+        parameters: { type: 'object', properties: { artifactId: { type: 'string' } }, required: ['artifactId'] },
+        execute: async ({ artifactId }) => ({ ok: true, artifactId }),
+      },
+    ],
+  });
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.deepEqual(inspected, [['savold', 'xlsxold'], ['savnew', 'xlsxnew']]);
+  assert.ok(result.steps.length >= 10, 'the first finalize must be rejected before the repaired pair');
+});
+
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {
   const { buildThreadWorkContext } = agenticStream._internal;
   const context = buildThreadWorkContext([

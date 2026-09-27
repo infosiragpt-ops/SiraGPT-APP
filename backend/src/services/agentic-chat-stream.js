@@ -68,6 +68,7 @@
     buildArtifactDeliveryContract,
     buildArtifactDeliveryPrompt,
     validateArtifactDelivery,
+    validateSavXlsxDelivery,
   } = require('./agents/artifact-delivery-contract');
   const {
     isSoftwareBuildRequest,
@@ -2300,11 +2301,23 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
         : null,
       artifactDeliveryContract.active
-        ? ({ steps, unavailableTools }) => validateArtifactDelivery(artifactDeliveryContract, {
-          artifacts: state.artifacts,
-          steps,
-          unavailableTools,
-        })
+        ? async ({ steps, unavailableTools }) => {
+          const delivery = validateArtifactDelivery(artifactDeliveryContract, {
+            artifacts: state.artifacts,
+            steps,
+            unavailableTools,
+          });
+          if (!delivery.ok || !artifactDeliveryContract.savXlsxMatrix) return delivery;
+          return validateSavXlsxDelivery(artifactDeliveryContract, {
+            artifacts: state.artifacts,
+            inspectPair: (refs) => require('./agents/generated-artifact-followup').compareGeneratedSavXlsx({
+              refs,
+              userId: toolContext.userId,
+              chatId: toolContext.chatId,
+              forDeliveryValidation: true,
+            }),
+          });
+        }
         : null,
       planVerify.createAnswerVerifier({ openai, model, userQuery }),
     ]);
