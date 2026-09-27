@@ -272,6 +272,34 @@ test('vision ladder: no candidate → no verifier; every candidate down → ok:n
   ladder.resetVisionDemotions();
 });
 
+test('vision ladder: an empty / JSON-less answer (reasoning budget spent) moves to the next model', async () => {
+  ladder.resetVisionDemotions();
+  const seen = [];
+  const payloads = [];
+  const answers = {
+    'deepseek-flash': { choices: [{ message: { content: '', reasoning_content: 'pensando…' } }] },
+    'grok-4.6': { choices: [{ message: { content: '```json\n{"veredicto":"ok","items":[{"requisito":"Lima, 2025","cumple":true,"evidencia":"pág. 1"}],"problemas":[]}\n```' } }] },
+  };
+  const failovers = [];
+  const client = ladder.createVisionClient(candidates(), {
+    createClient: (c) => ({ chat: { completions: { create: async (p) => { seen.push(p.model); payloads.push(p); return answers[c.model]; } } } }),
+    onFailover: (f) => failovers.push(`${f.model}:${f.status}:${f.demoted}`),
+  });
+  const verify = makeVisionVerifier({ client });
+  const out = await verify({ images: [], checklist: ['Lima, 2025'] });
+  assert.deepEqual(seen, ['deepseek-flash', 'grok-4.6']);
+  assert.equal(out.ok, true);
+  assert.match(out.text, /✓ Lima, 2025/);
+  assert.deepEqual(failovers, ['deepseek-flash:unusable:false'], 'no demotion: the next review tries it again');
+  assert.ok(payloads.every((p) => p.max_tokens >= 4000), 'room for reasoning models');
+  // Nobody answers usably → the first answer is kept and the review is ok:null.
+  answers['grok-4.6'] = { choices: [{ message: { content: 'No puedo ver la imagen.' } }] };
+  const none = await verify({ images: [], checklist: ['x'] });
+  assert.equal(none.ok, null);
+  assert.match(none.text, /no devolvió JSON/);
+  ladder.resetVisionDemotions();
+});
+
 test('vision ladder: resolves only configured providers, picked vision model first', () => {
   ladder.resetVisionDemotions();
   const env = { XAI_API_KEY: 'x', DEEPSEEK_API_KEY: 'd' };

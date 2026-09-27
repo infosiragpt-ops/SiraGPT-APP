@@ -17,8 +17,10 @@
  * Per call: quota / auth / transport / 5xx errors move to the next candidate;
  * a 400/404/415/422 (this model cannot take the image) also moves on AND
  * demotes that candidate for DEMOTE_MS — a live probe on first use, cached,
- * instead of trusting a capability table. When no candidate answers, the
- * verifier returns ok:null and the reply says no visual review ran.
+ * instead of trusting a capability table. An answer the caller cannot use
+ * (`accept` → false: empty content because a reasoning model spent its budget
+ * thinking, or no JSON) also moves on, without demotion. When no candidate
+ * answers, the verifier returns ok:null and the reply says no visual review ran.
  */
 
 const { LADDER, inferProvider } = require('../../doc-agent/llm-runtime');
@@ -167,8 +169,9 @@ function createVisionClient(candidates, {
     if (!clients.has(key)) clients.set(key, createClient(c));
     return clients.get(key);
   };
-  async function create(payload, opts) {
+  async function create(payload, opts, { accept } = {}) {
     let lastError = null;
+    let unusable = null;
     for (const c of order) {
       const key = `${c.provider}:${c.model}`;
       const until = demoted.get(key);
@@ -178,6 +181,14 @@ function createVisionClient(candidates, {
           { ...payload, model: c.model, ...(c.extra || {}) },
           opts,
         );
+        if (typeof accept === 'function' && !accept(response)) {
+          unusable = unusable || response;
+          try {
+            onFailover({ provider: c.provider, model: c.model, status: 'unusable', demoted: false,
+              message: 'respuesta sin veredicto utilizable' });
+          } catch (_) { /* observer errors never break the review */ }
+          continue;
+        }
         lastUsed = { provider: c.provider, model: c.model };
         return response;
       } catch (err) {
@@ -192,6 +203,7 @@ function createVisionClient(candidates, {
         } catch (_) { /* observer errors never break the review */ }
       }
     }
+    if (unusable) return unusable;
     throw lastError || new Error('no hay modelo de visión disponible');
   }
   return {
