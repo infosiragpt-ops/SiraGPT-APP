@@ -30,6 +30,17 @@ const MIME_BY_FORMAT = Object.freeze({
 const MIN_SOURCE_WORDS = 20;
 const STOPPED_REASON = 'transcription_document';
 
+/**
+ * Every extractor in fileProcessor prepends a technical header such as
+ * «HTML document — 176 words, 1165 chars» + «---» (PDF/Word/RTF/LaTeX too).
+ * It is context for the model, never part of the transcript (seen in the
+ * prod Word of 2026-09-27).
+ */
+const EXTRACTOR_HEADER_RE = /^[A-Za-z][A-Za-z ]{1,30} document — [^\n]*\n(?:---\n?)?/gm;
+function stripExtractorHeaders(text) {
+  return String(text || '').replace(/\r\n?/g, '\n').replace(EXTRACTOR_HEADER_RE, '');
+}
+
 function countWords(text) {
   return String(text || '').trim().split(/\s+/).filter(Boolean).length;
 }
@@ -79,8 +90,7 @@ function transcriptionDocumentMarkdown({ sourceNames = [], text = '', now = new 
   const provenance = names.length
     ? `Transcripción literal de ${names.length === 1 ? 'el archivo' : 'los archivos'} ${names.map((n) => `«${path.basename(n)}»`).join(', ')} · ${date}`
     : `Transcripción literal · ${date}`;
-  const body = String(text || '')
-    .replace(/\r\n?/g, '\n')
+  const body = stripExtractorHeaders(text)
     .split('\n')
     .map((line) => line.trimEnd())
     .join('\n\n')
@@ -244,6 +254,7 @@ module.exports = {
   buildTranscriptionDeliveryMarkdown,
   transcriptionDocumentMarkdown,
   transcriptionFilename,
+  stripExtractorHeaders,
   countWords,
   MIN_SOURCE_WORDS,
   STOPPED_REASON,
