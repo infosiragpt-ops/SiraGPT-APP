@@ -1571,6 +1571,23 @@ function respondGenerateTurnError(res, {
 // Idempotent USER-message persistence. Equal text is not a duplicate: users
 // may intentionally repeat a short instruction while another turn is still
 // running. Only a client-owned idempotencyKey/streamId may collapse writes.
+// Files recovered from earlier turns carry a marker so they feed the answer
+// but are never saved (or shown) as attachments of the new user message.
+const RECOVERED_FROM_HISTORY = Symbol.for('siragpt.recoveredFromHistory');
+
+function markRecoveredFromHistory(file) {
+  if (!file || typeof file !== 'object') return file;
+  const copy = { ...file };
+  // Enumerable so it survives `{ ...file }` copies (refreshProcessedFileExtracts
+  // spreads); symbol keys never reach JSON.stringify, so it is never persisted.
+  Object.defineProperty(copy, RECOVERED_FROM_HISTORY, { value: true, enumerable: true });
+  return copy;
+}
+
+function userAttachedOnly(files) {
+  return (Array.isArray(files) ? files : []).filter((f) => f && !f[RECOVERED_FROM_HISTORY]);
+}
+
 async function persistUserMessageOnce(chatId, content, filesJson = null, metadata = null, identityInput = null) {
   const identity = resolveTurnIdentity(identityInput || {});
   if (identity) {
@@ -1789,10 +1806,11 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         };
 
         if (!regenerate && !existingTurn?.userMessage) {
+          const userAttachedFiles = userAttachedOnly(processedFiles);
           await persistUserMessageOnce(
             chatId,
             prompt,
-            processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+            userAttachedFiles.length > 0 ? JSON.stringify(userAttachedFiles) : null,
             turnMetadata,
             { idempotencyKey, streamId },
           );
@@ -3287,6 +3305,10 @@ router.post(
       // recent chat document so RAG + file context still ground the answer.
       // Mirrors the agent-task fix — defense-in-depth so document analysis never
       // silently loses context on a follow-up. Best-effort; never blocks.
+      // Files recovered from earlier turns are CONTEXT for this answer, never
+      // attachments of the new user message (prod 2026-09-27: «cuando es 2+2?»
+      // was saved and shown with the chat's earlier (a+b)² screenshot).
+      let __recoveredFileRefs = null;
       if (isAuth && userId && canPersist && (!Array.isArray(files) || files.length === 0)
         && messageAttachments.looksLikeDocumentFollowupQuestion(prompt)) {
         try {
@@ -3297,6 +3319,9 @@ router.post(
           });
           if (Array.isArray(__reattachedDocs) && __reattachedDocs.length > 0) {
             files = __reattachedDocs;
+            __recoveredFileRefs = new Set(__reattachedDocs.map((ref) => String(
+              ref && typeof ref === 'object' ? (ref.id || ref.fileId || '') : ref,
+            )).filter(Boolean));
             generateLog.info('documents.reattached', { documentCount: __reattachedDocs.length });
           }
         } catch (__reattachErr) {
@@ -3319,6 +3344,19 @@ router.post(
             return processedFile;
           })
         ).then(results => results.filter(Boolean));
+
+        if (__recoveredFileRefs && __recoveredFileRefs.size > 0) {
+          const imageRelevant = messageAttachments.looksLikeImageFollowupQuestion(prompt);
+          processedFiles = processedFiles
+            .filter((pf) => {
+              const recovered = pf && __recoveredFileRefs.has(String(pf.id || pf.fileId || ''));
+              // An earlier IMAGE is only re-used when the message is about it.
+              return !(recovered && pf.attachmentKind === 'image' && !imageRelevant);
+            })
+            .map((pf) => (pf && __recoveredFileRefs.has(String(pf.id || pf.fileId || ''))
+              ? markRecoveredFromHistory(pf)
+              : pf));
+        }
 
         if (processedFiles.length > 0) {
           try {
@@ -3362,7 +3400,7 @@ router.post(
         try {
           const recovered = await recoverRecentChatDocumentFiles({ chatId, userId });
           if (recovered.length > 0) {
-            processedFiles = recovered;
+            processedFiles = recovered.map(markRecoveredFromHistory);
             for (const pf of recovered) {
               if (pf?.openaiFileId) openaiFiles.push(pf.openaiFileId);
             }
@@ -7331,10 +7369,11 @@ router.post(
               };
               let triageUserMessage = null;
               if (!regenerate) {
+                const triageUserFiles = userAttachedOnly(processedFiles);
                 triageUserMessage = await persistUserMessageOnce(
                   chatId,
                   prompt,
-                  processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+                  triageUserFiles.length > 0 ? JSON.stringify(triageUserFiles) : null,
                   triageTurnMetadata,
                   { idempotencyKey, streamId },
                 );

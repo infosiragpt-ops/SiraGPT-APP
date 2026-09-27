@@ -225,3 +225,76 @@ describe('document export follow-up — previous assistant content becomes the s
     assert.doesNotMatch(text, /Contenido específico pendiente de regeneración/);
   });
 });
+
+// Prod 2026-09-27: «cuando es 2+2?» re-attached the chat's earlier (a+b)²
+// screenshot to the NEW message (saved and shown with it) because any question
+// word counted as a document follow-up.
+describe('looksLikeDocumentFollowupQuestion — a question word alone is not a follow-up', () => {
+  const { looksLikeImageFollowupQuestion } = require('../src/services/message-attachments');
+
+  test('self-contained questions never re-attach earlier files', () => {
+    for (const q of [
+      'cuando es 2+2?',
+      '¿qué hora es?',
+      '¿cómo estás?',
+      '¿cuánto es 15*3?',
+      'qué opinas de la inteligencia artificial',
+      '¿dónde queda Lima?',
+      'entiendo',
+      'y puedes resolver ejercicios mas avanzado?',
+    ]) {
+      assert.equal(looksLikeDocumentFollowupQuestion(q), false, `expected false for: ${q}`);
+    }
+  });
+
+  test('questions that point at the document (noun, pronoun or reference) still re-attach', () => {
+    for (const q of [
+      'resúmelo',
+      'explícalo mejor',
+      'de qué trata',
+      '¿qué dice en la página 3?',
+      'cuál es la conclusión',
+      'y el título del de arriba?',
+      'agrega una tabla al final',
+    ]) {
+      assert.equal(looksLikeDocumentFollowupQuestion(q), true, `expected true for: ${q}`);
+    }
+  });
+
+  test('earlier images are only re-used when the message is about them', () => {
+    for (const q of ['resuélvelo', 'y el ejercicio de la imagen?', 'explica la foto', 'qué dice la captura']) {
+      assert.equal(looksLikeImageFollowupQuestion(q), true, `image follow-up: ${q}`);
+    }
+    for (const q of ['cuando es 2+2?', 'resume el documento', 'gracias', '¿qué hora es?']) {
+      assert.equal(looksLikeImageFollowupQuestion(q), false, `not about the image: ${q}`);
+    }
+  });
+});
+
+describe('generate route: recovered files are context, never the new message attachments', () => {
+  const aiSource = fs.readFileSync(path.join(__dirname, '../src/routes/ai.js'), 'utf8');
+
+  test('the user message is persisted with only the files the user attached', () => {
+    assert.match(aiSource, /const userAttachedFiles = userAttachedOnly\(processedFiles\);/);
+    assert.match(aiSource, /userAttachedFiles\.length > 0 \? JSON\.stringify\(userAttachedFiles\) : null/);
+    assert.doesNotMatch(aiSource, /persistUserMessageOnce\(\s*chatId,\s*prompt,\s*processedFiles\.length > 0 \? JSON\.stringify\(processedFiles\)/);
+  });
+
+  test('both recovery paths mark files as recovered and unrelated earlier images are dropped', () => {
+    assert.match(aiSource, /__recoveredFileRefs = new Set\(__reattachedDocs\.map/);
+    assert.match(aiSource, /processedFiles = recovered\.map\(markRecoveredFromHistory\);/);
+    assert.match(aiSource, /messageAttachments\.looksLikeImageFollowupQuestion\(prompt\)/);
+    assert.match(aiSource, /pf\.attachmentKind === 'image' && !imageRelevant/);
+  });
+
+  test('the recovered marker survives object spreads and is never serialized', () => {
+    const MARK = Symbol.for('siragpt.recoveredFromHistory');
+    assert.match(aiSource, /Symbol\.for\('siragpt\.recoveredFromHistory'\)/);
+    assert.match(aiSource, /enumerable: true/);
+    const copy = { id: 'f1', name: 'a.png' };
+    Object.defineProperty(copy, MARK, { value: true, enumerable: true });
+    const refreshed = { ...copy, extractedText: 'x' };
+    assert.equal(refreshed[MARK], true);
+    assert.equal(JSON.stringify(refreshed).includes('recovered'), false);
+  });
+});
