@@ -58,6 +58,9 @@ export interface MessageActionRailProps {
   /** Streaming or any in-flight LLM call disables every action so the
    *  user can't double-click into a race. */
   isStreaming?: boolean
+  /** ISO timestamp of the message; renders a quiet relative «hace N min»
+   *  after the buttons when present. */
+  createdAt?: string | null
 
   /** Feature gates — pass `false` to hide a button outright. Defaults
    *  to true for backwards compat with old call sites. */
@@ -138,6 +141,21 @@ function SpeakingEqualizer() {
   )
 }
 
+/** «hace 5 min» / «hace 2 h» / «hace 3 d» — Spanish, coarse on purpose. */
+export function formatRelativeTimeEs(iso?: string | null, now: number = Date.now()): string | null {
+  if (!iso) return null
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return null
+  const diffSec = Math.max(0, Math.round((now - then) / 1000))
+  if (diffSec < 60) return "ahora"
+  const min = Math.floor(diffSec / 60)
+  if (min < 60) return `hace ${min} min`
+  const hours = Math.floor(min / 60)
+  if (hours < 24) return `hace ${hours} h`
+  const days = Math.floor(hours / 24)
+  return `hace ${days} d`
+}
+
 /**
  * Single icon button used by the rail. All sizing/state styling lives
  * here so every action looks identical and the rail is self-consistent.
@@ -183,21 +201,16 @@ function RailButton({
           disabled={disabled || loading}
           onClick={onClick}
           className={cn(
-            // 36px hit area (h-9 w-9). Icon optical size stays 14-15px via
-            // RailButton callers. rounded-xl + relative for the glow layer.
-            "group/rb relative inline-flex h-9 w-9 items-center justify-center rounded-xl",
-            "text-muted-foreground/80 transition-all duration-200 ease-out will-change-transform",
-            // Futuristic glass hover: layered gradient + inset hairline +
-            // a soft lift shadow.
-            "hover:text-foreground",
-            "hover:bg-[linear-gradient(180deg,hsl(var(--foreground)/0.10),hsl(var(--foreground)/0.03))]",
-            "hover:shadow-[inset_0_0_0_1px_hsl(var(--border)/0.6),0_2px_10px_-3px_hsl(var(--foreground)/0.18)]",
-            "active:scale-[0.92]",
+            // Quiet 28px tile (h-7 w-7), claude.ai-style: flat hover tint,
+            // no glass gradient. Icons are 14px via the callers.
+            "group/rb relative inline-flex h-7 w-7 items-center justify-center rounded-md",
+            "text-muted-foreground/70 transition-colors duration-150 ease-out",
+            "hover:bg-muted hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-            "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground/80 disabled:hover:shadow-none disabled:active:scale-100",
-            pressed && !destructive && "bg-[linear-gradient(180deg,hsl(var(--foreground)/0.12),hsl(var(--foreground)/0.04))] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.8)]",
-            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400 shadow-[inset_0_0_0_1px_hsl(0_84%_60%/0.35)]",
-            glow === "accent" && "text-sky-500 dark:text-sky-400 shadow-[inset_0_0_0_1px_hsl(199_89%_55%/0.35),0_0_16px_-3px_hsl(199_89%_55%/0.6)]",
+            "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground/70",
+            pressed && !destructive && "bg-muted text-foreground",
+            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400",
+            glow === "accent" && "text-sky-500 dark:text-sky-400",
             pulse === "success" && "text-emerald-500 dark:text-emerald-400",
             pulse === "error" && "text-red-500 dark:text-red-400",
           )}
@@ -206,7 +219,7 @@ function RailButton({
           {glow === "accent" && (
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 rounded-xl bg-sky-400/10 motion-safe:animate-[rail-halo_1800ms_ease-in-out_infinite]"
+              className="pointer-events-none absolute inset-0 rounded-md bg-sky-400/10 motion-safe:animate-[rail-halo_1800ms_ease-in-out_infinite]"
             />
           )}
           <span className="relative inline-flex items-center justify-center">
@@ -229,6 +242,7 @@ export function MessageActionRail({
   hasError = false,
   regenerationAttempt = 0,
   isStreaming = false,
+  createdAt = null,
   canCopy = true,
   canVoice = true,
   canFeedback = true,
@@ -296,6 +310,15 @@ export function MessageActionRail({
     [model],
   )
   const showModelBadge = !isLive && !hasError && hasText && !!prettyModel
+  const relativeTime = React.useMemo(
+    () => (!isLive && hasText ? formatRelativeTimeEs(createdAt) : null),
+    [createdAt, isLive, hasText],
+  )
+  const absoluteTime = React.useMemo(() => {
+    if (!createdAt) return null
+    const date = new Date(createdAt)
+    return Number.isNaN(date.getTime()) ? null : date.toLocaleString("es")
+  }, [createdAt])
 
   // Nothing to render? Don't render the container either — keeps the
   // bubble visually clean for messages that genuinely have no actions.
@@ -429,13 +452,10 @@ export function MessageActionRail({
       <div
         role="toolbar"
         aria-label="Acciones del mensaje"
-        // Borderless rail — icons sit tight under the response.
-        // -ml-1.5 visually aligns the first icon's optical center with
-        // the text edge above (each RailButton has 4px internal padding
-        // on its left). mt-0.5 keeps the rail close enough to feel
-        // attached to the message instead of floating below it.
+        // Borderless rail — icons sit tight under the response. -ml-1
+        // aligns the first icon's optical center with the text edge above.
         className={cn(
-          "mt-0.5 -ml-1.5 inline-flex items-center gap-0",
+          "mt-1 -ml-1 inline-flex items-center gap-0.5",
         )}
       >
         {showCopy && (
@@ -445,7 +465,7 @@ export function MessageActionRail({
             loading={isCopying}
             pulse={copyPulse}
             onClick={handleCopy}
-            icon={copyPulse === "success" ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+            icon={copyPulse === "success" ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
           />
         )}
         {showRegenerate && (
@@ -455,7 +475,7 @@ export function MessageActionRail({
             onClick={handleRegenerateClick}
             icon={
               <span className="relative inline-flex h-4 w-4 items-center justify-center">
-                <RefreshCw className="h-4 w-4" />
+                <RefreshCw className="h-3.5 w-3.5" />
                 {regenerationBadge && (
                   <span
                     aria-hidden="true"
@@ -480,7 +500,7 @@ export function MessageActionRail({
               loading={isSubmittingFeedback === "liked"}
               pressed={localFeedback === "liked"}
               onClick={() => handleFeedbackClick("liked")}
-              icon={<ThumbsUp className="h-4 w-4" strokeWidth={localFeedback === "liked" ? 2.5 : 1.75} />}
+              icon={<ThumbsUp className="h-3.5 w-3.5" strokeWidth={localFeedback === "liked" ? 2.5 : 1.75} />}
             />
             <RailButton
               label={localFeedback === "disliked" ? "Quitar valoración negativa" : "No me gusta"}
@@ -489,7 +509,7 @@ export function MessageActionRail({
               pressed={localFeedback === "disliked"}
               destructive={localFeedback === "disliked"}
               onClick={() => handleFeedbackClick("disliked")}
-              icon={<ThumbsDown className="h-4 w-4" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
+              icon={<ThumbsDown className="h-3.5 w-3.5" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
             />
           </>
         )}
@@ -502,13 +522,13 @@ export function MessageActionRail({
                 title="Más acciones"
                 disabled={allDisabled}
                 className={cn(
-                  "inline-flex h-9 w-9 items-center justify-center rounded-xl",
-                  "text-muted-foreground/80 hover:text-foreground",
+                  "inline-flex h-7 w-7 items-center justify-center rounded-md",
+                  "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                   allDisabled && "opacity-40 cursor-not-allowed",
                 )}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="min-w-[12rem]">
@@ -570,9 +590,8 @@ export function MessageActionRail({
               <span
                 aria-label={`Respuesta generada por ${prettyModel}`}
                 className={cn(
-                  "ml-1 inline-flex h-7 items-center rounded-full px-2",
-                  "text-[11px] font-medium text-muted-foreground/75",
-                  "border border-border/40 bg-muted/30",
+                  "ml-1.5 inline-flex h-7 items-center px-1",
+                  "text-[11px] text-muted-foreground/70",
                   "select-none cursor-default tabular-nums",
                 )}
               >
@@ -583,6 +602,15 @@ export function MessageActionRail({
               {prettyModel}
             </TooltipContent>
           </Tooltip>
+        )}
+        {relativeTime && (
+          <time
+            dateTime={createdAt || undefined}
+            title={absoluteTime || undefined}
+            className="ml-1.5 select-none text-[11px] tabular-nums text-muted-foreground/60"
+          >
+            {relativeTime}
+          </time>
         )}
       </div>
     </TooltipProvider>

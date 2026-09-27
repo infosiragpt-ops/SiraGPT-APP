@@ -108,13 +108,13 @@ export default function AgentTrace({ reasoning = "", reasoningStreaming = false,
             onClick={() => setUserToggled(!expanded)}
             aria-expanded={expanded}
             aria-label={t("traceAria")}
-            className="think-row group flex w-full items-center gap-2 rounded-lg px-1 py-0.5 text-left"
+            className="think-row group flex w-full items-center gap-2 bg-transparent px-1 py-0.5 text-left text-[13px] text-[#8A8580] hover:text-[#6B6660]"
           >
             <span className="flex h-5 w-5 items-center justify-center text-[#8A8580]"><ClaudeAsterisk size={14} active={false} color="currentColor" /></span>
             <svg className="think-chevron h-3 w-3 shrink-0 text-[#8A8580]" viewBox="0 0 16 16" aria-hidden="true">
               <path d="M6 3.5 11 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <span className="min-w-0 truncate text-[13.5px] font-sans text-[#8A8580]">{headerLabel}</span>
+            <span className="min-w-0 truncate font-sans text-[13px] text-[#8A8580]">{headerLabel}</span>
           </button>
           {expanded ? <ClaudeThinkingTimeline steps={rows} /> : null}
         </>

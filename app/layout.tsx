@@ -3,11 +3,20 @@ import type { Metadata, Viewport } from "next"
 import { headers } from "next/headers"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
+import { Source_Serif_4 } from "next/font/google"
 import "./globals.css"
 import "./video-liquid.css"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages, getTranslations } from "next-intl/server"
 import { isRTL, SUPPORTED_LOCALES } from "@/lib/i18n/locales"
+// Serif text face for assistant prose (claude.ai-style reading rhythm).
+const sourceSerif = Source_Serif_4({
+  subsets: ["latin"],
+  weight: ["400", "600", "700"],
+  variable: "--font-serif",
+  display: "swap",
+})
+
 // LayoutClientEffects is loaded via a "use client" dynamic wrapper (ssr:false)
 // to prevent React from emitting a <div hidden=""> RSC transport container
 // before the <a> skip-link in the server HTML. That hidden div made the first
@@ -176,7 +185,7 @@ export default async function RootLayout({
     <html
       lang={locale} dir={dir}
       suppressHydrationWarning
-      className={`${GeistSans.variable} ${GeistMono.variable}`}
+      className={`${GeistSans.variable} ${GeistMono.variable} ${sourceSerif.variable}`}
       style={{
         "--font-sans": "var(--font-geist-sans)",
         "--font-mono": "var(--font-geist-mono)",

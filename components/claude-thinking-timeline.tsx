@@ -207,7 +207,7 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
               <svg className="think-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M6 3.5 11 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
+              <span className="min-w-0 flex-1 truncate font-sans text-[13px] leading-5 tracking-[-0.01em]">{label}</span>
               {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
               {!elapsed && step.meta ? <span data-step-meta="1" className="ml-3 shrink-0 font-sans text-[12px] tabular-nums leading-5 text-muted-foreground/80">{step.meta}</span> : null}
             </summary>
@@ -226,7 +226,7 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
         ) : (
           <>
             <span className="relative z-[1] flex h-5 w-5 shrink-0 items-center justify-center bg-background" data-kind={kind} data-loader={loaderState}>{glyph}</span>
-            <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
+            <span className="min-w-0 flex-1 truncate font-sans text-[13px] leading-5 tracking-[-0.01em]">{label}</span>
             {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
             {!elapsed && step.meta ? <span data-step-meta="1" className="ml-3 shrink-0 font-sans text-[12px] tabular-nums leading-5 text-muted-foreground/80">{step.meta}</span> : null}
           </>

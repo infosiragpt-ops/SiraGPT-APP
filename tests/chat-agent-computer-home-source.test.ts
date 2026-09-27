@@ -29,7 +29,7 @@ describe("chat agent computer home", () => {
     assert.match(chat, /title="Computadora"/)
     assert.match(chat, /aria-label="Computadora"/)
     assert.match(chat, /title="Navegador"/)
-    assert.match(chat, /<Monitor className="h-5 w-5" \/>/)
+    assert.match(chat, /<Monitor className="h-\[18px\] w-\[18px\]" \/>/)
     assert.match(chat, /<ChatAgentComputerPanel/)
   })
 

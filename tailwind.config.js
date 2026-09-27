@@ -141,6 +141,7 @@ module.exports = {
       fontFamily: {
         sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
         mono: ["JetBrains Mono", "Consolas", "monospace"],
+        serif: ["var(--font-serif)", "Georgia", "serif"],
       },
       fontSize: {
         xs: ["0.75rem", { lineHeight: "1rem" }],
