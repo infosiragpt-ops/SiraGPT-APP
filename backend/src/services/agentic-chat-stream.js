@@ -193,7 +193,9 @@ const CUSTOM_GPT_DOCUMENT_TOOL_NAMES = new Set([
 // searches in 6 steps (74 s) although the route had already injected 10
 // fresh results; once searches were capped, 11 page reads still took ~46 s.
 const WEB_LOOKUP_TOOLS = new Set(['web_search', 'deep_search', 'x_search', 'scientific_search']);
-const WEB_READ_TOOLS = new Set(['read_url', 'web_fetch', 'web_extract']);
+// browse_page (Cowork) opens the page in a real browser: the slowest read of all
+// (~9 s each in production), so it shares the page-read budget.
+const WEB_READ_TOOLS = new Set(['read_url', 'web_fetch', 'web_extract', 'browse_page']);
 
 function positiveEnvInt(env, name, fallback) {
   const value = Math.floor(Number(env[name]));
