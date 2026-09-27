@@ -22,6 +22,8 @@ const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
 const objectStorage = require('../object-storage');
 const sandbox = require('./code-sandbox');
+const { materializeArtifactSource, readArtifactMetadata } = require('./artifact-local-source');
+const { MAX_SIMULTANEOUS_DOCUMENTS } = require('../../config/document-batch-limits');
 const {
   MIN_QUALITY_SCORE,
   MIN_TECHNICAL_SCORE,
@@ -483,15 +485,63 @@ const pythonExec = {
     }
     ctx.onEvent?.({ type: 'tool_call', tool: 'python_exec', preview: previewText(source, 400), language: 'python' });
     ctx.onEvent?.({ type: 'stage', label: 'Ejecutando código Python', pct: 20 });
-    const r = await sandbox.run({
-      language: 'python',
-      source,
-      timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
-      stdin: stdin || '',
-      signal: ctx.signal,
-    });
-    const rawStdout = r.stdout || '';
-    const rawStderr = r.stderr || '';
+    const refs = Array.isArray(ctx.generatedArtifactRefs)
+      ? ctx.generatedArtifactRefs.slice(0, Math.min(8, MAX_SIMULTANEOUS_DOCUMENTS))
+      : [];
+    const hydrated = [];
+    let r;
+    try {
+      const artifactFiles = {};
+      if (refs.length && (!ctx.userId || !ctx.chatId)) {
+        throw new Error('No se pudo verificar el propietario y el chat de los archivos generados.');
+      }
+      for (const [index, ref] of refs.entries()) {
+        const id = String(ref?.id || '').trim();
+        if (!/^[a-f0-9]{16}$/.test(id)) throw new Error('Identificador de archivo generado inválido.');
+        const metadata = readArtifactMetadata(id, ARTIFACT_DIR);
+        if (String(metadata?.ownerUserId || '') !== String(ctx.userId)
+          || String(metadata?.chatId || '') !== String(ctx.chatId)
+          || metadata?.validation?.passed !== true) {
+          throw new Error('Uno de los archivos generados no pertenece a este chat o no fue validado.');
+        }
+        const resolved = await materializeArtifactSource({
+          id,
+          artifactDir: ARTIFACT_DIR,
+          ownerUserId: ctx.userId,
+        });
+        if (!resolved.ok) throw new Error('No se pudo abrir uno de los archivos generados de este chat.');
+        hydrated.push(resolved);
+        artifactFiles[`archivo_${index + 1}`] = { filename: resolved.filename, path: resolved.sourcePath };
+      }
+      const executionSource = refs.length
+        ? `import json as _sira_json\nARTIFACT_FILES = _sira_json.loads(${JSON.stringify(JSON.stringify(artifactFiles))})\n${source}`
+        : source;
+      r = await sandbox.run({
+        language: 'python',
+        source: executionSource,
+        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
+        stdin: stdin || '',
+        signal: ctx.signal,
+      });
+    } catch (err) {
+      const error = err?.message || 'No se pudieron abrir los archivos generados.';
+      ctx.onEvent?.({ type: 'tool_output', tool: 'python_exec', ok: false, preview: error });
+      return { ok: false, error, stdout: '', stderr: error };
+    } finally {
+      await Promise.allSettled(hydrated.map((item) => item.cleanup()));
+    }
+    const redactArtifactInternals = (value) => {
+      let safe = String(value || '');
+      for (const item of hydrated) {
+        if (item.sourcePath) safe = safe.split(item.sourcePath).join('[ruta interna]');
+      }
+      for (const ref of refs) {
+        if (ref?.id) safe = safe.split(String(ref.id)).join('[identificador interno]');
+      }
+      return safe;
+    };
+    const rawStdout = redactArtifactInternals(r.stdout);
+    const rawStderr = redactArtifactInternals(r.stderr);
     const payload = {
       ok: r.ok,
       exitCode: r.exitCode,
@@ -509,8 +559,8 @@ const pythonExec = {
       tool: 'python_exec',
       ok: payload.ok,
       preview: payload.ok
-        ? previewText(r.stdout || '(no stdout)', 600)
-        : previewText(r.stderr || '(no stderr)', 600),
+        ? previewText(rawStdout || '(no stdout)', 600)
+        : previewText(rawStderr || '(no stderr)', 600),
     });
     return payload;
   },

@@ -67,6 +67,11 @@ const {
   stripScaffolding,
   DEFAULT_THIN_THRESHOLD,
 } = require('./attachment-context-guard');
+const {
+  resolveReadOnlyGeneratedArtifactFollowup,
+  buildGeneratedArtifactReadContext,
+  requireGeneratedArtifactRead,
+} = require('./generated-artifact-followup');
 const apa7 = require('../marco-teorico/apa7');
 const imageAttachmentVision = require('../image-attachment-vision');
 const { throwIfAborted } = require('../../utils/abort-signals');
@@ -1731,6 +1736,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   throwIfAborted(externalSignal);
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
+  const generatedArtifactRefs = await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
+    userId: user.id,
+    chatId,
+    providedFileIds: files,
+    goal: displayGoal || goal,
+  });
   const hasEditableDocumentContext = hasAttachedFiles || Boolean(preferRecentArtifact);
   let wantsSourcePreservingEdit = shouldRunSourcePreservingEdit({
     request: displayGoal || goal,
@@ -1861,7 +1872,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     rawUserRequest: goal,
     fileIds: files,
   });
-  const finalizeProfile = buildFinalizeProfile(executionProfile, universalTaskContract);
+  const finalizeProfile = requireGeneratedArtifactRead(
+    buildFinalizeProfile(executionProfile, universalTaskContract),
+    generatedArtifactRefs,
+  );
   let taskContract = deriveLegacyTaskContract(universalTaskContract);
   let taskContractSource = 'fallback';
   // Resolve the actual OpenAI-compatible client (and final model id) for
@@ -3455,6 +3469,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       taskId,
       folderCode,
       fileIds: files,
+      generatedArtifactRefs,
       displayGoal,
       taskContract,
       universalTaskContract,
@@ -3577,7 +3592,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         agenticOperatingCore,
         uploadedFileContext,
         openclawRuntimeProfile
-      ),
+      ) + (generatedArtifactRefs.length
+        ? `\n\n${buildGeneratedArtifactReadContext(generatedArtifactRefs)}`
+        : ''),
       ctx: toolCtx,
       finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
         finalizeProfile,
