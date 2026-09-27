@@ -139,7 +139,7 @@ function detectKind(text, fallback = 'backend') {
 }
 
 // Client went away / user stopped: not a bug of ours.
-const CLIENT_GONE_RE = /\bAbortError\b|aborted by (?:the )?(?:client|user)|client (?:disconnected|closed|gone)|ERR_STREAM_PREMATURE_CLOSE|ERR_STREAM_WRITE_AFTER_END|write after end|ERR_HTTP_HEADERS_SENT.*client|socket hang up.*client|request aborted/i;
+const CLIENT_GONE_RE = /\bAbortError\b|\bAPIUserAbortError\b|aborted by (?:the )?(?:client|user)|client (?:disconnected|closed|gone)|ERR_STREAM_PREMATURE_CLOSE|ERR_STREAM_WRITE_AFTER_END|write after end|ERR_HTTP_HEADERS_SENT.*client|socket hang up.*client|request (?:was )?aborted|this operation was aborted/i;
 // Our own plumbing, never an issue (prevents capture loops).
 const SELF_RE = /^\s*\[(?:system-errors|turn-failures|audit-log)\]/i;
 const BENIGN_RE = /ExperimentalWarning|DeprecationWarning|PromiseRejectionHandledWarning|punycode|Eviction policy is/i;

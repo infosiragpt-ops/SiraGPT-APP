@@ -159,6 +159,7 @@ describe('fingerprint — grouping rules', () => {
     assert.equal(fp.isNoise({ text: 'ElevenLabs API key not configured' }), true);
     assert.equal(fp.isNoise({ text: 'Feature disabled on this server' }), true);
     assert.equal(fp.isNoise({ text: 'AbortError: This operation was aborted' }), true);
+    assert.equal(fp.isNoise({ text: '[agentic-chat] source-preserving pre-loop failed: Request was aborted.' }), true);
     assert.equal(fp.isNoise({ text: 'Error: Not found', status: 404 }), true);
     assert.equal(fp.isNoise({ text: '[system-errors] record failed: db down' }), true);
     assert.equal(fp.isNoise({ text: '(node:1) ExperimentalWarning: something' }), true);
