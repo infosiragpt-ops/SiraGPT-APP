@@ -572,24 +572,72 @@ jobs:
   security-audit:
     name: Security · npm audit + SBOM
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # PRs that don't touch a dependency manifest or the audit policy skip the
+      # npm audit calls: the result would only reflect today's advisory feed
+      # for an unchanged tree (and npm's audit endpoint is a frequent flake
+      # source). production-main pushes and the nightly workflow always audit,
+      # and any PR that changes dependencies keeps the full hard gate.
+      - name: Did this change touch dependencies or the audit policy?
+        id: deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # HEAD is the PR merge commit; HEAD^1 is the base side of that merge.
+          if ! git rev-parse -q --verify HEAD^1 >/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --quiet HEAD^1 HEAD -- package.json package-lock.json backend/package.json backend/package-lock.json \
+              scripts/audit-production-allowlist.js scripts/audit-production-allowlist.json scripts/audit-backend-production.cjs \
+              scripts/lib/npm-audit-retry.cjs backend/scripts/image-size-security-patch.cjs; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No dependency or audit-policy change in this PR — npm audit runs on production-main pushes and nightly."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Bounded retry ONLY for npm audit transport failures (timeouts, audit
+      # endpoint errors); a run that reports high/critical findings fails at once.
       - name: Frontend · npm audit (high and critical)
-        run: npm audit --omit=dev --audit-level=high
+        if: steps.deps.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            status=0
+            npm audit --omit=dev --audit-level=high > /tmp/npm-audit.txt 2>&1 || status=$?
+            cat /tmp/npm-audit.txt
+            if [ "$status" -eq 0 ]; then exit 0; fi
+            if [ "$attempt" -lt 3 ] && ! grep -qiE '^Severity: |^[0-9]+ (high|critical|moderate|low) severity|[0-9]+ vulnerabilit(y|ies) \(|found [0-9]+ vulnerabilit' /tmp/npm-audit.txt \
+               && grep -qiE 'audit endpoint returned an error|ETIMEDOUT|ECONNRESET|EAI_AGAIN|ENOTFOUND|socket hang up|network|50[234]' /tmp/npm-audit.txt; then
+              echo "::warning::npm audit transport failure (attempt $attempt/3) — retrying"
+              sleep $((attempt * 10))
+              continue
+            fi
+            exit "$status"
+          done
 
       - name: Backend · install isolated tree for security attestation
+        if: steps.deps.outputs.changed == 'true'
         run: |
           npm ci --prefix backend --omit=dev --ignore-scripts --no-audit --no-fund
           node backend/scripts/image-size-security-patch.cjs
       - name: Backend · audit high/critical with verified patch provenance
+        if: steps.deps.outputs.changed == 'true'
         run: node scripts/audit-backend-production.cjs
 
       - name: Generate CycloneDX SBOMs
@@ -833,10 +881,12 @@ jobs:
   dependency-audit:
     name: Dependency audit · npm audit production
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v5
@@ -847,10 +897,38 @@ jobs:
             package-lock.json
             backend/package-lock.json
 
+      # PRs that don't touch a dependency manifest or the audit policy skip the
+      # npm audit calls: the result would only reflect today's advisory feed
+      # for an unchanged tree (and npm's audit endpoint is a frequent flake
+      # source). production-main pushes and the nightly workflow always audit,
+      # and any PR that changes dependencies keeps the full hard gate.
+      - name: Did this change touch dependencies or the audit policy?
+        id: deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # HEAD is the PR merge commit; HEAD^1 is the base side of that merge.
+          if ! git rev-parse -q --verify HEAD^1 >/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --quiet HEAD^1 HEAD -- package.json package-lock.json backend/package.json backend/package-lock.json \
+              scripts/audit-production-allowlist.js scripts/audit-production-allowlist.json scripts/audit-backend-production.cjs \
+              scripts/lib/npm-audit-retry.cjs backend/scripts/image-size-security-patch.cjs; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No dependency or audit-policy change in this PR — npm audit runs on production-main pushes and nightly."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Audit root dependencies
+        if: steps.deps.outputs.changed == 'true'
         run: npm run audit:production
 
       - name: Audit backend dependencies
+        if: steps.deps.outputs.changed == 'true'
         run: |
           npm ci --prefix backend --omit=dev --ignore-scripts --no-audit --no-fund
           node backend/scripts/image-size-security-patch.cjs

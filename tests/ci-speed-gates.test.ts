@@ -75,6 +75,24 @@ describe("fast CI layout", () => {
     assert.match(smoke, /continue-on-error: true/)
   })
 
+  it("audits dependencies on every push/nightly and on PRs that change them; retries only transport failures", () => {
+    for (const id of ["dependency-audit", "security-audit"]) {
+      const job = jobSource(id)
+      assert.match(job, /fetch-depth: 2/, `${id} needs the merge parent to diff the PR`)
+      assert.match(job, /id: deps/)
+      assert.match(job, /if \[ "\$\{\{ github\.event_name \}\}" != "pull_request" \]; then\n\s+echo "changed=true"/,
+        `${id}: every non-PR event audits`)
+      assert.match(job, /package-lock\.json backend\/package\.json backend\/package-lock\.json/)
+      const audits = job.match(/if: steps\.deps\.outputs\.changed == 'true'/g) || []
+      assert.ok(audits.length >= 2, `${id}: audit steps are gated on the deps check`)
+    }
+    const nightly = readFileSync(".github/workflows/nightly-dependency-audit.yml", "utf8")
+    assert.match(nightly, /schedule:\n\s+- cron:/)
+    assert.match(nightly, /ref: production-main/)
+    assert.match(nightly, /npm run audit:production/)
+    assert.match(nightly, /node scripts\/audit-backend-production\.cjs/)
+  })
+
   it("keeps every e2e spec file referenced by the critical gate on disk", () => {
     const onDisk = new Set(readdirSync("e2e").map((f) => `e2e/${f}`))
     for (const spec of CRITICAL_SPECS) assert.ok(onDisk.has(spec), `${spec} exists`)
