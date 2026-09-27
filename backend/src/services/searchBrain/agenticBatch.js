@@ -930,6 +930,12 @@ async function* runAgenticBatch(opts) {
     return;
   }
 
+  // A client gone after collection must not keep paying for LLM re-ranking
+  // nor get a report persisted into a chat that already showed an error.
+  if (signal?.aborted) {
+    yield { type: "aborted", reason: "client_disconnect", stage: "ranking" };
+    return;
+  }
   const screeningByKey = new Map(screenedRecords.map((paper) => [dedupKey(paper), paper.screening]));
   const rankInput = protocol.active
     ? collected.map((paper) => ({ ...paper, screening: screeningByKey.get(dedupKey(paper)) || screenPaper(paper, protocol, filters) }))
@@ -968,6 +974,10 @@ async function* runAgenticBatch(opts) {
     yield { type: "rerank_error", error: err && err.message ? err.message : String(err) };
   }
 
+  if (signal?.aborted) {
+    yield { type: "aborted", reason: "client_disconnect", stage: "validation" };
+    return;
+  }
   let selected = ranked.slice(0, topK);
   const doiResolutionEnabled = opts.resolveDois !== false && process.env.SCIENTIFIC_DOI_RESOLUTION_ENABLED !== "0";
   if (doiResolutionEnabled) {
@@ -993,6 +1003,10 @@ async function* runAgenticBatch(opts) {
     } catch (error) {
       yield { type: "validation_error", error: error?.message || String(error) };
     }
+  }
+  if (signal?.aborted) {
+    yield { type: "aborted", reason: "client_disconnect", stage: "summary" };
+    return;
   }
   if (protocol.active) {
     selected = selected.map((paper) => ({ ...paper, riskOfBias: preliminaryRiskOfBias(paper) }));

@@ -37,6 +37,7 @@ const serializer = (() => {
 })();
 
 const router = express.Router();
+const AGENTIC_HEARTBEAT_MS = Math.max(250, Number(process.env.SIRAGPT_AGENTIC_HEARTBEAT_MS) || 15_000);
 
 const VALID_PROVIDERS = new Set(Object.keys(REGISTRY));
 
@@ -94,10 +95,20 @@ router.post(
     };
 
     // Propagate client disconnect to the orchestrator. The agentic
-    // loop checks `signal?.aborted` between provider calls, so a
-    // closed tab stops burning Crossref / OpenAlex quota immediately.
+    // loop checks `signal?.aborted` between provider calls and between
+    // phases, so a closed tab stops burning Crossref / OpenAlex quota.
     const controller = new AbortController();
+    // The LLM re-ranking phase can run for over a minute without an event;
+    // the edge proxy cut such idle streams at ~100 s («Búsqueda fallida:
+    // network error») while the run went on. An SSE comment every 15 s keeps
+    // the connection open; SSE parsers ignore comment lines.
+    const heartbeat = setInterval(() => {
+      if (res.writableEnded) return;
+      try { res.write(": ping\n\n"); } catch { /* client gone */ }
+    }, AGENTIC_HEARTBEAT_MS);
+    if (typeof heartbeat.unref === "function") heartbeat.unref();
     res.on("close", () => {
+      clearInterval(heartbeat);
       if (!res.writableEnded) controller.abort();
     });
 
