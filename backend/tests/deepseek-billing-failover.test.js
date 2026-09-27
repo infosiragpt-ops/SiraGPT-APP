@@ -82,3 +82,38 @@ test('ai.js wraps the DeepSeek client with the OpenRouter fallback factory', () 
   assert.match(src, /require\('\.\.\/services\/ai\/deepseek-billing-failover'\)/);
   assert.match(src, /return wrapDeepSeekClient\(new OpenAI\(\{\n\s+apiKey: process\.env\.DEEPSEEK_API_KEY,\n\s+baseURL: "https:\/\/api\.deepseek\.com",\n\s+\}\), \{\n\s+fallbackClientFactory: \(\) => createProviderClient\('OpenRouter'\),/);
 });
+
+test('DeepSeek direct gets the native id: the picker slug `deepseek/deepseek-v4-pro` is sent as `deepseek-v4-pro`', async () => {
+  // Prod 2026-09-27: api.deepseek.com → 400 «The supported API model names are
+  // deepseek-flash, deepseek-v4-pro, but you passed deepseek/deepseek-v4-pro».
+  const seen = [];
+  const direct = client(async (body) => {
+    seen.push(body.model);
+    if (body.model.includes('/')) throw httpError(400, `The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed ${body.model}.`);
+    return { model: body.model };
+  });
+  const openrouterCalls = [];
+  const wrapped = mod.wrapDeepSeekClient(direct, { fallbackClientFactory: () => client(async (b) => { openrouterCalls.push(b); return {}; }), env: {}, log: quiet });
+  const body = { model: 'deepseek/deepseek-v4-pro', messages: [], stream: true };
+  assert.deepEqual(await wrapped.chat.completions.create(body), { model: 'deepseek-v4-pro' });
+  assert.equal(body.model, 'deepseek/deepseek-v4-pro', "the caller's body is not mutated");
+  assert.deepEqual(await wrapped.chat.completions.create({ model: 'deepseek-v4-flash' }), { model: 'deepseek-v4-flash' });
+  assert.deepEqual(seen, ['deepseek-v4-pro', 'deepseek-v4-flash']);
+  assert.equal(openrouterCalls.length, 0);
+  assert.equal(mod.toDeepSeekDirectModel('DeepSeek/deepseek-v4-pro'), 'deepseek-v4-pro');
+  assert.equal(mod.toDeepSeekDirectModel('deepseek-chat'), 'deepseek-chat');
+  // …while the OpenRouter fallback still gets the slug.
+  assert.equal(mod.toOpenRouterSlug('deepseek-v4-pro'), 'deepseek/deepseek-v4-pro');
+});
+
+test('the chat stream client (ai-service) also sends native DeepSeek ids', async () => {
+  const seen = [];
+  const raw = client(async (body, opts) => { seen.push([body.model, opts && opts.signal]); return { ok: true }; });
+  const wrapped = mod.withDeepSeekDirectModelIds(raw);
+  assert.equal(mod.withDeepSeekDirectModelIds(wrapped), wrapped, 'idempotent');
+  await wrapped.chat.completions.create({ model: 'deepseek/deepseek-v4-pro', stream: true }, { signal: 'sig' });
+  await wrapped.chat.completions.create({ model: 'deepseek-v4-flash' });
+  assert.deepEqual(seen, [['deepseek-v4-pro', 'sig'], ['deepseek-v4-flash', undefined]]);
+  const src = fs.readFileSync(path.join(__dirname, '../src/services/ai-service.js'), 'utf8');
+  assert.match(src, /return withDeepSeekDirectModelIds\(new OpenAI\(\{[\s\S]{0,200}baseURL: "https:\/\/api\.deepseek\.com"/);
+});

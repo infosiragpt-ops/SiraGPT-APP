@@ -39,6 +39,37 @@ function isBillingOrAuthError(err) {
     && !/rate ?limit/i.test(msg);
 }
 
+/**
+ * Model id for DeepSeek DIRECT: the picker's «DeepSeek V4 Pro» row is named
+ * with its OpenRouter slug (`deepseek/deepseek-v4-pro`), which api.deepseek.com
+ * rejects with 400 «The supported API model names are deepseek-flash,
+ * deepseek-v4-pro» (prod 2026-09-27, found by «Fallos de respuesta»). Strip
+ * the provider prefix; bare ids pass through.
+ */
+function toDeepSeekDirectModel(model) {
+  const m = String(model || '').trim();
+  return m.replace(/^deepseek\//i, '') || m;
+}
+
+/**
+ * Any OpenAI-compatible client pointed at api.deepseek.com: send native ids
+ * whatever the caller passes (the chat stream path in ai-service uses its own
+ * client, not the failover wrapper). Idempotent.
+ */
+function withDeepSeekDirectModelIds(client) {
+  if (!client || !client.chat || !client.chat.completions || typeof client.chat.completions.create !== 'function') return client;
+  if (client.__deepseekDirectModelIds) return client;
+  const create = client.chat.completions.create.bind(client.chat.completions);
+  client.chat.completions.create = (body, options) => {
+    const mapped = body && typeof body.model === 'string' && /^deepseek\//i.test(body.model)
+      ? { ...body, model: toDeepSeekDirectModel(body.model) }
+      : body;
+    return options === undefined ? create(mapped) : create(mapped, options);
+  };
+  client.__deepseekDirectModelIds = true;
+  return client;
+}
+
 /** `deepseek-v4-pro` → `deepseek/deepseek-v4-pro`; slugs pass through. */
 function toOpenRouterSlug(model) {
   const m = String(model || '').trim();
@@ -94,8 +125,11 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
         log.warn?.(`[deepseek-failover] OpenRouter fallback failed (${fallbackErr && fallbackErr.message}); trying DeepSeek direct`);
       }
     }
+    const direct = body && typeof body.model === 'string' && /^deepseek\//i.test(body.model)
+      ? { ...body, model: toDeepSeekDirectModel(body.model) }
+      : body;
     try {
-      return options === undefined ? await primaryCreate(body) : await primaryCreate(body, options);
+      return options === undefined ? await primaryCreate(direct) : await primaryCreate(direct, options);
     } catch (err) {
       if (!isBillingOrAuthError(err)) throw err;
       markDirectFailure(err, env);
@@ -114,4 +148,4 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
   return client;
 }
 
-module.exports = { wrapDeepSeekClient, isBillingOrAuthError, toOpenRouterSlug, isDirectFailureMemoised, snapshot, resetForTests, DEFAULT_MEMO_MS };
+module.exports = { wrapDeepSeekClient, withDeepSeekDirectModelIds, isBillingOrAuthError, toOpenRouterSlug, toDeepSeekDirectModel, isDirectFailureMemoised, snapshot, resetForTests, DEFAULT_MEMO_MS };
