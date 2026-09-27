@@ -147,11 +147,6 @@ def xl_value(path, sheet, ref):
     if c is None: return None, None
     v = so._xl_cell_value(c, so._xl_shared_strings(pkg))
     return v[0], v[1]
-def hex_rgb(h):
-    h = str(h or "").strip().lstrip("#")[-6:]
-    try: return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    except Exception: return None
-
 try:
     if sid == "docx-portada-anio":
         tb, ta = texts(before), texts(after)
@@ -233,7 +228,7 @@ try:
         c_before, pkg_b = xl_cell(before, "Presupuesto", "B4")
         st_a = so.XlStyles(pkg_a).describe(int(c_after.get("s") or 0))
         st_b = so.XlStyles(pkg_b).describe(int(c_before.get("s") or 0))
-        check("B4 resaltada (relleno)", bool(st_a.get("fill")) and st_a.get("fill") != st_b.get("fill"), "relleno: %s" % st_a.get("fill"))
+        check("B4 resaltada con relleno FFF2CC", str(st_a.get("fill") or "").upper() == "FFF2CC" and st_a.get("fill") != st_b.get("fill"), "relleno: %s" % st_a.get("fill"))
         same = []
         for ref in ("A4", "C4", "D4", "B2", "B3", "B5", "D6"):
             ca, _ = xl_cell(after, "Presupuesto", ref); cb, _ = xl_cell(before, "Presupuesto", ref)
@@ -294,9 +289,7 @@ try:
         check("y y tamaño iguales", off_a.get("y") == off_b.get("y") and ext_a.get("cx") == ext_b.get("cx") and ext_a.get("cy") == ext_b.get("cy"), "")
         info = so.inspect(after, slide=2)
         fill = next((sh.get("fill") for sh in info["slides"][0]["shapes"] if sh.get("name") == "Nota"), None)
-        rgb = hex_rgb(fill)
-        green = rgb is not None and rgb[1] > rgb[0] + 30 and rgb[1] > rgb[2] + 30
-        check("relleno verde", green, "relleno: %s" % fill)
+        check("relleno verde 2E7D32", str(fill or "").upper() == "2E7D32", "relleno: %s" % fill)
         check("solo cambia la lámina 2", changed_parts() == ["ppt/slides/slide2.xml"], changed_parts())
 
     elif sid == "docx-larga-subtitulo":

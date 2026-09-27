@@ -29,6 +29,7 @@ const path = require('path');
 
 const { SCENARIOS } = require('../src/services/agent-runner/evals/office-scenarios');
 const { gradeOfficeOutput } = require('../src/services/agent-runner/evals/office-grader');
+const { assessOfficeEval, sseError } = require('../src/services/agent-runner/evals/office-acceptance');
 
 const MIME = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -108,16 +109,16 @@ async function runScenario({ scenario, base, headers, fixturesDir, provider, mod
   await readSse(res, (ev) => {
     if (ev.type === 'stage') stages.push(ev);
     if (ev.type === 'file_artifact' && ev.artifact) artifacts.push(ev.artifact);
+    const error = sseError(ev);
+    if (error) errors.push(error);
     if (ev.type === 'done') {
       // /document-edit: one final frame with the answer and the file cards.
       content = String(ev.content || '');
       for (const f of Array.isArray(ev.files) ? ev.files : []) {
         artifacts.push({ filename: f.filename, downloadUrl: f.downloadUrl || f.url });
       }
-      if (ev.ok === false) errors.push(String(ev.code || 'failed'));
       return;
     }
-    if (ev.error) errors.push(String(ev.error).slice(0, 160));
     if (typeof ev.content === 'string' && ev.content) content = ev.replace ? ev.content : content + ev.content;
   });
   const seconds = Math.round((Date.now() - started) / 1000);
@@ -131,15 +132,15 @@ async function runScenario({ scenario, base, headers, fixturesDir, provider, mod
   }
 
   // Persisted timeline (Fase D): the assistant row carries activityTrace.
-  let persistedTrace = 0;
+  let persistedStages = [];
   try {
     const full = await (await fetch(`${base}/api/chats/${chatId}`, { headers })).json();
     const messages = (full && (full.messages || (full.chat && full.chat.messages))) || [];
     const assistant = [...messages].reverse().find((m) => m.role === 'ASSISTANT');
     const meta = assistant && assistant.agentMetadata;
     const parsed = typeof meta === 'string' ? JSON.parse(meta) : meta;
-    persistedTrace = parsed && Array.isArray(parsed.activityTrace) ? parsed.activityTrace.length : 0;
-  } catch (_) { persistedTrace = 0; }
+    persistedStages = parsed && Array.isArray(parsed.activityTrace) ? parsed.activityTrace : [];
+  } catch (_) { persistedStages = []; }
 
   const sandbox = await createSandbox({});
   let graded;
@@ -150,13 +151,14 @@ async function runScenario({ scenario, base, headers, fixturesDir, provider, mod
   }
 
   const calls = stages.filter((s) => s.step === 'tool_call');
+  const acceptance = assessOfficeEval({ graded, stages, persistedStages, errors });
   return {
     n: scenario.n,
     id: scenario.id,
     prompt: scenario.prompt,
     chatId,
-    passed: graded.ok,
-    checks: graded.checks,
+    passed: acceptance.ok,
+    checks: acceptance.checks,
     seconds,
     delivered: delivered.map((a) => a.filename),
     tools: calls.map((s) => s.tool),
@@ -164,7 +166,7 @@ async function runScenario({ scenario, base, headers, fixturesDir, provider, mod
     timelineRows: calls.length,
     thumbs: stages.reduce((n, s) => n + (Array.isArray(s.thumbs) ? s.thumbs.length : 0), 0),
     stageV2: stages.some((s) => s.callId && s.kind && s.status),
-    persistedTrace,
+    persistedTrace: persistedStages.length,
     visionMention: /revisi[oó]n visual|modelo de visi[oó]n/i.test(content),
     answer: content.replace(/<!--[\s\S]*?-->/g, '').replace(/```[\s\S]*?```/g, '').trim().slice(0, 400),
     errors,

@@ -368,7 +368,7 @@ jobs:
         if: matrix.shard == 1
         env:
           NODE_ENV: test
-        run: node --test tests/agent-runner-office-tools.test.js tests/agent-runner-office-evals.test.js
+        run: node --test tests/agent-runner-office-tools.test.js tests/agent-runner-office-evals.test.js tests/agent-runner-office-acceptance.test.js
 
       - name: Configure Redis for auth-security readiness
         run: |
