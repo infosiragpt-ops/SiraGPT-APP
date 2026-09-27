@@ -80,6 +80,3 @@ test("locale prefix is preserved through the /chat redirect", async ({ page }) =
   const pathname = new URL(page.url()).pathname
   expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:agentes|chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
 })
-
-// THROWAWAY (PR #820): proves a failing critical e2e shard still blocks. Reverted next commit.
-test("ci gate probe must fail (e2e shard 1)", async () => { expect(1).toBe(2) })
