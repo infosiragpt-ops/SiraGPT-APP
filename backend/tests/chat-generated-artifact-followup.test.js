@@ -176,7 +176,7 @@ test('deterministic SAV/XLSX comparison reports a read error instead of inventin
   const taskTools = require('../src/services/agents/task-tools');
   const originalExecute = taskTools.INTERNAL.pythonExec.execute;
   t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
-  taskTools.INTERNAL.pythonExec.execute = async () => ({ ok: false, error: 'unavailable', stdout: '' });
+  taskTools.INTERNAL.pythonExec.execute = async () => ({ ok: false, error: 'No se pudo abrir uno de los archivos generados de este chat.', stdout: '' });
   let modelCalls = 0;
   const openai = { chat: { completions: { create: async () => { modelCalls += 1; throw new Error('provider unavailable'); } } } };
   const response = new PassThrough();
@@ -195,6 +195,7 @@ test('deterministic SAV/XLSX comparison reports a read error instead of inventin
   assert.equal(result.stoppedReason, 'generated_artifact_compare_failed');
   assert.equal(isHandledAgenticChatResult(result), true, 'the HTTP route must preserve the honest read error');
   assert.match(result.finalAnswer, /No pude abrir y comparar/);
+  assert.match(result.finalAnswer, /etapa: acceso a los archivos/);
   assert.doesNotMatch(result.finalAnswer, /0 diferencias|400 valores idénticos|[a-f0-9]{16}/i);
 });
 
