@@ -5,6 +5,7 @@ import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
 import { isLiveComputerUsePrompt } from "./computer-login-handoff"
 import { isSoftwareBuildRequest } from "./software-build-intent"
+import { isGeneratedArtifactReadRequest } from "./generated-artifact-read-intent"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -546,6 +547,9 @@ export function shouldUseExistingDocumentFileContext(
   prompt: string,
   conversationHistory: any[] = []
 ): boolean {
+  // Generated download cards are resolved by the server using owner + chat.
+  // Reattaching an older upload would hide the validated SAV/XLSX delivery.
+  if (isGeneratedArtifactReadRequest(prompt)) return false
   return shouldAnswerFromExistingDocument(prompt, conversationHistory)
     || shouldEditExistingDocument(prompt, conversationHistory)
 }
@@ -943,6 +947,9 @@ export function shouldRouteWorkModePromptThroughAgentTask(prompt: string, files:
 
 export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files: any[] = []): boolean {
   const normalized = normalizePrompt(prompt)
+  // Prior generated files are resolved by /api/ai/generate from this chat's
+  // validated artifacts. A .xlsx mention here must not start a new doc job.
+  if (files.length === 0 && isGeneratedArtifactReadRequest(prompt)) return false
   if (GOAL_COMMAND_RE.test(prompt)) return true
   if (files.length > 0) {
     const fileList = Array.isArray(files) ? files : []
@@ -1132,6 +1139,8 @@ export function isComputerRequestPrompt(prompt: string): boolean {
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
 
+  if (isGeneratedArtifactReadRequest(prompt)) return 'agent_task'
+
   if (GOAL_COMMAND_RE.test(prompt)) return 'agent_task'
 
   // Ambiguous comes first — under-specified prompts route to the
@@ -1281,6 +1290,8 @@ export class AIService {
     conversationHistory: any[] = [],
     signal?: AbortSignal
   ): Promise<ChatIntent> {
+
+    if (isGeneratedArtifactReadRequest(prompt)) return 'agent_task';
 
     if (isLiveComputerUsePrompt(prompt)) {
       return 'agent_task';

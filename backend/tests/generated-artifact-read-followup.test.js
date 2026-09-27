@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const request = require('supertest');
+const readbackCases = require('../../tests/fixtures/generated-sav-xlsx-readback.json');
 
 const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-artifact-followup-'));
 process.env.AGENT_ARTIFACT_DIR = artifactDir;
@@ -18,6 +19,7 @@ const {
   resolveReadOnlyGeneratedArtifactFollowup,
   buildGeneratedArtifactReadContext,
   requireGeneratedArtifactRead,
+  isGeneratedSavXlsxComparison,
 } = require('../src/services/agents/generated-artifact-followup');
 const { buildRouteTestApp, installAuthSessionMock, reloadModule } = require('./http-test-utils');
 
@@ -47,6 +49,22 @@ test('files:[] comparison recovers both validated SAV and XLSX from this owner a
 
   assert.deepEqual(queriedWhere, { userId: ownerUserId, chatId });
   assert.deepEqual(refs.map(({ id }) => id), [xlsx.id, sav.id]);
+  const readbackQuestion = readbackCases.readOnlySavXlsx[1];
+  assert.equal(isReadOnlyGeneratedArtifactFollowup(readbackQuestion), true);
+  for (const prompt of readbackCases.readOnlySavXlsx) {
+    assert.equal(isReadOnlyGeneratedArtifactFollowup(prompt), true, prompt);
+    assert.equal(isGeneratedSavXlsxComparison(prompt, refs), true, prompt);
+  }
+  for (const prompt of readbackCases.newOutputOrEdit) {
+    assert.equal(isReadOnlyGeneratedArtifactFollowup(prompt), false, prompt);
+    assert.equal(isGeneratedSavXlsxComparison(prompt, refs), false, prompt);
+  }
+  for (const prompt of readbackCases.unrelated) {
+    assert.equal(isGeneratedSavXlsxComparison(prompt, refs), false, prompt);
+  }
+  assert.deepEqual((await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
+    userId: ownerUserId, chatId, providedFileIds: [], goal: readbackQuestion,
+  })).map(({ id }) => id), [xlsx.id, sav.id]);
   assert.deepEqual(await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
     userId: ownerUserId, chatId, providedFileIds: ['new-upload'], goal: 'Compara el SAV y Excel anteriores',
   }), []);

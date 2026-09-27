@@ -1,0 +1,32 @@
+{
+  "readOnlySavXlsx": [
+    "Sin crear ni modificar archivos: abre participantes.sav y participantes.xlsx que acabas de entregar. Usa pyreadstat.read_sav y openpyxl para comparar celda por celda las 20×20 respuestas P01–P20. Informa el número exacto de diferencias entre los 400 valores y cuántas etiquetas de variable conserva el SAV. Si no puedes acceder o leer uno, dilo expresamente; no deduzcas la igualdad de la respuesta anterior.",
+    "¿Cuántas diferencias hay entre los 400 valores P01–P20 de participantes.sav y participantes.xlsx que entregaste en este chat? Compruébalo leyendo los dos archivos y dime también cuántas etiquetas de variables tiene el SAV.",
+    "Compara el SAV y Excel que acabas de generar",
+    "Compara el SAV y Excel que generaste",
+    "Compara el SAV y Excel que creaste",
+    "Compara el SAV y Excel que acabas de crear",
+    "Compara el SAV y Excel generados en este chat",
+    "Compara el SAV que generaste y el Excel que creaste"
+  ],
+  "newOutputOrEdit": [
+    "Compara el SAV y Excel que acabas de generar y crea un XLSX nuevo",
+    "Genera un PDF y compara el SAV y Excel que entregaste",
+    "Compara el SAV y Excel que entregaste; crea un PDF nuevo",
+    "Compara el SAV y Excel que entregaste para crear un PDF nuevo",
+    "Compara el SAV y Excel que entregaste y luego haz un PDF con el resumen",
+    "Lee el SAV y Excel que entregaste y conviértelo a PDF",
+    "Revisa el SAV y Excel que entregaste y prepara una nueva presentación",
+    "Compara el SAV y Excel que entregaste y transforma el Excel",
+    "Compara el SAV y Excel que entregaste y edita una celda",
+    "Abre el Word que acabas de entregar y luego haz un PDF con el resumen",
+    "Lee el Excel que entregaste y conviértelo a PDF",
+    "Revisa el Word que entregaste y prepara una nueva presentación"
+  ],
+  "unrelated": [
+    "Crea un XLSX nuevo",
+    "Abre el Word que acabas de entregar",
+    "Lee el PDF que generaste en este chat",
+    "Compara los dos Excel que entregaste"
+  ]
+}

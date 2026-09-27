@@ -1,6 +1,7 @@
 import { authenticatedFetch } from "./authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getAttachmentLocalFile } from "./document-viewer-attachment"
+import { isGeneratedArtifactReadRequest } from "./generated-artifact-read-intent"
 import { streamSseJson } from "./sse-client"
 import { composerBlocksTools, readComposerPermission, type ComposerPermissionId } from "./chat/composer-session"
 import type { AgentTaskState } from "./agent-task-service"
@@ -112,6 +113,7 @@ const HIGHLIGHT_EDIT_RE = /\b(?:resalt|subray)\w*\b[^.;\n]{0,60}?\b(?:celdas?|fi
 /** Language-only explicit-edit detector. Attachments are resolved by the admission helper. */
 export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
   const text = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
+  if (isGeneratedArtifactReadRequest(prompt)) return false
   if (/^no (?:cambies|cambiar|modifiques) nada\b/.test(text)) return true
   if (clauseLooksLikeEdit(text)) return true
   if (HIGHLIGHT_EDIT_RE.test(text)) return true

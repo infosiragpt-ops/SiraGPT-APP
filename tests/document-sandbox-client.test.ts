@@ -4,6 +4,34 @@ import { collectDocumentEditReferences, documentEditReference, snapshotDocumentE
   parseDocumentJobPointer, parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
 import { historyDocumentAttachments, mentionsDocumentTarget, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
 import { createPersistedComposerQueueItem } from "../lib/chat/composer-queue"
+import { aiService, shouldRouteTextPromptThroughAgenticRuntime, shouldUseExistingDocumentFileContext } from "../lib/ai-service"
+import { isGeneratedArtifactReadRequest } from "../lib/generated-artifact-read-intent"
+import readbackCases from "./fixtures/generated-sav-xlsx-readback.json"
+
+test("read-only follow-ups on a generated SAV/XLSX pair never enter either document editor or generator", async () => {
+  for (const prompt of readbackCases.readOnlySavXlsx) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+    assert.equal(resolveDocumentSandboxAdmission(prompt, {
+      historyAttachments: [{ id: "existing-xlsx", name: "participantes.xlsx" }],
+    }).route, null, prompt)
+    assert.equal(await aiService.classifyIntent(prompt), "agent_task", prompt)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, []), false, prompt)
+    assert.equal(shouldUseExistingDocumentFileContext(prompt, [{
+      role: "ASSISTANT", files: [{ id: "older-upload", name: "participantes.xlsx" }],
+    }]), false, prompt)
+  }
+  assert.equal(looksLikeExplicitDocumentEdit("Abre el Excel que acabas de entregar y luego edita participantes.xlsx"), true)
+})
+test("SAV/XLSX readback corpus rejects new outputs, edits and unrelated formats", async () => {
+  for (const prompt of readbackCases.readOnlySavXlsx) {
+    assert.equal(isGeneratedArtifactReadRequest(prompt), true, prompt)
+    assert.equal(await aiService.classifyIntent(prompt), "agent_task", prompt)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, []), false, prompt)
+  }
+  for (const prompt of [...readbackCases.newOutputOrEdit, ...readbackCases.unrelated]) {
+    assert.equal(isGeneratedArtifactReadRequest(prompt), false, prompt)
+  }
+})
 
 // HTTP protocol fixtures test the client only. These are not editor, independent
 // validation or paid-provider E2E evidence; those gates run in the backend suite.
