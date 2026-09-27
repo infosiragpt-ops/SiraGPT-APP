@@ -41,7 +41,10 @@ async function main() {
     chromeProcess = spawn(chromium.executablePath(), [...desktopFlags, '--no-startup-window', `--user-data-dir=${profile}`, '--remote-debugging-port=9222', '--window-position=0,0', '--window-size=1280,900'], { stdio: ['ignore', 'ignore', chromeLog] });
     fs.closeSync(chromeLog);
     let ready = false;
-    for (let i = 0; i < 40; i++) {
+    // Bounded startup: up to 30 s. A cold, loaded CI runner sometimes needs
+    // more than the previous 10 s before Chrome opens its CDP port; a Chrome
+    // that never opens it still fails this gate.
+    for (let i = 0; i < 120; i++) {
       try { ready = (await fetch('http://127.0.0.1:9222/json/version', { signal: AbortSignal.timeout(500) })).ok; } catch { /* bounded startup */ }
       if (ready) break;
       await new Promise(resolve => setTimeout(resolve, 250));

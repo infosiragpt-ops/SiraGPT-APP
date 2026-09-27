@@ -7,11 +7,14 @@ on:
     branches: [main, production-main]
   workflow_dispatch:
 
-# Keep runs on the same branch from cancelling each other. Main deploy
-# watches need a completed CI result for the exact pushed SHA.
+# Pull requests: a newer push to the same PR supersedes the running check —
+# cancel it so runners go to current work (a public-repo account has a
+# limited number of concurrent jobs; stale runs made new ones queue).
+# production-main pushes are never cancelled: the publish workflow needs a
+# completed result for the exact pushed SHA.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NODE_VERSION: '24'
@@ -33,6 +36,107 @@ jobs:
   # ───────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # `npm run build` starts with build:backend (prisma generate + the
+      # document-sandbox compile), so the backend deps are needed here too.
+      - name: Install backend dependencies for the backend build step
+        run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
+
+      # Prisma engine cache — keyed on schema. Restoring avoids re-downloading
+      # the platform-specific query engine binaries on every run.
+      - name: Cache Prisma engines
+        uses: actions/cache@v5
+        with:
+          path: |
+            backend/node_modules/.prisma
+            backend/node_modules/@prisma/engines
+            ~/.cache/prisma
+          key: prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-
+            prisma-${{ runner.os }}-
+
+      # Hard gate (with ratchet) — `eslint` errors fail the build.
+      # `--max-warnings 50` pins the existing baseline so the warning
+      # count can only shrink: any new warning lands on top of 50 and
+      # tips the gate over. Update the number when you clear warnings.
+      - name: Lint (hard gate, ratcheted)
+        run: npm run lint -- --max-warnings 50
+
+      # Belt-and-braces ratchet: count warnings explicitly so a regression
+      # surfaces a clear error message instead of relying solely on
+      # `--max-warnings` exit codes from `next lint`. Update LINT_WARN_CAP
+      # alongside `package.json` and the `--max-warnings` flag above.
+      - name: Lint warning-count ratchet
+        env:
+          LINT_WARN_CAP: '50'
+        run: |
+          set -o pipefail
+          COUNT=$(npx --no-install next lint 2>&1 | grep -c 'Warning:' || true)
+          echo "Lint warnings: ${COUNT} (cap: ${LINT_WARN_CAP})"
+          if [ "${COUNT}" -gt "${LINT_WARN_CAP}" ]; then
+            echo "::error ::Lint warning count ${COUNT} exceeds cap ${LINT_WARN_CAP}. Fix new warnings or lower the cap."
+            exit 1
+          fi
+
+      # Hard gate — `next build` is the source of truth. Catches
+      # missing modules, import errors, static-analysis failures, and
+      # env-usage bugs that lint/tsc may miss.
+      # Cache .next/cache between runs so `next build` reuses
+      # previously compiled modules, speeding up PR rebuilds.
+      - name: Cache Next.js build
+        uses: actions/cache@v5
+        with:
+          path: .next/cache
+          # Source-aware key: invalidate the cache when either deps or
+          # frontend source change, so `next build` reuses module-graph
+          # hits as often as safely possible.
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
+      - name: Next.js build
+        run: npm run build
+
+      # Hard gate — gzipped bundle size must stay under the budget defined
+      # in scripts/bundle-size-budget.json. Re-seed with
+      # `node scripts/bundle-size-check.js --update-baseline` after a
+      # deliberate, vetted change and commit the updated JSON alongside
+      # the PR that grew the bundle.
+      - name: Bundle-size budget gate
+        run: node scripts/bundle-size-check.js
+
+      - name: Upload bundle-size report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: bundle-size-report
+          path: bundle-size-report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Frontend test gates run in their own job, in parallel with the build
+  # (they used to run serially before `next build`, ~2 min on the critical
+  # path). Same commands, same hard gates; the required `ci` job needs both.
+  frontend-tests:
+    name: Frontend · tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -75,29 +179,6 @@ jobs:
       - name: Generate backend Prisma client for root tests
         run: npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
 
-      # Hard gate (with ratchet) — `eslint` errors fail the build.
-      # `--max-warnings 50` pins the existing baseline so the warning
-      # count can only shrink: any new warning lands on top of 50 and
-      # tips the gate over. Update the number when you clear warnings.
-      - name: Lint (hard gate, ratcheted)
-        run: npm run lint -- --max-warnings 50
-
-      # Belt-and-braces ratchet: count warnings explicitly so a regression
-      # surfaces a clear error message instead of relying solely on
-      # `--max-warnings` exit codes from `next lint`. Update LINT_WARN_CAP
-      # alongside `package.json` and the `--max-warnings` flag above.
-      - name: Lint warning-count ratchet
-        env:
-          LINT_WARN_CAP: '50'
-        run: |
-          set -o pipefail
-          COUNT=$(npx --no-install next lint 2>&1 | grep -c 'Warning:' || true)
-          echo "Lint warnings: ${COUNT} (cap: ${LINT_WARN_CAP})"
-          if [ "${COUNT}" -gt "${LINT_WARN_CAP}" ]; then
-            echo "::error ::Lint warning count ${COUNT} exceeds cap ${LINT_WARN_CAP}. Fix new warnings or lower the cap."
-            exit 1
-          fi
-
       # Hard gate — TypeScript errors fail the build. Baseline is
       # clean today (0 errors); flip is safe. `--ignoreDeprecations 5.0`
       # is kept to avoid noise from libraries that haven't migrated to
@@ -115,42 +196,6 @@ jobs:
       # stable pool for this repository (the forks pool can hang in CI).
       - name: Vitest component & lib tests (hard gate)
         run: npm run test:unit -- --pool=threads
-
-      # Hard gate — `next build` is the source of truth. Catches
-      # missing modules, import errors, static-analysis failures, and
-      # env-usage bugs that lint/tsc may miss.
-      # Cache .next/cache between runs so `next build` reuses
-      # previously compiled modules, speeding up PR rebuilds.
-      - name: Cache Next.js build
-        uses: actions/cache@v5
-        with:
-          path: .next/cache
-          # Source-aware key: invalidate the cache when either deps or
-          # frontend source change, so `next build` reuses module-graph
-          # hits as often as safely possible.
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
-          restore-keys: |
-            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
-            nextjs-${{ runner.os }}-
-      - name: Next.js build
-        run: npm run build
-
-      # Hard gate — gzipped bundle size must stay under the budget defined
-      # in scripts/bundle-size-budget.json. Re-seed with
-      # `node scripts/bundle-size-check.js --update-baseline` after a
-      # deliberate, vetted change and commit the updated JSON alongside
-      # the PR that grew the bundle.
-      - name: Bundle-size budget gate
-        run: node scripts/bundle-size-check.js
-
-      - name: Upload bundle-size report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: bundle-size-report
-          path: bundle-size-report.json
-          retention-days: 14
-          if-no-files-found: ignore
 
   # ───────────────────────────────────────────────────────────────────
   # BACKEND — Express API in backend/
@@ -426,7 +471,11 @@ jobs:
         if: matrix.shard == 1
         run: npm run test:openclaw-native
 
-      # Shard execution — round-robin slice of the full backend suite.
+      # Shard execution — round-robin slices of the full backend suite.
+      # Shard 1 also runs the document-sandbox / office suites above (~3.5
+      # min), so the discovered files are cut into 7 round-robin buckets:
+      # shard 1 takes bucket 1, shards 2–4 take buckets 2k-2 and 2k-1. Every
+      # file still runs exactly once; shard 1 stops being the critical path.
       # Coverage is collected on shard 1 only as an lcov artifact. Global
       # thresholds require the full suite, so the sharded CI sample must not
       # enforce repository-wide minimums.
@@ -434,13 +483,16 @@ jobs:
         if: matrix.shard == 1
         env:
           NODE_ENV: test
-        run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
+        run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh 1 7
 
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
         if: matrix.shard != 1
         env:
           NODE_ENV: test
-        run: bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-shard.sh $(( 2 * ${{ matrix.shard }} - 2 )) 7
+          bash scripts/test-shard.sh $(( 2 * ${{ matrix.shard }} - 1 )) 7
 
       - name: Upload coverage report
         if: matrix.shard == 1 && always()
@@ -615,6 +667,10 @@ jobs:
   # gap §14.4 for the criteria's owner and the audit trail.
   e2e:
     name: E2E · Playwright smoke (informational)
+    # Informational only (never fails CI) and its chat/upload specs already
+    # run in the critical gate — keep it off PRs so it doesn't hold a runner
+    # slot while real gates queue. It still runs on every production-main push.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # The suite is informational, but it still needs enough wall-clock to
     # finish on cold GitHub runners so the visible workflow can stay green.
@@ -828,10 +884,35 @@ jobs:
   # Next.js compile can't blow the test timeout and flake the gate. Broader /
   # flakier flows (auth, admin) stay in the informational `e2e` job above until
   # they're hardened, then graduate here.
+  # Critical UI gate — runs against a PRODUCTION build (`next build` +
+  # `next start`) instead of `next dev` + route pre-warm, split into three
+  # parallel shards balanced by measured spec time. The dev server compiled
+  # every route on first hit (~9 min for 57 tests); a prod server answers
+  # instantly and the three shards build concurrently with a warm cache.
+  # All shards must pass: the required `ci` job needs `e2e-critical`.
   e2e-critical:
-    name: E2E · critical UI gate
+    name: E2E · critical UI gate (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            desktop_gate: true
+            specs: e2e/chat-browser-live-progress.spec.ts e2e/chat-code-workspace.spec.ts e2e/chat-integrated-browser.spec.ts e2e/chat.spec.ts e2e/chat-upload.spec.ts
+          - shard: 2
+            desktop_gate: false
+            specs: e2e/document-task-error-recovery.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts
+          - shard: 3
+            desktop_gate: false
+            specs: e2e/voice-reference-layout.spec.ts e2e/chat-media-preview-players.spec.ts e2e/chat-computer-login-handoff.spec.ts
+    env:
+      # Baked into the client bundles by `next build` (dev mode used to read
+      # them at runtime) — same values the dev-server gate used.
+      NEXT_PUBLIC_API_URL: /api
+      NEXT_PUBLIC_AGENT_COMPUTER: '1'
+      NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -860,47 +941,84 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Install real desktop input dependencies
+        if: matrix.desktop_gate
         run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox
 
+      # Real Chromium + X11 gate. The only retried failure is Chrome not
+      # bringing up its CDP endpoint on a loaded runner (infrastructure, not
+      # product behaviour); any other failure fails the gate immediately.
       - name: Browser tools operate a real Chromium form (hard gate)
-        run: xvfb-run -a -s '-screen 0 1920x1080x24' node e2e/browser-live-desktop.cjs
+        if: matrix.desktop_gate
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            xvfb-run -a -s '-screen 0 1920x1080x24' node e2e/browser-live-desktop.cjs 2>&1 | tee /tmp/browser-gate-run.log
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ]; then exit 0; fi
+            if [ "$attempt" -lt 3 ] && grep -q 'desktop Chrome must start its CDP endpoint' /tmp/browser-gate-run.log; then
+              echo "::warning::Chrome CDP endpoint did not come up (attempt $attempt/3) — infrastructure retry"
+              sleep 5
+              continue
+            fi
+            exit "$status"
+          done
 
-      - name: Boot, pre-warm, and run critical-path e2e (hard gate)
+      - name: Cache Next.js e2e build
+        uses: actions/cache@v5
+        with:
+          path: .next/cache
+          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'hooks/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
+          restore-keys: |
+            nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-e2e-${{ runner.os }}-
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+
+      # Production bundle for the gate (not the standalone deploy build —
+      # that one is validated by `Frontend · build`). Lint and the backend
+      # prebuild steps are covered by other jobs.
+      - name: Next.js production build for the gate
+        env:
+          NODE_ENV: production
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npx next build --no-lint
+
+      - name: Start the production server and run critical-path e2e (hard gate)
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3005
-          NEXT_PUBLIC_API_URL: /api
-          NEXT_PUBLIC_AGENT_COMPUTER: '1'
           CI: '1'
         run: |
-          npm run dev -- --port 3005 > /tmp/next-e2e.log 2>&1 &
+          set -uo pipefail
+          npx next start --port 3005 > /tmp/next-e2e.log 2>&1 &
           SERVER_PID=$!
-          # Wait for the dev server port to bind (next dev binds fast).
+          ready=0
           for i in $(seq 1 60); do
-            curl -sf http://localhost:3005/auth/login >/dev/null 2>&1 && { echo "server up after ~$((i * 2))s"; break; }
-            sleep 2
+            if curl -sf -o /dev/null http://localhost:3005/auth/login; then ready=1; echo "server up after ~${i}s"; break; fi
+            sleep 1
           done
-          # Pre-warm heavy routes so the first spec navigation is NOT a cold
-          # compile that would exceed the 30s test timeout and flake the gate.
-          curl -s -o /dev/null --max-time 120 http://localhost:3005/agentes || true
-          curl -s -o /dev/null --max-time 120 http://localhost:3005/chat || true
-          curl -s -o /dev/null --max-time 30 http://localhost:3005/auth/login || true
-          sleep 3
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::next start did not answer /auth/login within 60s"
+            tail -n 80 /tmp/next-e2e.log || true
+            kill "$SERVER_PID" 2>/dev/null || true
+            exit 1
+          fi
           # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
-          # and runs against this pre-warmed instance.
+          # and runs against this production instance.
           STATUS=0
-          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts e2e/document-task-error-recovery.spec.ts e2e/chat-integrated-browser.spec.ts e2e/chat-browser-live-progress.spec.ts e2e/chat-computer-login-handoff.spec.ts e2e/voice-reference-layout.spec.ts e2e/chat-code-workspace.spec.ts e2e/chat-media-preview-players.spec.ts || STATUS=$?
+          npx playwright test --reporter=list ${{ matrix.specs }} || STATUS=$?
           kill "$SERVER_PID" 2>/dev/null || true
+          if [ "$STATUS" -ne 0 ]; then tail -n 80 /tmp/next-e2e.log || true; fi
           exit $STATUS
 
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: e2e-critical-report
+          name: e2e-critical-report-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
             /tmp/browser-gate-*
+            /tmp/next-e2e.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1009,7 +1127,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, desktop-f70, desktop-f71, desktop-f72, desktop-f73, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, frontend-tests, backend, desktop-f70, desktop-f71, desktop-f72, desktop-f73, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -1017,6 +1135,10 @@ jobs:
         run: |
           if [[ "${{ needs.frontend.result }}" != "success" ]]; then
             echo "✗ frontend: ${{ needs.frontend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.frontend-tests.result }}" != "success" ]]; then
+            echo "✗ frontend-tests: ${{ needs.frontend-tests.result }}"
             exit 1
           fi
           if [[ "${{ needs.backend.result }}" != "success" ]]; then
@@ -1084,7 +1206,7 @@ jobs:
   # block merges. Runs only when an upstream job failed.
   notify-on-failure:
     name: Notify · Slack on failure
-    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
+    needs: [frontend, frontend-tests, backend, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
     runs-on: ubuntu-latest
     if: failure()
     timeout-minutes: 3
@@ -1101,6 +1223,7 @@ jobs:
           {
             echo "SUMMARY<<EOF"
             echo "frontend:        ${{ needs.frontend.result }}"
+            echo "frontend-tests:  ${{ needs.frontend-tests.result }}"
             echo "backend:         ${{ needs.backend.result }}"
             echo "licenses:        ${{ needs.licenses.result }}"
             echo "security-audit:  ${{ needs.security-audit.result }}"
