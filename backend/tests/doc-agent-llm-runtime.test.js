@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 
 const rt = require('../src/services/doc-agent/llm-runtime');
 const { runDocAgentLoop } = require('../src/services/doc-agent/loop');
-const { callModel } = require('../src/services/agent-runner/loop');
+const { callModel, runAgentLoop } = require('../src/services/agent-runner/loop');
 
 const ALL_KEYS = {
   DEEPSEEK_API_KEY: 'ds',
@@ -307,6 +307,130 @@ test('AgentRunner preserves a user abort instead of reporting E_PROVIDER', async
   });
   await assert.rejects(
     () => client.chat.completions.create({ model: 'ignored', messages: [] }),
+    (error) => error === abort,
+  );
+});
+
+test('AgentRunner uses the selected native Claude API for Fable tool calls and replay', async () => {
+  const { createRunnerLlmClient, runnerModelSpec } = require('../src/services/agent-runner');
+  const requests = [];
+  const sdk = { messages: { create: async (request) => {
+    requests.push(request);
+    if (requests.length === 1) return {
+      id: 'claude-tool-1', model: 'claude-fable-5-1', stop_reason: 'tool_use', usage: {},
+      content: [
+        { type: 'thinking', thinking: 'Revisaré el archivo.', signature: 'sig-local' },
+        { type: 'tool_use', id: 'toolu_local', name: 'inspect_document', input: { path: 'outputs/datos.xlsx' } },
+      ],
+    };
+    return {
+      id: 'claude-tool-2', model: 'claude-fable-5-1', stop_reason: 'end_turn', usage: {},
+      content: [{ type: 'text', text: 'El archivo se revisó.' }],
+    };
+  } } };
+  const pickedModel = runnerModelSpec('Anthropic', 'anthropic/claude-fable-5-1');
+  assert.equal(pickedModel, 'Anthropic:claude-fable-5-1');
+  const client = createRunnerLlmClient({
+    pickedModel,
+    env: { ANTHROPIC_API_KEY: 'local-synthetic-key-123' },
+    anthropicSdkClient: sdk,
+  });
+  assert.deepEqual(client.candidates(), [{ provider: 'Anthropic', model: 'claude-fable-5-1' }]);
+  const tools = [{ type: 'function', function: {
+    name: 'inspect_document', description: 'Read a document',
+    parameters: { type: 'object', properties: { path: { type: 'string' } } },
+  } }];
+  const messages = [{ role: 'system', content: 'Eres SiraGPT.' }, { role: 'user', content: 'Revisa el archivo.' }];
+  const first = await client.chat.completions.create({ model: 'ignored', messages, tools, tool_choice: 'auto', max_tokens: 512 });
+  assert.equal(first.choices[0].message.tool_calls[0].id, 'toolu_local');
+  messages.push(first.choices[0].message);
+  messages.push({ role: 'tool', tool_call_id: 'toolu_local', content: 'Hoja1!A1=valor' });
+  const second = await client.chat.completions.create({ model: 'ignored', messages, tools, max_tokens: 512 });
+  assert.match(second.choices[0].message.content, /revisó/);
+  assert.equal(requests[0].model, 'claude-fable-5-1');
+  assert.deepEqual(requests[1].messages[1].content.map((block) => block.type), ['thinking', 'tool_use']);
+  assert.equal(requests[1].messages[1].content[0].signature, 'sig-local');
+  assert.equal(requests[1].messages[2].content[0].tool_use_id, 'toolu_local');
+});
+
+test('AgentRunner loop replays native Claude signed tool blocks after a tool result', async () => {
+  const { createRunnerLlmClient } = require('../src/services/agent-runner');
+  const requests = [];
+  const sdk = { messages: { create: async (request) => {
+    requests.push(request);
+    return requests.length === 1
+      ? { id: 'tool-turn', model: request.model, stop_reason: 'tool_use', usage: {}, content: [
+        { type: 'thinking', thinking: 'Voy a leer.', signature: 'signed-local' },
+        { type: 'tool_use', id: 'toolu_1', name: 'inspect_document', input: { path: 'outputs/datos.xlsx' } },
+      ] }
+      : { id: 'final-turn', model: request.model, stop_reason: 'end_turn', usage: {}, content: [
+        { type: 'text', text: 'Revisado.' },
+      ] };
+  } } };
+  const client = createRunnerLlmClient({
+    pickedModel: 'Anthropic:claude-fable-5-1',
+    env: { ANTHROPIC_API_KEY: 'local-synthetic-key-123' },
+    anthropicSdkClient: sdk,
+  });
+  const messages = [{ role: 'system', content: 'Eres SiraGPT.' }, { role: 'user', content: 'Lee el Excel.' }];
+  const result = await runAgentLoop({
+    client,
+    model: 'claude-fable-5-1',
+    messages,
+    tools: [{ type: 'function', function: { name: 'inspect_document', description: 'Read',
+      parameters: { type: 'object', properties: { path: { type: 'string' } } },
+    } }],
+    executors: { inspect_document: async () => 'Hoja1!A1=valor' },
+    maxIterations: 3,
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].messages[1].content.map((block) => block.type), ['thinking', 'tool_use']);
+  assert.equal(requests[1].messages[1].content[0].signature, 'signed-local');
+  assert.equal(requests[1].messages[2].content[0].tool_use_id, 'toolu_1');
+});
+
+test('AgentRunner rejects a selected Claude without its own key even if another provider is ready', () => {
+  const { resolveRunnerLlmCandidate } = require('../src/services/agent-runner');
+  assert.throws(() => resolveRunnerLlmCandidate({
+    pickedModel: 'Anthropic:claude-fable-5-1',
+    env: { DEEPSEEK_API_KEY: 'local-synthetic-deepseek-key' },
+  }), { code: 'E_PROVIDER' });
+  assert.throws(() => resolveRunnerLlmCandidate({
+    pickedModel: 'Anthropic:claude-fable-5-1',
+    env: { ANTHROPIC_API_KEY: 'ci-dummy', DEEPSEEK_API_KEY: 'local-synthetic-deepseek-key' },
+  }), { code: 'E_PROVIDER' });
+});
+
+test('AgentRunner maps a native Claude rejection to E_PROVIDER without trying a second API', async () => {
+  const { createRunnerLlmClient } = require('../src/services/agent-runner');
+  let calls = 0;
+  const sdk = { messages: { create: async () => { calls += 1; throw httpError(402, 'synthetic quota'); } } };
+  const client = createRunnerLlmClient({
+    pickedModel: 'Anthropic:claude-fable-5-1',
+    env: { ANTHROPIC_API_KEY: 'local-synthetic-key-123', DEEPSEEK_API_KEY: 'local-synthetic-deepseek-key' },
+    anthropicSdkClient: sdk,
+  });
+  await assert.rejects(
+    () => client.chat.completions.create({ model: 'ignored', messages: [{ role: 'user', content: 'Hola' }], tools: [] }),
+    { code: 'E_PROVIDER', status: 402 },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(client.candidates(), [{ provider: 'Anthropic', model: 'claude-fable-5-1' }]);
+});
+
+test('AgentRunner preserves native Claude aborts', async () => {
+  const { createRunnerLlmClient } = require('../src/services/agent-runner');
+  const abort = new Error('cancelled');
+  abort.name = 'AbortError';
+  const sdk = { messages: { create: async () => { throw abort; } } };
+  const client = createRunnerLlmClient({
+    pickedModel: 'Anthropic:claude-fable-5-1',
+    env: { SIRA_ANTHROPIC_API_KEY: 'local-synthetic-key-123' },
+    anthropicSdkClient: sdk,
+  });
+  await assert.rejects(
+    () => client.chat.completions.create({ model: 'ignored', messages: [{ role: 'user', content: 'Hola' }], tools: [] }),
     (error) => error === abort,
   );
 });

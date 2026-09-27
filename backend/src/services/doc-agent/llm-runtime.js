@@ -27,6 +27,7 @@ const LADDER = Object.freeze([
 ]);
 
 const PROVIDER_ALIASES = Object.freeze({
+  anthropic: 'Anthropic',
   deepseek: 'DeepSeek',
   meta: 'Meta',
   llama: 'Meta',
@@ -161,7 +162,14 @@ function isFailoverError(err) {
     && !/abort(ed)? by (user|caller)/.test(msg);
 }
 
-function defaultCreateClient(candidate) {
+function defaultCreateClient(candidate, { anthropicSdkClient = null } = {}) {
+  if (candidate.provider === 'Anthropic') {
+    const { createAnthropicStreamingClient } = require('../ai/first-party-chat-clients');
+    return createAnthropicStreamingClient({
+      apiKey: candidate.apiKey,
+      ...(anthropicSdkClient ? { sdkClient: anthropicSdkClient } : {}),
+    });
+  }
   // Lazy require: keeps this module loadable in tests without the SDK.
   const OpenAI = require('openai');
   return new OpenAI({
@@ -177,6 +185,9 @@ function payloadForCandidate(payload, candidate) {
   if (Array.isArray(request.messages)) {
     request.messages = request.messages.map((message) => {
       if (!message || message.role !== 'assistant') return message;
+      // The native Claude adapter keeps signed thinking/tool blocks in
+      // non-enumerable properties on this exact assistant message object.
+      if (provider === 'anthropic') return message;
       const hasReasoning = Object.prototype.hasOwnProperty.call(message, 'reasoning_content');
       if (provider === 'deepseek') {
         // Historical and synthetic tool turns were not produced by DeepSeek.
@@ -249,6 +260,7 @@ module.exports = {
   LADDER,
   inferProvider,
   parseModelSpec,
+  keyFor,
   resolveDocAgentCandidates,
   resolveDocAgentRunCandidates,
   isFailoverError,

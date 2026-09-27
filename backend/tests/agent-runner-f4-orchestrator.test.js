@@ -41,6 +41,32 @@ const {
   isOrchestratorRunActive,
 } = orchestrator;
 
+test('F4: planner accepts selected Claude before any tool work', async () => {
+  const previous = process.env.ANTHROPIC_API_KEY;
+  const previousAlias = process.env.SIRA_ANTHROPIC_API_KEY;
+  let plannerReached = false;
+  process.env.ANTHROPIC_API_KEY = 'local-synthetic-key-123';
+  delete process.env.SIRA_ANTHROPIC_API_KEY;
+  try {
+    const result = await runOrchestrator({
+      instruction: 'Analiza los datos y crea un informe',
+      model: 'claude-fable-5-1',
+      pickedModel: 'Anthropic:claude-fable-5-1',
+      plannerFn: async ({ client }) => {
+        plannerReached = typeof client.chat?.completions?.create === 'function';
+        return { nodes: [] }; // Deliberately stop before a paid API call.
+      },
+    });
+    assert.equal(plannerReached, true);
+    assert.equal(result.stoppedReason, 'plan_failed');
+  } finally {
+    if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previous;
+    if (previousAlias === undefined) delete process.env.SIRA_ANTHROPIC_API_KEY;
+    else process.env.SIRA_ANTHROPIC_API_KEY = previousAlias;
+  }
+});
+
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 function toResponse(turn) {
