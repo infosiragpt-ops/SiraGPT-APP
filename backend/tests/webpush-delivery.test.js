@@ -187,3 +187,71 @@ describe('webpush-delivery.maybeDeliver', () => {
     assert.equal(res.reason, 'lookup-failed');
   });
 });
+
+// Production 2026-09-27: web push is not configured (no VAPID keys, no
+// `web-push` package) and the skip was logged as a failure with the whole
+// require stack. "Off" is a state: say it once per process, never per message.
+describe('webpush-delivery skip notices', () => {
+  function capturingLogger() {
+    const lines = [];
+    const at = (level) => (message) => lines.push({ level, message: String(message) });
+    return { lines, debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error') };
+  }
+  const critical = { userId: 'u1', severity: 'critical', title: 't', message: 'm' };
+
+  beforeEach(() => {
+    _resetForTests();
+    delete process.env.VAPID_PUBLIC_KEY;
+    delete process.env.VAPID_PRIVATE_KEY;
+  });
+  afterEach(() => {
+    _resetForTests();
+    delete process.env.VAPID_PUBLIC_KEY;
+    delete process.env.VAPID_PRIVATE_KEY;
+  });
+
+  test('without VAPID keys web-push is never loaded and the state is logged once, at debug', async () => {
+    const logger = capturingLogger();
+    let loads = 0;
+    const loadWebPush = () => { loads += 1; throw Object.assign(new Error("Cannot find module 'web-push'"), { code: 'MODULE_NOT_FOUND' }); };
+    for (let i = 0; i < 3; i += 1) {
+      const res = await maybeDeliver(makePrisma(), critical, { logger, loadWebPush });
+      assert.equal(res.skipped, true);
+      assert.equal(res.reason, 'no-vapid');
+    }
+    assert.equal(loads, 0, 'an unconfigured channel does not touch the optional package');
+    assert.deepEqual(logger.lines.map((line) => line.level), ['debug']);
+    assert.match(logger.lines[0].message, /not configured/);
+  });
+
+  test('VAPID set but package missing warns once, with the error code and without the require stack', async () => {
+    process.env.VAPID_PUBLIC_KEY = 'pub-key';
+    process.env.VAPID_PRIVATE_KEY = 'priv-key';
+    const logger = capturingLogger();
+    let loads = 0;
+    const loadWebPush = () => {
+      loads += 1;
+      throw Object.assign(new Error("Cannot find module 'web-push'\nRequire stack:\n- /app/src/services/webpush-delivery.js"), { code: 'MODULE_NOT_FOUND' });
+    };
+    for (let i = 0; i < 3; i += 1) {
+      const res = await maybeDeliver(makePrisma(), critical, { logger, loadWebPush });
+      assert.equal(res.reason, 'no-webpush-lib');
+    }
+    assert.equal(loads, 1, 'the require is attempted once per process');
+    assert.deepEqual(logger.lines.map((line) => line.level), ['warn']);
+    assert.match(logger.lines[0].message, /MODULE_NOT_FOUND/);
+    assert.doesNotMatch(logger.lines[0].message, /Require stack|\/app\//);
+  });
+
+  test('a rejected VAPID configuration warns once and keeps skipping', async () => {
+    process.env.VAPID_PUBLIC_KEY = 'pub-key';
+    process.env.VAPID_PRIVATE_KEY = 'priv-key';
+    const logger = capturingLogger();
+    const webpush = { ...makeWebpushStub(), setVapidDetails() { throw new Error('Vapid public key should be 65 bytes long when decoded.'); } };
+    for (let i = 0; i < 2; i += 1) {
+      const res = await maybeDeliver(makePrisma(), critical, { logger, webpush });
+      assert.equal(res.reason, 'no-vapid');
+    }
+    assert.deepEqual(logger.lines.map((line) => line.level), ['warn']);
+  });
+});

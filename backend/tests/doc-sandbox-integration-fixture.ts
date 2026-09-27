@@ -80,7 +80,7 @@ export async function createDocumentIntegrationFixture() {
     const config: DocumentSandboxConfig = {
       redisUrl: process.env.DOC_SANDBOX_TEST_REDIS_URL ?? 'redis://127.0.0.1:1', apiKey: 'fixture-unused-no-provider',
       bucket, storageKey: key, keyId: 'test-v1', previousKeys: {}, r2AccountId: 'fixture', r2AccessKeyId: accessKeyId,
-      r2SecretAccessKey: secretAccessKey, r2Endpoint: endpoint.toString(), validatorImage: `fixture-unused@sha256:${'a'.repeat(64)}`,
+      r2SecretAccessKey: secretAccessKey, r2Endpoint: endpoint.toString(), r2ForcePathStyle: true, validatorImage: `fixture-unused@sha256:${'a'.repeat(64)}`,
       validatorStagingRoot: '/tmp/doc-fixture-validator-not-invoked',
       engine: { models: { mechanical: { ...model, id: 'fixture-mechanical' }, academic: { ...model, id: 'fixture-academic' } }, skillVersions: {}, maxFileBytes: 1024 * 1024,
         maxOutputBytes: 1024 * 1024, maxSessionMs: 60_000, apiTimeoutMs: 60_000, cleanupTimeoutMs: 10_000 },

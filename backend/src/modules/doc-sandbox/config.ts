@@ -16,7 +16,7 @@ const skillVersionsSchema = z.object({ docx: z.string().min(1), xlsx: z.string()
 
 export interface DocumentSandboxConfig {
   redisUrl: string; apiKey: string; bucket: string; storageKey: Buffer; keyId: string; previousKeys: Record<string, Buffer>;
-  r2AccountId: string; r2AccessKeyId: string; r2SecretAccessKey: string; r2Endpoint?: string;
+  r2AccountId: string; r2AccessKeyId: string; r2SecretAccessKey: string; r2Endpoint?: string; r2ForcePathStyle: boolean;
   validatorImage: string; validatorStagingRoot: string; engine: AnthropicEngineConfig;
   maxCostUsd: number; maxTurns: number; maxTokens: number; timeoutMs: number;
   retentionDays: number; maxFileBytes: number; concurrency: number; showCost: boolean;
@@ -25,6 +25,35 @@ function number(env: NodeJS.ProcessEnv, key: string, fallback: number, min: numb
   const value = env[key] === undefined ? fallback : Number(env[key]);
   if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isSafeInteger(value))) throw new DocSandboxError('E_NOT_READY', 503);
   return value;
+}
+const R2_HOST_SUFFIX = '.r2.cloudflarestorage.com';
+/** A custom S3 endpoint is a bare http(s) origin; credentials never travel in it. */
+function storageEndpoint(value: string | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  const url = new URL(raw);
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password || url.search || url.hash) {
+    throw new Error('invalid storage endpoint');
+  }
+  return raw;
+}
+/** R2 serves virtual-hosted buckets (`<bucket>.<account>.r2.cloudflarestorage.com`).
+ * A self-hosted S3 such as MinIO on the compose network only resolves its own
+ * service name, so the bucket must travel in the path (`http://minio:9000/<bucket>/…`).
+ * Without this every storage call fails with ENOTFOUND `<bucket>.<service>`. */
+function forcePathStyle(env: NodeJS.ProcessEnv, endpoint: string | undefined): boolean {
+  const flag = env.R2_FORCE_PATH_STYLE?.trim().toLowerCase();
+  if (flag === 'true' || flag === '1') return true;
+  if (flag === 'false' || flag === '0') return false;
+  if (flag) throw new Error('invalid path-style flag');
+  return endpoint !== undefined && !new URL(endpoint).hostname.endsWith(R2_HOST_SUFFIX);
+}
+/** The single mapping from configuration to S3 client options used by the module. */
+export function documentStorageClientOptions(config: Pick<DocumentSandboxConfig,
+  'r2AccountId' | 'r2AccessKeyId' | 'r2SecretAccessKey' | 'r2Endpoint' | 'r2ForcePathStyle'>) {
+  return { region: 'auto', endpoint: config.r2Endpoint ?? `https://${config.r2AccountId}${R2_HOST_SUFFIX}`,
+    forcePathStyle: config.r2ForcePathStyle,
+    credentials: { accessKeyId: config.r2AccessKeyId, secretAccessKey: config.r2SecretAccessKey } };
 }
 export function loadDocumentSandboxConfig(env: NodeJS.ProcessEnv = process.env): DocumentSandboxConfig | null {
   // Admission control only. Once enabled, no validation level can be disabled.
@@ -45,6 +74,7 @@ export function loadDocumentSandboxConfig(env: NodeJS.ProcessEnv = process.env):
       /[\x00-\x1f\x7f,]/.test(validatorStagingRoot)) throw new Error('invalid shared staging path');
     const previous = z.record(z.string().regex(/^[A-Za-z0-9_-]{1,40}$/), z.string()).parse(JSON.parse(env.DOC_SANDBOX_PREVIOUS_KEYS_JSON || '{}'));
     const previousKeys = Object.fromEntries(Object.entries(previous).map(([id, value]) => [id, decodeStorageKey(value)]));
+    const r2Endpoint = storageEndpoint(env.R2_ENDPOINT);
     return {
       redisUrl: required('REDIS_URL'), apiKey: required('ANTHROPIC_API_KEY'),
       bucket: env.R2_BUCKET_NAME || required('R2_BUCKET'),
@@ -52,7 +82,7 @@ export function loadDocumentSandboxConfig(env: NodeJS.ProcessEnv = process.env):
       keyId: env.DOC_SANDBOX_ENCRYPTION_KEY_ID || 'v1',
       previousKeys,
       r2AccountId: required('R2_ACCOUNT_ID'), r2AccessKeyId: required('R2_ACCESS_KEY_ID'),
-      r2SecretAccessKey: required('R2_SECRET_ACCESS_KEY'), r2Endpoint: env.R2_ENDPOINT,
+      r2SecretAccessKey: required('R2_SECRET_ACCESS_KEY'), r2Endpoint, r2ForcePathStyle: forcePathStyle(env, r2Endpoint),
       validatorImage, validatorStagingRoot, maxCostUsd: number(env, 'DOC_SANDBOX_MAX_COST_USD', 0, 0.001, 100, false),
       maxTurns: number(env, 'DOC_SANDBOX_MAX_TURNS', 8, 2, 30),
       maxTokens: number(env, 'DOC_SANDBOX_MAX_TOKENS', 50_000, 1000, 500_000),

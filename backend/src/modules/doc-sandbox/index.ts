@@ -1,12 +1,12 @@
 import { Router, type RequestHandler } from 'express';
 import { Worker, type ConnectionOptions, type QueueOptions } from 'bullmq';
 import type { PrismaClient } from '@prisma/client';
-import { loadDocumentSandboxConfig } from './config';
+import { documentStorageClientOptions, loadDocumentSandboxConfig } from './config';
 import { createDocumentRouter } from './api/router';
 import { DocSandboxRepository } from './queue/repository';
 import { DocSandboxQueue, DOC_QUEUE_NAME, type DocQueuePayload } from './queue/queue';
 import { DocumentSandboxProcessor } from './queue/processor';
-import { reconcileDocumentCleanup } from './queue/cleanup';
+import { DocumentCleanupBackoff, documentFailureReason, reconcileDocumentCleanup, type DocumentNotice } from './queue/cleanup';
 import { AnthropicDocumentProviderClient } from './engine/provider-client';
 import { AnthropicSandboxEngine } from './engine/anthropic-engine';
 import { IndependentDocumentValidator } from './validation';
@@ -24,7 +24,7 @@ interface ApplicationDependencies {
   metrics: MetricsRegistry;
   isModelPlanEligible(modelName: string, userPlan: string): boolean;
   reconcileDeletedAccounts?(): Promise<void>;
-  notice(code: string): void;
+  notice: DocumentNotice;
 }
 export interface DocumentModule { router: Router; start(): Promise<void>; close(): Promise<void> }
 /** Startup failures expose no connector bodies and always unwind partial resources. */
@@ -50,8 +50,7 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
     return { router, start: async () => {}, close: async () => {} };
   }
   const repository = new DocSandboxRepository(deps.prisma);
-  const client = createPrivateDocumentS3Client({ region: 'auto', endpoint: config.r2Endpoint ?? `https://${config.r2AccountId}.r2.cloudflarestorage.com`,
-    credentials: { accessKeyId: config.r2AccessKeyId, secretAccessKey: config.r2SecretAccessKey } });
+  const client = createPrivateDocumentS3Client(documentStorageClientOptions(config));
   const storage = new PrivateDocumentStorage(client, { bucket: config.bucket, key: config.storageKey,
     keyId: config.keyId, previousKeys: config.previousKeys, maxBytes: config.engine.maxOutputBytes });
   const provider = new AnthropicDocumentProviderClient(config.apiKey);
@@ -84,10 +83,17 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
     await repository.expireJobs(); await repository.recoverExpiredLeases(); await repository.recoverUndeliveredJobs();
     await queue?.dispatchOutbox(repository);
   };
-  const cleanupLoop = new DocumentBackgroundLoop(() =>
-    reconcileDocumentCleanup(repository, storage, provider, lifecycle.signal, deps.notice)
-      .then(() => deps.reconcileDeletedAccounts?.())
-      .catch(() => deps.notice('DOC_CLEANUP_PENDING')), 30_000);
+  const cleanupBackoff = new DocumentCleanupBackoff();
+  const cleanupLoop = new DocumentBackgroundLoop(async () => {
+    let stage = 'scan';
+    try {
+      await reconcileDocumentCleanup(repository, storage, provider, lifecycle.signal, deps.notice, cleanupBackoff);
+      stage = 'deleted_accounts';
+      await deps.reconcileDeletedAccounts?.();
+    } catch (error) {
+      if (!lifecycle.signal.aborted) deps.notice('DOC_CLEANUP_PENDING', { stage, reason: documentFailureReason(error) });
+    }
+  }, 30_000);
   const validatorCleanupLoop = new DocumentBackgroundLoop(() =>
     validator.reconcileOrphans().then(result => {
       validatorCleanupHealthy = result.pending === 0;
