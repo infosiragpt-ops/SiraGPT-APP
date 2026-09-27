@@ -4,7 +4,9 @@
  * Precedence (hard rule, applied in order):
  *   1. Explicit instruction in the current user message
  *      ("respóndeme en inglés" / "translate to English" / "use Portuguese")
- *   2. Persisted thread preference (Chat.preferredResponseLanguage)
+ *   2. Persisted thread preference (Chat.preferredResponseLanguage), while
+ *      the thread backs it — a pin no message supports (left by an earlier
+ *      misdetection) gives way to 3/4
  *   3. Dominant language detected in the current user message
  *   4. User locale fallback (defaults to 'es')
  *
@@ -103,36 +105,135 @@ const LANG_KEYWORDS = {
   ca: ['catalan', 'catalán', 'català'],
 }
 
-// Tiny heuristic for the most common LATAM languages — used as a fallback
-// when franc isn't available or the message is too short for it to be
-// confident. Counts diacritic + stop-word hits.
-const ES_HINTS = /[¿¡áéíóúñ]|\b(el|la|los|las|de|que|por|para|en|un|una|qué|cómo|cuál|cuándo|dónde|por\s+favor|gracias|hola)\b/i
-const EN_HINTS = /\b(the|and|or|but|with|from|this|that|what|how|when|where|please|thanks|hi|hello)\b/i
-const PT_HINTS = /[ãõç]|\b(você|o|a|os|as|de|que|por|para|em|um|uma|olá|obrigado)\b/i
+// SiraGPT is Spanish-first. Spanish and Portuguese (and Catalan/Galician/
+// Italian) share most short words, and a statistical detector on a short
+// prompt guesses: franc read «resolver este problema» as Portuguese, «explica
+// la fotosintesis» as Catalan and «escribe un correo formal» as French — the
+// chat answered in that language and the thread stayed pinned to it (prod
+// 2026-09-27). So short prompts are decided on words that belong to ONE
+// language only (spelling included: «cómo»/«también» are Spanish, «você»/
+// «também» Portuguese), Portuguese needs strong evidence, and anything
+// ambiguous is reported as unknown — the caller then uses the thread's
+// language, the user's locale and finally Spanish.
+const LONG_TEXT_MIN_WORDS = 8
+const ES_EXCLUSIVE_WORDS = new Set([
+  'el', 'los', 'las', 'del', 'al', 'la', 'lo', 'y', 'con', 'sin', 'muy', 'hay', 'es',
+  'su', 'sus', 'mi', 'mis', 'ese', 'esa', 'eso', 'esto', 'esos', 'esas', 'en', 'un', 'una',
+  'unos', 'unas', 'pero', 'también', 'tambien', 'más', 'aquí', 'ahora', 'hoy', 'ayer',
+  'bien', 'hola', 'gracias', 'usted', 'ustedes', 'yo', 'tú', 'nosotros', 'ellos', 'ellas',
+  'nuestro', 'nuestra', 'qué', 'cómo', 'cuál', 'cual', 'cuáles', 'cuales', 'dónde',
+  'donde', 'cuándo', 'cuando', 'cuánto', 'cuánta', 'quién', 'porqué', 'tengo', 'tiene',
+  'tienes', 'estoy', 'soy', 'eres', 'fue', 'fueron', 'cosa', 'cosas', 'necesito',
+  'quiero', 'quisiera', 'puedes', 'puede', 'podrías', 'podria', 'podría', 'hazme', 'haz',
+  'hazlo', 'hacer', 'hace', 'dame', 'dime', 'dámelo', 'crea', 'créame', 'creame',
+  'créalo', 'explícame', 'explicame', 'ayuda', 'ayudar', 'ayúdame', 'ayudame',
+  'cuéntame', 'cuentame', 'muéstrame', 'muestrame', 'mejora', 'mejorar', 'escribe',
+  'escríbeme', 'escribeme', 'resuelve', 'resuélveme', 'resuelveme', 'resuélvelo',
+  'resuelvelo', 'ejercicio', 'ejercicios', 'transcribir', 'transcríbeme', 'transcribeme',
+  'traduce', 'tradúceme', 'traduceme', 'genera', 'genérame', 'generame', 'pon', 'ponme',
+  'léeme', 'leeme', 'búscame', 'buscame', 'analiza', 'analízame', 'analizame', 'dibuja',
+  'dibújame', 'sácame', 'mándame', 'envíame', 'ejemplo', 'después', 'despues',
+  'entonces', 'bueno', 'buena', 'hoja', 'hojas', 'resumen',
+])
+const PT_EXCLUSIVE_WORDS = new Set([
+  'você', 'voce', 'vocês', 'não', 'nao', 'obrigado', 'obrigada', 'olá', 'muito', 'muita',
+  'muitos', 'muitas', 'então', 'entao', 'isso', 'essa', 'esse', 'essas', 'esses', 'isto',
+  'nós', 'eu', 'fazer', 'faça', 'faz', 'quero', 'tenho', 'pode', 'agora', 'ajuda',
+  'ajude', 'ajudar', 'escreva', 'escreve', 'resolva', 'exercício', 'exercicio', 'gera',
+  'crie', 'traduza', 'traduz', 'com', 'sem', 'meu', 'minha', 'meus', 'minhas', 'seu',
+  'sua', 'seus', 'suas', 'é', 'são', 'em', 'um', 'uma', 'uns', 'umas', 'na', 'nas',
+  'pela', 'ao', 'aos', 'às', 'foi', 'bom', 'boa', 'depois', 'até', 'também',
+  'mais', 'estou', 'tudo', 'bem', 'qual', 'quais', 'onde', 'quando', 'hoje', 'português',
+  'portugues',
+])
+// Words that are English and not Spanish/Portuguese — keeps «how do I do it»
+// or «my son needs help» from counting as Portuguese/Spanish evidence.
+const EN_EXCLUSIVE_WORDS = new Set([
+  'the', 'and', 'or', 'but', 'with', 'from', 'this', 'that', 'these', 'those', 'what',
+  'how', 'why', 'who', 'which', 'when', 'where', 'please', 'thanks', 'thank', 'hi',
+  'hello', 'hey', 'yes', 'is', 'are', 'was', 'were', 'am', 'be', 'have', 'does', 'did',
+  'not', 'you', 'your', 'my', 'our', 'we', 'us', 'they', 'their', 'she', 'it', 'its',
+  'of', 'to', 'for', 'on', 'at', 'by', 'an', 'if', 'then', 'than', 'into', 'out', 'up',
+  'about', 'can', 'could', 'would', 'should', 'will', 'just', 'some', 'any', 'all',
+  'more', 'most', 'also', 'very', 'much', 'many', 'there', 'get', 'need', 'want', 'know',
+  'think', 'help', 'write', 'make', 'create', 'explain', 'solve', 'give', 'show', 'tell',
+  'summarize', 'translate',
+])
+// Languages franc confuses with Spanish — even on longer text (a Spanish
+// request full of English tech words came back as French).
+const ROMANCE_CONFUSABLE = new Set(['es', 'pt', 'ca', 'gl', 'it', 'fr'])
+// Spanish words French / Italian / Catalan also use: no evidence against
+// those languages when franc names one of them.
+const SPANISH_WORDS_SHARED_WITH = {
+  fr: new Set(['un', 'en', 'la', 'es', 'y', 'dame', 'mi', 'mis', 'bien']),
+  it: new Set(['un', 'una', 'con', 'la', 'lo', 'mi', 'del', 'al', 'su', 'crea', 'genera', 'cosa']),
+  ca: new Set(['el', 'la', 'un', 'una', 'en', 'del', 'al', 'es', 'crea', 'genera', 'cosa']),
+}
+
+function tokenizeWords(text) {
+  // URLs, domains, e-mails and file names («google.com», «informe.pdf») carry
+  // no language evidence («com» would read as Portuguese).
+  const prose = String(text || '').replace(/\S*(?:\w[.@]\w|:\/\/)\S*/g, ' ')
+  return prose.toLowerCase().match(/[\p{L}]+/gu) || []
+}
+
+/** Evidence for Spanish, Portuguese and English: markers exclusive to one of them. */
+function languageEvidence(text) {
+  const raw = String(text || '')
+  const words = tokenizeWords(raw)
+  const spanishOnlyMarks = /[¿¡ñ]/i.test(raw)
+  let es = spanishOnlyMarks ? 2 : 0
+  let pt = 0
+  let en = 0
+  const esWords = []
+  if (/[ãõ]/i.test(raw)) pt += 2
+  if (/ç/i.test(raw)) pt += 1
+  if (/(?:lh|nh)[aeiouáéíóúâêôãõ]/i.test(raw)) pt += 1 // trabalho, tenho, senhor
+  for (const word of words) {
+    if (ES_EXCLUSIVE_WORDS.has(word)) { es += 1; esWords.push(word) }
+    if (PT_EXCLUSIVE_WORDS.has(word)) pt += 1
+    if (EN_EXCLUSIVE_WORDS.has(word)) en += 1
+  }
+  return { es, pt, en, esWords, wordCount: words.length, spanishOnlyMarks }
+}
 
 /**
  * Detect the dominant language of a piece of text.
- * Returns ISO 639-1 code or `null` if undetectable.
+ * Returns ISO 639-1 code or `null` if undetectable / ambiguous.
  */
 function detectLanguage(text) {
   if (!text || typeof text !== 'string') return null
   const trimmed = text.trim()
   if (trimmed.length < 2) return null
 
-  // 1) Try franc when text is long enough — it's much more accurate than
-  //    the regex heuristic for ambiguous strings (>= 12 chars by default).
-  if (francFn && trimmed.length >= 12) {
-    const code3 = francFn(trimmed, { minLength: 3 })
-    const code1 = ISO_3_TO_1[code3]
-    if (code1) return code1
+  const { es, pt, en, esWords, wordCount, spanishOnlyMarks } = languageEvidence(trimmed)
+
+  // 1) Longer text: franc is reliable, except between Spanish and its
+  //    Romance neighbours — settled on exclusive words below. On short text
+  //    franc is noise (Spanish came back as pt/ca/gl/fr/ron…).
+  let francGuess = null
+  if (francFn && wordCount >= LONG_TEXT_MIN_WORDS) {
+    francGuess = ISO_3_TO_1[francFn(trimmed, { minLength: 3 })] || null
+    if (francGuess && !ROMANCE_CONFUSABLE.has(francGuess)) return francGuess
   }
 
-  // 2) Heuristic fallback for short messages ("hola", "thanks", etc.)
-  //    franc would say "und" on these, so we look for diacritic + stop-word
-  //    fingerprints. Order matters — Spanish diacritics are most distinctive.
-  if (ES_HINTS.test(trimmed)) return 'es'
-  if (PT_HINTS.test(trimmed)) return 'pt'
-  if (EN_HINTS.test(trimmed)) return 'en'
+  // 2) Portuguese only on strong evidence.
+  if (pt >= 2 && pt > es && pt > en) return 'pt'
+
+  // 3) franc named French/Italian/Catalan: only Spanish words that language
+  //    doesn't share (los, y, con, necesito…) or ñ/¿/¡ argue for Spanish; a
+  //    single hint leaves it to the thread/locale.
+  const shared = SPANISH_WORDS_SHARED_WITH[francGuess]
+  if (shared) {
+    const against = esWords.filter((word) => !shared.has(word)).length + (spanishOnlyMarks ? 2 : 0)
+    if (against >= 2 && es > pt && es > en) return 'es'
+    return against === 0 ? francGuess : null
+  }
+
+  // 4) Spanish / English on a clear lead of exclusive words.
+  if (es > pt && es > en) return 'es'
+  if (en > es && en > pt) return 'en'
+  if (francGuess === 'es') return 'es'
 
   return null
 }
@@ -157,6 +258,47 @@ function extractExplicitLanguageInstruction(text) {
     }
   }
   return null
+}
+
+function normalizeLocale(userLocale) {
+  return String(userLocale || 'es').slice(0, 2).toLowerCase() || 'es'
+}
+
+// chatId|language pairs already backed by the thread's own messages. Backing
+// only grows while the chat is used, so a positive answer is kept (bounded).
+const backedThreadPins = new Map()
+const BACKED_THREAD_PINS_MAX = 5000
+const THREAD_BACKING_MESSAGES = 30
+const THREAD_OPENING_MESSAGES = 5
+const THREAD_BACKING_CHARS = 2000
+
+async function threadBacksLanguage(prisma, chatId, language) {
+  const key = `${chatId}|${language}`
+  if (backedThreadPins.has(key)) return true
+  const backs = (row) => {
+    const content = String(row?.content || '').slice(0, THREAD_BACKING_CHARS)
+    return extractExplicitLanguageInstruction(content) === language || detectLanguage(content) === language
+  }
+  let backed
+  try {
+    // The latest messages, then the opening ones (where a conversation's
+    // language — or a «respóndeme en inglés» — is usually set).
+    const where = { chatId, role: 'USER', deletedAt: null }
+    const select = { content: true }
+    const recent = await prisma.message.findMany({ where, select, orderBy: { timestamp: 'desc' }, take: THREAD_BACKING_MESSAGES })
+    backed = (recent || []).some(backs)
+    if (!backed && (recent || []).length >= THREAD_BACKING_MESSAGES) {
+      const opening = await prisma.message.findMany({ where, select, orderBy: { timestamp: 'asc' }, take: THREAD_OPENING_MESSAGES })
+      backed = (opening || []).some(backs)
+    }
+  } catch {
+    return true // can't tell — leave the thread as it is
+  }
+  if (backed) {
+    if (backedThreadPins.size >= BACKED_THREAD_PINS_MAX) backedThreadPins.delete(backedThreadPins.keys().next().value)
+    backedThreadPins.set(key, true)
+  }
+  return backed
 }
 
 /**
@@ -193,6 +335,18 @@ async function resolveResponseLanguage({ userMessage, chatId, userLocale = 'es',
     }
   }
   if (threadPref) {
+    // A pin the earlier detector got wrong (a Spanish thread pinned to pt /
+    // ca / fr by «resolver este problema») is not the thread's language: it
+    // holds only while something in the thread backs it — this message, an
+    // explicit instruction or an earlier message clearly in that language.
+    const localeLang = normalizeLocale(userLocale)
+    if (chatId && prisma && threadPref !== localeLang && detected !== threadPref) {
+      const supported = await threadBacksLanguage(prisma, chatId, threadPref)
+      if (!supported) {
+        if (detected) return { language: detected, detected, source: 'message_detection', shouldPersist: true }
+        return { language: localeLang, detected, source: 'fallback_locale', shouldPersist: true }
+      }
+    }
     return { language: threadPref, detected, source: 'thread_preference', shouldPersist: false }
   }
 
@@ -255,10 +409,12 @@ function isOutputLanguageCorrect(output, expectedLanguage) {
 
 module.exports = {
   detectLanguage,
+  languageEvidence,
   extractExplicitLanguageInstruction,
   resolveResponseLanguage,
   persistThreadLanguage,
   buildSystemRule,
   isOutputLanguageCorrect,
   LANG_NAMES,
+  __resetThreadBackingCacheForTests: () => backedThreadPins.clear(),
 }

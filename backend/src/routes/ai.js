@@ -3348,7 +3348,7 @@ router.post(
       __ttfbLimitMs = undefined;
       generateLog.info('attachments.prepared', {
         attachmentCount: processedFiles.length,
-        prepMs: __ttfbClockStartedAt - __generateStartedAt,
+        durationMs: __ttfbClockStartedAt - __generateStartedAt,
       });
 
       // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
