@@ -63,15 +63,19 @@ function clampVoiceSettings(settings) {
 }
 
 let cachedClient = null;
+// Rebuilt when ELEVENLABS_API_KEY changes (admin-connections bridge swaps it at runtime).
+let cachedClientKeyFp = null;
 function getClient(ElevenLabsClientCtor) {
   if (!isElevenLabsConfigured()) return null;
   if (ElevenLabsClientCtor) {
     // Injectable for tests — never cache an injected client.
     return new ElevenLabsClientCtor({ apiKey: process.env.ELEVENLABS_API_KEY });
   }
-  if (!cachedClient) {
+  const fp = require('../../utils/provider-key-health').fingerprint(process.env.ELEVENLABS_API_KEY);
+  if (!cachedClient || cachedClientKeyFp !== fp) {
     const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
     cachedClient = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
+    cachedClientKeyFp = fp;
   }
   return cachedClient;
 }

@@ -28,13 +28,18 @@ const { attachConversationSummary } = require('./conversation-summarizer');
 const objectStorage = require('./object-storage');
 
 let __anthropicSummarizerClient = null;
+// Key the memo by the key it was built with: the admin-connections bridge
+// swaps ANTHROPIC_API_KEY at runtime and a first-use memo froze the old key.
+let __anthropicSummarizerKeyFp = null;
 function getAnthropicSummarizerClient() {
-    if (__anthropicSummarizerClient) return __anthropicSummarizerClient;
     const apiKey = process.env.ANTHROPIC_API_KEY || process.env.SIRA_ANTHROPIC_API_KEY;
-    if (!apiKey) return null;
+    if (!apiKey) { __anthropicSummarizerClient = null; __anthropicSummarizerKeyFp = null; return null; }
+    const fp = require('../utils/provider-key-health').fingerprint(apiKey);
+    if (__anthropicSummarizerClient && __anthropicSummarizerKeyFp === fp) return __anthropicSummarizerClient;
     try {
         const Anthropic = require('@anthropic-ai/sdk');
         __anthropicSummarizerClient = new Anthropic({ apiKey, fetch: sharedFetch });
+        __anthropicSummarizerKeyFp = fp;
         return __anthropicSummarizerClient;
     } catch (err) {
         console.warn('[conversation-summarizer] anthropic client init failed:', err?.message || err);
@@ -631,7 +636,7 @@ class AIService {
         return out.text;
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null, onModelFailover = null }) {
         // The route hands us a client for the provider it resolved. When an
         // image turn has to leave a text-only model, `provider` changes below;
         // that client must then NOT be reused (live 2026-09-02: Meta's client
@@ -871,9 +876,17 @@ class AIService {
             const MAX_ATTEMPTS_PER_MODEL = 2;
             const FIRST_BYTE_TIMEOUT_MS = 30_000;
             let lastError = null;
+            // Billing failover (Luis: «failover solo ante errores del proveedor»):
+            // when the picked model's provider has no credit, a funded model of
+            // a comparable tier answers and the reply opens with a notice.
+            const billingFailoverMod = require('./ai/billing-failover');
+            const providerOverrides = new Map();
+            let billingFailover = null;
+            const turnHasImages = workingMessages.some((msg) => Array.isArray(msg && msg.content)
+                && msg.content.some((part) => part && part.type === 'image_url'));
             for (let m = 0; m < modelChain.length; m++) {
                 const currentModel = modelChain[m];
-                const currentProvider = m === 0 ? provider : providerForModel(currentModel);
+                const currentProvider = m === 0 ? provider : (providerOverrides.get(currentModel) || providerForModel(currentModel));
                 const currentRuntimeModel = normalizeModelForProvider(currentProvider, currentModel);
                 // Claude-style extended thinking. When reasoning streaming is
                 // ON (default) the chain-of-thought a reasoning model emits in
@@ -1055,6 +1068,18 @@ class AIService {
                                 if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
                                 // First visible token closes the thinking phase.
                                 await emitReasoningDone();
+                                if (billingFailover && billingFailover.noticePending && billingFailover.to.model === currentModel) {
+                                    billingFailover.noticePending = false;
+                                    fullResponseContent += billingFailover.noticeText;
+                                    await writeWithBackpressure(res, `data: ${JSON.stringify({
+                                        type: 'model_failover',
+                                        reason: 'billing',
+                                        from: billingFailover.from.label,
+                                        to: billingFailover.to.label,
+                                        notice: billingFailover.notice,
+                                    })}\n\n`);
+                                    await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'text_delta', content: billingFailover.noticeText })}\n\n`);
+                                }
                                 fullResponseContent += contentChunk;
                                 hasStreamedAnyContent = true;
                                 await writeWithBackpressure(res, `data: ${JSON.stringify({ type: 'text_delta', content: contentChunk })}\n\n`);
@@ -1077,6 +1102,7 @@ class AIService {
                             try { res.write(`data: ${JSON.stringify({ replace: true, content: '' })}\n\n`); } catch { /* socket gone */ }
                             fullResponseContent = '';
                             hasStreamedAnyContent = false;
+                            if (billingFailover && billingFailover.to.model === currentModel) billingFailover.noticePending = true;
                             throw Object.assign(new Error('Empty completion — model streamed only whitespace'), { code: 'EMPTY_COMPLETION' });
                         }
 
@@ -1107,8 +1133,12 @@ class AIService {
                                 const correctedVerdict = evaluateResponse({ response: cleanCorrected, userPrompt });
                                 const longEnoughToReplace = cleanCorrected.length >= Math.max(40, Math.floor(fullResponseContent.trim().length * 0.8));
                                 if (cleanCorrected && !correctedVerdict.weak && longEnoughToReplace) {
-                                    res.write(`data: ${JSON.stringify({ replace: true, content: cleanCorrected })}\n\n`);
-                                    fullResponseContent = cleanCorrected;
+                                    const replacement = billingFailover && billingFailover.to.model === currentModel
+                                        && !cleanCorrected.startsWith(billingFailover.noticeText.trim())
+                                        ? `${billingFailover.noticeText}${cleanCorrected}`
+                                        : cleanCorrected;
+                                    res.write(`data: ${JSON.stringify({ replace: true, content: replacement })}\n\n`);
+                                    fullResponseContent = replacement;
                                 }
                             }
                         }
@@ -1160,6 +1190,56 @@ class AIService {
                     } finally {
                         clearTimeout(firstByteTimer);
                         if (signal) signal.removeEventListener('abort', onParentAbort);
+                    }
+                }
+
+                if (!hasStreamedAnyContent && !billingFailover && m === modelChain.length - 1
+                    && billingFailoverMod.enabled() && billingFailoverMod.isBillingError(lastError)
+                    && !(signal && signal.aborted)) {
+                    billingFailoverMod.markOutOfCredit(currentProvider, lastError);
+                    let candidate = null;
+                    try {
+                        candidate = await billingFailoverMod.pickFailoverModel({
+                            fromProvider: currentProvider,
+                            fromModel: currentModel,
+                            needsVision: turnHasImages,
+                        });
+                    } catch (pickErr) {
+                        console.warn('[billing-failover] no se pudo elegir un modelo de reemplazo:', pickErr?.message || pickErr);
+                    }
+                    if (candidate) {
+                        const notice = billingFailoverMod.buildNotice({ fromLabel: candidate.fromLabel, toLabel: candidate.label });
+                        billingFailover = {
+                            from: { provider: currentProvider, model: currentModel, label: candidate.fromLabel },
+                            to: { provider: candidate.provider, model: candidate.model, label: candidate.label },
+                            notice,
+                            noticeText: `_${notice}_\n\n`,
+                            noticePending: true,
+                        };
+                        providerOverrides.set(candidate.model, candidate.provider);
+                        modelChain.push(candidate.model);
+                        console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} sin saldo (${Number(lastError?.status || lastError?.statusCode) || 'billing'}) → ${candidate.provider}:${candidate.model}`);
+                        if (typeof onModelFailover === 'function') {
+                            try {
+                                onModelFailover({
+                                    reason: 'billing',
+                                    from: { ...billingFailover.from },
+                                    to: { ...billingFailover.to },
+                                    notice,
+                                });
+                            } catch (_) { /* advisory */ }
+                        }
+                        noteTurnContext('model_failover', {
+                            reason: 'billing',
+                            fromProvider: currentProvider,
+                            fromModel: currentRuntimeModel,
+                            fromLabel: candidate.fromLabel,
+                            toProvider: candidate.provider,
+                            toModel: candidate.model,
+                            toLabel: candidate.label,
+                            status: Number(lastError && (lastError.status || lastError.statusCode)) || null,
+                            message: String((lastError && lastError.message) || '').slice(0, 200),
+                        });
                     }
                 }
             }

@@ -657,3 +657,21 @@ uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error
 | `STALE_RUN_WARN_MINUTES` / `STALE_RUN_CRITICAL_MINUTES` | `15` / `45` | Silence before a non-terminal run alerts (warn / critical) — once per run and severity, persisted in AuditLog (`stale_run_alerted`) |
 | `STALE_RUN_ALERT_COOLDOWN_MINUTES` | `30` | In-memory cooldown between sweeps (first-level cache) |
 | `STALE_RUN_ABANDON_HOURS` | `24` | A live run (agent task `queued`/`running`, codex run `running`/`waiting_approval`) silent this long is closed as «abandonado» (agent task → `failed`; codex plan awaiting approval → `cancelled`; codex run → `error`, reason in `error`), recorded once (`stale_run_abandoned`), never alerted again. Terminal rows (`completed`/`failed`/`cancelled`/`error`/`done`) are never scanned. `0` never closes |
+
+## Billing failover and provider keys (optional)
+
+When the provider of the model the user picked has no credit/quota left
+(Anthropic «credit balance is too low», HTTP 402, «Insufficient Balance»,
+OpenAI `insufficient_quota`), the turn is answered by a configured, funded model
+of a comparable tier and the reply opens with a notice. The provider shows as
+«Sin saldo» in the picker until the memo expires or an admin saves another key.
+Provider SDK clients follow the key currently in env (Admin → Conexiones swaps
+it at runtime), so no client keeps a stale key.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIRAGPT_BILLING_FAILOVER` | on | `0` disables the failover (the turn shows the honest error instead) |
+| `SIRAGPT_BILLING_FAILOVER_MEMO_MS` | `600000` | How long a provider stays «sin saldo» before it is tried again |
+| `SIRAGPT_BILLING_FAILOVER_ORDER` | `xAI,DeepSeek,Gemini,OpenAI,Anthropic,Meta,Kimi,OpenRouter,Mistral,Groq,Cerebras,Z.ai` | Preference among funded providers (same tier first) |
+| `SIRAGPT_OPENAI_FILES_UPLOAD` | on | `0` skips the optional OpenAI Files upload of documents (it now always runs in the background and is skipped while OpenAI rejects the key) |
+| `SIRAGPT_MODELS_DEBUG` | off | `1` prints `[models-dbg]` latency lines for `GET /api/ai/models` (debug level) |

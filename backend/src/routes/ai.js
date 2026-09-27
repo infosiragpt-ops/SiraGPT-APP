@@ -179,7 +179,8 @@ const siraMetrics = require('../services/sira/metrics');
 // PR-3: coref + lexicón.
 const corefResolver = require('../services/agents/coref-resolver');
 const personalLexicon = require('../services/personal-lexicon');
-const __corefJudge = makeGeminiCorefJudge();
+// Built per turn (below) so it reads GEMINI_API_KEY at call time — a module-load
+// judge froze the key present at boot (admin-connections bridge swaps it at runtime).
 // PR-4: ensemble de judges + short-query expander.
 const { buildEnsembleJudge } = require('../services/agents/triage-ensemble');
 const { expandShortQuery } = require('../services/agents/short-query-expander');
@@ -875,7 +876,11 @@ router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, name
 // ✅ Get available AI models
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   const __dbgT0 = Date.now();
-  const __dbg = (m) => { try { console.error(`[models-dbg] +${Date.now() - __dbgT0}ms ${m}`); } catch (_) {} };
+  // Latency probe for the picker list. Off by default: on every picker open it
+  // printed 7 stderr lines that log tooling (docker logs, live logs) showed as
+  // ERROR. Enable with SIRAGPT_MODELS_DEBUG=1 when diagnosing.
+  const __dbgOn = String(process.env.SIRAGPT_MODELS_DEBUG || '').trim() === '1';
+  const __dbg = (m) => { if (!__dbgOn) return; try { console.debug(`[models-dbg] +${Date.now() - __dbgT0}ms ${m}`); } catch (_) {} };
   try {
     __dbg('handler-enter');
     const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
@@ -988,6 +993,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
         isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
         isFallback: modelPolicy.fallbackModel.name === m.name,
         connected: providerConnectionReady(connectionProvider),
+        // Provider out of credit (learned from a real turn): the picker shows
+        // «Sin saldo»; picking it still answers — the turn fails over to a
+        // funded model with a notice.
+        billingStatus: require('../services/ai/billing-failover').isOutOfCredit(connectionProvider) ? 'sin_saldo' : null,
         planAccess: {
           currentPlan: modelPolicy.currentPlan,
           allowed: true,
@@ -3825,7 +3834,7 @@ router.post(
             prompt,
             recentTurns: __pr3RecentTurns,
             attachments: processedFiles.map((f) => ({ id: f?.id, name: f?.name || f?.fileId, filename: f?.filename })).filter((a) => a.id || a.name || a.filename),
-            judge: __corefJudge,
+            judge: makeGeminiCorefJudge(),
             options: { timeoutMs: 250 },
           });
           if (__pr3CorefResult && Array.isArray(__pr3CorefResult.references) && __pr3CorefResult.references.length > 0) {
@@ -7489,6 +7498,10 @@ router.post(
       // scope (NOT inside the !artifactHandled block) because the persistence
       // path below reads it for every branch.
       const __reasoningSink = {};
+      // Set when the picked model's provider had no credit and another model
+      // answered (services/ai/billing-failover). Persisted on the reply so the
+      // badge names the model that actually answered.
+      let __modelFailover = null;
       try {
         if (!artifactHandled) {
         // Keep images in the payload whenever this turn can reach a vision
@@ -7947,6 +7960,7 @@ router.post(
               qualityGuard: true,
               skipDoneSentinel: true,
               reasoningSink: __reasoningSink,
+              onModelFailover: (info) => { __modelFailover = info || null; },
               maxOutputTokens: req._trivialTurn
                 ? Math.min(256, actualMaxOutputTokens || 256)
                 : actualMaxOutputTokens,
@@ -8937,6 +8951,16 @@ router.post(
           // 12 s") on historically loaded messages.
           ...(__reasoningSink && __reasoningSink.durationMs
             ? { reasoningDurationMs: __reasoningSink.durationMs }
+            : {}),
+          ...(__modelFailover
+            ? {
+              modelFailover: {
+                reason: __modelFailover.reason || 'billing',
+                fromLabel: __modelFailover.from && __modelFailover.from.label,
+                toLabel: __modelFailover.to && __modelFailover.to.label,
+                toModel: __modelFailover.to && __modelFailover.to.model,
+              },
+            }
             : {}),
           generationUsage,
           // Top-level model id: routing-bridge.extractModel reads meta.model on

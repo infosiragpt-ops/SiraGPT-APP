@@ -136,6 +136,15 @@ export function resolveReplyBadgeLabel(
 ): string {
   const usage = message ? readMessageGenerationUsage(message) : null
   const meta = parseMetadata(message?.metadata)
+  // The picked model's provider had no credit and another model answered
+  // (billing failover): the badge names the model that actually answered.
+  const failover = meta.modelFailover && typeof meta.modelFailover === "object"
+    ? (meta.modelFailover as Record<string, unknown>)
+    : null
+  const failoverLabel = firstString(failover?.toLabel)
+  if (failoverLabel && !FORBIDDEN_UI_RE.test(failoverLabel) && !RAW_ID_RE.test(failoverLabel)) {
+    return failoverLabel
+  }
   const pickerFromMeta = firstString(meta.pickerModel)
   const pickerDisplay = firstString(meta.pickerDisplayName)
   const explicit = message?.model

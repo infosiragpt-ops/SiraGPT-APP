@@ -4,6 +4,7 @@ const { authenticateToken } = require('../middleware/auth');
 const requirePaidPlan = require('../middleware/require-paid-plan');
 const prisma = require('../config/database');
 const OpenAI = require('openai');
+const { lazyClientProxy } = require('../utils/env-keyed-client');
 const { createDocument } = require('../services/document-service');
 const { chromium } = require('playwright');
 const fs = require('fs').promises;
@@ -16,7 +17,10 @@ const {
 } = require('../services/auth/session-token-persistence');
 
 const router = express.Router();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Resolves the client for the CURRENT key (admin-connections bridge swaps it at runtime).
+const openai = lazyClientProxy(() => process.env.OPENAI_API_KEY, (apiKey) => new OpenAI({ apiKey }), {
+  missingKeyMessage: 'OPENAI_API_KEY no configurada',
+});
 
 /**
  * Get max_tokens limit for a model

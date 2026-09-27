@@ -5028,9 +5028,13 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const menuOpen = rowMenu === model.name;
     const label = getModelDisplayLabel(model);
     const tagline = getModelTagline(model);
+    // Provider out of credit (server-side memo from a real turn). Still
+    // selectable: the turn is answered by a funded model with a notice.
+    const noCredit = model.billingStatus === "sin_saldo" && !isComingSoon;
+    const ariaLabel = [label, noCredit ? "Sin saldo" : "", tagline].filter(Boolean).join(". ");
     return (
       <DropdownMenuItem
-        aria-label={tagline ? `${label}. ${tagline}` : label}
+        aria-label={ariaLabel}
         title={label}
         onSelect={(event) => {
           const target = event.target as HTMLElement | null
@@ -5062,6 +5066,15 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             {isComingSoon && (
               <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Pronto
+              </span>
+            )}
+            {noCredit && (
+              <span
+                data-testid="model-picker-no-credit"
+                title="El proveedor de este modelo no tiene saldo ahora. Si lo eliges, SiraGPT responde con otro modelo y te lo indica."
+                className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300"
+              >
+                Sin saldo
               </span>
             )}
           </span>

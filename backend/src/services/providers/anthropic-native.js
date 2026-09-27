@@ -38,7 +38,11 @@ const ENABLE_1M_CONTEXT_BETA = process.env.ANTHROPIC_NATIVE_1M_CONTEXT !== 'fals
 const CONTEXT_1M_BETA_HEADER = 'context-1m-2025-08-07';
 
 let _SdkClass = null;
+const { fingerprint: keyFingerprint } = require('../../utils/provider-key-health');
 let _client = null;
+// Rebuilt when ANTHROPIC_API_KEY changes (admin-connections bridge swaps it at runtime).
+let _clientKeyFp = null;
+let _clientInjected = false;
 
 function isEnabled(env = process.env) {
   if (!env.ANTHROPIC_API_KEY) return false;
@@ -63,14 +67,17 @@ async function loadSdkClass() {
  * Tests can inject a stub client via `_setClientForTests`.
  */
 async function getClient() {
-  if (_client) return _client;
-  if (!isEnabled()) return null;
+  if (_client && _clientInjected) return _client;
+  if (!isEnabled()) { _client = null; _clientKeyFp = null; return null; }
+  const fp = keyFingerprint(process.env.ANTHROPIC_API_KEY);
+  if (_client && _clientKeyFp === fp) return _client;
   const Sdk = await loadSdkClass();
   const opts = { apiKey: process.env.ANTHROPIC_API_KEY };
   if (ENABLE_1M_CONTEXT_BETA) {
     opts.defaultHeaders = { 'anthropic-beta': CONTEXT_1M_BETA_HEADER };
   }
   _client = new Sdk(opts);
+  _clientKeyFp = fp;
   return _client;
 }
 
@@ -166,8 +173,8 @@ function createAnthropicProvider() {
 }
 
 // Test-only hooks: avoid importing the live SDK inside unit tests.
-function _setClientForTests(client) { _client = client; }
-function _resetClientForTests() { _client = null; _SdkClass = null; }
+function _setClientForTests(client) { _client = client; _clientInjected = Boolean(client); }
+function _resetClientForTests() { _client = null; _SdkClass = null; _clientKeyFp = null; _clientInjected = false; }
 
 module.exports = {
   createAnthropicProvider,

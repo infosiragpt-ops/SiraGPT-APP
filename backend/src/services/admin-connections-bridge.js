@@ -131,13 +131,27 @@ const PROVIDER_PROBE = Object.freeze({
 
 const KEY_PREFIX = 'enc:v1:';
 
-function unwrap(stored) {
+// A row encrypted with an older ENCRYPTION key can't be read back ("bad
+// decrypt"). That's a configuration state, not a per-boot error: warn ONCE per
+// row (id + provider, never the ciphertext) and let the panel ask the admin to
+// paste the key again.
+const _undecryptableWarned = new Set();
+function noteUndecryptableKey(row = {}) {
+  const id = row && row.id ? String(row.id) : '';
+  const providerKey = row && row.providerKey ? String(row.providerKey) : '';
+  const k = id || providerKey || 'unknown';
+  if (_undecryptableWarned.has(k)) return;
+  _undecryptableWarned.add(k);
+  console.warn(`[admin-connections] clave ilegible en la conexión ${id || '?'} (${providerKey || '?'}): se cifró con otra clave del servidor; se ignora hasta que un admin la vuelva a guardar en Admin → Conexiones.`);
+}
+
+function unwrap(stored, row = null) {
   if (!stored || typeof stored !== 'string') return null;
   if (!stored.startsWith(KEY_PREFIX)) return stored;
   try {
     return decrypt(stored.slice(KEY_PREFIX.length));
-  } catch (err) {
-    console.error('[admin-connections-bridge] decrypt failed:', err.message);
+  } catch (_err) {
+    noteUndecryptableKey(row || {});
     return null;
   }
 }
@@ -170,7 +184,7 @@ async function applyAdminConnections() {
     const rows = await prisma.adminConnection.findMany({
       where: { enabled: true, apiKey: { not: null } },
       orderBy: { updatedAt: 'desc' },
-      select: { providerKey: true, apiKey: true, updatedAt: true },
+      select: { id: true, providerKey: true, apiKey: true, updatedAt: true },
     });
 
     // All enabled rows per provider, most recent first. The winner is the
@@ -212,7 +226,7 @@ async function applyAdminConnections() {
       const envVars = [envVar, ...(PROVIDER_ENV_ALIASES[providerKey] || [])];
       let chosen = null;
       for (const candidate of candidatesByProvider.get(providerKey) || []) {
-        const plain = unwrap(candidate.apiKey);
+        const plain = unwrap(candidate.apiKey, candidate);
         if (!plain) continue;
         if (await keyIsRejected(providerKey, plain)) {
           rejected.push(providerKey);
@@ -291,7 +305,7 @@ async function applyCustomConnectionEnv() {
   }
 
   process.env[CUSTOM_BASE_URL_ENV] = String(row.url).trim();
-  const key = unwrap(row.apiKey);
+  const key = unwrap(row.apiKey, row);
   if (key) process.env[CUSTOM_API_KEY_ENV] = key;
 }
 
@@ -362,6 +376,7 @@ async function reconcileCatalog() {
 }
 
 module.exports = {
+  noteUndecryptableKey,
   applyAdminConnections,
   applyCustomConnectionEnv,
   reconcileCatalog,

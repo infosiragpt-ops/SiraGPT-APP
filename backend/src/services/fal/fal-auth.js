@@ -51,8 +51,13 @@ function decryptAdminConnectionKey(stored, decryptFn) {
   try {
     const decrypt = decryptFn || require('../../utils/encryption').decrypt;
     return cleanEnvValue(decrypt(raw.slice(ADMIN_KEY_PREFIX.length)));
-  } catch (error) {
-    console.error('[fal-auth] failed to decrypt admin fal.ai key:', error.message);
+  } catch (_error) {
+    // Unreadable (encrypted with an older server key): warn once, the admin
+    // re-saves it in Admin → Conexiones («Clave ilegible — vuelve a guardarla»).
+    if (!decryptAdminConnectionKey.warned) {
+      decryptAdminConnectionKey.warned = true;
+      console.warn('[fal-auth] clave de fal.ai ilegible en Admin → Conexiones; vuelve a guardarla.');
+    }
     return '';
   }
 }

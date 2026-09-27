@@ -1,5 +1,6 @@
 const { google } = require('googleapis');
 const OpenAI = require('openai');
+const { lazyClientProxy } = require('../utils/env-keyed-client');
 const { OAuth2Client } = require('google-auth-library');
 const prisma = require('../config/database');
 
@@ -9,8 +10,9 @@ const prisma = require('../config/database');
  */
 class GoogleMCPService {
     constructor() {
-        this.openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY
+        // Follows the CURRENT key (admin-connections bridge swaps it at runtime).
+        this.openai = lazyClientProxy(() => process.env.OPENAI_API_KEY, (apiKey) => new OpenAI({ apiKey }), {
+            missingKeyMessage: 'OPENAI_API_KEY no configurada',
         });
 
         this.oauth2Client = new OAuth2Client(
