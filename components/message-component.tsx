@@ -1720,18 +1720,18 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 }
                 return <pre>{children}</pre>
             },
-            p: ({ children }: any) => <p className="mb-4 text-base leading-[1.6]">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-[1.6]">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-[1.6]">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1.5 text-base leading-[1.6]">{children}</li>,
-            h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
-            h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
-            h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
-            h4: ({ children }: any) => <h4 className="mb-2 text-base font-semibold leading-7">{children}</h4>,
+            p: ({ children }: any) => <p className="text-[17px] leading-[1.65] mb-4">{children}</p>,
+            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-[17px] leading-[1.65]">{children}</ul>,
+            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-[17px] leading-[1.65]">{children}</ol>,
+            li: ({ children }: any) => <li className="mb-1.5 text-[17px] leading-[1.65]">{children}</li>,
+            h1: ({ children }: any) => <h1 className="mb-4 font-serif text-2xl font-semibold leading-8">{children}</h1>,
+            h2: ({ children }: any) => <h2 className="mb-3 font-serif text-xl font-semibold leading-7">{children}</h2>,
+            h3: ({ children }: any) => <h3 className="mb-2 font-serif text-lg font-semibold leading-7">{children}</h3>,
+            h4: ({ children }: any) => <h4 className="mb-2 font-serif text-base font-semibold leading-7">{children}</h4>,
             hr: () => <hr className="my-4 border-muted" />,
             blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm align-top" style={{ overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
+            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-sans font-medium text-sm whitespace-nowrap">{children}</th>,
+            td: ({ children }: any) => <td className="border border-muted px-3 py-2 font-sans text-sm align-top" style={{ overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
             strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
             em: ({ children }: any) => <em className="italic">{children}</em>,
             a: ({ href, children, ...props }: any) => {
@@ -1765,7 +1765,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             table: ({ children }: any) => (
                 <div className="group relative mt-3">
                     <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                        <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                        <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
                     </div>
                     <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
                 </div>
@@ -1886,7 +1886,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             title={title}
                         />
                         <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                            <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                            <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
                         </div>
                         <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
                     </div>
@@ -1929,7 +1929,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 <div
                     ref={contentRef}
                     className={cn(
-                        "prose prose-sm dark:prose-invert max-w-none text-current leading-[1.6]",
+                        "prose prose-base dark:prose-invert max-w-none text-current font-serif text-[17px] leading-[1.65] tracking-[0.005em]",
                         "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
                         "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
                     )}
@@ -3489,15 +3489,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             on pure-code; everything hides during
                             streaming-only state). See MessageActionRail
                             for telemetry contract. */}
-                        {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && resolveReplyBadgeLabel(message) ? (
-                            <div
-                                className="mt-1 mb-0.5 text-[11px] leading-none text-muted-foreground/70 select-none"
-                                title={`Respondido con ${resolveReplyBadgeLabel(message)}`}
-                                aria-label={`Respondido con ${resolveReplyBadgeLabel(message)}`}
-                            >
-                                {resolveReplyBadgeLabel(message)}
-                            </div>
-                        ) : null}
                         {!isVideoMessage && (
                             <div className="flex flex-wrap items-center gap-2">
                                 <MessageActionRail
@@ -3508,6 +3499,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     hasError={!!message.error}
                                     regenerationAttempt={regenerationAttempt}
                                     isStreaming={isStreaming}
+                                    createdAt={message.createdAt}
                                     feedback={feedbackSent}
                                     isSpeaking={isSpeaking}
                                     isLoadingAudio={isLoadingAudio}

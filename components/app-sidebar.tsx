@@ -100,6 +100,13 @@ import {
 } from "@/components/ui/tooltip"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChatList, useModelsAndFiles } from "@/lib/chat-context-integrated"
+import {
+  PINNED_CHATS_CHANGED_EVENT,
+  readPinnedChatIds,
+  removePinnedChatId,
+  setChatPinned,
+  type PinnedChatsChangedDetail,
+} from "@/lib/chat/pinned-chats"
 import { useRouter, usePathname } from "next/navigation"
 import { isAgentsHomePath, agentsHomeHref } from "@/lib/agents-home-path"
 import { cn, downloadBlob } from "@/lib/utils"
@@ -718,7 +725,7 @@ export function AppSidebar() {
         const value = JSON.parse(localStorage.getItem(key) || "{}")
         return value && typeof value === "object" && !Array.isArray(value) ? value : {}
       }
-      setPinnedChatIds(readArray("sira:pinned-chat-ids"))
+      setPinnedChatIds(readPinnedChatIds())
       setArchivedChatIds(readArray("sira:archived-chat-ids"))
       setHiddenChatIds(readArray("sira:hidden-chat-ids"))
       setChatFolders(parseChatFolderAssignments(readRecord(CHAT_FOLDERS_STORAGE_KEY)))
@@ -732,6 +739,18 @@ export function AppSidebar() {
       setNamedChatFolders([])
       setScheduledChats({})
     }
+  }, [])
+
+  // The /agentes header menu pins through the same storage set; stay in sync.
+  React.useEffect(() => {
+    const sync = (event: Event) => {
+      setPinnedChatIds(readPinnedChatIds())
+      const detail = (event as CustomEvent<PinnedChatsChangedDetail>).detail
+      // Overrides win over the server `isPinned` flag until the list reloads.
+      if (detail?.chatId) setPinnedChatOverrides((current) => ({ ...current, [detail.chatId]: detail.pinned }))
+    }
+    window.addEventListener(PINNED_CHATS_CHANGED_EVENT, sync)
+    return () => window.removeEventListener(PINNED_CHATS_CHANGED_EVENT, sync)
   }, [])
 
   const persistArrayState = React.useCallback((
@@ -762,17 +781,10 @@ export function AppSidebar() {
     if (!chat?.id) return
     const nextPinned = !isChatPinned(chat)
     setPinnedChatOverrides((current) => ({ ...current, [chat.id]: nextPinned }))
-    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => {
-      const deduped = current.filter((id) => id !== chat.id)
-      return nextPinned ? [chat.id, ...deduped] : deduped
-    })
     toast.success(nextPinned ? "Chat fijado" : "Chat desfijado")
-    try {
-      await apiClient.pinChat(chat.id, nextPinned)
-    } catch (error) {
-      toast.warning("Guardado solo en este navegador; reinicia el backend para sincronizarlo.")
-    }
-  }, [isChatPinned, persistArrayState])
+    const { synced } = await setChatPinned(chat.id, nextPinned)
+    if (!synced) toast.warning("Guardado solo en este navegador; reinicia el backend para sincronizarlo.")
+  }, [isChatPinned])
 
   const archiveChat = React.useCallback(async (chat: any) => {
     if (!chat?.id) return
@@ -998,7 +1010,7 @@ export function AppSidebar() {
   }, [scheduleAt, scheduleNote, scheduleTarget])
 
   const removeChatLocalMetadata = React.useCallback((chatId: string) => {
-    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => current.filter((id) => id !== chatId))
+    removePinnedChatId(chatId)
     persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => current.filter((id) => id !== chatId))
     persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => current.filter((id) => id !== chatId))
     persistChatFolders(

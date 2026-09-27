@@ -88,6 +88,7 @@ import { CredentialWarning } from "@/components/credential-warning"
 import { ComposerCharCounter } from "@/components/composer-char-counter"
 import { Input } from "@/components/ui/input"
 import { useChat, useModelsAndFiles } from "@/lib/chat-context-integrated"
+import { ChatTitleMenu } from "@/components/chat/chat-title-menu"
 import { useAuth } from "@/lib/auth-context-integrated"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
@@ -5401,6 +5402,7 @@ export default function ChatInterface() {
 
 function ChatInterfaceContent() {
   const tComposer = useTranslations("composer")
+  const tChat = useTranslations("chat")
   const { active: activeArtifact, close: closeArtifactPanel } = useArtifactPanel()
   const { user } = useAuth()
 
@@ -14204,6 +14206,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <SidebarOvalIcon className="h-[18px] w-[18px]" />
                   </button>
                 ) : null}
+                {/* Claude-style chat title: the name itself opens the chat
+                    menu (fijar · renombrar · compartir · eliminar). */}
+                <ChatTitleMenu
+                  chat={currentChat?.id ? { id: currentChat.id, title: currentChat.title, isPinned: (currentChat as any).isPinned } : null}
+                  onShare={currentChat?.messages?.length ? () => { void handleCompleteShare() } : undefined}
+                />
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 <Button
@@ -14214,9 +14222,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   aria-label="Computadora"
                   aria-pressed={computerPanelOpen && !computerBrowserMode}
                   data-testid="chat-computer-button"
-                  className="chat-header-icon-btn chat-computer-action h-11 w-11 rounded-full"
+                  className="chat-header-icon-btn chat-computer-action h-9 w-9 rounded-md text-muted-foreground hover:text-foreground"
                 >
-                  <Monitor className="h-5 w-5" />
+                  <Monitor className="h-[18px] w-[18px]" />
                 </Button>
                 <Button
                   variant={computerPanelOpen && computerBrowserMode ? "secondary" : "ghost"}
@@ -14226,30 +14234,31 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   aria-label="Navegador"
                   aria-pressed={computerPanelOpen && computerBrowserMode}
                   data-testid="chat-browser-button"
-                  className="chat-header-icon-btn chat-browser-action h-11 w-11 rounded-full"
+                  className="chat-header-icon-btn chat-browser-action h-9 w-9 rounded-md text-muted-foreground hover:text-foreground"
                 >
-                  <Globe className="h-5 w-5" />
+                  <Globe className="h-[18px] w-[18px]" />
                 </Button>
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
                     Hidden when a right-side panel (preview/artifact/connector) is
                     active so the header fits the narrower pane. */}
                 {currentChat?.id && currentChat?.messages && currentChat.messages.length > 0 && !showAudioPanel && !rightPanelActive && (
                   <Button
-                    variant="ghost"
-                    size="icon"
+                    variant="outline"
+                    size="sm"
                     onClick={handleCompleteShare}
                     title="Compartir conversación completa"
                     aria-label="Compartir conversación completa"
-                    className="chat-header-icon-btn chat-share-action h-11 w-11 rounded-full"
+                    className="chat-header-icon-btn chat-share-action ml-1 h-8 gap-1.5 rounded-full border-border/70 bg-transparent px-3 text-[13px] font-medium text-foreground/85 shadow-none hover:bg-muted/70 hover:text-foreground"
                   >
-                    <Share className="h-5 w-5" />
+                    <Share className="h-[15px] w-[15px]" />
+                    <span>Compartir</span>
                   </Button>
                 )}
                 {/* WhatsApp CTA — marketing surface; hide it when the pane
                     is narrow (split active) so the primary controls stay visible. */}
                 {!rightPanelActive && (
                   <WhatsAppButton
-                    className="chat-header-icon-btn chat-optional-action"
+                    className="chat-header-icon-btn chat-optional-action h-9 w-9 rounded-md [&_svg]:h-[18px] [&_svg]:w-[18px]"
                     message="Hola 👋, me interesa SiraGPT. ¿Podrían contarme más sobre sus funciones y precios?"
                   />
                 )}
@@ -14269,8 +14278,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       aria-label="Subir de plan"
                       title="Subir de plan"
                       className={cn(
-                        !showTextCta && 'h-11 w-11 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
-                        showTextCta && 'h-11 gap-1.5 rounded-full px-3 text-[13px] font-semibold',
+                        !showTextCta && 'h-9 w-9 rounded-md text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.96]',
+                        showTextCta && 'ml-1 h-8 gap-1.5 rounded-full px-3 text-[13px] font-semibold shadow-none',
                         'chat-header-icon-btn',
                         'chat-plan-action',
                         'transition-all duration-200',
@@ -14626,6 +14635,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       <CredentialWarning text={input} />
                       {renderChatComposer()}
+                      <p className="chat-composer-disclaimer -mt-1 text-center text-[11.5px] leading-4 text-muted-foreground/60 select-none">
+                        {tChat("disclaimer")}
+                      </p>
                     </div>
                   </div>
                 </>
