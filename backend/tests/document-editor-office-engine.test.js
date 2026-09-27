@@ -293,7 +293,7 @@ test('office visual verifier: real engine in a sandbox — composite + thumbnail
 });
 
 test('runner keeps the model picked in the composer on its own API', () => {
-  const { runnerModelSpec, resolveRunnerLlmCandidate } = require('../src/services/agent-runner');
+  const { runnerModelSpec, resolveRunnerLlmCandidate, createRunnerLlmClient } = require('../src/services/agent-runner');
   assert.equal(runnerModelSpec('DeepSeek', 'deepseek-v4-pro'), 'DeepSeek:deepseek-v4-pro');
   assert.equal(runnerModelSpec('xAI', 'grok-4.7'), 'xAI:grok-4.7');
   assert.equal(runnerModelSpec('Custom', 'mi-modelo'), 'Custom:mi-modelo');
@@ -301,10 +301,15 @@ test('runner keeps the model picked in the composer on its own API', () => {
   const env = { XAI_API_KEY: 'xai-live-key', DEEPSEEK_API_KEY: 'ds-live-key' };
   const chosen = resolveRunnerLlmCandidate({ pickedModel: runnerModelSpec('xAI', 'grok-4.7'), env });
   assert.equal(`${chosen.provider}:${chosen.model}`, 'xAI:grok-4.7');
+  const client = createRunnerLlmClient({
+    pickedModel: runnerModelSpec('xAI', 'grok-4.7'),
+    env,
+    createClient: () => ({ chat: { completions: { create: async () => ({ choices: [] }) } } }),
+  });
+  assert.deepEqual(client.candidates(), [{ provider: 'xAI', model: 'grok-4.7' }], 'only the chosen API is eligible');
   const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   assert.match(read('src/services/agentic-chat-stream.js'), /pickedModel: require\('\.\/agent-runner'\)\.runnerModelSpec\(provider, model\),/);
   const index = read('src/services/agent-runner/index.js');
-  assert.match(index, /createFailoverClient\(\[selected\], \{ createClient \}\)/);
   assert.match(index, /if \(!llm\) llm = createRunnerLlmClient\(\{ pickedModel \}\);/);
 });
 
