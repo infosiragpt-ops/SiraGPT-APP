@@ -560,6 +560,7 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   // (credits/model/verification). The honest Spanish error IS the final
   // answer — never fall through to the plain stream or the generic pipeline.
   'agent_runner_failed',
+  'generated_artifact_read_failed',
   // GitHub CONSTRUIR pre-loop (OAuth CTA or isolated open). Falling through
   // to the plain stream was collapsing these into «Conexión no disponible».
   'github_open_repo',
@@ -909,8 +910,37 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const preloopFileIds = Array.isArray(toolContext.fileIds)
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
+    const generatedArtifactRefs = !codingWorkspace && preloopFileIds.length === 0
+      ? await require('./agents/generated-artifact-followup').resolveChatGeneratedArtifactFollowup(
+        toolContext.prisma,
+        { userId: toolContext.userId, chatId: toolContext.chatId, providedFileIds: [], goal: userQuery },
+      )
+      : [];
+    if (generatedArtifactRefs.length) toolContext.generatedArtifactRefs = generatedArtifactRefs;
+    const redactGeneratedArtifactText = (value) => {
+      let safe = String(value || '');
+      if (!generatedArtifactRefs.length) return safe;
+      for (const ref of generatedArtifactRefs) safe = safe.split(String(ref.id)).join('[identificador interno]');
+      return safe.replace(/\/?(?:app\/)?uploads\/agent-artifacts\/[^\s)\]}]+/g, '[ruta interna]');
+    };
+    const redactGeneratedArtifactPayload = (value) => {
+      if (!generatedArtifactRefs.length) return value;
+      if (typeof value === 'string') return redactGeneratedArtifactText(value);
+      if (Array.isArray(value)) return value.map(redactGeneratedArtifactPayload);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactGeneratedArtifactPayload(item)]));
+      }
+      return value;
+    };
+    const safeHistory = generatedArtifactRefs.length
+      ? history.map((message) => ({
+        ...message,
+        content: redactGeneratedArtifactText(textFromMessageContent(message?.content)
+          .replace(/^```agent-task-state\n[\s\S]*?\n```\s*/, '')),
+      }))
+      : history;
     if (
-      !codingWorkspace && preloopFileIds.length === 0
+      !codingWorkspace && preloopFileIds.length === 0 && generatedArtifactRefs.length === 0
       && toolContext.prisma
       && toolContext.userId
       && toolContext.chatId
@@ -1386,7 +1416,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const picked = await skillPicker.pickSkills({
           query: userQuery,
           descriptors,
-          history: Array.isArray(history) ? history.slice(-2) : [],
+          history: Array.isArray(safeHistory) ? safeHistory.slice(-2) : [],
           chatId: toolContext.chatId || null,
           ledger: require('./rlcd').ledger,
         });
@@ -1431,7 +1461,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     let tools = toolsOverride || buildDefaultTools({
       userQuery,
-      selection,
+      selection: generatedArtifactRefs.length && selection
+        ? { ...selection, signals: { ...(selection.signals || {}), hasCode: true } }
+        : selection,
       clearance: toolContext && toolContext.clearance,
       capabilities: customGptCapabilities,
       skillPolicy: runtimeSkillPolicy,
@@ -1605,7 +1637,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const { attachHarness } = require('./agent-harness/run-agent-turn');
         __harness = await attachHarness({
           tools,
-          write: (payload) => writeSse(res, payload),
+          write: (payload) => writeSse(res, redactGeneratedArtifactPayload(payload)),
           chatId: toolContext.chatId || null,
           userId: toolContext.userId || null,
           requestedOrganizationId: toolContext.requestedOrganizationId || null,
@@ -1685,6 +1717,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
       : null;
+    // A read-only follow-up about generated files has no File attachments.
+    // Force the existing byte-reading tool before any web/RAG skill can treat
+    // an internal artifact path as a knowledge-source id.
+    if (generatedArtifactRefs.length && availableToolNames.has('python_exec')) {
+      initialToolChoice = 'python_exec';
+    }
     // Jev said the turn REQUIRES current web sources: open with the search tool
     // it picked (web / academic / X / GitHub) unless a media intent already won.
     const jevWebTool = webSearchIntent && webSearchIntent.force && availableToolNames.has(webSearchIntent.tool) ? webSearchIntent.tool : null;
@@ -1806,6 +1844,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       hasImageAttachment: toolContext.hasImageAttachment === true,
       availableToolNames,
     });
+    if (generatedArtifactRefs.length) {
+      const { requireGeneratedArtifactRead } = require('./agents/generated-artifact-followup');
+      const readProfile = requireGeneratedArtifactRead({ requiredTools: [], minimumToolCalls: {} }, generatedArtifactRefs);
+      executionProfile.requiredTools = readProfile.requiredTools;
+      executionProfile.minimumToolCalls = readProfile.minimumToolCalls;
+    }
     if (customGptAgentPolicy.requiresSkill && availableToolNames.has('run_skill')) {
       executionProfile.requiredTools = Array.from(new Set([...(executionProfile.requiredTools || []), 'run_skill']));
       executionProfile.minimumToolCalls = { ...(executionProfile.minimumToolCalls || {}), run_skill: 1 };
@@ -1816,10 +1860,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       chatId: toolContext.chatId || null,
       attachmentCount: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.length : 0,
       toolNames: tools.map((tool) => tool.name),
-      recentTurnCount: Array.isArray(history) ? history.length : 0,
+      recentTurnCount: Array.isArray(safeHistory) ? safeHistory.length : 0,
       model,
       context: {
-        history,
+        history: safeHistory,
         documents: Array.isArray(toolContext.fileIds)
           ? toolContext.fileIds.map((id) => ({ id, source: 'chat_attachment' }))
           : [],
@@ -1902,7 +1946,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     // One bounded transcript: do not duplicate/re-truncate the already-fitted
     // history in the inferred-goals block. The current query stays separate.
-    const historyForPrompt = buildAgentHistoryBlock(history);
+    const historyForPrompt = buildAgentHistoryBlock(safeHistory);
 
     let pluginPromptBlock = '';
     if (pluginLifecycle) {
@@ -1942,6 +1986,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         : '',
       openclawRuntimeBlock,
       buildExecutionProfilePrompt(executionProfile),
+      generatedArtifactRefs.length
+        ? require('./agents/generated-artifact-followup').buildGeneratedArtifactReadContext(generatedArtifactRefs, userQuery)
+        : '',
       __coworkRun
         ? [
           'Este chat tiene un workspace Cowork versionado. El trabajo debe ocurrir en archivos, no quedarse solo en una burbuja de chat.',
@@ -1953,7 +2000,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         : '',
       __coworkMemoryBlock,
       __appsBlock,
-      buildThreadWorkContext(history, userQuery, { includeTranscript: false }),
+      buildThreadWorkContext(safeHistory, userQuery, { includeTranscript: false }),
       'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
       'Estándar de calidad (nivel experto): en tareas difíciles piensa antes de actuar (descompón el problema, explicita supuestos y casos límite, verifica cada paso); responde con la conclusión primero; distingue lo que SABES de lo que INFIERES de lo que NO SABES y NUNCA inventes datos, cifras, citas, fuentes ni APIs; cuando dudes, verifica con una herramienta en vez de adivinar; admite y corrige tus errores directamente, sin adular.',
       'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',
@@ -2269,7 +2316,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         // (instead of only a terse "Pensando" / tool label) is what makes the
         // chat show its thinking like Claude. Sanitised + capped so JSON /
         // tool-state never leaks into the visible narration.
-        const reasoning = sanitizeReasoning(stepRec?.thought);
+        const reasoning = redactGeneratedArtifactText(sanitizeReasoning(stepRec?.thought));
 
         // Project each tool call as its own visible step so the timeline
         // reads "buscando X → leyendo fuente N → componiendo respuesta".
@@ -2328,7 +2375,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               // reasoning line, which the chat timeline already renders as the
               // step detail — so a failed step shows the cause, not just a
               // red badge.
-              const errText = extractObservationError(obs);
+              const errText = redactGeneratedArtifactText(extractObservationError(obs));
               const toolName = (s.toolCalls[0] && s.toolCalls[0].tool) || a?.tool || 'la herramienta';
               s.toolCalls[0].output = { ok, error: errText || 'falló la ejecución' };
               const prefix = `Error en ${toolName}: ${errText || 'falló la ejecución'}`;
@@ -2389,6 +2436,21 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     let finalAnswer = (result?.finalAnswer || '').trim()
       || 'No pude generar una respuesta verificable. Intenta reformular la pregunta.';
+    let stoppedReason = result?.stoppedReason || 'finalized';
+    if (generatedArtifactRefs.length) {
+      const { successfulToolCalls } = require('./agents/agentic-execution-profile');
+      const { missingRequestedArtifactFormats } = require('./agents/generated-artifact-followup');
+      const readCount = successfulToolCalls(Array.isArray(result?.steps) ? result.steps : []).get('python_exec') || 0;
+      const missing = missingRequestedArtifactFormats(generatedArtifactRefs, userQuery);
+      if (missing.length) {
+        finalAnswer = `La entrega más reciente de este chat no contiene ${missing.map((format) => `.${format}`).join(' ni ')}. No puedo comparar todos los archivos solicitados; adjunta el archivo que falta o pide regenerar la pareja.`;
+        stoppedReason = 'generated_artifact_read_failed';
+      } else if (readCount === 0) {
+        finalAnswer = 'No pude abrir y verificar los archivos generados en este chat. No puedo concluir si sus datos coinciden; vuelve a intentarlo.';
+        stoppedReason = 'generated_artifact_read_failed';
+      }
+      finalAnswer = redactGeneratedArtifactText(finalAnswer);
+    }
     try {
       finalAnswer = require('./computer/login-handoff').filterModelPasswordPaste(finalAnswer);
     } catch (_) { /* never block the answer on a filter miss */ }
@@ -2493,7 +2555,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     return {
       finalAnswer,
       persistedContent: buildPersistedContent(state, finalAnswer),
-      stoppedReason: result?.stoppedReason || 'finalized',
+      stoppedReason,
       steps: result?.steps || [],
       artifacts: state.artifacts,
       agentRun,
