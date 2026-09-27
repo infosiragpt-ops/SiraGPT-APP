@@ -2648,7 +2648,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         userId: user.id,
         fileIds: files,
         task,
-        goal: displayGoal,
         documentPolicy,
         signal: controller.signal,
         emit,
@@ -2658,7 +2657,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           emit({ type: 'step_start', id: currentStepId, label: 'Creando el documento con la transcripción', icon: 'file-text' });
         },
         buildTranscriptionTextFromFiles,
-        generateAutoDocument,
       });
       if (currentStepId) {
         emit({ type: 'step_done', id: currentStepId, ok: fast.handled });
