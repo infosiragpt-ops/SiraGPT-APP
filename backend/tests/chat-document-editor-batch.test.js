@@ -129,6 +129,54 @@ test('missing or corrupt second output prevents publishing a partially completed
   }
 });
 
+test('a second four-file edit keeps the PDF validation reason without publishing an incomplete batch', async (t) => {
+  const f = fixture(t, ['Prueba-Word.docx', 'Prueba-Excel.xlsx', 'Prueba-PowerPoint.pptx', 'Prueba-PDF.pdf']);
+  const stages = [];
+  const first = await f.run({ instruction: 'En los 4 documentos cambia “Proyecto inicial” por “Proyecto revisado”.' });
+  assert.equal(first.ok, true, first.message);
+  f.messages.unshift({ role: 'ASSISTANT', files: toAssistantFiles(first.artifacts) });
+  f.deps.runDocumentAgent = async (options) => {
+    f.calls.edits.push(options);
+    const file = options.files[0];
+    if (file.name.endsWith('.pdf')) {
+      options.onEvent({ type: 'tool_call', callId: 'pdf-inspect', tool: 'bash',
+        description: 'Inspeccionando PDF', args: { command: 'python3 inspect.py' } });
+      options.onEvent({ type: 'phase', phase: 'validate' });
+      options.onEvent({ type: 'output_invalid', name: '/workspace/private/output.pdf',
+        reason: 'pdf_edit_unverified', details: 'INTERNAL_SENTINEL' });
+      return { stoppedReason: 'final', outputs: [{ name: file.name, valid: false, buffer: Buffer.from('invalid') }] };
+    }
+    return { stoppedReason: 'final', outputs: [{ name: file.name, valid: true,
+      buffer: Buffer.concat([file.buffer, Buffer.from('|second-edit')]) }] };
+  };
+  const result = await f.run({ fileIds: [], onEvent: (stage) => stages.push(stage), instruction: 'En todos los documentos recién editados cambia solamente “Proyecto revisado” por “Proyecto final”. Conserva “Aprobado”, CONTROL_SIN_CAMBIOS, formatos y la fórmula de Excel. Devuélveme las cuatro versiones finales.' });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'DOCUMENT_EDIT_INCOMPLETE');
+  assert.equal(result.failureReason, 'pdf_edit_unverified');
+  assert.match(result.message, /PDF.*cambio literal/i);
+  assert.ok(stages.some((stage) => stage.step === 'tool_call' && stage.callId === 'pdf-inspect'
+    && stage.kind === 'terminal' && stage.status === 'running' && stage.label === 'Inspeccionando PDF'),
+  'the document-agent tool stage v2 must reach the caller');
+  assert.ok(stages.some((stage) => stage.label === 'Verificando el archivo editado'),
+    'the document-agent validation stage must still reach the caller');
+  assert.doesNotMatch(JSON.stringify(result), /\/workspace|INTERNAL_SENTINEL/);
+  assert.equal(f.calls.saved.length, 4, 'the three prepared second-pass files must stay unpublished');
+});
+
+test('unknown document-agent failure details never enter the batch result', async (t) => {
+  const f = fixture(t, ['Prueba-PDF.pdf', 'Prueba-Excel.xlsx']);
+  f.deps.runDocumentAgent = async (options) => {
+    options.onEvent({ type: 'output_invalid', name: '/workspace/private/output.pdf',
+      reason: 'pdf_edit_unverified:/workspace/private/INTERNAL_SENTINEL' });
+    return { stoppedReason: 'final', outputs: [{ name: options.files[0].name, valid: false, buffer: Buffer.from('invalid') }] };
+  };
+  const result = await f.run({ instruction: 'En ambos documentos cambia “Proyecto revisado” por “Proyecto final”.' });
+  assert.equal(result.code, 'DOCUMENT_EDIT_INCOMPLETE');
+  assert.equal(result.failureReason, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /\/workspace|INTERNAL_SENTINEL/);
+  assert.deepEqual(f.calls.saved, []);
+});
+
 test('a valid file beside an invalid sibling is not reported as total success', async (t) => {
   const f = fixture(t, ['Datos.xlsx']);
   f.deps.runDocumentAgent = async () => ({ outputs: [

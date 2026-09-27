@@ -59,6 +59,23 @@ const MESSAGES = Object.freeze({
   DOCUMENT_EDIT_INCOMPLETE: 'No pude verificar todos los archivos solicitados. No entregué el lote como terminado; los originales se conservan.',
 });
 
+// The document agent emits fixed validation reasons. Keep only these codes in
+// batch failures: tool output can contain paths, document text or private data.
+const OUTPUT_FAILURE_MESSAGES = Object.freeze({
+  empty_file: 'El archivo generado estaba vacío.',
+  identical_to_input: 'El archivo generado no contenía cambios.',
+  ooxml_structure: 'El archivo Office generado no se pudo reabrir.',
+  pdf_unreadable: 'El PDF generado no se pudo abrir.',
+  pdf_baseline_unreadable: 'La versión PDF de origen no se pudo leer.',
+  pdf_source_text_missing: 'El texto solicitado no estaba en la versión PDF de origen.',
+  pdf_edit_unverified: 'El PDF no contiene un cambio literal verificable.',
+});
+
+function safeOutputFailureReason(reasons) {
+  if (!reasons.length || typeof reasons[0] !== 'string' || reasons.some((reason) => reason !== reasons[0])) return null;
+  return Object.hasOwn(OUTPUT_FAILURE_MESSAGES, reasons[0]) ? reasons[0] : null;
+}
+
 function parseMessageFiles(files) {
   if (!files) return [];
   if (Array.isArray(files)) return files;
@@ -706,7 +723,10 @@ async function prepareAndPublishDocumentBatch(options, sources, files, deps) {
       },
     } }, { sources: [sources[index]], files: [files[index]], batchNames: sources.map((source) => source.name) });
     if (!result?.ok || prepared.length !== start + 1) {
-      return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', message: `${MESSAGES.DOCUMENT_EDIT_INCOMPLETE} Revisa la petición para ${sources[index].name}.` };
+      const failureReason = result?.failureReason && Object.hasOwn(OUTPUT_FAILURE_MESSAGES, result.failureReason)
+        ? result.failureReason : null;
+      return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', ...(failureReason ? { failureReason } : {}),
+        message: `${MESSAGES.DOCUMENT_EDIT_INCOMPLETE} Revisa la petición para ${sources[index].name}.${failureReason ? ` ${OUTPUT_FAILURE_MESSAGES[failureReason]}` : ''}` };
     }
   }
   options.signal?.throwIfAborted();
@@ -1001,6 +1021,7 @@ async function runResolvedDocumentEdit({
 
     const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
     let result;
+    const outputFailureReasons = [];
     try {
       result = await deps.runDocumentAgent({
         files,
@@ -1012,7 +1033,12 @@ async function runResolvedDocumentEdit({
         maxIterations: DOC_AGENT_MAX_ITERATIONS,
         userId,
         chatId,
-        onEvent: (event) => { const stage = relayStage(event); if (stage) emit(stage); },
+        onEvent: (event) => {
+          if (event?.type === 'retry') outputFailureReasons.length = 0;
+          if (event?.type === 'output_invalid') outputFailureReasons.push(event.reason);
+          const stage = relayStage(event);
+          if (stage) emit(stage);
+        },
       });
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -1027,9 +1053,12 @@ async function runResolvedDocumentEdit({
     if (!outputs.length && result?.noChanges && cleanSummary(result.finalText)) {
       return { ok: false, code: 'NO_CHANGES_NEEDED', message: cleanSummary(result.finalText) };
     }
-    if (!outputs.length) return { ok: false, code: 'NO_VALID_OUTPUT', message: MESSAGES.NO_VALID_OUTPUT };
+    const failureReason = safeOutputFailureReason(outputFailureReasons);
+    if (!outputs.length) return { ok: false, code: 'NO_VALID_OUTPUT', ...(failureReason ? { failureReason } : {}), message: MESSAGES.NO_VALID_OUTPUT };
     if (outputs.length !== candidates.length || outputs.length !== 1 || (result.stoppedReason && result.stoppedReason !== 'final')) {
-      return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', message: MESSAGES.DOCUMENT_EDIT_INCOMPLETE };
+      return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE',
+        ...(outputs.length !== candidates.length && failureReason ? { failureReason } : {}),
+        message: MESSAGES.DOCUMENT_EDIT_INCOMPLETE };
     }
 
     const artifacts = outputs.map((out) => {
