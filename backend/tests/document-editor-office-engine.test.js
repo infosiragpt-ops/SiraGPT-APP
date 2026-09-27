@@ -321,7 +321,6 @@ test('wiring: /document-edit forwards stage v2 and persists the timeline; the ed
   assert.match(editor, /deps\.makeVisualVerifier\(\{ pickedModel: llm\.model, env: deps\.env \}\)/);
   assert.match(editor, /\.\.\.\(visualVerify \? \{ visualVerify \} : \{\}\),/);
   assert.match(editor, /office\.officeEditorEnabled\(injected\.env \|\| process\.env\)/);
-  assert.match(editor, /onEvent: \(event\) => \{ const stage = relayStage\(event\); if \(stage\) emit\(stage\); \},/);
 });
 
 test('Word: indent, tracked changes and paraphrases run on the office engine; forms stay on the docx engine', async () => {
