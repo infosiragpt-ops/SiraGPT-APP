@@ -712,6 +712,7 @@ test('AgentRunner preserves a credit failure instead of reporting missing SAV an
 });
 
 test('AgentRunner reports no output rather than a missing pair when the model made no files', async () => {
+  const events = [];
   const client = scriptedClient([
     { content: 'No pude crear los archivos.' },
     { content: 'Sigo sin poder crear los archivos.' },
@@ -721,10 +722,13 @@ test('AgentRunner reports no output rather than a missing pair when the model ma
     instruction: 'Genera un SAV de SPSS y un Excel con 20 preguntas.',
     client, driver: 'local', maxIterations: 1,
     userId: 'no-output-user', chatId: 'no-output-chat',
+    onEvent: (event) => events.push(event),
   });
   assert.equal(ran.ok, false);
   assert.deepEqual(ran.artifacts, []);
   assert.equal(ran.stoppedReason, 'no_output');
+  assert.ok(events.some((event) => event.type === 'outputs' && event.count === 0 && event.label === 'Sin verificar'));
+  assert.equal(events.some((event) => event.type === 'outputs' && event.label === 'Listo'), false);
 });
 
 test('AgentRunner never publishes a structurally valid XLSX after verification_failed', async () => {

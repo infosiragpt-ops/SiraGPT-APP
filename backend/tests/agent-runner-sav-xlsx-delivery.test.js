@@ -11,6 +11,7 @@ const {
   createSavXlsxFinalEventGate,
 } = require('../src/services/agent-runner/sav-xlsx-delivery');
 const { persistOutputs } = require('../src/services/agent-runner/artifacts');
+const { needsVerification } = require('../src/services/agent-runner/verify');
 
 const PROMPT = 'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel. Usa solo datos sintéticos.';
 const GENERATE_PAIR = [
@@ -103,6 +104,19 @@ test('AgentRunner never emits model success before the SAV/Excel bytes pass', ()
   assert.equal(acceptedEvents.length, 0);
   accepted.release({ ok: true, result: { stoppedReason: 'final' } });
   assert.deepEqual(acceptedEvents, [{ type: 'final', text: 'Listo.', label: 'Listo', verified: true }]);
+
+  const blockedEvents = [];
+  const blocked = createSavXlsxFinalEventGate(PROMPT, (event) => blockedEvents.push(event));
+  blocked.onEvent({ type: 'final', text: 'Listo.', label: 'Listo', verified: true });
+  const pendingRun = {
+    stoppedReason: 'final',
+    steps: [{ tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/muestra.xlsx'] }],
+  };
+  assert.equal(needsVerification(pendingRun.steps).needed, true);
+  blocked.release({ ok: true, result: pendingRun, deliveryBlocked: needsVerification(pendingRun.steps).needed });
+  assert.equal(blockedEvents.length, 1);
+  assert.equal(blockedEvents[0].verified, false, 'a pending visual check cannot announce success');
+  assert.equal(blockedEvents[0].label, 'Sin verificar');
 });
 
 test('AgentRunner final event gate leaves other document turns unchanged', () => {
@@ -119,24 +133,27 @@ test('AgentRunner emits no downloadable Excel card when the requested SAV is mis
   const generated = spawnSync('python3', ['-c', GENERATE_PAIR, root, '20', '0'], { encoding: 'utf8' });
   assert.equal(generated.status, 0, generated.stderr);
   const onlyExcel = pairOutputs(root).filter((output) => output.name.endsWith('.xlsx'));
-  const gated = await applySavXlsxDeliveryGate({
-    instruction: PROMPT,
-    outputs: onlyExcel,
-    result: { stoppedReason: 'final', finalText: 'Listo.' },
-    sandbox: makeSandbox(root),
-  });
-  assert.equal(gated.ok, false);
-  assert.equal(gated.result.stoppedReason, 'verification_failed');
-  assert.equal(gated.outputs[0].valid, false);
+  for (const instruction of [PROMPT, 'dame un documentos de spss y un excel. Usa solo datos sintéticos.']) {
+    const gated = await applySavXlsxDeliveryGate({
+      instruction,
+      outputs: onlyExcel,
+      result: { stoppedReason: 'final', finalText: 'Listo.' },
+      sandbox: makeSandbox(root),
+    });
+    assert.equal(gated.active, true);
+    assert.equal(gated.ok, false);
+    assert.equal(gated.result.stoppedReason, 'verification_failed');
+    assert.equal(gated.outputs[0].valid, false);
 
-  let saves = 0;
-  const events = [];
-  const artifacts = await persistOutputs({
-    outputs: gated.outputs,
-    saveArtifact: () => { saves += 1; return { id: 'unexpected', filename: 'muestra.xlsx', downloadUrl: '/unexpected' }; },
-    onEvent: (event) => events.push(event),
-  });
-  assert.equal(saves, 0);
-  assert.deepEqual(artifacts, []);
-  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+    let saves = 0;
+    const events = [];
+    const artifacts = await persistOutputs({
+      outputs: gated.outputs,
+      saveArtifact: () => { saves += 1; return { id: 'unexpected', filename: 'muestra.xlsx', downloadUrl: '/unexpected' }; },
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(saves, 0);
+    assert.deepEqual(artifacts, []);
+    assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+  }
 });

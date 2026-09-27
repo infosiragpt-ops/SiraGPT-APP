@@ -71,6 +71,7 @@ test('F2: a direct SPSS document and Excel request claims the document runner', 
     'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel',
     'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel. Usa solo datos sintéticos.',
     'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel. Usa solo datos sintéticos.',
+    'dame un documentos de spss y un excel. Usa solo datos sintéticos.',
   ];
   for (const prompt of requests) {
     assert.equal(agentRunner.shouldRunAgentRunner({ text: prompt, fileIds: [], hasPriorArtifacts: false }), true, prompt);

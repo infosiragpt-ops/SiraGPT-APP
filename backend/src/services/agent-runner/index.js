@@ -956,7 +956,6 @@ async function runAgentRunner({
     if (pairGate.active && !pairGate.ok && result.stoppedReason === 'verification_failed') {
       onEvent({ type: 'output_invalid', name: 'SAV/Excel', reason: 'sav_xlsx_matrix_invalid' });
     }
-    pairFinalEvents.release({ ok: pairGate.ok, result });
 
     // An edit that ends with its visual verification failed reaches the user
     // unverified: surface it to the admin turn-failure tracker.
@@ -970,6 +969,7 @@ async function runAgentRunner({
       result = { ...result, finalText: withVisionHonesty(result.finalText, lastVerify) };
     }
     const delivery = assessDelivery(result);
+    pairFinalEvents.release({ ok: pairGate.ok, result, deliveryBlocked: delivery.blocked });
     const deliverableOutputs = delivery.blocked
       ? outputs.map((output) => output.valid === false ? output : {
         ...output,
@@ -982,7 +982,8 @@ async function runAgentRunner({
       type: 'outputs',
       count: delivery.blocked ? 0 : outputs.length,
       names: delivery.blocked ? [] : outputs.map((o) => o.name),
-      label: delivery.verificationNeeded ? 'Sin verificar' : delivery.blocked ? 'Incompleto' : 'Listo',
+      label: delivery.verificationNeeded || (pairGate.active && !pairGate.ok)
+        ? 'Sin verificar' : delivery.blocked ? 'Incompleto' : 'Listo',
     });
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.
