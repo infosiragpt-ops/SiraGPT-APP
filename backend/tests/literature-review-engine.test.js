@@ -10,6 +10,7 @@ require('./research-discipline-routing.test');
 require('./research-library.test');
 require('./research-saved-search-alerts.test');
 require('./research-quality-agents.test');
+require('./research-query-english.test');
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

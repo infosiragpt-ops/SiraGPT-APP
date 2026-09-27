@@ -44,7 +44,7 @@ const LEXICON = [
   },
   { es: ['gestion', 'gestión', 'administracion', 'administración'], en: ['management', 'administration'] },
   { es: ['empresa', 'empresas', 'empresarial'], en: ['business', 'enterprise', 'firm', 'company'] },
-  { es: ['educacion', 'educación', 'educativo'], en: ['education', 'educational', 'learning'] },
+  { es: ['educacion', 'educación', 'educativo', 'educativa', 'educativos', 'educativas'], en: ['education', 'educational', 'learning'] },
   { es: ['salud', 'sanitario'], en: ['health', 'healthcare'] },
   { es: ['aprendizaje'], en: ['learning'] },
   { es: ['inteligencia artificial', 'ia'], en: ['artificial intelligence', 'ai', 'machine learning'] },
@@ -77,6 +77,59 @@ const LEXICON = [
   { es: ['vacuna', 'vacunacion', 'vacunación'], en: ['vaccine', 'vaccination'] },
   { es: ['cancer', 'cáncer'], en: ['cancer'] },
   { es: ['diabetes'], en: ['diabetes'] },
+  // Health, people, technology and society topics seen in real requests: the
+  // English form is what English-only indexes (arXiv, DBLP, bioRxiv) match.
+  { es: ['telemedicina', 'telesalud', 'teleconsulta'], en: ['telemedicine', 'telehealth', 'teleconsultation'] },
+  { es: ['salud mental'], en: ['mental health'] },
+  { es: ['hipertension', 'hipertensión'], en: ['hypertension'] },
+  { es: ['obesidad', 'sobrepeso'], en: ['obesity', 'overweight'] },
+  { es: ['ansiedad'], en: ['anxiety'] },
+  { es: ['depresion', 'depresión'], en: ['depression'] },
+  { es: ['embarazo', 'gestante', 'gestantes'], en: ['pregnancy', 'pregnant women'] },
+  { es: ['enfermeria', 'enfermería'], en: ['nursing'] },
+  { es: ['atencion primaria', 'atención primaria'], en: ['primary care', 'primary health care'] },
+  { es: ['nutricion', 'nutrición', 'alimentacion', 'alimentación'], en: ['nutrition', 'diet'] },
+  { es: ['enfermedad', 'enfermedades'], en: ['disease', 'diseases'] },
+  { es: ['tratamiento', 'tratamientos'], en: ['treatment', 'therapy'] },
+  { es: ['paciente', 'pacientes'], en: ['patient', 'patients'] },
+  { es: ['medicina'], en: ['medicine'] },
+  { es: ['clinico', 'clínico', 'clinica', 'clínica'], en: ['clinical'] },
+  { es: ['ciencia', 'ciencias', 'cientifico', 'científico'], en: ['science', 'scientific'] },
+  { es: ['ninos', 'niños', 'infancia', 'infantil'], en: ['children', 'childhood'] },
+  { es: ['adolescentes', 'adolescencia'], en: ['adolescents', 'adolescence'] },
+  { es: ['adultos mayores', 'envejecimiento'], en: ['older adults', 'aging'] },
+  { es: ['estudiantes', 'alumnos'], en: ['students'] },
+  { es: ['docentes', 'profesores', 'maestros'], en: ['teachers'] },
+  { es: ['mujeres'], en: ['women'] },
+  { es: ['aprendizaje automatico', 'aprendizaje automático'], en: ['machine learning'] },
+  { es: ['aprendizaje profundo'], en: ['deep learning'] },
+  { es: ['redes neuronales', 'red neuronal'], en: ['neural networks', 'neural network'] },
+  { es: ['vision por computadora', 'visión por computadora', 'vision artificial', 'visión artificial'], en: ['computer vision'] },
+  { es: ['procesamiento de lenguaje natural'], en: ['natural language processing'] },
+  { es: ['modelos de lenguaje', 'modelo de lenguaje'], en: ['language models', 'large language models'] },
+  { es: ['algoritmo', 'algoritmos'], en: ['algorithm', 'algorithms'] },
+  { es: ['robotica', 'robótica'], en: ['robotics'] },
+  { es: ['internet de las cosas'], en: ['internet of things'] },
+  { es: ['computacion en la nube', 'computación en la nube'], en: ['cloud computing'] },
+  { es: ['cadena de bloques'], en: ['blockchain'] },
+  { es: ['comercio electronico', 'comercio electrónico'], en: ['e-commerce', 'electronic commerce'] },
+  { es: ['violencia'], en: ['violence'] },
+  { es: ['migracion', 'migración', 'migrantes'], en: ['migration', 'migrants'] },
+  { es: ['contaminacion', 'contaminación'], en: ['pollution', 'contamination'] },
+  { es: ['mineria', 'minería'], en: ['mining'] },
+  { es: ['contabilidad'], en: ['accounting'] },
+  { es: ['politicas publicas', 'políticas públicas'], en: ['public policy'] },
+  { es: ['seguridad alimentaria'], en: ['food security'] },
+  { es: ['biodiversidad'], en: ['biodiversity'] },
+  { es: ['calidad de vida'], en: ['quality of life'] },
+  { es: ['impacto', 'impactos'], en: ['impact', 'impacts'] },
+  { es: ['efecto', 'efectos'], en: ['effect', 'effects'] },
+  { es: ['relacion', 'relación', 'relaciones'], en: ['relationship', 'relationships'] },
+  { es: ['factores', 'factor'], en: ['factors', 'factor'] },
+  { es: ['riesgo', 'riesgos'], en: ['risk', 'risks'] },
+  { es: ['programa', 'programas'], en: ['program', 'programs'] },
+  { es: ['vida'], en: ['life'] },
+  { es: ['investigacion', 'investigación', 'investigaciones'], en: ['research'] },
 ];
 
 // Study-type detectors (bilingual). Drives both filter extraction and the
@@ -96,8 +149,10 @@ const stripDiacritics = _stripDia;
 
 function detectLanguage(text) {
   const t = ` ${String(text || '').toLowerCase()} `;
-  const esHits = (t.match(/[áéíóúñ¿¡]| de | la | el | los | las | con | por | para | gestión | búscame | artículos /g) || []).length;
-  const enHits = (t.match(/ the | of | and | with | for | management | research | study /g) || []).length;
+  // Accentless Spanish requests («busca papers sobre telemedicina») used to
+  // read as English, so no English variant was built for English-only indexes.
+  const esHits = (t.match(/[áéíóúñ¿¡]| de | la | el | los | las | con | por | para | sobre | del | en | y | que | una? | como | entre | busca | buscar | dame | gestión | búscame | artículos | articulos | estudios |[a-z]cion | [a-z]+dad /g) || []).length;
+  const enHits = (t.match(/ the | of | and | with | for | on | in | about | management | research | study | studies /g) || []).length;
   if (esHits > enHits) return 'es';
   if (enHits > esHits) return 'en';
   return esHits > 0 ? 'es' : 'en';
@@ -250,6 +305,54 @@ function expandTerms(terms, fullTextLower) {
   return useful;
 }
 
+// Productive Latin suffixes for Spanish research vocabulary without a lexicon
+// entry (educación → education, universidad → university, biología → biology).
+const ES_EN_SUFFIXES = [
+  [/cion$/, 'tion'],
+  [/ciones$/, 'tions'],
+  [/(?<=[a-z]{3})dades$/, 'ties'],
+  [/(?<=[a-z]{3})dad$/, 'ty'],
+  [/(?<=[a-z]{3})tiv[oa]s?$/, 'tive'],
+  [/logia$/, 'logy'],
+  [/(?<=[a-z]{3})encia$/, 'ence'],
+  [/(?<=[a-z]{3})ancia$/, 'ance'],
+  [/(?<=[a-z]{3})ismo$/, 'ism'],
+];
+
+function suffixToEnglish(term) {
+  for (const [re, replacement] of ES_EN_SUFFIXES) {
+    // cualitativa → qualitative, cuantitativo → quantitative.
+    if (re.test(term)) return term.replace(re, replacement).replace(/^cua(?=nt|lit)/, 'qua');
+  }
+  return term;
+}
+
+/**
+ * English-only rendering of a Spanish topic: lexicon translations first, then
+ * the remaining terms through the suffix rules (unchanged when none applies,
+ * e.g. «rural», «covid»). English-only indexes search with this query.
+ */
+function buildEnglishQuery(terms, fullTextLower) {
+  const words = [];
+  const covered = new Set();
+  for (const entry of LEXICON) {
+    if (!lexiconEntryMatches(entry, terms, fullTextLower)) continue;
+    words.push(entry.en[0].toLowerCase());
+    for (const form of [...entry.es, ...entry.en]) {
+      for (const word of stripDiacritics(form.toLowerCase()).split(/\s+/)) covered.add(word);
+    }
+  }
+  for (const term of terms) {
+    if (!covered.has(term)) words.push(suffixToEnglish(term));
+  }
+  // «salud mental» also matches «salud»: drop «health» once «mental health» is there.
+  const unique = Array.from(new Set(words));
+  return unique
+    .filter((word) => !unique.some((other) => other !== word && ` ${other} `.includes(` ${word} `)))
+    .join(' ')
+    .trim();
+}
+
 /**
  * analyzeQuery — full structured search plan for a raw research request.
  *
@@ -293,12 +396,17 @@ function analyzeQuery(rawQuery, opts = {}) {
     if (v && !searchQueries.includes(v)) searchQueries.push(v);
   };
   pushQ(coreQuery);
+  const englishQuery = language === 'es' ? buildEnglishQuery(terms, fullLower) : '';
+  const hasEnglishQuery = Boolean(englishQuery) && englishQuery !== coreQuery;
   if (expansions.length) {
     pushQ(`${coreQuery} ${expansions.slice(0, 8).join(' ')}`);
-    // English-leaning: prefer expansions that look English (ascii-only words).
-    const englishish = expansions.filter((e) => /^[a-z0-9 -]+$/.test(e));
-    if (englishish.length) pushQ(englishish.slice(0, 8).join(' '));
+    if (!hasEnglishQuery) {
+      // English-leaning: prefer expansions that look English (ascii-only words).
+      const englishish = expansions.filter((e) => /^[a-z0-9 -]+$/.test(e));
+      if (englishish.length) pushQ(englishish.slice(0, 8).join(' '));
+    }
   }
+  if (hasEnglishQuery) pushQ(englishQuery);
   if (!searchQueries.length) pushQ(normalized);
 
   return {
@@ -311,7 +419,10 @@ function analyzeQuery(rawQuery, opts = {}) {
     discipline,
     expansions,
     conceptGroups,
-    searchQueries: searchQueries.slice(0, maxQueries),
+    englishQuery: hasEnglishQuery ? englishQuery : null,
+    searchQueries: hasEnglishQuery && maxQueries > 1 && searchQueries.indexOf(englishQuery) >= maxQueries
+      ? [...searchQueries.slice(0, maxQueries - 1), englishQuery]
+      : searchQueries.slice(0, maxQueries),
   };
 }
 
@@ -322,5 +433,5 @@ module.exports = {
   extractFilters,
   expandTerms,
   STUDY_TYPES,
-  _internal: { stripDiacritics, retrievalText, lexiconEntryMatches, matchedConceptGroups, STOPWORDS, LEXICON },
+  _internal: { stripDiacritics, retrievalText, lexiconEntryMatches, matchedConceptGroups, buildEnglishQuery, suffixToEnglish, STOPWORDS, LEXICON },
 };
