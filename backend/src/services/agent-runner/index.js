@@ -99,6 +99,7 @@ const MAX_OUTPUT_RETRIES = 3;
 const { trySurgicalPresentationFollowup } = require('./surgical-followup');
 const { isScopedSlideMutation, parsePresentationTitleEdit } = require('../document-editing/presentation-title-intent');
 const { verifyContentChanged, verifySlideTitleEdit, assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
+const { validateEditedPdf } = require('../doc-agent/pdf-output-validation');
 
 /* ── F8 — memoria híbrida + skills + cliente MCP (hooks) ────────────────────
  * Los módulos viven en ./memory, ./skills y ./mcp; este helper solo ORQUESTA:
@@ -330,6 +331,13 @@ function resolveOutputEditSource(name, sources) {
   return relevant.length === 1 ? relevant[0] : null;
 }
 
+function isExplicitPdfConversion(instruction, files = []) {
+  const hasOtherSource = files.some((file) => Buffer.isBuffer(file?.buffer) && !/\.pdf$/iu.test(String(file.name || '')));
+  const hasPdfSource = files.some((file) => Buffer.isBuffer(file?.buffer) && /\.pdf$/iu.test(String(file.name || '')));
+  return hasOtherSource && !hasPdfSource
+    && /\b(?:convierte|convertir|convert|exporta|exportar|export|guarda|guardar|save)\b[^.!?\n]{0,120}\b(?:a|al|en|como|to|as)\s+(?:(?:un|el|a)\s+)?(?:archivo\s+)?pdf\b/iu.test(String(instruction || ''));
+}
+
 async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}) {
   const outputs = await sandbox.collectOutputs();
   for (const out of outputs) {
@@ -356,6 +364,26 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
     const ext = String(out.name || '').split('.').pop().toLowerCase();
     const sources = (editContext.files || []).filter((file) => String(file.name || '').toLowerCase().endsWith(`.${ext}`));
     const source = resolveOutputEditSource(out.name, sources);
+    if (out.valid && ext === 'pdf') {
+      // The general agent also edits PDFs, outside the document-agent route.
+      // Byte inequality proves neither a readable PDF nor a requested edit.
+      const requiresPdfSource = editContext.isEdit && !isExplicitPdfConversion(editContext.instruction, editContext.files);
+      let proof = requiresPdfSource
+        ? (source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: sources.length ? 'source_ambiguous' : 'source_missing' })
+        : { passed: true };
+      if (proof.passed) {
+        const verdict = await validateEditedPdf({
+          originalBuffer: requiresPdfSource ? source.buffer : null,
+          editedBuffer: out.buffer,
+          instruction: editContext.instruction,
+        });
+        proof = { passed: verdict.ok, reason: verdict.reason };
+      }
+      out.valid = proof.passed;
+      out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_pdf_edit' };
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
+      continue;
+    }
     if (out.valid && sources.length && editContext.isEdit) {
       let proof = source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: 'source_ambiguous' };
       if (proof.passed && ext === 'pptx') {
