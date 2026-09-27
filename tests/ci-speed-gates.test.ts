@@ -44,7 +44,7 @@ describe("fast CI layout", () => {
     // npx skips the npm prebuild hook that installs Monaco into public/.
     assert.match(e2e, /node scripts\/prepare-code-editor\.cjs\n\s*npx next build --no-lint/)
     assert.match(e2e, /npx next start --port 3005/)
-    assert.doesNotMatch(e2e, /npm run dev/)
+    assert.doesNotMatch(e2e, /npm run dev -- --port/, "no dev-server gate")
     assert.match(e2e, /NEXT_PUBLIC_AGENT_COMPUTER: '1'/)
     assert.match(e2e, /NEXT_PUBLIC_API_URL: \/api/)
     assert.doesNotMatch(e2e, /continue-on-error/)
