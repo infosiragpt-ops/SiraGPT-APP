@@ -13,8 +13,15 @@
  * Design constraints:
  *   - Never throws: every failure path degrades to a warn log. The watchdog
  *     must not become another thing that needs a watchdog.
- *   - Idempotent + cooled down per run id, so overlapping scans or repeated
- *     invocations don't spam the channels.
+ *   - ONE alert per run and severity, persisted (AuditLog `stale_run_alerted`,
+ *     resourceId `<kind>:<runId>`): restarts and later sweeps never re-alert
+ *     a run already reported (prod 2026-09-26: zombie runs re-alerted
+ *     `critical` on every sweep — ~25 red lines per restart). The in-memory
+ *     cooldown stays as a first-level cache.
+ *   - Zombies are closed: a run with no update for STALE_RUN_ABANDON_HOURS is
+ *     marked terminal («abandonado») — agent task → cancelled, codex run →
+ *     cancelled with `error` — and recorded once (`stale_run_abandoned`). The
+ *     update is conditional on the row not having moved since the scan.
  *   - Degrades to no-op when prisma/tables are unavailable (tests, boot).
  *
  * Env:
@@ -22,12 +29,18 @@
  *   STALE_RUN_WARN_MINUTES=15            threshold for 'warn' severity
  *   STALE_RUN_CRITICAL_MINUTES=45        threshold for 'error' severity
  *   STALE_RUN_ALERT_COOLDOWN_MINUTES=30  min minutes between alerts per run
+ *   STALE_RUN_ABANDON_HOURS=24           close runs silent for this long (0 = never)
  */
 
 const DEFAULT_WARN_MS = 15 * 60 * 1000;
 const DEFAULT_CRITICAL_MS = 45 * 60 * 1000;
 const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000;
+const DEFAULT_ABANDON_HOURS = 24;
 const MAX_ALERTS_PER_SCAN = 25;
+const MAX_ABANDONS_PER_SCAN = 100;
+const ALERTED_ACTION = 'stale_run_alerted';
+const ABANDONED_ACTION = 'stale_run_abandoned';
+const SEVERITY_RANK = { warn: 1, critical: 2 };
 
 const TERMINAL_AGENT_TASK = new Set(['completed', 'cancelled', 'error']);
 // CodexRun terminals include done/error/cancelled; queued is excluded because
@@ -58,6 +71,13 @@ function thresholds(env = process.env) {
 
 function cooldownMs(env = process.env) {
   return readPositiveInt(env.STALE_RUN_ALERT_COOLDOWN_MINUTES, DEFAULT_COOLDOWN_MS / 60000) * 60000;
+}
+
+/** Hours of silence after which a non-terminal run is closed as abandoned (0 = never). */
+function abandonMs(env = process.env) {
+  const raw = env.STALE_RUN_ABANDON_HOURS;
+  if (raw !== undefined && raw !== null && String(raw).trim() === '0') return 0;
+  return readPositiveInt(raw, DEFAULT_ABANDON_HOURS) * 3600 * 1000;
 }
 
 function isDisabled(env = process.env) {
@@ -112,7 +132,7 @@ async function scanStaleRows(model, where, ageOf, thresholdsOpts, limit = 50) {
   try {
     rows = await model.findMany({
       where,
-      select: { id: true, userId: true, updatedAt: true, createdAt: true },
+      select: { id: true, userId: true, status: true, updatedAt: true, createdAt: true },
       orderBy: { updatedAt: 'asc' },
       take: limit,
     });
@@ -164,6 +184,74 @@ async function notifyOwner(prisma, userId, kind, runId, ageMs, severity) {
   }
 }
 
+/** Persisted «already alerted» severities for these candidates (key → rank). */
+async function loadAlertedRanks(prisma, keys) {
+  const out = new Map();
+  if (!keys.length || !prisma?.auditLog || typeof prisma.auditLog.findMany !== 'function') return out;
+  try {
+    const rows = await prisma.auditLog.findMany({
+      where: { action: ALERTED_ACTION, resourceType: 'stale_run', resourceId: { in: keys } },
+      select: { resourceId: true, metadata: true },
+      take: keys.length * 4,
+    });
+    for (const row of rows) {
+      const rank = SEVERITY_RANK[row.metadata && row.metadata.severity] || 1;
+      out.set(row.resourceId, Math.max(out.get(row.resourceId) || 0, rank));
+    }
+  } catch { /* table unavailable → in-memory cooldown only */ }
+  return out;
+}
+
+async function recordAudit(prisma, { action, key, candidate, extra = {} }) {
+  if (!prisma?.auditLog || typeof prisma.auditLog.create !== 'function') return false;
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorType: 'system',
+        actorId: null,
+        actorName: 'stale-run-watchdog',
+        resourceType: 'stale_run',
+        resourceId: key,
+        action,
+        metadata: {
+          kind: candidate.kind,
+          runId: String(candidate.id),
+          userId: candidate.userId || null,
+          status: candidate.status || null,
+          ageSeconds: Math.round(candidate.ageMs / 1000),
+          ...extra,
+        },
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Close a zombie run: terminal status + reason, only if the row has not
+ * moved since the scan (same status + updatedAt). Returns true when closed.
+ */
+async function abandonRun(prisma, candidate) {
+  const hours = Math.round(candidate.ageMs / 3600000);
+  const reason = `abandonado: sin actividad desde hace ${hours} h (stale-run-watchdog)`;
+  const where = { id: candidate.id, status: candidate.status, updatedAt: new Date(candidate.updatedAt) };
+  const now = new Date(_now());
+  try {
+    if (candidate.kind === 'agent_task') {
+      if (typeof prisma.agentTask?.updateMany !== 'function') return false;
+      const res = await prisma.agentTask.updateMany({ where, data: { status: 'cancelled', cancelledAt: now } });
+      return Number(res && res.count) > 0;
+    }
+    if (typeof prisma.codexRun?.updateMany !== 'function') return false;
+    const res = await prisma.codexRun.updateMany({ where, data: { status: 'cancelled', finishedAt: now, error: reason } });
+    return Number(res && res.count) > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * scanStaleRuns — one pass over both tables. Returns a summary suitable for
  * cron meta / admin health surfaces.
@@ -175,6 +263,8 @@ async function scanStaleRuns(opts = {}) {
     alerted: 0,
     notifiedUsers: 0,
     suppressedByCooldown: 0,
+    alreadyAlerted: 0,
+    abandoned: 0,
     skipped: null,
   };
   if (isDisabled(env)) {
@@ -216,11 +306,47 @@ async function scanStaleRuns(opts = {}) {
   const cooldown = cooldownMs(env);
   const now = _now();
 
-  for (const candidate of candidates.slice(0, MAX_ALERTS_PER_SCAN)) {
+  // Zombies first: closed as «abandonado», recorded once, never alerted again.
+  const abandonAfter = abandonMs(env);
+  const live = [];
+  const abandonedIds = [];
+  for (const candidate of candidates) {
+    if (abandonAfter > 0 && candidate.ageMs >= abandonAfter && abandonedIds.length < MAX_ABANDONS_PER_SCAN) {
+      // eslint-disable-next-line no-await-in-loop
+      const closed = await abandonRun(prisma, candidate);
+      if (closed) {
+        const key = `${candidate.kind}:${candidate.id}`;
+        // eslint-disable-next-line no-await-in-loop
+        await recordAudit(prisma, { action: ABANDONED_ACTION, key, candidate, extra: { reason: 'abandonado', previousStatus: candidate.status || null } });
+        _alertedAt.delete(key);
+        abandonedIds.push(key);
+        continue;
+      }
+    }
+    live.push(candidate);
+  }
+  summary.abandoned = abandonedIds.length;
+  if (abandonedIds.length) {
+    try {
+      console.log(`[stale-run-watchdog] ${abandonedIds.length} run(s) sin actividad cerrados como «abandonado»: ${abandonedIds.slice(0, 10).join(', ')}${abandonedIds.length > 10 ? '…' : ''}`);
+    } catch { /* never throw */ }
+  }
+
+  const window = live.slice(0, MAX_ALERTS_PER_SCAN);
+  const alertedRanks = await loadAlertedRanks(prisma, window.map((c) => `${c.kind}:${c.id}`));
+
+  for (const candidate of window) {
     const key = `${candidate.kind}:${candidate.id}`;
     const lastAlerted = _alertedAt.get(key) || 0;
     if (now - lastAlerted < cooldown) {
       summary.suppressedByCooldown += 1;
+      continue;
+    }
+    // Persisted dedupe: one alert per run and severity, across restarts.
+    const alreadyRank = alertedRanks.get(key) || 0;
+    if (alreadyRank >= (SEVERITY_RANK[candidate.severity] || 1)) {
+      _alertedAt.set(key, now);
+      summary.alreadyAlerted += 1;
       continue;
     }
 
@@ -246,9 +372,14 @@ async function scanStaleRuns(opts = {}) {
       } catch { /* never throw */ }
     }
 
-    const notified = await notifyOwner(prisma, candidate.userId, candidate.kind, candidate.id, candidate.ageMs, candidate.severity);
+    // The owner hears about a stalled run once (its first alert), never on
+    // the escalation to critical.
+    const notified = alreadyRank === 0
+      ? await notifyOwner(prisma, candidate.userId, candidate.kind, candidate.id, candidate.ageMs, candidate.severity)
+      : false;
     if (notified) summary.notifiedUsers += 1;
 
+    await recordAudit(prisma, { action: ALERTED_ACTION, key, candidate, extra: { severity: candidate.severity } });
     _alertedAt.set(key, now);
     summary.alerted += 1;
   }
@@ -270,6 +401,9 @@ module.exports = {
   MAX_ALERTS_PER_SCAN,
   TERMINAL_AGENT_TASK,
   NON_TERMINAL_CODEX_RUN,
+  ALERTED_ACTION,
+  ABANDONED_ACTION,
+  abandonMs,
   cooldownMs,
   scanStaleRuns,
   severityFor,

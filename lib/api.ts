@@ -19,6 +19,14 @@ import type {
   AdminTurnFailureRecent,
   AdminTurnFailureStats,
 } from "./admin/turn-failures-types"
+import type {
+  AdminSystemIssueList,
+  AdminSystemIssueRecent,
+  AdminSystemIssueStats,
+  SystemIssueDetail,
+  SystemIssueItem,
+  SystemIssueStatus,
+} from "./admin/system-issues-types"
 import { safeUUID } from "./safe-uuid"
 import { pinGenerateRequest } from "./chat/catalog-model"
 import {
@@ -3551,9 +3559,47 @@ class ApiClient {
     return this.request('/admin/turn-failures/stats')
   }
 
+  // Background poll of the admin-wide listener: a failure is retried on the
+  // next tick and must never raise telemetry of its own.
   async getAdminTurnFailuresRecent(since?: string | null): Promise<AdminTurnFailureRecent> {
     const query = this._cleanParams({ since: since || undefined })
-    return this.request(`/admin/turn-failures/recent${query ? `?${query}` : ''}`)
+    return this.request(`/admin/turn-failures/recent${query ? `?${query}` : ''}`, { suppressFailureLog: true, maxRetries: 0 })
+  }
+
+  // «Errores del sistema» — backend/frontend errors grouped into issues.
+  async getAdminSystemIssues(params?: {
+    status?: string
+    kind?: string
+    q?: string
+    from?: string
+    to?: string
+    sort?: string
+    page?: number
+    limit?: number
+  }): Promise<AdminSystemIssueList> {
+    const query = this._cleanParams(params || {})
+    return this.request(`/admin/system-issues${query ? `?${query}` : ''}`)
+  }
+
+  async getAdminSystemIssueStats(): Promise<AdminSystemIssueStats> {
+    return this.request('/admin/system-issues/stats')
+  }
+
+  async getAdminSystemIssuesRecent(since?: string | null): Promise<AdminSystemIssueRecent> {
+    const query = this._cleanParams({ since: since || undefined })
+    return this.request(`/admin/system-issues/recent${query ? `?${query}` : ''}`, { suppressFailureLog: true, maxRetries: 0 })
+  }
+
+  async getAdminSystemIssue(id: string): Promise<{ item: SystemIssueDetail }> {
+    return this.request(`/admin/system-issues/${encodeURIComponent(id)}`)
+  }
+
+  async setAdminSystemIssueStatus(id: string, status: SystemIssueStatus): Promise<{ item: SystemIssueItem }> {
+    return this.request(`/admin/system-issues/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+      maxRetries: 0,
+    })
   }
 
   // Backend log lines of one request (Admin → Logs «Registros en vivo»).

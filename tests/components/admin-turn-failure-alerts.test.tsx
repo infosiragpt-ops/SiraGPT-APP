@@ -7,6 +7,7 @@ import {
   ERROR_SOUND_STORAGE_KEY,
   SEEN_AT_STORAGE_KEY,
   TurnFailureAlertsProvider,
+  isUserFacingLiveErrorLine,
   useTurnFailureAlerts,
 } from "@/lib/admin/turn-failure-alerts"
 import type { AdminTurnFailureRecent } from "@/lib/admin/turn-failures-types"
@@ -98,6 +99,66 @@ describe("TurnFailureAlertsProvider (admin-wide listener)", () => {
     await act(async () => { screen.getByText("visto").click() })
     expect(screen.getByTestId("unseen").textContent).toBe("0")
     expect(document.title).toBe("Admin · SiraGPT")
+  })
+
+  it("new system issues and regressions play the stronger «critical» tone and add to the badge", async () => {
+    window.localStorage.setItem(ERROR_SOUND_STORAGE_KEY, "1")
+    const empty = { serverTime: new Date().toISOString(), count: 0, items: [] }
+    const fetchRecent = vi.fn(async () => empty)
+    const issueResponses = [
+      // seed: the backlog counts but never sounds
+      { serverTime: new Date().toISOString(), count: 1, items: [{ id: "a1", issueId: "i1", createdAt: new Date().toISOString(), type: "nuevo" as const, title: "TypeError: x", culprit: null, kind: "backend", kindLabel: null, level: "error" }] },
+      { serverTime: new Date().toISOString(), count: 1, items: [{ id: "a2", issueId: "i2", createdAt: new Date().toISOString(), type: "regresion" as const, title: "ReplyError: ERR rate-limited", culprit: null, kind: "redis", kindLabel: "Redis", level: "error" }] },
+    ]
+    const fetchIssueAlerts = vi.fn(async () => issueResponses.shift() || empty)
+    const audio = instrumentedAudio()
+    function IssueProbe() {
+      const alerts = useTurnFailureAlerts()
+      return (
+        <div>
+          <span data-testid="issues">{alerts?.unseenIssues ?? -1}</span>
+          <span data-testid="total">{alerts?.totalUnseen ?? -1}</span>
+        </div>
+      )
+    }
+    render(
+      <TurnFailureAlertsProvider pollMs={1000} fetchRecent={fetchRecent} fetchIssueAlerts={fetchIssueAlerts} audioFactory={audio.factory}>
+        <IssueProbe />
+      </TurnFailureAlertsProvider>,
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId("issues").textContent).toBe("1")
+    expect(audio.started).toHaveLength(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(screen.getByTestId("issues").textContent).toBe("2")
+    expect(screen.getByTestId("total").textContent).toBe("2")
+    expect(audio.started).toEqual([1046.5, 830.61, 1046.5, 830.61])
+    expect(document.title).toBe("(2) Admin · SiraGPT")
+  })
+
+  it("«Registros en vivo» errors sound once per burst, only when a user hit them", async () => {
+    window.localStorage.setItem(ERROR_SOUND_STORAGE_KEY, "1")
+    const empty = { serverTime: new Date().toISOString(), count: 0, items: [] }
+    const audio = instrumentedAudio()
+    render(
+      <TurnFailureAlertsProvider pollMs={60_000} fetchRecent={vi.fn(async () => empty)} fetchIssueAlerts={vi.fn(async () => empty)} audioFactory={audio.factory}>
+        <Probe />
+      </TurnFailureAlertsProvider>,
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    const emit = (lines: unknown[]) => window.dispatchEvent(new CustomEvent("sira:admin-live-log-errors", { detail: { count: lines.length, lines } }))
+    // Worker / boot noise with no user attached: silent.
+    await act(async () => { emit([{ level: "error", source: "worker:doc-engine", msg: "Missing lock" }]) })
+    expect(audio.started).toHaveLength(0)
+    // A user's request failed: strong chime.
+    await act(async () => { emit([{ level: "error", userId: "u1", reqId: "r1", route: "/api/ai/generate", msg: "boom" }]) })
+    expect(audio.started).toEqual([880, 698.46, 587.33])
+    // Another one 1 s later is throttled (≥5 s between chimes).
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); emit([{ level: "fatal", chatId: "c1", msg: "boom" }]) })
+    expect(audio.started).toHaveLength(3)
+    expect(isUserFacingLiveErrorLine({ level: "warn", userId: "u1" })).toBe(false)
+    expect(isUserFacingLiveErrorLine({ level: "error", reqId: "r1" })).toBe(false)
+    expect(isUserFacingLiveErrorLine({ level: "error", reqId: "r1", route: "/api/files/upload" })).toBe(true)
   })
 
   it("stays silent while the sound toggle is off", async () => {

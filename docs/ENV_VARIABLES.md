@@ -607,3 +607,27 @@ Normal turns write nothing. All defaults are safe for production.
 | `SIRAGPT_TURN_FAILURE_RATE_LIMIT` | `30` | Max new rows per identical cause per minute (floods are counted, not stored) |
 | `SIRAGPT_TURN_SIN_CIERRE_MS` | `600000` | A turn with no activity and no finalize for this long is recorded as «Turno sin cerrar» |
 | `SYSTEM_CRON_TURN_FAILURE_SWEEP_SCHEDULE` | `50 4 * * *` | Retention sweep schedule (UTC) |
+
+### Errores del sistema (Admin → Logs → «Errores del sistema»)
+
+Backend / frontend errors of siragpt.com grouped into issues by fingerprint
+(`backend/src/services/observability/system-errors/`, AuditLog rows
+`system_issue`, `system_issue_alert`, `system_issue_status`; no migration).
+Captures `console.error` (and provider/Redis/Prisma/queue `console.warn`),
+uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIRAGPT_SYSTEM_ERRORS` | on (off under `NODE_ENV=test`) | `0` disables capture (the page then stays empty) |
+| `SIRAGPT_SYSTEM_ERRORS_FLUSH_MS` | `5000` | How often captured events are grouped and written |
+| `SIRAGPT_SYSTEM_ISSUE_RETENTION_DAYS` | `30` | Issues silent for this long are deleted by the `sweep-turn-failures` cron; alert rows after 7 days |
+| `SIRAGPT_ENVIRONMENT` | `NODE_ENV` | Environment label stored on every sample |
+
+### Stale-run watchdog (`backend/src/jobs/stale-run-watchdog.js`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `STALE_RUN_WATCHDOG_DISABLED` | off | `1` turns the scan off |
+| `STALE_RUN_WARN_MINUTES` / `STALE_RUN_CRITICAL_MINUTES` | `15` / `45` | Silence before a non-terminal run alerts (warn / critical) — once per run and severity, persisted in AuditLog (`stale_run_alerted`) |
+| `STALE_RUN_ALERT_COOLDOWN_MINUTES` | `30` | In-memory cooldown between sweeps (first-level cache) |
+| `STALE_RUN_ABANDON_HOURS` | `24` | A run silent this long is closed as «abandonado» (agent task → `cancelled`; codex run → `cancelled` + `error`), recorded once (`stale_run_abandoned`), never alerted again. `0` never closes |
