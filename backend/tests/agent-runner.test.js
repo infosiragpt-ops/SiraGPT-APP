@@ -674,6 +674,59 @@ test('AgentRunner does not say Listo when it generated metadata but missed the r
   assert.doesNotMatch(ran.summary, /Listo|Generé el SAV/);
 });
 
+test('AgentRunner preserves provider failure when a requested SAV and Excel produced no files', async () => {
+  const client = {
+    chat: { completions: { create: async () => {
+      const error = new Error('selected provider unavailable');
+      error.code = 'E_PROVIDER';
+      throw error;
+    } } },
+  };
+  const ran = await runAgentRunnerForChat({
+    instruction: 'Genera un SAV de SPSS y un Excel con 20 preguntas.',
+    client, driver: 'local', maxIterations: 1,
+    userId: 'provider-failure-user', chatId: 'provider-failure-chat',
+  });
+  assert.equal(ran.ok, false);
+  assert.deepEqual(ran.artifacts, []);
+  assert.equal(ran.stoppedReason, 'E_PROVIDER');
+  assert.match(ran.errorMessage, /modelo seleccionado no está disponible/i);
+});
+
+test('AgentRunner preserves a credit failure instead of reporting missing SAV and Excel', async () => {
+  const client = {
+    chat: { completions: { create: async () => {
+      const error = new Error('payment required');
+      error.status = 402;
+      throw error;
+    } } },
+  };
+  const ran = await runAgentRunnerForChat({
+    instruction: 'Genera un SAV de SPSS y un Excel con 20 preguntas.',
+    client, driver: 'local', maxIterations: 1,
+    userId: 'credit-failure-user', chatId: 'credit-failure-chat',
+  });
+  assert.equal(ran.ok, false);
+  assert.deepEqual(ran.artifacts, []);
+  assert.equal(ran.stoppedReason, 'llm_402');
+});
+
+test('AgentRunner reports no output rather than a missing pair when the model made no files', async () => {
+  const client = scriptedClient([
+    { content: 'No pude crear los archivos.' },
+    { content: 'Sigo sin poder crear los archivos.' },
+    { content: 'No hay archivos verificables.' },
+  ]);
+  const ran = await runAgentRunnerForChat({
+    instruction: 'Genera un SAV de SPSS y un Excel con 20 preguntas.',
+    client, driver: 'local', maxIterations: 1,
+    userId: 'no-output-user', chatId: 'no-output-chat',
+  });
+  assert.equal(ran.ok, false);
+  assert.deepEqual(ran.artifacts, []);
+  assert.equal(ran.stoppedReason, 'no_output');
+});
+
 test('runAgentRunnerForDocRoute: runner-first result in the doc-route file shape', async () => {
   const upserts = [];
   const prisma = {

@@ -991,7 +991,9 @@ async function runAgentRunnerForChat({
   });
   const artifacts = persisted.filter((artifact) => artifact?.id && artifact?.downloadUrl && !artifact.error);
   const requestedPair = requestsSavExcelDelivery(instruction);
-  const missingFormats = missingRequestedSavExcel(instruction, artifacts);
+  // A missing format is an incomplete *partial* delivery. With no delivered
+  // files, preserve the loop's real failure (provider, quota, timeout, etc.).
+  const missingFormats = artifacts.length ? missingRequestedSavExcel(instruction, artifacts) : [];
   const persistenceFailed = valid.length > 0 && !artifacts.length;
   const rejectedEdit = !valid.length && (run.outputs || []).some((output) => output.validation?.passed === false);
   const summary = missingFormats.length
