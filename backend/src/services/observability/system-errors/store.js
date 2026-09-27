@@ -302,11 +302,16 @@ function createSystemIssueStore({ prisma = null, now = () => Date.now(), logger 
         ],
       });
     }
-    // Issues are ordered by recency of their LAST event (updatedAt-like);
-    // the date range filters on lastSeen.
-    if (from) and.push({ metadata: { path: ['lastSeen'], gte: new Date(from).toISOString() } });
-    if (to) and.push({ metadata: { path: ['lastSeen'], lte: new Date(to).toISOString() } });
+    // The date range filters on lastSeen — applied in memory (list()), JSON
+    // range comparisons are not portable across Prisma providers.
     return { AND: and };
+  }
+
+  function inRange(item, { from, to } = {}) {
+    const last = Date.parse(item.lastSeen);
+    if (from && Number.isFinite(Date.parse(from)) && !(last >= Date.parse(from))) return false;
+    if (to && Number.isFinite(Date.parse(to)) && !(last <= Date.parse(to))) return false;
+    return true;
   }
 
   async function list(params = {}) {
@@ -320,6 +325,7 @@ function createSystemIssueStore({ prisma = null, now = () => Date.now(), logger 
     const t = now();
     const items = rows
       .map((r) => toItem(r, t))
+      .filter((it) => inRange(it, params))
       .sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen));
     const sort = String(params.sort || 'recientes');
     if (sort === 'frecuentes') items.sort((a, b) => b.events24h - a.events24h || b.count - a.count);
@@ -485,10 +491,16 @@ function createSystemIssueStore({ prisma = null, now = () => Date.now(), logger 
     const cutoff = new Date(t - Math.max(1, Number(retentionDays) || 30) * 24 * 3600 * 1000);
     let deletedIssues = 0;
     try {
-      const stale = await client.auditLog.findMany({
-        where: { action: ISSUE_ACTION, metadata: { path: ['lastSeen'], lt: cutoff.toISOString() } },
-        select: { id: true, resourceId: true },
+      // An issue created after the cutoff cannot be silent that long; the
+      // lastSeen check itself runs in memory (no JSON range query).
+      const candidates = await client.auditLog.findMany({
+        where: { action: ISSUE_ACTION, createdAt: { lt: cutoff } },
+        select: { id: true, resourceId: true, metadata: true },
         take: 5000,
+      });
+      const stale = candidates.filter((r) => {
+        const last = Date.parse(r.metadata && r.metadata.lastSeen);
+        return !Number.isFinite(last) || last < cutoff.getTime();
       });
       if (stale.length) {
         const res = await client.auditLog.deleteMany({ where: { id: { in: stale.map((r) => r.id) } } });

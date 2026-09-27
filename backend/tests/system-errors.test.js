@@ -427,6 +427,8 @@ describe('admin queries — list, stats, recent, detail with linked failed turns
     assert.equal(queue.total, 1);
     const search = await store.list({ q: 'MAP is not' });
     assert.equal(search.total, 1);
+    assert.equal((await store.list({ from: '2099-01-01T00:00:00.000Z' })).total, 0, 'date range on lastSeen');
+    assert.equal((await store.list({ to: '2099-01-01T00:00:00.000Z' })).total, 2);
 
     const id = search.items[0].id;
     const detail = await store.get(id);
@@ -454,11 +456,16 @@ describe('admin queries — list, stats, recent, detail with linked failed turns
   it('retention sweeps silent issues and old alert rows', async () => {
     systemErrors.capture({ source: 'console', message: 'old failure', ctx: null });
     await systemErrors.flush();
-    const row = issues(prisma)[0];
-    row.metadata.lastSeen = '2026-07-01T00:00:00.000Z';
+    systemErrors.capture({ source: 'console', message: 'recent failure', ctx: null });
+    await systemErrors.flush();
+    const [old, recent] = issues(prisma);
+    old.createdAt = new Date('2026-06-15T00:00:00.000Z');
+    old.metadata.lastSeen = '2026-07-01T00:00:00.000Z';
+    // created long ago but seen recently → kept
+    recent.createdAt = new Date('2026-06-15T00:00:00.000Z');
     const res = await store.sweepExpired({ retentionDays: 30 });
     assert.equal(res.deletedIssues, 1);
-    assert.equal(issues(prisma).length, 0);
+    assert.deepEqual(issues(prisma).map((r) => r.metadata.title), ['recent failure']);
   });
 });
 
