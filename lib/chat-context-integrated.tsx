@@ -11,7 +11,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient, type AIUsagePayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
-import { appendActivity, finalizeActivity, type ActivityStep } from "./chat/activity-log"
+import { appendActivity, finalizeActivity, type ActivityEvent, type ActivityStep } from "./chat/activity-log"
 import { shouldPollPersistedTurnOnStreamClose } from "./generate-stream-complete"
 import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
@@ -420,14 +420,16 @@ function createActivityHandlers(opts: {
 }) {
   const { setChat, messageId, isCancelled } = opts
   return {
-    onActivity: (text: string, event?: { type?: string; tool?: string; label?: string }) => {
+    onActivity: (text: string, event?: ActivityEvent) => {
       if (isCancelled()) return
       setChat((prevChat: any) => {
         if (!prevChat) return prevChat
         const newMessages = prevChat.messages.map((msg: any) => {
           if (msg.id !== messageId) return msg
           const label = String(event?.label || text || '').trim()
-          const activityLog = appendActivity(msg.activityLog, { label, tool: event?.tool, type: event?.type })
+          // The whole stage frame: stage v2 pairs a tool result with its call
+          // (callId) and carries the phrase, icon family, detail and thumbnails.
+          const activityLog = appendActivity(msg.activityLog, { ...(event || {}), label })
           return { ...msg, activityLog, progressStage: label || msg.progressStage }
         })
         return { ...prevChat, messages: newMessages }
