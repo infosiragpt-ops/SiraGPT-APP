@@ -54,7 +54,17 @@ function getDefaultModel() {
  * request, OR when a transient network error occurs. Callers MUST treat
  * null as "fallback to non-LLM path".
  */
-async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model, signal }) {
+// SDK defaults are a 10-minute timeout with 2 retries: one slow re-ranking
+// call kept an academic search silent for 334 s in production. These helpers
+// all have a non-LLM fallback, so a short bound is always safe.
+const DEFAULT_LLM_TIMEOUT_MS = 25_000;
+
+function llmTimeoutMs() {
+  const value = Math.floor(Number(process.env.SEARCH_BRAIN_LLM_TIMEOUT_MS));
+  return Number.isFinite(value) && value >= 1000 ? value : DEFAULT_LLM_TIMEOUT_MS;
+}
+
+async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model, signal, timeoutMs }) {
   const client = getClient();
   if (!client || signal?.aborted) return null;
   try {
@@ -66,7 +76,11 @@ async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-    }, signal ? { signal } : undefined);
+    }, {
+      timeout: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : llmTimeoutMs(),
+      maxRetries: 1,
+      ...(signal ? { signal } : {}),
+    });
     const content = resp?.choices?.[0]?.message?.content;
     if (typeof content !== "string") return null;
     return { content };

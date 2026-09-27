@@ -454,6 +454,61 @@ describe('rerankResults · concurrency and cancellation', () => {
     };
     await rerankResults({ query: 'q', results: pool(100), batchSize: 10, callLLM, signal: controller.signal, concurrency: 1 });
     assert.equal(calls, 1, 'no further batches once aborted');
-    assert.equal(seenSignals[0], controller.signal, 'the provider call can be cancelled too');
+    assert.equal(seenSignals[0].aborted, true, 'the provider call is cancelled with the run');
+  });
+});
+
+describe('rerankResults · deadline', () => {
+  it('stops scoring at the deadline and cancels the in-flight call', async () => {
+    let calls = 0;
+    let lastSignal = null;
+    const callLLM = async ({ signal }) => {
+      calls += 1;
+      lastSignal = signal;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return { content: JSON.stringify({ scores: [{ idx: 1, score: 5 }] }) };
+    };
+    const results = Array.from({ length: 100 }, (_, i) => ({ title: `r${i}` }));
+    const started = Date.now();
+    const out = await rerankResults({ query: 'q', results, batchSize: 10, callLLM, concurrency: 1, deadlineMs: 30 });
+    assert.equal(calls, 1, 'no batch starts after the deadline');
+    assert.equal(lastSignal.aborted, true, 'the running call is told to stop');
+    assert.equal(out.results.length, 100, 'every candidate is still returned');
+    assert.ok(Date.now() - started < 1000);
+  });
+});
+
+// Prod 2026-09-27: one re-ranking call ran under the SDK default (10 min, 2
+// retries) and kept an academic search silent for 334 s.
+describe('callLLM · bounded request', () => {
+  it('passes a short timeout, one retry and the caller signal to the SDK', async () => {
+    const path = require('node:path');
+    const clientPath = require.resolve('../src/services/searchBrain/llmClient');
+    const openaiPath = require.resolve('openai', { paths: [path.dirname(clientPath)] });
+    const seen = [];
+    const savedOpenai = require.cache[openaiPath];
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete require.cache[clientPath];
+    require.cache[openaiPath] = { id: openaiPath, filename: openaiPath, loaded: true, exports: class FakeOpenAI {
+      constructor() { this.chat = { completions: { create: async (params, options) => { seen.push(options); return { choices: [{ message: { content: 'ok' } }] }; } } }; }
+    } };
+    process.env.OPENROUTER_API_KEY = 'test-key-not-real';
+    try {
+      const { callLLM } = require('../src/services/searchBrain/llmClient');
+      const controller = new AbortController();
+      assert.deepEqual(await callLLM({ system: 's', user: 'u', signal: controller.signal }), { content: 'ok' });
+      assert.equal(seen[0].timeout, 25000, 'default bound (SEARCH_BRAIN_LLM_TIMEOUT_MS unset)');
+      assert.equal(seen[0].maxRetries, 1);
+      assert.equal(seen[0].signal, controller.signal);
+      await callLLM({ system: 's', user: 'u', timeoutMs: 5000 });
+      assert.equal(seen[1].timeout, 5000);
+      controller.abort();
+      assert.equal(await callLLM({ system: 's', user: 'u', signal: controller.signal }), null, 'an aborted run makes no call');
+      assert.equal(seen.length, 2);
+    } finally {
+      if (savedOpenai) require.cache[openaiPath] = savedOpenai; else delete require.cache[openaiPath];
+      delete require.cache[clientPath];
+      if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY; else process.env.OPENROUTER_API_KEY = savedKey;
+    }
   });
 });

@@ -10,7 +10,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { _internal } = require('../src/services/agentic-chat-stream');
 
-const { webSearchBudget, webReadBudget, withWebSearchBudget, withWebReadBudget } = _internal;
+const { webSearchBudget, webReadBudget, withWebSearchBudget, withWebReadBudget, checkWebToolBudget } = _internal;
+const { dispatchTool } = require('../src/services/react-agent');
 
 test('budget: generous by default, two follow-ups when the route already searched', () => {
   assert.equal(webSearchBudget({ env: {} }), 8);
@@ -62,6 +63,32 @@ test('page reads have their own budget: 12 by default, 3 when the route already 
   assert.deepEqual(await tools[3].execute({}), { ok: true });
 });
 
+// Prod (after #868): one page read more than the cap completed. The budget is
+// now also enforced where every call is dispatched, so a tool reaching the
+// loop without its wrapper is still capped.
+test('the dispatch-level budget caps unwrapped tools, in parallel too, per group', async () => {
+  let fetches = 0;
+  let searches = 0;
+  const registry = [
+    { name: 'web_fetch', parameters: { type: 'object', properties: { url: { type: 'string' } } }, execute: async () => { fetches += 1; return { ok: true }; } },
+    { name: 'read_url', parameters: { type: 'object', properties: { url: { type: 'string' } } }, execute: async () => { fetches += 1; return { ok: true }; } },
+    { name: 'scientific_search', parameters: { type: 'object', properties: { query: { type: 'string' } } }, execute: async () => { searches += 1; return { ok: true }; } },
+    { name: 'web_search', parameters: { type: 'object', properties: { query: { type: 'string' } } }, execute: async () => { searches += 1; return { ok: true }; } },
+  ];
+  const ctx = { toolUsageMap: Object.create(null), checkToolBudget: (name, usage) => checkWebToolBudget(name, usage, { searches: 2, reads: 3 }) };
+  const reads = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((x, i) => dispatchTool(registry, i % 2 ? 'read_url' : 'web_fetch', JSON.stringify({ url: `https://example.com/${x}` }), ctx)));
+  assert.equal(fetches, 3, 'web_fetch and read_url share one cap');
+  assert.equal(reads.filter((r) => r && r.error && /Límite de 3 lecturas de página/.test(r.error)).length, 2);
+  const looks = await Promise.all([
+    dispatchTool(registry, 'scientific_search', JSON.stringify({ query: 'q' }), ctx),
+    dispatchTool(registry, 'web_search', JSON.stringify({ query: 'q' }), ctx),
+    dispatchTool(registry, 'web_search', JSON.stringify({ query: 'q2' }), ctx),
+  ]);
+  assert.equal(searches, 2, 'scientific_search counts as a web lookup');
+  assert.match(looks[2].error, /Límite de 2 búsquedas web/);
+  assert.deepEqual(checkWebToolBudget('python_exec', {}, { searches: 0, reads: 0 }), { ok: true });
+});
+
 test('wiring: the route passes its fresh sources and the loop starts from them', () => {
   const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   const ai = read('src/routes/ai.js');
@@ -69,6 +96,7 @@ test('wiring: the route passes its fresh sources and the loop starts from them',
   const stream = read('src/services/agentic-chat-stream.js');
   assert.match(stream, /if \(preGroundedSources > 0 && initialToolChoice === 'web_search'\) initialToolChoice = null;/);
   assert.match(stream, /tools = withWebReadBudget\(withWebSearchBudget\(tools, webLookupLimit\), webReadLimit\);/);
+  assert.match(stream, /checkToolBudget: \(name, usage\) => checkWebToolBudget\(name, usage, \{ searches: webLookupLimit, reads: webReadLimit \}\),/);
   assert.match(stream, /if \(!initialToolChoice && preGroundedSources === 0 && availableToolNames\.has\('web_search'\)\) \{/);
   assert.match(stream, /Ya tienes \$\{preGroundedSources\} resultados web recientes para esta pregunta en «Fresh Web Context»/);
 });
