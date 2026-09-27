@@ -6,7 +6,7 @@ set -eu
 # build its pinned source release against musl and remove the compiler.
 apk add --no-cache python3 py3-pip py3-pandas py3-openpyxl
 apk add --no-cache --virtual .spss-build-deps \
-  build-base python3-dev py3-wheel cython zlib-dev
+  build-base python3-dev py3-setuptools py3-wheel cython zlib-dev
 
 python3 -m pip install --break-system-packages --disable-pip-version-check \
   --no-cache-dir --no-deps 'narwhals==2.10.1'
