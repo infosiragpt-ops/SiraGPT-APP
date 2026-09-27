@@ -827,7 +827,10 @@ async function runResolvedDocumentEdit({
       return await editDocxImage({ wordFile, imageEdit, instruction, prisma, userId, chatId, fileIds, signal, deps, emit });
     }
     if (wordFile && !llm.client) return { ok: false, code: 'ENGINE_FAILED', message: MESSAGES.ENGINE_FAILED };
-    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env)) {
+    // Indent / tracked changes / paraphrases go to the office engine below.
+    const wordOnOfficeEngine = Boolean(wordFile) && typeof deps.wordNeedsOfficeEngine === 'function'
+      && deps.wordNeedsOfficeEngine(instruction, deps.env);
+    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env) && !wordOnOfficeEngine) {
       const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
       const extraContext = [await loadRecentUserText({ prisma, userId, chatId, instruction }), batchContext].filter(Boolean).join('\n');
       let edited;
@@ -1027,6 +1030,7 @@ function resolveDeps(injected) {
         : legacy(options));
     }),
     makeVisualVerifier: lazy('makeVisualVerifier', () => require('./office-engine').makeOfficeVisualVerifier),
+    wordNeedsOfficeEngine: lazy('wordNeedsOfficeEngine', () => require('./office-engine').wordNeedsOfficeEngine),
     tryDeterministicEdit: lazy('tryDeterministicEdit', () => require('../source-preserving-document-edit').tryGenerateSourcePreservingDocumentEdit),
     parseDocxPrecisionRequest: lazy('parseDocxPrecisionRequest', () => (...args) => require('../document-editing/docx-precision-intent').parseDocxPrecisionRequest(...args)),
     applyDocxPrecisionEdit: lazy('applyDocxPrecisionEdit', () => (...args) => require('../document-editing/docx-precision-edit').applyDocxPrecisionEdit(...args)),

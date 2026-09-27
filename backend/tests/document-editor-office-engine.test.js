@@ -325,3 +325,48 @@ test('wiring: /document-edit forwards stage v2 and persists the timeline; the ed
   assert.match(editor, /office\.officeEditorEnabled\(injected\.env \|\| process\.env\)/);
   assert.match(editor, /onEvent: \(event\) => \{ const stage = relayStage\(event\); if \(stage\) emit\(stage\); \},/);
 });
+
+test('Word: indent, tracked changes and paraphrases run on the office engine; forms stay on the docx engine', async () => {
+  const { runChatDocumentEdit } = require('../src/services/document-editor/chat-document-editor');
+  for (const prompt of [
+    'En la introducción pon sangría de primera línea de 1,25 cm y texto justificado.',
+    'En la tabla corrige 14,6 por 15,1 con control de cambios.',
+    'Parafrasea el párrafo que cita a García (2020) sin tocar la cita.',
+  ]) assert.equal(office.wordNeedsOfficeEngine(prompt, {}), true, prompt);
+  for (const prompt of [
+    'completa el word con mis datos de magisterio soy Luis Carrera Salas',
+    'EN EL MISMO WORD QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES PORFVAOR',
+    'Cambia 2024 por 2025 en la portada.',
+    'Pon en negrita solo «baja capacidad portante».',
+  ]) assert.equal(office.wordNeedsOfficeEngine(prompt, {}), false, prompt);
+  assert.equal(office.wordNeedsOfficeEngine('pon sangría de 1,25 cm', { SIRAGPT_DOCUMENT_EDITOR_ENGINE: 'legacy' }), false);
+
+  const USER = 'user-g';
+  const prisma = {
+    file: { findMany: async (q) => [{ id: 'f1', userId: USER, originalName: 'tesis.docx' }].filter((r) => q.where.id.in.includes(r.id)) },
+    message: { findMany: async () => [] },
+  };
+  const calls = { docx: 0, office: 0 };
+  const deps = {
+    env: {},
+    docxEngine: { docxEngineEnabled: () => true, editWordDocument: async () => { calls.docx += 1; return { ok: false, status: 'failed', message: 'x' }; } },
+    artifactDir: fs.mkdtempSync(path.join(require('os').tmpdir(), 'g-route-')),
+    objectStorage: { toLocalTemp: async () => { throw new Error('not remote'); } },
+    readSourceBuffer: async () => ({ buffer: Buffer.from('PKdocx'), cleanup: async () => {} }),
+    extractFileIds: () => [],
+    saveArtifact: (input) => ({ id: 'abc1def', filename: input.filename, format: 'docx', mime: input.mime, sizeBytes: 3, downloadUrl: '/api/agent/artifact/abc1def' }),
+    runDocumentAgent: async () => { calls.office += 1; return { finalText: 'Listo.', outputs: [{ name: 'tesis-editado.docx', buffer: Buffer.from('PKnew'), valid: true }], stoppedReason: 'final' }; },
+    tryApplyLiteralDocxTitleEdit: async () => null,
+    parseDocxPrecisionRequest: () => null,
+    parseDocxImageRequest: () => null,
+    makeVisualVerifier: () => null,
+    log: () => {},
+  };
+  const indent = await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], llm: { client: {}, model: 'picked' }, deps,
+    instruction: 'En la introducción pon sangría de primera línea de 1,25 cm y texto justificado.' });
+  assert.equal(indent.ok, true);
+  assert.deepEqual(calls, { docx: 0, office: 1 });
+  await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], llm: { client: {}, model: 'picked' }, deps,
+    instruction: 'Completa mi nombre: Ana Torres' });
+  assert.deepEqual(calls, { docx: 1, office: 1 }, 'forms keep the docx engine');
+});

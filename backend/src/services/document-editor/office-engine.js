@@ -50,6 +50,16 @@ function officeEngineHandles(files = []) {
   return list.length > 0 && list.every((file) => file && OFFICE_ENGINE_EXT_RE.test(String(file.name || '')));
 }
 
+// Word edits the docx engine cannot express — first-line indent / spacing,
+// tracked changes, paraphrases that must keep citation fields — run on the
+// office engine (sira_office.py), like Excel and PowerPoint. The docx engine
+// keeps forms, fields, check boxes and the content the assistant writes.
+const OFFICE_ENGINE_WORD_RE = /\b(?:sangr[ií]as?|interlineado|espaciado entre|control de cambios|cambios controlados|track(?:ed)? changes|marcas de revisi[oó]n|parafrase\w*|par[aá]frasis)\b/i;
+
+function wordNeedsOfficeEngine(instruction, env = process.env) {
+  return officeEditorEnabled(env) && OFFICE_ENGINE_WORD_RE.test(String(instruction || ''));
+}
+
 function officeEditorEnabled(env = process.env) {
   const raw = String((env && env.SIRAGPT_DOCUMENT_EDITOR_ENGINE) || '').trim().toLowerCase();
   return !['legacy', 'doc-agent', 'docagent', '0', 'off'].includes(raw);
@@ -214,6 +224,7 @@ module.exports = {
   AUTHOR_CONTENT_RULE,
   officeEditorEnabled,
   officeEngineHandles,
+  wordNeedsOfficeEngine,
   visualVerifyEnabled,
   lastVerificationPassed,
   runOfficeEditorEngine,
