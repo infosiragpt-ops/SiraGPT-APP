@@ -66,7 +66,9 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
   const [lastEventAt, setLastEventAt] = useState<number | null>(null)
   const [paused, setPaused] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
-  const [level, setLevel] = useState<LiveLogLevelFilter>("all")
+  // Default hides debug (fast successful reads, [*-dbg] traces): «si pasa
+  // normal, no reportarlo». «Todos» still shows everything.
+  const [level, setLevel] = useState<LiveLogLevelFilter>("info")
   const [source, setSource] = useState<string>("all")
   const [draftQ, setDraftQ] = useState("")
   const [draftUser, setDraftUser] = useState("")
@@ -298,7 +300,7 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
         : conn === "reconnecting" ? "Reconectando…" : "Conectando…"
 
   return (
-    <div className="space-y-3" data-testid="live-logs-panel">
+    <div className="space-y-3 rounded-xl border border-border/70 bg-card p-4 text-card-foreground shadow-sm" data-testid="live-logs-panel">
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-2 rounded-full border border-border/70 px-2.5 py-1 text-xs font-medium" data-testid="live-logs-status">
           <span className={cn("h-2 w-2 rounded-full", statusDot)} />
@@ -309,7 +311,7 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
           {paused ? "Reanudar" : "Pausar"}
         </Button>
         <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Switch checked={level === "error"} onCheckedChange={(v) => setLevel(v ? "error" : "all")} data-testid="live-logs-errors-only" />
+          <Switch checked={level === "error"} onCheckedChange={(v) => setLevel(v ? "error" : "info")} data-testid="live-logs-errors-only" />
           Solo errores
         </label>
         <Select value={level} onValueChange={(v) => setLevel(v as LiveLogLevelFilter)}>
@@ -317,8 +319,8 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos los niveles</SelectItem>
             <SelectItem value="info">Info y superior</SelectItem>
+            <SelectItem value="all">Todos (incl. depuración)</SelectItem>
             <SelectItem value="warn">Avisos y errores</SelectItem>
             <SelectItem value="error">Solo errores</SelectItem>
           </SelectContent>

@@ -14,6 +14,7 @@ const ALLOWED_URLS = Object.freeze([
 ]);
 const VERIFY_SCRIPT = 'backend/scripts/image-size-security-patch.cjs';
 const { PATCHES } = require('../backend/scripts/image-size-security-patch.cjs');
+const { auditTimeoutMs, runWithAuditRetries } = require('./lib/npm-audit-retry.cjs');
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const natural = (value) => Number.isSafeInteger(value) && value >= 0;
 function fail(message) { const error = new Error(message); error.code = 'BACKEND_AUDIT_BLOCKED'; throw error; }
@@ -122,7 +123,7 @@ function validatePatchEvidence(evidence, report) {
 }
 
 function runBackendAuditGate({ root = ROOT, run = spawnSync, print = (text) => process.stdout.write(text) } = {}) {
-  const options = { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000, maxBuffer: 16 * 1024 * 1024 };
+  const options = { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: auditTimeoutMs(), maxBuffer: 16 * 1024 * 1024 };
   const audit = run('npm', ['--prefix', 'backend', 'audit', '--omit=dev', '--json'], options);
   checkProcess(audit, 'npm audit', [0, 1]);
   const report = parseJson(audit.stdout, 'npm audit');
@@ -146,7 +147,9 @@ function runBackendAuditGate({ root = ROOT, run = spawnSync, print = (text) => p
 }
 
 if (require.main === module) {
-  try { runBackendAuditGate(); }
+  // Transport failures of npm's audit endpoint are retried (bounded); a real
+  // unpatched high/critical finding is not — it fails on the first attempt.
+  try { runWithAuditRetries(() => runBackendAuditGate(), { label: 'backend-audit' }); }
   catch (error) {
     console.error(`[backend-audit] ${error?.code === 'BACKEND_AUDIT_BLOCKED' ? error.message : 'Unexpected gate failure'}`);
     process.exitCode = 1;

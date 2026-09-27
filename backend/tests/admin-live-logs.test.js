@@ -63,7 +63,9 @@ test('redaction caps huge lines', () => {
 // ── Level / source inference ─────────────────────────────────────────────
 
 test('level follows the console method', () => {
-  assert.equal(classifyLine({ text: 'hello', method: 'console.error' }).level, 'error');
+  assert.equal(classifyLine({ text: 'upload failed', method: 'console.error' }).level, 'error');
+  // console.error with nothing that reads like a failure is shown as a notice.
+  assert.equal(classifyLine({ text: 'hello', method: 'console.error' }).level, 'warn');
   assert.equal(classifyLine({ text: 'hello', method: 'console.warn' }).level, 'warn');
   assert.equal(classifyLine({ text: 'hello', method: 'console.log' }).level, 'info');
   assert.equal(classifyLine({ text: 'hello', method: 'console.debug' }).level, 'debug');
@@ -77,6 +79,27 @@ test('content upgrades plain lines to error / fatal / warn', () => {
   assert.equal(classifyLine({ text: 'AI stream aborted by client for provider: xAI.', method: 'console.log' }).level, 'warn');
   assert.equal(classifyLine({ text: '[file-status] {"stage":"ready","error":null}', method: 'console.log' }).level, 'info');
   assert.equal(classifyLine({ text: 'Trace: here\n    at x (y.js:1:1)', method: 'console.trace' }).level, 'debug');
+});
+
+test('signal rules: debug tags, quiet successful reads, console.error without failure words', () => {
+  assert.equal(classifyLine({ text: '[models-dbg] +0ms handler-enter', method: 'console.error' }).level, 'debug');
+  assert.equal(classifyLine({ text: '[models-dbg] TypeError: x is not a function\n    at y (a.js:1:1)', method: 'console.error' }).level, 'error');
+  assert.equal(classifyLine({ text: '[startup] listening on 5000', method: 'console.error' }).level, 'warn');
+  assert.equal(classifyLine({ text: '❌ Error from Anthropic API: 400 credit balance too low', method: 'console.error' }).level, 'error');
+  const poll = JSON.stringify({ ts: 'x', level: 'info', method: 'GET', path: '/api/agent-computer/login-handoff', status: 304, durMs: 13, userId: 'u1', reqId: 'r1' });
+  assert.equal(classifyLine({ text: poll, method: 'stdout' }).level, 'debug');
+  const slow = JSON.stringify({ level: 'info', method: 'GET', path: '/api/files/1', status: 200, durMs: 4200 });
+  assert.equal(classifyLine({ text: slow, method: 'stdout' }).level, 'info');
+  const post = JSON.stringify({ level: 'info', method: 'POST', path: '/api/ai/generate', status: 200, durMs: 900 });
+  assert.equal(classifyLine({ text: post, method: 'stdout' }).level, 'info');
+  const pinoDone = JSON.stringify({ level: 30, req: { id: 'r', method: 'GET', url: '/api/x' }, res: { statusCode: 200 }, responseTime: 3, msg: 'request completed' });
+  assert.deepEqual(classifyLine({ text: pinoDone, method: 'stdout' }), { drop: 'duplicate' });
+  const pinoErr = JSON.stringify({ level: 50, req: { id: 'r', method: 'GET', url: '/api/x' }, res: { statusCode: 500 }, err: { message: 'boom', stack: 'Error: boom' }, msg: 'request errored' });
+  assert.equal(classifyLine({ text: pinoErr, method: 'stdout' }).level, 'error');
+  const self = JSON.stringify({ level: 'info', method: 'GET', path: '/api/admin/logs/live', status: 200, durMs: 7099 });
+  assert.deepEqual(classifyLine({ text: self, method: 'stdout' }), { drop: 'self' });
+  const event = JSON.stringify({ level: 30, msg: 'ai.generate', event: 'ai.generate.request.accepted', req: { method: 'POST', url: '/api/ai/generate' } });
+  assert.match(classifyLine({ text: event, method: 'pino' }).msg, /ai\.generate\.request\.accepted/);
 });
 
 test('BullMQ worker errors are errors from a worker source', () => {
@@ -95,7 +118,7 @@ test('structured JSON lines: pino levels, HTTP status and summary', () => {
   assert.equal(access.status, 502);
   assert.match(access.msg, /POST \/api\/ai\/generate → 502 \(81770 ms\)/);
   assert.deepEqual(access.jsonCtx, { reqId: 'abc', userId: 'u1' });
-  const ok = classifyLine({ text: JSON.stringify({ level: 30, msg: 'request completed', req: { method: 'GET', url: '/api/health' }, res: { statusCode: 200 } }), method: 'pino' });
+  const ok = classifyLine({ text: JSON.stringify({ level: 30, msg: 'job finished', jobId: 'j1' }), method: 'pino' });
   assert.equal(ok.level, 'info');
 });
 
@@ -166,6 +189,19 @@ test('worker context (runWithLogContext) tags queue + job', async () => {
     assert.equal(events[0].source, 'worker:siragpt-agent-runner');
     assert.equal(events[0].jobId, 'job-7');
     assert.equal(events[0].userId, 'u2');
+  });
+});
+
+test('lines that only know the user id get the email learned from request lines', async () => {
+  await withSink(async (events) => {
+    const req = { method: 'GET', originalUrl: '/api/x', user: { id: 'user-77', email: 'valeria@example.com' } };
+    await loggerCtx.runWithContext({ reqId: 'r-77' }, async () => {
+      loggerCtx.setContextField('__liveLogsReq', req);
+      capture.captureText('[chat] turn started', 'console.log');
+    });
+    capture.captureText(JSON.stringify({ level: 'info', method: 'POST', path: '/api/ai/generate', status: 200, durMs: 5000, userId: 'user-77', reqId: 'r-78' }), 'stdout');
+    assert.equal(events[1].email, 'valeria@example.com');
+    assert.equal(events[1].userId, 'user-77');
   });
 });
 
@@ -324,7 +360,7 @@ test('Redis flush: all stream, error stream for warn+, per-request index', async
   store.redisReady = true;
   store.push(ev({ msg: 'ok line', reqId: 'req-a', ts: (t += 1) }));
   store.push(ev({ msg: 'bad line', level: 'error', reqId: 'req-a', ts: (t += 1) }));
-  await store.flush();
+  await store.flush({ force: true });
   assert.equal(fake.streams['siragpt:logs:all'].length, 2);
   assert.equal(fake.streams['siragpt:logs:err'].length, 1);
   assert.equal(fake.lists['siragpt:logs:req:req-a'].length, 2);
@@ -344,13 +380,30 @@ test('request trail survives an expired index by scanning the streams', async ()
   store.redisReady = true;
   store.push(ev({ msg: 'old turn start', reqId: 'req-old', ts: (t += 1) }));
   store.push(ev({ msg: 'old turn failed', level: 'error', reqId: 'req-old', ts: (t += 1) }));
-  await store.flush();
+  await store.flush({ force: true });
   delete fake.lists['siragpt:logs:req:req-old'];
   store.ring = new Array(store.opts.ringMax);
   store.ringSize = 0;
   const lines = await store.requestLines('req-old');
   store.stop();
   assert.deepEqual(lines.map((l) => l.msg), ['old turn start', 'old turn failed']);
+});
+
+test('flush holds lines for the repeat window so a flood collapses before persisting', async () => {
+  const fake = fakeRedis();
+  let t = 90_000;
+  const store = new LiveLogStore({ env: {}, now: () => t, redisFactory: () => fake.client });
+  store.start();
+  store.redisReady = true;
+  store.push(ev({ level: 'error', msg: '[codex-runs] worker error: ERR rate-limited 1', ts: t }));
+  for (let i = 0; i < 20; i += 1) store.push(ev({ level: 'error', msg: `[codex-runs] worker error: ERR rate-limited ${i + 2}`, ts: (t += 100) }));
+  assert.equal(await store.flush(), 0, 'young lines are held');
+  t += 3500;
+  assert.equal(await store.flush(), 1);
+  const stored = LiveLogStore.parseEntries(fake.streams['siragpt:logs:err']);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].repeat, 21);
+  store.stop();
 });
 
 test('memory guard pauses persistence before Redis (shared with BullMQ) fills up', async () => {

@@ -89,7 +89,8 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
-import { activityDurationMs, activityToPlaceholderSteps } from "@/lib/chat/activity-log";
+import { activityDurationMs, activitySignature, activityToPlaceholderSteps, hasPairedActivity, hydrateActivityTrace } from "@/lib/chat/activity-log";
+import ActivityRail from "./activity-rail"
 import ThinkingTrace from "./thinking-trace"
 import AgentTrace from "./agent-trace"
 import MessageActionRail from "./MessageActionRail"
@@ -1272,9 +1273,24 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const agentTraceView = extractAgentTrace(message);
     const hasAgentTrace = isAssistant && agentTraceView.steps.length > 0;
     const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
-    // Claude-style activity timeline (backend `stage` frames). Live only.
-    const activityLog: any[] = Array.isArray((message as any).activityLog) ? (message as any).activityLog : [];
+    // Claude-style activity timeline (backend `stage` frames). Live turns
+    // carry it on the message; a reloaded AgentRunner turn replays the
+    // stage events persisted in agent_metadata.activityTrace.
+    const liveActivity: any[] = Array.isArray((message as any).activityLog) ? (message as any).activityLog : [];
+    const persistedTrace = isAssistant && !liveActivity.length ? (message as any).agentMetadata : null;
+    const hydratedActivity = useMemo(() => hydrateActivityTrace(persistedTrace), [persistedTrace]);
+    const activityLog: any[] = liveActivity.length ? liveActivity : hydratedActivity;
+    // Tool-call steps (AgentRunner): one timeline on the rail, with thumbnails.
+    const hasRunnerTrace = isAssistant && hasPairedActivity(activityLog);
+    const persistedTraceDuration = (() => {
+        if (liveActivity.length || !persistedTrace) return null;
+        try {
+            const meta = typeof persistedTrace === 'string' ? JSON.parse(persistedTrace) : persistedTrace;
+            return typeof meta?.durationMs === 'number' ? meta.durationMs : null;
+        } catch { return null; }
+    })();
     const activityDuration = reasoningView.reasoningDurationMs
+        ?? persistedTraceDuration
         ?? activityDurationMs(activityLog, (message as any).thinkingEndedAt);
     const hasActivityTrace = isAssistant && activityLog.some((step: any) => step && !/^pensando/i.test(String(step.label || '')));
     const isThinking = isAssistant && !message.error && !hasLiveReasoning && !message.content && (
@@ -3375,6 +3391,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 run={agentTraceView.run}
                                 permission={agentTraceView.permission}
                             />
+                        ) : !message.error && hasRunnerTrace && !isThinking ? (
+                            // AgentRunner turn: every tool call is one row on the
+                            // rail (phrase, icon, thumbnail, what ran / came back).
+                            <ActivityRail steps={activityLog} live={Boolean(isStreaming)} durationMs={activityDuration} />
                         ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming || (hasActivityTrace && !isThinking)) ? (
                             <ThinkingTrace
                                 reasoning={reasoningView.reasoning}
@@ -3386,6 +3406,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         ) : null}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
+                        ) : isThinking && !hasAgentTrace && hasRunnerTrace ? (
+                            <ActivityRail steps={activityLog} live durationMs={null} />
                         ) : isThinking && !hasAgentTrace ? (
                             <ThinkingPlaceholder
                                 stage={(message as any).progressStage || null}
@@ -3605,11 +3627,17 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         </article>
     );
 };
-const areMessagePropsEqual = (prev: any, next: any) => {
+export const areMessagePropsEqual = (prev: any, next: any) => {
     const a = prev.message
     const b = next.message
     if (a.id !== b.id) return false
     if (a.content !== b.content) return false
+    // The live timeline changes while content is still empty: new stages,
+    // a tool result settling its row, a thumbnail, the stream closing.
+    if (Boolean(prev.isStreaming) !== Boolean(next.isStreaming)) return false
+    if (a.progressStage !== b.progressStage) return false
+    if (activitySignature(a.activityLog) !== activitySignature(b.activityLog)) return false
+    if (a.agentMetadata !== b.agentMetadata) return false
 
     const fileKey = (files: unknown) => {
         if (!files) return ""

@@ -697,14 +697,21 @@ async function reprocessIfNeeded(prisma, file) {
   if (hasProcessableStoredText(file?.extractedText) || !file?.path || !fs.existsSync(file.path)) {
     return { file, result: null };
   }
+  // The upload pipeline is still extracting this file: a second full
+  // extraction here (analyze on a chat/agent request) duplicated the OCR of
+  // a just-sent image for ~1 min (prod 2026-09-26). Analyze what is stored
+  // now; the pipeline re-analyzes with its own result when it finishes.
+  const extractionSingleflight = require('./file-extraction-singleflight');
+  const pipeline = await extractionSingleflight.pipelineStatus(prisma, file.id);
+  if (pipeline.inProgress) return { file, result: null };
   try {
     const fileProcessor = require('./fileProcessor');
-    const result = await fileProcessor.processFile({
+    const result = await extractionSingleflight.runExtractionOnce(file.id, () => fileProcessor.processFile({
       path: file.path,
       mimetype: file.mimeType,
       originalname: file.originalName || file.filename || 'archivo',
       size: file.size || 0,
-    });
+    }));
     if (result?.extractedText && prisma?.file?.update) {
       await prisma.file.update({
         where: { id: file.id },

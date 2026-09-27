@@ -205,63 +205,15 @@ function buildProcessedFilesContext(processedFiles = [], prompt = '') {
   ].join('\n');
 }
 
-const PIPELINE_STAGES_IN_PROGRESS = new Set(['uploaded', 'validating', 'extracting']);
-const DEFAULT_TURN_ATTACHMENT_WAIT_MS = 20_000;
-const PIPELINE_POLL_MS = 500;
-
-function turnAttachmentWaitMs(value, env = process.env) {
-  const raw = value != null ? value : env.SIRAGPT_TURN_ATTACHMENT_WAIT_MS;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n >= 0) return Math.min(n, 120_000);
-  return DEFAULT_TURN_ATTACHMENT_WAIT_MS;
-}
-
 function hasUsableExtract(text) {
   return messageAttachments.hasUsefulExtractedText(text) && !looksLikeUnsupportedExtractionPlaceholder(text);
-}
-
-async function readPipelineState(prisma, fileId) {
-  if (!fileId || !prisma?.file?.findUnique) return null;
-  try {
-    return await prisma.file.findUnique({
-      where: { id: fileId },
-      select: { processingStage: true, extractedText: true },
-    });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Wait (bounded) for the upload pipeline's own extraction of `file` instead of
- * starting a second one. Returns the extracted text, or '' when it is still not
- * ready at the deadline — the turn then proceeds with what it has.
- */
-async function waitForPipelineExtract(prisma, file, { inflight, waitMs, sleep }) {
-  const deadline = Date.now() + waitMs;
-  if (inflight) {
-    let timer = null;
-    await Promise.race([
-      Promise.resolve(inflight).catch(() => null),
-      new Promise((resolve) => { timer = setTimeout(resolve, waitMs); if (timer.unref) timer.unref(); }),
-    ]);
-    if (timer) clearTimeout(timer);
-  }
-  for (;;) {
-    const state = await readPipelineState(prisma, file.id);
-    if (state && hasUsableExtract(state.extractedText)) return state.extractedText;
-    if (!state || !PIPELINE_STAGES_IN_PROGRESS.has(String(state.processingStage || ''))) return '';
-    if (Date.now() >= deadline) return '';
-    await sleep(Math.min(PIPELINE_POLL_MS, Math.max(0, deadline - Date.now())));
-  }
 }
 
 async function refreshProcessedFileExtracts(prisma, processedFiles = [], opts = {}) {
   if (!Array.isArray(processedFiles) || processedFiles.length === 0) return processedFiles;
   const fileProcessor = opts.fileProcessor || require('./fileProcessor');
   const extractionSingleflight = require('./file-extraction-singleflight');
-  const waitMs = turnAttachmentWaitMs(opts.waitMs);
-  const sleep = opts.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const waitMs = extractionSingleflight.requestWaitMs(opts.waitMs);
   return Promise.all(processedFiles.map(async (file) => {
     if (!file) return file;
     if (hasUsableExtract(file.extractedText)) return file;
@@ -271,13 +223,14 @@ async function refreshProcessedFileExtracts(prisma, processedFiles = [], opts = 
     if (isImageAttachment(file)) return file;
     // The upload pipeline is still extracting this file: never start a second
     // extraction of the same bytes — wait (bounded) for its result instead.
-    const inflight = extractionSingleflight.inflightExtraction(file.id);
-    const state = inflight ? null : await readPipelineState(prisma, file.id);
-    if (inflight || (state && PIPELINE_STAGES_IN_PROGRESS.has(String(state.processingStage || '')))) {
-      const text = await waitForPipelineExtract(prisma, file, { inflight, waitMs, sleep });
+    const pipeline = await extractionSingleflight.pipelineStatus(prisma, file.id);
+    if (pipeline.inProgress) {
+      const text = await extractionSingleflight.awaitPipelineText(prisma, file.id, {
+        waitMs, isUseful: hasUsableExtract, ...(opts.sleep ? { sleep: opts.sleep } : {}),
+      });
       return text ? { ...file, extractedText: text } : file;
     }
-    if (state && hasUsableExtract(state.extractedText)) return { ...file, extractedText: state.extractedText };
+    if (hasUsableExtract(pipeline.text)) return { ...file, extractedText: pipeline.text };
     if (!file?.path || !fs.existsSync(file.path)) return file;
     try {
       const result = await extractionSingleflight.runExtractionOnce(file.id, () => fileProcessor.processFile({
@@ -310,6 +263,9 @@ async function buildChatUploadedFileContext(prisma, { userId, processedFiles, pr
     userId,
     fileIds,
     query: prompt,
+    // Chat turns send images to the model as pixels: never hold the turn
+    // for OCR text the upload pipeline is still producing.
+    imageTextWaitMs: 0,
   });
   return enrichedContext || buildProcessedFilesContext(processedFiles, prompt);
 }

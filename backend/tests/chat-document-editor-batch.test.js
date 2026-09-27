@@ -66,6 +66,20 @@ test('multiple originals and later edits retain each latest version and the sele
   }
 });
 
+test('batch answer reports delivered files without repeating contradictory per-file scope claims', async (t) => {
+  const f = fixture(t);
+  f.deps.runDocumentAgent = async (options) => ({ stoppedReason: 'final',
+    finalText: `Solo está presente ${options.files[0].name}; los demás archivos no están disponibles.`,
+    outputs: options.files.map((file) => ({ name: file.name, valid: true, buffer: Buffer.concat([file.buffer, Buffer.from('|edit')]) })) });
+  const result = await f.run();
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.artifacts.length, 2);
+  assert.match(result.summary, /Ventas\.xlsx → Ventas\.xlsx/);
+  assert.match(result.summary, /Informe\.pptx → Informe\.pptx/);
+  assert.doesNotMatch(result.summary, /solo est[aá] presente|no est[aá]n disponibles/i);
+  assert.ok(f.calls.saved.every((item) => item.validation.documentEdit.sourceFileId));
+});
+
 test('explicit artifact identity wins over history and checks ownership', async (t) => {
   const f = fixture(t, ['Base.xlsx']);
   f.addArtifact('aabbcc', 'Base (editado).xlsx', 'chosen-v2');

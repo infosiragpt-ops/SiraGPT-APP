@@ -69,6 +69,13 @@ describe("LiveLogsPanel", () => {
     expect(s.calls[1].filter.level).toBe("error")
   })
 
+  it("defaults to «Info y superior» so fast successful reads (debug) stay out of the way", async () => {
+    const s = fakeStream()
+    render(<LiveLogsPanel openStream={s.openStream as any} />)
+    await waitFor(() => expect(s.openStream).toHaveBeenCalled())
+    expect(s.calls[0].filter.level).toBe("info")
+  })
+
   it("clicking a line opens the detail with context and the request trail button", async () => {
     const s = fakeStream()
     render(<LiveLogsPanel openStream={s.openStream as any} />)

@@ -134,6 +134,7 @@ const ALLOWED_EVENTS = new Set([
   'artifacts.generation_declined',
   'artifacts.generation_failed',
   'artifacts.vision_image_read_failed',
+  'attachments.prepared',
   'attribution.completed',
   'attribution.confidence_calibrated',
   'attribution.failed',

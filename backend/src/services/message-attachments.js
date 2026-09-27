@@ -211,13 +211,49 @@ function resolveStoredFilePath(row = {}, userId = '') {
   }) || null;
 }
 
-async function ensureImageOcr(prisma, row, userId) {
+const REQUEST_OCR_TIMEOUT_MS = Math.max(1000, Number(process.env.SIRAGPT_REQUEST_OCR_TIMEOUT_MS) || 20_000);
+
+function withTimeout(promise, ms) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => { timer = setTimeout(() => resolve(null), ms); if (timer.unref) timer.unref(); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
+/**
+ * OCR text for an image attachment on a REQUEST path (chat turn, agent task,
+ * transcription). The upload pipeline already OCRs every image in the
+ * background (tesseract + vision fallback, up to a minute); running that
+ * again here held a chat turn for 43 s and the first-byte watchdog cancelled
+ * the reply (prod 2026-09-26, «(a+b)² =» screenshot). So:
+ *   - pipeline still working → wait for ITS text, at most `imageTextWaitMs`
+ *     (0 = don't wait: the pixels go to the vision model anyway);
+ *   - pipeline done → use its text; never re-OCR what it already tried;
+ *   - no pipeline record (legacy rows) → one bounded OCR pass, shared by
+ *     concurrent requests.
+ */
+async function ensureImageOcr(prisma, row, userId, { imageTextWaitMs } = {}) {
   if (!row || !isImageFile(row) || hasUsefulExtractedText(row.extractedText)) return row;
+  const extractionSingleflight = require('./file-extraction-singleflight');
+  const pipeline = await extractionSingleflight.pipelineStatus(prisma, row.id);
+  if (pipeline.inProgress) {
+    const waitMs = extractionSingleflight.requestWaitMs(imageTextWaitMs);
+    if (waitMs <= 0) return row;
+    const text = await extractionSingleflight.awaitPipelineText(prisma, row.id, { waitMs, isUseful: hasUsefulExtractedText });
+    return text ? { ...row, extractedText: text } : row;
+  }
+  if (hasUsefulExtractedText(pipeline.text)) return { ...row, extractedText: pipeline.text };
+  if (pipeline.stage) return row; // the pipeline already ran and found no useful text
   const filePath = resolveStoredFilePath(row, userId);
   if (!filePath) return row;
 
   try {
-    const result = await ocrEngine.extractFromImage(filePath, { mimeType: row.mimeType || row.type || 'image/png' });
+    const result = await withTimeout(
+      extractionSingleflight.runExtractionOnce(`ocr:${row.id}`, () => ocrEngine.extractFromImage(filePath, { mimeType: row.mimeType || row.type || 'image/png' })),
+      REQUEST_OCR_TIMEOUT_MS,
+    );
+    if (!result) return row;
     const extractedText = result.text || '';
     if (!hasUsefulExtractedText(extractedText)) return row;
     if (prisma?.file?.update) {
@@ -778,11 +814,15 @@ async function buildUploadedFileContext(prisma, {
   query = '',
   maxChars = 36000,
   evidenceLimit = 18,
+  // How long an image may wait for the upload pipeline's OCR text. Chat turns
+  // pass 0 (the pixels go to the vision model); agent paths keep the bounded
+  // default instead of re-running OCR themselves.
+  imageTextWaitMs,
 } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return '';
   const rows = await loadFileRows(prisma, userId, ids);
-  const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
+  const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId, { imageTextWaitMs }));
   const enrichedRows = await mapWithLimit(ocrRows, (row) => ensureDocumentAnalysis(prisma, row, userId));
   const withText = enrichedRows
     .map((row) => ({ ...row, documentText: documentTextForRow(row, Math.max(maxChars, 240000)) }))

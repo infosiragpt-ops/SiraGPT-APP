@@ -936,9 +936,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       const { wantsNewPresentationDeliverable } = require('./agents/document-delivery-policy');
       wantsNewDeckDeliverable = wantsNewPresentationDeliverable(userQuery);
     } catch (_) { /* best-effort */ }
+    // Edición milimétrica (SPEC §7 D.3): the stage timeline of an AgentRunner
+    // turn, persisted with the message so a reload shows the same steps.
+    let agentRunnerTrace = null;
     const finishSourcePreservingPreloop = (stoppedReason, answer, artifacts = []) => {
       const finalAnswer = String(answer || '').trim();
       const reason = String(stoppedReason || '');
+      let agentActivityTrace = null;
+      if (agentRunnerTrace && (reason === 'agent_runner' || reason === 'agent_runner_failed')) {
+        try { agentActivityTrace = agentRunnerTrace.toMetadata(); } catch (_) { agentActivityTrace = null; }
+      }
       const preloopTool = reason.startsWith('github_')
         ? 'github_open_repo'
         : reason.startsWith('project_preview')
@@ -973,6 +980,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         }, finalAnswer),
         stoppedReason,
         artifacts,
+        ...(agentActivityTrace ? { agentActivityTrace } : {}),
       };
     };
     if (githubLocalPreviewTurn && toolContext.userId) {
@@ -1101,7 +1109,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         text: userQuery,
       })) {
         agentRunnerClaimedTurn = true;
-        await writeSse(res, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner' });
+        try {
+          const { createActivityTraceCollector, createArtifactThumbSaver } = require('./agent-runner/activity-trace');
+          agentRunnerTrace = createActivityTraceCollector({
+            saveThumb: createArtifactThumbSaver({ userId: toolContext.userId }),
+          });
+        } catch (_) { agentRunnerTrace = null; }
+        const runnerStartStage = { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner' };
+        if (agentRunnerTrace) agentRunnerTrace.push(runnerStartStage);
+        await writeSse(res, runnerStartStage);
         const ran = await executeAgentRunnerTurn({
           prisma: toolContext.prisma,
           userId: toolContext.userId,
@@ -1120,7 +1136,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               // / retry / thought / cancelled / error) becomes one canonical
               // `type: 'stage'` SSE event with a Spanish label + tool name.
               const stage = require('./agent-runner/trace').toStageEvent(ev);
-              if (stage) await writeSse(res, stage);
+              if (stage) {
+                if (agentRunnerTrace) agentRunnerTrace.push(stage);
+                await writeSse(res, stage);
+              }
             })()).catch(() => {});
           },
         });
