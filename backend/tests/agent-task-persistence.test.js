@@ -210,3 +210,30 @@ test('appendAgentTaskEvent does not turn an existing failure/cancel into success
   await persistence.appendAgentTaskEvent({ taskId: 'explicit-cancel', userId: 'user-1', status: 'running' }, { type: 'done', seq: 1, stoppedReason: 'cancelled_by_user' });
   assert.equal(prisma._rows.get('explicit-cancel').status, 'cancelled');
 });
+
+// Prod 2026-09-27: the chat of a running task was deleted; the FK is ON DELETE
+// SET NULL, so the row kept living with chatId null and every later snapshot
+// write that still carried the old chatId failed with P2003 (28 in one
+// second) — the task never reached a terminal status in Postgres.
+test('updateExistingAgentTask drops a dangling chatId when the chat was deleted (P2003)', async (t) => {
+  const prisma = makePrismaMock([{ id: 'task-fk', jobId: 'task-fk', userId: 'u1', chatId: null, status: 'running' }]);
+  const seen = [];
+  const original = prisma.agentTask.updateMany;
+  prisma.agentTask.updateMany = async (args) => {
+    seen.push(args.data);
+    if (args.data.chatId) {
+      const err = new Error('Foreign key constraint violated on the constraint: `agent_tasks_chatId_fkey`');
+      err.code = 'P2003';
+      throw err;
+    }
+    return original(args);
+  };
+  const { persistence, restore } = loadPersistenceWithPrisma(prisma);
+  t.after(restore);
+  const row = await persistence.upsertAgentTask({ taskId: 'task-fk', jobId: 'task-fk', userId: 'u1', chatId: 'deleted-chat', status: 'completed', goal: 'x' });
+  assert.ok(row, 'the task must still be persisted');
+  assert.equal(row.status, 'completed');
+  assert.equal(row.chatId, null);
+  assert.equal(seen.length, 2, 'one failed write with the old chatId, one retry without it');
+  assert.equal(seen[1].chatId, null);
+});

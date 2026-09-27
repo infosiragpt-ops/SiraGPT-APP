@@ -257,3 +257,22 @@ describe('client aborts while the body is read', () => {
     assert.equal(events[0].message, 'request_failed');
   });
 });
+
+// Prod 2026-09-27: a rejected Origin answered 403 correctly and still showed
+// as ERROR in «Registros en vivo» because the machine-readable line hardcoded
+// level "error". Only 5xx is a backend failure.
+test('the machine-readable failure line carries warn for 4xx and error for 5xx', async () => {
+  const express = require('express');
+  const request = require('supertest');
+  const lines = [];
+  const app = express();
+  app.get('/forbidden', (_req, _res, next) => { const err = new Error('nope'); err.status = 403; next(err); });
+  app.get('/boom', (_req, _res, next) => next(new Error('kaboom')));
+  app.use(globalErrorHandler({ logger: { warn() {}, error() {}, info() {} }, stdout: (line) => lines.push(JSON.parse(line)) }));
+  await request(app).get('/forbidden').expect(403);
+  await request(app).get('/boom').expect(500);
+  assert.equal(lines[0].status, 403);
+  assert.equal(lines[0].level, 'warn');
+  assert.equal(lines[1].status, 500);
+  assert.equal(lines[1].level, 'error');
+});

@@ -65,3 +65,16 @@ test('getFactMeta: after upsert reports mentions and non-negative age', () => {
   assert.equal(meta.mentions, 2);
   assert.ok(meta.ageDays >= 0);
 });
+
+// Prod 2026-09-27: «[long-term-memory] extraction failed: Unexpected end of
+// JSON input» — max_tokens cut the answer mid-array and every fact was lost.
+test('parseExtractionPayload salvages the complete facts of a truncated answer and tolerates fences', () => {
+  const { parseExtractionPayload } = require('../src/services/long-term-memory');
+  const whole = parseExtractionPayload('```json\n{"facts":[{"fact":"usa Mac","category":"profile","confidence":0.9}]}\n```');
+  assert.deepEqual(whole, { facts: [{ fact: 'usa Mac', category: 'profile', confidence: 0.9 }] });
+  const cut = parseExtractionPayload('{"facts":[{"fact":"usa Mac","category":"profile","confidence":0.9},{"fact":"vive en Lima","category":"pro');
+  assert.equal(cut.salvaged, true);
+  assert.deepEqual(cut.facts.map((f) => f.fact), ['usa Mac']);
+  assert.equal(parseExtractionPayload(''), null);
+  assert.equal(parseExtractionPayload('not json at all'), null);
+});

@@ -75,6 +75,7 @@ function isUnauthorizedAuthError(error: unknown): boolean {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -88,6 +89,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mountedRef.current = false
     }
+  }, [])
+
+  // The API client dispatches this once when a token refresh definitively
+  // fails (see ApiClient._tryRefresh): the tab goes to «unauthenticated» so
+  // pollers stop hammering /auth/refresh and the user sees the login.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onExpired = () => {
+      apiClient.setToken(null)
+      setToken(null)
+      setUser(null)
+      setSessionStatus("unauthenticated")
+    }
+    window.addEventListener('siragpt:session-expired', onExpired)
+    return () => window.removeEventListener('siragpt:session-expired', onExpired)
   }, [])
 
   const hydrateSession = useCallback(async (): Promise<SessionHydrationResult> => {
@@ -245,6 +261,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Registration failed:', error)
       if (authEpochRef.current === registerEpoch) setSessionStatus("error")
+      // A 4xx is the user's own input (validation, email already registered):
+      // rethrow so the page can show the server's field details inline.
+      const status = Number((error as { status?: number } | null)?.status)
+      if (status >= 400 && status < 500 && status !== 429) throw error
       return false
     } finally {
       if (authEpochRef.current === registerEpoch) setIsLoading(false)

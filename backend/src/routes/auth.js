@@ -718,7 +718,11 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
       });
     }
     if (!result.ok && result.kind === 'duplicate') {
-      return res.status(400).json({ error: 'User already exists' });
+      return res.status(400).json({
+        error: 'User already exists',
+        code: 'auth.email.in_use',
+        message: 'Ya existe una cuenta con este correo. Inicia sesión o recupera tu contraseña.',
+      });
     }
 
     const { user, token } = result;

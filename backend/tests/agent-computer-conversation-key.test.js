@@ -68,7 +68,7 @@ describe('agent-computer conversation session key', () => {
     const start = route.indexOf('async function ensureMemberDesktop');
     const end = route.indexOf('function ownedOrDeny');
     const ensure = route.slice(start, end);
-    assert.match(ensure, /orchFetch\('\/sessions'/);
+    assert.match(ensure, /orchFetch(?:WithRetry)?\('\/sessions'/);
     assert.match(ensure, /if \(identity.conversationBound\)/);
     assert.ok(
       ensure.indexOf("orchFetch('/sessions'") < ensure.indexOf('requireProvenIsolation'),

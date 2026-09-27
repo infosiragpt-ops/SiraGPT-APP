@@ -1421,7 +1421,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const code = preErr && preErr.code;
         const message = String(preErr && preErr.message || preErr || '').slice(0, 500);
         try {
-          console.warn('[agentic-chat] source-preserving pre-loop failed:', code || message);
+          const validationNote = preErr && preErr.validation && Array.isArray(preErr.validation.failures)
+            ? ` — ${preErr.validation.failures.slice(0, 3).map((f) => (f && (f.summary || f.label || f.code)) || '').filter(Boolean).join('; ')}`
+            : '';
+          console.warn('[agentic-chat] source-preserving pre-loop failed:', code ? `${code} — ${message}${validationNote}` : message);
         } catch (_) { /* noop */ }
         // Surgical not-found / ambiguous edit: tell the user instead of letting
         // a weak model call docintel_analyze and "analyze" the attachment.

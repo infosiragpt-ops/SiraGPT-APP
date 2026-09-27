@@ -180,7 +180,10 @@ describe('capture → issues (new, repeat, regression, ignored, spike)', () => {
   beforeEach(() => {
     systemErrors.__resetForTests();
     prisma = fakePrisma();
-    store = createSystemIssueStore({ prisma });
+    // The fake prisma stamps rows at 2026-09-26T20:00; the store must read
+    // the same clock or every «last 24 h» query goes empty once the real
+    // date moves on (CI went red on 2026-09-27T20:00 UTC, exactly 24 h later).
+    store = createSystemIssueStore({ prisma, now: () => Date.parse('2026-09-26T20:40:00.000Z') });
     systemErrors.__setStoreForTests(store);
   });
   afterEach(() => {
@@ -430,7 +433,10 @@ describe('admin queries — list, stats, recent, detail with linked failed turns
   beforeEach(() => {
     systemErrors.__resetForTests();
     prisma = fakePrisma();
-    store = createSystemIssueStore({ prisma });
+    // The fake prisma stamps rows at 2026-09-26T20:00; the store must read
+    // the same clock or every «last 24 h» query goes empty once the real
+    // date moves on (CI went red on 2026-09-27T20:00 UTC, exactly 24 h later).
+    store = createSystemIssueStore({ prisma, now: () => Date.parse('2026-09-26T20:40:00.000Z') });
     systemErrors.__setStoreForTests(store);
   });
   afterEach(() => {
