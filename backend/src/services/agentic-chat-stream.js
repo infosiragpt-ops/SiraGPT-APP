@@ -561,6 +561,10 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   // answer — never fall through to the plain stream or the generic pipeline.
   'agent_runner_failed',
   'generated_artifact_read_failed',
+  // A direct byte comparison has already produced the final, verified result
+  // (or an honest read error). The HTTP route must not ask a model to replace it.
+  'generated_artifact_compare_verified',
+  'generated_artifact_compare_failed',
   // GitHub CONSTRUIR pre-loop (OAuth CTA or isolated open). Falling through
   // to the plain stream was collapsing these into «Conexión no disponible».
   'github_open_repo',
@@ -988,7 +992,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           ? 'project_preview_start'
           : reason.startsWith('project_')
             ? 'project_clone_repo'
-            : 'document_edit';
+            : reason.startsWith('generated_artifact_compare')
+              ? 'python_exec'
+              : 'document_edit';
       // Turn failure tracker: an honest failure answer is still a failed
       // turn for the admin log (the user did not get the edit/preview).
       if (/(_failed|_error)$/.test(reason)) {
@@ -1004,7 +1010,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       return {
         finalAnswer,
         persistedContent: buildPersistedContent({
-          meta: { goal: userQuery, model, tools: [preloopTool] },
+          meta: reason.startsWith('generated_artifact_compare')
+            ? { goal: userQuery, execution: 'deterministic_python', tools: [preloopTool] }
+            : { goal: userQuery, model, tools: [preloopTool] },
           steps: [],
           artifacts,
           approvals: [],
@@ -1019,6 +1027,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ...(agentActivityTrace ? { agentActivityTrace } : {}),
       };
     };
+    // A read-only comparison of the .sav and .xlsx just delivered is fully
+    // determined by their bytes. The selected provider may take minutes or
+    // decline a forced function call; neither should block this exact audit.
+    // The existing Python tool rechecks owner/chat/validation and hydrates R2.
+    if (generatedArtifactRefs.length) {
+      const followup = require('./agents/generated-artifact-followup');
+      if (followup.isGeneratedSavXlsxComparison(userQuery, generatedArtifactRefs)) {
+        await writeSse(res, { type: 'stage', label: 'Comparando archivos SPSS y Excel', tool: 'python_exec' });
+        const comparison = await followup.compareGeneratedSavXlsx({
+          refs: generatedArtifactRefs,
+          goal: userQuery,
+          userId: toolContext.userId,
+          chatId: toolContext.chatId,
+        });
+        await writeSse(res, { replace: true, content: comparison.answer });
+        return finishSourcePreservingPreloop(
+          comparison.ok ? 'generated_artifact_compare_verified' : 'generated_artifact_compare_failed',
+          comparison.answer,
+        );
+      }
+    }
     if (githubLocalPreviewTurn && toolContext.userId) {
       try {
         const previewTools = require('./agents/project-preview-tools');
