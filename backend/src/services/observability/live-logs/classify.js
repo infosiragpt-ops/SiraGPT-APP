@@ -95,6 +95,42 @@ function statusOf(obj) {
   return null;
 }
 
+// Keys already shown elsewhere (or noise) — never repeated as `key=value`.
+const DETAIL_SKIP = new Set([
+  'level', 'lvl', 'severity', 'time', 't', 'ts', 'timestamp', 'pid', 'hostname', 'v',
+  'msg', 'message', 'event', 'action', 'component', 'name', 'module', 'tag', 'service',
+  'userId', 'user_id', 'reqId', 'requestId', 'request_id', 'chatId', 'chat_id', 'conversationId',
+  'ip', 'ua', 'userAgent', 'method', 'path', 'url', 'route', 'endpoint', 'status', 'statusCode',
+  'durMs', 'responseTime', 'req', 'res', 'err', 'alert', 'trace_id', 'span_id', 'trace_flags',
+]);
+const DETAIL_PRIORITY = ['code', 'reason', 'provider', 'model', 'scope', 'stage', 'kind', 'domain', 'file', 'hits', 'count', 'durationMs', 'ms'];
+
+/** Up to `max` short `key=value` details so metric/event lines say something. */
+function scalarDetails(obj, max = 4) {
+  const out = [];
+  const seen = new Set();
+  const add = (key) => {
+    if (out.length >= max || seen.has(key) || DETAIL_SKIP.has(key)) return;
+    const value = obj[key];
+    if (value == null || value === '') return;
+    if (typeof value === 'string' && value.length <= 60 && !/[\n\r]/.test(value)) out.push(`${key}=${value}`);
+    else if (typeof value === 'number' || typeof value === 'boolean') out.push(`${key}=${value}`);
+    else if (Array.isArray(value)) out.push(`${key}=[${value.length}]`);
+    else return;
+    seen.add(key);
+  };
+  for (const key of DETAIL_PRIORITY) add(key);
+  for (const key of Object.keys(obj)) add(key);
+  return out;
+}
+
+/** Does a structured record itself say something failed? */
+function jsonFailureSignal(obj) {
+  if (obj.ok === false || obj.aborted === true) return true;
+  if (typeof obj.error === 'string' ? obj.error.trim() : obj.error && obj.error.message) return true;
+  return /^(?:error|critical|fatal)$/i.test(String(obj.severity || ''));
+}
+
 /** One-line human summary of a structured (JSON) log record. */
 function summarizeJson(obj) {
   const method = firstString(obj.method, obj.req && obj.req.method);
@@ -113,7 +149,17 @@ function summarizeJson(obj) {
   if (status) parts.push(`→ ${status}`);
   if (Number.isFinite(dur) && dur >= 0 && (method || status)) parts.push(`(${Math.round(dur)} ms)`);
   if (text && !(text === 'request completed' && parts.length)) parts.push(text);
+  const alert = obj.alert && typeof obj.alert === 'object' ? obj.alert : null;
+  if (alert && (alert.title || alert.message)) {
+    // alert_emitted → «[critical] [agent-task] run estancado 478h …»
+    parts.push(`· ${alert.severity ? `[${alert.severity}] ` : ''}${firstString(alert.title, alert.message)}`);
+  }
   if (errMsg && !parts.join(' ').includes(errMsg)) parts.push(`— ${errMsg}`);
+  if (parts.length && !(method && url) && !alert) {
+    // Event/metric lines (`doc_sandbox`, `web_search_many`…): add the key facts.
+    const details = scalarDetails(obj).filter((d) => !errMsg || !d.startsWith('error='));
+    if (details.length) parts.push(`· ${details.join(' ')}`);
+  }
   if (!parts.length) {
     const keys = Object.keys(obj).filter((k) => !['level', 'time', 'pid', 'hostname', 'v', 'ts', 'timestamp'].includes(k)).slice(0, 4);
     parts.push(keys.map((k) => `${k}=${typeof obj[k] === 'object' ? JSON.stringify(obj[k]).slice(0, 60) : String(obj[k]).slice(0, 60)}`).join(' '));
@@ -175,8 +221,12 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
   }
 
   if (obj) {
-    const declared = normalizeLevelValue(obj.level ?? obj.severity ?? obj.lvl);
+    const declared = normalizeLevelValue(obj.level ?? obj.lvl) || normalizeLevelValue(obj.severity);
     if (declared) level = declared;
+    // A structured record without a level is a metric/event: which console
+    // method printed it is not a failure signal — its own fields are.
+    else if (!jsonFailureSignal(obj)) level = 'info';
+    else if (level !== 'error') level = 'warn';
     status = statusOf(obj);
     if (status >= 500) level = maxLevel(level, 'error');
     else if (status >= 400 && status !== 401 && status !== 404) level = maxLevel(level, 'warn');
