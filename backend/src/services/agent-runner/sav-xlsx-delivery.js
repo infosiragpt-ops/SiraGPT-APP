@@ -10,10 +10,16 @@ function formatOf(output) {
   return String(output?.name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || '';
 }
 
+function isRequestedSavXlsxPair(contract) {
+  return contract?.active && contract.expectedCount === 2 && contract.requested?.length === 2
+    && contract.requested.some((item) => item.format === 'sav' && item.count === 1)
+    && contract.requested.some((item) => item.format === 'xlsx' && item.count === 1);
+}
+
 /** Keep a model's “Listo” out of SSE until the pair's bytes have passed. */
 function createSavXlsxFinalEventGate(instruction, emit) {
   const contract = buildArtifactDeliveryContract(instruction, { multipleArtifacts: false });
-  const active = Boolean(contract.active && contract.savXlsxMatrix);
+  const active = Boolean(contract.active && (contract.savXlsxMatrix || isRequestedSavXlsxPair(contract)));
   let pendingFinal = null;
   return {
     onEvent(event) {
@@ -23,11 +29,11 @@ function createSavXlsxFinalEventGate(instruction, emit) {
       }
       emit(event);
     },
-    release({ ok, result } = {}) {
+    release({ ok, result, deliveryBlocked = false } = {}) {
       if (!active || !pendingFinal) return;
       const finalEvent = pendingFinal;
       pendingFinal = null;
-      if (ok && result?.stoppedReason === 'final') {
+      if (ok && !deliveryBlocked && result?.stoppedReason === 'final') {
         emit(finalEvent);
       } else {
         emit({
@@ -70,17 +76,29 @@ async function inspectExactPair(sandbox, outputs) {
   }
 }
 
-/** Reject an explicit matrix pair before persistOutputs can publish either card. */
+/** Reject an incomplete pair, then verify matrix bytes when dimensions were requested. */
 async function applySavXlsxDeliveryGate({ instruction = '', outputs = [], result = {}, sandbox } = {}) {
   const contract = buildArtifactDeliveryContract(instruction, { multipleArtifacts: false });
-  if (!contract.active || !contract.savXlsxMatrix) {
+  if (!contract.active || (!contract.savXlsxMatrix && !isRequestedSavXlsxPair(contract))) {
     return { active: false, ok: true, outputs, result };
   }
   const validOutputs = outputs.filter((output) => output?.valid !== false && Buffer.isBuffer(output?.buffer));
   // Preserve a provider, timeout, or existing verification failure as the
   // primary result; those paths already publish no files.
-  if (result.stoppedReason !== 'final' || validOutputs.length === 0) {
+  if (result.stoppedReason !== 'final') {
     return { active: true, ok: false, outputs, result };
+  }
+  if (validOutputs.length === 0) {
+    return {
+      active: true,
+      ok: false,
+      outputs,
+      result: {
+        ...result,
+        stoppedReason: 'no_output',
+        errorMessage: result.errorMessage || 'No se produjeron los archivos SAV y Excel solicitados.',
+      },
+    };
   }
 
   let verdict;
@@ -95,10 +113,12 @@ async function applySavXlsxDeliveryGate({ instruction = '', outputs = [], result
       format: formatOf(output),
       downloadUrl: '/internal-candidate',
     }));
-    verdict = await validateSavXlsxDelivery(contract, {
-      artifacts,
-      inspectPair: () => inspectExactPair(sandbox, validOutputs),
-    });
+    verdict = contract.savXlsxMatrix
+      ? await validateSavXlsxDelivery(contract, {
+        artifacts,
+        inspectPair: () => inspectExactPair(sandbox, validOutputs),
+      })
+      : { ok: true };
   }
 
   if (verdict.ok) {
@@ -106,14 +126,14 @@ async function applySavXlsxDeliveryGate({ instruction = '', outputs = [], result
       active: true,
       ok: true,
       outputs,
-      result: {
+      result: contract.savXlsxMatrix ? {
         ...result,
         savXlsxVerification: {
           ...contract.savXlsxMatrix,
           comparedCells: verdict.comparedCells,
           labelCount: verdict.labelCount,
         },
-      },
+      } : result,
     };
   }
   return {
