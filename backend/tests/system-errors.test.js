@@ -65,7 +65,7 @@ function matches(row, where) {
 function fakePrisma() {
   const rows = [];
   let seq = 0;
-  let clock = Date.parse('2026-09-26T20:00:00.000Z');
+  let clock = Date.now();
   return {
     rows,
     auditLog: {
@@ -472,7 +472,7 @@ describe('admin queries — list, stats, recent, detail with linked failed turns
     assert.equal(stats.new24h, 2);
     assert.equal(stats.resolved7d, 1);
 
-    const recent = await store.recent({ since: new Date(Date.parse('2026-09-26T19:59:00.000Z')).toISOString() });
+    const recent = await store.recent({ since: new Date(prisma.rows[0].createdAt.getTime() - 60_000).toISOString() });
     assert.equal(recent.count, 2);
     assert.ok(recent.items.every((i) => i.type === 'nuevo'));
     await assert.rejects(store.setStatus(id, 'borrado'), /Estado no válido/);
