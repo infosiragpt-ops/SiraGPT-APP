@@ -1689,7 +1689,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null } = {}) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null, activityTrace = null } = {}) {
   const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
     ? observabilityLog
     : generatePersistenceLog;
@@ -1829,6 +1829,12 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
               ? reasoningPayload.details
               : undefined,
+            // AgentRunner turns (edición milimétrica): the stage timeline the
+            // user watched live, so a reload shows the same steps. A harness
+            // run owns agent_metadata instead (one timeline per turn).
+            ...(activityTrace && typeof activityTrace === 'object' && !agentRun
+              ? { agentMetadata: activityTrace }
+              : {}),
           }
         });
 
@@ -1974,7 +1980,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           maxAttempts: 3,
         });
         setTimeout(() => {
-          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog })
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog, activityTrace })
             .catch((retryErr) => persistenceLog.error('persistence.retry_crashed', retryErr, {
               attempt: _attempt + 2,
               maxAttempts: 3,
@@ -7766,6 +7772,9 @@ router.post(
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
                   req._agentRun = agenticResult.agentRun || null;
+                  // AgentRunner turns: the stage timeline persisted with the
+                  // assistant row (messages.agent_metadata.activityTrace).
+                  req._agentActivityTrace = agenticResult.agentActivityTrace || null;
                   // The live stream already contains artifact cards. Keep the
                   // compact persistence envelope separately from the model
                   // answer so post-processing and token accounting continue to
@@ -8355,7 +8364,7 @@ router.post(
                 null,
                 req._agentRun || null,
                 0,
-                { observabilityLog: generateLog, rlhfFeedback },
+                { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || null },
               );
               if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
                 req._activeGenerateTurn.resolve(savedChat);
@@ -8854,7 +8863,7 @@ router.post(
           __reasoningSink,
           req._agentRun || null,
           0,
-          { observabilityLog: generateLog, rlhfFeedback },
+          { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || null },
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
