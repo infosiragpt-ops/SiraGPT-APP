@@ -30,6 +30,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Module = require('node:module');
+const { spawnSync } = require('node:child_process');
 
 const PizZip = require('pizzip');
 const agentRunner = require('../src/services/agent-runner');
@@ -45,9 +46,19 @@ const {
 
 const SMOKE = process.env.SIRAGPT_SCENARIO_SMOKE === '1';
 const SMOKE_SIZE = 200;
+const HAS_PPT_RENDERER = spawnSync('sh', ['-c', 'command -v soffice'], { stdio: 'ignore' }).status === 0;
 
 const BANK = buildScenarioBank();
 const ROUTING_SET = SMOKE ? sampleBank(BANK, SMOKE_SIZE) : BANK;
+
+function assertClosedWithoutPreview(result, scenario) {
+  if (HAS_PPT_RENDERER) return false;
+  assert.equal(result.stoppedReason, 'verification_failed', `${scenario}: no renderizador`);
+  assert.deepEqual(result.outputs, [], `${scenario}: no se entrega una PPT sin vista previa`);
+  assert.ok(result.steps?.some((step) => step.tool === 'render_preview' && step.ok === false),
+    `${scenario}: queda registrado el fallo de render`);
+  return true;
+}
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -436,6 +447,7 @@ async function runPaintScenario(fixture) {
     maxIterations: 6,
   }));
   assert.deepEqual(loads, []);
+  if (assertClosedWithoutPreview(result, fixture.text)) return;
   assert.equal(result.stoppedReason, 'fast_path', `paint follow-up should use the deterministic fast path: ${fixture.text}`);
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
   assert.ok(out, `produced a painted pptx for: ${fixture.text}`);
@@ -454,6 +466,7 @@ async function runThanksScenario(fixture) {
     maxIterations: 8,
   }));
   assert.deepEqual(loads, []);
+  if (assertClosedWithoutPreview(result, fixture.text)) return;
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
   assert.ok(out, `produced a pptx for: ${fixture.text}`);
   assert.equal(slideCount(out.buffer), 3, 'exactly one slide appended');
@@ -476,6 +489,7 @@ async function runFollowupScenario(fixture) {
     maxIterations: 6,
   }));
   assert.deepEqual(loads, []);
+  if (assertClosedWithoutPreview(result, fixture.text)) return;
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
   assert.ok(out, `follow-up produced a pptx for: ${fixture.text}`);
   slideXmlHasHex(out.buffer, fixture.expect.colorHex);
@@ -521,6 +535,10 @@ async function runInjectionFastpathScenario() {
     maxIterations: 6,
   }));
   assert.deepEqual(loads, []);
+  if (assertClosedWithoutPreview(result, 'injection_fastpath')) {
+    assert.doesNotMatch(result.finalText, /HACKED/);
+    return;
+  }
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
   assert.ok(out, 'deck painted despite the poisoned upload');
   slideXmlHasHex(out.buffer, NAMED_COLORS.verde);
