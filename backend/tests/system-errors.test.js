@@ -270,6 +270,30 @@ describe('capture → issues (new, repeat, regression, ignored, spike)', () => {
     assert.ok(issues(prisma).every((r) => r.metadata.level === 'warning'));
   });
 
+  it('debug timing lines and console.error without any failure signal are not issues', async () => {
+    for (const step of ['handler-enter', 'after-quota-policy type=TEXT', 'after-res-json']) {
+      systemErrors.captureConsole('error', [`[models-dbg] +${Math.round(Math.random() * 90)}ms ${step}`]);
+    }
+    systemErrors.captureConsole('error', ['[perf] slow path 1200ms']);
+    systemErrors.captureConsole('error', ['Loading voices (one time only)...']);
+    // …but real failures still are, with or without an Error object.
+    systemErrors.captureConsole('error', ['[admin-connections-bridge] decrypt failed:', 'error:1C800064:Provider routines::bad decrypt']);
+    systemErrors.captureConsole('error', ['❌ Error from DeepSeek API:', '400 bad model']);
+    systemErrors.captureConsole('error', ['[x] boom', new RangeError('Invalid array length')]);
+    await systemErrors.flush();
+    assert.deepEqual(issues(prisma).map((r) => r.metadata.title).sort(), [
+      'RangeError: [x] boom Invalid array length',
+      '[admin-connections-bridge] decrypt failed: error:1C800064:Provider routines::bad decrypt',
+      '❌ Error from DeepSeek API: 400 bad model',
+    ]);
+  });
+
+  it('frontend stacks keep one frame per line in the drawer', async () => {
+    systemErrors.captureFrontendEvent({ source: 'render', severity: 'error', message: 'TypeError: x', stack: 'TypeError: x at A (a.js:1:2) at B (b.js:3:4)' }, { headers: {} });
+    await systemErrors.flush();
+    assert.equal(issues(prisma)[0].metadata.samples[0].stack, 'TypeError: x\n at A (a.js:1:2)\n at B (b.js:3:4)');
+  });
+
   it('config-absent answers, 4xx and client aborts never become issues', async () => {
     systemErrors.captureConsole('error', ['ElevenLabs API key not configured']);
     systemErrors.captureRequestError(Object.assign(new Error('Validation failed'), { status: 400 }), { req: null, tags: { status: 400 } });
