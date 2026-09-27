@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { imageAssetFromFile, imageAssetsFromMessages, imageOriginalChatHref, resolveImageWorkspaceModel } from '@/lib/image-workspace'
+import { imageAssetForRenderedFile, imageAssetFromFile, imageAssetsFromMessages, imageOriginalChatHref, resolveImageWorkspaceModel } from '@/lib/image-workspace'
 
 describe('image workspace source identity', () => {
   it('keeps the source, version and original message when opening multiple images', () => {
@@ -42,6 +42,23 @@ describe('image workspace source identity', () => {
     expect(asset).toMatchObject({ id: 'original', fileId: 'original', chatId: 'current-chat', messageId: 'current-message', parentFileId: 'parent', rootFileId: 'root', version: 3 })
     expect(asset.url).toMatch(/\/uploads\/original\.png$/)
     expect(imageOriginalChatHref(asset)).toBe('/agentes?id=current-chat&message=current-message')
+  })
+
+  it('opens the original asset when the chat card displays a thumbnail with a different URL', () => {
+    const file = {
+      type: 'image', fileId: 'generated-1',
+      url: '/uploads/original.png', imageUrl: '/uploads/preview.png',
+      name: 'Imagen de playa.png',
+    }
+    const assets = imageAssetsFromMessages([{ id: 'answer', chatId: 'chat', files: [file] }])
+    const opened = imageAssetForRenderedFile(file, assets, 'chat', 'answer')
+
+    expect(opened).toMatchObject({
+      id: 'generated-1', fileId: 'generated-1', chatId: 'chat', messageId: 'answer',
+      name: 'Imagen de playa.png',
+    })
+    expect(opened?.url).toMatch(/\/uploads\/original\.png$/)
+    expect(opened?.url).not.toContain('preview.png')
   })
 
   it('never truncates a non-artifact identifier into a different artifact', () => {
