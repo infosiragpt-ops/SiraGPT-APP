@@ -289,10 +289,25 @@ const PICKER_LADDER_PROVIDERS = new Set(['DeepSeek', 'Meta', 'Gemini', 'xAI', 'O
  * rung of the runner ladder (engines follow the picked model; Custom / other
  * providers keep the ladder order).
  */
+// The picker row may carry an aggregator slug («deepseek/deepseek-v4-pro»):
+// a direct provider API rejects it with a 400 that never fails over («The
+// supported API model names are deepseek-flash, deepseek-v4-pro, but you
+// passed deepseek/deepseek-v4-pro» — every runner turn failed). OpenRouter
+// keeps the slug.
+const DIRECT_SLUG_PREFIX = Object.freeze({
+  DeepSeek: /^deepseek\//i,
+  Gemini: /^(?:google|gemini)\//i,
+  xAI: /^x-?ai\//i,
+  Meta: /^meta\//i,
+  OpenAI: /^openai\//i,
+});
+
 function runnerModelSpec(provider, model) {
   const p = String(provider || '').trim();
-  const m = String(model || '').trim();
+  let m = String(model || '').trim();
   if (!m || !PICKER_LADDER_PROVIDERS.has(p)) return null;
+  const prefix = DIRECT_SLUG_PREFIX[p];
+  if (prefix) m = m.replace(prefix, '') || m;
   return `${p}:${m}`;
 }
 

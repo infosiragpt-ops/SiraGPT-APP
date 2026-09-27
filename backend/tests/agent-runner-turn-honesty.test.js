@@ -237,3 +237,17 @@ test('«ya estaba así»: an unchanged office_edit needs no verification, no out
   assert.equal(res.code, 'NO_CHANGES_NEEDED');
   assert.match(res.message, /ya tiene sangría/);
 });
+
+test('the picked model reaches a direct provider with its native id, never the aggregator slug', () => {
+  // Production: «400 The supported API model names are deepseek-flash,
+  // deepseek-v4-pro, but you passed deepseek/deepseek-v4-pro» on every
+  // /generate runner turn picked with «DeepSeek V4 Pro».
+  assert.equal(runner.runnerModelSpec('DeepSeek', 'deepseek/deepseek-v4-pro'), 'DeepSeek:deepseek-v4-pro');
+  assert.equal(runner.runnerModelSpec('DeepSeek', 'deepseek-v4-pro'), 'DeepSeek:deepseek-v4-pro');
+  assert.equal(runner.runnerModelSpec('Gemini', 'google/gemini-3.5-flash'), 'Gemini:gemini-3.5-flash');
+  assert.equal(runner.runnerModelSpec('xAI', 'x-ai/grok-4.7'), 'xAI:grok-4.7');
+  assert.equal(runner.runnerModelSpec('OpenRouter', 'deepseek/deepseek-v4-pro'), 'OpenRouter:deepseek/deepseek-v4-pro', 'OpenRouter keeps its slug');
+  const { resolveDocAgentCandidates } = require('../src/services/doc-agent/llm-runtime');
+  const first = resolveDocAgentCandidates({ model: runner.runnerModelSpec('DeepSeek', 'deepseek/deepseek-v4-pro'), env: { DEEPSEEK_API_KEY: 'k' } })[0];
+  assert.deepEqual([first.provider, first.model], ['DeepSeek', 'deepseek-v4-pro']);
+});
