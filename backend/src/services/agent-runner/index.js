@@ -186,6 +186,7 @@ const installSiraOfficeEngine = installOfficeEngine;
 
 const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
+const DIRECT_SAV_FILE_REQUEST_RE = /\bdame\s+(?:un|una|el|la)\s+(?:documentos?|archivos?|ficheros?|bases?(?:\s+de\s+datos)?)\s+(?:de\s+)?(?:spss|sav)\b/i;
 const SOURCE_COPY_RE = /\b(?:copia|versi[oó]n)(?:\s+(?:nueva|corregida|editada|actualizada|modificada)){0,2}\s+(?:de\s+)?(?:este|esta|mi|del|de\s+la|de\s+los|de\s+las)\b/i;
 
 
@@ -283,7 +284,7 @@ function isRunnerOnlyDocumentTurn(text) {
     const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('../agents/software-build-intent');
     if (isSoftwareBuildRequest(t) && !isExplicitDocumentRequest(t)) return false;
   } catch (_) { /* classifier is local */ }
-  if (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) return true;
+  if ((CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) || requestsSavExcelDelivery(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
   if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
   return false;
@@ -410,7 +411,7 @@ function isExplicitPdfConversion(instruction, files = []) {
 
 function requestsSavExcelDelivery(instruction) {
   const request = String(instruction || '');
-  return CREATE_DOC_RE.test(request)
+  return (CREATE_DOC_RE.test(request) || DIRECT_SAV_FILE_REQUEST_RE.test(request))
     && /(?:\bspss\b|\.sav\b)/i.test(request)
     && /(?:\bexcel\b|\.xlsx\b)/i.test(request);
 }
@@ -706,7 +707,8 @@ async function runAgentRunner({
     const f8 = await prepareF8Extras({
       userId, chatId, instruction: task, prisma, memoryStore, mcpToolLoader,
     });
-    const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
+    const isCreateRequest = (CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
+      || requestsSavExcelDelivery(task);
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,

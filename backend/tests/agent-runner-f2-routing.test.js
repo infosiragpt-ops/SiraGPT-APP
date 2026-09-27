@@ -66,6 +66,22 @@ test('F2: every create-doc phrase claims the runner AND routes into the agentic 
   }
 });
 
+test('F2: a direct SPSS document and Excel request claims the document runner', () => {
+  const requests = [
+    'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel',
+    'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel. Usa solo datos sintéticos.',
+    'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel. Usa solo datos sintéticos.',
+  ];
+  for (const prompt of requests) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ text: prompt, fileIds: [], hasPriorArtifacts: false }), true, prompt);
+    assert.equal(agentRunner.isRunnerOnlyDocumentTurn(prompt), true, prompt);
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt }), true, prompt);
+    assert.deepEqual(agentRunner.missingRequestedSavExcel(prompt, [{ format: 'xlsx' }]), ['SAV'], prompt);
+    assert.deepEqual(agentRunner.missingRequestedSavExcel(prompt, [{ format: 'sav' }]), ['Excel'], prompt);
+  }
+  assert.equal(agentRunner.shouldRunAgentRunner({ text: 'dame un resumen del documento de SPSS y el Excel' }), false);
+});
+
 test('F2: every style/color follow-up claims the runner AND routes into the agentic chat', () => {
   for (const phrase of STYLE_FOLLOWUP_PHRASES) {
     assert.equal(
