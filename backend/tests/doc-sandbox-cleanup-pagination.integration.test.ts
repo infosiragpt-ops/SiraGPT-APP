@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import { GetObjectCommand, ListObjectsV2Command, type S3Client } from '@aws-sdk/client-s3';
 import { Prisma } from '@prisma/client';
 import { AnthropicDocumentProviderClient } from '../src/modules/doc-sandbox/engine/provider-client';
-import { reconcileDocumentCleanup } from '../src/modules/doc-sandbox/queue/cleanup';
+import { DocumentCleanupBackoff, reconcileDocumentCleanup, type DocumentNoticeDetail } from '../src/modules/doc-sandbox/queue/cleanup';
 import { DocumentRepositoryError } from '../src/modules/doc-sandbox/queue/repository';
 import { createPrivateDocumentS3Client, PrivateDocumentStorage, type PrivateObject, type StorageScope } from '../src/modules/doc-sandbox/storage/private-storage';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
@@ -361,6 +361,53 @@ test('real LIST failure still purges known keys and a fresh pass removes only th
     assert.deepEqual(await fixture.storage.get(job.neighborScope, job.neighbor.key, job.neighbor.sha256, signal), job.neighborBytes);
     assert.deepEqual(complete.providerFiles, []);
     assert.deepEqual(complete.outputKeys, []);
+  } finally { await fixture.close(); }
+});
+
+async function secondsUntilCleanup(fixture: DocumentIntegrationFixture, id: string): Promise<number> {
+  const rows = await fixture.db.$queryRaw<Array<{ wait: number }>>(Prisma.sql`SELECT EXTRACT(EPOCH FROM cleanup_not_before-clock_timestamp())::float8 AS wait FROM doc_jobs WHERE id=${id}`);
+  return rows[0]!.wait;
+}
+
+test('a failing cleanup names its job, stage and reason and is deferred durably instead of retried every pass', { timeout: 45_000 }, async t => {
+  const fixture = await createDocumentIntegrationFixture();
+  try {
+    const signal = AbortSignal.any([t.signal, AbortSignal.timeout(40_000)]);
+    const job = await seedJob(fixture, signal);
+    await expireOnlyThisTombstone(fixture, job.id);
+    const provider = new AnthropicDocumentProviderClient('fixture-unused-no-provider');
+    const backoff = new DocumentCleanupBackoff();
+    const notices: Array<{ code: string; detail?: DocumentNoticeDetail }> = [];
+    const notice = (code: string, detail?: DocumentNoticeDetail): void => { notices.push({ code, detail }); };
+    const proxy = await denyListProxy(fixture);
+    try {
+      await reconcileDocumentCleanup(fixture.repository, proxy.storage, provider,
+        AbortSignal.any([signal, AbortSignal.timeout(15_000)]), notice, backoff);
+    } finally { await proxy.close(); }
+    assert.deepEqual(notices, [{ code: 'DOC_CLEANUP_PENDING',
+      detail: { jobId: job.id, stage: 'storage_list', reason: 's3_403:AccessDenied', retryInMs: 30_000 } }]);
+    assert.equal(backoff.count(job.id), 1);
+    const wait = await secondsUntilCleanup(fixture, job.id);
+    assert.ok(wait > 20 && wait <= 31, `deferred ${wait}s`);
+    assert.equal((await fixture.repository.jobsNeedingCleanup(500)).some(candidate => candidate.id === job.id), false);
+    // The next 30 s pass leaves the deferred job alone, even with healthy storage.
+    await reconcileDocumentCleanup(fixture.repository, fixture.storage, provider,
+      AbortSignal.any([signal, AbortSignal.timeout(15_000)]), notice, backoff);
+    assert.equal((await fixture.repository.getInternal(job.id)).cleanupPending, true);
+    assert.equal(notices.length, 1);
+    // Deferral only moves the durable gate later, never earlier.
+    await fixture.db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=clock_timestamp()+interval '1 day' WHERE id=${job.id}`);
+    await fixture.repository.deferCleanup(job.id, 30_000);
+    assert.ok(await secondsUntilCleanup(fixture, job.id) > 86_000, 'a longer grace is preserved');
+    // Once due, a healthy pass completes and restarts the schedule.
+    await fixture.db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=clock_timestamp()-interval '1 second' WHERE id=${job.id}`);
+    await reconcileDocumentCleanup(fixture.repository, fixture.storage, provider,
+      AbortSignal.any([signal, AbortSignal.timeout(15_000)]), notice, backoff);
+    assert.equal((await fixture.repository.getInternal(job.id)).cleanupPending, false);
+    assert.equal(backoff.count(job.id), 0);
+    assert.equal(notices.length, 1);
+    assert.equal((await remoteKeys(fixture, job.scope, signal)).size, 0);
+    assert.deepEqual(await fixture.storage.get(job.neighborScope, job.neighbor.key, job.neighbor.sha256, signal), job.neighborBytes);
   } finally { await fixture.close(); }
 });
 

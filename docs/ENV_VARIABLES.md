@@ -205,7 +205,8 @@ Ver `docs/memory-architecture.md`.
 | `R2_ACCESS_KEY_ID` | R2 S3-compatible access key |
 | `R2_SECRET_ACCESS_KEY` | R2 S3-compatible secret key |
 | `R2_BUCKET_NAME` | R2 bucket name for artifacts |
-| `R2_ENDPOINT` | R2 endpoint override (auto-resolved from ACCOUNT_ID) |
+| `R2_ENDPOINT` | R2 endpoint override (auto-resolved from ACCOUNT_ID). A self-hosted S3 such as MinIO (`http://siragpt-doc-minio:9000`) is addressed path-style automatically |
+| `R2_FORCE_PATH_STYLE` | Document sandbox: `true`/`false` to override the path-style decision (default: path-style for any endpoint that is not `*.r2.cloudflarestorage.com`) |
 
 ---
 

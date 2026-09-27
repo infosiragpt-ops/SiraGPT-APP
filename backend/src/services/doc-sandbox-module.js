@@ -2,6 +2,25 @@
 
 const { Router } = require('express');
 
+// Notices carry identifiers and error classes only (see documentFailureReason):
+// never messages, object keys, hosts or bodies.
+const NOTICE_CODE = /^[A-Z][A-Z0-9_]{1,79}$/;
+const NOTICE_DETAIL = {
+  jobId: (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value),
+  stage: (value) => typeof value === 'string' && /^[a-z][a-z_]{0,39}$/.test(value),
+  reason: (value) => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(value),
+  retryInMs: (value) => Number.isSafeInteger(value) && value >= 0 && value <= 86_400_000,
+};
+function documentNoticeFields(code, detail) {
+  const fields = { code: NOTICE_CODE.test(code) ? code : 'DOC_MODULE_ERROR' };
+  if (detail && typeof detail === 'object') {
+    for (const [key, valid] of Object.entries(NOTICE_DETAIL)) {
+      if (valid(detail[key])) fields[key] = detail[key];
+    }
+  }
+  return fields;
+}
+
 // Keep legacy/test boot cheap when admission is off. A configured module must be
 // compiled; a missing build is never replaced with the old unvalidated editor.
 function createDocumentSandboxModule({ prisma, authenticate, logger }) {
@@ -30,9 +49,9 @@ function createDocumentSandboxModule({ prisma, authenticate, logger }) {
       const entry = modelRouter.getModel(name);
       return Boolean(entry && modelRouter.isPlanEligible(entry.plans, plan));
     },
-    notice: (code) => logger.warn({ code: /^[A-Z][A-Z0-9_]{1,79}$/.test(code) ? code : 'DOC_MODULE_ERROR' }, 'doc_sandbox'),
+    notice: (code, detail) => logger.warn(documentNoticeFields(code, detail), 'doc_sandbox'),
   });
   return instance;
 }
 
-module.exports = { createDocumentSandboxModule };
+module.exports = { createDocumentSandboxModule, documentNoticeFields };

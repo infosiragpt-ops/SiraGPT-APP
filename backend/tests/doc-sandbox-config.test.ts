@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadDocumentSandboxConfig } from '../src/modules/doc-sandbox/config';
+import { HeadObjectCommand } from '@aws-sdk/client-s3';
+import { documentStorageClientOptions, loadDocumentSandboxConfig } from '../src/modules/doc-sandbox/config';
+import { createPrivateDocumentS3Client } from '../src/modules/doc-sandbox/storage/private-storage';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 
 // Deliberately synthetic model/config values: these tests never call a provider.
@@ -103,4 +105,48 @@ test('bucket alias and explicit cost visibility retain deterministic behavior', 
   assert.equal(config.bucket, 'preferred-bucket');
   assert.equal(config.showCost, true);
   assert.equal(config.engine.apiTimeoutMs, 2000);
+});
+test('self-hosted S3 endpoints put the bucket in the path; Cloudflare R2 keeps virtual-hosted buckets', () => {
+  assert.equal(loadDocumentSandboxConfig(env({ R2_ENDPOINT: 'http://siragpt-doc-minio:9000' }))?.r2ForcePathStyle, true);
+  assert.equal(loadDocumentSandboxConfig(env())?.r2ForcePathStyle, false, 'account endpoint derived from R2_ACCOUNT_ID');
+  for (const endpoint of ['https://synthetic-test-account.r2.cloudflarestorage.com', 'https://synthetic-test-account.eu.r2.cloudflarestorage.com']) {
+    assert.equal(loadDocumentSandboxConfig(env({ R2_ENDPOINT: endpoint }))?.r2ForcePathStyle, false, endpoint);
+  }
+  const blank = loadDocumentSandboxConfig(env({ R2_ENDPOINT: '  ' }));
+  assert.equal(blank?.r2Endpoint, undefined, 'a blank endpoint falls back to the account endpoint');
+  assert.equal(blank?.r2ForcePathStyle, false);
+});
+test('an explicit path-style flag wins; a malformed flag or endpoint fails admission', () => {
+  const minio = 'http://siragpt-doc-minio:9000';
+  assert.equal(loadDocumentSandboxConfig(env({ R2_ENDPOINT: minio, R2_FORCE_PATH_STYLE: 'false' }))?.r2ForcePathStyle, false);
+  assert.equal(loadDocumentSandboxConfig(env({ R2_ENDPOINT: minio, R2_FORCE_PATH_STYLE: '0' }))?.r2ForcePathStyle, false);
+  assert.equal(loadDocumentSandboxConfig(env({ R2_FORCE_PATH_STYLE: 'true' }))?.r2ForcePathStyle, true);
+  assert.equal(loadDocumentSandboxConfig(env({ R2_FORCE_PATH_STYLE: ' TRUE ' }))?.r2ForcePathStyle, true);
+  assert.equal(loadDocumentSandboxConfig(env({ R2_FORCE_PATH_STYLE: '1' }))?.r2ForcePathStyle, true);
+  for (const flag of ['yes', 'on', 'path']) assert.throws(() => loadDocumentSandboxConfig(env({ R2_FORCE_PATH_STYLE: flag })), notReady, flag);
+  for (const endpoint of ['not a url', 'ftp://siragpt-doc-minio:21', 'http://user:secret@siragpt-doc-minio:9000',
+    'http://siragpt-doc-minio:9000/?region=x', 'http://siragpt-doc-minio:9000/#bucket']) {
+    assert.throws(() => loadDocumentSandboxConfig(env({ R2_ENDPOINT: endpoint })), notReady, endpoint);
+  }
+});
+test('the module client addresses the bucket the way each store resolves it', async () => {
+  // Production 2026-09-27: without path style the SDK asked DNS for
+  // `<bucket>.siragpt-doc-minio` (ENOTFOUND) and every storage call failed.
+  const seen: Array<{ hostname: string; port?: number; path: string }> = [];
+  const requestHandler = { handle: async (request: { hostname: string; port?: number; path: string }) => {
+    seen.push({ hostname: request.hostname, port: request.port, path: request.path });
+    throw new Error('captured before any network IO');
+  } };
+  for (const overrides of [{ R2_ENDPOINT: 'http://siragpt-doc-minio:9000' }, {}]) {
+    const config = loadDocumentSandboxConfig(env(overrides));
+    assert.ok(config);
+    const client = createPrivateDocumentS3Client({ ...documentStorageClientOptions(config), requestHandler: requestHandler as never });
+    try {
+      await assert.rejects(client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: 'owner/job/v2/object.sealed' })), /captured/);
+    } finally { client.destroy(); }
+  }
+  assert.deepEqual(seen, [
+    { hostname: 'siragpt-doc-minio', port: 9000, path: '/synthetic-test-bucket/owner/job/v2/object.sealed' },
+    { hostname: 'synthetic-test-bucket.synthetic-test-account.r2.cloudflarestorage.com', port: undefined, path: '/owner/job/v2/object.sealed' },
+  ]);
 });

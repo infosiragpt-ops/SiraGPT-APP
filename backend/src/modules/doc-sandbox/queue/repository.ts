@@ -444,6 +444,12 @@ export class DocSandboxRepository {
       return true;
     });
   }
+  /** Space out a failing cleanup. The gate only ever moves later, so the
+   * late-write grace and remote-container gates are never shortened. */
+  async deferCleanup(jobId: string, delayMs: number): Promise<void> {
+    const seconds = Math.max(1, Math.min(86_400, Math.ceil(delayMs / 1000)));
+    await this.client.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=GREATEST(COALESCE(cleanup_not_before,clock_timestamp()),clock_timestamp()+make_interval(secs => ${seconds}::double precision)) WHERE id=${jobId} AND cleanup_pending=true`);
+  }
   async jobsNeedingCleanup(limit = 100): Promise<StoredDocumentJob[]> {
     const rows = await this.client.$queryRaw<DbJob[]>(Prisma.sql`SELECT * FROM doc_jobs WHERE cleanup_pending=true AND (cleanup_not_before IS NULL OR cleanup_not_before<=clock_timestamp()) AND (status IN ('queued','done','failed','cancelled') OR EXISTS (SELECT 1 FROM jsonb_array_elements(provider_files) f WHERE (f->>'attempt')::integer<attempts AND (f->>'deleted')::boolean=false)) ORDER BY updated_at LIMIT ${Math.max(1, Math.min(500, limit))}`);
     return rows.map(toJob);

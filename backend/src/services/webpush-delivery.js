@@ -12,9 +12,12 @@
  * error (missing `web-push` lib, missing VAPID keys, expired
  * subscription, network failure) is logged but never bubbles out.
  *
- * Graceful degradation:
- *   - If `web-push` is not installed   → log "skip: not installed" and return.
- *   - If VAPID env vars are missing    → log "skip: vapid missing"  and return.
+ * Graceful degradation (each reason is logged ONCE per process, never per
+ * notification — web push is optional and "off" is a state, not a failure):
+ *   - If VAPID env vars are missing    → skip without loading `web-push`
+ *                                        (one debug line).
+ *   - If VAPID is set but `web-push` is not installed → skip (one warn line:
+ *                                        that is a real misconfiguration).
  *   - If the user has zero subs        → no-op, returns 0.
  *   - If a single send fails with 404/410 (Gone) → delete the dead
  *     subscription row so the inbox isn't penalised for it forever.
@@ -36,35 +39,47 @@
 let _webPushModule;        // cached require('web-push')
 let _webPushLoadAttempted; // so we only try the require once per process
 let _webPushConfigured;
+const _announced = new Set(); // skip reasons already logged by this process
 
-function _loadWebPush(logger) {
+function _announceOnce(reason, logger, level, message) {
+  if (_announced.has(reason)) return;
+  _announced.add(reason);
+  logger?.[level]?.(message);
+}
+
+function _vapidFromEnv() {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  if (!publicKey || !privateKey) return null;
+  return { publicKey, privateKey, subject: process.env.VAPID_SUBJECT || 'mailto:admin@siragpt.local' };
+}
+
+// eslint-disable-next-line global-require
+const _requireWebPush = () => require('web-push');
+
+function _loadWebPush(logger, load = _requireWebPush) {
   if (_webPushLoadAttempted) return _webPushModule;
   _webPushLoadAttempted = true;
   try {
-    // eslint-disable-next-line global-require
-    _webPushModule = require('web-push');
+    _webPushModule = load();
   } catch (err) {
-    logger?.info?.(`[webpush-delivery] web-push not installed, skipping (${err?.message || err})`);
     _webPushModule = null;
+    // Only the error code: the message carries the require stack and paths.
+    _announceOnce('no-webpush-lib', logger, 'warn',
+      `[webpush-delivery] VAPID keys are set but the web-push package cannot be loaded (${err?.code || 'load error'}); critical notifications stay in the in-app inbox`);
   }
   return _webPushModule;
 }
 
-function _configure(webpush, logger) {
+function _configure(webpush, vapid, logger) {
   if (_webPushConfigured) return true;
-  const pub = process.env.VAPID_PUBLIC_KEY;
-  const priv = process.env.VAPID_PRIVATE_KEY;
-  if (!pub || !priv) {
-    logger?.info?.('[webpush-delivery] VAPID keys missing, skipping');
-    return false;
-  }
-  const subject = process.env.VAPID_SUBJECT || 'mailto:admin@siragpt.local';
   try {
-    webpush.setVapidDetails(subject, pub, priv);
+    webpush.setVapidDetails(vapid.subject, vapid.publicKey, vapid.privateKey);
     _webPushConfigured = true;
     return true;
-  } catch (err) {
-    logger?.warn?.(`[webpush-delivery] setVapidDetails failed: ${err?.message || err}`);
+  } catch {
+    _announceOnce('vapid-invalid', logger, 'warn',
+      '[webpush-delivery] setVapidDetails rejected the VAPID configuration; critical notifications stay in the in-app inbox');
     return false;
   }
 }
@@ -113,8 +128,8 @@ function _toSubscriptionObject(row) {
  * @param {import('@prisma/client').PrismaClient} prisma
  * @param {{ userId: string, severity: string, title?: string, message?: string,
  *           id?: string, type?: string, metadata?: any, createdAt?: any }} notification
- * @param {{ logger?: { info: Function, warn: Function, error: Function },
- *           webpush?: any }} [opts]
+ * @param {{ logger?: { debug?: Function, info: Function, warn: Function, error: Function },
+ *           webpush?: any, loadWebPush?: () => any }} [opts]
  */
 async function maybeDeliver(prisma, notification, opts = {}) {
   const logger = opts.logger || console;
@@ -129,11 +144,17 @@ async function maybeDeliver(prisma, notification, opts = {}) {
     return { attempted: 0, delivered: 0, failed: 0, skipped: true, reason: 'no-model' };
   }
 
-  const webpush = opts.webpush || _loadWebPush(logger);
+  const vapid = _vapidFromEnv();
+  if (!vapid) {
+    _announceOnce('no-vapid', logger, 'debug',
+      '[webpush-delivery] web push not configured (VAPID keys missing); critical notifications stay in the in-app inbox');
+    return { attempted: 0, delivered: 0, failed: 0, skipped: true, reason: 'no-vapid' };
+  }
+  const webpush = opts.webpush || _loadWebPush(logger, opts.loadWebPush);
   if (!webpush) {
     return { attempted: 0, delivered: 0, failed: 0, skipped: true, reason: 'no-webpush-lib' };
   }
-  if (!_configure(webpush, logger)) {
+  if (!_configure(webpush, vapid, logger)) {
     return { attempted: 0, delivered: 0, failed: 0, skipped: true, reason: 'no-vapid' };
   }
 
@@ -196,6 +217,7 @@ function _resetForTests() {
   _webPushModule = undefined;
   _webPushLoadAttempted = false;
   _webPushConfigured = false;
+  _announced.clear();
 }
 
 module.exports = {
