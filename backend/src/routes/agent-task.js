@@ -136,6 +136,11 @@ const {
   hasRecentGeneratedArtifactSource,
   isSourcePreservingEditRequest,
 } = require('../services/source-preserving-document-edit');
+const {
+  resolveReadOnlyGeneratedArtifactFollowup,
+  buildGeneratedArtifactReadContext,
+  requireGeneratedArtifactRead,
+} = require('../services/agents/generated-artifact-followup');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -1214,35 +1219,48 @@ router.post(
     // no-file agentic path fails with a 5xx (the reported bug). Reattach the most
     // recent readable document from this chat so the turn runs through the safe
     // local-document runtime — the same path the first (working) turn used.
+    // Never trust artifact references supplied by the client. Only the server
+    // may recover validated artifacts belonging to this owner and chat.
+    delete req.body.generatedArtifactRefs;
     try {
       const providedNow = Array.isArray(req.body.files) ? req.body.files.map(String).filter(Boolean) : [];
-      if (providedNow.length === 0 && req.body.chatId && looksLikeDocumentFollowupQuestion(req.body.goal)) {
-        const hasGeneratedArtifact = await hasRecentGeneratedArtifactSource(prisma, {
+      if (providedNow.length === 0 && req.body.chatId) {
+        const generatedRefs = await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
           userId: req.user?.id,
           chatId: String(req.body.chatId),
-        });
-        const resumeGeneratedArtifact = shouldResumeGeneratedArtifactForDocumentFollowup({
-          goal: req.body.goal,
           providedFileIds: providedNow,
-          hasGeneratedArtifact,
+          goal: req.body.goal,
         });
-
-        if (resumeGeneratedArtifact) {
-          // Keep files empty deliberately. The document runtime will resolve the
-          // latest owner-scoped generated artifact from this chat and edit that
-          // version, preserving every previous turn instead of rebasing onto the
-          // original upload.
-          req.body.preferRecentArtifact = true;
-          console.log('[agent-task] continuing edit from latest generated chat artifact');
-        } else {
-          const reattached = await resolveChatDocumentFileIds(prisma, {
+        if (generatedRefs.length) {
+          req.body.generatedArtifactRefs = generatedRefs;
+        } else if (looksLikeDocumentFollowupQuestion(req.body.goal)) {
+          const hasGeneratedArtifact = await hasRecentGeneratedArtifactSource(prisma, {
             userId: req.user?.id,
             chatId: String(req.body.chatId),
-            providedFileIds: providedNow,
           });
-          if (Array.isArray(reattached) && reattached.length > 0) {
-            req.body.files = reattached;
-            console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+          const resumeGeneratedArtifact = shouldResumeGeneratedArtifactForDocumentFollowup({
+            goal: req.body.goal,
+            providedFileIds: providedNow,
+            hasGeneratedArtifact,
+          });
+
+          if (resumeGeneratedArtifact) {
+            // Keep files empty deliberately. The document runtime will resolve the
+            // latest owner-scoped generated artifact from this chat and edit that
+            // version, preserving every previous turn instead of rebasing onto the
+            // original upload.
+            req.body.preferRecentArtifact = true;
+            console.log('[agent-task] continuing edit from latest generated chat artifact');
+          } else {
+            const reattached = await resolveChatDocumentFileIds(prisma, {
+              userId: req.user?.id,
+              chatId: String(req.body.chatId),
+              providedFileIds: providedNow,
+            });
+            if (Array.isArray(reattached) && reattached.length > 0) {
+              req.body.files = reattached;
+              console.log(`[agent-task] reattached ${reattached.length} prior chat document(s) for follow-up question`);
+            }
           }
         }
       }
@@ -1255,6 +1273,7 @@ router.post(
       : [];
     const canUseLocalDocumentRuntime = requestedFileIds.length > 0
       || Boolean(req.body.preferRecentArtifact)
+      || Boolean(req.body.generatedArtifactRefs?.length)
       || isTranscriptionRequest(String(req.body.goal || ''));
     if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
       return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
@@ -1303,7 +1322,10 @@ router.post(
       rawUserRequest: agentGoal,
       fileIds,
     });
-    const finalizeProfile = buildFinalizeProfile(executionProfile, universalTaskContract);
+    const finalizeProfile = requireGeneratedArtifactRead(
+      buildFinalizeProfile(executionProfile, universalTaskContract),
+      req.body.generatedArtifactRefs,
+    );
     // The UniversalTaskContract is now the source of truth. The
     // legacy TaskContract is only the ArtifactReviewer adapter. LLM
     // resolution may add tests, but it cannot override extension/MIME
@@ -1753,6 +1775,7 @@ router.post(
       chatId,
       taskId,
       fileIds,
+      generatedArtifactRefs: req.body.generatedArtifactRefs || [],
       displayGoal,
       // The TaskContract is the authoritative source of truth for
       // every downstream validation. Tools that produce artifacts
@@ -1862,7 +1885,9 @@ router.post(
           uploadedFileContext,
           openclawRuntimeProfile,
           agentGoal
-        ),
+        ) + (req.body.generatedArtifactRefs?.length
+          ? `\n\n${buildGeneratedArtifactReadContext(req.body.generatedArtifactRefs, agentGoal)}`
+          : ''),
         ctx: toolCtx,
         finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
           finalizeProfile,
