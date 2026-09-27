@@ -68,6 +68,24 @@ test('the answer near the end of a selected chunk survives context clipping with
   assert.ok(result.includes('Presupuesto!A200:B200'));
 });
 
+test('a factual question with no document match does not inject an unrelated excerpt', async () => {
+  const { prisma } = corpus([{ id: 'ventas', name: 'Ventas.xlsx', chunks: [
+    chunk(1, 'Ingresos confirmados para 2025: S/ 1200.', { sourceLabel: 'Ventas!A2:B2', sheetName: 'Ventas' }),
+  ] }]);
+  const missing = await buildUploadedFileContext(prisma, {
+    userId: 'owner', fileIds: ['ventas'], query: '¿Cuál es la proyección de sarcopenia?', maxChars: 2000,
+  });
+  assert.match(missing, /Ventas\.xlsx/);
+  assert.match(missing, /No se encontr[oó] evidencia/i);
+  assert.doesNotMatch(missing, /S\/ 1200|Ventas!A2:B2/);
+
+  const found = await buildUploadedFileContext(prisma, {
+    userId: 'owner', fileIds: ['ventas'], query: '¿Cuáles son los ingresos de 2025?', maxChars: 2000,
+  });
+  assert.match(found, /S\/ 1200/);
+  assert.match(found, /Ventas!A2:B2/);
+});
+
 test('each attached file keeps its own evidence in a comparative question', async () => {
   const files = ['COMUNICACIONES', 'DERECHO'].map((area, index) => ({
     id: area, name: `${area}.xlsx`, chunks: [
