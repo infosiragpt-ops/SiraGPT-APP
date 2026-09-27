@@ -370,3 +370,41 @@ test('Word: indent, tracked changes and paraphrases run on the office engine; fo
     instruction: 'Completa mi nombre: Ana Torres' });
   assert.deepEqual(calls, { docx: 1, office: 1 }, 'forms keep the docx engine');
 });
+
+test('docx engine: the intent review and the visual verification run side by side; the review gets one patient attempt', async () => {
+  let visualStarted = null;
+  const visualSeen = new Promise((resolve) => { visualStarted = resolve; });
+  const client = scriptedClient([
+    { tool_calls: [call('fill_field', { label: 'DNI:', value: '72792992' }, 'f1')] },
+    { tool_calls: [call('finish', { status: 'done', summary: 'Completé el DNI.', expected_values: ['72792992'] }, 'fin')] },
+    // The review answers only once the visual verification has started:
+    // a sequential finish would never get here.
+    () => REVIEW_OK,
+  ]);
+  const create = client.chat.completions.create;
+  const reviewOptions = [];
+  client.chat.completions.create = async (payload, options) => {
+    if (payload.tools && payload.tools.some((t) => t.function && t.function.name === 'review_document_edit')) {
+      reviewOptions.push(options);
+      await visualSeen;
+    }
+    return create.call(client.chat.completions, payload, options);
+  };
+  const out = await runDocxEngineEdit({
+    buffer: formDocx(), instruction: 'completa mi DNI 72792992', client, model: 'm', render: renderText,
+    visualVerify: async () => { visualStarted(); return { ok: true, checksOk: true, visionOk: true, text: 'VERIFICADO', thumbs: [THUMB] }; },
+  });
+  assert.equal(out.ok, true);
+  assert.equal(reviewOptions.length, 1);
+  assert.equal(reviewOptions[0].maxRetries, 0, 'no SDK retry restarting the review from scratch');
+  assert.ok(reviewOptions[0].timeout >= 120_000);
+});
+
+test('wiring: /document-edit answers or fails clearly within its time budget', () => {
+  const ai = fs.readFileSync(path.join(__dirname, '..', 'src/routes/ai.js'), 'utf8');
+  const route = ai.slice(ai.indexOf("'/document-edit',"), ai.indexOf("router.post('/stop-stream'"));
+  assert.match(route, /SIRAGPT_DOCUMENT_EDIT_BUDGET_MS\) \|\| 8 \* 60_000/);
+  assert.match(route, /controller\.abort\(new Error\('document_edit_budget'\)\)/);
+  assert.match(route, /code: editBudgetExceeded \? 'TIMEOUT'/);
+  assert.match(route, /clearTimeout\(editBudgetTimer\)/);
+});

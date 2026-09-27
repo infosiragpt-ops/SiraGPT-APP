@@ -5,6 +5,7 @@
 // that mutate the document, to compare the original and reopened result.
 const { createDocxSession } = require('./session');
 const MAX_CONTEXT = 120_000;
+const REVIEW_TIMEOUT_MS = Math.max(30_000, Number(process.env.SIRAGPT_DOCX_INTENT_REVIEW_TIMEOUT_MS) || 150_000);
 const REVIEW_TOOL = {
   type: 'function',
   function: {
@@ -67,7 +68,10 @@ async function reviewDocumentIntent({ originalBuffer, editedBuffer, instruction,
       { role: 'user', content: JSON.stringify({ user_request: instruction, prior_user_data: String(extraContext).slice(0, 4000), claimed_summary: summary, original_document: original, edited_document: edited }) },
     ],
     tools: [REVIEW_TOOL], tool_choice: 'auto',
-  }, { signal, timeout: 60_000 });
+  // One patient attempt: a reasoning model (DeepSeek V4 Pro) needs ~40–70 s
+  // for both full snapshots, and a 60 s timeout + SDK retries restarted the
+  // review from scratch (101 s in production for Luis's UPN form).
+  }, { signal, timeout: REVIEW_TIMEOUT_MS, maxRetries: 0 });
   signal?.throwIfAborted();
   const calls = response?.choices?.[0]?.message?.tool_calls;
   if (!Array.isArray(calls) || calls.length !== 1 || calls[0]?.function?.name !== 'review_document_edit') {
@@ -83,4 +87,4 @@ async function reviewDocumentIntent({ originalBuffer, editedBuffer, instruction,
   return result;
 }
 
-module.exports = { reviewDocumentIntent, reviewSnapshot };
+module.exports = { reviewDocumentIntent, reviewSnapshot, REVIEW_TIMEOUT_MS };

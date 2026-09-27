@@ -10229,6 +10229,16 @@ router.post(
     const controller = new AbortController();
     const controllerKey = `${userId}:${streamId}`;
     streamControllers.set(controllerKey, controller);
+    // The edit answers — or fails with a clear message — well before the
+    // turn tracker's «sin cierre» (10 min): a stalled provider never keeps
+    // the turn open. Luis's UPN form takes ~2–4 min with DeepSeek V4 Pro.
+    const editBudgetMs = Math.max(60_000, Number(process.env.SIRAGPT_DOCUMENT_EDIT_BUDGET_MS) || 8 * 60_000);
+    let editBudgetExceeded = false;
+    const editBudgetTimer = setTimeout(() => {
+      editBudgetExceeded = true;
+      try { controller.abort(new Error('document_edit_budget')); } catch (_) { /* already aborted */ }
+    }, editBudgetMs);
+    if (typeof editBudgetTimer.unref === 'function') editBudgetTimer.unref();
     send({ type: 'start', streamId });
 
     const processedFiles = fileIds.length
@@ -10281,14 +10291,20 @@ router.post(
       const { deliverDocumentEdit } = require('../services/document-editor/deliver-edit');
       send(await deliverDocumentEdit({ result, files, persist, chatId }));
     } catch (err) {
-      const cancelled = controller.signal.aborted || isAbortError(err);
-      const content = cancelled
-        ? 'Edición detenida. El documento original no se modificó.'
-        : 'No se pudo completar la edición del documento. El original no se modificó; inténtalo de nuevo.';
-      if (!cancelled) console.error('[ai/document-edit] failed:', err?.message || err);
+      const cancelled = !editBudgetExceeded && (controller.signal.aborted || isAbortError(err));
+      const content = editBudgetExceeded
+        ? `La edición tardó más de ${Math.round(editBudgetMs / 60_000)} minutos y la detuve para no dejarte esperando. El documento original no se modificó; vuelve a intentarlo o divide el pedido en partes más pequeñas.`
+        : cancelled
+          ? 'Edición detenida. El documento original no se modificó.'
+          : 'No se pudo completar la edición del documento. El original no se modificó; inténtalo de nuevo.';
+      if (!cancelled) console.error('[ai/document-edit] failed:', editBudgetExceeded ? `time budget ${editBudgetMs} ms` : (err?.message || err));
+      if (editBudgetExceeded) {
+        try { turnFailures.noteTurn('provider_failure', { code: 'timeout', message: `document-edit superó ${Math.round(editBudgetMs / 1000)} s` }); } catch (_) { /* tracker optional */ }
+      }
       const assistantMessageId = await persist(content);
-      send({ type: 'done', ok: false, code: cancelled ? 'CANCELLED' : 'FAILED', content, files: [], assistantMessageId, chatId });
+      send({ type: 'done', ok: false, code: editBudgetExceeded ? 'TIMEOUT' : cancelled ? 'CANCELLED' : 'FAILED', content, files: [], assistantMessageId, chatId });
     } finally {
+      clearTimeout(editBudgetTimer);
       clearInterval(heartbeat);
       if (__docTurnTap) {
         turnFailures.finishTurn(__docTurnTap, {
