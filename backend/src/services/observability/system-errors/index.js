@@ -50,6 +50,13 @@ const WARN_CAPTURE_RE = new RegExp([
 
 // Lines the process hooks already capture with the real error object.
 const CONSOLE_SKIP_RE = /^\s*\[FATAL\]\s*(?:uncaughtException|unhandledRejection)/i;
+// Diagnostic tags ([models-dbg], [perf], [timing]…) print timings through
+// console.error on purpose: debug output, never an issue (same rule as the
+// «Registros en vivo» classifier). Prod 2026-09-27: seven [models-dbg] lines
+// per /api/ai/models call became seven «issues».
+const DEBUG_TAG_RE = /(?:^|[-_:\s])(?:dbg|debug|trace|timing|perf|bench|verbose)(?:$|[-_:\s])/i;
+// A console.error WITHOUT an Error object must at least read like a failure.
+const ERROR_SIGNAL_RE = /error|exception|\bfail|fall[oó]|no se pudo|cannot|can't|could not|unable|crash|fatal|panic|timed? ?out|timeout|refused|reset|denied|invalid|unauthori[sz]ed|forbidden|reject|rechaz|not found|no encontrad|abort|\bE[A-Z]{3,}\b|\bERR\b|\b5\d\d\b|[❌✖🚨⛔💥]/iu;
 const HTTP_SKIP_RE = /^\/api\/(?:health|healthz|ready|live|metrics|version|telemetry)(?:\/|$)|^\/(?:health|healthz|ready|live|metrics)(?:\/|$)/;
 
 let storeInstance = null;
@@ -379,6 +386,14 @@ function captureConsole(level, args = []) {
   const text = args.map((a) => (isErrorLike(a) ? `${a.name || 'Error'}: ${a.message}` : safeStringify(a))).join(' ');
   if (level === 'warning' && !WARN_CAPTURE_RE.test(text)) return null;
   const tag = fingerprint.logTagOf(first);
+  if (tag && DEBUG_TAG_RE.test(tag)) {
+    counters.noise += 1;
+    return null;
+  }
+  if (!errArg && !ERROR_SIGNAL_RE.test(text)) {
+    counters.noise += 1;
+    return null;
+  }
   let message = text;
   if (errArg) {
     // Keep the log prefix («[doc-engine] worker error:») with the error text.
@@ -444,12 +459,15 @@ function captureFrontendEvent(event = {}, req = null) {
     return null;
   }
   const ctx = contextFromReq(req) || {};
+  // The telemetry sanitizer collapses whitespace: put the stack frames back
+  // on their own lines so the drawer shows a readable trace.
+  const stack = event.stack ? String(event.stack).replace(/\s+at\s+/g, '\n    at ') : null;
   return capture({
     source: 'frontend',
     kind: 'frontend',
     level: event.severity === 'fatal' ? 'fatal' : 'error',
     message: event.message || 'Error del navegador',
-    stack: event.stack || null,
+    stack,
     tag: event.component || null,
     page: event.page || null,
     component: event.component || null,
