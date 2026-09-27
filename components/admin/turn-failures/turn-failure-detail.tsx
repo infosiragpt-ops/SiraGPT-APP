@@ -62,7 +62,8 @@ function RequestLogsSection({ reqIds }: { reqIds: string[] }) {
     }).catch(() => { /* 404 → the button stays hidden */ })
     return () => { cancelled = true }
   }, [reqId])
-  if (!lines) return null
+  // Nothing logged for that request (or the endpoint is not there): no button.
+  if (!lines || lines.length === 0) return null
   return (
     <Block label="Registros de esta petición">
       <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)} data-testid="turn-failure-request-logs">

@@ -28,7 +28,10 @@ export function requestLogLineText(line: unknown): string {
   const entry = line as LogEntry
   const time = timeLabel(pick(entry, ["ts", "time", "timestamp", "at", "createdAt"]))
   const level = pick(entry, ["level", "severity"]).toUpperCase()
-  const message = pick(entry, ["msg", "message", "line", "text"])
+  const tag = pick(entry, ["tag"])
+  const rawMessage = pick(entry, ["msg", "message", "line", "text"])
+  // «Registros en vivo» lines carry the log tag apart from the message.
+  const message = tag && rawMessage && !rawMessage.startsWith("[") ? `[${tag}] ${rawMessage}` : rawMessage
   const head = [time, level].filter(Boolean).join(" ")
   if (message) return head ? `${head}  ${message}` : message
   try {

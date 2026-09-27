@@ -27,6 +27,7 @@ test("Logs opens on «Fallos de respuesta» with the global error-sound toggle",
   assert.match(page, /const logsTabs: LogsTab\[\] = \[/)
   assert.match(page, /value: "fallos",\s*label: "Fallos de respuesta",/)
   assert.match(page, /\{ value: "auditoria", label: "Auditoría", render: \(\) => auditPanel \}/)
+  assert.match(page, /\{ value: "vivo", label: "Registros en vivo", render: \(\) => <LiveLogsPanel \/> \}/)
   assert.match(page, /\{logsTabs\.map\(\(t\) => \(\s*<TabsTrigger key=\{t\.value\} value=\{t\.value\}/)
   assert.match(page, /render: \(\) => <TurnFailuresPanel \/>/)
   assert.match(page, /Sonido de errores: \{alerts\?\.soundOn \? "activado" : "desactivado"\}/)
@@ -60,7 +61,7 @@ test("the alerts provider sounds only failures, throttled, and unlocks audio on 
 test("the failure detail offers the request's backend log lines only when that endpoint exists", () => {
   const detail = read("components/admin/turn-failures/turn-failure-detail.tsx")
   assert.match(detail, /apiClient\.getAdminRequestLogs\(reqId\)/)
-  assert.match(detail, /if \(!lines\) return null/, "hidden until GET /admin/logs/request/:reqId answers")
+  assert.match(detail, /if \(!lines \|\| lines\.length === 0\) return null/, "hidden until GET /admin/logs/request/:reqId answers with lines")
   const api = read("lib/api.ts")
   assert.match(api, /\/admin\/logs\/request\/\$\{encodeURIComponent\(reqId\)\}`, \{ suppressFailureLog: true, maxRetries: 0 \}/)
 })
