@@ -33,3 +33,14 @@ test("backend mounts the three admin log routes and captures from the first line
   const pino = read("backend/src/middleware/logger.js")
   assert.match(pino, /streamWrite: tapLiveLogs/)
 })
+
+test("live rows carry a selection checkbox before the time and copy only the selected lines", () => {
+  const panel = read("components/admin/live-logs/live-logs-panel.tsx")
+  assert.match(panel, /data-testid="live-logs-select-all"/)
+  assert.match(panel, /data-testid="live-log-select"/)
+  assert.match(panel, /data-testid="live-logs-copy-selected"/)
+  assert.match(panel, /copyLines\(selectedLines\)/)
+  assert.match(panel, /toggleLine\(line\.id, e\.shiftKey\)/)
+  // The checkbox column comes first, before «Hora».
+  assert.match(panel, /grid-cols-\[18px_92px_/)
+})
