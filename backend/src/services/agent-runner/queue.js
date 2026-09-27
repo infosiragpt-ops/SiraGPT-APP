@@ -91,6 +91,7 @@ async function enqueueAgentRunnerJob(data, { QueueImpl, connection, queueName = 
     chatId: data.chatId || null,
     fileIds: data.fileIds || [],
     model: data.model || null,
+    pickedModel: data.pickedModel || null,
   }, {
     attempts: 1,
     removeOnComplete: { count: 200 },

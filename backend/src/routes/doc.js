@@ -33,6 +33,8 @@ const {
   buildDocumentReplayFrame,
 } = require('../services/document-operation-idempotency');
 const { buildPublicStreamError } = require('../services/observability/public-stream-error');
+const { createActivityTraceCollector, createArtifactThumbSaver } = require('../services/agent-runner/activity-trace');
+const { resolveGenerateProvider } = require('../services/ai/provider-inference');
 const {
   buildPreviousContentDocumentPrompt,
   findPreviousAssistantContent,
@@ -48,7 +50,7 @@ const {
 const router = express.Router();
 router.use(authenticateToken);
 
-async function persistSuccess(chatId, userId, displayPrompt, content, file) {
+async function persistSuccess(chatId, userId, displayPrompt, content, file, { agentMetadata = null } = {}) {
   return prisma.$transaction(async (tx) => {
     const chat = await tx.chat.findFirst({ where: { id: chatId, userId } });
     if (!chat) return null;
@@ -59,27 +61,35 @@ async function persistSuccess(chatId, userId, displayPrompt, content, file) {
     // storage without changing the client contract.
     const persistedFile = file;
     const assistant = await tx.message.create({
-      data: { chatId, role: 'ASSISTANT', content, files: JSON.stringify([persistedFile]) },
+      data: {
+        chatId, role: 'ASSISTANT', content, files: JSON.stringify([persistedFile]),
+        // The runner's step timeline (edición milimétrica): survives reloads.
+        ...(agentMetadata ? { agentMetadata } : {}),
+      },
     });
     await tx.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
     return {
       id: assistant.id, role: assistant.role, content: assistant.content,
       files: [file], // still hand back the real one for this turn
+      ...(agentMetadata ? { agentMetadata } : {}),
     };
   });
 }
 
-async function persistFailure(chatId, userId, displayPrompt, reason) {
+async function persistFailure(chatId, userId, displayPrompt, reason, { agentMetadata = null } = {}) {
   return prisma.$transaction(async (tx) => {
     const chat = await tx.chat.findFirst({ where: { id: chatId, userId } });
     if (!chat) return null;
     await tx.message.create({ data: { chatId, role: 'USER', content: displayPrompt } });
     const content = `No pude generar el documento: ${reason}. Dame más detalle (formato, estructura, datos) y lo intento otra vez.`;
     const assistant = await tx.message.create({
-      data: { chatId, role: 'ASSISTANT', content },
+      data: { chatId, role: 'ASSISTANT', content, ...(agentMetadata ? { agentMetadata } : {}) },
     });
     await tx.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
-    return { id: assistant.id, role: assistant.role, content: assistant.content, files: [] };
+    return {
+      id: assistant.id, role: assistant.role, content: assistant.content, files: [],
+      ...(agentMetadata ? { agentMetadata } : {}),
+    };
   });
 }
 
@@ -324,6 +334,12 @@ router.post(
     if (operation.key) res.setHeader('X-Idempotency-Key-Echo', operation.key);
     res.flushHeaders();
     const send = (obj) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch {} };
+    // One timeline per turn (edición milimétrica): the runner's stage v2 rows
+    // (callId, phrase, detail, thumbnails) reach the chat and are stored with
+    // the assistant row.
+    const docTrace = createActivityTraceCollector({
+      saveThumb: createArtifactThumbSaver({ userId: req.user.id }),
+    });
     const controller = new AbortController();
     let clientGone = false;
     res.on('close', () => {
@@ -392,16 +408,18 @@ router.post(
           prompt,
           fileIds: requestedFileIds,
           model: req.body.model,
+          // Engines follow the model picked in the composer.
+          pickedModel: require('../services/agent-runner')
+            .runnerModelSpec(resolveGenerateProvider(req.body.provider, req.body.model), req.body.model),
           signal: controller.signal,
-          // F3: ev ya es el stage canónico (label español + tool + step) —
-          // se reenvía completo para que la UI muestre la traza por paso.
-          onStage: (ev) => send({
-            type: 'stage',
-            label: ev.label || 'Agente trabajando',
-            tool: ev.tool,
-            step: ev.step,
-            ...(ev.preview != null ? { preview: ev.preview } : {}),
-          }),
+          // F3 + stage v2: ev ya es el stage canónico (label español + tool +
+          // step; callId / kind / status / description / detail / thumbs en
+          // los pasos de herramienta) — se reenvía completo y se guarda.
+          onStage: (ev) => {
+            const frame = { ...ev, type: 'stage', label: ev.label || 'Agente trabajando' };
+            docTrace.push(frame);
+            send(frame);
+          },
         });
       } catch (agentRunnerErr) {
         if (controller.signal.aborted) throw agentRunnerErr;
@@ -539,7 +557,9 @@ router.post(
       let persistenceError = null;
       if (chatId) {
         try {
-          assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content, file);
+          assistantMessage = await persistSuccess(chatId, req.user.id, displayPrompt, content, file, {
+            agentMetadata: docTrace.toMetadata(),
+          });
           if (!assistantMessage) {
             const missingChatError = new Error('document chat was not found during persistence');
             missingChatError.code = 'PERSISTENCE_FAILED';
@@ -582,7 +602,11 @@ router.post(
       console.error('[doc] generation failed:', reason);
       let assistantMessage = null;
       if (chatId) {
-        try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
+        try {
+          assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason, {
+            agentMetadata: docTrace.toMetadata(),
+          });
+        }
         catch (e) { console.error('[doc] persist failure error:', e?.message); }
       }
       if (operation.outcome === 'acquired') {

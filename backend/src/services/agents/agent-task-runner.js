@@ -2648,6 +2648,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             chatId,
             fileIds: files,
             instruction: runnerText,
+            // Engines follow the model picked in the composer (the ladder
+            // only takes over on provider errors).
+            pickedModel: agentRunner.runnerModelSpec(
+              runtimeModelProfile.detected && runtimeModelProfile.detected.provider,
+              runtimeModelProfile.runtimeModel,
+            ),
             signal: controller.signal,
             onEvent: (ev) => {
               if (!ev) return;

@@ -1,0 +1,143 @@
+'use strict';
+
+/**
+ * Edición milimétrica — Fase G, hallazgos de producción del runner:
+ *
+ *   - «ponlas todas de color verde oscuro»: el modelo pidió la misma
+ *     herramienta varias veces en un lote y el guardia anti-bucle lo tomó por
+ *     un ciclo del plan (auto-arista A→A): el turno se cortó en la iteración 1…
+ *   - …y el archivo que el turno ANTERIOR dejó en outputs/ (workspace
+ *     persistente del chat) se entregó como «Listo. Generé …» sin cambios.
+ *   - La última versión de un artefacto guardado en R2 no se podía releer
+ *     (object-storage no tiene readFile): el seguimiento corría sin el archivo.
+ *   - El runner sigue al modelo elegido también en /api/doc/generate y en
+ *     /api/agent/task (y en la cola asíncrona).
+ */
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const w65 = require('../src/services/agent-runner/engine-3h65');
+const ad = require('../src/services/agent-runner/engine-adapter');
+const runner = require('../src/services/agent-runner');
+const { loadArtifactBuffer } = require('../src/services/agent-runner/artifacts');
+
+function guard(calls) {
+  return w65.applyAntiLoopGuardsClosed({
+    calls: calls.map((name) => ({ name })),
+    detectDagCycle: ad.detectDagCycle,
+    rejectToolCallCycleAtoBtoA: ad.rejectToolCallCycleAtoBtoA,
+  });
+}
+
+test('anti-loop: the same tool several times in one batch is parallel work, not a plan cycle', () => {
+  assert.equal(guard(['set_slide_background', 'set_slide_background', 'set_slide_background']).halt, false);
+  assert.equal(guard(['office_edit', 'office_edit']).halt, false);
+  assert.equal(guard(['inspect_document', 'office_edit', 'office_edit', 'verify_visual']).halt, false);
+  // A real A→B→A cycle still stops the turn.
+  assert.equal(guard(['read_file', 'write_file', 'read_file']).halt, true);
+});
+
+test('a persistent workspace never re-delivers the previous turn output as this turn\'s result', async () => {
+  const old = Buffer.from('deck v1');
+  const files = [{ name: 'ciclo-del-agua.pptx', buffer: old }];
+  const sandbox = { persistent: true, collectOutputs: async () => files.map((f) => ({ ...f })) };
+  const previous = await runner.fingerprintOutputs(sandbox);
+  assert.equal(previous.size, 1);
+  const events = [];
+  // The loop stopped before editing: the same bytes are still there.
+  assert.deepEqual(runner.dropPreviousTurnOutputs(await sandbox.collectOutputs(), previous, (e) => events.push(e)), []);
+  assert.deepEqual(events.map((e) => e.reason), ['previous_turn_output']);
+  // Edited in place (same name, new bytes) or a new file: delivered.
+  files[0] = { name: 'ciclo-del-agua.pptx', buffer: Buffer.from('deck v2 verde') };
+  files.push({ name: 'nuevo.docx', buffer: Buffer.from('x') });
+  const kept = runner.dropPreviousTurnOutputs(await sandbox.collectOutputs(), previous);
+  assert.deepEqual(kept.map((o) => o.name), ['ciclo-del-agua.pptx', 'nuevo.docx']);
+  // An ephemeral sandbox starts empty: nothing to fingerprint.
+  assert.equal((await runner.fingerprintOutputs({ persistent: false, collectOutputs: async () => files })).size, 0);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/services/agent-runner/index.js'), 'utf8');
+  // Every collection of the turn (fast path, after the loop, each retry) goes through the filter.
+  assert.equal((src.match(/outputs = await collectTurnOutputs\(\);/g) || []).length, 3);
+  assert.equal((src.match(/await collectValidOutputs\(sandbox, onEvent, editContext\)/g) || []).length, 1);
+});
+
+test('the latest artifact stored in R2 is read back through object-storage (no readFile there)', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-r2-artifact-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = 'bc759ee29986d078';
+  const bytes = Buffer.from('PK pptx bytes');
+  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({
+    ownerUserId: 'owner', chatId: 'chat', storageRef: 'r2:agent-artifacts/bc759ee29986d078-ciclo.pptx',
+    storedRelPath: `${id}-ciclo.pptx`, filename: 'ciclo.pptx',
+  }));
+  const tmp = path.join(dir, 'r2-copy.pptx');
+  let cleaned = false;
+  const objectStorage = {
+    isRemote: (ref) => String(ref).startsWith('r2:'),
+    toLocalTemp: async (ref) => {
+      assert.equal(ref, 'r2:agent-artifacts/bc759ee29986d078-ciclo.pptx');
+      fs.writeFileSync(tmp, bytes);
+      return { path: tmp, cleanup: async () => { cleaned = true; fs.rmSync(tmp, { force: true }); } };
+    },
+  };
+  const row = { id, userId: 'owner', chatId: 'chat', filename: 'ciclo.pptx', path: '/app/uploads/agent-artifacts/gone.pptx' };
+  assert.deepEqual(await loadArtifactBuffer(row, { artifactDir: dir, objectStorage }), bytes);
+  assert.equal(cleaned, true, 'the temp copy is removed');
+  // Owner / chat scoping still applies before touching storage.
+  assert.equal(await loadArtifactBuffer({ ...row, userId: 'intruso' }, { artifactDir: dir, objectStorage }), null);
+});
+
+test('the runner follows the picked model on /api/doc/generate, /api/agent/task and the async queue', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+  const doc = read('src/routes/doc.js');
+  assert.match(doc, /pickedModel: require\('\.\.\/services\/agent-runner'\)\s*\.runnerModelSpec\(resolveGenerateProvider\(req\.body\.provider, req\.body\.model\), req\.body\.model\)/);
+  const task = read('src/services/agents/agent-task-runner.js');
+  assert.match(task, /pickedModel: agentRunner\.runnerModelSpec\(\s*runtimeModelProfile\.detected && runtimeModelProfile\.detected\.provider,\s*runtimeModelProfile\.runtimeModel,\s*\)/);
+  const index = read('src/services/agent-runner/index.js');
+  assert.match(index, /pickedModel: params\.pickedModel \|\| null,/);
+  assert.match(read('src/services/agent-runner/queue.js'), /pickedModel: data\.pickedModel \|\| null,/);
+  assert.equal(runner.runnerModelSpec('DeepSeek', 'deepseek-v4-pro'), 'DeepSeek:deepseek-v4-pro');
+});
+
+test('/api/doc/generate streams the runner rows as stage v2 and stores the timeline with the reply', () => {
+  const doc = fs.readFileSync(path.join(__dirname, '..', 'src/routes/doc.js'), 'utf8');
+  assert.match(doc, /const frame = \{ \.\.\.ev, type: 'stage', label: ev\.label \|\| 'Agente trabajando' \};\s*docTrace\.push\(frame\);\s*send\(frame\);/);
+  assert.match(doc, /persistSuccess\(chatId, req\.user\.id, displayPrompt, content, file, \{\s*agentMetadata: docTrace\.toMetadata\(\),/);
+  assert.match(doc, /persistFailure\(chatId, req\.user\.id, displayPrompt, reason, \{\s*agentMetadata: docTrace\.toMetadata\(\),/);
+  assert.match(doc, /\.\.\.\(agentMetadata \? \{ agentMetadata \} : \{\}\),/);
+});
+
+test('a turn in a chat workspace starts with an empty outputs/: the previous files move to tmp/previous-outputs', async (t) => {
+  const { createSandbox } = require('../src/services/doc-agent/sandbox');
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-ws-'));
+  const prev = process.env.SIRAGPT_AGENT_WORKSPACE_DIR;
+  process.env.SIRAGPT_AGENT_WORKSPACE_DIR = base;
+  t.after(() => {
+    if (prev === undefined) delete process.env.SIRAGPT_AGENT_WORKSPACE_DIR; else process.env.SIRAGPT_AGENT_WORKSPACE_DIR = prev;
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+  const seed = await createSandbox({ driver: 'local', persistKey: 'chat-honesty' });
+  await seed.exec('mkdir -p /workspace/outputs', { timeoutMs: 10_000 });
+  await seed.writeFile('outputs/ciclo-del-agua.pptx', Buffer.from('deck v1'));
+  await seed.destroy();
+
+  // A turn whose model stops without writing anything (the dag_cycle case):
+  // nothing is delivered, and the answer is not «Listo. Generé …».
+  const client = { chat: { completions: { create: async () => ({ choices: [{ message: { role: 'assistant', content: 'No pude hacerlo.' } }] }) } } };
+  const run = await runner.runAgentRunner({
+    files: [], instruction: 'ponlas todas de color verde oscuro', client, driver: 'local', chatId: 'chat-honesty',
+    requireFileOutput: false, persistMemory: false,
+  });
+  assert.deepEqual((run.outputs || []).map((o) => o.name), []);
+
+  const after = await createSandbox({ driver: 'local', persistKey: 'chat-honesty' });
+  try {
+    assert.deepEqual((await after.collectOutputs()).map((o) => o.name), []);
+    assert.equal(String(await after.readFile('tmp/previous-outputs/ciclo-del-agua.pptx')), 'deck v1', 'history is kept, only out of outputs/');
+  } finally {
+    await after.destroy();
+  }
+});

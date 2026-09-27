@@ -1650,12 +1650,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           let finalMsg: any = null;
           let lastStage = 'Generando documento';
           let lastPct = 0;
+          // The AgentRunner's step rows (stage v2) → the same timeline as chat turns.
+          let docActivity: ActivityStep[] = [];
           const renderProgress = () => {
             setCurrentChat((prev) => {
               if (!prev) return prev;
               const msgs = prev.messages.map((m: any) =>
                 m.id === aiMessagePlaceholder.id
-                  ? { ...m, content: '', progressStage: lastStage, progressPct: lastPct }
+                  ? { ...m, content: '', progressStage: lastStage, progressPct: lastPct, activityLog: docActivity }
                   : m
               );
               return { ...prev, messages: msgs };
@@ -1676,6 +1678,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (ev.type === 'stage') {
                   lastStage = ev.label || lastStage;
                   lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
+                  if (ev.tool || ev.callId) docActivity = appendActivity(docActivity, ev);
                   renderProgress();
                 } else if (ev.type === 'final') {
                   finalMsg = ev.assistantMessage || {
@@ -1715,10 +1718,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
           throwIfTurnCancelled();
           if (finalMsg) {
+            const delivered = docActivity.length
+              ? { ...finalMsg, activityLog: finalizeActivity(docActivity), thinkingStartedAt: aiMessagePlaceholder.thinkingStartedAt, thinkingEndedAt: Date.now() }
+              : finalMsg;
             setCurrentChat((prev) => {
               if (!prev) return prev;
               const msgs = prev.messages.map((m: any) =>
-                m.id === aiMessagePlaceholder.id ? finalMsg : m
+                m.id === aiMessagePlaceholder.id ? delivered : m
               );
               return { ...prev, messages: msgs };
             });
@@ -3462,13 +3468,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         let docFinalMsg: any = null;
         let docStage = 'Editando documento';
         let docPct = 0;
+        let docActivity: ActivityStep[] = [];
         const renderDocProgress = () => {
           setCurrentChat((prev) => {
             if (isEditRegenerationCancelled()) return prev;
             if (!prev) return prev;
             const msgs = prev.messages.map((m: any) =>
               m.id === aiMessagePlaceholder.id
-                ? { ...m, content: '', progressStage: docStage, progressPct: docPct }
+                ? { ...m, content: '', progressStage: docStage, progressPct: docPct, activityLog: docActivity }
                 : m
             );
             return { ...prev, messages: msgs };
@@ -3484,6 +3491,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               if (ev.type === 'stage') {
                 docStage = ev.label || docStage;
                 docPct = typeof ev.pct === 'number' ? ev.pct : docPct;
+                if (ev.tool || ev.callId) docActivity = appendActivity(docActivity, ev);
                 renderDocProgress();
               } else if (ev.type === 'final') {
                 docFinalMsg = ev.assistantMessage || {
@@ -3517,11 +3525,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
         throwIfEditRegenerationCancelled();
         if (docFinalMsg) {
+          const deliveredDoc = docActivity.length
+            ? { ...docFinalMsg, activityLog: finalizeActivity(docActivity), thinkingEndedAt: Date.now() }
+            : docFinalMsg;
           setCurrentChat((prev) => {
             if (isEditRegenerationCancelled()) return prev;
             if (!prev) return prev;
             const msgs = prev.messages.map((m: any) =>
-              m.id === aiMessagePlaceholder.id ? { ...docFinalMsg, id: docFinalMsg.id || aiMessagePlaceholder.id } : m
+              m.id === aiMessagePlaceholder.id ? { ...deliveredDoc, id: deliveredDoc.id || aiMessagePlaceholder.id } : m
             );
             return { ...prev, messages: msgs };
           });

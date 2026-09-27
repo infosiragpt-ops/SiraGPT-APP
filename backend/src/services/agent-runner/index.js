@@ -361,6 +361,56 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
 }
 
 /**
+ * A persistent chat workspace (persistKey = chatId) keeps earlier turns'
+ * outputs/. Those files are history, never this turn's deliverable: a loop
+ * that stopped before editing re-delivered the previous deck as «Listo.
+ * Generé …». At turn start they move to tmp/previous-outputs/ (still
+ * readable), so outputs/ only holds what this turn writes. The latest version
+ * the user works on is staged in uploads/ anyway.
+ */
+async function archivePreviousOutputs(sandbox) {
+  if (!sandbox || !sandbox.persistent || typeof sandbox.exec !== 'function') return false;
+  try {
+    const res = await sandbox.exec(
+      'rm -rf /workspace/tmp/previous-outputs && mkdir -p /workspace/tmp/previous-outputs'
+        + ' && find /workspace/outputs -mindepth 1 -maxdepth 1 -exec mv {} /workspace/tmp/previous-outputs/ \\;',
+      { timeoutMs: 20_000 },
+    );
+    return !res || res.exitCode === undefined || res.exitCode === 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Fallback when the archive could not run: never deliver a file identical to
+// one that was already there before the turn.
+async function fingerprintOutputs(sandbox) {
+  const seen = new Map();
+  if (!sandbox || !sandbox.persistent || typeof sandbox.collectOutputs !== 'function') return seen;
+  try {
+    for (const out of await sandbox.collectOutputs()) {
+      if (out && out.name && Buffer.isBuffer(out.buffer)) {
+        seen.set(out.name, require('crypto').createHash('sha256').update(out.buffer).digest('hex'));
+      }
+    }
+  } catch (_) { /* no snapshot → nothing is excluded */ }
+  return seen;
+}
+
+function dropPreviousTurnOutputs(outputs = [], previous = new Map(), onEvent = () => {}) {
+  if (!previous || !previous.size) return outputs;
+  return (Array.isArray(outputs) ? outputs : []).filter((out) => {
+    const hash = out && Buffer.isBuffer(out.buffer)
+      ? require('crypto').createHash('sha256').update(out.buffer).digest('hex') : null;
+    const unchanged = Boolean(out && hash && previous.get(out.name) === hash);
+    if (unchanged) {
+      try { onEvent({ type: 'output_invalid', name: out.name, reason: 'previous_turn_output' }); } catch (_) { /* trace only */ }
+    }
+    return !unchanged;
+  });
+}
+
+/**
  * An office_edit chain (first edit → verification → correction) leaves every
  * version in outputs/; only the LAST link is the deliverable. An output that a
  * later successful office_edit used as its `src` is an intermediate version
@@ -476,6 +526,9 @@ async function runAgentRunner({
       if (f.isPriorArtifact) priorNames.push(name);
     }
     await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
+    const previousOutputs = (await archivePreviousOutputs(sandbox)) ? new Map() : await fingerprintOutputs(sandbox);
+    const collectTurnOutputs = async () => dropPreviousTurnOutputs(
+      await collectValidOutputs(sandbox, onEvent, editContext), previousOutputs, onEvent);
     const officeHelpersPy = loadOfficeHelpersPy();
     if (officeHelpersPy) {
       try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
@@ -577,7 +630,7 @@ async function runAgentRunner({
       }
     }
 
-    let outputs = await collectValidOutputs(sandbox, onEvent, editContext);
+    let outputs = await collectTurnOutputs();
     if (fastPathUsed && outputs.filter((o) => o.valid !== false).length > 0) {
       const previewTarget = outputs.find((o) => o.valid !== false);
       onEvent({ type: 'tool_call', tool: 'render_preview', label: 'Verificando resultado', preview: previewTarget.name });
@@ -653,7 +706,7 @@ async function runAgentRunner({
       maxTokens: loopMaxTokens,
     });
     throwIfAborted(abortScope.signal);
-    outputs = await collectValidOutputs(sandbox, onEvent, editContext);
+    outputs = await collectTurnOutputs();
 
     let outputAttempt = 1;
     while (
@@ -692,7 +745,7 @@ async function runAgentRunner({
         maxTokens: loopMaxTokens,
       });
       throwIfAborted(abortScope.signal);
-      outputs = await collectValidOutputs(sandbox, onEvent, editContext);
+      outputs = await collectTurnOutputs();
     }
     outputs = dropIntermediateOutputs(outputs, result && result.steps);
 
@@ -915,6 +968,7 @@ async function executeAgentRunnerTurn(params = {}) {
         chatId: params.chatId,
         fileIds: params.fileIds,
         model: params.model,
+        pickedModel: params.pickedModel || null,
       }, { connection: params.queueConnection || connection });
       onEventSafe(params.onEvent, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner', jobId });
       return await waitForAgentRunnerJob({
@@ -977,6 +1031,7 @@ async function runAgentRunnerForDocRoute({
   prompt,
   fileIds = [],
   model,
+  pickedModel = null,
   client,
   signal,
   driver,
@@ -999,6 +1054,7 @@ async function runAgentRunnerForDocRoute({
     fileIds,
     instruction: text,
     model,
+    pickedModel,
     client,
     signal,
     driver,
@@ -1086,6 +1142,9 @@ function orchestratorEnabled(env) {
 
 module.exports = {
   dropIntermediateOutputs,
+  archivePreviousOutputs,
+  fingerprintOutputs,
+  dropPreviousTurnOutputs,
   runnerModelSpec,
   shouldRunAgentRunner,
   createRunnerLlmClient,
