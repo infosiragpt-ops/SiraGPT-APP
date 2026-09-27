@@ -36,7 +36,11 @@ function fakePrisma({ agentTaskRows = [], codexRunRows = [], createdNotification
     agentTask: {
       findMany: async ({ where }) => {
         if (!where || !where.status) return agentTaskRows;
-        if (where.status.nin) return agentTaskRows.filter((r) => !where.status.nin.includes(r.status));
+        // Mirror Prisma: only real operators are accepted (`nin` is not one).
+        const ops = Object.keys(where.status);
+        const invalid = ops.filter((op) => !['in', 'notIn', 'equals', 'not'].includes(op));
+        if (invalid.length) throw new Error(`Unknown argument \`${invalid[0]}\``);
+        if (where.status.notIn) return agentTaskRows.filter((r) => !where.status.notIn.includes(r.status));
         if (where.status.in) return agentTaskRows.filter((r) => where.status.in.includes(r.status));
         return agentTaskRows;
       },

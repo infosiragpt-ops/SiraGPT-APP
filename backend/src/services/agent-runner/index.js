@@ -19,7 +19,9 @@ const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-age
 const { resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
-const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
+const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
+const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
+const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
 const { runAgentLoop, MAX_ITERATIONS_DEFAULT, isLlmCreditError } = require('./loop');
 const {
   resolveTurnFiles,
@@ -103,30 +105,11 @@ function loadOfficeHelpersPy({ dir } = {}) {
 }
 
 // sira_office.py — office engine for millimetric edits with visual
-// verification (docs/specs/edicion-milimetrica/SPEC.md, Fase A). Same
-// lazy/fail-open contract as office_helpers.py: a missing file never breaks
-// the runner, the agent just keeps using execute_python.
-const SIRA_OFFICE_ENGINE_REL = 'tmp/sira_office.py';
-let siraOfficePyCache;
-function loadSiraOfficePy({ dir } = {}) {
-  const fromDefaultDir = !dir;
-  if (fromDefaultDir && siraOfficePyCache !== undefined) return siraOfficePyCache;
-  let text = null;
-  try {
-    text = fs.readFileSync(path.join(dir || __dirname, 'sira_office.py'), 'utf8');
-  } catch (_) {
-    text = null;
-  }
-  if (fromDefaultDir) siraOfficePyCache = text;
-  return text;
-}
-
-async function installSiraOfficeEngine(sandbox, { dir } = {}) {
-  const py = loadSiraOfficePy({ dir });
-  if (!py || !sandbox || typeof sandbox.writeFile !== 'function') return false;
-  await sandbox.writeFile(SIRA_OFFICE_ENGINE_REL, py);
-  return true;
-}
+// verification (docs/specs/edicion-milimetrica/SPEC.md). Installed by
+// tools.office.js with the same lazy/fail-open contract as office_helpers.py:
+// a missing file never breaks the runner, the agent keeps execute_python.
+const SIRA_OFFICE_ENGINE_REL = OFFICE_ENGINE_REL;
+const installSiraOfficeEngine = installOfficeEngine;
 
 const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
@@ -401,7 +384,14 @@ async function runAgentRunner({
       try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
     }
     // Fail-open: without the engine the agent still edits with execute_python.
-    try { await installSiraOfficeEngine(sandbox); } catch (_) { /* fail-open */ }
+    // With the office tools on, a failed install is reported to the admin
+    // turn-failure tracker (the user may end up without visual verification).
+    const reportOfficeFailure = createOfficeFailureReporter({ userId, chatId });
+    try { await installSiraOfficeEngine(sandbox); } catch (err) {
+      if (officeEngineEnabled()) {
+        reportOfficeFailure({ tool: 'office_engine', code: 'install_failed', error: err && err.message });
+      }
+    }
 
     // ── F8 hook: memoria recall (DATA) + tools extra (skills / MCP) ────────
     const f8 = await prepareF8Extras({
@@ -420,7 +410,10 @@ async function runAgentRunner({
       { role: 'user', content: task },
     ];
 
-    const executors = { ...makeToolExecutors(sandbox), ...f8.executors };
+    const executors = {
+      ...makeToolExecutors(sandbox, { office: { onFailure: reportOfficeFailure } }),
+      ...f8.executors,
+    };
 
     // Deterministic fast-paths are allowed ONLY for exact edits on an
     // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
@@ -588,6 +581,12 @@ async function runAgentRunner({
       outputs = await collectValidOutputs(sandbox, onEvent, editContext);
     }
 
+    // An edit that ends with its visual verification failed reaches the user
+    // unverified: surface it to the admin turn-failure tracker.
+    try {
+      const verifyFailure = verificationFailureFromSteps(result && result.steps);
+      if (verifyFailure) reportOfficeFailure(verifyFailure);
+    } catch (_) { /* reporting never breaks a turn */ }
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.
@@ -986,7 +985,6 @@ module.exports = {
   canCallLlm,
   defaultModel,
   loadOfficeHelpersPy,
-  loadSiraOfficePy,
   installSiraOfficeEngine,
   SIRA_OFFICE_ENGINE_REL,
   MAX_ITERATIONS_DEFAULT,

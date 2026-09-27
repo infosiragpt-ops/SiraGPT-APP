@@ -167,6 +167,32 @@ async function exists(ref, env = process.env) {
 }
 
 /**
+ * Resolve a stored path to something readable NOW. An upload's File.path
+ * starts as a local path and becomes "r2:uploads/<userId>/<filename>" once the
+ * post-extract offload moves the binary to R2 and deletes the local copy. A
+ * caller still holding the pre-offload local path (a turn that loaded the File
+ * row seconds earlier) got ENOENT and the image never reached the model
+ * (prod 2026-09-26: «Image file not found» on a (a+b)² screenshot). The R2 key
+ * mirrors the public upload path, so a missing local ".../uploads/<rel>" maps
+ * onto "r2:uploads/<rel>". Anything else is returned unchanged.
+ */
+async function resolveReadableRef(pathOrRef, env = process.env) {
+  const raw = typeof pathOrRef === 'string' ? pathOrRef.trim() : '';
+  if (!raw || isRemote(raw)) return raw;
+  if (fsSync.existsSync(raw)) return raw;
+  if (!enabled(env)) return raw;
+  const match = /(?:^|\/)uploads\/(.+)$/.exec(raw.replace(/\\/g, '/'));
+  if (!match) return raw;
+  const segments = match[1].split('/').filter((seg) => seg && seg !== '.' && seg !== '..');
+  if (segments.length === 0) return raw;
+  const key = segments.length === 2
+    ? uploadKey(segments[0], segments[1])
+    : `uploads/${segments.map((seg) => sanitizeSegment(seg)).join('/')}`;
+  const candidate = refFromKey(key);
+  return (await exists(candidate, env)) ? candidate : raw;
+}
+
+/**
  * Ensure a local copy of a ref exists on disk and return its path plus a
  * cleanup() to remove the temp file. For local refs this is a no-op passthrough
  * (cleanup does nothing). Used by tools that require a filesystem path
@@ -219,6 +245,7 @@ module.exports = {
   readStream,
   stat,
   exists,
+  resolveReadableRef,
   toLocalTemp,
   remove,
   __setStorageForTests,

@@ -560,6 +560,24 @@ describe('turn lifecycle — beginTurn / noteTurn / finishTurn', () => {
     assert.equal(turnFailures.finishTurn(tap, {}), null, 'finishTurn is idempotent');
   });
 
+  it('converges with the «never end in silence» guard: its honest message is what the user saw, the turn still failed', async () => {
+    const res = fakeRes();
+    const tap = turnFailures.beginTurn(req({}), res, { route: 'generate', context: { chatId: 'chat-empty', idempotencyKey: 'turn-e', prompt: 'explícame esto' } });
+    const honest = 'El modelo terminó sin dar una respuesta. Vuelve a enviar tu mensaje; si se repite, prueba con otro modelo.';
+    res.write(frame({ content: honest }));
+    tap.note('turn_no_output', { category: 'sin_respuesta', message: honest });
+    const cls = turnFailures.finishTurn(tap, { finalText: honest, streamCompleted: true });
+    assert.equal(cls.category, 'sin_respuesta');
+    await flush();
+    assert.equal(prisma.rows.length, 1);
+    assert.equal(prisma.rows[0].metadata.whatUserSaw, honest);
+
+    const res2 = fakeRes();
+    const tap2 = turnFailures.beginTurn(req({}), res2, { route: 'generate', context: { idempotencyKey: 'turn-w' } });
+    tap2.note('turn_no_output', { category: 'cancelado_por_sistema', message: 'El modelo no empezó a responder a tiempo…' });
+    assert.equal(turnFailures.finishTurn(tap2, { finalText: 'El modelo no empezó a responder a tiempo…' }).category, 'colgado');
+  });
+
   it('a normal streamed answer writes nothing', async () => {
     const res = fakeRes();
     const tap = turnFailures.beginTurn(req({}), res, { route: 'generate', context: { prompt: 'hola' } });
@@ -676,6 +694,11 @@ describe('httpFailureMiddleware — non-2xx on user endpoints', () => {
 
 describe('wiring contracts', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+
+  it('the empty-turn guard (services/turn-outcome) tells the tracker why the turn failed', () => {
+    const ai = read('src/routes/ai.js');
+    assert.match(ai, /if \(__turnTap\) __turnTap\.note\('turn_no_output', \{ category: __emptyTurn\.category, message: __emptyTurn\.message \}\);/);
+  });
 
   it('media generation is tracked on the agentic path and on every composer route', () => {
     const stream = read('src/services/agentic-chat-stream.js');

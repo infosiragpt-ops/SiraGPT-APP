@@ -296,6 +296,16 @@ jobs:
           SIRA_FIXTURES_DIR: ${{ github.workspace }}/backend/tests/fixtures/office
         run: python -m unittest tests/python/test_sira_office.py -v
 
+      # Fase B: the runner's office tools against the REAL sandbox + engine.
+      # Backend tests are sharded round-robin and only shard 1 has LibreOffice,
+      # so run this file here explicitly: its render/verify cases must execute,
+      # not skip.
+      - name: Office tools of the runner (render + verify with LibreOffice)
+        if: matrix.shard == 1
+        env:
+          NODE_ENV: test
+        run: node --test tests/agent-runner-office-tools.test.js
+
       - name: Configure Redis for auth-security readiness
         run: |
           docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET maxmemory 268435456

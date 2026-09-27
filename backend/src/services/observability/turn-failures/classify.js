@@ -321,6 +321,22 @@ function classifyTurnOutcome(outcome = {}) {
     return out('error_visible', `${hf.method || 'POST'} ${hf.endpoint || outcome.route || ''} → ${hf.status}${hf.code ? ` ${hf.code}` : ''}`.trim(), ['http_status']);
   }
 
+  // The generate route's «never end in silence» guard (services/turn-outcome)
+  // wrote an honest message because the turn produced nothing: that text is
+  // what the user saw, but the question still failed.
+  const guard = lastNote(notes, 'turn_no_output');
+  if (guard && guard.data) {
+    const guardCategory = str(guard.data.category, 40);
+    if (guardCategory === 'adjunto_perdido') {
+      return out('adjunto_perdido', 'Imagen no leída: no llegó al modelo', ['turn_no_output', guardCategory]);
+    }
+    if (guardCategory === 'cancelado_por_sistema') {
+      return out('colgado', 'Sin primera respuesta del modelo a tiempo (watchdog)', ['turn_no_output', guardCategory]);
+    }
+    const pc = providerCause(notes);
+    return out('sin_respuesta', pc ? `${pc} → respuesta vacía` : 'Respuesta vacía del modelo', ['turn_no_output', guardCategory || 'sin_respuesta']);
+  }
+
   // A media generation that failed or came back degenerate: the user asked
   // for an image/video/audio and did not get it, whatever the text says.
   const genNote = unresolvedGenerationFailure(notes);
