@@ -417,3 +417,43 @@ describe('module surface', () => {
     assert.deepEqual(keys, ['INTERNAL', 'RERANKER_SYSTEM', 'rerankResults']);
   });
 });
+
+// Prod 2026-09-27: ten sequential rerank calls kept the academic search silent
+// for over a minute, and a closed tab kept paying for them for ~2.5 min.
+describe('rerankResults · concurrency and cancellation', () => {
+  const pool = (n) => Array.from({ length: n }, (_, i) => ({ title: `r${i}` }));
+  const scoreFirst = () => ({ content: JSON.stringify({ scores: [{ idx: 1, score: 5 }] }) });
+
+  it('scores batches a few at a time instead of one after another', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let calls = 0;
+    const callLLM = async () => {
+      calls += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight -= 1;
+      return scoreFirst();
+    };
+    const out = await rerankResults({ query: 'q', results: pool(100), batchSize: 10, callLLM });
+    assert.equal(calls, 10, 'every batch is still scored');
+    assert.equal(maxInFlight, 3, 'bounded concurrency');
+    assert.equal(out.reranked, true);
+  });
+
+  it('forwards the abort signal and launches no batch after the client left', async () => {
+    const controller = new AbortController();
+    const seenSignals = [];
+    let calls = 0;
+    const callLLM = async ({ signal }) => {
+      calls += 1;
+      seenSignals.push(signal);
+      controller.abort();
+      return scoreFirst();
+    };
+    await rerankResults({ query: 'q', results: pool(100), batchSize: 10, callLLM, signal: controller.signal, concurrency: 1 });
+    assert.equal(calls, 1, 'no further batches once aborted');
+    assert.equal(seenSignals[0], controller.signal, 'the provider call can be cancelled too');
+  });
+});

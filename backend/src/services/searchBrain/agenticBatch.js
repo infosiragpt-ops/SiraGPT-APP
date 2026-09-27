@@ -33,6 +33,7 @@
 
 const { retrieveFromProvider, REGISTRY } = require("./providers");
 const { rerankResults } = require("./llmReranker");
+const { extractIndexMentions } = require("./index-mentions");
 const { callLLM } = require("./llmClient");
 const { analyzeQuery } = require("../research/research-query-intelligence");
 const { scoreResult } = require("../agents/web-search/relevance");
@@ -509,11 +510,16 @@ async function* runAgenticBatch(opts) {
     return;
   }
 
-  const plan = analyzeQuery(query, { maxQueries: 3, discipline: opts.discipline });
-  if (!hasExplicitProviders) {
+  // «… en arxiv»: a named index picks the providers and leaves the topic.
+  const mentioned = hasExplicitProviders ? { providers: [], topicQuery: query } : extractIndexMentions(query, REGISTRY);
+  const topicQuery = mentioned.topicQuery;
+  const plan = analyzeQuery(topicQuery, { maxQueries: 3, discipline: opts.discipline });
+  if (mentioned.providers.length) {
+    providers = mentioned.providers;
+  } else if (!hasExplicitProviders) {
     providers = orderProvidersForDiscipline(providers, plan.discipline);
   }
-  const protocol = buildProtocol(query, plan, opts.protocol || {});
+  const protocol = buildProtocol(topicQuery, plan, opts.protocol || {});
   const searchQueries = [];
   const queryKeys = new Set();
   for (const candidate of [protocol.searchExpression, ...(plan.searchQueries || [])].slice(0, 3)) {
@@ -942,7 +948,7 @@ async function* runAgenticBatch(opts) {
     : collected;
   const deterministic = rankDeterministically(
     rankInput,
-    [searchQueries[0], query, ...searchQueries.slice(1)],
+    [searchQueries[0], topicQuery, ...searchQueries.slice(1)],
     conceptGroups,
     filters,
   );
@@ -963,10 +969,11 @@ async function* runAgenticBatch(opts) {
   let rerankerWasUsed = false;
   try {
     const out = await rerank({
-      query,
+      query: topicQuery,
       results: rerankPool,
       callLLM: llm,
       batchSize: 10,
+      signal,
     });
     ranked = Array.isArray(out?.results) ? out.results : rerankPool;
     rerankerWasUsed = Boolean(out?.reranked);

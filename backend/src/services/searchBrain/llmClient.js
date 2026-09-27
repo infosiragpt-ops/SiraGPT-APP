@@ -49,14 +49,14 @@ function getDefaultModel() {
 }
 
 /**
- * callLLM({ system, user, temperature, maxTokens }) → { content }
- * Returns null when no client is configured OR when a transient
- * network error occurs. Callers MUST treat null as "fallback to
- * non-LLM path".
+ * callLLM({ system, user, temperature, maxTokens, signal }) → { content }
+ * Returns null when no client is configured, when `signal` aborted the
+ * request, OR when a transient network error occurs. Callers MUST treat
+ * null as "fallback to non-LLM path".
  */
-async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model }) {
+async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model, signal }) {
   const client = getClient();
-  if (!client) return null;
+  if (!client || signal?.aborted) return null;
   try {
     const resp = await client.chat.completions.create({
       model: model || getDefaultModel(),
@@ -66,7 +66,7 @@ async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-    });
+    }, signal ? { signal } : undefined);
     const content = resp?.choices?.[0]?.message?.content;
     if (typeof content !== "string") return null;
     return { content };
