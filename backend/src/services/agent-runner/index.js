@@ -331,6 +331,13 @@ function resolveOutputEditSource(name, sources) {
   return relevant.length === 1 ? relevant[0] : null;
 }
 
+function isExplicitPdfConversion(instruction, files = []) {
+  const hasOtherSource = files.some((file) => Buffer.isBuffer(file?.buffer) && !/\.pdf$/iu.test(String(file.name || '')));
+  const hasPdfSource = files.some((file) => Buffer.isBuffer(file?.buffer) && /\.pdf$/iu.test(String(file.name || '')));
+  return hasOtherSource && !hasPdfSource
+    && /\b(?:convierte|convertir|convert|exporta|exportar|export|guarda|guardar|save)\b[^.!?\n]{0,120}\b(?:a|al|en|como|to|as)\s+(?:(?:un|el|a)\s+)?(?:archivo\s+)?pdf\b/iu.test(String(instruction || ''));
+}
+
 async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}) {
   const outputs = await sandbox.collectOutputs();
   for (const out of outputs) {
@@ -360,12 +367,13 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
     if (out.valid && ext === 'pdf') {
       // The general agent also edits PDFs, outside the document-agent route.
       // Byte inequality proves neither a readable PDF nor a requested edit.
-      let proof = editContext.isEdit
+      const requiresPdfSource = editContext.isEdit && !isExplicitPdfConversion(editContext.instruction, editContext.files);
+      let proof = requiresPdfSource
         ? (source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: sources.length ? 'source_ambiguous' : 'source_missing' })
         : { passed: true };
       if (proof.passed) {
         const verdict = await validateEditedPdf({
-          originalBuffer: editContext.isEdit ? source.buffer : null,
+          originalBuffer: requiresPdfSource ? source.buffer : null,
           editedBuffer: out.buffer,
           instruction: editContext.instruction,
         });

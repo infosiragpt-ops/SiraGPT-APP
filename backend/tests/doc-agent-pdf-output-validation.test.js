@@ -144,8 +144,31 @@ test('a PDF edit without its source fails closed while new PDF generation remain
   const edit = await collectValidOutputs(sandbox, () => {}, { files: [], instruction, isEdit: true });
   assert.equal(edit[0].valid, false);
   assert.equal(edit[0].validation?.reason, 'source_missing');
+  const wrongFormat = await collectValidOutputs(sandbox, () => {}, {
+    files: [{ name: 'fuente.docx', buffer: Buffer.from('source file') }], instruction, isEdit: true,
+  });
+  assert.equal(wrongFormat[0].valid, false);
+  assert.equal(wrongFormat[0].validation?.reason, 'source_missing');
   const generated = await collectValidOutputs(sandbox, () => {}, { files: [], instruction: 'Crea un PDF', isEdit: false });
   assert.equal(generated[0].valid, true);
+});
+
+test('explicit conversion from a non-PDF source accepts only a readable PDF result', async () => {
+  const output = await pdfWith('Proyecto final');
+  const context = {
+    files: [{ name: 'fuente.docx', buffer: Buffer.from('source file') }],
+    instruction: 'Convierte el DOCX adjunto a PDF.', isEdit: true,
+  };
+  const readable = await collectValidOutputs(
+    { collectOutputs: async () => [{ name: 'convertido.pdf', buffer: output }] }, () => {}, context,
+  );
+  assert.equal(readable[0].valid, true);
+  assert.equal(readable[0].validation?.reason, 'pdf_readable');
+  const unreadable = await collectValidOutputs(
+    { collectOutputs: async () => [{ name: 'convertido.pdf', buffer: Buffer.from('not a PDF') }] }, () => {}, context,
+  );
+  assert.equal(unreadable[0].valid, false);
+  assert.equal(unreadable[0].validation?.reason, 'pdf_unreadable');
 });
 
 test('the general agent accepts a verified PDF literal edit', async () => {
