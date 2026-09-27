@@ -5,12 +5,11 @@ import { collectDocumentEditReferences, documentEditReference, snapshotDocumentE
 import { historyDocumentAttachments, mentionsDocumentTarget, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
 import { createPersistedComposerQueueItem } from "../lib/chat/composer-queue"
 import { aiService, shouldRouteTextPromptThroughAgenticRuntime, shouldUseExistingDocumentFileContext } from "../lib/ai-service"
-
-const savReadbackPrompt = "Sin crear ni modificar archivos: abre participantes.sav y participantes.xlsx que acabas de entregar. Usa pyreadstat.read_sav y openpyxl para comparar celda por celda las 20×20 respuestas P01–P20. Informa el número exacto de diferencias entre los 400 valores y cuántas etiquetas de variable conserva el SAV. Si no puedes acceder o leer uno, dilo expresamente; no deduzcas la igualdad de la respuesta anterior."
-const savReadbackQuestion = "¿Cuántas diferencias hay entre los 400 valores P01–P20 de participantes.sav y participantes.xlsx que entregaste en este chat? Compruébalo leyendo los dos archivos y dime también cuántas etiquetas de variables tiene el SAV."
+import { isGeneratedArtifactReadRequest } from "../lib/generated-artifact-read-intent"
+import readbackCases from "./fixtures/generated-sav-xlsx-readback.json"
 
 test("read-only follow-ups on a generated SAV/XLSX pair never enter either document editor or generator", async () => {
-  for (const prompt of [savReadbackPrompt, savReadbackQuestion]) {
+  for (const prompt of readbackCases.readOnlySavXlsx) {
     assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
     assert.equal(resolveDocumentSandboxAdmission(prompt, {
       historyAttachments: [{ id: "existing-xlsx", name: "participantes.xlsx" }],
@@ -22,6 +21,16 @@ test("read-only follow-ups on a generated SAV/XLSX pair never enter either docum
     }]), false, prompt)
   }
   assert.equal(looksLikeExplicitDocumentEdit("Abre el Excel que acabas de entregar y luego edita participantes.xlsx"), true)
+})
+test("SAV/XLSX readback corpus rejects new outputs, edits and unrelated formats", async () => {
+  for (const prompt of readbackCases.readOnlySavXlsx) {
+    assert.equal(isGeneratedArtifactReadRequest(prompt), true, prompt)
+    assert.equal(await aiService.classifyIntent(prompt), "agent_task", prompt)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, []), false, prompt)
+  }
+  for (const prompt of [...readbackCases.newOutputOrEdit, ...readbackCases.unrelated]) {
+    assert.equal(isGeneratedArtifactReadRequest(prompt), false, prompt)
+  }
 })
 
 // HTTP protocol fixtures test the client only. These are not editor, independent

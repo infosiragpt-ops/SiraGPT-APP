@@ -11,13 +11,14 @@ const MAX_RECENT_ARTIFACTS = Math.min(8, MAX_SIMULTANEOUS_DOCUMENTS);
 const RECENT_CANDIDATE_LIMIT = 30;
 const READABLE_DOCUMENT_FORMATS = new Set(['sav', 'xlsx', 'docx', 'pptx', 'pdf', 'csv']);
 const READ_VERB_RE = /\b(?:abre|abrir|lee|leer|leelo|leela|revisa|revisar|verifica|verificar|comprueba|comprobar|compara|comparar|contrasta|contrastar|coincid\w*|difier\w*|diferenc\w*|analiza|analizar|inspecciona|inspeccionar|valida|validar)\b/;
-const GENERATED_REFERENCE_RE = /\b(?:generad\w*|entregad\w*|cread\w*|generaste|entregaste|creaste|acabas de entregar|acabas de generar|acabamos de crear|de tu respuesta anterior|de la respuesta anterior)\b/;
+const GENERATED_REFERENCE_RE = /\b(?:generad\w*|entregad\w*|cread\w*|generaste|entregaste|creaste|acabas de entregar|acabas de generar|acabas de crear|acabamos de crear|de tu respuesta anterior|de la respuesta anterior)\b/;
+const GENERATED_REFERENCES_RE = new RegExp(GENERATED_REFERENCE_RE.source, 'g');
 const FORMAT_REFERENCE_RE = /\b(?:spss|sav|excel|xlsx|word|docx|pptx?|powerpoint|pdf|csv)\b|\.(?:sav|xlsx|docx|pptx|pdf|csv)\b/;
 const PRIOR_REFERENCE_RE = /\b(?:anteriores?|previos?|de arriba|del turno anterior)\b/;
 const CHANGE_VERBS = '(?:edita\\w*|modifica\\w*|cambia\\w*|reemplaza\\w*|sustitu\\w*|completa\\w*|corrige\\w*|actualiza\\w*|anade\\w*|agrega\\w*|elimina\\w*|borra\\w*|guarda\\w*|reescribe\\w*|inserta\\w*|altera\\w*)';
-const NEW_OUTPUT_VERBS = '(?:crea\\w*|genera\\w*|exporta\\w*)';
+const NEW_OUTPUT_VERBS = '(?:crea\\w*|genera\\w*|exporta\\w*|haz|hacer|haga\\w*|conviert\\w*|converti\\w*|prepara\\w*|transforma\\w*)';
 const CHANGE_VERB_RE = new RegExp(`\\b${CHANGE_VERBS}\\b`);
-const NEW_OUTPUT_COMMAND_RE = new RegExp(`\\b(?:y|luego|despues|tambien)\\s+${NEW_OUTPUT_VERBS}\\b`);
+const NEW_OUTPUT_VERB_RE = new RegExp(`\\b${NEW_OUTPUT_VERBS}\\b`);
 const NEGATED_CHANGE_RE = new RegExp(`\\b(?:sin|no)\\s+(?:(?:${CHANGE_VERBS}|${NEW_OUTPUT_VERBS})\\s+(?:ni|y)\\s+)*(?:${CHANGE_VERBS}|${NEW_OUTPUT_VERBS})\\b`, 'g');
 
 function normalized(text) {
@@ -28,11 +29,11 @@ function isReadOnlyGeneratedArtifactFollowup(goal) {
   const text = normalized(goal);
   // "sin crear ni modificar" is a read-only constraint, while "abre y
   // edita" must stay on the source-preserving edit route.
-  const requestedChanges = text.replace(NEGATED_CHANGE_RE, '');
+  const requestedChanges = text.replace(GENERATED_REFERENCES_RE, '').replace(NEGATED_CHANGE_RE, '');
   return text.length > 0 && text.length <= 4000
     && READ_VERB_RE.test(text)
     && !CHANGE_VERB_RE.test(requestedChanges)
-    && !NEW_OUTPUT_COMMAND_RE.test(requestedChanges)
+    && !NEW_OUTPUT_VERB_RE.test(requestedChanges)
     && (GENERATED_REFERENCE_RE.test(text)
       || (FORMAT_REFERENCE_RE.test(text) && PRIOR_REFERENCE_RE.test(text)));
 }
@@ -191,7 +192,8 @@ function isGeneratedSavXlsxComparison(goal, refs = []) {
   if (!isReadOnlyGeneratedArtifactFollowup(goal)
     || !/\b(?:compara\w*|contrasta\w*|coincid\w*|difier\w*|diferenc\w*)\b/.test(text)
     || !requestedFormats(goal).has('sav')
-    || !requestedFormats(goal).has('xlsx')) return false;
+    || !requestedFormats(goal).has('xlsx')
+    || requestedFormats(goal).size !== 2) return false;
   return Array.isArray(refs) && refs.length === 2
     && new Set(refs.map((ref) => String(ref?.format || '').toLowerCase())).size === 2
     && refs.some((ref) => ref?.format === 'sav')
