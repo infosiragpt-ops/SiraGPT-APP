@@ -168,6 +168,11 @@ console.log = (...args) => {
     if (args.length === 0) { _origConsoleLog(); return; }
     _origConsoleLog(args.map(_formatLogArg).join(' '));
 };
+// «Errores del sistema» (Admin → Logs): console.error — and the console.warn
+// lines that name a provider status / Redis / Prisma / queue failure — become
+// grouped ISSUES. Installed after the console shaping above; output unchanged.
+const systemErrors = require('./src/services/observability/system-errors');
+systemErrors.installConsoleCapture();
 process.on('unhandledRejection', (reason, promise) => {
     // Transient Redis errors (Upstash quota, connection blips, etc.)
     // surface here from BullMQ internals. Log as warning and keep
@@ -193,6 +198,7 @@ process.on('unhandledRejection', (reason, promise) => {
         reason instanceof Error
             ? `${reason.name}: ${reason.message}${reason.stack ? '\n' + reason.stack : ''}`
             : String(reason);
+    systemErrors.captureFatal(reason, 'unhandledRejection');
     console.error('[FATAL] unhandledRejection:', reasonStr);
     // In production, log and continue (let PM2/Docker restart if
     // the process becomes unhealthy). In development, exit hard.
@@ -202,6 +208,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 process.on('uncaughtException', (error) => {
+    systemErrors.captureFatal(error, 'uncaughtException');
     console.error('[FATAL] uncaughtException:', error);
     // Always exit on uncaught exceptions — the process is in an
     // unknown state. PM2 / Docker will restart automatically.
@@ -1022,6 +1029,10 @@ app.use(redMetricsMiddleware);
 // «Fallos de respuesta». Turn routes that classify themselves (/generate,
 // /document-edit, /doc/generate) are skipped via req._turnTap.
 app.use(require('./src/services/observability/turn-failures').httpFailureMiddleware());
+// «Errores del sistema»: binds the request to the log context (so an error
+// logged while serving it carries route / reqId / user) and records any 5xx
+// no captured error explains.
+app.use(systemErrors.httpMiddleware());
 
 // SLO tracker — records per-endpoint counters used by /metrics. Must
 // run after request-id/otel context (set above) so the matched route
@@ -1478,7 +1489,13 @@ app.use('*', (req, res) => {
 // in addition to pino's structured log so the request-logger pipeline
 // sees errored requests too.
 const { globalErrorHandler: buildGlobalErrorHandler } = require('./src/middleware/error-handler');
-app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryException }));
+app.use(buildGlobalErrorHandler({
+    logger,
+    captureException: (err, context) => {
+        captureSentryException(err, context);
+        systemErrors.captureRequestError(err, context);
+    },
+}));
 
 async function startServer() {
     // ── Provider-aware OAuth configuration check ───────────────
@@ -1970,6 +1987,7 @@ async function startServer() {
     // Flush telemetry exporters before disconnecting persistence clients.
     shutdownRegistry.register('observability_flush', async () => {
         const flushers = [
+            systemErrors.flush(),
             shutdownOpenTelemetry(),
             shutdownLangfuse(),
             shutdownPostHog(),

@@ -84,7 +84,8 @@ export function AdminSidebar() {
   const initials = getInitials(user?.name, user?.email)
   const expanded = state === "open" || isMobile
   // Failed user turns the admin hasn't looked at yet (Logs → Fallos de respuesta).
-  const unseenFailures = useTurnFailureAlerts()?.unseen ?? 0
+  // Failed turns + new system issues / regressions not seen yet.
+  const unseenFailures = useTurnFailureAlerts()?.totalUnseen ?? 0
 
   const handleNavigation = (url: string) => {
     router.push(url)
@@ -171,8 +172,8 @@ export function AdminSidebar() {
                     {item.url === "/admin/logs" && unseenFailures > 0 && (
                       <span
                         data-testid="admin-logs-failure-badge"
-                        aria-label={`${unseenFailures} fallos de respuesta sin revisar`}
-                        title={`${unseenFailures} fallos de respuesta sin revisar`}
+                        aria-label={`${unseenFailures} alertas de logs sin revisar`}
+                        title={`${unseenFailures} alertas de logs sin revisar`}
                         className={cn(
                           "ml-auto inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-red-600 px-1.5 text-[10px] font-semibold leading-5 text-white tabular-nums",
                           !expanded && "absolute right-0.5 top-0.5 ml-0 min-w-[1rem] px-1 text-[9px] leading-4",

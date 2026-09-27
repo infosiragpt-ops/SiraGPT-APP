@@ -46,6 +46,12 @@ router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req,
     Promise.resolve()
       .then(() => writeAuditLog(prisma, buildClientEventAuditEntry(event, req)))
       .catch(() => {});
+
+    // «Errores del sistema»: browser crashes / render errors group into
+    // issues next to the backend ones (API failures are captured server-side).
+    Promise.resolve()
+      .then(() => require('../services/observability/system-errors').captureFrontendEvent(event, req))
+      .catch(() => {});
   }
 
   // Browser-side turn failure (stream error, no activity, empty close,
