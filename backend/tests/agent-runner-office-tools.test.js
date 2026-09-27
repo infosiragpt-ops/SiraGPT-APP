@@ -103,6 +103,25 @@ test('office_edit: quirúrgico, atómico y con argumentos seguros', { skip: !HAS
   } finally { await sandbox.destroy(); }
 });
 
+test('office_edit: lo pedido ya estaba aplicado → «unchanged» explícito; dst «outputs/» usa el nombre por defecto', { skip: !HAS_PY && 'python3 + lxml + Pillow requeridos' }, async () => {
+  const sandbox = await freshSandbox();
+  try {
+    const ex = office.makeOfficeToolExecutors(sandbox);
+    // The fixture's introduction already has a 1.25 cm first-line indent and
+    // justified text (eval docx-sangria-justificado).
+    const raw = await ex.office_edit({ src: 'uploads/tesis_demo.docx', dst: 'outputs/',
+      ops: [10, 11, 12, 13].map((paragraph) => ({ op: 'set_paragraph_format', paragraph, align: 'justify', first_line_mm: 12.5 })) });
+    assert.ok(raw.startsWith('{"unchanged":true'), raw.slice(0, 200));
+    const out = JSON.parse(raw);
+    assert.equal(out.ok, true);
+    assert.equal(out.dst, 'outputs/tesis_demo-editado.docx', 'a folder dst gets the default name');
+    assert.match(out.note, /ya estaba aplicado/);
+    // A real change never carries the flag.
+    const real = await ex.office_edit({ src: 'uploads/tesis_demo.docx', ops: [{ op: 'replace_text', paragraph: 8, find: '2024', replace: '2025' }] });
+    assert.ok(!real.startsWith('{"unchanged"'));
+  } finally { await sandbox.destroy(); }
+});
+
 test('render_preview v2: todas las páginas + campos de compatibilidad', { skip: (!HAS_PY || !HAS_RENDER) && 'requiere soffice + pdftoppm' }, async () => {
   const sandbox = await freshSandbox();
   try {
