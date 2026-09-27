@@ -24,7 +24,7 @@ const { runDocAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
 const { validateEditedFile, MAX_ATTEMPTS } = require('./validate');
 const { validateEditedPdf } = require('./pdf-output-validation');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
-const { resolveDocAgentCandidates, createFailoverClient } = require('./llm-runtime');
+const { resolveDocAgentRunCandidates, createFailoverClient } = require('./llm-runtime');
 
 // Production 2026-09: gpt-4o-mini is retired and the OpenAI key answers 401;
 // the document agent writes python-docx / openpyxl / python-pptx code, so it
@@ -164,12 +164,10 @@ async function runDocumentAgent({
   }
 
   // Injected client (tests, callers with their own runtime): use it as-is.
-  // Otherwise build the production runtime: the explicit model on its
-  // provider first, then every configured provider of the ladder, with
-  // per-call failover (an exhausted OpenRouter balance no longer kills the
-  // run when DeepSeek/Meta/Gemini/xAI can take the same tool-calling loop).
-  const llm = client || createFailoverClient(resolveDocAgentCandidates({ model }), {
-    onFailover: (info) => onEvent({ type: 'llm_failover', ...info }),
+  // A model picked by the user stays on its own API. The historical default
+  // route keeps its provider ladder when no model was selected.
+  const llm = client || createFailoverClient(resolveDocAgentRunCandidates({ model }), {
+    onFailover: () => onEvent({ type: 'llm_failover', message: 'Reintentando con otro servicio de IA.' }),
   });
   const loopModel = model || DEFAULT_MODEL;
 

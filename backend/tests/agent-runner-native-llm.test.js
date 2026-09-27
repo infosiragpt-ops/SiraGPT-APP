@@ -148,4 +148,51 @@ describe('native-llm module', () => {
     assert.ok(calls <= 3);
     assert.ok(events.some((e) => e.code === 'loop_stall'));
   });
+
+  test('DeepSeek thinking is replayed unchanged after a tool call', async () => {
+    const messages = [{ role: 'user', content: 'lee un archivo' }];
+    const seen = [];
+    const client = { chat: { completions: { create: async (payload) => {
+      seen.push(payload);
+      if (seen.length === 1) {
+        return { choices: [{ message: {
+          content: '',
+          reasoning_content: 'razonamiento devuelto por el proveedor',
+          tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }],
+        } }] };
+      }
+      assert.equal(payload.messages[1].reasoning_content, 'razonamiento devuelto por el proveedor');
+      return { choices: [{ message: { content: 'Leí el archivo.' } }] };
+    } } } };
+    const result = await loop.runAgentLoop({
+      client,
+      model: 'deepseek-v4-pro',
+      messages,
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }],
+      executors: { read_file: async () => 'contenido' },
+      maxIterations: 2,
+    });
+    assert.equal(result.finalText, 'Leí el archivo.');
+    assert.equal(seen.length, 2);
+  });
+
+  test('native GPT 6 uses max_completion_tokens; DeepSeek and OpenRouter keep max_tokens', async () => {
+    const calls = [];
+    const client = { chat: { completions: { create: async (payload) => {
+      calls.push(payload);
+      return { choices: [{ message: { content: 'ok' } }] };
+    } } } };
+    await loop.callModel({ client, model: 'gpt-6-sol', messages: [{ role: 'user', content: 'hola' }], tools: [], maxTokens: 500 });
+    await loop.callModel({ client, model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'hola' }], tools: [], maxTokens: 500 });
+    await loop.callModel({ client, model: 'openai/gpt-6-sol', messages: [{ role: 'user', content: 'hola' }], tools: [], maxTokens: 500 });
+    await loop.callModel({ client: { ...client, describe: () => ({ provider: 'OpenAI' }) }, model: 'openai/gpt-6-sol', messages: [{ role: 'user', content: 'hola' }], tools: [], maxTokens: 500 });
+    assert.equal(calls[0].max_completion_tokens, 500);
+    assert.equal('max_tokens' in calls[0], false);
+    assert.equal(calls[1].max_tokens, 500);
+    assert.equal('max_completion_tokens' in calls[1], false);
+    assert.equal(calls[2].max_tokens, 500);
+    assert.equal('max_completion_tokens' in calls[2], false);
+    assert.equal(calls[3].max_completion_tokens, 500, 'the actual first-party transport overrides the model slug');
+    assert.equal('max_tokens' in calls[3], false);
+  });
 });

@@ -63,6 +63,32 @@ function scriptedClient(script) {
   };
 }
 
+test('document edit loop replays DeepSeek reasoning unchanged after a tool call', async () => {
+  const seen = [];
+  const client = { chat: { completions: { create: async (payload) => {
+    seen.push(payload);
+    if (seen.length === 1) {
+      return { choices: [{ message: {
+        content: null,
+        reasoning_content: 'razonamiento original del documento',
+        tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"uploads/a.docx"}' } }],
+      } }] };
+    }
+    assert.equal(payload.messages[1].reasoning_content, 'razonamiento original del documento');
+    return { choices: [{ message: { content: 'Documento leído.' } }] };
+  } } } };
+  const result = await runDocAgentLoop({
+    client,
+    model: 'deepseek-v4-pro',
+    messages: [{ role: 'user', content: 'lee el documento' }],
+    tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }],
+    executors: { read_file: async () => 'contenido' },
+    maxIterations: 2,
+  });
+  assert.equal(result.finalText, 'Documento leído.');
+  assert.equal(seen.length, 2);
+});
+
 async function makeSampleDocx() {
   const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx');
   const doc = new Document({

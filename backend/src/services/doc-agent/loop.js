@@ -87,14 +87,25 @@ async function runDocAgentLoop({
     if (!toolCalls.length) {
       finalText = String(msg.content || '').trim();
       stoppedReason = 'final';
-      messages.push({ role: 'assistant', content: msg.content || '' });
+      messages.push({
+        role: 'assistant',
+        content: msg.content || '',
+        ...(Object.prototype.hasOwnProperty.call(msg, 'reasoning_content')
+          ? { reasoning_content: msg.reasoning_content } : {}),
+      });
       onEvent({ type: 'final', text: finalText, iterations: iteration });
       return { finalText, iterations: iteration, steps, stoppedReason };
     }
 
-    // Record the assistant turn EXACTLY as returned (required so the
-    // follow-up role:"tool" messages bind to their tool_call ids).
-    messages.push({ role: 'assistant', content: msg.content || null, tool_calls: toolCalls });
+    // Keep the provider's reasoning alongside the tool calls. DeepSeek
+    // thinking mode requires it on the next request, unchanged.
+    messages.push({
+      role: 'assistant',
+      content: msg.content || null,
+      tool_calls: toolCalls,
+      ...(Object.prototype.hasOwnProperty.call(msg, 'reasoning_content')
+        ? { reasoning_content: msg.reasoning_content } : {}),
+    });
 
     for (const call of toolCalls) {
       throwIfAborted(signal);
