@@ -958,8 +958,33 @@ function asNativeCalls(calls, iteration) {
   }));
 }
 
+function assistantTranscriptMessage(msg, toolCalls) {
+  const message = {
+    role: 'assistant',
+    content: msg.content || (toolCalls ? null : ''),
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+  };
+  // DeepSeek thinking mode requires the exact reasoning returned by the
+  // provider on every assistant turn when tools are present in later calls.
+  if (Object.prototype.hasOwnProperty.call(msg, 'reasoning_content')) {
+    message.reasoning_content = msg.reasoning_content;
+  }
+  return message;
+}
+
+function usesNativeOpenAiCompletionTokens(model, client) {
+  // Bare OpenAI models use max_completion_tokens. Slugs such as
+  // openai/gpt-6-sol go through OpenRouter and keep max_tokens.
+  // The active client descriptor wins if the runner was given a provider
+  // wrapper whose actual transport differs from the requested model name.
+  let provider;
+  try { provider = client?.describe?.().provider; } catch (_) { /* injected clients may not describe themselves */ }
+  if (provider) return String(provider).toLowerCase() === 'openai';
+  return /^(?:gpt-|o[1-9])/i.test(String(model || ''));
+}
+
 async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken }) {
-  const max_tokens = maxTokens || resolveAgentRunnerMaxTokens();
+  const tokenLimit = maxTokens || resolveAgentRunnerMaxTokens();
   // The request payload is a structurally valid copy of the transcript: the
   // compaction / pruning hooks may leave orphan tool results or unanswered
   // tool_calls behind, which strict providers (DeepSeek native, OpenAI,
@@ -973,7 +998,9 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
     model,
     messages: normalized.messages,
     ...(withTools ? { tools, tool_choice: 'auto' } : {}),
-    max_tokens,
+    ...(usesNativeOpenAiCompletionTokens(model, client)
+      ? { max_completion_tokens: tokenLimit }
+      : { max_tokens: tokenLimit }),
   }, signal ? { signal } : undefined);
   return callModelWithRetry(async () => {
     try {
@@ -2101,7 +2128,7 @@ async function runAgentLoop({
           label: 'Sin verificación visual',
           verified: false,
         });
-        messages.push({ role: 'assistant', content: msg.content || '' });
+        messages.push(assistantTranscriptMessage(msg));
         return { finalText, iterations: iteration, steps, stoppedReason, verificationAttempts };
       }
       if (gate.needed && verificationAttempts < MAX_VERIFICATION_RETRIES) {
@@ -2120,7 +2147,7 @@ async function runAgentLoop({
           attempt: verificationAttempts,
           label: 'Verificando resultado',
         });
-        messages.push({ role: 'assistant', content: msg.content || '' });
+        messages.push(assistantTranscriptMessage(msg));
         messages.push({
           role: 'user',
           content: verificationNudge(verificationAttempts, gate.reason),
@@ -2144,7 +2171,7 @@ async function runAgentLoop({
         stoppedReason = 'final';
         onEvent({ type: 'final', text: finalText, iterations: iteration, label: 'Listo', verified: true });
       }
-      messages.push({ role: 'assistant', content: msg.content || '' });
+      messages.push(assistantTranscriptMessage(msg));
       return { finalText, iterations: iteration, steps, stoppedReason, verificationAttempts };
     }
 
@@ -2157,11 +2184,7 @@ async function runAgentLoop({
       });
     }
 
-    messages.push({
-      role: 'assistant',
-      content: msg.content || null,
-      tool_calls: toolCalls,
-    });
+    messages.push(assistantTranscriptMessage(msg, toolCalls));
 
     try {
       const adIso = loadEngineAdapter();
