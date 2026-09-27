@@ -418,10 +418,16 @@ test('F4: the RUN token budget stops the whole orchestration and never persists 
   });
   // Every response burns 1000 reported tokens and keeps asking for tools —
   // without the run cap this would grind through every node budget.
-  const client = repeatingClient({
+  const client = repeatingClient((call) => ({
     usage: { total_tokens: 1000 },
-    toolCalls: [{ name: 'write_file', args: { path: 'outputs/parte.md', content: 'x' } }],
-  });
+    toolCalls: call === 1
+      ? [
+        { name: 'write_file', args: { path: 'outputs/parte.md', content: 'parte sin terminar' } },
+        { name: 'render_preview', args: { path: 'outputs/parte.md' } },
+        { name: 'read_file', args: { path: 'outputs/parte.md' } },
+      ]
+      : [{ name: 'list_files', args: { path: call % 2 ? 'uploads' : 'outputs' } }],
+  }));
   let persistCalled = false;
   const result = await runOrchestratorForChat({
     instruction: 'analiza los datos y genera un informe',

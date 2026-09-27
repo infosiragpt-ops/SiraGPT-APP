@@ -166,6 +166,24 @@ test('verify_visual: verificado con visión OK; falla con check roto o visión e
   } finally { await sandbox.destroy(); }
 });
 
+test('verify_visual: un XLSX nuevo se verifica sin before y falla ante un valor incorrecto', { skip: (!HAS_PY || !HAS_RENDER) && 'requiere soffice + pdftoppm' }, async () => {
+  const sandbox = await freshSandbox();
+  try {
+    await sandbox.putFile('outputs/nuevo.xlsx', fs.readFileSync(path.join(FIXTURES, 'presupuesto_demo.xlsx')));
+    const ex = office.makeOfficeToolExecutors(sandbox);
+    const good = await ex.verify_visual({
+      after: 'outputs/nuevo.xlsx', checklist: ['La celda A1 contiene Partida'],
+      expect: { cells: { 'Presupuesto!A1': 'Partida' } },
+    });
+    assert.match(good, /VEREDICTO: VERIFICADO/);
+    const wrong = await ex.verify_visual({
+      after: 'outputs/nuevo.xlsx', checklist: ['La celda A1 contiene OTRO'],
+      expect: { cells: { 'Presupuesto!A1': 'OTRO' } },
+    });
+    assert.match(wrong, /^ERROR: verificación fallida/);
+  } finally { await sandbox.destroy(); }
+});
+
 test('visual-verifier: JSON con cercas o texto alrededor; sin JSON → ok:null', async () => {
   assert.deepEqual(parseJsonLoose('bla ```json\n{"a":1}\n``` fin'), { a: 1 });
   assert.equal(parseJsonLoose('sin json'), null);

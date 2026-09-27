@@ -41,6 +41,7 @@ const EDIT_TOOLS = new Set([
 const EXEC_TOOLS = new Set(['execute_python', 'execute_bash', 'bash']);
 const VISUAL_VERIFY = 'verify_visual';
 const OFFICE_PATH_RE = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
+const SAV_PATH_RE = /\.sav$/i;
 const RENDERER_UNAVAILABLE_RE = /no está instalado|renderer_unavailable|no hay pdftoppm/i;
 
 function officeEngineOn(env = process.env) {
@@ -85,6 +86,32 @@ function isOfficeEdit(step) {
   return false;
 }
 
+function outputPath(value) {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/^\/workspace\//, '');
+}
+
+function officeOutputPaths(step) {
+  if (EXEC_TOOLS.has(step.tool) && Array.isArray(step.changedOutputs)) {
+    return step.changedOutputs.map(outputPath).filter((path) => OFFICE_PATH_RE.test(path));
+  }
+  if (step.tool === 'office_edit') {
+    let dst = step.args?.dst;
+    if (!dst) {
+      try { dst = JSON.parse(String(step.resultPreview || '')).dst; } catch { /* legacy result */ }
+    }
+    const path = outputPath(dst);
+    return OFFICE_PATH_RE.test(path) ? [path] : [];
+  }
+  return [];
+}
+
+function isSavMutation(step) {
+  return isRealEdit(step) && EXEC_TOOLS.has(step.tool)
+    && Array.isArray(step.changedOutputs)
+    && step.changedOutputs.length > 0
+    && step.changedOutputs.every((path) => SAV_PATH_RE.test(outputPath(path)));
+}
+
 function legacyGate(steps) {
   const lastEdit = lastIndex(steps, (s) => EDIT_TOOLS.has(s.tool) && s.ok !== false);
   if (lastEdit === -1) return { needed: false, reason: null };
@@ -109,18 +136,52 @@ function needsVerification(steps = [], { strict = officeEngineOn() } = {}) {
 
   const lastOfficeEdit = lastIndex(list, isOfficeEdit);
   if (lastOfficeEdit !== -1) {
-    const lastVerify = lastIndex(list, (s) => s && s.tool === VISUAL_VERIFY);
-    if (lastVerify < lastOfficeEdit) return { needed: true, reason: 'missing_visual_verify' };
-    const verify = list[lastVerify];
-    if (verify.ok === false) {
+    const latestMutation = new Map();
+    let latestUnknownPath = -1;
+    for (let i = 0; i < list.length; i += 1) {
+      if (!isOfficeEdit(list[i])) continue;
+      const paths = officeOutputPaths(list[i]);
+      if (paths.length === 0) latestUnknownPath = i;
+      else for (const path of paths) latestMutation.set(path, i);
+    }
+    const verdict = (verify) => {
+      if (verify.ok !== false) return null;
       if (verify.renderUnavailable) return { needed: true, reason: 'renderer_unavailable', terminal: true };
       return { needed: true, reason: 'visual_checks_failed' };
+    };
+    for (const [path, editedAt] of latestMutation) {
+      let verifiedAt = -1;
+      for (let i = list.length - 1; i > editedAt; i -= 1) {
+        if (list[i]?.tool === VISUAL_VERIFY && outputPath(list[i].args?.after) === path) {
+          verifiedAt = i;
+          break;
+        }
+      }
+      if (verifiedAt === -1) return { needed: true, reason: 'missing_visual_verify' };
+      const failed = verdict(list[verifiedAt]);
+      if (failed) return failed;
+      // A generated Office file needs a parser readback as well as a render.
+      // verify_visual with an empty `expect` can otherwise approve appearance
+      // without opening cells/text from the saved output itself.
+      if (EXEC_TOOLS.has(list[editedAt].tool)) {
+        const inspectedAt = lastIndex(list, (step) => step?.tool === 'inspect_document'
+          && step.ok !== false && outputPath(step.args?.path) === path);
+        if (inspectedAt <= editedAt) return { needed: true, reason: 'missing_document_inspection' };
+      }
+    }
+    if (latestUnknownPath !== -1) {
+      const lastVerify = lastIndex(list, (step) => step?.tool === VISUAL_VERIFY);
+      if (lastVerify < latestUnknownPath) return { needed: true, reason: 'missing_visual_verify' };
+      const failed = verdict(list[lastVerify]);
+      if (failed) return failed;
     }
   }
 
-  // Everything after the last office edit (or all edits when none touched an
-  // office file) keeps the previous rule, with verify_visual also accepted.
-  const lastEdit = lastIndex(list, isRealEdit);
+  // SAV has no visual renderer. Ignore only a tool step that changed SAV
+  // outputs exclusively; collectValidOutputs reopens those exact bytes with
+  // pyreadstat before persistence. Office and other outputs still need their
+  // own verification, regardless of the order in which SAV was generated.
+  const lastEdit = lastIndex(list, (step) => isRealEdit(step) && !isSavMutation(step));
   if (lastEdit === -1 || lastEdit <= lastOfficeEdit) return { needed: false, reason: null };
   const lastCheck = lastIndex(list, (s) => s && (s.tool === 'render_preview' || s.tool === VISUAL_VERIFY));
   if (lastCheck < lastEdit) return { needed: true, reason: 'missing_preview' };
@@ -132,16 +193,22 @@ function verificationNudge(attempt, reason) {
   const n = Math.max(1, Number(attempt) || 1);
   if (reason === 'missing_visual_verify') {
     return [
-      `VERIFICATION REQUIRED (attempt ${n}/${MAX_VERIFICATION_RETRIES}). You edited an office file but did not call verify_visual afterwards.`,
-      'Call verify_visual NOW with before=<the source file>, after=<the output under outputs/>, checklist=<one item per requirement of the user, plus "no cambia nada más"> and `expect` (contains / not_contains with page, only_pages, cells for Excel).',
+      `VERIFICATION REQUIRED (attempt ${n}/${MAX_VERIFICATION_RETRIES}). An Office output still needs verify_visual after its latest change.`,
+      'Call verify_visual NOW for EACH changed Office output: after=<that exact file in outputs/>, checklist=<one item per requirement>, expect=<content/cell checks>. For an edit set before=<source>; for a NEW file omit before.',
       'A render alone is not verification. Do NOT claim success yet.',
     ].join('\n');
   }
   if (reason === 'visual_checks_failed') {
     return [
       `VERIFICATION FAILED (attempt ${n}/${MAX_VERIFICATION_RETRIES}). verify_visual marked items with ✗.`,
-      'Fix ONLY those items with office_edit (use the last output as src) and call verify_visual again.',
+      'Fix ONLY those items (office_edit for an existing file, execute_python for a new file), then call verify_visual again on the exact output.',
       'If this is the last attempt and it still fails, report plainly in Spanish what could not be achieved — never pretend it worked.',
+    ].join('\n');
+  }
+  if (reason === 'missing_document_inspection') {
+    return [
+      `VERIFICATION REQUIRED (attempt ${n}/${MAX_VERIFICATION_RETRIES}). A generated Office file has not been reopened after its latest change.`,
+      'Call inspect_document NOW with path=<that exact output in outputs/> for EACH generated Office file, inspect the returned content, and also call verify_visual on the same file. Do NOT claim success yet.',
     ].join('\n');
   }
   const why = reason === 'preview_failed'

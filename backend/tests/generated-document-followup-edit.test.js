@@ -60,6 +60,23 @@ test('exact user follow-up edits the existing 11-slide ZIP without any model or 
   assert.deepEqual(changedParts(original, result.outputs[0].buffer), ['ppt/slides/slide1.xml']);
   assert.match(result.finalText, /Cambié/); assert.doesNotMatch(result.finalText, /Generé/);
 });
+test('verified surgical PPTX follow-up still produces a downloadable chat artifact', async () => {
+  const original = await deck();
+  const result = await runAgentRunnerForChat({
+    attachedFiles: [{ name: 'historia_dinosaurios.pptx', buffer: original }],
+    instruction: PROMPT,
+    userId: 'surgical-user', chatId: 'surgical-chat',
+    saveArtifact: ({ filename, validation }) => ({
+      id: 'surgical-id', filename, format: 'pptx', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      downloadUrl: '/api/agent/artifact/surgical-id', validation,
+    }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.stoppedReason, 'agent_runner');
+  assert.equal(result.artifacts.length, 1);
+  assert.equal(result.artifacts[0].validation.engine, 'pptx_surgical_edit');
+  assert.equal(result.artifacts[0].validation.passed, true);
+});
 test('an already-cancelled surgical edit emits exactly one cancellation and no deliverable', async () => {
   const controller = new AbortController(); controller.abort();
   const original = await deck(); const events = []; let modelCalls = 0;

@@ -25,6 +25,16 @@ const { createOfficeFailureReporter, verificationFailureFromSteps } = require('.
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
+const { needsVerification } = require('./verify');
+
+function assessDelivery(run = {}) {
+  const surgicalProof = run.stoppedReason === 'surgical_edit'
+    && Array.isArray(run.outputs) && run.outputs.length > 0
+    && run.outputs.every((output) => output.valid !== false && output.validation?.passed === true);
+  const complete = run.stoppedReason === 'final' || run.stoppedReason === 'fast_path' || surgicalProof;
+  const verificationNeeded = needsVerification(run.steps || []).needed;
+  return { complete, verificationNeeded, blocked: !complete || verificationNeeded };
+}
 
 // Edición milimétrica (Fase C): the before/after image is reviewed by a
 // separate vision model (multimodal/vision-ladder.js). Off under
@@ -176,6 +186,7 @@ const installSiraOfficeEngine = installOfficeEngine;
 
 const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
+const SOURCE_COPY_RE = /\b(?:copia|versi[oó]n)(?:\s+(?:nueva|corregida|editada|actualizada|modificada)){0,2}\s+(?:de\s+)?(?:este|esta|mi|del|de\s+la|de\s+los|de\s+las)\b/i;
 
 
 const { NAMED_COLORS } = require('./tools');
@@ -628,7 +639,8 @@ async function runAgentRunner({
     // a real change unless the user explicitly asked to generate a new file.
     // Keep the generic document pipeline out of AgentRunner's dependency path.
     const editContext = { files, instruction: task,
-      isEdit: files.some((file) => Buffer.isBuffer(file?.buffer)) && !CREATE_DOC_RE.test(task) };
+      isEdit: files.some((file) => Buffer.isBuffer(file?.buffer))
+        && (!CREATE_DOC_RE.test(task) || SOURCE_COPY_RE.test(task)) };
     sandbox = await createSandbox({
       driver,
       signal: abortScope.signal,
@@ -682,10 +694,12 @@ async function runAgentRunner({
     const f8 = await prepareF8Extras({
       userId, chatId, instruction: task, prisma, memoryStore, mcpToolLoader,
     });
+    const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,
       memoryBlock: f8.memoryBlock,
+      creatingNewFile: isCreateRequest && !SOURCE_COPY_RE.test(task),
     });
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
@@ -722,7 +736,6 @@ async function runAgentRunner({
     // is exactly the quality failure Phase 1 removes.
     const color = inferColorFromText(task);
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
-    const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
     let fastPathUsed = false;
     if (color && pptxUpload && !isCreateRequest && isSlideBackgroundColorRequest(task)) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
@@ -904,7 +917,21 @@ async function runAgentRunner({
     if (result && result.stoppedReason === 'final') {
       result = { ...result, finalText: withVisionHonesty(result.finalText, lastVerify) };
     }
-    onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
+    const delivery = assessDelivery(result);
+    const deliverableOutputs = delivery.blocked
+      ? outputs.map((output) => output.valid === false ? output : {
+        ...output,
+        valid: false,
+        validation: { ...output.validation, passed: false,
+          reason: delivery.verificationNeeded ? 'verification_incomplete' : 'turn_incomplete' },
+      })
+      : outputs;
+    onEvent({
+      type: 'outputs',
+      count: delivery.blocked ? 0 : outputs.length,
+      names: delivery.blocked ? [] : outputs.map((o) => o.name),
+      label: delivery.verificationNeeded ? 'Sin verificar' : delivery.blocked ? 'Incompleto' : 'Listo',
+    });
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.
     try {
@@ -912,13 +939,13 @@ async function runAgentRunner({
         userId,
         chatId,
         instruction: task,
-        summary: result.finalText,
-        outputNames: outputs.filter((o) => o.valid !== false).map((o) => o.name),
+        summary: delivery.blocked ? 'El trabajo no terminó o no se verificó; no se entregó.' : result.finalText,
+        outputNames: deliverableOutputs.filter((o) => o.valid !== false).map((o) => o.name),
         store: memoryStore,
         persist: persistMemory,
       });
     } catch (_) { /* memory is best-effort */ }
-    return { ...result, outputs, driver: sandbox.driver, model: resolvedModel };
+    return { ...result, outputs: deliverableOutputs, driver: sandbox.driver, model: resolvedModel };
   } catch (err) {
     if (abortScope.signal.aborted) {
       try { onEvent({ type: 'cancelled', label: 'Cancelado' }); } catch (_) { /* trace only */ }
@@ -980,7 +1007,12 @@ async function runAgentRunnerForChat({
     // injectables default to the real stores when absent.
     prisma,
   });
-  const valid = (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);
+  // A structurally readable OOXML file is not a verified deliverable when the
+  // loop exhausted or could not run its verification gate. Never publish a
+  // download card or report success for it, including on iteration limits.
+  const delivery = assessDelivery(run);
+  const valid = delivery.blocked ? []
+    : (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);
   const persisted = await persistOutputs({
     outputs: valid,
     userId,
@@ -996,7 +1028,11 @@ async function runAgentRunnerForChat({
   const missingFormats = artifacts.length ? missingRequestedSavExcel(instruction, artifacts) : [];
   const persistenceFailed = valid.length > 0 && !artifacts.length;
   const rejectedEdit = !valid.length && (run.outputs || []).some((output) => output.validation?.passed === false);
-  const summary = missingFormats.length
+  const summary = delivery.verificationNeeded
+    ? 'No pude verificar los archivos generados. No entregué un resultado sin comprobar; vuelve a intentarlo.'
+    : delivery.blocked
+      ? 'No pude completar los archivos solicitados. No entregué un resultado parcial; vuelve a intentarlo.'
+    : missingFormats.length
     ? `No pude completar los dos archivos solicitados: falta ${missingFormats.join(' y ')}. ${artifacts.length ? `Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}.` : 'No entregué archivos.'} Inténtalo de nuevo; no asumiré que el archivo faltante existe.`
     : persistenceFailed ? 'La edición no pudo guardarse como archivo descargable. No entregué un resultado; vuelve a intentarlo.'
     : rejectedEdit ? 'No pude verificar el cambio solicitado en el documento original. No entregué una copia sin cambios ni una edición incorrecta.'
@@ -1009,14 +1045,19 @@ async function runAgentRunnerForChat({
   let failReason = persistenceFailed ? 'artifact_persistence_failed' : run.stoppedReason || 'no_output';
   if (failReason === 'final' || failReason === 'fast_path') failReason = 'no_output';
   return {
-    ok: artifacts.length > 0 && missingFormats.length === 0,
+    ok: !delivery.blocked && artifacts.length > 0 && missingFormats.length === 0,
     summary,
     artifacts,
     steps: run.steps || [],
     iterations: run.iterations,
     driver: run.driver,
-    stoppedReason: missingFormats.length ? 'requested_artifact_missing' : artifacts.length ? 'agent_runner' : failReason,
-    errorMessage: missingFormats.length ? summary : artifacts.length ? null : (run.errorMessage || null),
+    stoppedReason: delivery.blocked ? run.stoppedReason
+      : missingFormats.length ? 'requested_artifact_missing' : artifacts.length ? 'agent_runner' : failReason,
+    // The delivery gate can block a turn for being incomplete, but it must
+    // not replace the provider's primary failure when no file was produced.
+    errorMessage: !artifacts.length && run.errorMessage ? run.errorMessage
+      : delivery.blocked || missingFormats.length ? summary
+        : null,
     priorArtifactId: resolved.latest?.id || null,
   };
 }
@@ -1338,6 +1379,7 @@ module.exports = {
   STYLE_EDIT_RE,
   hasConversationArtifacts,
   collectValidOutputs,
+  assessDelivery,
   missingRequestedSavExcel,
   completedSavExcelSummary,
 };

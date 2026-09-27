@@ -631,10 +631,14 @@ async function runOrchestrateOkScenario(fixture) {
   const client = roleDispatchClient({
     researcher: [
       { toolCalls: [{ name: 'write_file', args: { path: 'outputs/hallazgos.md', content: '# Hallazgos\nHALLAZGO-7: dato clave verificado.' } }] },
+      { toolCalls: [{ name: 'read_file', args: { path: 'outputs/hallazgos.md' } }] },
+      { toolCalls: [{ name: 'render_preview', args: { path: 'outputs/hallazgos.md' } }] },
       { content: 'Hallazgos listos: HALLAZGO-7.' },
     ],
     document_editor: [
       { toolCalls: [{ name: 'write_file', args: { path: 'outputs/entregable.md', content: '# Entregable\nBasado en HALLAZGO-7.' } }] },
+      { toolCalls: [{ name: 'read_file', args: { path: 'outputs/entregable.md' } }] },
+      { toolCalls: [{ name: 'render_preview', args: { path: 'outputs/entregable.md' } }] },
       { content: 'Listo. Generé entregable.md.' },
     ],
     verifier: [
@@ -659,6 +663,10 @@ async function runOrchestrateOkScenario(fixture) {
   assert.equal(result.orchestrated, true);
   const names = result.outputs.map((o) => o.name);
   assert.ok(names.includes('entregable.md'), `deliverable produced (got ${names.join(', ')})`);
+  assert.ok(result.steps.some((step) => step.node === 'investigar' && step.tool === 'read_file'
+    && String(step.resultPreview || '').includes('HALLAZGO-7')), 'research file was reopened and checked');
+  assert.ok(result.steps.some((step) => step.node === 'redactar' && step.tool === 'read_file'
+    && String(step.resultPreview || '').includes('HALLAZGO-7')), 'deliverable was reopened and checked');
   const docCall = client.calls.find((c) => c.role === 'document_editor');
   assert.ok(docCall, 'document node ran');
   assert.match(String(docCall.messages[1].content), /HALLAZGO-7/, 'blackboard passed research downstream');

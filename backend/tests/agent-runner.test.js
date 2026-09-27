@@ -657,7 +657,7 @@ test('AgentRunner treats a requested SAV and Excel as an incomplete delivery whe
   assert.doesNotMatch(completedSavExcelSummary([sav, excel]), /400 valores: 0 diferencias|son idénticos|coinciden: sí|verificado/i);
 });
 
-test('AgentRunner does not say Listo when it generated metadata but missed the requested SAV and Excel', async () => {
+test('AgentRunner does not say Listo or deliver unverified metadata instead of the requested SAV and Excel', async () => {
   const client = scriptedClient([
     { toolCalls: [{ name: 'write_file', args: { path: 'outputs/metadatos.json', content: '{"archivo_sav":"NO GENERADO"}' } }] },
   ]);
@@ -668,9 +668,9 @@ test('AgentRunner does not say Listo when it generated metadata but missed the r
     saveArtifact: ({ filename }) => ({ id: 'metadata-id', filename, format: 'json', mime: 'application/json', downloadUrl: '/api/agent/artifact/metadata-id' }),
   });
   assert.equal(ran.ok, false);
-  assert.equal(ran.stoppedReason, 'requested_artifact_missing');
-  assert.equal(ran.artifacts.length, 1);
-  assert.match(ran.summary, /falta SAV y Excel/);
+  assert.equal(ran.stoppedReason, 'max_iterations');
+  assert.equal(ran.artifacts.length, 0);
+  assert.match(ran.summary, /No pude verificar/);
   assert.doesNotMatch(ran.summary, /Listo|Generé el SAV/);
 });
 
@@ -725,6 +725,60 @@ test('AgentRunner reports no output rather than a missing pair when the model ma
   assert.equal(ran.ok, false);
   assert.deepEqual(ran.artifacts, []);
   assert.equal(ran.stoppedReason, 'no_output');
+});
+
+test('AgentRunner never publishes a structurally valid XLSX after verification_failed', async () => {
+  let saves = 0;
+  const source = await fs.readFile(require('path').join(__dirname, 'fixtures', 'office', 'presupuesto_demo.xlsx'));
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'execute_python', args: { code: "import shutil; shutil.copyfile('/workspace/uploads/presupuesto_demo.xlsx', '/workspace/outputs/nuevo.xlsx')" } }] },
+    { content: 'Listo.' },
+    { content: 'Listo otra vez.' },
+    { content: 'Listo en serio.' },
+    { content: 'Sigo sin verificarlo.' },
+  ]);
+  const ran = await runAgentRunnerForChat({
+    instruction: 'Crea un archivo Excel descargable.',
+    attachedFiles: [{ name: 'presupuesto_demo.xlsx', buffer: source }],
+    client, driver: 'local', maxIterations: 10,
+    userId: 'verification-blocked-user', chatId: 'verification-blocked-chat',
+    saveArtifact: ({ filename }) => {
+      saves += 1;
+      return { id: 'unverified-id', filename, format: 'xlsx', downloadUrl: '/api/agent/artifact/unverified-id' };
+    },
+  });
+  assert.equal(ran.stoppedReason, 'verification_failed');
+  assert.equal(ran.ok, false);
+  assert.deepEqual(ran.artifacts, []);
+  assert.equal(saves, 0);
+  assert.match(ran.summary, /No pude verificar/);
+});
+
+test('AgentRunner never publishes an XLSX when max_iterations ends immediately after creation', async () => {
+  let saves = 0;
+  const events = [];
+  const source = await fs.readFile(require('path').join(__dirname, 'fixtures', 'office', 'presupuesto_demo.xlsx'));
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'execute_python', args: { code: "import shutil; shutil.copyfile('/workspace/uploads/presupuesto_demo.xlsx', '/workspace/outputs/nuevo.xlsx')" } }] },
+  ]);
+  const ran = await runAgentRunnerForChat({
+    instruction: 'Crea un archivo Excel descargable.',
+    attachedFiles: [{ name: 'presupuesto_demo.xlsx', buffer: source }],
+    client, driver: 'local', maxIterations: 1,
+    userId: 'iteration-blocked-user', chatId: 'iteration-blocked-chat',
+    onEvent: (event) => events.push(event),
+    saveArtifact: ({ filename }) => {
+      saves += 1;
+      return { id: 'unverified-id', filename, format: 'xlsx', downloadUrl: '/api/agent/artifact/unverified-id' };
+    },
+  });
+  assert.equal(ran.stoppedReason, 'max_iterations');
+  assert.equal(ran.ok, false);
+  assert.deepEqual(ran.artifacts, []);
+  assert.equal(saves, 0);
+  assert.match(ran.summary, /No pude verificar/);
+  assert.ok(events.some((event) => event.type === 'final' && event.label === 'Sin verificar' && event.verified === false));
+  assert.ok(events.some((event) => event.type === 'outputs' && event.label === 'Sin verificar' && event.count === 0));
 });
 
 test('runAgentRunnerForDocRoute: runner-first result in the doc-route file shape', async () => {
