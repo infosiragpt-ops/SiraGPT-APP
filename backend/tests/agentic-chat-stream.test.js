@@ -1047,9 +1047,15 @@ test('ordinary statistical requests still require executable computation', () =>
   assert.ok(profile.requiredTools.includes('python_exec'));
 });
 
-test('SAV and Excel delivery plus an independent statistic still requires model computation', () => {
+test('SAV and Excel delivery plus extra analysis or output still requires model computation', () => {
   const { buildArtifactDeliveryContract } = require('../src/services/agents/artifact-delivery-contract');
-  for (const extra of ['calcula el alfa de Cronbach', 'calcula la media', 'haz una regresión']) {
+  for (const extra of [
+    'calcula el alfa de Cronbach',
+    'calcula la media',
+    'haz una regresión',
+    'incluye una tabla de contingencia',
+    'incluye una matriz de covarianza',
+  ]) {
     const query = `dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel; ${extra}`;
     const artifactDeliveryContract = buildArtifactDeliveryContract(query, { multipleArtifacts: false });
     assert.equal(artifactDeliveryContract.active, true);
