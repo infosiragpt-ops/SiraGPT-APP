@@ -13,7 +13,7 @@ process.env.AGENT_ARTIFACT_DIR = artifactDir;
 const objectStorage = require('../src/services/object-storage');
 const { saveArtifact, INTERNAL } = require('../src/services/agents/task-tools');
 const { resolveChatGeneratedArtifactFollowup } = require('../src/services/agents/generated-artifact-followup');
-const { runAgenticChat } = require('../src/services/agentic-chat-stream');
+const { runAgenticChat, isHandledAgenticChatResult } = require('../src/services/agentic-chat-stream');
 const PRODUCTION_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.';
 const MODEL_DRIVEN_READ_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl e informa si ambos son legibles. Si no puedes acceder a uno, dilo explícitamente.';
 
@@ -161,10 +161,12 @@ test('an explicit SAV/XLSX parity request reads the validated bytes even when th
   });
   assert.equal(pythonCalls, 1);
   assert.equal(modelCalls, 0);
+  assert.equal(isHandledAgenticChatResult(result), true, 'the HTTP route must preserve the verified answer');
   assert.match(result.finalAnswer, /20\s*[×x]\s*20/);
   assert.match(result.finalAnswer, /400/);
   assert.match(result.finalAnswer, /0 diferencias/);
   assert.match(result.finalAnswer, /20 etiquetas/);
+  assert.match(result.finalAnswer, /sin llamar al modelo seleccionado/);
   assert.doesNotMatch(result.finalAnswer, new RegExp(`${sav.id}|${xlsx.id}|\/app\/uploads\/agent-artifacts`));
   assert.doesNotMatch(result.persistedContent, /grok-4\.7/);
 });
@@ -191,6 +193,7 @@ test('deterministic SAV/XLSX comparison reports a read error instead of inventin
   });
   assert.equal(modelCalls, 0);
   assert.equal(result.stoppedReason, 'generated_artifact_compare_failed');
+  assert.equal(isHandledAgenticChatResult(result), true, 'the HTTP route must preserve the honest read error');
   assert.match(result.finalAnswer, /No pude abrir y comparar/);
   assert.doesNotMatch(result.finalAnswer, /0 diferencias|400 valores idénticos|[a-f0-9]{16}/i);
 });

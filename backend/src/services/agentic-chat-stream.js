@@ -561,6 +561,10 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   // answer — never fall through to the plain stream or the generic pipeline.
   'agent_runner_failed',
   'generated_artifact_read_failed',
+  // A direct byte comparison has already produced the final, verified result
+  // (or an honest read error). The HTTP route must not ask a model to replace it.
+  'generated_artifact_compare_verified',
+  'generated_artifact_compare_failed',
   // GitHub CONSTRUIR pre-loop (OAuth CTA or isolated open). Falling through
   // to the plain stream was collapsing these into «Conexión no disponible».
   'github_open_repo',

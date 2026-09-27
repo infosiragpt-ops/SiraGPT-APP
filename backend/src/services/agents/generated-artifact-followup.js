@@ -238,7 +238,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } =
   const { INTERNAL } = require('./task-tools');
   const failed = {
     ok: false,
-    answer: 'No pude abrir y comparar los bytes del SAV y el Excel de este chat. No puedo concluir si coinciden; vuelve a intentarlo.',
+    answer: 'No pude abrir y comparar los bytes del SAV y el Excel de este chat. No puedo concluir si coinciden; vuelve a intentarlo. Esta comprobación directa no llamó al modelo seleccionado.',
   };
   let execution;
   try {
@@ -272,7 +272,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } =
     : 'Las columnas del SAV no son exactamente P01–P20.';
   return {
     ok: true,
-    answer: `Verificación directa de los archivos de este chat: SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias. El SAV conserva ${result.labelCount} etiquetas de variables.`,
+    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias. El SAV conserva ${result.labelCount} etiquetas de variables.`,
   };
 }
 
