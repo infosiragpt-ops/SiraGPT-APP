@@ -232,7 +232,7 @@ const crypto = require('crypto');
 const mime = require('mime-types');
 const sharp = require('sharp');
 
-const { enrichWithWebSearch, getTracer, getMemoryAdapter } = require('../orchestration/gateway-adapter');
+const { enrichWithWebSearch, getTracer, getMemoryAdapter, webSearchPlanned } = require('../orchestration/gateway-adapter');
 
 const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
@@ -6199,13 +6199,18 @@ router.post(
         // independent reads on the same prompt/userId.
         const _memoryAdapter = userId && !__publicWebReadonly ? getMemoryAdapter() : null;
         const _wsStart = Date.now();
-        if (_webSearchAllowed) emitStage('Buscando en la web', { tool: 'web_search' });
+        const _webSearchOptions = {
+          mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
+          directUrlGrounding: _explicitWebGrounding,
+        };
+        // Announce the step only when a search really runs: «Buscando en la
+        // web» on a «¿qué hay en esta imagen?» turn was a label, not a search.
+        const _willSearchWeb = _webSearchAllowed && webSearchPlanned(_webGroundingPrompt, _webSearchOptions);
+        if (_willSearchWeb) emitStage('Buscando en la web', { tool: 'web_search' });
         const [_webCtx, _orchMem] = await Promise.all([
-          _webSearchAllowed
-            ? enrichWithWebSearch(_webGroundingPrompt, {
-                mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
-                directUrlGrounding: _explicitWebGrounding,
-              }).catch((e) => { generateLog.warnError('web_search.unavailable', e); return null; })
+          _willSearchWeb
+            ? enrichWithWebSearch(_webGroundingPrompt, _webSearchOptions)
+                .catch((e) => { generateLog.warnError('web_search.unavailable', e); return null; })
             : Promise.resolve(null),
           _memoryAdapter
             ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch((e) => { generateLog.warnError('memory.orchestration_unavailable', e); return null; })
@@ -8241,14 +8246,21 @@ router.post(
             try {
               const jevFaith = require('../services/rlcd/jev-faithfulness');
               if (jevFaith.isFaithfulnessEnabled()) {
-                const __sources = faithGate.buildGroundingContext({
-                  evidenceBlock,
-                  uploadedFileContext: uploadedFileContextForTurn,
-                  documentEnrichmentBlock,
-                  memoryBlock,
-                  activeMemoryBlock,
-                  crossChatBlock,
-                  webSearchBlock,
+                const __turnFiles = Array.isArray(processedFiles) ? processedFiles.filter(Boolean) : [];
+                const __sources = jevFaith.sourcesToCheck({
+                  planned: faithGate.shouldVerify(req._cognitiveDecision),
+                  question: prompt,
+                  imageAttachmentsOnly: __turnFiles.length > 0
+                    && __turnFiles.every((f) => typeof f.mimeType === 'string' && f.mimeType.startsWith('image/')),
+                  sources: faithGate.buildGroundingContext({
+                    evidenceBlock,
+                    uploadedFileContext: uploadedFileContextForTurn,
+                    documentEnrichmentBlock,
+                    memoryBlock,
+                    activeMemoryBlock,
+                    crossChatBlock,
+                    webSearchBlock,
+                  }),
                 });
                 if (__sources.length) {
                   const __jf = await jevFaith.checkAnswer({ question: prompt, answer: fullResponseContent, sources: __sources, language: (langResolution && langResolution.language) || 'es' });

@@ -14,6 +14,7 @@
 
 const typesafe = require('../providers/typesafe');
 const config = require('./config');
+const { looksLikeCalculation } = require('../prompt-shape');
 
 const MAX_ANSWER_CHARS = 6000;
 const MAX_SOURCE_CHARS = 14000;
@@ -21,6 +22,25 @@ const MAX_SOURCE_CHARS = 14000;
 function isFaithfulnessEnabled(env = process.env) {
   const c = config.describe(env);
   return c.flags.jev.value && c.flags.jevFaithfulness.value;
+}
+
+// What a grounded answer is judged against: retrieved evidence, document
+// text and web results. Memory and other chats are personal context, not
+// sources — judging a math derivation or an image description against them
+// put «Comprobación de fuentes» under answers that never claimed a source.
+const EVIDENCE_KINDS = new Set(['rag_evidence', 'file', 'document', 'web']);
+
+/**
+ * The sources Jev may judge this turn against; [] means skip. Skips turns the
+ * orchestrator did not plan to verify (same gate as the heuristic check),
+ * self-contained calculations (the steps are derived, not quoted), and the
+ * attachment text when every attachment is an image: the model answered from
+ * the pixels, which that text does not describe.
+ */
+function sourcesToCheck({ planned = false, question = '', sources = [], imageAttachmentsOnly = false } = {}) {
+  if (!planned || looksLikeCalculation(question)) return [];
+  return (Array.isArray(sources) ? sources : []).filter((s) => s && EVIDENCE_KINDS.has(s.kind)
+    && !(imageAttachmentsOnly && s.kind === 'file'));
 }
 
 function buildQuestions() {
@@ -107,4 +127,4 @@ async function checkAnswer({ question, answer, sources = [], language = 'es', en
   }
 }
 
-module.exports = { MAX_ANSWER_CHARS, MAX_SOURCE_CHARS, isFaithfulnessEnabled, buildQuestions, trimSources, checkAnswer };
+module.exports = { MAX_ANSWER_CHARS, MAX_SOURCE_CHARS, isFaithfulnessEnabled, sourcesToCheck, buildQuestions, trimSources, checkAnswer };

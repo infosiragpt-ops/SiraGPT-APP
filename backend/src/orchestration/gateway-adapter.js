@@ -365,17 +365,25 @@ async function buildGitHubRepositoryContext(prompt, opts = {}) {
   };
 }
 
+/**
+ * Will `enrichWithWebSearch` actually search for this prompt? Callers use it
+ * to announce «Buscando en la web» only when a search really runs.
+ * `directUrlGrounding` is the explicit, current-message-only public-web mode
+ * selected by /code: it also covers discovery prompts without a literal URL
+ * ("investiga Tesis20"), not only freshness keywords.
+ */
+function webSearchPlanned(prompt, opts = {}) {
+  const mode = String(opts.mode || 'auto').toLowerCase();
+  return mode === 'dedicated' || opts.directUrlGrounding === true || needsFreshWebContext(prompt);
+}
+
 async function enrichWithWebSearch(prompt, opts = {}) {
   const env = opts.env || process.env;
   const mode = String(opts.mode || 'auto').toLowerCase();
   const dedicated = mode === 'dedicated';
   const directUrlGrounding = opts.directUrlGrounding === true;
   const directUrls = directUrlGrounding ? extractHttpUrls(prompt) : [];
-  // `directUrlGrounding` is the explicit, current-message-only public-web
-  // mode selected by /code. It must also cover discovery prompts without a
-  // literal URL ("investiga Tesis20"), not only freshness keywords.
-  const needsSearch = dedicated || directUrlGrounding || needsFreshWebContext(prompt);
-  if (!needsSearch) return null;
+  if (!webSearchPlanned(prompt, opts)) return null;
 
   if (directUrlGrounding) {
     const githubContext = await buildGitHubRepositoryContext(prompt, opts);
@@ -583,4 +591,5 @@ module.exports = {
   embedTexts,
   resetOrchestrationCache,
   toOpenAIResponseFormat,
+  webSearchPlanned,
 };

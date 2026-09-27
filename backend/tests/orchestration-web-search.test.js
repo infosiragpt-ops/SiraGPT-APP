@@ -11,6 +11,7 @@ const {
   searchFreshContext,
   tavilySearch,
 } = require('../src/orchestration/web-search-tools');
+const { looksLikeCalculation } = require('../src/services/prompt-shape');
 
 test('needsFreshWebContext detects time-sensitive queries', () => {
   assert.equal(needsFreshWebContext(''), false);
@@ -27,6 +28,31 @@ test('needsFreshWebContext detects time-sensitive queries', () => {
   assert.equal(needsFreshWebContext('where can I find the best deals'), true);
   assert.equal(needsFreshWebContext('explica el teorema de Pitágoras'), false);
   assert.equal(needsFreshWebContext('cómo hacer una tesis'), false);
+});
+
+// Prod 2026-09-27: «ahora resuelve 3x + 5 = 20» searched the web (10 sources)
+// because «ahora» counted as freshness; «el resultado de…» would too.
+test('needsFreshWebContext: follow-up «ahora» and calculations are not freshness', () => {
+  for (const prompt of ['ahora resuelve 3x + 5 = 20', 'ahora hazlo en inglés', '¿cuánto es 2+2?',
+    'dame el resultado de 5*8', 'resuelve 2x - 4 = 10 para hoy', 'calcula la derivada de x^2 + 3x',
+    'resuelve la ecuación 5 = 2x + 1 del ejercicio de hoy']) {
+    assert.equal(needsFreshWebContext(prompt), false, prompt);
+  }
+  // Events, live data and dates still ground on the web.
+  for (const prompt of ['resultados de las elecciones en Perú', 'resultado del partido Perú vs Chile',
+    'results of the election 2026', 'precio del dólar hoy por 3.5 * 2', 'qué pasó el 27/09/2026',
+    'noticias del 2026-09-27', 'qué clima hace hoy en Lima', 'quién ganó el partido de hoy']) {
+    assert.equal(needsFreshWebContext(prompt), true, prompt);
+  }
+});
+
+test('looksLikeCalculation: arithmetic or a math verb with numbers, never a date', () => {
+  for (const prompt of ['3x + 5 = 20', '2+2', '(a+b)^2 = 49', 'calcula el 15% de 80', 'solve 4y = 12']) {
+    assert.equal(looksLikeCalculation(prompt), true, prompt);
+  }
+  for (const prompt of ['27/09/2026', '2026-09-27', 'cómo resolver el tráfico de Lima', 'explica las derivadas']) {
+    assert.equal(looksLikeCalculation(prompt), false, prompt);
+  }
 });
 
 test('tavilySearch returns empty when not configured', async () => {

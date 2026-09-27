@@ -80,6 +80,28 @@ test('faithfulness: verdict high / low / unclear, outcomes, footer language, tri
   assert.ok(trimmed.reduce((a, s) => a + s.texto.length, 0) <= faith.MAX_SOURCE_CHARS);
 });
 
+// Prod 2026-09-27: «¿qué hay en esta imagen?» and «3x + 5 = 20» got «⚠️
+// Comprobación de fuentes» — Jev judged a vision answer / a derivation
+// against the user's memory blocks and the image's text stub.
+test('faithfulness: only planned, non-calculation turns are judged, and only against evidence', () => {
+  const sources = [
+    { kind: 'rag_evidence', text: 'e' }, { kind: 'file', text: 'f' }, { kind: 'document', text: 'd' },
+    { kind: 'memory', text: 'm' }, { kind: 'active_memory', text: 'a' }, { kind: 'cross_chat', text: 'c' }, { kind: 'web', text: 'w' },
+  ];
+  const kinds = (list) => list.map((s) => s.kind);
+  assert.deepEqual(kinds(faith.sourcesToCheck({ planned: true, question: 'resume el informe adjunto', sources })),
+    ['rag_evidence', 'file', 'document', 'web'], 'memory and other chats are context, not sources');
+  assert.deepEqual(faith.sourcesToCheck({ planned: false, question: 'resume el informe adjunto', sources }), [],
+    'same gate as the heuristic check');
+  assert.deepEqual(faith.sourcesToCheck({ planned: true, question: 'ahora resuelve 3x + 5 = 20', sources }), [],
+    'a derivation is not quoted from sources');
+  assert.deepEqual(kinds(faith.sourcesToCheck({ planned: true, question: '¿qué hay en esta imagen?', sources, imageAttachmentsOnly: true })),
+    ['rag_evidence', 'document', 'web'], 'an image answer is not judged against the image text stub');
+  assert.deepEqual(faith.sourcesToCheck({ planned: true, question: '¿qué hay en esta imagen?',
+    sources: [{ kind: 'file', text: 'f' }, { kind: 'memory', text: 'm' }], imageAttachmentsOnly: true }), []);
+  assert.deepEqual(faith.sourcesToCheck(), []);
+});
+
 test('wiring: route filters hits after rerank and checks the answer after the heuristic gate; kinds/events registered', () => {
   const ai = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
   const rerankAt = ai.indexOf("generateLog.warnError('rag.rerank_failed', rerankErr);");
@@ -88,6 +110,8 @@ test('wiring: route filters hits after rerank and checks the answer after the he
   assert.ok(rerankAt > 0 && filterAt > rerankAt && evidenceAt > filterAt, 'filter runs after rerank and before the evidence block is rendered');
   assert.match(ai, /operationalRag\.buildEvidenceBlock\(\{/);
   assert.match(ai, /jevFaith\.checkAnswer\(\{ question: prompt, answer: fullResponseContent/);
+  assert.match(ai, /const __sources = jevFaith\.sourcesToCheck\(\{\s*planned: faithGate\.shouldVerify\(req\._cognitiveDecision\),\s*question: prompt,/);
+  assert.match(ai, /imageAttachmentsOnly: __turnFiles\.length > 0\s*&& __turnFiles\.every\(\(f\) => typeof f\.mimeType === 'string' && f\.mimeType\.startsWith\('image\/'\)\)/);
   assert.match(ai, /source: 'jev_faithfulness'/);
   assert.match(ai, /__jf\.verdict === 'low' && __jf\.footer && __faith\.action !== 'annotate'/);
   assert.ok(ledger.DECISION_KINDS.includes('rag_filter'));
