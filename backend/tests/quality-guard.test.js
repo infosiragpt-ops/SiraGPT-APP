@@ -61,3 +61,25 @@ test('quality guard corrective prompt asks for a complete Spanish rewrite', () =
   assert.match(prompt, /Pregunta original:/i);
   assert.match(prompt, /dame pasos para mejorar mi tesis/i);
 });
+
+// Prod 2026-09-27: «¿cuánto es 2+2?» → «2 + 2 = 4» was flagged too-short and
+// a corrective pass held the reply for 8 s.
+test('quality guard lets calculations and direct fact questions have short answers', () => {
+  for (const [userPrompt, response] of [
+    ['¿cuánto es 2+2?', '2 + 2 = 4'], ['ahora resuelve 3x + 5 = 20', 'x = 5'],
+    ['¿cuál es la capital de Francia?', 'París.'], ['¿cuántos continentes hay?', 'Siete.'],
+    ['¿quién escribió el Quijote?', 'Miguel de Cervantes.'], ['¿qué día es hoy?', 'Sábado.'],
+  ]) {
+    assert.deepEqual(evaluateResponse({ userPrompt, response }), { weak: false, reason: null }, `${userPrompt} → ${response}`);
+  }
+});
+
+test('quality guard still flags short answers that do not answer', () => {
+  for (const [userPrompt, response] of [
+    ['¿cuánto es 2+2?', 'Claro.'], ['¿cuál es la capital de Francia?', 'La'],
+    ['¿qué opinas de la IA?', 'Interesante.'], ['hazme un informe de ventas', 'Listo.'],
+  ]) {
+    assert.equal(evaluateResponse({ userPrompt, response }).weak, true, `${userPrompt} → ${response}`);
+  }
+});
+

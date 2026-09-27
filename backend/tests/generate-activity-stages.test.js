@@ -22,7 +22,9 @@ test('generate route defines emitStage after the SSE headers are flushed', () =>
 
 test('generate route announces attachments, web search, vision and the model phase', () => {
   assert.match(src, /emitStage\(files\.length === 1 \? 'Leyendo el archivo adjunto' : `Leyendo \$\{files\.length\} archivos adjuntos`, \{ tool: 'read_file' \}\)/);
-  assert.match(src, /if \(_webSearchAllowed\) emitStage\('Buscando en la web', \{ tool: 'web_search' \}\)/);
+  // Only when a search really runs (not on every allowed turn).
+  assert.match(src, /const _willSearchWeb = _webSearchAllowed && webSearchPlanned\(_webGroundingPrompt, _webSearchOptions\);/);
+  assert.match(src, /if \(_willSearchWeb\) emitStage\('Buscando en la web', \{ tool: 'web_search' \}\)/);
   assert.match(src, /emitStage\(webSearchSources\.length === 1 \? 'Leyendo 1 fuente' : `Leyendo \$\{webSearchSources\.length\} fuentes`, \{ tool: 'web_fetch' \}\)/);
   assert.match(src, /emitStage\(__imageCount === 1 \? 'Analizando la imagen' : `Analizando \$\{__imageCount\} imágenes`, \{ tool: 'vision' \}\)/);
   assert.match(src, /emitStage\('Pensando', \{ tool: 'model' \}\);\s*\}\s*const out = await aiService\.generateStream\(\{/);

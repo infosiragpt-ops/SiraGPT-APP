@@ -1,5 +1,7 @@
 'use strict';
 
+const { looksLikeCalculation } = require('../services/prompt-shape');
+
 // JS regex `\b` (word boundary) is ASCII-only — `\bú`, `\bñ`,
 // `\belección` silently fail to match because the boundary check
 // treats accented letters as non-word characters. Replace `\b` with
@@ -9,10 +11,20 @@
 // Shopping/live-price intent joins the freshness triggers: offers,
 // discounts and "cuánto cuesta" questions are worthless without current
 // results, so they must ground before answering instead of refusing.
-const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|ayer|mañana|esta\s+semana|este\s+(?:mes|año)|últim[ao]s?|latest|current|recent(?:ly)?|noticias?|paper\s+reciente|precio[s]?|cotizaci[oó]n|tipo\s+de\s+cambio|d[oó]lar|euro|bitcoin|20(?:2[5-9]|[3-9][0-9])|ahora|news|weather|clima|pron[oó]stico|sismo|terremoto|elecci[oó]n|elecciones|resultados?|marcador|en\s+vivo|recien(?:te|tes|temente)|oferta[s]?|descuento[s]?|promoci[oó]n(?:es)?|rebaja[s]?|liquidaci[oó]n(?:es)?|outlet|remate[s]?|cup[oó]n(?:es)?|cu[aá]nto\s+(?:cuesta|cuestan|vale|valen)|comprar|compramos?|deals?|discounts?|cheapest|shopping)(?![\p{L}\p{N}])/iu;
+// «ahora» mostly chains a follow-up («ahora resuelve 3x + 5 = 20», «ahora
+// hazlo en inglés») and «resultado» is what every calculation asks for, so
+// neither is a freshness signal on its own: results only count next to an
+// event (elecciones, partido, sorteo…).
+const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|ayer|mañana|esta\s+semana|este\s+(?:mes|año)|últim[ao]s?|latest|current|recent(?:ly)?|noticias?|paper\s+reciente|precio[s]?|cotizaci[oó]n|tipo\s+de\s+cambio|d[oó]lar|euro|bitcoin|20(?:2[5-9]|[3-9][0-9])|news|weather|clima|pron[oó]stico|sismo|terremoto|elecci[oó]n|elecciones|marcador|en\s+vivo|recien(?:te|tes|temente)|oferta[s]?|descuento[s]?|promoci[oó]n(?:es)?|rebaja[s]?|liquidaci[oó]n(?:es)?|outlet|remate[s]?|cup[oó]n(?:es)?|cu[aá]nto\s+(?:cuesta|cuestan|vale|valen)|comprar|compramos?|deals?|discounts?|cheapest|shopping)(?![\p{L}\p{N}])/iu;
+const EVENT_RESULTS_RE = /(?<![\p{L}\p{N}])(?:resultados?|results?)\s+(?:[\p{L}\p{N}]+\s+){0,3}?(?:elecci[oó]n(?:es)?|elections?|comicios|votaci[oó]n(?:es)?|encuestas?|partidos?|match(?:es)?|sorteos?|loter[ií]as?|liga|champions|mundial|copa|carreras?|gran\s+premio|ex[aá]men(?:es)?|admisi[oó]n)(?![\p{L}\p{N}])/iu;
+
+// A self-contained calculation never needs the web unless it names live data.
+const LIVE_DATA_RE = /(?<![\p{L}\p{N}])(?:noticias?|news|precio[s]?|cotizaci[oó]n|tipo\s+de\s+cambio|d[oó]lar|euro|bitcoin|clima|weather|pron[oó]stico|sismo|terremoto|elecci[oó]n|elecciones|marcador|en\s+vivo|oferta[s]?|descuento[s]?|cu[aá]nto\s+(?:cuesta|cuestan|vale|valen))(?![\p{L}\p{N}])/iu;
 
 function needsFreshWebContext(prompt = '') {
-  return FRESH_WEB_CONTEXT_RE.test(String(prompt || ''));
+  const text = String(prompt || '');
+  if (!FRESH_WEB_CONTEXT_RE.test(text) && !EVENT_RESULTS_RE.test(text)) return false;
+  return !looksLikeCalculation(text) || LIVE_DATA_RE.test(text);
 }
 
 async function tavilySearch(query, { env = process.env, fetchImpl = globalThis.fetch, maxResults = 5 } = {}) {

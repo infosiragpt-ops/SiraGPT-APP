@@ -14,6 +14,7 @@ const {
   embedTexts,
   resetOrchestrationCache,
   toOpenAIResponseFormat,
+  webSearchPlanned,
 } = require('../src/orchestration/gateway-adapter');
 const { needsFreshWebContext } = require('../src/orchestration/web-search-tools');
 
@@ -28,6 +29,14 @@ test('gateway-adapter exports all expected functions', function() {
   assert.equal(typeof embedTexts, 'function');
   assert.equal(typeof resetOrchestrationCache, 'function');
   assert.equal(typeof toOpenAIResponseFormat, 'function');
+});
+
+test('webSearchPlanned: the route announces «Buscando en la web» only when a search runs', function() {
+  assert.equal(webSearchPlanned('¿qué hay en esta imagen?'), false);
+  assert.equal(webSearchPlanned('ahora resuelve 3x + 5 = 20'), false);
+  assert.equal(webSearchPlanned('noticias de hoy en Lima'), true);
+  assert.equal(webSearchPlanned('¿qué hay en esta imagen?', { mode: 'dedicated' }), true);
+  assert.equal(webSearchPlanned('investiga Tesis20', { directUrlGrounding: true }), true);
 });
 
 test('enrichWithWebSearch returns null for non-fresh queries', async function() {

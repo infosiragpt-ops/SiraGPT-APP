@@ -17,6 +17,8 @@
  * short.
  */
 
+const { looksLikeCalculation } = require('./prompt-shape');
+
 const REFUSAL_PATTERNS = [
   /^i\s+(can'?t|cannot|am\s+unable\s+to|won'?t)\b/i,
   /\bi\s+(can'?t|cannot|am\s+unable\s+to)\s+(help|assist|answer|respond|provide)\b/i,
@@ -46,6 +48,8 @@ const GENERIC_THIN_PATTERNS = [
   /\b(aqu[ií]\s+tienes|here\s+you\s+go)\s*(una\s+respuesta|la\s+respuesta)?\.?\s*$/i,
   /\b(es\s+importante\s+tener\s+en\s+cuenta|it\s+is\s+important\s+to\s+note)\b/i,
 ];
+// Quantity/identity questions whose right answer is one datum.
+const DIRECT_FACT_QUESTION = /^\s*(?:¿\s*)?(?:cu[aá]nt[oa]s?|cu[aá]l(?:es)?|qui[eé]n(?:es)?|cu[aá]ndo|d[oó]nde|qu[eé]\s+(?:d[ií]a|hora|fecha|año|mes)|how\s+(?:many|much)|which|who|when|where)(?![\p{L}\p{N}])/iu;
 const STRUCTURE_MARKER = /(^|\n)\s*(#{1,4}\s+|[-*]\s+|\d+[.)]\s+|>\s+)|```|\|.+\|/m;
 const CONCRETE_SIGNAL = /\b(por\s+ejemplo|ejemplo|paso|primero|segundo|tercero|define|identifica|revisa|usa|incluye|mide|prioriza|entrega|resultado|plantilla|checklist|tabla)\b/i;
 
@@ -96,6 +100,19 @@ function hasConcreteSignal(response) {
   return CONCRETE_SIGNAL.test(normalizeText(response));
 }
 
+/**
+ * A short question can deserve a short answer: «¿cuánto es 2+2?» → «2 + 2 = 4»
+ * cost an 8 s corrective pass in production. A calculation is answered by a
+ * number; a quantity/identity question by a number or a proper name.
+ */
+function allowsShortAnswer(userPrompt, response) {
+  const prompt = normalizeText(userPrompt);
+  const answer = normalizeText(response);
+  if (!prompt || prompt.length > 80) return false;
+  if (looksLikeCalculation(prompt)) return /\d/.test(answer);
+  return DIRECT_FACT_QUESTION.test(prompt) && (/\d/.test(answer) || /\p{Lu}\p{L}{2,}/u.test(answer));
+}
+
 function isGenericThinResponse(response) {
   const text = normalizeText(response);
   return GENERIC_THIN_PATTERNS.some(pattern => pattern.test(text));
@@ -130,7 +147,7 @@ function evaluateResponse({ response, userPrompt }) {
   // Too short for a question that likely wants a real answer.
   if (trimmed.length < MIN_USEFUL_LENGTH) {
     const userLooksYesNo = YES_NO_HINT.test(userPrompt || '') || SIMPLE_QUESTION_HINT.test((userPrompt || '').trim());
-    if (!userLooksYesNo) return { weak: true, reason: 'too-short' };
+    if (!userLooksYesNo && !allowsShortAnswer(userPrompt, trimmed)) return { weak: true, reason: 'too-short' };
   }
 
   const substantialPrompt = looksSubstantialPrompt(userPrompt);
@@ -203,4 +220,5 @@ module.exports = {
   looksLightweightPrompt,
   looksSubstantialPrompt,
   expectsShortResponse,
+  allowsShortAnswer,
 };
