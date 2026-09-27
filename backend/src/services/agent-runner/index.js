@@ -78,6 +78,7 @@ const {
   resolveTurnFiles,
   persistOutputs,
   hasConversationArtifacts,
+  sanitizeUploadName,
 } = require('./artifacts');
 const {
   isAsyncEnabled,
@@ -276,12 +277,6 @@ function canCallLlm({ client } = {}) {
   return resolveDocAgentCandidates({ model: explicitRunnerModel() }).length > 0;
 }
 
-function sanitizeUploadName(name, index) {
-  const base = String(name || `file-${index + 1}`).split(/[\\/]/).pop();
-  const clean = base.replace(/[^\w.\-() À-ɏ]/g, '_').slice(0, 180);
-  return clean || `file-${index + 1}`;
-}
-
 function resolveOutputEditSource(name, sources) {
   const basename = (value) => String(value || '').split(/[\\/]/).pop().toLowerCase();
   const outputName = basename(name);
@@ -433,6 +428,11 @@ async function runAgentRunner({
       const f = files[i];
       if (!f || !Buffer.isBuffer(f.buffer)) continue;
       const name = sanitizeUploadName(f.name, i);
+      if (names.some((staged) => staged.toLowerCase() === name.toLowerCase())) {
+        const error = new Error(`Hay varios archivos llamados ${name}. Indica cuál deseas editar; no modifiqué ninguno.`);
+        error.code = 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS';
+        throw error;
+      }
       await sandbox.putFile(`uploads/${name}`, f.buffer);
       names.push(name);
       if (f.isPriorArtifact) priorNames.push(name);
