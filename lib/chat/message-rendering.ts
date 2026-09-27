@@ -4,6 +4,8 @@ type RenderableChatMessage = {
   files?: unknown
   error?: unknown
   progressStage?: unknown
+  activityRail?: unknown
+  activityLog?: unknown
 }
 
 function asRenderableMessage(message: unknown): RenderableChatMessage | null {
@@ -89,6 +91,11 @@ export function shouldRenderChatMessage(
   const role = String(candidate.role || "").toUpperCase()
   if (role === "USER") return true
   if (candidate.error || candidate.progressStage) return true
+  // A live document edit (/api/ai/document-edit) shows its step timeline from
+  // the first frame: it is not the chat stream, so without this the bubble
+  // stayed blank until the answer — 2–4 min on Luis's UPN form.
+  if (role === "ASSISTANT" && candidate.activityRail === true && Array.isArray(candidate.activityLog)
+    && candidate.activityLog.length > 0) return true
   if (hasMessageTextForRender(contentWithoutHiddenImages(candidate.content, candidate.files))) return true
   if (parseMessageFilesForRender(candidate.files).length > 0) return true
   return allowEmptyStreamingAssistant && role === "ASSISTANT"

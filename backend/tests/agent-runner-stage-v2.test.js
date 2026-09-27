@@ -345,3 +345,9 @@ test('wiring: the chat streams + collects runner stages and persists them with t
   const index = read('src/services/agent-runner/index.js');
   assert.match(index, /thumbs: agentThumbsEnabled\(\),/);
 });
+
+test('a file listing reads as «Revisando los archivos», not «Ejecutando código»', () => {
+  const { labelForToolCall } = require('../src/services/agent-runner/trace');
+  assert.equal(labelForToolCall('list_files'), 'Revisando los archivos');
+  assert.equal(labelForToolCall('execute_python'), 'Ejecutando código');
+});

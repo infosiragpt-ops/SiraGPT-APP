@@ -78,3 +78,13 @@ describe("chat message rendering", () => {
     )
   })
 })
+
+describe("live document edit placeholder", () => {
+  it("renders the editor's timeline before any text, never an empty assistant bubble", () => {
+    const placeholder = { role: "ASSISTANT", content: "", activityRail: true,
+      activityLog: [{ id: "act-0", label: "Preparando la edición", status: "active", at: 1 }] }
+    assert.equal(shouldRenderChatMessage(placeholder), true)
+    assert.equal(shouldRenderChatMessage({ ...placeholder, activityLog: [] }), false)
+    assert.equal(shouldRenderChatMessage({ role: "ASSISTANT", content: "", activityLog: placeholder.activityLog }), false)
+  })
+})

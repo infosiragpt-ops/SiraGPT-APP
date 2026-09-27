@@ -170,8 +170,21 @@ async function runDocxEngineEdit({
       originalRender,
       allowSectionChange: requestTouchesPageSetup(instruction),
     });
+    let visualRun = null;
     if (verification.ok) {
       emit({ label: 'Comprobando que los cambios cumplen tu petición' });
+      // The intent review (the picked model) and the visual verification
+      // (render + vision) are independent: they run side by side.
+      visualRun = typeof visualVerify === 'function'
+        ? Promise.resolve().then(() => visualVerify({
+          originalBuffer: buffer,
+          editedBuffer: edited,
+          filename,
+          instruction,
+          expectedValues: Array.isArray(expectedValues) ? expectedValues : [],
+          signal,
+        })).then((visual) => ({ visual }), (error) => ({ error }))
+        : null;
       try {
         const intent = await reviewDocumentIntent({ originalBuffer: buffer, editedBuffer: edited, instruction,
           summary: String(summary || ''), client, model, signal, extraContext });
@@ -187,16 +200,11 @@ async function runDocxEngineEdit({
     // AgentRunner — page render, changed zones in mm, before/after composite
     // and the vision review. Deterministic checks rule: a vision veto asks
     // for one more revision, and on the last round it is only reported.
-    if (verification.ok && typeof visualVerify === 'function') {
+    if (verification.ok && visualRun) {
       try {
-        const visual = await visualVerify({
-          originalBuffer: buffer,
-          editedBuffer: edited,
-          filename,
-          instruction,
-          expectedValues: Array.isArray(expectedValues) ? expectedValues : [],
-          signal,
-        });
+        const settled = await visualRun;
+        if (settled.error) throw settled.error;
+        const visual = settled.visual;
         if (visual) {
           verification.report.visual = {
             ok: visual.ok, visionOk: visual.visionOk ?? null, unavailable: Boolean(visual.unavailable),
