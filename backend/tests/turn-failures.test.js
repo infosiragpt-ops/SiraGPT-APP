@@ -162,6 +162,9 @@ describe('classify — categories', () => {
     assert.equal(classify.classifyTurnOutcome({ ...base, errorFrames: [{ code: 'agent_runner_failed', message: 'x' }] }).category, 'herramienta_fallida');
     assert.equal(classify.classifyTurnOutcome({ ...base, visibleText: 'No se pudo completar', doneFrame: { ok: false, code: 'FAILED' } }).cause, 'Editor de documentos: edición no completada');
     assert.equal(classify.classifyTurnOutcome({ ...base, doneFrame: { ok: false, code: 'CANCELLED' }, visibleText: 'Edición detenida' }), null);
+    // «El documento ya cumplía lo pedido»: an answer, never «herramienta fallida».
+    assert.equal(classify.classifyTurnOutcome({ ...base, doneFrame: { ok: false, code: 'NO_CHANGES_NEEDED' },
+      visibleText: 'El documento ya cumplía lo pedido, no fue necesario cambiarlo.' }), null);
     const fatal = classify.classifyTurnOutcome({
       ...base,
       visibleText: 'No pude editar el documento.',

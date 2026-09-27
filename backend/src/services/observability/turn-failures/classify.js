@@ -363,7 +363,9 @@ function classifyTurnOutcome(outcome = {}) {
     return out('error_visible', cause, ['error_frame', code].filter(Boolean));
   }
 
-  if (outcome.doneFrame && outcome.doneFrame.ok === false && !/CANCEL/i.test(str(outcome.doneFrame.code, 40))) {
+  // NO_CHANGES_NEEDED: the document already had what was asked and the reply
+  // says so — an answer, not a failed tool (edición milimétrica G.2).
+  if (outcome.doneFrame && outcome.doneFrame.ok === false && !/CANCEL|NO_CHANGES_NEEDED/i.test(str(outcome.doneFrame.code, 40))) {
     return out('herramienta_fallida', toolCause(notes, outcome.doneFrame.code || 'document_edit'), ['done_not_ok']);
   }
 
