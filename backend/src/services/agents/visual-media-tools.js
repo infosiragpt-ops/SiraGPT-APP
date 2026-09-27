@@ -8579,4 +8579,8 @@ const __test_helpers = {
   xmlEscape,
 };
 
+// Video generations log their outcome for Admin → Logs (images are logged
+// once, inside media/image-engine).
+require('../observability/generation-outcome').instrumentGenerationTools(VISUAL_MEDIA_TOOLS, { only: ['generate_video'] });
+
 module.exports = { VISUAL_MEDIA_TOOLS, __test_helpers };
