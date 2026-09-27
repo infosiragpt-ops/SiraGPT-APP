@@ -34,6 +34,9 @@
 const { retrieveFromProvider, REGISTRY } = require("./providers");
 const { rerankResults } = require("./llmReranker");
 const { extractIndexMentions } = require("./index-mentions");
+
+// Indexes whose records are (almost) only in English.
+const ENGLISH_ONLY_PROVIDERS = new Set(["arxiv", "dblp", "biorxiv", "medrxiv"]);
 const { callLLM } = require("./llmClient");
 const { analyzeQuery } = require("../research/research-query-intelligence");
 const { scoreResult } = require("../agents/web-search/relevance");
@@ -531,6 +534,13 @@ async function* runAgenticBatch(opts) {
     }
   }
   if (searchQueries.length === 0) searchQueries.push(query);
+  // A Spanish topic keeps its English rendering in the plan even when the
+  // protocol expression took a slot: English-only indexes search with it.
+  const englishQuery = typeof plan.englishQuery === "string" && plan.englishQuery.trim() ? plan.englishQuery.trim() : null;
+  if (englishQuery && !searchQueries.includes(englishQuery)) {
+    if (searchQueries.length >= 3) searchQueries[searchQueries.length - 1] = englishQuery;
+    else searchQueries.push(englishQuery);
+  }
   const filters = plan.filters || {};
   const conceptGroups = Array.isArray(plan.conceptGroups) ? plan.conceptGroups : [];
   const language = opts.language || filters.language || plan.language;
@@ -569,12 +579,15 @@ async function* runAgenticBatch(opts) {
   const lanes = new Map();
   for (const provider of providers) {
     for (let queryIndex = 0; queryIndex < searchQueries.length; queryIndex++) {
+      // arXiv & co. only index English: a Spanish variant there returned one
+      // off-topic record for «telemedicina» (vs 10 for «telemedicine»).
+      const englishOnlyLane = englishQuery && ENGLISH_ONLY_PROVIDERS.has(provider) && searchQueries[queryIndex] !== englishQuery;
       lanes.set(laneKey(provider, queryIndex), {
         offset: 0,
         errors: 0,
-        exhausted: false,
+        exhausted: Boolean(englishOnlyLane),
         stalePages: 0,
-        reason: null,
+        reason: englishOnlyLane ? "english_only_index" : null,
       });
     }
   }
