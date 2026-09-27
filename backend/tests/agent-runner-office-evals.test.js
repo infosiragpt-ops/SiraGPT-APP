@@ -134,6 +134,37 @@ test('graders FAIL plausible wrong edits (they never trust the agent)', { skip: 
   }
 });
 
+test('graders reject a different Excel highlight or PowerPoint green than the SPEC', { skip: SKIP, timeout: 120_000 }, async () => {
+  const sandbox = await freshSandbox();
+  try {
+    const wrongColors = [
+      {
+        id: 'xlsx-cantidad-resaltado',
+        spec: { ops: [
+          { op: 'set_cell', sheet: 'Presupuesto', ref: 'B4', value: 15 },
+          { op: 'set_cell_style', sheet: 'Presupuesto', range: 'B4', fill: '00FFFF', bold: true },
+        ] },
+      },
+      {
+        id: 'pptx-nota-mover-verde',
+        spec: { ops: [
+          { op: 'set_geometry', slide: 2, shape: 'Nota', dx_mm: 2 },
+          { op: 'set_fill', slide: 2, shape: 'Nota', color: '00AA00' },
+        ] },
+      },
+    ];
+    for (const { id, spec } of wrongColors) {
+      const scenario = scenarioById(id);
+      const after = await edited(sandbox, scenario, spec, `outputs/wrong-color-${id}${path.extname(scenario.fixture)}`);
+      const before = fs.readFileSync(path.join(FIXTURES, scenario.fixture));
+      const graded = await gradeOfficeOutput({ sandbox, scenarioId: id, before, after, render: false });
+      assert.equal(graded.ok, false, `${id}: el color distinto debe fallar`);
+    }
+  } finally {
+    await sandbox.destroy();
+  }
+});
+
 test('every SPEC scenario prompt reaches an edit path on /generate (never a media question)', () => {
   const agentRunner = require('../src/services/agent-runner');
   const { isDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
