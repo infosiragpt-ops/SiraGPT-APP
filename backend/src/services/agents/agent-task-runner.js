@@ -3593,7 +3593,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         uploadedFileContext,
         openclawRuntimeProfile
       ) + (generatedArtifactRefs.length
-        ? `\n\n${buildGeneratedArtifactReadContext(generatedArtifactRefs)}`
+        ? `\n\n${buildGeneratedArtifactReadContext(generatedArtifactRefs, displayGoal || goal)}`
         : ''),
       ctx: toolCtx,
       finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({

@@ -74,22 +74,26 @@ async function createAndVerify(filename, python, expectedFormat, events) {
   // original VM paths disappear. A follow-up with files:[] must recover both
   // files from the same delivery, then pyreadstat/openpyxl must compare bytes.
   const saved = [excel.result, sav.result];
-  const bytes = new Map();
+  const binaries = new Map();
   for (const artifact of saved) {
     const metadataPath = INTERNAL.metadataPathFor(artifact.artifactId);
     const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
     const binaryPath = path.join(artifactDir, metadata.storedRelPath);
-    bytes.set(artifact.artifactId, fs.readFileSync(binaryPath));
+    binaries.set(artifact.artifactId, {
+      bytes: fs.readFileSync(binaryPath),
+      format: artifact.format,
+    });
     metadata.storageRef = `mock://${artifact.artifactId}`;
     fs.writeFileSync(metadataPath, JSON.stringify(metadata));
     fs.rmSync(binaryPath);
   }
   objectStorage.toLocalTemp = async (ref) => {
     const id = String(ref).split('/').at(-1);
-    const buffer = bytes.get(id);
-    if (!buffer) throw new Error('missing offloaded artifact');
-    const destination = path.join(artifactDir, `hydrated-${id}`);
-    fs.writeFileSync(destination, buffer);
+    const binary = binaries.get(id);
+    if (!binary) throw new Error('missing offloaded artifact');
+    // Match objectStorage.toLocalTemp, which retains the binary extension.
+    const destination = path.join(artifactDir, `hydrated-${id}.${binary.format}`);
+    fs.writeFileSync(destination, binary.bytes);
     return { path: destination, cleanup: async () => fs.rmSync(destination, { force: true }) };
   };
   const records = saved.map((artifact, index) => ({

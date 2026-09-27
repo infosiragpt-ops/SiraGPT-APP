@@ -1273,6 +1273,7 @@ router.post(
       : [];
     const canUseLocalDocumentRuntime = requestedFileIds.length > 0
       || Boolean(req.body.preferRecentArtifact)
+      || Boolean(req.body.generatedArtifactRefs?.length)
       || isTranscriptionRequest(String(req.body.goal || ''));
     if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
       return res.status(500).json({ error: 'OPENAI_API_KEY not configured' });
@@ -1885,7 +1886,7 @@ router.post(
           openclawRuntimeProfile,
           agentGoal
         ) + (req.body.generatedArtifactRefs?.length
-          ? `\n\n${buildGeneratedArtifactReadContext(req.body.generatedArtifactRefs)}`
+          ? `\n\n${buildGeneratedArtifactReadContext(req.body.generatedArtifactRefs, agentGoal)}`
           : ''),
         ctx: toolCtx,
         finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
