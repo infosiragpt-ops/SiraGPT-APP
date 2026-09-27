@@ -494,10 +494,10 @@ describe('callLLM · bounded request', () => {
     } };
     process.env.OPENROUTER_API_KEY = 'test-key-not-real';
     try {
-      const { callLLM, DEFAULT_LLM_TIMEOUT_MS } = require('../src/services/searchBrain/llmClient');
+      const { callLLM } = require('../src/services/searchBrain/llmClient');
       const controller = new AbortController();
       assert.deepEqual(await callLLM({ system: 's', user: 'u', signal: controller.signal }), { content: 'ok' });
-      assert.equal(seen[0].timeout, DEFAULT_LLM_TIMEOUT_MS);
+      assert.equal(seen[0].timeout, 25000, 'default bound (SEARCH_BRAIN_LLM_TIMEOUT_MS unset)');
       assert.equal(seen[0].maxRetries, 1);
       assert.equal(seen[0].signal, controller.signal);
       await callLLM({ system: 's', user: 'u', timeoutMs: 5000 });

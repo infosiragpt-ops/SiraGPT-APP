@@ -96,7 +96,6 @@ function __resetClient() {
 }
 
 module.exports = {
-  DEFAULT_LLM_TIMEOUT_MS,
   callLLM,
   getClient,
   getDefaultModel,
