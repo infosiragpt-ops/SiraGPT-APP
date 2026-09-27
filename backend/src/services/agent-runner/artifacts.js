@@ -20,6 +20,14 @@ function mimeToExt(mime, filename) {
   return 'bin';
 }
 
+// Match the exact workspace basename used by runAgentRunner. A prior output
+// and a reattached upload with this same name occupy the same sandbox path.
+function sanitizeUploadName(name, index) {
+  const base = String(name || `file-${index + 1}`).split(/[\\/]/).pop();
+  const clean = base.replace(/[^\w.\-() À-ɏ]/g, '_').slice(0, 180);
+  return clean || `file-${index + 1}`;
+}
+
 async function listConversationArtifacts(prisma, { userId, chatId, take = 8 } = {}) {
   const limit = Math.max(1, Math.min(20, Number(take) || 8));
   if (prisma?.generatedArtifact && userId && chatId) {
@@ -144,9 +152,22 @@ async function resolveTurnFiles({
       throw new Error('No pude cargar la última versión del documento; adjúntala de nuevo. No usaré una versión anterior en su lugar.');
     }
   }
-  // If the user re-attached the original, still put the prior artifact FIRST
-  // so the agent edits the last version.
-  return { files: [...prior, ...attached], priorArtifacts: prior, latest };
+  // The last edited artifact owns its workspace name. Reattached originals
+  // can include that exact filename (especially PDF outputs which keep their
+  // original name). Staging them after the artifact overwrote the edited bytes
+  // before the agent saw the file. Keep the other attached documents available.
+  const priorName = prior.length ? sanitizeUploadName(prior[0].name, 0).toLowerCase() : null;
+  const sourceFileId = String(latest?.validation?.documentEdit?.sourceFileId || '');
+  const otherAttachments = priorName
+    ? attached.filter((file, index) => {
+      if (sanitizeUploadName(file.name, index).toLowerCase() !== priorName) return true;
+      // When stored lineage exists, a different upload with the same name is
+      // not the source of this version. Let the staging collision gate report
+      // the ambiguity instead of silently discarding that user's attachment.
+      return Boolean(sourceFileId && file.fileId && String(file.fileId) !== sourceFileId);
+    })
+    : attached;
+  return { files: [...prior, ...otherAttachments], priorArtifacts: prior, latest };
 }
 
 async function persistOutputs({
@@ -236,4 +257,5 @@ module.exports = {
   resolveTurnFiles,
   persistOutputs,
   mimeToExt,
+  sanitizeUploadName,
 };
