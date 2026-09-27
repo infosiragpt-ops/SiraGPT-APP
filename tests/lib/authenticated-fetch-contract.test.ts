@@ -8,6 +8,7 @@ const FETCH_SCAN_ROOTS = ["app", "components", "hooks", "lib"] as const
 
 const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/admin-credits-service.ts",
+  "lib/admin/live-logs-service.ts",
   "lib/agent-task-service.ts",
   "lib/agentic-search-service.ts",
   "lib/ai-service.ts",
