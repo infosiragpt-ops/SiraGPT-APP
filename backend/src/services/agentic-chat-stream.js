@@ -189,37 +189,52 @@ const CUSTOM_GPT_DOCUMENT_TOOL_NAMES = new Set([
   'document_edit',
 ]);
 
-// Web lookups per agentic turn. A news question ran 22 searches in 6 steps
-// (74 s) although the route had already injected 10 fresh results.
+// Web lookups and page reads per agentic turn. A news question ran 22
+// searches in 6 steps (74 s) although the route had already injected 10
+// fresh results; once searches were capped, 11 page reads still took ~46 s.
 const WEB_LOOKUP_TOOLS = new Set(['web_search', 'deep_search', 'x_search']);
+const WEB_READ_TOOLS = new Set(['read_url', 'web_fetch', 'web_extract']);
+
+function positiveEnvInt(env, name, fallback) {
+  const value = Math.floor(Number(env[name]));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
 
 function webSearchBudget({ preGroundedSources = 0, env = process.env } = {}) {
-  const configured = Math.floor(Number(env.SIRAGPT_AGENTIC_WEB_SEARCH_BUDGET));
-  const limit = Number.isFinite(configured) && configured > 0 ? configured : 8;
+  const limit = positiveEnvInt(env, 'SIRAGPT_AGENTIC_WEB_SEARCH_BUDGET', 8);
   return preGroundedSources > 0 ? Math.min(limit, 2) : limit;
 }
 
-/** Copies of the web lookup tools that stop after `limit` calls this turn. */
-function withWebSearchBudget(tools, limit) {
+function webReadBudget({ preGroundedSources = 0, env = process.env } = {}) {
+  const limit = positiveEnvInt(env, 'SIRAGPT_AGENTIC_WEB_READ_BUDGET', 12);
+  return preGroundedSources > 0 ? Math.min(limit, 3) : limit;
+}
+
+/** Copies of the tools in `names` that stop after `limit` calls this turn. */
+function withToolBudget(tools, names, limit, exhaustedMessage) {
   let used = 0;
   return (Array.isArray(tools) ? tools : []).map((tool) => {
-    if (!tool || !WEB_LOOKUP_TOOLS.has(tool.name) || typeof tool.execute !== 'function') return tool;
+    if (!tool || !names.has(tool.name) || typeof tool.execute !== 'function') return tool;
     const inner = tool.execute;
     return {
       ...tool,
       execute: async (args, ctx) => {
-        if (used >= limit) {
-          return {
-            ok: false,
-            budgetExhausted: true,
-            error: `Límite de ${limit} búsquedas web en este turno alcanzado. Responde ya con las fuentes que tienes y cítalas.`,
-          };
-        }
+        if (used >= limit) return { ok: false, budgetExhausted: true, error: exhaustedMessage };
         used += 1;
         return inner(args, ctx);
       },
     };
   });
+}
+
+function withWebSearchBudget(tools, limit) {
+  return withToolBudget(tools, WEB_LOOKUP_TOOLS, limit,
+    `Límite de ${limit} búsquedas web en este turno alcanzado. Responde ya con las fuentes que tienes y cítalas.`);
+}
+
+function withWebReadBudget(tools, limit) {
+  return withToolBudget(tools, WEB_READ_TOOLS, limit,
+    `Límite de ${limit} lecturas de página en este turno alcanzado. Responde ya con lo que leíste y los resultados que tienes, y cítalos.`);
 }
 
 function applyCustomGptCapabilityGates(tools, capabilities) {
@@ -1797,6 +1812,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const preGroundedSources = Math.max(0, Math.floor(Number(webGrounding && webGrounding.sources) || 0));
     if (preGroundedSources > 0 && initialToolChoice === 'web_search') initialToolChoice = null;
     const webLookupLimit = webSearchBudget({ preGroundedSources });
+    const webReadLimit = webReadBudget({ preGroundedSources });
     // Jev's freshness window becomes the default when the model omits it.
     if (webSearchIntent && webSearchIntent.freshness) {
       for (const tool of tools) {
@@ -1806,7 +1822,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         tool.__jevFreshness = webSearchIntent.freshness;
       }
     }
-    tools = withWebSearchBudget(tools, webLookupLimit);
+    tools = withWebReadBudget(withWebSearchBudget(tools, webLookupLimit), webReadLimit);
     // Document merge ("combina estos 2 words en 1"): force document_edit as
     // the FIRST tool call — its deterministic merge fast-path produces the
     // fused .docx without depending on the model choosing the right tool.
@@ -2087,7 +2103,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Memoria persistente: el índice del usuario ya está en el system prompt. Abre un tema con `memory_read_topic`, busca con `memory_search` (grep primero), recupera lo hablado en otros chats con `chat_history_search`, busca en Drive/Gmail del usuario con `connector_search`, y guarda hechos nuevos y duraderos con `memory_write` en esta misma conversación (nunca secretos ni detalles efímeros). Si el usuario pide olvidar algo, usa `memory_forget`.',
       preGroundedSources > 0
-        ? `Ya tienes ${preGroundedSources} resultados web recientes para esta pregunta en «Fresh Web Context»: responde con ellos y cita sus enlaces. Usa \`web_search\` solo si falta un dato concreto (hasta ${webLookupLimit} búsquedas en este turno).`
+        ? `Ya tienes ${preGroundedSources} resultados web recientes para esta pregunta en «Fresh Web Context»: responde con ellos y cita sus enlaces. Usa \`web_search\` solo si falta un dato concreto (hasta ${webLookupLimit} búsquedas y ${webReadLimit} lecturas de página en este turno).`
         : '',
       webSearchIntent && webSearchIntent.suggest
         ? `Jev (juez de turno) estima que esta petición necesita fuentes actuales (${webSearchIntent.need === 'web_required' ? 'imprescindible' : 'recomendable'}): busca con \`${webSearchIntent.tool}\`${webSearchIntent.freshness ? ` usando freshness=${webSearchIntent.freshness}` : ''} antes de afirmar datos que cambian con el tiempo, y cita las URLs.`
@@ -3202,7 +3218,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       buildDefaultTools,
       applyCustomGptCapabilityGates,
       webSearchBudget,
+      webReadBudget,
       withWebSearchBudget,
+      withWebReadBudget,
       buildChatFinalizeProfile,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
