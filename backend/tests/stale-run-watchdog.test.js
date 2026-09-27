@@ -240,9 +240,9 @@ test('zombie runs are closed as «abandonado» once, recorded, and never alerted
     assert.equal(first.abandoned, 2);
     assert.equal(first.alerted, 1, 'only the genuinely stale (not zombie) task alerts');
     assert.deepEqual(captured.alerts.map((a) => a.context.runId), ['task-stale']);
-    assert.equal(agentTaskRows[0].status, 'cancelled');
-    assert.ok(agentTaskRows[0].cancelledAt instanceof Date);
-    assert.equal(codexRunRows[0].status, 'cancelled');
+    assert.equal(agentTaskRows[0].status, 'failed', 'an agent task that never finished is closed as failed');
+    assert.ok(agentTaskRows[0].failedAt instanceof Date);
+    assert.equal(codexRunRows[0].status, 'error', 'a codex run stuck running is closed as error');
     assert.match(codexRunRows[0].error, /^abandonado: sin actividad desde hace 2000 h/);
     const abandoned = audit.rows.filter((r) => r.action === watchdog.ABANDONED_ACTION).map((r) => r.resourceId).sort();
     assert.deepEqual(abandoned, ['agent_task:task-zombie', 'codex_run:run-zombie']);
@@ -304,6 +304,56 @@ test('a zombie that moved since the scan is not closed; abandonment can be turne
     watchdog._resetForTests();
     const off = await watchdog.scanStaleRuns({ prisma, env: { ...process.env, STALE_RUN_ABANDON_HOURS: '0' } });
     assert.equal(off.abandoned, 0);
+  } finally {
+    captured.unload();
+  }
+});
+
+test('every real status value: terminal ones are never scanned, alerted or rewritten', async () => {
+  // AgentTask writers: agent-task-persistence TERMINAL_STATUSES + task-store validStatuses.
+  const persistence = require('../src/services/agents/agent-task-persistence');
+  for (const status of ['completed', 'failed', 'cancelled']) {
+    assert.equal(persistence.INTERNAL.isTerminalStatus(status), true, status);
+    assert.ok(watchdog.TERMINAL_AGENT_TASK.has(status), `watchdog must treat ${status} as terminal`);
+  }
+  assert.ok(watchdog.TERMINAL_AGENT_TASK.has('error'), 'task-store writes error for failed runs');
+  const taskStoreSrc = require('fs').readFileSync(require.resolve('../src/services/agents/task-store.js'), 'utf8');
+  const valid = /const validStatuses = new Set\(\[([^\]]+)\]\)/.exec(taskStoreSrc);
+  assert.ok(valid, 'task-store validStatuses found');
+  for (const status of valid[1].match(/'([a-z_]+)'/g).map((q) => q.slice(1, -1))) {
+    const live = status === 'queued' || status === 'running';
+    assert.equal(watchdog.TERMINAL_AGENT_TASK.has(status), !live, `agent task status ${status}`);
+  }
+  // CodexRun: queued | running | waiting_approval | done | error | cancelled.
+  for (const status of ['done', 'error', 'cancelled']) assert.ok(watchdog.TERMINAL_CODEX_RUN.has(status));
+  for (const status of ['running', 'waiting_approval']) assert.ok(watchdog.NON_TERMINAL_CODEX_RUN.has(status));
+
+  const old = isoAgo(300); // 5 h: stale, below the 24 h abandon line
+  const agentTaskRows = ['queued', 'running', 'completed', 'failed', 'cancelled', 'error', 'timeout', 'aborted']
+    .map((status) => ({ id: `task-${status}`, userId: 'user-1', status, updatedAt: old, createdAt: old }));
+  const codexRunRows = ['queued', 'running', 'waiting_approval', 'done', 'error', 'cancelled']
+    .map((status) => ({ id: `run-${status}`, userId: 'user-2', status, updatedAt: old, createdAt: old }));
+  const { prisma } = fakePrisma({ agentTaskRows, codexRunRows });
+  withUpdateMany(prisma.agentTask, agentTaskRows);
+  withUpdateMany(prisma.codexRun, codexRunRows);
+  const captured = captureAlerts();
+  try {
+    const res = await watchdog.scanStaleRuns({ prisma });
+    assert.deepEqual(captured.alerts.map((a) => a.context.runId).sort(), ['run-running', 'run-waiting_approval', 'task-queued', 'task-running']);
+    assert.equal(res.abandoned, 0, '5 h is below the 24 h abandon threshold');
+    // Past the threshold only the live ones are closed; terminal rows keep their status.
+    for (const row of [...agentTaskRows, ...codexRunRows]) row.updatedAt = isoAgo(30 * 60);
+    watchdog._resetForTests();
+    const late = await watchdog.scanStaleRuns({ prisma });
+    assert.equal(late.abandoned, 4);
+    const status = Object.fromEntries([...agentTaskRows, ...codexRunRows].map((r) => [r.id, r.status]));
+    assert.deepEqual(status, {
+      'task-queued': 'failed', 'task-running': 'failed',
+      'task-completed': 'completed', 'task-failed': 'failed', 'task-cancelled': 'cancelled', 'task-error': 'error',
+      'task-timeout': 'timeout', 'task-aborted': 'aborted',
+      'run-queued': 'queued', 'run-running': 'error', 'run-waiting_approval': 'cancelled',
+      'run-done': 'done', 'run-error': 'error', 'run-cancelled': 'cancelled',
+    });
   } finally {
     captured.unload();
   }

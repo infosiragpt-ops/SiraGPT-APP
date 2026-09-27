@@ -630,4 +630,4 @@ uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error
 | `STALE_RUN_WATCHDOG_DISABLED` | off | `1` turns the scan off |
 | `STALE_RUN_WARN_MINUTES` / `STALE_RUN_CRITICAL_MINUTES` | `15` / `45` | Silence before a non-terminal run alerts (warn / critical) — once per run and severity, persisted in AuditLog (`stale_run_alerted`) |
 | `STALE_RUN_ALERT_COOLDOWN_MINUTES` | `30` | In-memory cooldown between sweeps (first-level cache) |
-| `STALE_RUN_ABANDON_HOURS` | `24` | A run silent this long is closed as «abandonado» (agent task → `cancelled`; codex run → `cancelled` + `error`), recorded once (`stale_run_abandoned`), never alerted again. `0` never closes |
+| `STALE_RUN_ABANDON_HOURS` | `24` | A live run (agent task `queued`/`running`, codex run `running`/`waiting_approval`) silent this long is closed as «abandonado» (agent task → `failed`; codex plan awaiting approval → `cancelled`; codex run → `error`, reason in `error`), recorded once (`stale_run_abandoned`), never alerted again. Terminal rows (`completed`/`failed`/`cancelled`/`error`/`done`) are never scanned. `0` never closes |

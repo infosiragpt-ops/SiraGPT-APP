@@ -42,10 +42,18 @@ const ALERTED_ACTION = 'stale_run_alerted';
 const ABANDONED_ACTION = 'stale_run_abandoned';
 const SEVERITY_RANK = { warn: 1, critical: 2 };
 
-const TERMINAL_AGENT_TASK = new Set(['completed', 'cancelled', 'error']);
-// CodexRun terminals include done/error/cancelled; queued is excluded because
-// the queue handoff watchdog in routes/agent-task.js owns queued recovery and
-// BullMQ's own stalled machinery owns queued re-delivery.
+// Real AgentTask statuses, from its writers (agents/agent-task-persistence.js
+// TERMINAL_STATUSES + agents/task-store.js validStatuses):
+//   live      queued · running
+//   terminal  completed · failed · cancelled · error
+// timeout / aborted are listed defensively (legacy writers). `failed` was
+// missing here, so every failed task was alerted as «estancado» forever
+// (prod 2026-09-26: all 7 failed tasks).
+const TERMINAL_AGENT_TASK = new Set(['completed', 'failed', 'cancelled', 'error', 'timeout', 'aborted']);
+// CodexRun statuses (schema): queued · running · waiting_approval (live) —
+// done · error · cancelled (terminal). queued is excluded from the scan
+// because the queue handoff watchdog in routes/agent-task.js owns queued
+// recovery and BullMQ's own stalled machinery owns queued re-delivery.
 const TERMINAL_CODEX_RUN = new Set(['done', 'error', 'cancelled']);
 const NON_TERMINAL_CODEX_RUN = new Set(['running', 'waiting_approval']);
 
@@ -230,25 +238,40 @@ async function recordAudit(prisma, { action, key, candidate, extra = {} }) {
 }
 
 /**
+ * Terminal status for a zombie run («abandonado»): an agent task that never
+ * finished → failed; a codex plan nobody approved → cancelled; a codex run
+ * stuck running → error.
+ */
+function abandonedStatusFor(candidate) {
+  if (candidate.kind === 'agent_task') return 'failed';
+  return candidate.status === 'waiting_approval' ? 'cancelled' : 'error';
+}
+
+/**
  * Close a zombie run: terminal status + reason, only if the row has not
- * moved since the scan (same status + updatedAt). Returns true when closed.
+ * moved since the scan (same live status + updatedAt), so a terminal row is
+ * never rewritten. Returns the new status, or null when nothing changed.
  */
 async function abandonRun(prisma, candidate) {
+  const isAgentTask = candidate.kind === 'agent_task';
+  const live = isAgentTask ? !TERMINAL_AGENT_TASK.has(candidate.status) : NON_TERMINAL_CODEX_RUN.has(candidate.status);
+  if (!candidate.status || !live) return null;
   const hours = Math.round(candidate.ageMs / 3600000);
   const reason = `abandonado: sin actividad desde hace ${hours} h (stale-run-watchdog)`;
   const where = { id: candidate.id, status: candidate.status, updatedAt: new Date(candidate.updatedAt) };
   const now = new Date(_now());
+  const status = abandonedStatusFor(candidate);
   try {
-    if (candidate.kind === 'agent_task') {
-      if (typeof prisma.agentTask?.updateMany !== 'function') return false;
-      const res = await prisma.agentTask.updateMany({ where, data: { status: 'cancelled', cancelledAt: now } });
-      return Number(res && res.count) > 0;
+    if (isAgentTask) {
+      if (typeof prisma.agentTask?.updateMany !== 'function') return null;
+      const res = await prisma.agentTask.updateMany({ where, data: { status, failedAt: now } });
+      return Number(res && res.count) > 0 ? status : null;
     }
-    if (typeof prisma.codexRun?.updateMany !== 'function') return false;
-    const res = await prisma.codexRun.updateMany({ where, data: { status: 'cancelled', finishedAt: now, error: reason } });
-    return Number(res && res.count) > 0;
+    if (typeof prisma.codexRun?.updateMany !== 'function') return null;
+    const res = await prisma.codexRun.updateMany({ where, data: { status, finishedAt: now, error: reason } });
+    return Number(res && res.count) > 0 ? status : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -313,11 +336,11 @@ async function scanStaleRuns(opts = {}) {
   for (const candidate of candidates) {
     if (abandonAfter > 0 && candidate.ageMs >= abandonAfter && abandonedIds.length < MAX_ABANDONS_PER_SCAN) {
       // eslint-disable-next-line no-await-in-loop
-      const closed = await abandonRun(prisma, candidate);
-      if (closed) {
+      const closedAs = await abandonRun(prisma, candidate);
+      if (closedAs) {
         const key = `${candidate.kind}:${candidate.id}`;
         // eslint-disable-next-line no-await-in-loop
-        await recordAudit(prisma, { action: ABANDONED_ACTION, key, candidate, extra: { reason: 'abandonado', previousStatus: candidate.status || null } });
+        await recordAudit(prisma, { action: ABANDONED_ACTION, key, candidate, extra: { reason: 'abandonado', previousStatus: candidate.status || null, newStatus: closedAs } });
         _alertedAt.delete(key);
         abandonedIds.push(key);
         continue;
@@ -400,7 +423,9 @@ function _resetForTests() {
 module.exports = {
   MAX_ALERTS_PER_SCAN,
   TERMINAL_AGENT_TASK,
+  TERMINAL_CODEX_RUN,
   NON_TERMINAL_CODEX_RUN,
+  abandonedStatusFor,
   ALERTED_ACTION,
   ABANDONED_ACTION,
   abandonMs,
