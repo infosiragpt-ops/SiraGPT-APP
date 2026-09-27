@@ -188,6 +188,7 @@ function validateArtifactDelivery(contract, { artifacts = [], steps = [], unavai
     expectedCount: contract.expectedCount,
     deliveredCount: selected.length,
     verifiedCount: selected.length,
+    selectedArtifacts: selected,
   };
 }
 

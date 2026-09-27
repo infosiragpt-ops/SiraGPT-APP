@@ -2201,6 +2201,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // any frontend change (the existing AgenticStepsRenderer already reads
     // state.artifacts). Tools emit `file_artifact` via ctx.onEvent.
     const seenArtifactIds = new Set();
+    // A multi-file request is one delivery. Keep candidate files out of the
+    // live sentinel (and workspace) until the finalize guard accepts the set.
+    // Otherwise Stop or a failed repair leaves a lone download card behind.
+    const pendingDeliveryArtifacts = [];
     const upstreamOnEvent = typeof toolContext.onEvent === 'function' ? toolContext.onEvent : null;
     const loginHandoffMod = require('./computer/login-handoff');
     const unsubLoginHandoff = loginHandoffMod.subscribeTakeover((evt) => {
@@ -2222,33 +2226,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       res.once('close', stopLoginHandoff);
       res.once('finish', stopLoginHandoff);
     } catch (_) { /* res may be a stub in tests */ }
-    function onEvent(evt) {
-      if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
-      // Image / video / music / voice tools that fail (or deliver a 0-byte
-      // file) inside this turn → «Fallos de respuesta» (advisory, never throws).
-      require('./observability/turn-failures').observeGenerationToolEvent(evt, toolContext);
-      try {
-        if (!evt || evt.type !== 'file_artifact' || !evt.artifact || !evt.artifact.downloadUrl) return;
-        const a = evt.artifact;
-        const key = String(a.id || a.downloadUrl);
-        if (seenArtifactIds.has(key)) return;
-        seenArtifactIds.add(key);
-        state.artifacts.push({
-          id: String(a.id || key),
-          filename: a.filename || 'archivo',
-          mime: a.mime || 'application/octet-stream',
-          format: a.format || null,
-          sizeBytes: Number(a.sizeBytes) || 0,
-          downloadUrl: a.downloadUrl,
-          previewHtml: a.previewHtml || null,
-          validation: a.validation || null,
-          category: a.category || null,
-          kind: a.kind || a.category || null,
-          durationSeconds: Number(a.durationSeconds) || null,
-          prompt: a.prompt || null,
-        });
-        writeSse(res, { replace: true, content: serializeSentinel(state) });
-        if (toolContext.workspaceId && toolContext.prisma && toolContext.userId && a.id) {
+    function importArtifactToWorkspace(a) {
+      if (toolContext.workspaceId && toolContext.prisma && toolContext.userId && a.id) {
+        try {
           const workspaceStore = require('./cowork/workspace-store');
           Promise.resolve(workspaceStore.importAgentArtifact(toolContext.prisma, {
             workspaceId: toolContext.workspaceId,
@@ -2272,6 +2252,42 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           }).catch((error) => {
             try { console.warn('[cowork] artifact import failed:', error.message); } catch (_) { /* noop */ }
           });
+        } catch (error) {
+          try { console.warn('[cowork] artifact import failed:', error.message); } catch (_) { /* noop */ }
+        }
+      }
+    }
+    function onEvent(evt) {
+      if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
+      // Image / video / music / voice tools that fail (or deliver a 0-byte
+      // file) inside this turn → «Fallos de respuesta» (advisory, never throws).
+      require('./observability/turn-failures').observeGenerationToolEvent(evt, toolContext);
+      try {
+        if (!evt || evt.type !== 'file_artifact' || !evt.artifact || !evt.artifact.downloadUrl) return;
+        const a = evt.artifact;
+        const key = String(a.id || a.downloadUrl);
+        if (seenArtifactIds.has(key)) return;
+        seenArtifactIds.add(key);
+        const artifact = {
+          id: String(a.id || key),
+          filename: a.filename || 'archivo',
+          mime: a.mime || 'application/octet-stream',
+          format: a.format || null,
+          sizeBytes: Number(a.sizeBytes) || 0,
+          downloadUrl: a.downloadUrl,
+          previewHtml: a.previewHtml || null,
+          validation: a.validation || null,
+          category: a.category || null,
+          kind: a.kind || a.category || null,
+          durationSeconds: Number(a.durationSeconds) || null,
+          prompt: a.prompt || null,
+        };
+        if (artifactDeliveryContract.active) {
+          pendingDeliveryArtifacts.push(artifact);
+        } else {
+          state.artifacts.push(artifact);
+          writeSse(res, { replace: true, content: serializeSentinel(state) });
+          importArtifactToWorkspace(artifact);
         }
       } catch (_) { /* never let UI plumbing crash a tool */ }
     }
@@ -2330,13 +2346,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       artifactDeliveryContract.active
         ? async ({ steps, unavailableTools }) => {
           const delivery = validateArtifactDelivery(artifactDeliveryContract, {
-            artifacts: state.artifacts,
+            artifacts: pendingDeliveryArtifacts,
             steps,
             unavailableTools,
           });
           if (!delivery.ok || !artifactDeliveryContract.savXlsxMatrix) return delivery;
           return validateSavXlsxDelivery(artifactDeliveryContract, {
-            artifacts: state.artifacts,
+            artifacts: pendingDeliveryArtifacts,
             inspectPair: (refs) => require('./agents/generated-artifact-followup').compareGeneratedSavXlsx({
               refs,
               userId: toolContext.userId,
@@ -2586,9 +2602,28 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       throw agentRunError;
     }
 
+    let deliveryReleaseBlocked = false;
+    if (artifactDeliveryContract.active && !signal?.aborted
+      && (result?.stoppedReason === 'finalized' || result?.stoppedReason === 'plain_text_finalize')) {
+      const delivery = validateArtifactDelivery(artifactDeliveryContract, {
+        artifacts: pendingDeliveryArtifacts,
+        steps: result.steps,
+        unavailableTools: result.exhaustedTools,
+      });
+      if (delivery.ok && !delivery.degraded) {
+        state.artifacts.push(...delivery.selectedArtifacts);
+        for (const artifact of delivery.selectedArtifacts) importArtifactToWorkspace(artifact);
+      } else {
+        deliveryReleaseBlocked = true;
+      }
+    }
+    const deliveryStoppedReason = deliveryReleaseBlocked
+      ? 'verification_failed:artifact_delivery'
+      : (result?.stoppedReason || 'finalized');
+
     if (pluginLifecycle && !signal?.aborted) {
       try {
-        await pluginLifecycle.afterRun(result);
+        await pluginLifecycle.afterRun({ ...result, stoppedReason: deliveryStoppedReason });
         state.meta.plugins = pluginLifecycle.summary();
       } catch (pluginAfterError) {
         if (pluginAfterError?.code !== 'ABORT_ERR') {
@@ -2605,7 +2640,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     let finalAnswer = (result?.finalAnswer || '').trim()
       || 'No pude generar una respuesta verificable. Intenta reformular la pregunta.';
-    let stoppedReason = result?.stoppedReason || 'finalized';
+    let stoppedReason = deliveryStoppedReason;
+    if (deliveryReleaseBlocked) {
+      finalAnswer = 'No pude verificar todos los archivos solicitados. No entregaré una parte como si fuera el resultado completo; vuelve a intentarlo.';
+    }
     if (generatedArtifactRefs.length) {
       const { successfulToolCalls } = require('./agents/agentic-execution-profile');
       const { missingRequestedArtifactFormats } = require('./agents/generated-artifact-followup');
@@ -2677,7 +2715,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (__harness) {
       try {
         agentRun = __harness.finish({
-          stoppedReason: result?.stoppedReason || 'finalized',
+          stoppedReason,
           interrupted: Boolean(signal && signal.aborted),
           finalAnswer,
         });
@@ -2686,7 +2724,6 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
     if (__coworkRun) {
-      const stoppedReason = String(result?.stoppedReason || 'finalized');
       const status = signal?.aborted || /cancelled_by_user|aborted|cost_budget_exhausted/.test(stoppedReason)
         ? 'cancelled'
         : statusForAgentStopReason(stoppedReason);
