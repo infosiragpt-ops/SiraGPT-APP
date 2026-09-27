@@ -82,4 +82,3 @@ test('quality guard still flags short answers that do not answer', () => {
     assert.equal(evaluateResponse({ userPrompt, response }).weak, true, `${userPrompt} → ${response}`);
   }
 });
-
