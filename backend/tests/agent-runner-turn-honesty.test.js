@@ -173,3 +173,67 @@ test('the paint fast path only recolors slide backgrounds when that is what was 
   assert.notEqual(run.stoppedReason, 'fast_path');
   assert.ok(calls.length >= 1, 'the model was asked');
 });
+
+test('document turns get a longer loop wall than the 3H64 chat default (120 s)', async () => {
+  const { runAgentLoop } = require('../src/services/agent-runner/loop');
+  assert.equal(runner.documentTurnWallMs({}), 6 * 60_000);
+  assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_TURN_WALL_MS: '90000' }), 90_000);
+  assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_TURN_WALL_MS: '5' }), 6 * 60_000, 'nonsense values keep the default');
+  // The wall really is the one passed: 1 s cuts a slow two-step turn, 60 s does not.
+  const slowClient = () => {
+    let n = 0;
+    return { chat: { completions: { create: async () => {
+      n += 1;
+      await new Promise((r) => setTimeout(r, 1100));
+      return n === 1
+        ? { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 't1', type: 'function', function: { name: 'list_files', arguments: '{"path":"."}' } }] } }] }
+        : { choices: [{ message: { role: 'assistant', content: 'Listo.' } }] };
+    } } } };
+  };
+  const base = { model: 'x', messages: [{ role: 'user', content: 'lista' }], tools: [], executors: { async list_files() { return 'a.docx'; } }, maxIterations: 4 };
+  const cut = await runAgentLoop({ ...base, client: slowClient(), turnWallMs: 1000 });
+  assert.match(cut.stoppedReason, /^(turn_wall|wall_clock)$/);
+  const ok = await runAgentLoop({ ...base, client: slowClient(), turnWallMs: 60_000 });
+  assert.equal(ok.stoppedReason, 'final');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src/services/agent-runner/index.js'), 'utf8');
+  assert.equal((src.match(/turnWallMs: documentTurnWallMs\(\),/g) || []).length, 2, 'main loop and output retries');
+});
+
+test('«ya estaba así»: an unchanged office_edit needs no verification, no output retry, and the editor answers with the model text', async () => {
+  const { needsVerification } = require('../src/services/agent-runner/verify');
+  const unchanged = { tool: 'office_edit', ok: true, resultPreview: '{"unchanged":true,"note":"SIN CAMBIOS…","ok":true}' };
+  const changed = { tool: 'office_edit', ok: true, resultPreview: '{"ok":true,"written":true}' };
+  assert.equal(runner.noChangesNeeded([unchanged]), true);
+  assert.equal(runner.noChangesNeeded([unchanged, changed]), false);
+  assert.equal(runner.noChangesNeeded([]), false);
+  assert.equal(needsVerification([unchanged], { strict: true }).needed, false, 'nothing changed → nothing to verify');
+  assert.equal(needsVerification([changed], { strict: true }).needed, true);
+
+  const { runChatDocumentEdit } = require('../src/services/document-editor/chat-document-editor');
+  const USER = 'user-noop';
+  const prisma = {
+    file: { findMany: async (q) => [{ id: 'f1', userId: USER, originalName: 'tesis.docx' }].filter((r) => q.where.id.in.includes(r.id)) },
+    message: { findMany: async () => [] },
+  };
+  const deps = {
+    env: {},
+    docxEngine: { docxEngineEnabled: () => true, editWordDocument: async () => { throw new Error('not for indent requests'); } },
+    artifactDir: fs.mkdtempSync(path.join(os.tmpdir(), 'noop-')),
+    objectStorage: { toLocalTemp: async () => { throw new Error('not remote'); } },
+    readSourceBuffer: async () => ({ buffer: Buffer.from('PKdocx'), cleanup: async () => {} }),
+    extractFileIds: () => [],
+    saveArtifact: () => { throw new Error('nothing to save'); },
+    runDocumentAgent: async () => ({ finalText: 'La introducción ya tiene sangría de primera línea de 1,25 cm y está justificada; no hice cambios.',
+      outputs: [], stoppedReason: 'final', noChanges: true }),
+    tryApplyLiteralDocxTitleEdit: async () => null,
+    parseDocxPrecisionRequest: () => null,
+    parseDocxImageRequest: () => null,
+    makeVisualVerifier: () => null,
+    log: () => {},
+  };
+  const res = await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], llm: { client: {}, model: 'picked' }, deps,
+    instruction: 'En la introducción pon sangría de primera línea de 1,25 cm y texto justificado.' });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'NO_CHANGES_NEEDED');
+  assert.match(res.message, /ya tiene sangría/);
+});

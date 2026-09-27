@@ -92,8 +92,10 @@ export function useDocumentEditorChat(options: Options) {
           return
         }
         if (event.type === "done") {
-          settle(event.content, event.files, !event.ok && event.code !== "CANCELLED")
-          if (!event.ok && event.code !== "CANCELLED") latest.current.notify(event.content)
+          // «Ya estaba así» (NO_CHANGES_NEEDED) is an answer, not a failure.
+          const failed = !event.ok && event.code !== "CANCELLED" && event.code !== "NO_CHANGES_NEEDED"
+          settle(event.content, event.files, failed)
+          if (failed) latest.current.notify(event.content)
         }
       }, run.controller.signal)
       if (!finished) throw new Error("Se perdió la conexión con la edición. Abre de nuevo la conversación para ver el resultado.")

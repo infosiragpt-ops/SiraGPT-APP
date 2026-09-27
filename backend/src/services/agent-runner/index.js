@@ -53,6 +53,15 @@ function loopSeesImages(env = process.env) {
   }
 }
 
+// AgentRunner turns do document work (sandbox, render, changed zones, vision
+// review, a correction round): the loop wall is longer than the 3H64 chat
+// default of 120 s, and stays under the runner's own max runtime (10 min).
+function documentTurnWallMs(env = process.env) {
+  const raw = Number(env.SIRAGPT_AGENT_RUNNER_TURN_WALL_MS);
+  if (Number.isFinite(raw) && raw >= 30_000) return Math.min(Math.floor(raw), 20 * 60_000);
+  return 6 * 60_000;
+}
+
 const OFFICE_FILE_RE = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
 // Document turns get room for a batch of edits (a paraphrase must not be cut
 // mid-JSON, hallazgo 7). An explicit SIRAGPT_AGENT_RUNNER_MAX_TOKENS wins.
@@ -422,6 +431,16 @@ function dropPreviousTurnOutputs(outputs = [], previous = new Map(), onEvent = (
 }
 
 /**
+ * The turn's office edits all left the file byte-identical: what the user
+ * asked was already in the document. No output-retry nudge («you have NOT
+ * produced a deliverable») — the honest answer is «ya estaba así».
+ */
+function noChangesNeeded(steps = []) {
+  const edits = (Array.isArray(steps) ? steps : []).filter((s) => s && s.tool === 'office_edit' && s.ok !== false);
+  return edits.length > 0 && edits.every((s) => /^\{"unchanged":true/.test(String(s.resultPreview || '')));
+}
+
+/**
  * An office_edit chain (first edit → verification → correction) leaves every
  * version in outputs/; only the LAST link is the deliverable. An output that a
  * later successful office_edit used as its `src` is an intermediate version
@@ -715,6 +734,7 @@ async function runAgentRunner({
       onEvent,
       signal: abortScope.signal,
       maxTokens: loopMaxTokens,
+      turnWallMs: documentTurnWallMs(),
     });
     throwIfAborted(abortScope.signal);
     outputs = await collectTurnOutputs();
@@ -726,6 +746,7 @@ async function runAgentRunner({
       // Out of credits (OpenRouter/Anthropic 402): another loop pass costs
       // latency and cannot succeed — stop retrying and surface the reason.
       && result.stoppedReason !== 'llm_402'
+      && !noChangesNeeded(result.steps)
       && outputs.filter((o) => o.valid !== false).length === 0
       && outputAttempt < MAX_OUTPUT_RETRIES
     ) {
@@ -754,6 +775,7 @@ async function runAgentRunner({
         onEvent,
         signal: abortScope.signal,
         maxTokens: loopMaxTokens,
+        turnWallMs: documentTurnWallMs(),
       });
       throwIfAborted(abortScope.signal);
       outputs = await collectTurnOutputs();
@@ -1155,6 +1177,8 @@ function orchestratorEnabled(env) {
 module.exports = {
   dropIntermediateOutputs,
   archivePreviousOutputs,
+  noChangesNeeded,
+  documentTurnWallMs,
   isSlideBackgroundColorRequest,
   fingerprintOutputs,
   dropPreviousTurnOutputs,

@@ -292,6 +292,23 @@ const OFFICE_TOOL_DEFINITIONS = [
  *   cada verify_visual: el turno sabe si un modelo de visión revisó el resultado (visionOk null = no
  *   hubo revisión) y las métricas F.2 ven desacuerdos visión/checks y cambios de paginación.
  */
+/**
+ * Every part of the written package equals the source (ZIP timestamps aside):
+ * the edit changed nothing. Fail-open (false) when the files cannot be read.
+ */
+async function samePackageParts(sandbox, src, dst) {
+  try {
+    const PizZip = require('pizzip');
+    const [a, b] = [new PizZip(await sandbox.readFile(src)), new PizZip(await sandbox.readFile(dst))];
+    const names = Object.keys(a.files).filter((n) => !a.files[n].dir);
+    const other = Object.keys(b.files).filter((n) => !b.files[n].dir);
+    if (names.length !== other.length) return false;
+    return names.every((n) => b.files[n] && Buffer.from(a.files[n].asUint8Array()).equals(Buffer.from(b.files[n].asUint8Array())));
+  } catch (_) {
+    return false;
+  }
+}
+
 function makeOfficeToolExecutors(sandbox, {
   visionVerifier = null, attachImages = false, thumbs = false, onFailure = null, fallbackRender = null,
   onVerify = null,
@@ -336,7 +353,11 @@ function makeOfficeToolExecutors(sandbox, {
     async office_edit(args = {}, ctx = {}) {
       const src = toRel(args.src || args.path);
       if (!src) return 'ERROR: `src` inválido: ruta relativa a /workspace (uploads/… u outputs/…)';
-      const dst = args.dst ? toRel(args.dst) : defaultDst(src);
+      // «outputs/» (a folder) means «the default name in outputs/»; a path
+      // outside the workspace is still refused.
+      const dstArg = args.dst ? toRel(args.dst) : null;
+      if (args.dst && !dstArg) return 'ERROR: `dst` debe estar dentro de outputs/';
+      const dst = !dstArg || dstArg.endsWith('/') ? defaultDst(src) : dstArg;
       if (!dst || !dst.startsWith('outputs/')) return 'ERROR: `dst` debe estar dentro de outputs/';
       if (dst === src) return 'ERROR: `dst` debe ser un archivo nuevo; nunca se sobrescribe el origen';
       if (!Array.isArray(args.ops) || !args.ops.length) return 'ERROR: `ops` debe ser una lista con al menos una operación';
@@ -346,6 +367,16 @@ function makeOfficeToolExecutors(sandbox, {
         const detail = res?.errors ? `\n${cap(JSON.stringify(res.errors), 4000)}` : '';
         const note = res?.note ? `\n${res.note}` : '';
         return `ERROR: ${res?.error || 'la edición no se aplicó'}${detail}${note}`;
+      }
+      if (await samePackageParts(sandbox, src, res.dst || dst)) {
+        // Everything asked was already there («ya tiene sangría de 1,25 cm y
+        // está justificado»): say so instead of retrying edits that cannot
+        // change anything (eval docx-sangria-justificado spent 184 s on it).
+        return cap(JSON.stringify({
+          unchanged: true,
+          note: 'SIN CAMBIOS: el archivo resultante es idéntico al original, así que lo pedido ya estaba aplicado. No reintentes ni entregues una copia: responde al usuario que el documento ya cumple lo que pidió, con el dato concreto (p. ej. «la introducción ya tiene sangría de primera línea de 1,25 cm y está justificada»).',
+          ...res,
+        }));
       }
       return cap(JSON.stringify(res));
     },

@@ -1022,8 +1022,16 @@ async function runAgentLoop({
   maxTokens = null,
   // Stage v2 thumbnails on tool_result events; null = SIRAGPT_AGENT_THUMBS.
   thumbs = null,
+  // Total wall of the turn; null = the 3H64 default (120 s). Document turns
+  // (render, changed zones, vision review, one correction) pass a longer one:
+  // a verified tracked-changes edit was cut at 130 s and never answered.
+  turnWallMs = null,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
+  const wallMsOverride = Number(turnWallMs) > 0 ? Number(turnWallMs) : null;
+  const enforceWall = (adapter) => (wallMsOverride
+    ? (args) => adapter.enforceTotalTurnWall120s({ ...(args || {}), wallMs: wallMsOverride })
+    : adapter.enforceTotalTurnWall120s);
   const thumbsEnabled = thumbs == null ? agentThumbsEnabled() : Boolean(thumbs);
   // Pinned for compaction (hallazgo 6): the user's literal request + the last
   // document map. Captured once; restored verbatim after every compaction.
@@ -1392,7 +1400,7 @@ async function runAgentLoop({
           startedAt: turnStartedAt,
           now: Date.now(),
           cancelIfThreeStreamStalls: adapter.cancelIfThreeStreamStalls,
-          enforceTotalTurnWall120s: adapter.enforceTotalTurnWall120s,
+          enforceTotalTurnWall120s: enforceWall(adapter),
           remainingWallClockCut: adapter.remainingWallClockCut,
           resetStallCountOnToken: adapter.resetStallCountOnToken,
         });
@@ -1488,7 +1496,7 @@ async function runAgentLoop({
             startedAt: turnStartedAt,
             now: Date.now(),
             cancelIfThreeStreamStalls: adapter.cancelIfThreeStreamStalls,
-            enforceTotalTurnWall120s: adapter.enforceTotalTurnWall120s,
+            enforceTotalTurnWall120s: enforceWall(adapter),
             remainingWallClockCut: adapter.remainingWallClockCut,
             resetStallCountOnToken: adapter.resetStallCountOnToken,
           });

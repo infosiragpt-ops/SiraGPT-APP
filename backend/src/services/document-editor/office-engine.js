@@ -132,6 +132,8 @@ async function runOfficeEditorEngine({
     ...(out.validation ? { validation: out.validation } : {}),
     ...(out.validation && out.validation.changes ? { changeReport: out.validation.changes } : {}),
   }));
+  let noChanges = false;
+  try { noChanges = require('../agent-runner').noChangesNeeded(result && result.steps); } catch (_) { noChanges = false; }
   return {
     finalText: result && result.finalText,
     outputs,
@@ -139,6 +141,8 @@ async function runOfficeEditorEngine({
     stoppedReason: result && result.stoppedReason,
     iterations: result && result.iterations,
     verified,
+    // Everything asked was already in the file: the model's answer says so.
+    ...(noChanges ? { noChanges: true } : {}),
   };
 }
 

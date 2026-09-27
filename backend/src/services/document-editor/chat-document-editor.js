@@ -1015,6 +1015,11 @@ async function runResolvedDocumentEdit({
 
     const candidates = Array.isArray(result?.outputs) ? result.outputs : [];
     const outputs = candidates.filter((out) => out && out.valid === true && Buffer.isBuffer(out.buffer) && out.buffer.length > 0);
+    // «La introducción ya tiene sangría de 1,25 cm y está justificada»: no
+    // copy is delivered and the model's own explanation is the answer.
+    if (!outputs.length && result?.noChanges && cleanSummary(result.finalText)) {
+      return { ok: false, code: 'NO_CHANGES_NEEDED', message: cleanSummary(result.finalText) };
+    }
     if (!outputs.length) return { ok: false, code: 'NO_VALID_OUTPUT', message: MESSAGES.NO_VALID_OUTPUT };
     if (outputs.length !== candidates.length || outputs.length !== 1 || (result.stoppedReason && result.stoppedReason !== 'final')) {
       return { ok: false, code: 'DOCUMENT_EDIT_INCOMPLETE', message: MESSAGES.DOCUMENT_EDIT_INCOMPLETE };

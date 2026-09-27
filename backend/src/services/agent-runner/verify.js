@@ -63,6 +63,8 @@ function looksLikeSuccessClaim(text) {
 /** A step that really changed a deliverable. */
 function isRealEdit(step) {
   if (!step || !EDIT_TOOLS.has(step.tool) || step.ok === false) return false;
+  // office_edit that left the file byte-identical: nothing to verify.
+  if (step.tool === 'office_edit' && /^\{"unchanged":true/.test(String(step.resultPreview || ''))) return false;
   // execute_python/bash that did not change outputs/ only READ (hallazgo 5).
   // `mutated` undefined = unknown snapshot → conservative: counts as an edit.
   if (EXEC_TOOLS.has(step.tool) && step.mutated === false) return false;
