@@ -14,13 +14,23 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFile } = require('child_process');
+const { execFile, spawnSync } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
 const { runAgentRunner } = require('../src/services/agent-runner');
 const { TOOL_DEFINITIONS } = require('../src/services/agent-runner/tools');
 
 const pexec = promisify(execFile);
+const HAS_FASTPATH_RENDERER = spawnSync('sh', ['-c', 'command -v soffice'], { stdio: 'ignore' }).status === 0;
+
+function assertClosedWithoutPreview(result, scenario) {
+  if (HAS_FASTPATH_RENDERER) return false;
+  assert.equal(result.stoppedReason, 'verification_failed', `${scenario}: no renderizador`);
+  assert.deepEqual(result.outputs, [], `${scenario}: no se entrega una PPT sin vista previa`);
+  assert.ok(result.steps?.some((step) => step.tool === 'render_preview' && step.ok === false),
+    `${scenario}: queda registrado el fallo de render`);
+  return true;
+}
 
 async function makeDeck({ slides = 2, bg } = {}) {
   const PptxGenJS = require('pptxgenjs');
@@ -124,6 +134,7 @@ test('E2E: "ponlas todas rosadas" paints every slide FFC0CB (XML)', async () => 
     driver: 'local',
     maxIterations: 8,
   });
+  if (assertClosedWithoutPreview(result, 'ponlas todas rosadas')) return;
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
   assert.ok(out, 'produced a pptx');
   slideXmlHasHex(out.buffer, 'FFC0CB');
@@ -143,6 +154,7 @@ test('E2E: "uniformisa … blanco" paints FFFFFF', async () => {
     driver: 'local',
     maxIterations: 6,
   });
+  if (assertClosedWithoutPreview(result, 'uniformisa blanco')) return;
   const out = (result.outputs || []).find((o) => o.valid !== false);
   assert.ok(out);
   slideXmlHasHex(out.buffer, 'FFFFFF');
@@ -162,6 +174,7 @@ test('E2E: hex #1E3A8A is written into slide XML', async () => {
     driver: 'local',
     maxIterations: 6,
   });
+  if (assertClosedWithoutPreview(result, 'hex 1E3A8A')) return;
   const out = (result.outputs || []).find((o) => o.valid !== false);
   assert.ok(out);
   slideXmlHasHex(out.buffer, '1E3A8A');
@@ -180,6 +193,7 @@ test('E2E: "agrega una lámina de gracias al final" adds a Gracias slide (XML)',
     driver: 'local',
     maxIterations: 8,
   });
+  if (assertClosedWithoutPreview(result, 'agrega Gracias')) return;
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
   assert.ok(out, 'produced a pptx');
   assert.equal(slideCount(out.buffer), 3);
@@ -204,6 +218,7 @@ test('E2E: follow-up uses prior artifact bytes, not the original upload', async 
     driver: 'local',
     maxIterations: 6,
   });
+  if (assertClosedWithoutPreview(result, 'follow-up rosado')) return;
   const out = (result.outputs || []).find((o) => o.valid !== false);
   assert.ok(out);
   slideXmlHasHex(out.buffer, 'FFC0CB');
