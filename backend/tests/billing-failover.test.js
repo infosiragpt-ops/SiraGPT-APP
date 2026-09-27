@@ -56,12 +56,12 @@ test('out-of-credit memo: marks the provider, re-arms on a new key and after the
 
 function fakeDeps({ outOfCredit = [], notReady = [], rejected = [], vision = {} } = {}) {
   const rows = [
-    { name: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', provider: 'Anthropic', type: 'TEXT' },
-    { name: 'typesafe/jev-latest', displayName: 'TypeSafe Jev', provider: 'TypeSafe', type: 'TEXT' },
-    { name: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', provider: 'DeepSeek', type: 'TEXT' },
-    { name: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'DeepSeek', type: 'TEXT' },
-    { name: 'grok-4.7', displayName: 'Grok 4.7', provider: 'xAI', type: 'TEXT' },
-    { name: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', provider: 'Gemini', type: 'TEXT' },
+    { id: 'm1', name: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', provider: 'Anthropic', type: 'TEXT', isActive: true },
+    { id: 'm2', name: 'typesafe/jev-latest', displayName: 'TypeSafe Jev', provider: 'TypeSafe', type: 'TEXT', isActive: true },
+    { id: 'm3', name: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', provider: 'DeepSeek', type: 'TEXT', isActive: true },
+    { id: 'm4', name: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'DeepSeek', type: 'TEXT', isActive: true },
+    { id: 'm5', name: 'grok-4.7', displayName: 'Grok 4.7', provider: 'xAI', type: 'TEXT', isActive: true },
+    { id: 'm6', name: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', provider: 'Gemini', type: 'TEXT', isActive: true },
   ];
   for (const p of outOfCredit) billing.markOutOfCredit(p, httpError(402, 'Insufficient Balance'), {});
   return {
@@ -121,6 +121,35 @@ test('pickFailoverModel: comparable tier from the picker list, funded and config
   assert.equal(none, null);
   // Kill switch.
   assert.equal(await billing.pickFailoverModel({ fromProvider: 'Anthropic', fromModel: 'x', env: { SIRAGPT_BILLING_FAILOVER: '0' }, deps: fakeDeps() }), null);
+  billing.__resetForTests();
+});
+
+test('pickFailoverModel works with the REAL picker curation (rows need id + isActive)', async () => {
+  billing.__resetForTests();
+  const rows = [
+    { id: 'r1', name: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', provider: 'Anthropic', type: 'TEXT', isActive: true },
+    { id: 'r2', name: 'grok-4.7', displayName: 'Grok 4.7', provider: 'xAI', type: 'TEXT', isActive: true },
+    { id: 'r3', name: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'DeepSeek', type: 'TEXT', isActive: true },
+  ];
+  let seenSelect = null;
+  const prisma = { aiModel: { findMany: async (args) => { seenSelect = args.select; return rows; } } };
+  const pick = await billing.pickFailoverModel({
+    fromProvider: 'Anthropic',
+    fromModel: 'claude-fable-5-1',
+    env: {},
+    deps: {
+      prisma,
+      // real curation — the one that dropped every row when isActive wasn't selected
+      catalog: require('../src/services/visible-model-catalog'),
+      inference: { resolveGenerateProvider: (p) => p, providerConnectionReady: () => true },
+      keyHealth: { isRejected: () => false },
+      capabilities: { resolveModelCapabilities: () => ({ supportsImages: false }) },
+    },
+  });
+  assert.equal(seenSelect.isActive, true, 'select must include isActive (curateVisibleTextModels filters on it)');
+  assert.equal(seenSelect.id, true);
+  assert.ok(pick, 'a funded model must be found from the real curated list');
+  assert.notEqual(pick.provider, 'Anthropic');
   billing.__resetForTests();
 });
 
