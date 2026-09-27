@@ -298,3 +298,28 @@ describe('generate route: recovered files are context, never the new message att
     assert.equal(JSON.stringify(refreshed).includes('recovered'), false);
   });
 });
+
+// Prod 2026-09-27: «transcribir en un docuemnto word» (Luis's real typo) is a
+// transcription that must become a FILE — never a plain inline transcript and
+// never an edit of the attachment. One typo (transposition / missing letter)
+// in the format word is tolerated; short tokens (pdf) must be exact.
+test('transcription-to-file detection tolerates one typo in the format word', () => {
+  const ma = require('../src/services/message-attachments');
+  for (const [prompt, format] of [
+    ['transcribir en un docuemnto word', 'docx'], ['transcribe esto en un word', 'docx'],
+    ['transcribe el audio a un documento word', 'docx'], ['pasa la transcripción a word', 'docx'],
+    ['transcríbelo a pdf', 'pdf'], ['transcribir en un documeto pdf', 'pdf'],
+    ['exporta la transcripción a excel', 'xlsx'], ['transcribe en un docuemnto exel', 'xlsx'],
+    ['transcribe esto en un pwerpoint', 'pptx'],
+  ]) {
+    assert.equal(ma.transcriptionFileOutputFormat(prompt), format, prompt);
+    assert.equal(ma.isTranscriptionToFileRequest(prompt), true, prompt);
+    assert.equal(ma.isPlainTranscriptionRequest(prompt), false, prompt);
+  }
+  // The attachment is the SOURCE here, not the output → plain transcription.
+  for (const prompt of ['transcribe el archivo', 'transcribe este documento', 'transcribe el word adjunto', 'transcripción literal del audio']) {
+    assert.equal(ma.transcriptionFileOutputFormat(prompt), null, prompt);
+    assert.equal(ma.isPlainTranscriptionRequest(prompt), true, prompt);
+  }
+  assert.equal(ma.isTranscriptionToFileRequest('hazme un word con el resumen'), false, 'not a transcription at all');
+});

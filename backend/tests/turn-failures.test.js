@@ -652,6 +652,52 @@ describe('turn lifecycle — beginTurn / noteTurn / finishTurn', () => {
     assert.equal(prisma.rows[0].metadata.sound, 'soft');
   });
 
+  // Prod 2026-09-27 (Luis): «transcribir en un docuemnto word» on a .md failed
+  // in the source-preserving editor; the row had no reason, no message and
+  // «(nada)» although the chat showed the full honest answer. The task store
+  // fires on the `done` event, before `stats` exists: streamState is the truth.
+  it('agent task failed via a deterministic stop: reason, what the user saw, gate and steps come from streamState', async () => {
+    const seen = 'No pude editar el archivo original sin cambiarlo: No pude interpretar esa edición con el modelo seleccionado. El original no se modificó; no agregué la petición como un anexo.. Indica el texto exacto…';
+    await turnFailures.recordAgentTaskFailure({
+      taskId: 'ee438f4c', userId: 'u1', chatId: 'cmuk3gff9000ls45kbuhipb8a', model: 'grok-4.7',
+      displayGoal: 'transcribir en un docuemnto word', fileIds: ['file-md-1'],
+      createdAt: '2026-09-27T17:30:09.836Z', failedAt: '2026-09-27T17:30:11.460Z',
+      streamState: {
+        done: true, stoppedReason: 'source_preserving_document_edit_failed', finalText: seen, artifacts: [],
+        steps: [{ id: 's1', label: 'Editando documento original', icon: 'file-edit', ok: false, startedAt: '2026-09-27T17:30:10.000Z' }],
+        qualityGates: [{ id: 'q1', label: 'Edición preservadora no disponible', passed: false, summary: 'No pude interpretar esa edición con el modelo seleccionado. El original no se modificó; no agregué la petición como un anexo.' }],
+      },
+    }, 'failed');
+    assert.equal(prisma.rows.length, 1);
+    const m = prisma.rows[0].metadata;
+    assert.equal(m.category, 'herramienta_fallida');
+    assert.equal(m.cause, 'Editor de documentos: edición no completada');
+    assert.deepEqual(m.reasons, ['agent_task', 'source_preserving_document_edit_failed']);
+    assert.equal(m.endReason, 'source_preserving_document_edit_failed');
+    assert.match(m.whatUserSaw, /^No pude editar el archivo original sin cambiarlo/);
+    assert.equal(m.errorCode, 'source_preserving_document_edit_failed');
+    assert.match(m.errorMessage, /No pude interpretar esa edición con el modelo seleccionado/);
+    assert.equal(m.modelLabel, 'grok-4.7');
+    assert.deepEqual(m.stages.map((s) => s.label), ['Editando documento original — falló']);
+    assert.deepEqual(m.attachments, [{ id: 'file-md-1' }]);
+    assert.equal(m.qualityGate.label, 'Edición preservadora no disponible');
+    assert.equal(m.fingerprint, 'herramienta_fallida|editor de documentos: edición no completada');
+  });
+
+  it('agent task failed with an exception frame keeps the thrown message first', async () => {
+    await turnFailures.recordAgentTaskFailure({
+      taskId: 't-err', userId: 'u1', chatId: 'c9', model: 'deepseek-v4-pro',
+      error: { message: 'DeepSeek API 400: unsupported model', code: 'llm_400' },
+      streamState: { done: true, error: 'DeepSeek API 400: unsupported model', errorCode: 'llm_400', finalText: '', steps: [] },
+      stats: { stoppedReason: 'agent_runner_failed' },
+    }, 'error');
+    const m = prisma.rows[0].metadata;
+    assert.equal(m.cause, 'Agente de documentos: no entregó el archivo');
+    assert.equal(m.errorCode, 'llm_400');
+    assert.equal(m.errorMessage, 'DeepSeek API 400: unsupported model');
+    assert.equal(m.whatUserSaw, 'DeepSeek API 400: unsupported model');
+  });
+
   it('agent tasks: failed and partial transcription are recorded, success is not', async () => {
     await turnFailures.recordAgentTaskFailure({ taskId: 't1', userId: 'u1', chatId: 'c6', displayGoal: 'transcribir el video', stats: { stoppedReason: 'media_batch_failed' } }, 'error');
     await turnFailures.recordAgentTaskFailure({ taskId: 't2', userId: 'u1', chatId: 'c6', stats: { stoppedReason: 'media_batch_partial' } }, 'completed');

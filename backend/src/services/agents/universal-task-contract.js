@@ -552,8 +552,11 @@ const EXPLICIT_TRANSCRIPTION_ARTIFACT_RE =
 function isPlainTranscriptionRequest(raw, explicitExt = null) {
   const value = String(raw || '');
   const normalized = normalize(value);
+  let toFile = false;
+  try { toFile = require('../message-attachments').isTranscriptionToFileRequest(value); } catch { toFile = false; }
   return Boolean(
     !explicitExt
+    && !toFile
     && (TRANSCRIPTION_REQUEST_RE.test(value) || TRANSCRIPTION_REQUEST_RE.test(normalized))
     && !(EXPLICIT_TRANSCRIPTION_ARTIFACT_RE.test(value) || EXPLICIT_TRANSCRIPTION_ARTIFACT_RE.test(normalized))
   );

@@ -470,19 +470,51 @@ function recordFeedbackFailure({ userId, userEmail, chatId, messageId, reasonCod
 
 // ── Agent tasks (/agentes tasks, transcription batches) ───────────────
 
+// Spanish cause for an agent-task stop reason, in the same vocabulary the
+// generate route uses (classify.toolCause), so «Causas principales» groups a
+// failed source-preserving edit the same way whichever path produced it.
+function agentTaskCause(stopped, status, { isMedia = false, partialMedia = false } = {}) {
+  if (isMedia) return partialMedia ? 'Transcripción: algunos archivos fallaron' : 'Transcripción: falló';
+  const code = String(stopped || '');
+  if (/source_preserving_document_target_not_found/i.test(code)) return 'Editor de documentos: no ubicó el fragmento a editar';
+  if (/source_preserving|document_edit/i.test(code)) return 'Editor de documentos: edición no completada';
+  if (/agent_runner|runner_failed|llm_402|no_llm/i.test(code)) return 'Agente de documentos: no entregó el archivo';
+  if (/verif/i.test(code)) return 'Editor de documentos: verificación fallida';
+  if (/document_generation|pipeline|auto_document/i.test(code)) return 'Generación de documento: falló';
+  if (/timeout|runtime_exceeded|max_runtime/i.test(code)) return 'Tarea del agente: se agotó el tiempo';
+  if (/max_steps|step_budget/i.test(code)) return 'Tarea del agente: se agotaron los pasos';
+  if (/cancel/i.test(code)) return 'Tarea del agente: cancelada';
+  if (code) return `Tarea del agente: ${code.replace(/_/g, ' ')}`;
+  return status === 'error' ? 'Tarea del agente: error' : 'Tarea del agente: falló';
+}
+
+/**
+ * Failed agent task → one «Fallos de respuesta» row with everything the task
+ * already knows. The task store fires this on the FIRST terminal write (the
+ * `done` event), before the runner's later markTaskStatus writes `stats`, so
+ * `streamState` — reduced from every event — is the reliable source:
+ * stoppedReason, the final text the user saw, the error frame and the last
+ * failed quality gate. Prod 2026-09-27: the row for «transcribir en un
+ * docuemnto word» had no reason, no message and «(nada)» as what the user
+ * saw, while the chat showed a full «No pude editar el archivo original…».
+ */
 function recordAgentTaskFailure(task = {}, status = '') {
   try {
     if (!enabled() || !task || !task.userId) return Promise.resolve({});
-    const stopped = String((task.stats && task.stats.stoppedReason) || (task.streamState && task.streamState.stoppedReason) || '');
+    const state = task.streamState && typeof task.streamState === 'object' ? task.streamState : {};
+    const stopped = String(
+      (task.stats && task.stats.stoppedReason)
+      || state.stoppedReason
+      || (task.documentPolicy && task.documentPolicy.thresholds && task.documentPolicy.thresholds.agentRunnerFailure)
+      || '',
+    );
     const failedStatus = status === 'error' || status === 'failed';
     const partialMedia = status === 'completed' && /media_batch_(failed|partial)/.test(stopped);
     if (!failedStatus && !partialMedia) return Promise.resolve({});
-    const isMedia = /media_batch|transcri/.test(stopped);
+    const isMedia = /media_batch|transcri/.test(stopped) && !/document/.test(stopped);
     const category = 'herramienta_fallida';
     const meta = classify.CATEGORIES[category];
-    const cause = isMedia
-      ? (partialMedia ? 'Transcripción: algunos archivos fallaron' : 'Transcripción: falló')
-      : (stopped ? `Tarea del agente: ${stopped.replace(/_/g, ' ')}` : 'Tarea del agente: falló');
+    const cause = agentTaskCause(stopped, status, { isMedia, partialMedia });
     const classification = {
       category,
       label: meta.label,
@@ -491,8 +523,30 @@ function recordAgentTaskFailure(task = {}, status = '') {
       cause,
       reasons: ['agent_task', stopped || status].filter(Boolean),
     };
-    const startedAt = Date.parse(task.createdAt || '') || Date.now();
+    const startedAtMs = Date.parse(task.createdAt || '') || Date.now();
     const endedAt = Date.parse(task.failedAt || task.completedAt || task.updatedAt || '') || Date.now();
+    // What the user saw: the final text the runner streamed, if any.
+    const finalText = typeof state.finalText === 'string' ? state.finalText : '';
+    // The error the runner recorded, or the last failed quality gate's
+    // summary (the source-preserving editor reports through a gate, not an
+    // exception).
+    const gates = Array.isArray(state.qualityGates) ? state.qualityGates : [];
+    const failedGate = [...gates].reverse().find((g) => g && g.passed === false) || null;
+    const errorMessage = (task.error && (task.error.message || task.error))
+      || state.error
+      || (failedGate && (failedGate.summary || failedGate.label))
+      || null;
+    const errorCode = (task.error && task.error.code) || state.errorCode || stopped || status;
+    const errorFrames = errorMessage ? [{ code: String(errorCode), message: String(errorMessage) }] : [];
+    // Steps as stages so the drawer shows the timeline («Editando documento
+    // original» → failed) instead of an empty list.
+    const steps = Array.isArray(state.steps) ? state.steps : [];
+    const stages = steps.slice(-15).map((step) => ({
+      label: `${step.label || step.id || 'paso'}${step.ok === false ? ' — falló' : ''}`,
+      ...(step.icon ? { tool: String(step.icon) } : {}),
+      at: Date.parse(step.startedAt || step.ts || '') || startedAtMs,
+    }));
+    const artifactsCount = Array.isArray(state.artifacts) ? state.artifacts.length : (Array.isArray(task.artifacts) ? task.artifacts.length : 0);
     return persist({
       ctx: {
         route: 'agent-task',
@@ -503,14 +557,24 @@ function recordAgentTaskFailure(task = {}, status = '') {
         prompt: task.displayGoal || task.agentGoal || task.goal || '',
         modelPicked: task.model || null,
         modelLabel: task.model || null,
-        startedAt,
+        modelUsed: task.runtimeModel || (task.stats && task.stats.runtimeModel) || null,
+        providerUsed: task.runtimeProvider || (task.stats && task.stats.runtimeProvider) || null,
+        startedAt: startedAtMs,
         endedAt,
         endReason: stopped || status,
-        errorFrames: task.error ? [{ code: stopped || status, message: String(task.error.message || task.error) }] : [],
+        finalText,
+        errorFrames,
+        stages,
+        artifactsCount,
+        attachments: Array.isArray(task.fileIds) ? task.fileIds.slice(0, 10).map((id) => ({ id: String(id) })) : [],
       },
       classification,
       source: 'server',
-      extra: { taskId: task.taskId || null, taskStatus: status },
+      extra: {
+        taskId: task.taskId || null,
+        taskStatus: status,
+        ...(failedGate ? { qualityGate: { label: failedGate.label || null, summary: redact(failedGate.summary || '', 300) } } : {}),
+      },
     });
   } catch (_) {
     return Promise.resolve({});

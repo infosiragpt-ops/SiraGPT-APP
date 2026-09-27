@@ -72,6 +72,26 @@ test('DocumentDeliveryPolicy still creates a file when transcription asks for Wo
   assert.equal(policy.autoGenerate, true);
 });
 
+test('DocumentDeliveryPolicy creates the file for a typo-ridden transcription-to-Word request', () => {
+  // The exact production prompt: «docuemnto» defeated every strict regex and
+  // the request fell to chat_only; the user never got the Word.
+  for (const [goal, format] of [
+    ['transcribir en un docuemnto word', 'docx'],
+    ['transcribe esto en un word', 'docx'],
+    ['transcríbelo a pdf', 'pdf'],
+    ['transcribe en un docuemnto exel', 'xlsx'],
+  ]) {
+    const policy = buildDocumentDeliveryPolicy({ goal, files: ['uploaded-md-id'] });
+    assert.equal(policy.mode, 'doc_required', goal);
+    assert.equal(policy.format, format, goal);
+    assert.equal(policy.autoGenerate, true, goal);
+  }
+  // Plain transcription and chat-scoped asks still stay in chat.
+  for (const goal of ['transcribe el archivo', 'transcribe el word adjunto', 'resume el Word adjunto en el chat']) {
+    assert.equal(buildDocumentDeliveryPolicy({ goal, files: ['uploaded-id'] }).mode, 'chat_only', goal);
+  }
+});
+
 test('DocumentDeliveryPolicy requires an edited artifact for minimal corrections on an attached Word', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'aplica correcciones minimas al documento porfavor',

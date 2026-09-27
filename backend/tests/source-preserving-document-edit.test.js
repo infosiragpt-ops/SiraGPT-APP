@@ -336,6 +336,13 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
     assert.equal(isSourcePreservingEditRequest('analiza este documento adjunto y agrégalo a mi documento general', ['file-ref']), true);
+    // Prod 2026-09-27 (Luis): a transcription that must land IN A FILE is a
+    // new deliverable built from the attachment, never an edit of it. The
+    // typo («docuemnto») is the real prompt that reached the editor and died.
+    for (const prompt of [
+      'transcribir en un docuemnto word', 'transcribe esto en un word', 'transcribe el audio a un documento word',
+      'transcríbelo a pdf', 'exporta la transcripción a excel', 'transcribe esto en un pwerpoint',
+    ]) assert.equal(isSourcePreservingEditRequest(prompt, ['file-md']), false, prompt);
     // Whole-document transforms over the uploaded file must preserve the source.
     assert.equal(isSourcePreservingEditRequest('traduce este documento al inglés', ['file-docx']), true);
     assert.equal(isSourcePreservingEditRequest('resume este documento', ['file-docx']), true);
