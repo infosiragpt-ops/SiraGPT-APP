@@ -16,8 +16,12 @@ const {
   shouldRunAgentRunner,
   canCallLlm,
   executeAgentRunnerTurn,
+  runAgentRunnerForChat,
   runAgentRunnerForDocRoute,
   loadOfficeHelpersPy,
+  collectValidOutputs,
+  missingRequestedSavExcel,
+  completedSavExcelSummary,
 } = require('../src/services/agent-runner');
 const { persistOutputs, resolveTurnFiles } = require('../src/services/agent-runner/artifacts');
 const {
@@ -612,6 +616,62 @@ test('persistOutputs saves via saveArtifact and emits file_artifact', async () =
   assert.equal(saved.length, 1);
   assert.equal(saved[0].filename, 'embarazo.pptx');
   assert.equal(events[0].type, 'file_artifact');
+});
+
+test('AgentRunner rejects an unreadable SAV before calling it valid', async () => {
+  const events = [];
+  const outputs = await collectValidOutputs({
+    collectOutputs: async () => [{ name: 'muestra.sav', buffer: Buffer.from('$FL2corrupted-after-validation') }],
+    putFile: async () => {},
+    exec: async (command) => command.startsWith('python3 ')
+      ? { exitCode: 0, stdout: '{"ok":false,"reason":"sav_unreadable"}\n' }
+      : { exitCode: 0 },
+  }, (event) => events.push(event));
+  assert.equal(outputs[0].valid, false);
+  assert.equal(outputs[0].validation?.passed, false);
+  assert.ok(events.some((event) => event.type === 'output_invalid' && event.reason === 'sav_unreadable'));
+});
+
+test('AgentRunner persistence cannot turn an unreadable SAV into a validated card', async () => {
+  let saves = 0;
+  const events = [];
+  const artifacts = await persistOutputs({
+    outputs: [{ name: 'muestra.sav', buffer: Buffer.from('$FL2corrupted-after-validation'), valid: true }],
+    userId: 'u1', chatId: 'c1',
+    saveArtifact: () => { saves += 1; throw new Error('must not save'); },
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(saves, 0);
+  assert.equal(artifacts.length, 0);
+  assert.ok(events.some((event) => event.type === 'output_invalid' && event.reason === 'sav_unverified'));
+});
+
+test('AgentRunner treats a requested SAV and Excel as an incomplete delivery when either is missing', () => {
+  const excel = { filename: 'muestra.xlsx', format: 'xlsx' };
+  const sav = { filename: 'muestra.sav', format: 'sav' };
+  assert.deepEqual(missingRequestedSavExcel('Genera un SAV de SPSS y un Excel con 20 preguntas.', [excel]), ['SAV']);
+  assert.deepEqual(missingRequestedSavExcel('Genera un SAV de SPSS y un Excel con 20 preguntas.', [sav]), ['Excel']);
+  assert.deepEqual(missingRequestedSavExcel('Genera un SAV de SPSS y un Excel con 20 preguntas.', [sav, excel]), []);
+  assert.deepEqual(missingRequestedSavExcel('Compara el SAV de SPSS y el Excel que ya entregaste.', [excel]), []);
+  assert.match(completedSavExcelSummary([sav, excel]), /todavía no he comparado sus valores/);
+  assert.doesNotMatch(completedSavExcelSummary([sav, excel]), /400 valores: 0 diferencias|son idénticos|coinciden: sí|verificado/i);
+});
+
+test('AgentRunner does not say Listo when it generated metadata but missed the requested SAV and Excel', async () => {
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'write_file', args: { path: 'outputs/metadatos.json', content: '{"archivo_sav":"NO GENERADO"}' } }] },
+  ]);
+  const ran = await runAgentRunnerForChat({
+    instruction: 'Genera un SAV de SPSS y un Excel con 20 preguntas.',
+    client, driver: 'local', maxIterations: 1,
+    userId: 'incomplete-delivery-user', chatId: 'incomplete-delivery-chat',
+    saveArtifact: ({ filename }) => ({ id: 'metadata-id', filename, format: 'json', mime: 'application/json', downloadUrl: '/api/agent/artifact/metadata-id' }),
+  });
+  assert.equal(ran.ok, false);
+  assert.equal(ran.stoppedReason, 'requested_artifact_missing');
+  assert.equal(ran.artifacts.length, 1);
+  assert.match(ran.summary, /falta SAV y Excel/);
+  assert.doesNotMatch(ran.summary, /Listo|Generé el SAV/);
 });
 
 test('runAgentRunnerForDocRoute: runner-first result in the doc-route file shape', async () => {

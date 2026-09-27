@@ -170,7 +170,39 @@ jobs:
         # private on the Lenovo under deployments/iliagpt/backups/reviewed-*.
         run: |
           set -euo pipefail
+          # Compose's reviewed publisher builds the app services, but the
+          # ephemeral document sandbox is a separate Docker image on Lenovo.
+          # Build it only when its Dockerfile changed, and prove the live
+          # backend reaches the upgraded reader before publishing the app.
+          runner_tagged=0
+          prior_image=''
+          rollback_runner_image() {
+            local status=$?
+            trap - EXIT
+            if [[ "$status" -ne 0 && "$runner_tagged" -eq 1 ]]; then
+              docker image tag "$prior_image" siragpt-doc-sandbox:latest >/dev/null \
+                || { echo '::error::Could not restore the previous document sandbox image'; status=2; }
+            fi
+            exit "$status"
+          }
+          trap rollback_runner_image EXIT
+          runner_change=$(git -C "$REPO" diff --name-only "$LIVE" "$TARGET" -- services/sandbox/runner/Dockerfile)
+          if [[ -n "$runner_change" ]]; then
+            prior_image=$(docker image inspect --format '{{.Id}}' siragpt-doc-sandbox:latest)
+            [[ "$prior_image" =~ ^sha256:[0-9a-f]{64}$ ]] \
+              || { echo '::error::The previous document sandbox image is unavailable'; exit 1; }
+            candidate="siragpt-doc-sandbox:candidate-${TARGET:0:12}"
+            docker build --quiet -t "$candidate" -f "$REPO/services/sandbox/runner/Dockerfile" "$REPO/services/sandbox/runner" >/dev/null
+            docker run --rm --network none --entrypoint python3 "$candidate" -c 'import pandas, pyreadstat, openpyxl; print("SPSS_IMAGE_OK")'
+            docker image tag "$candidate" siragpt-doc-sandbox:latest >/dev/null
+            runner_tagged=1
+            mapfile -t backend_ids < <(docker ps --filter label=com.docker.compose.project=iliagpt --filter label=com.docker.compose.service=backend --format '{{.ID}}')
+            [[ "${#backend_ids[@]}" -eq 1 ]] \
+              || { echo '::error::Could not identify the single live backend container'; exit 1; }
+            docker exec -w /app -i "${backend_ids[0]}" node - < "$REPO/backend/scripts/verify-agent-sandbox-runtime.cjs"
+          fi
           "$PUBLISH" "$TARGET" "$LIVE"
+          runner_tagged=0
 
       - name: Verify public release
         if: steps.live.outputs.sha != steps.target.outputs.sha

@@ -7,6 +7,7 @@ on:
       - Dockerfile
       - .dockerignore
       - backend/Dockerfile
+      - services/sandbox/runner/Dockerfile
       - package.json
       - package-lock.json
       - backend/package.json
@@ -21,6 +22,7 @@ on:
       - backend/scripts/install-spss-runtime.sh
       - backend/scripts/verify-spss-runtime.cjs
       - backend/scripts/verify-spss-artifacts.cjs
+      - services/sandbox/runner/Dockerfile
       - .github/workflows/docker-build.yml
   workflow_dispatch:
 
@@ -57,3 +59,56 @@ jobs:
           file: Dockerfile
           tags: siragpt-frontend:ci
           load: true
+
+  sandbox-runner:
+    name: Docker · document sandbox SPSS
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the actual AgentRunner sandbox image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/sandbox/runner
+          file: services/sandbox/runner/Dockerfile
+          tags: siragpt-doc-sandbox:ci
+          load: true
+
+      - name: Reopen a 20 by 20 SAV and Excel in the isolated image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -i --network none --entrypoint python3 siragpt-doc-sandbox:ci - <<'PY'
+          import os, tempfile
+          import pandas as pd
+          import pyreadstat
+          from openpyxl import Workbook, load_workbook
+
+          columns = [f"P{i:02d}" for i in range(1, 21)]
+          values = [[row * 100 + col for col in range(20)] for row in range(20)]
+          frame = pd.DataFrame(values, columns=columns)
+          with tempfile.TemporaryDirectory(dir="/workspace") as directory:
+              sav = os.path.join(directory, "muestra.sav")
+              xlsx = os.path.join(directory, "muestra.xlsx")
+              pyreadstat.write_sav(frame, sav, column_labels={name: f"Pregunta {i}" for i, name in enumerate(columns, 1)})
+              workbook = Workbook()
+              sheet = workbook.active
+              sheet.append(columns)
+              for row in values:
+                  sheet.append(row)
+              workbook.save(xlsx)
+              restored, metadata = pyreadstat.read_sav(sav)
+              excel = load_workbook(xlsx, read_only=True, data_only=True)
+              rows = list(excel.active.values)
+              assert restored.shape == (20, 20)
+              assert list(restored.columns) == columns
+              assert sum(bool(label) for label in (metadata.column_labels or [])) == 20
+              assert rows[0] == tuple(columns)
+              assert all(tuple(restored.iloc[index]) == tuple(rows[index + 1]) for index in range(20))
+          print("SPSS_SANDBOX_IMAGE_OK")
+          PY

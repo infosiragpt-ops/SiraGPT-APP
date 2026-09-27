@@ -1267,6 +1267,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           logDocRouting('agent_runner');
           return finishSourcePreservingPreloop('agent_runner', ran.summary, ran.artifacts);
         }
+        if (ran?.stoppedReason === 'requested_artifact_missing') {
+          // The runner may have produced a useful Excel while failing to make
+          // the requested SAV. Keep that card, but never claim the pair is done.
+          await writeSse(res, { replace: true, content: ran.summary });
+          logDocRouting('agent_runner_failed', 'requested_artifact_missing');
+          return finishSourcePreservingPreloop('agent_runner_failed', ran.summary, ran.artifacts || []);
+        }
         agentRunnerFailure = {
           reason: ran?.stoppedReason || 'no_output',
           detail: ran?.errorMessage || null,
