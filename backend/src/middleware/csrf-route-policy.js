@@ -114,8 +114,21 @@ function createAuthCsrfMiddleware(requireCsrf) {
   }
   return function authCsrf(req, res, next) {
     if (isExactSamlAssertionConsumerRequest(req)) return next();
+    // /refresh and /logout carry no credential to forge when the browser has
+    // neither the login cookie nor a Bearer: let authentication answer 401
+    // (`no session`) instead of a CSRF 403. Prod 2026-09-27: anonymous
+    // visitors and expired sessions produced «POST /api/auth/refresh → 403»
+    // in a loop with nothing an attacker could have gained.
+    if (isCredentiallessSessionMaintenance(req)) return next();
     return requireCsrf(req, res, next);
   };
+}
+
+const SESSION_MAINTENANCE_PATHS = new Set(['/refresh', '/logout']);
+function isCredentiallessSessionMaintenance(req) {
+  const pathname = String(req?.path || '').replace(/\/+$/, '') || '/';
+  if (!SESSION_MAINTENANCE_PATHS.has(pathname)) return false;
+  return !hasCookieSession(req) && !hasBearerAuth(req);
 }
 
 /**
@@ -142,6 +155,7 @@ function createCookieAuthCsrfMiddleware(requireCsrf) {
 }
 
 module.exports = {
+  isCredentiallessSessionMaintenance,
   COOKIE_AUTH_CSRF_MOUNTS,
   EXPENSIVE_GENERATION_MOUNTS,
   PUBLIC_GENERATED_APP_MOUNTS,

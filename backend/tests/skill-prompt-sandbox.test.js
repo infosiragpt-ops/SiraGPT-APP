@@ -192,3 +192,17 @@ describe('runSkill audit hook', () => {
     assert.ok(!Object.prototype.hasOwnProperty.call(denied[0], 'error'));
   });
 });
+
+// Prod 2026-09-27: «skill_run · skillId=summarize ok=false errorCode=skill_failed»
+// gave nothing to act on. The record keeps a short, redacted reason.
+test('skill_run record carries a redacted errorMessage next to the code', () => {
+  const failed = buildSkillRunAuditRecord({ skillId: 'summarize', ok: false, error: new Error('provider 502 while calling Bearer sk-abcdefghijklmnopqrstuvwxyz012345 upstream') });
+  assert.equal(failed.errorCode, 'skill_failed');
+  assert.match(failed.errorMessage, /provider 502/);
+  assert.doesNotMatch(failed.errorMessage, /sk-abcdefghijklmnopqrstuvwxyz012345/);
+  assert.ok(failed.errorMessage.length <= 200);
+  const long = buildSkillRunAuditRecord({ skillId: 'x', ok: false, error: 'e'.repeat(500) });
+  assert.equal(long.errorMessage.length, 200);
+  const ok = buildSkillRunAuditRecord({ skillId: 'echo', ok: true });
+  assert.equal(ok.errorMessage, null);
+});

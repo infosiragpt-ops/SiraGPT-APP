@@ -344,7 +344,10 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
     try {
       const errPayload = {
         ts: new Date().toISOString(),
-        level: 'error',
+        // 4xx is the client's outcome (validation, auth, CORS), not a backend
+        // failure: prod 2026-09-27 a rejected Origin answered 403 correctly
+        // and still surfaced as ERROR in «Registros en vivo».
+        level: statusCode >= 500 ? 'error' : 'warn',
         method: req.method || '',
         path: redactPreviewUrl((req.originalUrl || req.url || '').split('?')[0]),
         status: statusCode,

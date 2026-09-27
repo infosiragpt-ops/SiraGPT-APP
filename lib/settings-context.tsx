@@ -15,6 +15,7 @@
 
 import React from "react"
 import { authenticatedFetch } from "./authenticated-fetch"
+import { useAuth } from "./auth-context-integrated"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const STORAGE_KEY = "siraGPT-settings"
@@ -237,7 +238,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const firstPersistSkip = React.useRef(true)
 
-  // Hydrate once: localStorage first (instant), then backend (authoritative).
+  const { sessionStatus } = useAuth()
+
+  // Hydrate: localStorage first (instant), then the backend (authoritative)
+  // once there is a session. Anonymous visitors used to hit
+  // GET /users/settings → 401 on every page load (prod 2026-09-27).
   React.useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
@@ -246,15 +251,24 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setSettings((prev) => mergeDeep(prev, parsed))
       }
     } catch { /* ignore */ }
+  }, [])
 
+  React.useEffect(() => {
+    if (sessionStatus === "loading") return
+    if (sessionStatus !== "authenticated") {
+      setLoaded(true)
+      return
+    }
+    let cancelled = false
     authenticatedFetch(`${API_BASE}/users/settings`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data?.settings) setSettings((prev) => mergeDeep(prev, data.settings))
+        if (!cancelled && data?.settings) setSettings((prev) => mergeDeep(prev, data.settings))
       })
       .catch(() => { /* offline — localStorage state is enough */ })
-      .finally(() => setLoaded(true))
-  }, [])
+      .finally(() => { if (!cancelled) setLoaded(true) })
+    return () => { cancelled = true }
+  }, [sessionStatus])
 
   // Apply preview vars every time settings change — this is what makes
   // theme/accent/density/fontSize flip live without a reload.

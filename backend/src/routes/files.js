@@ -401,7 +401,12 @@ function scheduleOpenAiFilesUpload(prismaClient, fileRecordId, file) {
       if (!openaiFileId) return;
       await prismaClient.file.update({ where: { id: fileRecordId }, data: { openaiFileId } });
     })
-    .catch((err) => console.warn('[files] OpenAI Files background upload failed:', err?.message || err));
+    .catch((err) => {
+      // The row can be gone by the time the upload lands (the user deleted the
+      // file or the chat while it was in flight): nothing to patch.
+      if (err?.code === 'P2025') return;
+      console.warn('[files] OpenAI Files background upload failed:', err?.message || err);
+    });
 }
 
 
