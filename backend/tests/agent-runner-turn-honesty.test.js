@@ -141,3 +141,35 @@ test('a turn in a chat workspace starts with an empty outputs/: the previous fil
     await after.destroy();
   }
 });
+
+test('the paint fast path only recolors slide backgrounds when that is what was asked', async () => {
+  // Eval pptx-nota-mover-verde: «ponla verde» (the note) painted every slide
+  // background green in 9 s and never moved the note.
+  assert.equal(runner.isSlideBackgroundColorRequest('Mueve la nota 2 mm a la derecha y ponla verde'), false);
+  assert.equal(runner.isSlideBackgroundColorRequest('pon el título en azul'), false);
+  assert.equal(runner.isSlideBackgroundColorRequest('cambia el fondo de la nota a verde'), false);
+  assert.equal(runner.isSlideBackgroundColorRequest('colorea el gráfico de rojo'), false);
+  const { buildScenarioBank } = require('./fixtures/agent-runner-scenarios');
+  const paint = buildScenarioBank().filter((s) => s.family === 'style' || /^production-000[235]$/.test(s.id));
+  assert.ok(paint.length > 200);
+  for (const s of paint) assert.equal(runner.isSlideBackgroundColorRequest(s.text), true, s.text);
+
+  // The deterministic path is skipped: the loop (the scripted model) handles it.
+  const PizZip = require('pizzip');
+  const zip = new PizZip();
+  zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  zip.file('ppt/presentation.xml', '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>');
+  const deck = zip.generate({ type: 'nodebuffer' });
+  const calls = [];
+  const client = { chat: { completions: { create: async (req) => {
+    calls.push(req);
+    return { choices: [{ message: { role: 'assistant', content: 'No moví la nota: no la encontré.' } }] };
+  } } } };
+  const run = await runner.runAgentRunner({
+    files: [{ name: 'defensa.pptx', buffer: deck }],
+    instruction: 'Mueve la nota 2 mm a la derecha y ponla verde',
+    client, driver: 'local', maxIterations: 2, requireFileOutput: false, persistMemory: false,
+  });
+  assert.notEqual(run.stoppedReason, 'fast_path');
+  assert.ok(calls.length >= 1, 'the model was asked');
+});

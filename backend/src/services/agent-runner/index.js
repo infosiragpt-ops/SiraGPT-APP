@@ -189,6 +189,17 @@ const COLOR_WORD_RE = new RegExp(
   'i',
 );
 const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|pon|ponle|ponme|coloca|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|inserta|reemplaza|borra|elimina)\b/i;
+// The deterministic paint fast path recolors EVERY slide background. It only
+// fits «ponlas todas rosadas» / «cambia el fondo a #1E3A8A»: «Mueve la nota
+// 2 mm a la derecha y ponla verde» painted all three slides green and never
+// moved the note (eval pptx-nota-mover-verde). A named element or a movement
+// goes to the loop, which edits that shape.
+const SLIDE_BACKGROUND_RE = /\b(fondos?|background|ponlas|p[ií]ntalas|c[aá]mbialas|col[oó]realas|uniformi[sz]a\w*|todas)\b/i;
+const SHAPE_TARGET_RE = /\b(notas?|cuadros?|recuadros?|t[ií]tulos?|subt[ií]tulos?|textos?|formas?|flechas?|celdas?|tablas?|im[aá]gen(?:es)?|logos?|letras?|fuentes?|bordes?|l[ií]neas?|[ií]conos?|gr[aá]ficos?|botones|bot[oó]n|palabras?|frases?|mueve|mover|mu[eé]vela|desplaza\w*)\b|\d+(?:[.,]\d+)?\s*(?:mm|cm|pt|px)\b/i;
+function isSlideBackgroundColorRequest(text) {
+  const t = String(text || '');
+  return SLIDE_BACKGROUND_RE.test(t) && !SHAPE_TARGET_RE.test(t);
+}
 // Pictures are read by the vision runtime, never by the document runner: an
 // attached screenshot must not turn «¿cuánto es?» into a document task.
 const IMAGE_FILE_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/i;
@@ -589,7 +600,7 @@ async function runAgentRunner({
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
     const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
     let fastPathUsed = false;
-    if (color && pptxUpload && !isCreateRequest) {
+    if (color && pptxUpload && !isCreateRequest && isSlideBackgroundColorRequest(task)) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
       const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
       onEvent({
@@ -909,6 +920,7 @@ async function executeAgentRunnerTurn(params = {}) {
   const hasTurnFiles = (Array.isArray(params.fileIds) && params.fileIds.length > 0)
     || (Array.isArray(params.attachedFiles) && params.attachedFiles.length > 0);
   const colorFastPath = Boolean(inferColorFromText(instruction))
+    && isSlideBackgroundColorRequest(instruction)
     && (STYLE_EDIT_RE.test(instruction) || hasTurnFiles);
   const titleFastPath = isScopedSlideMutation(instruction) || Boolean(parsePresentationTitleEdit(instruction));
   if (!titleFastPath && !colorFastPath && !canCallLlm(params) && !params.client) {
@@ -1143,6 +1155,7 @@ function orchestratorEnabled(env) {
 module.exports = {
   dropIntermediateOutputs,
   archivePreviousOutputs,
+  isSlideBackgroundColorRequest,
   fingerprintOutputs,
   dropPreviousTurnOutputs,
   runnerModelSpec,
