@@ -60,6 +60,7 @@ RUN pip3 install --no-cache-dir \
       mammoth \
       lxml \
       pandas \
+      pyreadstat==1.3.6 \
       numpy \
       tabulate
 

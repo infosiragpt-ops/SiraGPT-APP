@@ -78,6 +78,7 @@ CONTENT RULES (documents the user asks you to CREATE)
 - FORBIDDEN filler: never write boilerplate like "Puntos clave sobre X" or "Información clara, verificable y útil". If you have nothing specific to say on a slide, research the topic from the request context or restructure the outline.
 - COLOR: apply the color the user asked for — ANY named color (rosado, naranja, turquesa, dorado…) or #hex — to EVERY slide. If the user asked for no color, use a clean light theme; NEVER default to pink.
 - When using create_presentation, always pass \`outline\` with the full slide plan (titles + bullets in Spanish unless asked otherwise).
+- For SPSS .sav, use the installed pyreadstat library: pyreadstat.write_sav(dataframe, output_path), then pyreadstat.read_sav(output_path) to verify it. Never fabricate a .sav by writing its $FL2 header, and never replace a requested SAV with a JSON description.
 
 ${officeEngine ? `${OFFICE_WORKFLOW}
 

@@ -1,5 +1,7 @@
 'use strict';
 
+const { hasVerifiedSavBytes } = require('./sav-validation');
+
 /**
  * Conversation artifact registry.
  * Follow-ups ("ahora ponlas rosadas") must always operate on the LAST edited
@@ -202,10 +204,18 @@ async function persistOutputs({
     if (!out || !Buffer.isBuffer(out.buffer) || !out.buffer.length) continue;
     if (out.valid === false) continue;
     const ext = String(out.name || 'file.bin').split('.').pop().toLowerCase();
+    if (ext === 'sav' && !hasVerifiedSavBytes(out)) {
+      // No .sav card may become "Validado" merely because it has bytes or a
+      // caller supplied validation.passed. The exact persisted bytes must
+      // have passed read_sav in this AgentRunner turn.
+      try { onEvent({ type: 'output_invalid', name: out.name, reason: 'sav_unverified' }); } catch { /* trace only */ }
+      continue;
+    }
     const mime = (
       ext === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
       : ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
       : ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : ext === 'sav' ? 'application/x-spss-sav'
       : ext === 'pdf' ? 'application/pdf'
       : 'application/octet-stream'
     );

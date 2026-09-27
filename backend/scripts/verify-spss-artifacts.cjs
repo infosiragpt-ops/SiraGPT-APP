@@ -75,6 +75,46 @@ async function createAndVerify(filename, python, expectedFormat, events) {
   // original VM paths disappear. A follow-up with files:[] must recover both
   // files from the same delivery, then pyreadstat/openpyxl must compare bytes.
   const saved = [excel.result, sav.result];
+  // AgentRunner is the normal-chat path for "create a SAV and Excel". It must
+  // reopen the exact SAV bytes inside its own document sandbox, then persist
+  // only a verified card. This path used to accept any nonempty .sav as valid.
+  const { createSandbox } = require('../src/services/doc-agent/sandbox');
+  const { collectValidOutputs } = require('../src/services/agent-runner');
+  const { persistOutputs } = require('../src/services/agent-runner/artifacts');
+  const runnerSandbox = await createSandbox({ driver: 'local' });
+  try {
+    const savMetadata = JSON.parse(fs.readFileSync(INTERNAL.metadataPathFor(sav.result.artifactId), 'utf8'));
+    const savBytes = fs.readFileSync(path.join(artifactDir, savMetadata.storedRelPath));
+    const validRunnerOutputs = await collectValidOutputs({
+      ...runnerSandbox,
+      collectOutputs: async () => [{ name: 'runner-muestra.sav', buffer: savBytes }],
+    });
+    assert.equal(validRunnerOutputs[0].valid, true);
+    assert.equal(validRunnerOutputs[0].validation?.spss?.rowCount, 20);
+    assert.equal(validRunnerOutputs[0].validation?.spss?.columnCount, 20);
+    assert.equal(validRunnerOutputs[0].validation?.spss?.labelCount, 20);
+    const runnerCards = await persistOutputs({
+      outputs: validRunnerOutputs,
+      userId: 'spss-runtime-smoke', chatId: 'spss-excel-pair',
+      saveArtifact: ({ filename, mime, validation }) => ({
+        id: 'runner-verified', filename, mime, format: 'sav', sizeBytes: savBytes.length,
+        downloadUrl: '/test/runner-verified', validation,
+      }),
+    });
+    assert.equal(runnerCards.length, 1);
+    assert.equal(runnerCards[0].mime, 'application/x-spss-sav');
+    validRunnerOutputs[0].buffer = Buffer.from('$FL2corrupted-after-validation');
+    assert.equal((await persistOutputs({ outputs: validRunnerOutputs, saveArtifact: () => {
+      throw new Error('changed bytes must not be saved');
+    } })).length, 0);
+    const invalidRunnerOutputs = await collectValidOutputs({
+      ...runnerSandbox,
+      collectOutputs: async () => [{ name: 'runner-falso.sav', buffer: Buffer.from('$FL2corrupted-after-validation') }],
+    });
+    assert.equal(invalidRunnerOutputs[0].valid, false);
+  } finally {
+    await runnerSandbox.destroy();
+  }
   const binaries = new Map();
   for (const artifact of saved) {
     const metadataPath = INTERNAL.metadataPathFor(artifact.artifactId);

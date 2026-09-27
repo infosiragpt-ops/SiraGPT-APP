@@ -45,7 +45,7 @@ test('runner image has the renderer, rasterizer and metric fonts the engine need
   ]) {
     assert.match(dockerfile, new RegExp(`\\b${pkg.replace(/[-]/g, '\\-')}\\b`), `${pkg} missing from the runner image`);
   }
-  for (const pip of ['lxml', 'pillow', 'python-docx', 'openpyxl', 'python-pptx', 'pandas']) {
+  for (const pip of ['lxml', 'pillow', 'python-docx', 'openpyxl', 'python-pptx', 'pandas', 'pyreadstat']) {
     assert.match(dockerfile, new RegExp(`^\\s+${pip}\\b`, 'm'), `pip ${pip} missing from the runner image`);
   }
   assert.match(dockerfile, /USER sandbox/, 'the runner must stay non-root');

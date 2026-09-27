@@ -24,6 +24,7 @@ const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
+const { validateSavOutput } = require('./sav-validation');
 
 // Edición milimétrica (Fase C): the before/after image is reviewed by a
 // separate vision model (multimodal/vision-ladder.js). Off under
@@ -353,6 +354,26 @@ function isExplicitPdfConversion(instruction, files = []) {
     && /\b(?:convierte|convertir|convert|exporta|exportar|export|guarda|guardar|save)\b[^.!?\n]{0,120}\b(?:a|al|en|como|to|as)\s+(?:(?:un|el|a)\s+)?(?:archivo\s+)?pdf\b/iu.test(String(instruction || ''));
 }
 
+function requestsSavExcelDelivery(instruction) {
+  const request = String(instruction || '');
+  return CREATE_DOC_RE.test(request)
+    && /(?:\bspss\b|\.sav\b)/i.test(request)
+    && /(?:\bexcel\b|\.xlsx\b)/i.test(request);
+}
+
+function missingRequestedSavExcel(instruction, artifacts = []) {
+  if (!requestsSavExcelDelivery(instruction)) return [];
+  const formats = new Set(artifacts.map((artifact) => String(artifact?.format || artifact?.filename?.split('.').pop() || '').toLowerCase()));
+  return [['sav', 'SAV'], ['xlsx', 'Excel']]
+    .filter(([format]) => !formats.has(format))
+    .map(([, label]) => label);
+}
+
+function completedSavExcelSummary(artifacts = []) {
+  const names = artifacts.map((artifact) => artifact.filename).filter(Boolean).join(', ');
+  return `Entregué ${names}. El SAV se pudo abrir; todavía no he comparado sus valores con los del Excel, así que no puedo afirmar que coincidan.`;
+}
+
 async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}) {
   const outputs = await sandbox.collectOutputs();
   for (const out of outputs) {
@@ -371,6 +392,13 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
         out.validation = { ok: false, passed: false, reason, engine: 'office_package_preflight' };
         onEvent({ type: 'output_invalid', name: out.name, reason });
       }
+    } else if (ext === 'sav') {
+      const verdict = await validateSavOutput(sandbox, out);
+      out.valid = verdict.ok;
+      out.validation = verdict.ok
+        ? verdict.validation
+        : { ok: false, passed: false, engine: 'pyreadstat', reason: verdict.reason };
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: verdict.reason });
     } else {
       out.valid = true;
     }
@@ -415,7 +443,10 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
         }
       }
       out.valid = proof.passed;
-      out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_edit_delta' };
+      out.validation = {
+        ...proof, ok: proof.passed, engine: 'agent_runner_edit_delta',
+        ...(ext === 'sav' && out.validation?.spss ? { spss: out.validation.spss } : {}),
+      };
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
     }
   }
@@ -922,10 +953,15 @@ async function runAgentRunnerForChat({
     saveArtifact,
   });
   const artifacts = persisted.filter((artifact) => artifact?.id && artifact?.downloadUrl && !artifact.error);
+  const requestedPair = requestsSavExcelDelivery(instruction);
+  const missingFormats = missingRequestedSavExcel(instruction, artifacts);
   const persistenceFailed = valid.length > 0 && !artifacts.length;
   const rejectedEdit = !valid.length && (run.outputs || []).some((output) => output.validation?.passed === false);
-  const summary = persistenceFailed ? 'La edición no pudo guardarse como archivo descargable. No entregué un resultado; vuelve a intentarlo.'
+  const summary = missingFormats.length
+    ? `No pude completar los dos archivos solicitados: falta ${missingFormats.join(' y ')}. ${artifacts.length ? `Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}.` : 'No entregué archivos.'} Inténtalo de nuevo; no asumiré que el archivo faltante existe.`
+    : persistenceFailed ? 'La edición no pudo guardarse como archivo descargable. No entregué un resultado; vuelve a intentarlo.'
     : rejectedEdit ? 'No pude verificar el cambio solicitado en el documento original. No entregué una copia sin cambios ni una edición incorrecta.'
+    : requestedPair && artifacts.length ? completedSavExcelSummary(artifacts)
     : artifacts.length ? (String(run.finalText || '').trim() || `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`)
       : run.stoppedReason === 'edit_not_applied' ? String(run.finalText || 'No se aplicó la edición.')
         : 'No pude producir un archivo verificado. No entregué un resultado sin comprobar.';
@@ -934,14 +970,14 @@ async function runAgentRunnerForChat({
   let failReason = persistenceFailed ? 'artifact_persistence_failed' : run.stoppedReason || 'no_output';
   if (failReason === 'final' || failReason === 'fast_path') failReason = 'no_output';
   return {
-    ok: artifacts.length > 0,
+    ok: artifacts.length > 0 && missingFormats.length === 0,
     summary,
     artifacts,
     steps: run.steps || [],
     iterations: run.iterations,
     driver: run.driver,
-    stoppedReason: artifacts.length ? 'agent_runner' : failReason,
-    errorMessage: artifacts.length ? null : (run.errorMessage || null),
+    stoppedReason: missingFormats.length ? 'requested_artifact_missing' : artifacts.length ? 'agent_runner' : failReason,
+    errorMessage: missingFormats.length ? summary : artifacts.length ? null : (run.errorMessage || null),
     priorArtifactId: resolved.latest?.id || null,
   };
 }
@@ -1260,4 +1296,6 @@ module.exports = {
   STYLE_EDIT_RE,
   hasConversationArtifacts,
   collectValidOutputs,
+  missingRequestedSavExcel,
+  completedSavExcelSummary,
 };
