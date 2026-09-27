@@ -129,11 +129,98 @@ function isSpreadsheetFile(row = {}) {
 }
 
 const TRANSCRIPTION_RE = /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcripcion|transcribe|transcript|transcription)\b/i;
-const EXPLICIT_TRANSCRIPTION_FILE_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint)\b|\b(?:exporta(?:r|me)?|descarga(?:r|me)?|genera(?:r|me)?|crea(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|archivo\s+descargable)\b/i;
+
+// A transcription that must land IN A FILE («transcribir en un documento
+// word», «transcribe esto a pdf», «exporta la transcripción a excel») is a
+// new deliverable built from the source, never an edit of the attachment
+// and never an inline answer. Prod 2026-09-27: «transcribir en un docuemnto
+// word» (typo) went to the source-preserving editor and failed with «No pude
+// editar el archivo original». The format words tolerate one transposed or
+// missing letter («docuemnto», «documeto», «wrod», «exel», «pwerpoint»).
+const FUZZY_FORMAT_WORDS = {
+  docx: ['word', 'docx', 'documento', 'doc'],
+  pdf: ['pdf'],
+  xlsx: ['excel', 'xlsx', 'hoja de calculo', 'spreadsheet'],
+  pptx: ['pptx', 'ppt', 'powerpoint', 'power point', 'presentacion', 'diapositivas', 'slides'],
+};
+const FILE_OUTPUT_LEAD_RE = /\b(?:en|como|a|hacia|formato(?:\s+de)?|exporta(?:r|me|lo|la)?|descarga(?:r|me|lo|la)?|genera(?:r|me|lo|la)?|crea(?:r|me|lo|la)?|prepara(?:r|me|lo|la)?|convierte(?:lo|la)?|convertir|pasa(?:r|me|lo|la)?|guarda(?:r|me|lo|la)?|dame|quiero|necesito)\b/i;
+
+function stripAccentsLower(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function withinOneEdit(a, b) {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; let j = 0; let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i += 1; j += 1; continue; }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length > b.length) i += 1;
+    else if (a.length < b.length) j += 1;
+    else if (a[i + 1] === b[j] && a[i] === b[j + 1]) { i += 2; j += 2; } // transposition
+    else { i += 1; j += 1; }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+function fuzzyWordMatches(word, target) {
+  if (word === target) return true;
+  // Short tokens (pdf, ppt, doc) must match exactly; typos are only
+  // tolerated in words of 4+ letters so «pdf» never matches «pfd»-like noise.
+  return target.length >= 4 && word.length >= 4 && withinOneEdit(word, target);
+}
+
+/**
+ * Output format a transcription/copy request asks for, or null. Looks at the
+ * words after an output lead-in («en un», «a», «exporta», …) so «transcribe
+ * el word adjunto» (source) is not read as output.
+ */
+function transcriptionFileOutputFormat(value) {
+  const text = stripAccentsLower(value).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const tokens = text.split(' ');
+  const leadAt = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (FILE_OUTPUT_LEAD_RE.test(tokens[i]) || (tokens[i] === 'formato' && tokens[i + 1] === 'de')) leadAt.push(i);
+  }
+  if (!leadAt.length) return null;
+  for (const start of leadAt) {
+    // Up to 6 tokens after the lead-in: «en un docuemnto word profesional».
+    const window = tokens.slice(start + 1, start + 7);
+    for (const [format, words] of Object.entries(FUZZY_FORMAT_WORDS)) {
+      for (const target of words) {
+        const parts = target.split(' ');
+        for (let k = 0; k + parts.length <= window.length; k += 1) {
+          if (parts.every((part, idx) => fuzzyWordMatches(window[k + idx], part))) {
+            // «documento» alone means docx only when nothing more specific
+            // (excel/pdf/pptx) follows in the same window.
+            if (format === 'docx' && (target === 'documento' || target === 'doc')) {
+              const specific = ['pdf', 'xlsx', 'pptx'].find((other) => FUZZY_FORMAT_WORDS[other].some((w) => window.some((t) => fuzzyWordMatches(t, w))));
+              if (specific) return specific;
+            }
+            return format;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function isTranscriptionRequest(value) {
+  const raw = String(value || '');
+  return TRANSCRIPTION_RE.test(raw) || TRANSCRIPTION_RE.test(stripAccentsLower(raw));
+}
+
+/** «transcribir en un documento word»: transcription that must become a file. */
+function isTranscriptionToFileRequest(value) {
+  return isTranscriptionRequest(value) && transcriptionFileOutputFormat(value) !== null;
+}
 
 function isPlainTranscriptionRequest(value) {
-  const text = String(value || '');
-  return TRANSCRIPTION_RE.test(text) && !EXPLICIT_TRANSCRIPTION_FILE_OUTPUT_RE.test(text);
+  return isTranscriptionRequest(value) && transcriptionFileOutputFormat(value) === null;
 }
 
 function isReadableFileCandidate(row = {}) {
@@ -1219,6 +1306,9 @@ module.exports = {
   isImageFile,
   isProfessionalDocumentSynthesisRequest,
   isPlainTranscriptionRequest,
+  isTranscriptionRequest,
+  isTranscriptionToFileRequest,
+  transcriptionFileOutputFormat,
   mapWithLimit,
   normalizeClientMetadata,
   prepareDocumentTextForProfessionalSynthesis,
