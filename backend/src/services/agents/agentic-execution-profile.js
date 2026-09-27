@@ -31,6 +31,10 @@ const PATTERNS = {
   autonomousSoftware: /\b(agente(?:s)?\s+aut[oó]nom[oa]s?|autonomous\s+agent|software\s+(?:muy\s+)?potente|sofware\s+(?:muy\s+)?potente|fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|integr[aá]lo|auto.?ejecut(?:a|able|or))\b/i,
   bulkSourceFusion: /\b(millones|millions|miles|thousands|much[ií]simas?)\b.{0,80}\b(l[ií]neas?|lines?|c[oó]digo|code|archivos?|files?)\b|\b(copiar|copia(?:r)?|copy)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw)\b|\b(fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|merge)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw|c[oó]digo|code)\b|\b(c[oó]digo|code)\b.{0,80}\b(copiar\s+y\s+fusionar|copy\s+and\s+merge|fusionar(?:lo)?)\b/i,
   computation: /\b(calcula(?:r)?|analiza(?:r)?|procesa(?:r)?|limpia(?:r)?|estad[ií]stica|cronbach|spearman|anova|regresi[oó]n|correlaci[oó]n|likert|dataset|csv|datos|tabla|f[oó]rmula|matriz|integral|derivada|probabilidad)\b/i,
+  // Separate an explicit calculation from words that merely describe the
+  // data format. A SAV/XLSX matrix comparison proves the latter, not a
+  // requested statistic such as Cronbach's alpha or a regression.
+  independentComputation: /\b(?:calcul\w*|analiz\w*|analisis|proces\w*|limpi\w*|estadistic\w*|cronbach|spearman|anova|regresion\w*|correlacion\w*|media|promedio\w*|mediana|moda|desviacion\w*|varianza\w*|frecuencia\w*|porcentaje\w*|probabilidad\w*|integral\w*|derivada\w*|formula\w*|coeficiente\w*|fiabilidad|confiabilidad|consistencia\s+interna|hipotesis|significancia|p[\s-]?valor|chi[\s-]?cuadrad\w*|factorial\w*|t[\s-]?student)\b/i,
   strictEvidence: /\b(100%|extremadamente preciso|precisi[oó]n|verifica(?:r)?|validar|reales|doi|open access|acceso abierto|20|30|40|50|100|miles|202[0-9]|art[ií]culos cient[ií]ficos)\b/i,
   transcription: /\b(transcrib(?:e|ir|eme|irme|elo|elo|alo|al[oó]|irlo)?|transcripci[oó]n|transcript|transcribe)\b/i,
   explicitTranscriptionArtifact: /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html|archivo|documento)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html)\b/i,
@@ -134,6 +138,7 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     needsAutonomousSoftware: autonomousSoftwareWork,
     needsBulkSourceFusion: bulkSourceFusion,
     needsComputation: PATTERNS.computation.test(rawGoal) || PATTERNS.computation.test(normalized),
+    needsIndependentComputation: PATTERNS.independentComputation.test(normalized),
     strictEvidence: PATTERNS.strictEvidence.test(rawGoal) || PATTERNS.strictEvidence.test(normalized),
     needsMedia,
     mediaKind: needsMedia ? mediaIntent.kind : null,

@@ -828,7 +828,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // validateSavXlsxDelivery. That server-side comparison performs the
     // computation, but is not a model tool step; requiring an additional
     // python_exec call would reject a fully verified pair before it is read.
-    if (artifactDeliveryContract?.active && artifactDeliveryContract.savXlsxMatrix) {
+    // Independent calculations requested alongside the files still need
+    // their own execution proof; comparing matrices cannot prove those.
+    if (artifactDeliveryContract?.active
+      && artifactDeliveryContract.savXlsxMatrix
+      && !profile.capabilities.needsIndependentComputation) {
       gateTools = gateTools.filter((tool) => tool !== 'python_exec');
     }
     const requiredTools = gateTools.filter((tool) => available.has(tool));
