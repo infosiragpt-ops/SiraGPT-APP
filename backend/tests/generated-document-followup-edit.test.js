@@ -159,6 +159,50 @@ test('latest requested-format artifact wins over newer preview and reattached or
   const result = await resolveTurnFiles({ prisma, userId: 'u', chatId: 'c', instruction: PROMPT, attachedFiles: [{ name: 'original.pptx', buffer: original }], objectStorage: { readFile: async (p) => { assert.equal(p, '/edited'); return latest; } } });
   assert.equal(result.files[0].artifactId, 'last-edit'); assert.equal(result.files[0].isPriorArtifact, true);
 });
+test('a same-named edited PDF is not overwritten by reattached originals in a four-file follow-up', async () => {
+  const requests = [
+    'En el PDF Prueba-PDF.pdf recién editado cambia solamente «Proyecto revisado» por «Proyecto final». Conserva «Aprobado», CONTROL_SIN_CAMBIOS y el formato. Devuélveme el PDF final.',
+    'En la última versión editada de Prueba-PDF.pdf cambia «Proyecto revisado» por «Proyecto final».',
+    'En Prueba-PDF.pdf que acabas de editar cambia «Proyecto revisado» por «Proyecto final».',
+  ];
+  const edited = Buffer.from('Proyecto revisado|Aprobado|CONTROL_SIN_CAMBIOS');
+  const names = ['Prueba-Word.docx', 'Prueba-Excel.xlsx', 'Prueba-PowerPoint.pptx', 'Prueba-PDF.pdf'];
+  const attachedFiles = names.map((name) => ({
+    name, fileId: `upload-${name}`, buffer: Buffer.from(name === 'Prueba-PDF.pdf'
+      ? 'Proyecto inicial|Pendiente|CONTROL_SIN_CAMBIOS' : `original:${name}`),
+  }));
+  const prisma = { generatedArtifact: { findMany: async ({ where }) => {
+    assert.deepEqual(where, { userId: 'owner', chatId: 'chat' });
+    return [{ id: 'edited-pdf', filename: 'Prueba-PDF.pdf', mime: 'application/pdf',
+      path: '/edited-pdf', userId: 'owner', chatId: 'chat' }];
+  } } };
+  for (const instruction of requests) {
+    const resolved = await resolveTurnFiles({ prisma, userId: 'owner', chatId: 'chat',
+      instruction, attachedFiles,
+      objectStorage: { readFile: async (ref) => { assert.equal(ref, '/edited-pdf'); return edited; } },
+    });
+    assert.equal(resolved.latest.id, 'edited-pdf');
+    assert.deepEqual(resolved.files.map((file) => file.name),
+      ['Prueba-PDF.pdf', 'Prueba-Word.docx', 'Prueba-Excel.xlsx', 'Prueba-PowerPoint.pptx']);
+    assert.deepEqual(resolved.files[0].buffer, edited);
+    assert.equal(resolved.files.filter((file) => file.name === 'Prueba-PDF.pdf').length, 1);
+  }
+});
+test('a different same-named upload with known lineage fails visibly before workspace staging', async () => {
+  const prisma = { generatedArtifact: { findMany: async () => [{
+    id: 'edited-pdf', filename: 'Prueba-PDF.pdf', mime: 'application/pdf',
+    path: '/edited-pdf', validation: { documentEdit: { sourceFileId: 'older-upload' } },
+  }] } };
+  const files = (await resolveTurnFiles({ prisma, userId: 'owner', chatId: 'chat',
+    instruction: 'En Prueba-PDF.pdf recién editado cambia el título.',
+    attachedFiles: [{ name: 'Prueba-PDF.pdf', fileId: 'different-upload', buffer: Buffer.from('nuevo archivo') }],
+    objectStorage: { readFile: async () => Buffer.from('versión anterior editada') },
+  })).files;
+  assert.equal(files.length, 2, 'a different upload cannot be discarded using only its filename');
+  await assert.rejects(runAgentRunner({ files, instruction: 'En Prueba-PDF.pdf cambia el título.',
+    client: { chat: { completions: { create: async () => { throw new Error('the source is ambiguous'); } } } },
+  }), { code: 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS' });
+});
 test('quoted new titles do not select another source format and exact filenames outrank content keywords', async () => {
   const rows = [{ id: 'latest-presentation', filename: 'presentacion_editada.pptx' }, { id: 'older-spreadsheet', filename: 'presupuesto.xlsx' }];
   const prisma = { generatedArtifact: { findMany: async () => rows } };
