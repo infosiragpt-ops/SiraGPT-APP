@@ -102,6 +102,28 @@ test('signal rules: debug tags, quiet successful reads, console.error without fa
   assert.match(classifyLine({ text: event, method: 'pino' }).msg, /ai\.generate\.request\.accepted/);
 });
 
+test('structured event/metric lines: meaningful summaries and levels from their own fields', () => {
+  const alert = JSON.stringify({ level: 50, time: 1, alert: { title: '[agent-task] run estancado 478h 15m — 1aee4cd2', severity: 'critical', message: 'x' }, msg: 'alert_emitted' });
+  const a = classifyLine({ text: alert, method: 'pino' });
+  assert.equal(a.level, 'error');
+  assert.equal(a.msg, 'alert_emitted · [critical] [agent-task] run estancado 478h 15m — 1aee4cd2');
+  const metrics = JSON.stringify({ t: 'x', event: 'filter_pipeline_metrics', scope: 'ai.generate', userId: 'u', model: 'claude-fable-5-1', provider: 'Anthropic', durationMs: 5354, aborted: false });
+  const m = classifyLine({ text: metrics, method: 'console.warn' });
+  assert.equal(m.level, 'info', 'a metric printed with console.warn is not a warning');
+  assert.match(m.msg, /^filter_pipeline_metrics · provider=Anthropic model=claude-fable-5-1 scope=ai\.generate durationMs=5354$/);
+  const search = JSON.stringify({ t: 'x', event: 'web_search_many', provider: 'aggregate:1', hits: 4, attempts: [{ id: 'a' }, { id: 'b' }] });
+  assert.match(classifyLine({ text: search, method: 'console.warn' }).msg, /web_search_many · provider=aggregate:1 hits=4 attempts=\[2\]/);
+  const sandbox = JSON.stringify({ level: 40, time: 1, code: 'DOC_CLEANUP_PENDING', msg: 'doc_sandbox' });
+  const d = classifyLine({ text: sandbox, method: 'pino' });
+  assert.equal(d.level, 'warn');
+  assert.equal(d.msg, 'doc_sandbox · code=DOC_CLEANUP_PENDING');
+  const failed = JSON.stringify({ event: 'upload_done', ok: false, error: 'disk full', file: 'a.pdf' });
+  const f = classifyLine({ text: failed, method: 'console.error' });
+  assert.equal(f.level, 'error');
+  assert.match(f.msg, /upload_done — disk full · file=a\.pdf/);
+  assert.equal(classifyLine({ text: failed, method: 'console.log' }).level, 'warn');
+});
+
 test('BullMQ worker errors are errors from a worker source', () => {
   const e = classifyLine({ text: "[agent-task-worker] worker error: ERR Your database has been temporarily rate-limited", method: 'console.error' });
   assert.equal(e.level, 'error');
