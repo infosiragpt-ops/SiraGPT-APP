@@ -104,6 +104,25 @@ test('spreadsheet chunks retain sheet identity, repeated headers and exact late-
   assert.deepEqual(await documentIntelligence.retrieveEvidence(prisma, { userId: 'other', fileId: file.id, query: 'sarcopenia' }), { evidence: [], totalChunks: 0 });
 });
 
+test('document evidence does not cite unrelated chunks when the answer is absent', async () => {
+  const text = 'Sheet: Ventas\nColumns (2): Año | Ingresos\nHeader row: 1. Column range: A:B.\nRow coordinates: 2\nTotal data rows: 1\n---\n2025\t1200';
+  const file = { id: 'sales-file', userId: 'owner', originalName: 'ventas.xlsx', extractedText: text };
+  const chunks = documentIntelligence.buildChunks(file, text);
+  const prisma = {
+    file: { async findFirst({ where }) { return where.userId === file.userId ? file : null; } },
+    documentAnalysis: { async findFirst() { return { id: 'sales-analysis' }; } },
+    documentChunk: { async findMany() { return chunks; } },
+  };
+
+  const found = await documentIntelligence.retrieveEvidence(prisma, { userId: 'owner', fileId: file.id, query: '2025', limit: 1 });
+  assert.equal(found.evidence[0].sourceLabel, 'Ventas!A2:B2');
+  assert.equal(found.evidence[0].metadata.cellRange, 'A2:B2');
+
+  const missing = await documentIntelligence.retrieveEvidence(prisma, { userId: 'owner', fileId: file.id, query: 'sarcopenia', limit: 1 });
+  assert.deepEqual(missing, { evidence: [], totalChunks: 1 });
+  assert.deepEqual(await documentIntelligence.retrieveEvidence(prisma, { userId: 'other', fileId: file.id, query: '2025' }), { evidence: [], totalChunks: 0 });
+});
+
 test('document evidence recovers late short identifiers and accent-insensitive terms without changing values', async () => {
   const chunks = Array.from({ length: 40 }, (_, index) => ({
     ordinal: index + 1,

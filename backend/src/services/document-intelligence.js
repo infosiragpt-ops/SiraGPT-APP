@@ -997,7 +997,11 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
   // adding neighbor context.
   const topK = Math.min(8, Math.max(3, Math.floor(limit / 2)));
   const positiveMatches = ranked.filter((chunk) => chunk.relevanceScore > 0);
-  const topMatches = (positiveMatches.length ? positiveMatches : ranked).slice(0, topK);
+  // No lexical or structural match means the document provided no evidence
+  // for this query. Returning an arbitrary first chunk here made a grounded
+  // answer appear possible even when the requested fact was absent.
+  if (!positiveMatches.length) return { evidence: [], totalChunks };
+  const topMatches = positiveMatches.slice(0, topK);
 
   // Strategy 4: Add neighbor chunks for context continuity
   const neighborSet = new Set(topMatches.map((c) => c.ordinal));
