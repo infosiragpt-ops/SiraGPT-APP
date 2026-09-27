@@ -9,11 +9,23 @@ let pdfJsPromise;
 
 function quotedReplacementPairs(instruction) {
   const value = String.raw`(?:«([^»]+)»|“([^”]+)”|"([^"]+)"|'([^']+)')`;
-  const pair = new RegExp(String.raw`${value}\s*(?:por|con|a|to|with|→|->)\s*${value}`, 'giu');
+  const pair = new RegExp(String.raw`${value}\s*(?:por|con|a|to|with|→|->|para\s+que\s+(?:diga|sea|quede\s+como))\s*${value}`, 'giu');
   return [...String(instruction || '').matchAll(pair)].map((match) => ({
     before: match.slice(1, 5).find(Boolean),
     after: match.slice(5, 9).find(Boolean),
   })).filter(({ before, after }) => before && after && before !== after);
+}
+
+// A simple unquoted instruction can still identify an exact replacement. Keep
+// this intentionally narrow: ambiguous prose is not a safe source of a PDF
+// text plan, and quoted pairs above remain authoritative when present.
+function unquotedReplacementPairs(instruction) {
+  const command = /\b(?:cambia|reemplaza|sustituye|change|replace)\s+(?:(?:solo|solamente|únicamente)\s+)?(?:(?:el|la)\s+(?:título|texto|frase|palabra|nombre|fecha)\s+(?:de\s+)?)?([^.;:\n]{2,100}?)\s+(?:por|con|a|to|with|→|->)\s+([^.;:\n]{2,100})(?:[.;:\n]|$)/giu;
+  return [...String(instruction || '').matchAll(command)].map((match) => ({
+    before: match[1].trim(),
+    after: match[2].replace(/\s+(?:y\s+)?(?:conserva|mant[eé]n|preserva)\b.*$/iu, '').trim(),
+  })).filter(({ before, after }) => before && after && before !== after
+    && !/[«»“”"']/.test(before + after));
 }
 
 function normalizedText(value) {
@@ -93,7 +105,8 @@ function textChangeMatches(beforePages, afterPages, pairs) {
 }
 
 async function validateEditedPdf({ originalBuffer, editedBuffer, instruction = '' } = {}) {
-  const pairs = Buffer.isBuffer(originalBuffer) ? quotedReplacementPairs(instruction) : [];
+  const quoted = Buffer.isBuffer(originalBuffer) ? quotedReplacementPairs(instruction) : [];
+  const pairs = quoted.length ? quoted : (Buffer.isBuffer(originalBuffer) ? unquotedReplacementPairs(instruction) : []);
   let after;
   try {
     after = await inspectPdf(editedBuffer, { withText: pairs.length > 0 });
@@ -107,9 +120,16 @@ async function validateEditedPdf({ originalBuffer, editedBuffer, instruction = '
   } catch {
     return { ok: false, reason: 'pdf_baseline_unreadable' };
   }
+  // An unquoted color/layout instruction can resemble a text replacement.
+  // Only impose the strict literal-text gate when its old phrase is actually
+  // present in the PDF's extracted text; quoted pairs are explicit regardless.
+  if (!quoted.length && !pairs.every(({ before: needle }) => before.some((page) =>
+    normalizedText(page.items.map((item) => item.text).join(' ')).includes(normalizedText(needle))))) {
+    return { ok: true, reason: 'pdf_readable' };
+  }
   return textChangeMatches(before, after, pairs)
     ? { ok: true, reason: 'pdf_literal_edit_verified' }
     : { ok: false, reason: 'pdf_edit_unverified' };
 }
 
-module.exports = { validateEditedPdf, quotedReplacementPairs };
+module.exports = { validateEditedPdf, quotedReplacementPairs, unquotedReplacementPairs };

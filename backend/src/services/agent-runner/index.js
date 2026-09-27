@@ -99,6 +99,7 @@ const MAX_OUTPUT_RETRIES = 3;
 const { trySurgicalPresentationFollowup } = require('./surgical-followup');
 const { isScopedSlideMutation, parsePresentationTitleEdit } = require('../document-editing/presentation-title-intent');
 const { verifyContentChanged, verifySlideTitleEdit, assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
+const { validateEditedPdf } = require('../doc-agent/pdf-output-validation');
 
 /* ── F8 — memoria híbrida + skills + cliente MCP (hooks) ────────────────────
  * Los módulos viven en ./memory, ./skills y ./mcp; este helper solo ORQUESTA:
@@ -356,6 +357,25 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
     const ext = String(out.name || '').split('.').pop().toLowerCase();
     const sources = (editContext.files || []).filter((file) => String(file.name || '').toLowerCase().endsWith(`.${ext}`));
     const source = resolveOutputEditSource(out.name, sources);
+    if (out.valid && ext === 'pdf') {
+      // The general agent also edits PDFs, outside the document-agent route.
+      // Byte inequality proves neither a readable PDF nor a requested edit.
+      let proof = sources.length && editContext.isEdit
+        ? (source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: 'source_ambiguous' })
+        : { passed: true };
+      if (proof.passed) {
+        const verdict = await validateEditedPdf({
+          originalBuffer: sources.length && editContext.isEdit ? source.buffer : null,
+          editedBuffer: out.buffer,
+          instruction: editContext.instruction,
+        });
+        proof = { passed: verdict.ok, reason: verdict.reason };
+      }
+      out.valid = proof.passed;
+      out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_pdf_edit' };
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
+      continue;
+    }
     if (out.valid && sources.length && editContext.isEdit) {
       let proof = source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: 'source_ambiguous' };
       if (proof.passed && ext === 'pptx') {
