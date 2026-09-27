@@ -101,6 +101,14 @@ function combinedScore(result, rerankScore, weights) {
 }
 
 const RERANK_CONCURRENCY = 3;
+// Whole re-ranking budget: batches not scored by then keep the deterministic
+// order instead of holding the search open.
+const RERANK_DEADLINE_MS = 45_000;
+
+function rerankDeadlineMs() {
+  const value = Math.floor(Number(process.env.SEARCH_BRAIN_RERANK_DEADLINE_MS));
+  return Number.isFinite(value) && value >= 1000 ? value : RERANK_DEADLINE_MS;
+}
 
 /**
  * @param {object} args
@@ -111,9 +119,10 @@ const RERANK_CONCURRENCY = 3;
  * @param {(args:{system:string,user:string,temperature?:number,maxTokens?:number,signal?:AbortSignal})=>Promise<{content:string}>} [args.callLLM]
  * @param {AbortSignal} [args.signal]   stop launching batches (and cancel the in-flight calls) once aborted
  * @param {number} [args.concurrency=3] batches scored at the same time
+ * @param {number} [args.deadlineMs=45000] stop scoring (and cancel in-flight calls) after this long
  * @returns {Promise<{results: import("./types").NormalisedResult[], reranked: boolean}>}
  */
-async function rerankResults({ query, results, weights, batchSize = 10, callLLM, signal, concurrency = RERANK_CONCURRENCY }) {
+async function rerankResults({ query, results, weights, batchSize = 10, callLLM, signal, concurrency = RERANK_CONCURRENCY, deadlineMs = rerankDeadlineMs() }) {
   const w = { ...DEFAULT_WEIGHTS, ...(weights || {}) };
   const pool = Array.isArray(results) ? [...results] : [];
   if (pool.length === 0) return { results: [], reranked: false };
@@ -130,8 +139,10 @@ async function rerankResults({ query, results, weights, batchSize = 10, callLLM,
   for (let start = 0; start < pool.length; start += batchSize) batches.push(pool.slice(start, start + batchSize));
   let scoredCount = 0;
   let next = 0;
+  const deadline = AbortSignal.timeout(Math.max(1, Math.floor(Number(deadlineMs)) || RERANK_DEADLINE_MS));
+  const callSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
   const scoreBatches = async () => {
-    while (next < batches.length && !signal?.aborted) {
+    while (next < batches.length && !callSignal.aborted) {
       const batch = batches[next++];
       try {
         const out = await callLLM({
@@ -139,7 +150,7 @@ async function rerankResults({ query, results, weights, batchSize = 10, callLLM,
           user: `QUERY:\n${query}\n\nCANDIDATES:\n${formatBatch(batch)}`,
           temperature: 0,
           maxTokens: 700,
-          signal,
+          signal: callSignal,
         });
         const parsed = parseJson((out && out.content) || "");
         const scores = validateScores(parsed);

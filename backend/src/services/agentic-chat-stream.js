@@ -192,7 +192,7 @@ const CUSTOM_GPT_DOCUMENT_TOOL_NAMES = new Set([
 // Web lookups and page reads per agentic turn. A news question ran 22
 // searches in 6 steps (74 s) although the route had already injected 10
 // fresh results; once searches were capped, 11 page reads still took ~46 s.
-const WEB_LOOKUP_TOOLS = new Set(['web_search', 'deep_search', 'x_search']);
+const WEB_LOOKUP_TOOLS = new Set(['web_search', 'deep_search', 'x_search', 'scientific_search']);
 const WEB_READ_TOOLS = new Set(['read_url', 'web_fetch', 'web_extract']);
 
 function positiveEnvInt(env, name, fallback) {
@@ -225,6 +225,28 @@ function withToolBudget(tools, names, limit, exhaustedMessage) {
       },
     };
   });
+}
+
+/**
+ * Same budgets enforced where every tool call is dispatched (react-agent's
+ * `ctx.checkToolBudget`, prefetch and sequential paths alike). The per-tool
+ * wrappers stay as a second layer; in production a news turn still completed
+ * one page read more than its cap.
+ */
+function checkWebToolBudget(name, usage, limits) {
+  const group = WEB_LOOKUP_TOOLS.has(name) ? 'searches' : WEB_READ_TOOLS.has(name) ? 'reads' : null;
+  if (!group) return { ok: true };
+  const members = group === 'searches' ? WEB_LOOKUP_TOOLS : WEB_READ_TOOLS;
+  let used = 0;
+  for (const member of members) used += Number(usage && usage[member]) || 0;
+  const limit = limits[group];
+  if (used < limit) return { ok: true };
+  return {
+    ok: false,
+    reason: group === 'searches'
+      ? `Límite de ${limit} búsquedas web en este turno alcanzado. Responde ya con las fuentes que tienes y cítalas.`
+      : `Límite de ${limit} lecturas de página en este turno alcanzado. Responde ya con lo que leíste y los resultados que tienes, y cítalos.`,
+  };
 }
 
 function withWebSearchBudget(tools, limit) {
@@ -2386,6 +2408,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             clearance: toolContext.clearance || null,
             permission: composerPermission,
           },
+          toolUsageMap: Object.create(null),
+          checkToolBudget: (name, usage) => checkWebToolBudget(name, usage, { searches: webLookupLimit, reads: webReadLimit }),
         },
         finalizeGuard: composedFinalizeGuard,
         onBeforeStep: __coworkRun ? beforeCoworkStep : null,
@@ -3226,6 +3250,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       applyCustomGptCapabilityGates,
       webSearchBudget,
       webReadBudget,
+      checkWebToolBudget,
       withWebSearchBudget,
       withWebReadBudget,
       buildChatFinalizeProfile,
