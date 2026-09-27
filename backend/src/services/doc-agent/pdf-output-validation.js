@@ -21,11 +21,12 @@ function quotedReplacementPairs(instruction) {
 // text plan, and quoted pairs above remain authoritative when present.
 function unquotedReplacementPairs(instruction) {
   const command = /\b(?:cambia|reemplaza|sustituye|change|replace)\s+(?:(?:solo|solamente|únicamente)\s+)?(?:(?:el|la)\s+(?:título|texto|frase|palabra|nombre|fecha)\s+(?:de\s+)?)?([^.;:\n]{2,100}?)\s+(?:por|con|a|to|with|→|->)\s+([^.;:\n]{2,100})(?:[.;:\n]|$)/giu;
+  const visualTarget = /^(?:(?:el|la|los|las)\s+)?(?:color|fondo|tipografía|fuente|tamaño|margen(?:es)?|diseño|estilo|layout)\b/iu;
   return [...String(instruction || '').matchAll(command)].map((match) => ({
     before: match[1].trim(),
     after: match[2].replace(/\s+(?:y\s+)?(?:conserva|mant[eé]n|preserva)\b.*$/iu, '').trim(),
   })).filter(({ before, after }) => before && after && before !== after
-    && !/[«»“”"']/.test(before + after));
+    && !/[«»“”"']/.test(before + after) && !visualTarget.test(before));
 }
 
 function normalizedText(value) {
@@ -120,12 +121,11 @@ async function validateEditedPdf({ originalBuffer, editedBuffer, instruction = '
   } catch {
     return { ok: false, reason: 'pdf_baseline_unreadable' };
   }
-  // An unquoted color/layout instruction can resemble a text replacement.
-  // Only impose the strict literal-text gate when its old phrase is actually
-  // present in the PDF's extracted text; quoted pairs are explicit regardless.
+  // Visual instructions are excluded by the unquoted parser. Once a literal
+  // replacement is recognized, missing source text makes the edit impossible.
   if (!quoted.length && !pairs.every(({ before: needle }) => before.some((page) =>
     normalizedText(page.items.map((item) => item.text).join(' ')).includes(normalizedText(needle))))) {
-    return { ok: true, reason: 'pdf_readable' };
+    return { ok: false, reason: 'pdf_source_text_missing' };
   }
   return textChangeMatches(before, after, pairs)
     ? { ok: true, reason: 'pdf_literal_edit_verified' }

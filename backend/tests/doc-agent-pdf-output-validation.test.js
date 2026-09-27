@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
 const { runDocumentAgent } = require('../src/services/doc-agent');
+const { unquotedReplacementPairs } = require('../src/services/doc-agent/pdf-output-validation');
 const { collectValidOutputs } = require('../src/services/agent-runner');
 
 const instruction = 'En el PDF cambia solamente «Proyecto revisado» por «Proyecto final». Conserva «Aprobado» y CONTROL_SIN_CAMBIOS.';
@@ -115,6 +116,36 @@ test('an unquoted literal PDF replacement is checked before marking the artifact
   const { output: accepted } = await runAgentOutputCheck(source, edited, request);
   assert.equal(accepted.valid, true);
   assert.equal(accepted.validation?.passed, true);
+});
+
+test('an explicit unquoted replacement fails when its old text is absent from the source PDF', async () => {
+  const source = await pdfWith('Proyecto revisado');
+  const changedBytes = Buffer.concat([source, Buffer.from('\n% harmless trailing comment\n')]);
+  const request = 'Cambia Título fantasma por Proyecto final. Conserva Aprobado.';
+  const { output, events } = await runAgentOutputCheck(source, changedBytes, request);
+  assert.equal(output.valid, false);
+  assert.equal(output.validation?.reason, 'pdf_source_text_missing');
+  assert.ok(events.some((event) => event.type === 'output_invalid' && event.reason === 'pdf_source_text_missing'));
+});
+
+test('the unquoted parser keeps conservation prose out of the replacement value', async () => {
+  const request = 'Cambia Proyecto revisado por Proyecto final y conserva Aprobado y CONTROL_SIN_CAMBIOS';
+  assert.deepEqual(unquotedReplacementPairs(request), [{ before: 'Proyecto revisado', after: 'Proyecto final' }]);
+  assert.deepEqual(unquotedReplacementPairs('Cambia el color rojo por azul.'), []);
+  const source = await pdfWith('Proyecto revisado');
+  const edited = await pdfWith('Proyecto final');
+  const { output } = await runAgentOutputCheck(source, edited, request);
+  assert.equal(output.valid, true);
+});
+
+test('a PDF edit without its source fails closed while new PDF generation remains valid', async () => {
+  const source = await pdfWith('Proyecto revisado');
+  const sandbox = { collectOutputs: async () => [{ name: 'editado.pdf', buffer: source }] };
+  const edit = await collectValidOutputs(sandbox, () => {}, { files: [], instruction, isEdit: true });
+  assert.equal(edit[0].valid, false);
+  assert.equal(edit[0].validation?.reason, 'source_missing');
+  const generated = await collectValidOutputs(sandbox, () => {}, { files: [], instruction: 'Crea un PDF', isEdit: false });
+  assert.equal(generated[0].valid, true);
 });
 
 test('the general agent accepts a verified PDF literal edit', async () => {

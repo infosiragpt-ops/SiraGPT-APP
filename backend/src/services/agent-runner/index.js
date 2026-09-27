@@ -360,12 +360,12 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
     if (out.valid && ext === 'pdf') {
       // The general agent also edits PDFs, outside the document-agent route.
       // Byte inequality proves neither a readable PDF nor a requested edit.
-      let proof = sources.length && editContext.isEdit
-        ? (source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: 'source_ambiguous' })
+      let proof = editContext.isEdit
+        ? (source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: sources.length ? 'source_ambiguous' : 'source_missing' })
         : { passed: true };
       if (proof.passed) {
         const verdict = await validateEditedPdf({
-          originalBuffer: sources.length && editContext.isEdit ? source.buffer : null,
+          originalBuffer: editContext.isEdit ? source.buffer : null,
           editedBuffer: out.buffer,
           instruction: editContext.instruction,
         });
