@@ -103,9 +103,28 @@ function buildPrismaDatasourceUrl(databaseUrl, poolConfig = resolveDatabasePoolC
   return parsed.toString();
 }
 
+// A Serializable transaction that loses a race throws P2034 («write conflict
+// or a deadlock») and its callers retry it (cowork runs, goal events…).
+// Prisma's stdout logger printed every one as `prisma:error`, so a conflict
+// resolved on the next attempt read as an outage in Admin → Logs. Errors are
+// emitted as events: conflicts are logged as warnings, everything else as an
+// error. The thrown error still reaches the caller either way.
+const PRISMA_WRITE_CONFLICT_RE = /write conflict or a deadlock/i;
+
+function logPrismaError(event, sink = console) {
+  const message = String((event && event.message) || '').trim();
+  if (PRISMA_WRITE_CONFLICT_RE.test(message)) {
+    const invocation = /Invalid `([^`]+)` invocation/.exec(message);
+    sink.warn(`prisma:warn transaction conflict (retried by the caller)${invocation ? ` in ${invocation[1]}` : ''}`);
+    return 'conflict';
+  }
+  sink.error(`prisma:error ${message}`);
+  return 'error';
+}
+
 function buildPrismaClientOptions(env = {}) {
   const options = {
-    log: env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+    log: env.NODE_ENV === 'development' ? ['warn', 'error'] : [{ emit: 'event', level: 'error' }],
   };
   const databaseUrl = resolveRuntimeDatabaseUrl(env);
   if (databaseUrl) {
@@ -126,6 +145,9 @@ const databasePoolConfig = resolveDatabasePoolConfig(process.env);
 const resolvedDatabaseUrl = resolveRuntimeDatabaseUrl(process.env);
 const databasePoolCapacity = classifyDatabasePoolCapacity(resolvedDatabaseUrl);
 const basePrisma = new PrismaClient(buildPrismaClientOptions(process.env));
+if (process.env.NODE_ENV !== 'development' && typeof basePrisma.$on === 'function') {
+  basePrisma.$on('error', (event) => logPrismaError(event));
+}
 
 // Prisma does not expose native pool counters at the JavaScript layer. Attach
 // the existing best-effort in-flight instrumentation. Prisma 6.14+ removed
@@ -246,6 +268,7 @@ module.exports.resolveDatabaseUrl = resolveRuntimeDatabaseUrl;
 module.exports.classifyDatabasePoolCapacity = classifyDatabasePoolCapacity;
 module.exports.buildPrismaDatasourceUrl = buildPrismaDatasourceUrl;
 module.exports.buildPrismaClientOptions = buildPrismaClientOptions;
+module.exports.logPrismaError = logPrismaError;
 module.exports.sanitizeDatabaseErrorMessage = sanitizeDatabaseErrorMessage;
 module.exports.parseBoundedInteger = parseBoundedInteger;
 module.exports.DATABASE_POOL_LIMIT_BOUNDS = DATABASE_POOL_LIMIT_BOUNDS;
