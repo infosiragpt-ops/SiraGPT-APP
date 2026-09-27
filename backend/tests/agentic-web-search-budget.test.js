@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { _internal } = require('../src/services/agentic-chat-stream');
 
-const { webSearchBudget, withWebSearchBudget } = _internal;
+const { webSearchBudget, webReadBudget, withWebSearchBudget, withWebReadBudget } = _internal;
 
 test('budget: generous by default, two follow-ups when the route already searched', () => {
   assert.equal(webSearchBudget({ env: {} }), 8);
@@ -39,13 +39,36 @@ test('web lookups past the budget answer «use what you have» without calling t
   assert.equal(providerCalls, 3);
 });
 
+// After #865 capped searches at 2, the same news turn still read 11 pages
+// (~46 s) before answering.
+test('page reads have their own budget: 12 by default, 3 when the route already searched', async () => {
+  assert.equal(webReadBudget({ env: {} }), 12);
+  assert.equal(webReadBudget({ preGroundedSources: 10, env: {} }), 3);
+  assert.equal(webReadBudget({ env: { SIRAGPT_AGENTIC_WEB_READ_BUDGET: '5' } }), 5);
+  let reads = 0;
+  let searches = 0;
+  const tools = withWebReadBudget(withWebSearchBudget([
+    { name: 'web_search', execute: async () => { searches += 1; return { ok: true }; } },
+    { name: 'web_fetch', execute: async () => { reads += 1; return { ok: true }; } },
+    { name: 'read_url', execute: async () => { reads += 1; return { ok: true }; } },
+    { name: 'python_exec', execute: async () => ({ ok: true }) },
+  ], 1), 2);
+  await Promise.all([tools[1].execute({}), tools[2].execute({}), tools[1].execute({})]);
+  assert.equal(reads, 2, 'read_url and web_fetch share one budget');
+  const blocked = await tools[2].execute({});
+  assert.match(blocked.error, /Límite de 2 lecturas de página en este turno alcanzado\. Responde ya con lo que leíste/);
+  await tools[0].execute({});
+  assert.equal(searches, 1, 'searches keep their own counter');
+  assert.deepEqual(await tools[3].execute({}), { ok: true });
+});
+
 test('wiring: the route passes its fresh sources and the loop starts from them', () => {
   const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   const ai = read('src/routes/ai.js');
   assert.match(ai, /webGrounding: Array\.isArray\(webSearchSources\) && webSearchSources\.length\s*\? \{ sources: webSearchSources\.length \}\s*: null,/);
   const stream = read('src/services/agentic-chat-stream.js');
   assert.match(stream, /if \(preGroundedSources > 0 && initialToolChoice === 'web_search'\) initialToolChoice = null;/);
-  assert.match(stream, /tools = withWebSearchBudget\(tools, webLookupLimit\);/);
+  assert.match(stream, /tools = withWebReadBudget\(withWebSearchBudget\(tools, webLookupLimit\), webReadLimit\);/);
   assert.match(stream, /if \(!initialToolChoice && preGroundedSources === 0 && availableToolNames\.has\('web_search'\)\) \{/);
   assert.match(stream, /Ya tienes \$\{preGroundedSources\} resultados web recientes para esta pregunta en «Fresh Web Context»/);
 });
