@@ -40,7 +40,7 @@ function formatElapsed(sec: number): string {
 
 /**
  * Status chip for Pensando / AgenticSteps / RunTrace header.
- * In-progress always uses PensandoBars (the Claude asterisk, think accent #D97757).
+ * In-progress always uses PensandoBars (the clover glyph, think accent #2E7D32).
  * Terminal states keep the static check / X. The step list (not this chip)
  * keeps semantic colors — running is --step-running blue, never brand-red.
  */
@@ -119,7 +119,7 @@ export function ThinkingStatusLoader({
           className={cn(
             "min-w-0 truncate font-sans tracking-[-0.01em]",
             compact ? "text-[13px] leading-5" : "text-[13.5px] font-medium leading-5",
-            state === "error" ? "text-[var(--step-failed,#B45353)]" : "text-[var(--step-running,#D97757)]",
+            state === "error" ? "text-[var(--step-failed,#B45353)]" : "text-[var(--step-running,#2E7D32)]",
             state === "completado" && "text-[var(--step-done,#059669)]",
             !terminal && "thinking-shimmer-text",
           )}

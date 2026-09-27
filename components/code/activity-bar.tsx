@@ -56,7 +56,7 @@ function RailAccent({ on }: { on: boolean }) {
         "absolute inset-y-1.5 left-0 w-[2px] rounded-r-full transition-opacity",
         on ? "opacity-100" : "opacity-0",
       )}
-      style={{ backgroundColor: "hsl(var(--accent-violet, 262 83% 66%))" }}
+      style={{ backgroundColor: "hsl(var(--accent-violet, 123 46% 34%))" }}
     />
   )
 }
@@ -105,7 +105,7 @@ export function ToolsRail({
                   {opened && !active ? (
                     <span
                       aria-hidden
-                      className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet,262_83%_66%))]"
+                      className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent-violet,123_46%_34%))]"
                     />
                   ) : null}
                 </Button>

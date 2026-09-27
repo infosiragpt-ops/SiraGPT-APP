@@ -114,7 +114,7 @@ class EmailService {
       
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+          <div style="background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%); padding: 20px; text-align: center;">
             <h1 style="color: white; margin: 0;">Usage Alert</h1>
           </div>
           
@@ -127,7 +127,7 @@ class EmailService {
               <h3>Current Usage:</h3>
               <p><strong>${usage.current.toLocaleString()}</strong> / ${usage.limit.toLocaleString()} ${type === 'api_usage' ? 'API calls' : 'calls'}</p>
               <div style="background: #e0e0e0; height: 10px; border-radius: 5px; overflow: hidden;">
-                <div style="background: ${percentage >= 100 ? '#e74c3c' : percentage >= 90 ? '#f39c12' : '#3498db'}; height: 100%; width: ${Math.min(percentage, 100)}%;"></div>
+                <div style="background: ${percentage >= 100 ? '#e74c3c' : percentage >= 90 ? '#f39c12' : '#2E7D32'}; height: 100%; width: ${Math.min(percentage, 100)}%;"></div>
               </div>
             </div>
 
@@ -139,7 +139,7 @@ class EmailService {
             ` : ''}
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.FRONTEND_URL}/billing" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${process.env.FRONTEND_URL}/billing" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Manage Subscription
               </a>
             </div>
@@ -147,7 +147,7 @@ class EmailService {
           
           <div style="background: #34495e; color: white; padding: 15px; text-align: center; font-size: 12px;">
             <p>This is an automated message from OpenWebUI. If you no longer wish to receive these notifications, 
-            <a href="${process.env.FRONTEND_URL}/profile" style="color: #3498db;">manage your preferences</a>.</p>
+            <a href="${process.env.FRONTEND_URL}/profile" style="color: #2E7D32;">manage your preferences</a>.</p>
           </div>
         </div>
       `;
@@ -307,7 +307,7 @@ class EmailService {
       
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+          <div style="background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%); padding: 20px; text-align: center;">
             <h1 style="color: white; margin: 0;">🎉 Welcome to ${user.plan}!</h1>
           </div>
           
@@ -324,7 +324,7 @@ class EmailService {
             </div>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.FRONTEND_URL}/chat" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${process.env.FRONTEND_URL}/chat" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Start Using Your Plan
               </a>
             </div>
@@ -531,14 +531,14 @@ class EmailService {
 
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+          <div style="background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%); padding: 20px; text-align: center;">
             <h1 style="color: white; margin: 0;">Verify your email</h1>
           </div>
           <div style="padding: 20px; background: #f9f9f9;">
             <h2>Hi ${safeName},</h2>
             <p>Click the button below to verify your email address. This link expires in 24 hours.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${verifyUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${verifyUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Verify Email
               </a>
             </div>
@@ -575,14 +575,14 @@ class EmailService {
 
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+          <div style="background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%); padding: 20px; text-align: center;">
             <h1 style="color: white; margin: 0;">Restablece tu contraseña</h1>
           </div>
           <div style="padding: 20px; background: #f9f9f9;">
             <h2>Hola ${safeName},</h2>
             <p>Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en SiraGPT. Haz clic en el botón a continuación para crear una nueva contraseña. Este enlace expira en 30 minutos.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${resetUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${resetUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Restablecer contraseña
               </a>
             </div>
@@ -658,7 +658,7 @@ class EmailService {
 
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: #FF0000; padding: 22px; text-align: center;">
+          <div style="background: #2E7D32; padding: 22px; text-align: center;">
             <h1 style="color: white; margin: 0; font-size: 24px;">Invitación a Sira</h1>
           </div>
           <div style="padding: 24px; background: #f9fafb;">
@@ -666,7 +666,7 @@ class EmailService {
             <p style="color: #4b5563; line-height: 1.6;">Te agregaron como <strong>${safeRole}</strong> para trabajar en Sira.</p>
             ${projectBlock}
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${safeInviteUrl}" style="background: #FF0000; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+              <a href="${safeInviteUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
                 Aceptar invitación
               </a>
             </div>
@@ -709,14 +709,14 @@ class EmailService {
 
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; text-align: center;">
+          <div style="background: linear-gradient(135deg, #2E7D32 0%, #1B5E20 100%); padding: 20px; text-align: center;">
             <h1 style="color: white; margin: 0;">Welcome to ${safeOrg}</h1>
           </div>
           <div style="padding: 20px; background: #f9f9f9;">
             <h2>Hi ${safeName},</h2>
             <p>You've been added to <strong>${safeOrg}</strong>. You can now access shared chats, files and team resources.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${orgUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${orgUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Open ${safeOrg}
               </a>
             </div>
@@ -765,7 +765,7 @@ class EmailService {
             <p>Your role in <strong>${safeOrg}</strong> changed from <strong>${safeOld}</strong> to <strong>${safeNew}</strong>.</p>
             <p>If you did not expect this change, contact an organization administrator.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${orgUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${orgUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Open ${safeOrg}
               </a>
             </div>
@@ -815,7 +815,7 @@ class EmailService {
             <p>You no longer have access to chats, files or resources that were shared inside that organization.</p>
             <p>If you believe this was a mistake, contact an organization administrator.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${homeUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${homeUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Open SiraGPT
               </a>
             </div>
@@ -876,7 +876,7 @@ class EmailService {
             ${bodyHtml}
             <p>If you did not expect this change, contact the organization immediately.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${orgUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${orgUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Open ${safeOrg}
               </a>
             </div>
@@ -1109,7 +1109,7 @@ class EmailService {
             </ul>
             <p>Si no has sido tú, alguien con acceso a tu cuenta acaba de hacerlo. Cambia tu contraseña y revisa el resto de tus dispositivos.</p>
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${settingsUrl}" style="background: #3498db; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              <a href="${settingsUrl}" style="background: #2E7D32; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                 Revisar mis dispositivos
               </a>
             </div>

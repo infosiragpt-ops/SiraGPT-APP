@@ -1,13 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SiraGPT">
-  <rect width="512" height="512" rx="96" fill="#fff"/>
-  <g transform="translate(56 56) scale(0.78125)">
   <defs>
     <!-- one heart-shaped leaf, tip at the origin, axis pointing up -->
     <g id="leaf">
       <path d="M0 0 C -16 -30, -62 -44, -76 -84 C -90 -124, -56 -154, -28 -136 C -12 -126, -5 -112, 0 -100 C 5 -112, 12 -126, 28 -136 C 56 -154, 90 -124, 76 -84 C 62 -44, 16 -30, 0 0 Z"/>
     </g>
   </defs>
-  <g fill="#2E7D32" transform="translate(256 244)">
+  <g fill="currentColor" transform="translate(256 244)">
     <use href="#leaf" transform="rotate(0)"/>
     <use href="#leaf" transform="rotate(90)"/>
     <use href="#leaf" transform="rotate(180)"/>
@@ -19,8 +17,5 @@
     <path d="M0 -34 L 0 -96" transform="rotate(90)"/>
     <path d="M0 -34 L 0 -96" transform="rotate(180)"/>
     <path d="M0 -34 L 0 -96" transform="rotate(270)"/>
-  </g>
-
-
   </g>
 </svg>

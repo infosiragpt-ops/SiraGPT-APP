@@ -25,7 +25,7 @@
  *   - Bump SCHEMA_VERSION whenever the PRECACHE_URLS list or fetch policy
  *     changes shape (e.g. adding new pre-cached assets).
  */
-const SCHEMA_VERSION = 'sira-v2'
+const SCHEMA_VERSION = 'sira-v3'
 // Placeholder replaced at deploy time. Falls back to 'dev' for local builds
 // so the SW still functions without the substitution step.
 const BUILD_ID = '__SIRAGPT_BUILD_ID__'.startsWith('__') ? 'dev' : '__SIRAGPT_BUILD_ID__'
@@ -37,6 +37,7 @@ const PRECACHE_URLS = [
   '/offline',
   '/sira-gpt-192.png',
   '/sira-gpt-512.png',
+  '/brand/clover.svg',
   '/manifest.webmanifest',
 ]
 
@@ -96,6 +97,7 @@ function isCacheableStatic(url) {
     url.pathname.startsWith('/_next/static/') ||
     url.pathname.startsWith('/icons/') ||
     url.pathname.startsWith('/sira-gpt-') ||
+    url.pathname.startsWith('/brand/') ||
     url.pathname === '/manifest.webmanifest'
   )
 }

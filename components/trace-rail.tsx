@@ -93,7 +93,7 @@ export function TraceRailRow({ label, status = "done", icon, tool, phase, labelT
         className={cn(
           "relative z-[1] mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] border bg-background",
           failed ? "border-[color-mix(in_srgb,var(--step-failed,#B45353)_45%,transparent)] text-[var(--step-failed,#B45353)]" : "border-border/70 text-muted-foreground",
-          running && "border-[color-mix(in_srgb,var(--think-accent,#D97757)_40%,transparent)]",
+          running && "border-[color-mix(in_srgb,var(--think-accent,#2E7D32)_40%,transparent)]",
         )}
         aria-hidden="true"
       >

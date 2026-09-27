@@ -13,7 +13,7 @@ export type PensandoBarsProps = {
 
 /**
  * THE only animated in-progress glyph: the Claude asterisk (eight rounded
- * arms, slow rotation + breathing) in the terracotta think accent #D97757
+ * arms, slow rotation + breathing) in the clover think accent #2E7D32
  * (`--think-accent`), the same glyph for chat, agent loop, documents and
  * images. The name is historical (it replaced the celeste 3×3 dot matrix,
  * which replaced the bouncing bars); every caller keeps working unchanged.

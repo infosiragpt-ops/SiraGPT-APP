@@ -21,7 +21,7 @@ export default function NotFound() {
       {/* Decorative soft glow — same palette as the marketing hero */}
       <div
         aria-hidden
-        className="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-[520px] w-[520px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-violet-500/10 via-fuchsia-500/8 to-pink-500/10 blur-3xl"
+        className="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-[520px] w-[520px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-gradient-to-br from-green-700/10 via-green-500/8 to-emerald-500/10 blur-3xl"
       />
 
       <div className="mx-auto w-full max-w-md text-center">

@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react"
+import { CloverMark } from "@/components/brand"
 
 const DISMISS_KEY = "siragpt.pwa.installPrompt.dismissedPermanently"
 const SESSION_KEY = "siragpt.pwa.installPrompt.sessionDismissed"
@@ -137,16 +138,17 @@ export default function PWAInstallPrompt({
   return (
     <div
       role="dialog"
-      aria-label="Instalar la aplicación Sira GPT"
+      aria-label="Instalar la aplicación SiraGPT"
       className={
         className ??
         "fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 sm:bottom-6"
       }
     >
       <div className="flex items-start gap-3">
+        <CloverMark size={28} className="mt-0.5 shrink-0 text-[color:var(--brand)]" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-            Instalar Sira GPT
+            Instalar SiraGPT
           </p>
           <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
             Añádela a tu pantalla de inicio para abrirla más rápido, como una app.

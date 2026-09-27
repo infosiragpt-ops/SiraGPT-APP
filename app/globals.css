@@ -122,7 +122,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --sidebar-accent: 240 4.8% 95.9%;
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: 123 46% 34%;       /* #2E7D32 — clover green */
 
     /*
      * Premium-extension tokens — mirrored from `.dark` so any component
@@ -130,7 +130,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      * these, light-mode placeholders fell through to the browser default
      * (washed-out gray that's hard to read against a white composer).
      */
-    --accent-violet: 253 92% 60%;      /* light: a calmer violet */
+    --accent-violet: 123 46% 34%;      /* light: clover green #2E7D32 (token name kept for compatibility) */
     --text-tertiary: 240 4% 56%;       /* light tertiary text — meets WCAG AA on white */
     --icon-default: 240 5% 34%;        /* light icon stroke */
     --surface-elevated: 0 0% 100%;     /* light elevated surface */
@@ -139,9 +139,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
     /* Chat UX tokens — brand, surfaces, WCAG code contrast.
        Keep shadcn --accent (HSL components) intact; --brand is the
-       chat accent used by the send disc and focus rings. */
+       chat accent used by the send disc and focus rings: the clover green. */
     color-scheme: light;
-    --brand: #5b4dff;
+    --brand: #2E7D32;
+    --clover-vein: #ffffff;
     --chat-accent: var(--brand);
     --surface-1: #ffffff;
     --surface-2: #f4f6f8;
@@ -150,10 +151,10 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --code-fg: #e8eef7;
     --content-max: 46rem;
 
-    /* RunTrace / Pensando stepper — running is the Claude think accent
-       (terracotta), same glyph and colour on every flow. */
+    /* RunTrace / Pensando stepper — running is the clover think accent
+       (brand green), same glyph and colour on every flow. */
     --sira-celeste: #38BDF8;
-    --think-accent: #D97757;
+    --think-accent: #2E7D32;
     --step-pending: #8A8580;
     --step-running: var(--think-accent);
     --step-done: #6B6660;
@@ -182,7 +183,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
    *   sidebar  #0B0F15  — nav/rail, slightly richer than canvas
    *   surface  #0E131B  — panels, cards, popovers
    *   elevated #121824  — composer, dialogs, hover states
-   *   accent   #7C5CFF  — only on active/focus (never idle)
+   *   accent   #66BB6A  — clover green, only on active/focus (never idle)
    *
    * Text:
    *   primary    #F5F7FA  — body copy, strong headings
@@ -209,7 +210,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --destructive-foreground: 0 0% 98%;
     --border: 214 28% 15%;             /* #1B2430 — border/subtle */
     --input: 214 28% 15%;
-    --ring: 253 100% 68%;              /* #7C5CFF — accent violet, focus only */
+    --ring: 122 39% 49%;               /* #4CAF50 — clover green, focus only */
     --chart-1: 220 70% 50%;
     --chart-2: 160 60% 45%;
     --chart-3: 30 80% 55%;
@@ -218,7 +219,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
     /* Premium-extension tokens (consumed via arbitrary values in the
        few places the shadcn tokens don't cover the spec exactly). */
-    --accent-violet: 253 100% 68%;     /* #7C5CFF */
+    --accent-violet: 122 39% 49%;      /* #4CAF50 — clover green (token name kept for compatibility) */
     --text-tertiary: 219 13% 56%;      /* dark tertiary text — readable on #0B1118 */
     --icon-default: 220 16% 84%;       /* #D0D5DD */
     --surface-elevated: 220 33% 11%;   /* #121824 */
@@ -236,15 +237,16 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     /* Sidebar — 1 step lighter than canvas for subtle depth. */
     --sidebar-background: 216 31% 6%;  /* #0B0F15 */
     --sidebar-foreground: 216 29% 97%;
-    --sidebar-primary: 253 100% 68%;
+    --sidebar-primary: 122 39% 49%;
     --sidebar-primary-foreground: 216 29% 97%;
     --sidebar-accent: 240 3.7% 15.9%;  /* #27272a — subtle hover highlight */
     --sidebar-accent-foreground: 240 4.8% 95%;  /* #f1f1f6 — high-contrast text on accent bg */
     --sidebar-border: 215 21% 11%;     /* #161B22 */
-    --sidebar-ring: 253 100% 68%;
+    --sidebar-ring: 122 39% 49%;
 
     color-scheme: dark;
-    --brand: #7c5cff;
+    --brand: #66BB6A;
+    --clover-vein: #ffffff;
     --chat-accent: var(--brand);
     --surface-1: #0b0d12;
     --surface-2: #141820;
@@ -254,7 +256,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --content-max: 46rem;
 
     --sira-celeste: #38BDF8;
-    --think-accent: #E08A6A;
+    --think-accent: #66BB6A;
     --step-pending: #8A8580;
     --step-running: var(--think-accent);
     --step-done: #A8A29E;
@@ -8547,13 +8549,13 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  */
 :root {
   --step-pending: #8A8580;
-  --step-running: var(--think-accent, #D97757);
+  --step-running: var(--think-accent, #2E7D32);
   --step-done: #6B6660;
   --step-failed: #dc2626;
 }
 .dark {
   --step-pending: #9ca3af;
-  --step-running: var(--think-accent, #E08A6A);
+  --step-running: var(--think-accent, #66BB6A);
   --step-done: #34d399;
   --step-failed: #f87171;
 }

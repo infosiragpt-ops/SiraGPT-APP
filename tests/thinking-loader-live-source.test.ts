@@ -26,7 +26,7 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.match(docs, /retired/)
   })
 
-  it("ships PensandoBars as the Claude asterisk in the terracotta think accent", () => {
+  it("ships PensandoBars as the clover glyph in the clover think accent", () => {
     const bars = source("components/pensando-bars.tsx")
     const svg = source("public/loaders/pensando.svg")
     const icon = source("components/icons/thinking-bars-icon.tsx")
