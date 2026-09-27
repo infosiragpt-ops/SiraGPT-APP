@@ -133,7 +133,10 @@ function resolveDocAgentRunCandidates({ model, env = process.env } = {}) {
   const spec = provider ? `${provider}:${direct[2]}` : raw;
   const selected = parseModelSpec(spec);
   const candidates = resolveDocAgentCandidates({ model: spec, env });
-  const match = candidates.find((candidate) => candidate.provider === selected?.provider && candidate.model === selected?.model);
+  // An unknown vendor/model slug must not become an implicit OpenRouter run.
+  // The user can opt into that transport explicitly with OpenRouter:model.
+  const implicitRouter = selected?.provider === 'OpenRouter' && !/^openrouter\s*:/i.test(raw);
+  const match = implicitRouter ? null : candidates.find((candidate) => candidate.provider === selected?.provider && candidate.model === selected?.model);
   if (match) return [match];
   const error = new Error('El modelo seleccionado no está disponible. Reintenta o elige otro modelo.');
   error.code = 'E_PROVIDER';

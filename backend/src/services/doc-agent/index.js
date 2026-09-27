@@ -167,7 +167,7 @@ async function runDocumentAgent({
   // A model picked by the user stays on its own API. The historical default
   // route keeps its provider ladder when no model was selected.
   const llm = client || createFailoverClient(resolveDocAgentRunCandidates({ model }), {
-    onFailover: (info) => onEvent({ type: 'llm_failover', ...info }),
+    onFailover: () => onEvent({ type: 'llm_failover', message: 'Reintentando con otro servicio de IA.' }),
   });
   const loopModel = model || DEFAULT_MODEL;
 

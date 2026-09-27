@@ -130,7 +130,9 @@ router.post(
 
       send({ type: 'done', finalText: result.finalText, iterations: result.iterations, stoppedReason: result.stoppedReason, driver: result.driver, artifacts });
     } catch (err) {
-      send({ type: 'error', message: err?.message || 'doc agent failed' });
+      const code = ['E_PROVIDER', 'E_PARAMS', 'E_QUOTA', 'E_TIMEOUT', 'E_CANCELLED', 'E_CONTENT'].includes(err?.code)
+        ? err.code : 'E_PROVIDER';
+      send({ type: 'error', code, message: err?.message || 'No se pudo completar la edición.' });
     } finally {
       clearInterval(heartbeat);
       try { res.end(); } catch (_) { /* already closed */ }

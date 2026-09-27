@@ -70,6 +70,16 @@ describe('candidate ladder', () => {
     const xai = rt.resolveDocAgentRunCandidates({ model: 'x-ai/grok-4.7', env: ALL_KEYS });
     assert.deepEqual(xai.map((entry) => [entry.provider, entry.model]), [['xAI', 'grok-4.7']]);
     assert.throws(
+      () => rt.resolveDocAgentRunCandidates({ model: 'anthropic/claude-4', env: ALL_KEYS }),
+      { code: 'E_PROVIDER' },
+      'an unknown vendor slug must not be routed through a configured OpenRouter key',
+    );
+    assert.throws(
+      () => rt.resolveDocAgentRunCandidates({ model: 'Anthropic:anthropic/claude-4', env: ALL_KEYS }),
+      { code: 'E_PROVIDER' },
+      'an unknown provider prefix must not imply OpenRouter',
+    );
+    assert.throws(
       () => rt.resolveDocAgentRunCandidates({ model: 'OpenAI:gpt-6-sol', env: { DEEPSEEK_API_KEY: 'configured' } }),
       { code: 'E_PROVIDER' },
       'missing selected API must not silently use DeepSeek',
