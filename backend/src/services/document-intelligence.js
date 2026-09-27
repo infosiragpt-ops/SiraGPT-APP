@@ -1111,13 +1111,6 @@ async function compareDocuments(prisma, { userId, fileIds = [], query = '', limi
       evidence = res.evidence || [];
     } catch (_) { evidence = []; }
 
-    // Fallback: when no query/evidence match, surface the first chunk as
-    // a deterministic representative so callers always have at least one
-    // anchor per document.
-    if (!evidence.length && chunks.length) {
-      evidence = chunks.slice(0, 1).map((c) => ({ ...c, relevanceScore: 0, matchedTerms: [] }));
-    }
-
     documents.push({
       fileId: file.id,
       originalName: file.originalName || file.filename || 'documento',

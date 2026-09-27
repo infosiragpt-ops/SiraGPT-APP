@@ -350,3 +350,17 @@ test('DocumentIntelligence compares documents with evidence and deltas', async (
   assert.ok(result.documents.every((doc) => doc.evidence.length >= 1));
   assert.ok(result.documents.every((doc) => doc.tableCount >= 1));
 });
+
+test('document comparison keeps unmatched representative text out of evidence', async () => {
+  const prisma = createPrismaMock([
+    { id: 'sales', userId: 'owner', originalName: 'ventas.md', mimeType: 'text/markdown', extractedText: '# Ventas\nLos ingresos de 2025 fueron 1200 soles.' },
+    { id: 'costs', userId: 'owner', originalName: 'costos.md', mimeType: 'text/markdown', extractedText: '# Costos\nLos gastos de 2025 fueron 700 soles.' },
+  ]);
+  const result = await documentIntelligence.compareDocuments(prisma, {
+    userId: 'owner', fileIds: ['sales', 'costs'], query: 'sarcopenia',
+  });
+
+  assert.equal(result.documents.length, 2);
+  assert.ok(result.documents.every((doc) => doc.summary && doc.chunkCount > 0));
+  assert.ok(result.documents.every((doc) => doc.evidence.length === 0));
+});
