@@ -17,7 +17,7 @@ const { authenticateToken } = require('../middleware/auth');
 const requireAdminRoutePermission = require('../services/admin-route-policy');
 const prisma = require('../config/database');
 const { encrypt, decrypt } = require('../utils/encryption');
-const { applyAdminConnections, reconcileCatalog } = require('../services/admin-connections-bridge');
+const { applyAdminConnections, reconcileCatalog, noteUndecryptableKey } = require('../services/admin-connections-bridge');
 const modelSyncService = require('../services/model-sync-service');
 const { invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const { describeConnectionProbeFailure, redactProbeDetail } = require('../services/connection-probe-reason');
@@ -48,7 +48,7 @@ async function discoverConnectionModels(connId) {
   try {
     const conn = await prisma.adminConnection.findUnique({ where: { id: connId } });
     if (!conn || !conn.enabled) return;
-    const apiKey = decryptKey(conn.apiKey);
+    const apiKey = decryptKey(conn.apiKey, conn);
     if (!apiKey && conn.authType !== 'None') return;
 
     const result = await modelSyncService.syncConnectionModels({
@@ -99,16 +99,20 @@ function encryptKey(plain) {
   return KEY_PREFIX + encrypt(plain);
 }
 
-function decryptKey(stored) {
+function decryptKey(stored, row = null) {
   if (!stored || typeof stored !== 'string') return null;
   if (!stored.startsWith(KEY_PREFIX)) return stored; // legacy plaintext
   try {
     return decrypt(stored.slice(KEY_PREFIX.length));
-  } catch (err) {
-    console.error('[admin-connections] decryptKey failed:', err.message);
+  } catch (_err) {
+    // Encrypted with an older server key: a state the admin fixes by pasting
+    // the key again — warned once per row, never an ERROR on every page load.
+    noteUndecryptableKey(row || {});
     return null;
   }
 }
+
+const UNREADABLE_KEY_REASON = 'Clave ilegible — vuelve a guardarla. Se guardó con otra clave de cifrado del servidor y no se puede leer: pega la API key de nuevo y guarda.';
 
 // Known provider keys — used to normalise UI grouping. First-class
 // OpenAI-compatible local runtimes (Ollama, LM Studio, vLLM) keep their
@@ -179,7 +183,7 @@ const DEFAULT_PROVIDER_LABELS = {
 
 /** Mask sensitive fields before returning a connection row to the client. */
 function shapeConnection(c, { revealKey = false } = {}) {
-  const plain = decryptKey(c.apiKey);
+  const plain = decryptKey(c.apiKey, c);
   return {
     id: c.id,
     url: c.url,
@@ -189,6 +193,8 @@ function shapeConnection(c, { revealKey = false } = {}) {
       ? plain
       : (plain ? `${plain.slice(0, 4)}…${plain.slice(-4)}` : null),
     apiKeySet: !!c.apiKey,
+    // null = no key stored; false = stored but unreadable (re-save it).
+    keyReadable: c.apiKey ? plain != null : null,
     authType: c.authType,
     apiType: c.apiType,
     headers: c.headers || null,
@@ -369,6 +375,16 @@ router.post('/:id/test', async (req, res) => {
     conn = await prisma.adminConnection.findUnique({ where: { id: req.params.id } });
     if (!conn) return res.status(404).json({ error: 'Connection not found' });
 
+    // A stored key we can't decrypt would be sent as «no key» and the provider
+    // would answer 401 — say what's actually wrong instead.
+    if (conn.apiKey && decryptKey(conn.apiKey, conn) == null) {
+      await prisma.adminConnection.update({
+        where: { id: conn.id },
+        data: { lastSyncedAt: new Date(), lastSyncOk: false, lastSyncError: UNREADABLE_KEY_REASON.slice(0, 240) },
+      }).catch(() => {});
+      return res.json({ ok: false, status: 0, keyReadable: false, reason: UNREADABLE_KEY_REASON });
+    }
+
     // Provider-agnostic discovery (handles Anthropic x-api-key auth too) that
     // ALSO persists the models into the catalog — testing a connection now
     // populates Admin → Modelos in one click.
@@ -379,7 +395,7 @@ router.post('/:id/test', async (req, res) => {
       authType: conn.authType,
       headers: conn.headers,
       modelIds: conn.modelIds,
-      apiKey: decryptKey(conn.apiKey),
+      apiKey: decryptKey(conn.apiKey, conn),
     });
 
     const reason = result.ok ? null : describeConnectionProbeFailure({

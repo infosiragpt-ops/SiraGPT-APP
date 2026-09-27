@@ -155,6 +155,8 @@ type Connection = {
   providerLabel: string
   apiKey: string | null
   apiKeySet: boolean
+  // false = a key is stored but the server can't decrypt it (re-save it).
+  keyReadable?: boolean | null
   authType: AuthType
   apiType: ApiType
   headers: Record<string, string> | null
@@ -421,7 +423,16 @@ export default function AdminConnectionsPage() {
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-mono truncate" title={c.url}>{c.url}</div>
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          {c.apiKeySet ? (
+                          {c.apiKeySet && c.keyReadable === false ? (
+                            <Badge
+                              data-testid="connection-key-unreadable"
+                              variant="outline"
+                              className="text-[10px] py-0 text-red-600"
+                              title="La clave guardada se cifró con otra clave del servidor y no se puede leer. Edita la conexión y pega la API key de nuevo."
+                            >
+                              Clave ilegible — vuelve a guardarla
+                            </Badge>
+                          ) : c.apiKeySet ? (
                             <Badge variant="outline" className="text-[10px] py-0 font-mono">{c.apiKey}</Badge>
                           ) : (
                             <Badge variant="outline" className="text-[10px] py-0 text-amber-600">sin api key</Badge>
@@ -724,7 +735,7 @@ function ConnectionDialog({
                   type={showKey ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={isEdit ? (connection?.apiKeySet ? "Dejar vacío para conservar la actual" : "API Key") : (providerKey === "fal" ? "fal.ai API Key" : "API Key")}
+                  placeholder={isEdit ? (connection?.apiKeySet ? (connection?.keyReadable === false ? "Clave ilegible — pega la API key de nuevo" : "Dejar vacío para conservar la actual") : "API Key") : (providerKey === "fal" ? "fal.ai API Key" : "API Key")}
                   className="pr-9"
                 />
                 <button

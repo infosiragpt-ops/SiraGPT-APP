@@ -34,6 +34,8 @@ const operationalRag = require('../services/rag/operational-runtime');
 const fs = require('fs').promises;
 const path = require('path');
 const OpenAI = require('openai');
+const { keyedClient } = require('../utils/env-keyed-client');
+const providerKeyHealth = require('../utils/provider-key-health');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 const fileIntegrityValidator = require('../services/file-integrity-validator');
 const objectStorage = require('../services/object-storage');
@@ -83,9 +85,13 @@ function enforceOrgRateLimitSafe(req, res, next) {
   }
 }
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+// OpenAI client for the CURRENT key. The admin-connections bridge swaps
+// OPENAI_API_KEY at runtime; a client built at module load froze the stale
+// .env key and every upload logged «OpenAI file upload error: 401» while the
+// rest of the app used the valid panel key (2026-09-27). Returns null when no
+// key is configured.
+const getFilesOpenAI = keyedClient(() => process.env.OPENAI_API_KEY, (apiKey) => new OpenAI({
+  apiKey,
   // Bound time-to-first-headers so a hung OpenAI upstream can't stall a
   // summary/cite/decompose/deep-ask handler for the SDK's 10-minute default
   // (×2 retries). 120s is far above any healthy latency for these calls, so it
@@ -93,7 +99,7 @@ const openai = new OpenAI({
   // create) still win. Mirrors rag-service.js's _embedClientOptions pattern.
   timeout: Number.parseInt(process.env.SIRAGPT_FILES_OPENAI_TIMEOUT_MS || '120000', 10),
   maxRetries: Number.parseInt(process.env.SIRAGPT_FILES_OPENAI_MAX_RETRIES || '2', 10),
-});
+}));
 
 // `file-type` v22 is ESM-only; we use a dynamic import wrapped in a
 // memoised promise so it loads once per process and works under CJS.
@@ -348,14 +354,21 @@ const OPENAI_FILE_MIMES = new Set([
 // SDK retries disabled (retries would multiply the wall-clock cost and risk
 // the proxy cut). Returns the OpenAI file id, or null on any failure —
 // OpenAI Files is an optional enhancement, never a hard upload dependency.
+let openAiFilesRejectWarnedFp = null;
 async function uploadToOpenAiFiles(file) {
+  if (String(process.env.SIRAGPT_OPENAI_FILES_UPLOAD || '').trim() === '0') return null;
   if (!OPENAI_FILE_MIMES.has(file.mimetype) && !file.mimetype.startsWith('text/')) {
     return null;
   }
+  const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
+  const client = getFilesOpenAI();
+  // No key, or OpenAI already rejected this exact key: skip without a network
+  // round-trip. The memo re-arms when an admin saves a new key.
+  if (!client || providerKeyHealth.isRejected('openai', apiKey)) return null;
   try {
     const buf = await fs.readFile(file.path);
     const oaFile = await withTimeout(
-      openai.files.create(
+      client.files.create(
         { file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' },
         { timeout: OPENAI_FILE_TIMEOUT_MS, maxRetries: 0 },
       ),
@@ -364,9 +377,31 @@ async function uploadToOpenAiFiles(file) {
     );
     return oaFile.id;
   } catch (openaiError) {
-    console.error('OpenAI file upload error:', openaiError?.message || openaiError);
+    if (providerKeyHealth.isInvalidKeyError(openaiError)) {
+      providerKeyHealth.markRejected('openai', apiKey, openaiError);
+      const fp = providerKeyHealth.fingerprint(apiKey);
+      if (openAiFilesRejectWarnedFp !== fp) {
+        openAiFilesRejectWarnedFp = fp;
+        console.warn('[files] OpenAI Files deshabilitado: OpenAI rechazó la clave actual (401). Las subidas siguen sin esta mejora opcional; se reintenta al guardar otra clave en Admin → Conexiones.');
+      }
+      return null;
+    }
+    console.warn('[files] OpenAI Files upload skipped:', openaiError?.message || openaiError);
     return null;
   }
+}
+
+// OpenAI Files is an optional enhancement (only OpenAI models read the file
+// id). Never make the user wait for it: run it after the upload settles and
+// patch the row when it lands.
+function scheduleOpenAiFilesUpload(prismaClient, fileRecordId, file) {
+  Promise.resolve()
+    .then(() => uploadToOpenAiFiles(file))
+    .then(async (openaiFileId) => {
+      if (!openaiFileId) return;
+      await prismaClient.file.update({ where: { id: fileRecordId }, data: { openaiFileId } });
+    })
+    .catch((err) => console.warn('[files] OpenAI Files background upload failed:', err?.message || err));
 }
 
 
@@ -589,7 +624,7 @@ async function processFilesInParallel(files, userId, prismaClient) {
         // is individually bounded and degrades to a safe default on failure,
         // so a slow/down upstream never fails the upload.
         const extractStarted = Date.now();
-        const [result, thumbnailPath, openaiFileId] = await Promise.all([
+        const [result, thumbnailPath] = await Promise.all([
           withTimeout(extractionSingleflight.runExtractionOnce(fileRecord.id, () => fileProcessor.processFile(file, extractProcessOptions())), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
             .catch((extractErr) => {
               console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
@@ -600,15 +635,17 @@ async function processFilesInParallel(files, userId, prismaClient) {
               console.warn(`[files] thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
               return null;
             }),
-          uploadToOpenAiFiles(file),
         ]);
+        // Filled in the background (scheduleOpenAiFilesUpload) — never awaited.
+        const openaiFileId = null;
 
         // Persist text immediately so chat/preview can use it. RAG embeddings
         // are skip-until-send by default — they no longer block the chip.
         fileRecord = await prismaClient.file.update({
           where: { id: fileRecord.id },
-          data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
+          data: { mimeType: file.mimetype, extractedText: result.extractedText },
         });
+        scheduleOpenAiFilesUpload(prismaClient, fileRecord.id, file);
         await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', {
           userId,
           durationMs: result?.timings?.totalMs || (Date.now() - extractStarted),
@@ -748,12 +785,12 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
       console.warn(`[files] async thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
     }
 
-    const openaiFileId = await uploadToOpenAiFiles(file);
-
     fileRecord = await prismaClient.file.update({
       where: { id: fileRecord.id },
-      data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
+      data: { mimeType: file.mimetype, extractedText: result.extractedText },
     });
+    // Optional OpenAI Files id: patched in the background, never delays «ready».
+    scheduleOpenAiFilesUpload(prismaClient, fileRecord.id, file);
     await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', {
       userId,
       durationMs: result?.timings?.totalMs || (Date.now() - extractStarted),
@@ -1873,7 +1910,7 @@ router.get('/:id/summary', authenticateToken, async (req, res) => {
     const refresh = String(req.query?.refresh || '').toLowerCase() === 'true';
     const result = await documentSummarizer.getOrComputeFileSummary({
       prisma,
-      openai,
+      openai: getFilesOpenAI(),
       userId: req.user.id,
       fileId: req.params.id,
       refresh,
@@ -1933,7 +1970,7 @@ router.post('/:id/cite', authenticateToken, async (req, res) => {
       // existing OpenAI client. Either way the caller gets
       // citation.verification = { label, score, reason, backend }.
       opts.verify = true;
-      opts.nli = { openai };
+      opts.nli = { openai: getFilesOpenAI() };
     }
     const out = await anthropicCitations.answerFileQuestionWithCitations({
       prisma,
@@ -2005,7 +2042,7 @@ router.post('/:id/decompose-query', authenticateToken, async (req, res) => {
 
     const { question, options } = req.body || {};
     const out = await queryDecomposer.decomposeQuery({
-      openai,
+      openai: getFilesOpenAI(),
       question,
       options: {
         ...(options && typeof options === 'object' ? options : {}),
@@ -2059,7 +2096,7 @@ router.post('/:id/deep-ask', authenticateToken, async (req, res) => {
 
     const out = await deepAsk.deepAskFile({
       prisma,
-      openai,
+      openai: getFilesOpenAI(),
       anthropicCitations,
       userId: req.user.id,
       fileId: req.params.id,

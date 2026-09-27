@@ -1,5 +1,6 @@
 const express = require('express');
 const { OpenAI } = require('openai');
+const { lazyClientProxy } = require('../utils/env-keyed-client');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const requirePaidPlan = require('../middleware/require-paid-plan');
@@ -8,8 +9,9 @@ const imageEngine = require('../services/media/image-engine');
 const router = express.Router();
 
 // Initialize OpenAI client
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+// Resolves the client for the CURRENT key (admin-connections bridge swaps it at runtime).
+const openai = lazyClientProxy(() => process.env.OPENAI_API_KEY, (apiKey) => new OpenAI({ apiKey }), {
+    missingKeyMessage: 'OPENAI_API_KEY no configurada',
 });
 
 function sendValidationErrors(req, res) {

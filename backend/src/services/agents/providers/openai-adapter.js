@@ -49,7 +49,12 @@ const ADVERTISED_MODELS = Object.freeze([
 ]);
 
 let _SdkClass = null;
+const { fingerprint: keyFingerprint } = require('../../../utils/provider-key-health');
 let _client = null;
+// Key the cached client by the key it was built with: the admin-connections
+// bridge swaps OPENAI_API_KEY at runtime, and a first-use memo froze the old key.
+let _clientKeyFp = null;
+let _clientInjected = false;
 
 async function loadSdk() {
   if (_SdkClass) return _SdkClass;
@@ -62,11 +67,14 @@ async function loadSdk() {
 }
 
 async function getClient() {
-  if (_client) return _client;
+  if (_client && _clientInjected) return _client;
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) { _client = null; _clientKeyFp = null; return null; }
+  const fp = keyFingerprint(apiKey);
+  if (_client && _clientKeyFp === fp) return _client;
   const Sdk = await loadSdk();
   _client = new Sdk({ apiKey });
+  _clientKeyFp = fp;
   return _client;
 }
 
@@ -173,8 +181,8 @@ class OpenAIAdapter extends ProviderAdapter {
 }
 
 // ── Test seams ────────────────────────────────────────────────────────────
-function _setClientForTests(client) { _client = client; }
-function _resetClientForTests() { _client = null; _SdkClass = null; }
+function _setClientForTests(client) { _client = client; _clientInjected = Boolean(client); }
+function _resetClientForTests() { _client = null; _SdkClass = null; _clientKeyFp = null; _clientInjected = false; }
 
 module.exports = {
   OpenAIAdapter,

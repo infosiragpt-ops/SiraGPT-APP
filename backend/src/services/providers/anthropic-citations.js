@@ -45,7 +45,11 @@ const DEFAULT_MAX_TOKENS = Number.parseInt(process.env.ANTHROPIC_CITATIONS_MAX_T
 const DEFAULT_MODEL = process.env.ANTHROPIC_CITATIONS_DEFAULT_MODEL || 'claude-sonnet-4-6';
 
 let _SdkClass = null;
+const { fingerprint: keyFingerprint } = require('../../utils/provider-key-health');
 let _client = null;
+// Rebuilt when ANTHROPIC_API_KEY changes (admin-connections bridge swaps it at runtime).
+let _clientKeyFp = null;
+let _clientInjected = false;
 
 async function loadSdkClass() {
   if (_SdkClass) return _SdkClass;
@@ -58,10 +62,13 @@ async function loadSdkClass() {
 }
 
 async function getClient() {
-  if (_client) return _client;
-  if (!native.isEnabled()) return null;
+  if (_client && _clientInjected) return _client;
+  if (!native.isEnabled()) { _client = null; _clientKeyFp = null; return null; }
+  const fp = keyFingerprint(process.env.ANTHROPIC_API_KEY);
+  if (_client && _clientKeyFp === fp) return _client;
   const Sdk = await loadSdkClass();
   _client = new Sdk({ apiKey: process.env.ANTHROPIC_API_KEY });
+  _clientKeyFp = fp;
   return _client;
 }
 
@@ -494,8 +501,8 @@ async function attachCitationVerifications(blocks, nliOptions) {
 }
 
 // ── Test seams ────────────────────────────────────────────────────────────
-function _setClientForTests(client) { _client = client; }
-function _resetClientForTests() { _client = null; _SdkClass = null; }
+function _setClientForTests(client) { _client = client; _clientInjected = Boolean(client); }
+function _resetClientForTests() { _client = null; _SdkClass = null; _clientKeyFp = null; _clientInjected = false; }
 
 module.exports = {
   callAnthropicWithCitations,

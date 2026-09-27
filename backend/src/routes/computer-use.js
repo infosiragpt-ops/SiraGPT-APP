@@ -1,6 +1,7 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const OpenAI = require('openai');
+const { lazyClientProxy } = require('../utils/env-keyed-client');
 const WebSocket = require('ws');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
@@ -34,8 +35,10 @@ const { attachWebSocketPath } = require('../utils/websocket-upgrade-router');
 const router = express.Router();
 
 // Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+// Resolves the client for the CURRENT key (the admin-connections bridge swaps
+// OPENAI_API_KEY at runtime; a module-load client froze the old key).
+const openai = lazyClientProxy(() => process.env.OPENAI_API_KEY, (apiKey) => new OpenAI({ apiKey }), {
+  missingKeyMessage: 'OPENAI_API_KEY no configurada',
 });
 
 // Custom Computer Use Agent - simulates OpenAI's computer-use-preview

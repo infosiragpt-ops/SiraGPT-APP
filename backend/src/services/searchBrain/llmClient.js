@@ -16,12 +16,17 @@
 const OpenAI = require("openai");
 
 let cachedClient = null;
+// The memo follows the CURRENT key/route (the admin-connections bridge swaps
+// provider keys at runtime; a first-use memo froze the old key).
+let cachedClientSignature = null;
 
 function getClient() {
-  if (cachedClient) return cachedClient;
   const apiKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
+  if (!apiKey) { cachedClient = null; cachedClientSignature = null; return null; }
   const useOpenRouter = Boolean(process.env.OPENROUTER_API_KEY);
+  const signature = `${useOpenRouter ? "openrouter" : "openai"}:${require("../../utils/provider-key-health").fingerprint(apiKey)}`;
+  if (cachedClient && cachedClientSignature === signature) return cachedClient;
+  cachedClientSignature = signature;
   cachedClient = new OpenAI({
     apiKey,
     baseURL: useOpenRouter ? "https://openrouter.ai/api/v1" : undefined,
@@ -73,6 +78,7 @@ async function callLLM({ system, user, temperature = 0.2, maxTokens = 600, model
 /** Test hook — clear the cached client after env mutations in tests. */
 function __resetClient() {
   cachedClient = null;
+  cachedClientSignature = null;
 }
 
 module.exports = {

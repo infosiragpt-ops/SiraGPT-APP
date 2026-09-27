@@ -32,7 +32,11 @@ const ADVERTISED_MODELS = Object.freeze([
 ]);
 
 let _SdkClass = null;
+const { fingerprint: keyFingerprint } = require('../../../utils/provider-key-health');
 let _client = null;
+// Rebuilt when the key changes (admin-connections bridge swaps it at runtime).
+let _clientKeyFp = null;
+let _clientInjected = false;
 
 function pickApiKey() {
   return process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '';
@@ -60,11 +64,14 @@ async function loadSdk() {
 }
 
 async function getClient() {
-  if (_client) return _client;
+  if (_client && _clientInjected) return _client;
   const apiKey = pickApiKey();
-  if (!apiKey) return null;
+  if (!apiKey) { _client = null; _clientKeyFp = null; return null; }
+  const fp = keyFingerprint(apiKey);
+  if (_client && _clientKeyFp === fp) return _client;
   const Sdk = await loadSdk();
   _client = new Sdk({ apiKey });
+  _clientKeyFp = fp;
   return _client;
 }
 
@@ -171,8 +178,8 @@ function extractText(response) {
 }
 
 // ── Test seams ────────────────────────────────────────────────────────────
-function _setClientForTests(client) { _client = client; }
-function _resetClientForTests() { _client = null; _SdkClass = null; }
+function _setClientForTests(client) { _client = client; _clientInjected = Boolean(client); }
+function _resetClientForTests() { _client = null; _SdkClass = null; _clientKeyFp = null; _clientInjected = false; }
 
 module.exports = {
   GeminiAdapter,

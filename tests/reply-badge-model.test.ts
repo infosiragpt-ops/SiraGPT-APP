@@ -121,6 +121,17 @@ describe("reply badge follows the picker, not DeepSeek V4 Flash by default", () 
     )
   })
 
+  it("names the model that actually answered after a billing failover", () => {
+    const failedOver = {
+      model: "claude-fable-5-1",
+      metadata: { modelFailover: { reason: "billing", fromLabel: "Claude Fable 5.1", toLabel: "Grok 4.7", toModel: "grok-4.7" } },
+    }
+    assert.equal(resolveReplyBadgeLabel(failedOver as never, catalog), "Grok 4.7")
+    // A raw id never reaches the badge even through the failover path.
+    const raw = { model: "claude-fable-5-1", metadata: { modelFailover: { toLabel: "deepseek/deepseek-v4-pro" } } }
+    assert.doesNotMatch(resolveReplyBadgeLabel(raw as never, catalog), /deepseek[-_/:]/i)
+  })
+
   it("stamps the picker descriptor used on the live placeholder", () => {
     assert.deepEqual(
       resolvePickerBadgeSource("x-ai/grok-4.5", catalog, "Kimi"),

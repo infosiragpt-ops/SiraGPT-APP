@@ -371,6 +371,18 @@ function classifyTurnOutcome(outcome = {}) {
     return out('herramienta_fallida', toolCause(notes, toolFatal.data.reason), ['tool_failure']);
   }
 
+  // Billing failover: the picked model's provider had no credit and another
+  // model answered (the reply opens with a notice). The user got an answer,
+  // but the admin must top up / fix that provider — record it.
+  const failover = lastNote(notes, 'model_failover');
+  if (failover && failover.data && hasOutput(outcome, visible, finalVisible)) {
+    const d = failover.data;
+    const fromProv = providerLabel(d.fromProvider) || 'Proveedor';
+    const status = statusFrom(d);
+    const to = str(d.toLabel || d.toModel || 'otro modelo', 60);
+    return out('error_visible', `${fromProv}${status ? ` ${status}` : ''} sin saldo → respondió ${to}`, ['billing_failover']);
+  }
+
   const partial = notes.find((n) => n && n.kind === 'provider_failure' && n.data && /partial|fallback/.test(str(n.data.code, 40)));
   if (partial && hasOutput(outcome, visible, finalVisible)) {
     return out('error_visible', `${providerCause(notes) || 'Proveedor'} → respuesta cortada`, ['provider_partial']);

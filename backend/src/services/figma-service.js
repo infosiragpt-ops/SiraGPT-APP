@@ -1,12 +1,14 @@
 const { OpenAI } = require('openai');
+const { lazyClientProxy } = require('../utils/env-keyed-client');
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
 
 class FigmaService {
     constructor() {
-        this.openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY,
+        // Follows the CURRENT key (admin-connections bridge swaps it at runtime).
+        this.openai = lazyClientProxy(() => process.env.OPENAI_API_KEY, (apiKey) => new OpenAI({ apiKey }), {
+            missingKeyMessage: 'OPENAI_API_KEY no configurada',
         });
         this.figmaApiKey = process.env.FIGMA_API_KEY;
         this.figmaApiUrl = 'https://api.figma.com/v1';
