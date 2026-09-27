@@ -100,16 +100,20 @@ function combinedScore(result, rerankScore, weights) {
   );
 }
 
+const RERANK_CONCURRENCY = 3;
+
 /**
  * @param {object} args
  * @param {string} args.query
  * @param {import("./types").NormalisedResult[]} args.results
  * @param {Partial<import("./types").SearchBrainWeights>} [args.weights]
  * @param {number} [args.batchSize=10]
- * @param {(args:{system:string,user:string,temperature?:number,maxTokens?:number})=>Promise<{content:string}>} [args.callLLM]
+ * @param {(args:{system:string,user:string,temperature?:number,maxTokens?:number,signal?:AbortSignal})=>Promise<{content:string}>} [args.callLLM]
+ * @param {AbortSignal} [args.signal]   stop launching batches (and cancel the in-flight calls) once aborted
+ * @param {number} [args.concurrency=3] batches scored at the same time
  * @returns {Promise<{results: import("./types").NormalisedResult[], reranked: boolean}>}
  */
-async function rerankResults({ query, results, weights, batchSize = 10, callLLM }) {
+async function rerankResults({ query, results, weights, batchSize = 10, callLLM, signal, concurrency = RERANK_CONCURRENCY }) {
   const w = { ...DEFAULT_WEIGHTS, ...(weights || {}) };
   const pool = Array.isArray(results) ? [...results] : [];
   if (pool.length === 0) return { results: [], reranked: false };
@@ -119,29 +123,40 @@ async function rerankResults({ query, results, weights, batchSize = 10, callLLM 
     return { results: pool, reranked: false };
   }
 
+  // Batches are independent: score a few at a time instead of one after
+  // another (10 sequential calls kept the academic search silent for over a
+  // minute), and stop as soon as the client is gone.
+  const batches = [];
+  for (let start = 0; start < pool.length; start += batchSize) batches.push(pool.slice(start, start + batchSize));
   let scoredCount = 0;
-  for (let start = 0; start < pool.length; start += batchSize) {
-    const batch = pool.slice(start, start + batchSize);
-    try {
-      const { content } = await callLLM({
-        system: RERANKER_SYSTEM,
-        user: `QUERY:\n${query}\n\nCANDIDATES:\n${formatBatch(batch)}`,
-        temperature: 0,
-        maxTokens: 700,
-      });
-      const parsed = parseJson(content || "");
-      const scores = validateScores(parsed);
-      for (const s of scores) {
-        const target = batch[s.idx - 1];
-        if (target) {
-          target.rerankScore = s.score;
-          scoredCount += 1;
+  let next = 0;
+  const scoreBatches = async () => {
+    while (next < batches.length && !signal?.aborted) {
+      const batch = batches[next++];
+      try {
+        const out = await callLLM({
+          system: RERANKER_SYSTEM,
+          user: `QUERY:\n${query}\n\nCANDIDATES:\n${formatBatch(batch)}`,
+          temperature: 0,
+          maxTokens: 700,
+          signal,
+        });
+        const parsed = parseJson((out && out.content) || "");
+        const scores = validateScores(parsed);
+        for (const s of scores) {
+          const target = batch[s.idx - 1];
+          if (target) {
+            target.rerankScore = s.score;
+            scoredCount += 1;
+          }
         }
+      } catch {
+        // leave rerankScore undefined for this batch
       }
-    } catch {
-      // leave rerankScore undefined for this batch
     }
-  }
+  };
+  const workers = Math.max(1, Math.min(Math.floor(Number(concurrency)) || 1, batches.length));
+  await Promise.all(Array.from({ length: workers }, scoreBatches));
 
   pool.sort((a, b) => combinedScore(b, b.rerankScore, w) - combinedScore(a, a.rerankScore, w));
   return { results: pool, reranked: scoredCount > 0 };
