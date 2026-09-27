@@ -1,9 +1,9 @@
 'use strict';
 
-// Prod 2026-09-27 (verified turn): «transcribir en un docuemnto word» on a
-// .md took 342 s through the agent loop before generating a 3.6 KB Word from
-// text the runner already had. The fast path builds the document straight
-// from the attachment's extracted text and only when that text is real.
+// Prod 2026-09-27 (verified turns): «transcribir en un docuemnto word» on a .md
+// took 342 s through the agent loop; the first fast path (#880) answered in
+// 15 s with a 30-word «Resumen ejecutivo» template because the authored
+// document pipeline rewrote the transcript. The document is built verbatim.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,74 +12,126 @@ const fastPath = require('../src/services/agents/transcription-document-fast-pat
 const policy = { mode: 'doc_required', format: 'docx', autoGenerate: true };
 const transcript = Array.from({ length: 30 }, (_, i) => `[00:${String(i).padStart(2, '0')}:00] Hablante: línea ${i} de la transcripción.`).join('\n');
 
-function deps({ source = transcript, artifact = { id: 'a1', filename: 'Transcripcion.docx', format: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sizeBytes: 3611, downloadUrl: 'https://uploads.example/a1.docx' }, generateError = null } = {}) {
-  const calls = { source: 0, generate: [], emitted: [], starts: 0 };
+function deps({ source = transcript, buildError = null, format = 'docx' } = {}) {
+  const calls = { built: [], emitted: [], starts: 0 };
   return {
     calls,
     args: {
-      prisma: {}, userId: 'u1', fileIds: ['f1'], task: { taskId: 't1' }, goal: 'transcribir en un docuemnto word', documentPolicy: policy,
+      prisma: {}, userId: 'u1', fileIds: ['f1'], task: { taskId: 't1', userId: 'u1', chatId: 'c1' },
+      documentPolicy: { ...policy, format },
       emit: (ev) => calls.emitted.push(ev),
       onStart: () => { calls.starts += 1; },
-      buildTranscriptionTextFromFiles: async () => { calls.source += 1; return source; },
-      generateAutoDocument: async (input) => { calls.generate.push(input); if (generateError) throw generateError; return { artifact }; },
+      buildTranscriptionTextFromFiles: async () => source,
+      loadSourceNames: async () => ['Transcripcion_Justicia_Restaurativa_min15-65.md'],
+      buildDocument: async (input) => {
+        calls.built.push(input);
+        if (buildError) throw buildError;
+        return { artifact: { id: 'a1', filename: input.filename, format, mime: 'application/x', sizeBytes: 3611, downloadUrl: `/api/agent/artifact/a1` } };
+      },
       logger: { warn: () => {} },
+      now: new Date('2026-09-27T12:00:00Z'),
     },
   };
 }
 
-test('gating: only a transcription-to-file with document attachments, a document policy and no prior artifacts', () => {
+test('gating: transcription-to-file with document attachments, a verbatim format and no prior artifacts', () => {
   const base = { transcriptionToFileRequest: true, hasAttachedFiles: true, mediaBatchRows: null, wantsSourcePreservingEdit: false, documentPolicy: policy, artifactsCount: 0 };
   assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath(base), true);
-  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, transcriptionToFileRequest: false }), false, 'plain chat request');
-  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, hasAttachedFiles: false }), false, 'nothing to transcribe');
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, documentPolicy: { ...policy, format: 'pdf' } }), true);
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, documentPolicy: { ...policy, format: 'xlsx' } }), false, 'xlsx/pptx keep the agent loop');
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, transcriptionToFileRequest: false }), false);
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, hasAttachedFiles: false }), false);
   assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, mediaBatchRows: [{ id: 'audio' }] }), false, 'audio/video keep the media batch');
-  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, wantsSourcePreservingEdit: true }), false, 'surgical edits keep the editor');
-  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, documentPolicy: { ...policy, autoGenerate: false } }), false, 'chat-only policy');
-  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, artifactsCount: 1 }), false, 'already delivered');
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, wantsSourcePreservingEdit: true }), false);
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, documentPolicy: { ...policy, autoGenerate: false } }), false);
+  assert.equal(fastPath.shouldUseTranscriptionDocumentFastPath({ ...base, artifactsCount: 1 }), false);
 });
 
-test('delivers the document from the attachment text and answers with the file link', async () => {
+test('the document body is the transcript itself, named after the source file', async () => {
   const { args, calls } = deps();
   const out = await fastPath.runTranscriptionDocumentFastPath(args);
   assert.equal(out.handled, true);
   assert.equal(out.sourceWords, fastPath.countWords(transcript));
   assert.equal(calls.starts, 1);
-  assert.equal(calls.generate.length, 1);
-  assert.equal(calls.generate[0].finalText, transcript, 'the Word body is the transcript itself, not a summary');
-  assert.equal(calls.generate[0].policy, policy);
-  assert.deepEqual(out.artifact, { id: 'a1', filename: 'Transcripcion.docx', format: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', sizeBytes: 3611, downloadUrl: 'https://uploads.example/a1.docx' });
+  assert.equal(calls.built.length, 1);
+  const built = calls.built[0];
+  assert.equal(built.format, 'docx');
+  assert.equal(built.filename, 'Transcripcion_Justicia_Restaurativa_min15-65.docx');
+  assert.match(built.markdown, /^# Transcripción — Transcripcion_Justicia_Restaurativa_min15-65\n/);
+  assert.match(built.markdown, /Transcripción literal de el archivo «Transcripcion_Justicia_Restaurativa_min15-65\.md»/);
+  for (const line of transcript.split('\n')) assert.ok(built.markdown.includes(line), `verbatim line kept: ${line}`);
+  assert.match(built.markdown, /línea 0 de la transcripción\.\n\n\[00:01:00\]/, 'each transcript line is its own paragraph');
   assert.match(out.finalMarkdown, /Transcribí el archivo adjunto en un documento Word, sin resumir ni alterar el contenido/);
-  assert.match(out.finalMarkdown, /\[Transcripcion\.docx\]\(https:\/\/uploads\.example\/a1\.docx\)/);
+  assert.match(out.finalMarkdown, /\[Transcripcion_Justicia_Restaurativa_min15-65\.docx\]\(\/api\/agent\/artifact\/a1\)/);
   assert.ok(calls.emitted.some((ev) => ev.type === 'checkpoint' && /Transcripción tomada del archivo adjunto/.test(ev.label)));
 });
 
-test('an attachment without usable text is left to the agent loop, without opening a step', async () => {
-  const { args, calls } = deps({ source: 'solo tres palabras' });
-  const out = await fastPath.runTranscriptionDocumentFastPath(args);
-  assert.deepEqual(out, { handled: false, reason: 'source_too_short', sourceWords: 3 });
-  assert.equal(calls.starts, 0);
-  assert.equal(calls.generate.length, 0);
+test('an attachment without usable text, or a non-verbatim format, is left to the agent loop', async () => {
+  const short = deps({ source: 'solo tres palabras' });
+  assert.deepEqual(await fastPath.runTranscriptionDocumentFastPath(short.args), { handled: false, reason: 'source_too_short', sourceWords: 3 });
+  assert.equal(short.calls.starts, 0);
+  const pptx = deps({ format: 'pptx' });
+  assert.deepEqual(await fastPath.runTranscriptionDocumentFastPath(pptx.args), { handled: false, reason: 'format_not_verbatim' });
 });
 
-test('a failed generation falls back instead of failing the turn; an abort propagates', async () => {
-  const failing = deps({ generateError: new Error('pipeline down') });
+test('a failed build falls back instead of failing the turn; an abort propagates', async () => {
+  const failing = deps({ buildError: new Error('docx writer down') });
   const out = await fastPath.runTranscriptionDocumentFastPath(failing.args);
   assert.equal(out.handled, false);
   assert.equal(out.reason, 'generation_failed');
-
   const controller = new AbortController();
-  const aborted = deps({ generateError: Object.assign(new Error('aborted'), { name: 'AbortError' }) });
-  const originalGenerate = aborted.args.generateAutoDocument;
-  aborted.args.generateAutoDocument = async (input) => { controller.abort(); return originalGenerate(input); };
+  const aborted = deps({ buildError: Object.assign(new Error('aborted'), { name: 'AbortError' }) });
+  const original = aborted.args.buildDocument;
+  aborted.args.buildDocument = async (input) => { controller.abort(); return original(input); };
   aborted.args.signal = controller.signal;
   await assert.rejects(fastPath.runTranscriptionDocumentFastPath(aborted.args), /aborted/);
 });
 
-test('delivery text names the format and the number of files', () => {
-  const artifact = { filename: 'Actas.pdf', downloadUrl: 'https://x/actas.pdf' };
-  assert.match(fastPath.buildTranscriptionDeliveryMarkdown({ fileCount: 3, format: 'pdf', artifact }), /los 3 archivos adjuntos en un documento PDF/);
-  assert.match(fastPath.buildTranscriptionDeliveryMarkdown({ fileCount: 1, format: 'xlsx', artifact }), /documento Excel/);
-  const unknown = fastPath.buildTranscriptionDeliveryMarkdown({ fileCount: 1, format: 'unknown', artifact });
-  assert.match(unknown, /en un documento, sin resumir/);
-  assert.doesNotMatch(unknown, /documento documento/);
+test('filename and markdown helpers', () => {
+  assert.equal(fastPath.transcriptionFilename(['Acta reunión 12/05.md'], 'pdf'), 'Acta reunión 12 05 (transcripción).pdf');
+  assert.equal(fastPath.transcriptionFilename(['transcripcion_clase.txt'], 'docx'), 'transcripcion_clase.docx');
+  assert.equal(fastPath.transcriptionFilename([], 'docx'), 'transcripcion.docx');
+  const md = fastPath.transcriptionDocumentMarkdown({ sourceNames: ['a.md', 'b.md'], text: 'uno\r\ndos\n\n\n\ntres', now: new Date('2026-09-27T12:00:00Z') });
+  assert.match(md, /^# Transcripción\n/);
+  assert.match(md, /«a\.md», «b\.md»/);
+  assert.equal(md.split('\n\n').slice(2).join('\n\n').trim(), 'uno\n\ndos\n\ntres');
+  const unknown = fastPath.buildTranscriptionDeliveryMarkdown({ fileCount: 3, format: 'pdf', artifact: { filename: 'x.pdf', downloadUrl: '/x' } });
+  assert.match(unknown, /los 3 archivos adjuntos en un documento PDF/);
+});
+
+test('the default builder writes a real Word whose text is the transcript (no model)', async () => {
+  const os = require('os'); const fs = require('fs'); const path = require('path');
+  const PizZip = require('pizzip');
+  const saved = [];
+  const taskTools = require('../src/services/agents/task-tools');
+  const originalSave = taskTools.saveArtifact;
+  const persistence = require('../src/services/agents/agent-task-persistence');
+  const originalPersist = persistence.persistGeneratedArtifact;
+  const docService = require('../src/services/document-service');
+  const originalCreate = docService.createDocument;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'verbatim-'));
+  docService.createDocument = async (userId, filename, content) => {
+    const filePath = path.join(tmp, filename);
+    await originalCreate.call(docService, `verbatim-test-${process.pid}`, filename, content).then(async (r) => { await fs.promises.copyFile(r.filePath, filePath); await fs.promises.rm(path.dirname(r.filePath), { recursive: true, force: true }); });
+    return { filePath, safeFilename: filename };
+  };
+  taskTools.saveArtifact = (input) => { saved.push(input); return { id: 'art1', filename: input.filename, mime: input.mime, sizeBytes: Buffer.from(input.base64, 'base64').length, downloadUrl: '/api/agent/artifact/art1' }; };
+  persistence.persistGeneratedArtifact = async () => ({});
+  try {
+    const events = [];
+    const out = await fastPath.buildVerbatimTranscriptionDocument({
+      task: { userId: 'u1', chatId: null }, filename: 'prueba.docx', format: 'docx', emit: (ev) => events.push(ev),
+      markdown: fastPath.transcriptionDocumentMarkdown({ sourceNames: ['prueba.md'], text: transcript }),
+    });
+    assert.equal(out.artifact.id, 'art1');
+    const xml = new PizZip(Buffer.from(saved[0].base64, 'base64')).file('word/document.xml').asText().replace(/<[^>]+>/g, ' ');
+    assert.match(xml, /Hablante: línea 0 de la transcripción/);
+    assert.match(xml, /línea 29 de la transcripción/);
+    assert.ok(events.some((ev) => ev.type === 'file_artifact' && ev.artifact.id === 'art1'));
+  } finally {
+    taskTools.saveArtifact = originalSave;
+    persistence.persistGeneratedArtifact = originalPersist;
+    docService.createDocument = originalCreate;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
