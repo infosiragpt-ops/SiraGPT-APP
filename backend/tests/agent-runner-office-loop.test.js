@@ -202,7 +202,7 @@ test('loop: description is plain text, capped at 120; absent → the old fixed l
   assert.equal(first.description.length, 120);
   assert.doesNotMatch(first.description, /[\u0000-\u001f]/);
   assert.equal(second.description, undefined);
-  assert.equal(second.label, 'Ejecutando código');
+  assert.equal(second.label, 'Revisando los archivos', 'the fixed label of the tool, never «Ejecutando código» for a listing');
 });
 
 test('loop: identical office calls in one turn run again (no stale verification)', async () => {

@@ -59,6 +59,7 @@ const STAGE_LABELS = {
   steered: 'Instrucción recibida',
   // Edición milimétrica — default phrase when the model sent no description.
   reading: 'Leyendo el documento',
+  listing: 'Revisando los archivos',
   editing: 'Editando el documento',
   comparing: 'Comparando antes y después',
 };
@@ -69,6 +70,8 @@ const VERIFY_TOOLS = new Set(['render_preview', 'verify_visual']);
 // render_preview keeps «Verificando resultado» (F3 contract); the office
 // tools get their own phrase.
 const TOOL_CALL_LABELS = Object.freeze({
+  // «Ejecutando código» for a file listing misled the timeline.
+  list_files: STAGE_LABELS.listing,
   inspect_document: STAGE_LABELS.reading,
   office_edit: STAGE_LABELS.editing,
   verify_visual: STAGE_LABELS.comparing,
