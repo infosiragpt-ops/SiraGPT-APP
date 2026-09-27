@@ -134,6 +134,12 @@ RUN sh /tmp/install-local-whisper.sh \
         -ng -t 1 -nt --no-prints -otxt -of /tmp/whisper-smoke \
     && rm -f /tmp/whisper-smoke.wav /tmp/whisper-smoke.txt /tmp/whisper-smoke.json
 
+# SPSS system files need the native ReadStat writer/reader in the very Python
+# interpreter used by the agent sandbox. Install after the expensive Whisper
+# layer so a dependency change does not rebuild the speech model.
+COPY scripts/install-spss-runtime.sh /tmp/install-spss-runtime.sh
+RUN sh /tmp/install-spss-runtime.sh && rm -f /tmp/install-spss-runtime.sh
+
 # Copy only runtime production assets
 COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
 COPY --from=build --chown=appuser:appgroup /app/package.json ./package.json
@@ -159,6 +165,11 @@ USER appuser
 # permission-resume spawns this path as appuser; CI on Ubuntu will not
 # catch an Alpine-only ENOENT. Do not substitute sh.
 RUN /bin/bash -lc 'set -euo pipefail; test -n "${BASH_VERSION}"'
+
+# Fail the image build unless the non-root agent sandbox can write and reopen
+# a real 20-case/20-variable SAV and the matching Excel workbook.
+RUN node scripts/verify-spss-runtime.cjs
+RUN node scripts/verify-spss-artifacts.cjs
 
 # Immutable release provenance is declared after expensive runtime layers so a
 # new commit does not invalidate the document-toolchain installation cache.
