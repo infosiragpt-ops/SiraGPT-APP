@@ -162,6 +162,15 @@ function isDocumentStyleEditRequest(text) {
   return STYLE_EDIT_VERBS.test(t) && (STYLE_EDIT_NOUNS.test(t) || ARTIFACT_NOUNS.test(t));
 }
 
+// «Resalta esa celda», «subraya el título», «resáltalo en amarillo»: the
+// formatting verb points at a concrete spot of the file. «Resalta los puntos
+// clave del documento» asks for an answer, so the bare verb is not enough.
+const HIGHLIGHT_EDIT_RE = /\b(?:res[aá]lt|subr[aá]y)\w*\b[^.;\n]{0,60}?\b(?:celdas?|filas?|columnas?|t[ií]tulos?|subt[ií]tulos?|encabezados?|p[aá]rrafos?|palabra|frase|l[ií]nea)\b|\b(?:res[aá]lt|subr[aá]y)\w*\b[^.;\n]{0,60}?\ben\s+(?:amarillo|verde|rojo|azul|naranja|rosado|celeste|negrita|cursiva)\b|\b(?:res[aá]lt|subr[aá]y)\w*\s+["'“«]/i;
+
+function isHighlightEditRequest(text) {
+  return HIGHLIGHT_EDIT_RE.test(String(text == null ? '' : text));
+}
+
 const DOCUMENT_CORRECTION_NOUNS = /\b(correcci[oó]n(?:es)?|ortograf[ií]a|gram[aá]tica|redacci[oó]n|erratas?|errores?)\b/i;
 const DOCUMENT_CORRECTION_ACTIONS = /\b(aplic\w*|haz|hacer|realiz\w*|corrig\w*|correg\w*|revis\w*|arregl\w*|ajust\w*|mejora\w*)\b/i;
 
@@ -198,6 +207,7 @@ function isDocumentEditRequest(text) {
   if (!t.trim()) return false;
   if (isDocumentCorrectionEditRequest(t)) return true;
   if (isDocumentStyleEditRequest(t)) return true;
+  if (isHighlightEditRequest(t)) return true;
   if (STRONG_EDIT_VERBS.test(t)) return true;
   if (WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t))) return true;
   return isFuzzyDocumentEditRequest(t);
@@ -209,7 +219,7 @@ function isDocumentEditRequest(text) {
 // (explica, resume, qué dice…) never count.
 const FUZZY_EDIT_STEMS = ['agreg', 'anad', 'anhad', 'insert', 'incorpor', 'inclu', 'met', 'pon', 'ponl', 'coloc', 'escrib', 'redact',
   'complet', 'llen', 'rellen', 'marc', 'coment', 'edit', 'modif', 'modific', 'corrig', 'correg', 'cambi', 'reempl',
-  'sustitu', 'actualiz', 'quit', 'borr', 'elimin', 'mejor', 'arregl', 'ajust', 'renombr', 'reescrib', 'traduc', 'numer'];
+  'sustitu', 'actualiz', 'quit', 'borr', 'elimin', 'mejor', 'arregl', 'ajust', 'renombr', 'reescrib', 'traduc', 'parafrase', 'numer'];
 const FUZZY_DOC_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observacion(?:es)?|comentarios?|campos?|casillas?|firma|formulario|matriz|ficha|items?|preguntas?|respuestas?|notas?|texto)\b/;
 const FUZZY_READ_ONLY_RE = /^\s*(?:explica|explicame|describe|resume|resumeme|analiza|revisa|que|como|por que|dime|cual|cuales|cuanto|no (?:edites|modifiques|reescribas|cambies))\b/;
 
@@ -255,6 +265,7 @@ module.exports = {
   isArtifactDeliverableRequest,
   isDocumentEditRequest,
   isDocumentStyleEditRequest,
+  isHighlightEditRequest,
   ACTION_VERBS,
   CREATION_VERBS,
   ARTIFACT_NOUNS,

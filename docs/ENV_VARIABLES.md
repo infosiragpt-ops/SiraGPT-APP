@@ -576,6 +576,30 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 
 ---
 
+## Edición milimétrica de Office (AgentRunner)
+
+Motor `sira_office.py` en el sandbox + tools `inspect_document` / `office_edit` /
+`render_preview` v2 / `verify_visual`, revisión con visión, gate de
+verificación v2, timeline con miniaturas. Spec:
+`docs/specs/edicion-milimetrica/SPEC.md`. Métricas F.2 en `/metrics`
+(`office_verify_total`, `office_verify_attempts_per_turn`,
+`office_pagination_changed_total`, `office_vision_disagreement_total`,
+`office_tool_latency_ms`) + una línea `[office-edit]` por turno. Evals de los 10
+escenarios contra la ruta real: `node scripts/run-office-evals.js --user <id>
+--fixtures <dir>` (dentro del contenedor del backend).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_OFFICE_ENGINE` | `1` | `0` = comportamiento previo a la Fase B: sin tools de oficina, render v1, gate de verificación anterior |
+| `SIRAGPT_OFFICE_ENGINE_TIMEOUT_MS` | `170000` | Tope por llamada al motor (mín. 10 s, máx. 600 s) |
+| `SIRAGPT_VISUAL_VERIFY_VISION` | `1` (off en `NODE_ENV=test`) | Revisión del antes/después con un modelo de visión |
+| `SIRAGPT_VISION_VERIFY_MODEL` | escalera | Fuerza el modelo de visión (`Proveedor:modelo` o id). Sin él: el modelo elegido si ve imágenes → `deepseek-flash` → `grok-4.6` → `gemini-3.5-flash` / `gemini-3-flash-preview` → `gpt-5.6-sol`; un 400/404/415/422 degrada 6 h |
+| `SIRAGPT_DEEPSEEK_VISION_MODEL` / `SIRAGPT_XAI_VISION_MODEL` / `SIRAGPT_GEMINI_VISION_MODEL` / `SIRAGPT_OPENAI_VISION_MODEL` | ver arriba | Modelo de visión por proveedor en la escalera |
+| `SIRAGPT_AGENT_VISION_IN_LOOP` | `0` | `1` adjunta las imágenes al loop (solo si el modelo del loop tiene visión); se conservan las 2 últimas |
+| `SIRAGPT_AGENT_THUMBS` | `1` (off en `NODE_ENV=test`) | Miniaturas (≤2 por paso, ≤80 KB) en el SSE del timeline |
+| `SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS` | `60000` | Presupuesto de compactación del loop (8000–120000); el pedido y el último mapa del documento se restauran tras compactar |
+| `SIRAGPT_AGENT_RUNNER_MAX_TOKENS` | `8192` en turnos de documentos | Salida por llamada al modelo |
+
 ## Chat attachments — any format (optional)
 
 Every file type is accepted in the `/agentes` composer. Defaults need no configuration.

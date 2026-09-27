@@ -2487,6 +2487,7 @@ async function runAgentLoop({
         }
       } catch (_) { /* 3H63 subagent/cache fail-open */ }
       const description = toolCallDescription(args);
+      const toolStartedAt = Date.now();
       onEvent({
         type: 'tool_call',
         iteration,
@@ -2850,6 +2851,7 @@ async function runAgentLoop({
         viaReact,
         tokensDelta: 0,
         artifactsDelta: ok ? 1 : 0,
+        durationMs: Date.now() - toolStartedAt,
         ...stepOutputs,
         ...(mapped === 'verify_visual' && !ok && isRendererUnavailable(result) ? { renderUnavailable: true } : {}),
       });
