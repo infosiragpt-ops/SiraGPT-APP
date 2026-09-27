@@ -110,7 +110,7 @@ export function ChatTitleMenu({
     setPinOverride({ id: chatId, pinned: next })
     toast.success(next ? "Chat fijado" : "Chat desfijado")
     const { synced } = await setChatPinned(chatId, next)
-    if (!synced) toast.warning("Guardado solo en este navegador; reinicia el backend para sincronizarlo.")
+    if (!synced) toast.warning("Guardado en este dispositivo; no se pudo sincronizar con tu cuenta.")
   }, [chatId, isPinned])
 
   const confirmDelete = React.useCallback(async () => {
