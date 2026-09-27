@@ -16,6 +16,23 @@ function verifiedStep(id) {
 }
 
 describe('multi-artifact delivery contract', () => {
+  test('SPSS plus Excel stays incomplete until both independently verified files exist', () => {
+    const contract = contractService.buildArtifactDeliveryContract(
+      'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel',
+      { multipleArtifacts: false, maxArtifactsPerTurn: 6 },
+    );
+    assert.equal(contract.active, true);
+    assert.equal(contract.expectedCount, 2);
+    assert.deepEqual(contract.requested.map((item) => item.format), ['xlsx', 'sav']);
+
+    const onlyExcel = contractService.validateArtifactDelivery(contract, {
+      artifacts: [{ id: 'excel-1', filename: 'muestra.xlsx', format: 'xlsx', downloadUrl: '/excel-1' }],
+      steps: [verifiedStep('excel-1')],
+    });
+    assert.equal(onlyExcel.ok, false);
+    assert.match(onlyExcel.message, /SPSS/);
+  });
+
   test('detects distinct Word, PDF and PowerPoint deliverables', () => {
     const contract = contractService.buildArtifactDeliveryContract(
       'Crea el informe en Word, una copia PDF y una presentación PowerPoint',

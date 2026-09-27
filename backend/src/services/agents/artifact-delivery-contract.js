@@ -3,6 +3,7 @@
 const FORMAT_SPECS = [
   { format: 'docx', label: 'Word', pattern: /\b(docx|word)\b/i },
   { format: 'xlsx', label: 'Excel', pattern: /\b(xlsx|excel|hoja\s+de\s+c[aá]lculo)\b/i },
+  { format: 'sav', label: 'SPSS (.sav)', pattern: /(?:\bspss\b|\.sav\b)/i },
   { format: 'pptx', label: 'PowerPoint', pattern: /\b(pptx?|power\s*point|diapositivas?|slides?)\b/i },
   { format: 'pdf', label: 'PDF', pattern: /\bpdf\b/i },
   { format: 'csv', label: 'CSV', pattern: /\bcsv\b/i },
@@ -11,8 +12,8 @@ const FORMAT_SPECS = [
   { format: 'txt', label: 'texto', pattern: /\b(txt|archivo\s+de\s+texto)\b/i },
 ];
 
-const DELIVERABLE_ACTION = /\b(crea(?:r|me)?|genera(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|arma(?:r|me)?|construye(?:r|me)?|redacta(?:r|me)?|exporta(?:r|me)?|convierte|descargable|entr[eé]ga(?:r|me)?)\b/i;
-const DELIVERABLE_NOUN = /\b(archivos?|documentos?|entregables?|versiones?|formatos?|informe|reporte|presentaci[oó]n|word|excel|power\s*point|pptx?|pdf|csv|svg|markdown|docx|xlsx)\b/i;
+const DELIVERABLE_ACTION = /\b(crea(?:r|me)?|genera(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|arma(?:r|me)?|construye(?:r|me)?|redacta(?:r|me)?|exporta(?:r|me)?|convierte|descargable|entr[eé]ga(?:r|me)?|dame)\b/i;
+const DELIVERABLE_NOUN = /\b(archivos?|documentos?|entregables?|versiones?|formatos?|informe|reporte|presentaci[oó]n|word|excel|spss|sav|power\s*point|pptx?|pdf|csv|svg|markdown|docx|xlsx)\b/i;
 const COUNT_WORDS = Object.freeze({ un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8 });
 
 function parseCount(value) {
@@ -43,7 +44,12 @@ function parseActionArgs(value) {
 
 function buildArtifactDeliveryContract(prompt, policy = {}) {
   const text = String(prompt || '');
-  if (!policy.multipleArtifacts || !DELIVERABLE_ACTION.test(text) || !DELIVERABLE_NOUN.test(text)) {
+  // SPSS + Excel is an explicit two-file request even in the default chat.
+  // Requiring the configured multi-artifact capability here would let a
+  // lone Excel pass as the complete result of this specific request.
+  const explicitSpssExcel = FORMAT_SPECS.find((spec) => spec.format === 'sav').pattern.test(text)
+    && FORMAT_SPECS.find((spec) => spec.format === 'xlsx').pattern.test(text);
+  if ((!policy.multipleArtifacts && !explicitSpssExcel) || !DELIVERABLE_ACTION.test(text) || !DELIVERABLE_NOUN.test(text)) {
     return { active: false, expectedCount: 0, requested: [], maxArtifacts: policy.maxArtifactsPerTurn || 6 };
   }
 
