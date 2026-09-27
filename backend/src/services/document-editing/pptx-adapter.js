@@ -169,6 +169,37 @@ function setSlideTitle({ buffer, slideNumber, title }) {
  * parts byte-for-byte. This is the scoped counterpart to the legacy
  * deck-wide replace operation.
  */
+// «el año de la portada», «la fecha», «el correo», «el título»: the planner
+// sometimes passes the DESCRIPTION of the text instead of the text itself
+// (prod 2026-09-27: «no encontré el texto "año de la portada" dentro de la
+// diapositiva 1» while the cover plainly showed «2024»). A descriptor is
+// resolved against the slide's own text and ONLY when exactly one candidate
+// exists — the editor never guesses between two years or two emails.
+const DESCRIPTOR_PATTERNS = Object.freeze([
+  { kind: 'year', mention: /\b(?:a[ñn]o|year)\b/i, find: /\b(?:19|20)\d{2}\b/g },
+  { kind: 'date', mention: /\b(?:fecha|date)\b/i, find: /\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b|\b\d{1,2}\s+de\s+[a-záéíóúñ]+\s+(?:de\s+|del\s+)?\d{4}\b|\b\d{4}-\d{2}-\d{2}\b/gi },
+  { kind: 'email', mention: /\b(?:correo|email|e-mail|mail)\b/i, find: /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g },
+  { kind: 'phone', mention: /\b(?:tel[eé]fono|celular|m[oó]vil|phone|whatsapp)\b/i, find: /\+?\d[\d\s().-]{6,}\d/g },
+  { kind: 'url', mention: /\b(?:url|enlace|link|web|sitio)\b/i, find: /\bhttps?:\/\/[^\s<>"']+|\bwww\.[^\s<>"']+/gi },
+  { kind: 'percent', mention: /\b(?:porcentaje|percent(?:age)?)\b/i, find: /\d+(?:[.,]\d+)?\s?%/g },
+]);
+
+function resolveDescriptiveNeedle(needle, { texts = [], title = '' } = {}) {
+  const description = String(needle || '');
+  if (/\b(?:t[ií]tulo|title)\b/i.test(description)) {
+    const clean = String(title || '').trim();
+    return clean.length >= 3 ? { kind: 'title', needle: clean } : null;
+  }
+  const pattern = DESCRIPTOR_PATTERNS.find((entry) => entry.mention.test(description));
+  if (!pattern) return null;
+  const found = new Set();
+  for (const text of texts) {
+    for (const match of String(text || '').match(pattern.find) || []) found.add(match.trim());
+  }
+  if (found.size !== 1) return null;
+  return { kind: pattern.kind, needle: [...found][0] };
+}
+
 function replaceSlideText({ buffer, slideNumber, needle, replacement = '' }) {
   const normalizedNeedle = normalizeText(needle);
   if (normalizedNeedle.length < 3) {
@@ -181,15 +212,29 @@ function replaceSlideText({ buffer, slideNumber, needle, replacement = '' }) {
     throw new Error(`la presentación tiene ${slides.length} diapositiva(s); no existe la diapositiva ${slideNumber}`);
   }
   const xml = zip.file(slide.partName)?.asText() || '';
-  let changedCount = 0;
-  const updated = xml.replace(/<a:t\b([^>]*)>([\s\S]*?)<\/a:t>/g, (full, attrs, value) => {
-    const visible = unescapeXmlText(value);
-    if (!normalizeText(visible).includes(normalizedNeedle)) return full;
-    const next = replaceVisibleText(visible, needle, replacement);
-    if (next === visible) return full;
-    changedCount += 1;
-    return `<a:t${attrs}>${xmlEscape(next)}</a:t>`;
-  });
+  const applyReplace = (literal) => {
+    const normalizedLiteral = normalizeText(literal);
+    let changedCount = 0;
+    const updated = xml.replace(/<a:t\b([^>]*)>([\s\S]*?)<\/a:t>/g, (full, attrs, value) => {
+      const visible = unescapeXmlText(value);
+      if (!normalizeText(visible).includes(normalizedLiteral)) return full;
+      const next = replaceVisibleText(visible, literal, replacement);
+      if (next === visible) return full;
+      changedCount += 1;
+      return `<a:t${attrs}>${xmlEscape(next)}</a:t>`;
+    });
+    return { updated, changedCount };
+  };
+  let { updated, changedCount } = applyReplace(needle);
+  let resolvedNeedle = null;
+  if (changedCount === 0) {
+    const texts = [...xml.matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) => unescapeXmlText(m[1]));
+    const resolved = resolveDescriptiveNeedle(needle, { texts, title: slide.title });
+    if (resolved && normalizeText(resolved.needle) !== normalizedNeedle) {
+      ({ updated, changedCount } = applyReplace(resolved.needle));
+      if (changedCount > 0) resolvedNeedle = resolved;
+    }
+  }
   if (changedCount === 0) {
     throw new Error(`no encontré el texto "${needle}" dentro de la diapositiva ${slideNumber}`);
   }
@@ -198,6 +243,7 @@ function replaceSlideText({ buffer, slideNumber, needle, replacement = '' }) {
     buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
     slideNumber: slide.number,
     partName: slide.partName,
+    ...(resolvedNeedle ? { resolvedNeedle: resolvedNeedle.needle, resolvedKind: resolvedNeedle.kind } : {}),
     changedCount,
   };
 }
@@ -405,6 +451,7 @@ function setSlideBackgrounds({ buffer, color, allSlides = true, slideNumber = nu
 }
 
 module.exports = {
+  resolveDescriptiveNeedle,
   listPptxSlides,
   listPptxImages,
   setSlideTitle,

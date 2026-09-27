@@ -39,6 +39,7 @@ const {
 } = require('./agent-task-honest-progress');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
+const transcriptionFastPath = require('./transcription-document-fast-path');
 const {
   isSourcePreservingEditRequest,
   tryGenerateSourcePreservingDocumentEdit,
@@ -2620,6 +2621,55 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         artifactsList: [],
         metadata: { imageVision: true, sourceFileIds: files },
       });
+    }
+
+    // ── Transcription-to-file: deterministic, from the attachment's text ──
+    // «transcribir en un documento word» with a readable attachment is not an
+    // open task: the deliverable IS the attachment's text in the requested
+    // format. Prod 2026-09-27 (verified turn): the loop spent 342 s on
+    // document_analysis tool calls before generating a 3.6 KB Word from text
+    // it already had. Media transcription keeps its batch path; an attachment
+    // without usable text falls through to the loop below.
+    if (transcriptionFastPath.shouldUseTranscriptionDocumentFastPath({
+      transcriptionToFileRequest,
+      hasAttachedFiles,
+      mediaBatchRows,
+      wantsSourcePreservingEdit,
+      documentPolicy,
+      artifactsCount: artifacts.length,
+    })) {
+      const fast = await transcriptionFastPath.runTranscriptionDocumentFastPath({
+        prisma,
+        userId: user.id,
+        fileIds: files,
+        task,
+        goal: displayGoal,
+        documentPolicy,
+        signal: controller.signal,
+        emit,
+        onStart: () => {
+          stepIdCounter += 1;
+          currentStepId = `s${stepIdCounter}`;
+          emit({ type: 'step_start', id: currentStepId, label: 'Creando el documento con la transcripción', icon: 'file-text' });
+        },
+        buildTranscriptionTextFromFiles,
+        generateAutoDocument,
+      });
+      if (currentStepId) {
+        emit({ type: 'step_done', id: currentStepId, ok: fast.handled });
+        currentStepId = null;
+      }
+      if (fast.handled) {
+        artifacts.push(fast.artifact);
+        logDocRouting(transcriptionFastPath.STOPPED_REASON);
+        return await finishDeterministicTask({
+          finalMarkdown: fast.finalMarkdown,
+          stoppedReason: transcriptionFastPath.STOPPED_REASON,
+          steps: stepIdCounter,
+          artifactsList: artifacts,
+          metadata: { servedBy: transcriptionFastPath.STOPPED_REASON, sourceFileIds: files, sourceWords: fast.sourceWords },
+        });
+      }
     }
 
     // ── F2: AgentRunner PRIMARY on the durable agent-task entry ──────────
