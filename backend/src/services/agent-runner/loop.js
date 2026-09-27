@@ -969,6 +969,13 @@ function assistantTranscriptMessage(msg, toolCalls) {
   if (Object.prototype.hasOwnProperty.call(msg, 'reasoning_content')) {
     message.reasoning_content = msg.reasoning_content;
   }
+  // The native Claude adapter stores signed thinking/tool blocks outside the
+  // serialized message. Keep those descriptors for the next tool-call turn;
+  // the adapter verifies call IDs before replaying them.
+  for (const field of ['_anthropicContent', '_anthropicModel']) {
+    const descriptor = Object.getOwnPropertyDescriptor(msg, field);
+    if (descriptor) Object.defineProperty(message, field, descriptor);
+  }
   return message;
 }
 

@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { createSandbox } = require('../doc-agent/sandbox');
 const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
-const { parseModelSpec, resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
+const { parseModelSpec, keyFor, resolveDocAgentCandidates, createFailoverClient, defaultCreateClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
@@ -321,6 +321,7 @@ const PICKER_LADDER_PROVIDERS = new Set(['DeepSeek', 'Meta', 'Gemini', 'xAI', 'O
 // passed deepseek/deepseek-v4-pro» — every runner turn failed). OpenRouter
 // keeps the slug.
 const DIRECT_SLUG_PREFIX = Object.freeze({
+  Anthropic: /^anthropic\//i,
   DeepSeek: /^deepseek\//i,
   Gemini: /^(?:google|gemini)\//i,
   xAI: /^x-?ai\//i,
@@ -353,21 +354,29 @@ function runnerProviderError(err) {
 
 function resolveRunnerLlmCandidate({ pickedModel = null, env = process.env } = {}) {
   const requested = pickedModel || explicitRunnerModel(env);
-  const candidates = resolveDocAgentCandidates({ model: requested || null, env });
   if (!requested) {
+    const candidates = resolveDocAgentCandidates({ env });
     if (candidates.length) return candidates[0];
     throw runnerProviderError();
   }
   const selected = parseModelSpec(requested);
+  if (selected?.provider === 'Anthropic') {
+    const apiKey = keyFor({ keys: ['ANTHROPIC_API_KEY', 'SIRA_ANTHROPIC_API_KEY'] }, env);
+    if (!apiKey) throw runnerProviderError();
+    return { provider: 'Anthropic', model: selected.model, apiKey };
+  }
   if (!selected?.provider || !PICKER_LADDER_PROVIDERS.has(selected.provider)) throw runnerProviderError();
+  const candidates = resolveDocAgentCandidates({ model: requested, env });
   const candidate = candidates.find((entry) => entry.provider === selected.provider && entry.model === selected.model);
   if (!candidate) throw runnerProviderError();
   return candidate;
 }
 
-function createRunnerLlmClient({ pickedModel = null, env = process.env, createClient } = {}) {
+function createRunnerLlmClient({ pickedModel = null, env = process.env, createClient, anthropicSdkClient = null } = {}) {
   const selected = resolveRunnerLlmCandidate({ pickedModel, env });
-  const client = createFailoverClient([selected], { createClient });
+  const client = createFailoverClient([selected], {
+    createClient: createClient || ((candidate) => defaultCreateClient(candidate, { anthropicSdkClient })),
+  });
   return {
     ...client,
     chat: { completions: { create: async (...args) => {
