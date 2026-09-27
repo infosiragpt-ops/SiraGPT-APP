@@ -178,6 +178,18 @@ test('a filename selects its current derived version and avoids editing the othe
   assert.equal(f.calls.edits[2].files[0].buffer.toString(), 'original:file-0|edit');
 });
 
+test('a named PDF inside an explicit mixed-document batch never narrows the batch to that PDF', async (t) => {
+  const f = fixture(t, ['Prueba-PDF.pdf', 'Prueba-Word.docx']);
+  const initial = await f.run();
+  assert.equal(initial.ok, true, initial.message);
+  f.messages.unshift({ role: 'ASSISTANT', files: toAssistantFiles(initial.artifacts) });
+  const updated = await f.run({ instruction: 'Edita todos los documentos, incluido Prueba-PDF.pdf recién editado, y conserva el formato.' });
+  assert.equal(updated.ok, true, updated.message);
+  assert.equal(updated.artifacts.length, 2);
+  assert.deepEqual(f.calls.edits.slice(-2).map((edit) => edit.files[0].name),
+    ['Prueba-PDF.pdf', 'Prueba-Word.docx']);
+});
+
 test('compound Word edits reach the selected engine intact and follow-ups retain both verified changes', async (t) => {
   const { Document, Packer, Paragraph } = require('docx');
   const PizZip = require('pizzip');

@@ -466,6 +466,66 @@ test('re-attaching the original upload continues from the latest delivered versi
   assert.deepEqual(fresh.map((s) => s.kind), ['upload'], 'first edit still uses the upload');
 });
 
+test('an exact named PDF follow-up selects its edited artifact even after a newer differently named version', async (t) => {
+  const artifactDir = tempArtifactDir({
+    aaa111: { metadata: { id: 'aaa111', filename: 'Prueba-PDF.pdf', ownerUserId: USER,
+      storedRelPath: 'aaa111-Prueba-PDF.pdf', validation: { documentEdit: { sourceFileId: 'f1', sourceFilename: 'Prueba-PDF.pdf' } } },
+    bytes: Buffer.from('Proyecto revisado|Aprobado|CONTROL_SIN_CAMBIOS') },
+    bbb222: { metadata: { id: 'bbb222', filename: 'Prueba-PDF-final.pdf', ownerUserId: USER,
+      storedRelPath: 'bbb222-Prueba-PDF-final.pdf', validation: { documentEdit: { sourceFileId: 'f1', sourceFilename: 'Prueba-PDF.pdf' } } },
+    bytes: Buffer.from('Proyecto final|Aprobado|CONTROL_SIN_CAMBIOS') },
+  });
+  t.after(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({
+    files: [
+      { id: 'f1', userId: USER, originalName: 'Prueba-PDF.pdf', path: '/tmp/original' },
+      { id: 'f2', userId: USER, originalName: 'Prueba-PDF.pdf', path: '/tmp/new-upload' },
+      { id: 'word', userId: USER, originalName: 'Prueba-Word.docx', path: '/tmp/word' },
+    ],
+    messages: [
+      { role: 'ASSISTANT', files: [{ artifactId: 'bbb222', filename: 'Prueba-PDF-final.pdf' }] },
+      { role: 'ASSISTANT', files: [{ artifactId: 'aaa111', filename: 'Prueba-PDF.pdf' }] },
+      { role: 'USER', files: [{ id: 'f1' }] },
+    ],
+  });
+  const { deps } = baseDeps({ artifactDir });
+  const instruction = 'En el PDF Prueba-PDF.pdf recién editado cambia solamente «Proyecto revisado» por «Proyecto final». Conserva «Aprobado», CONTROL_SIN_CAMBIOS y el formato. Devuélveme el PDF final.';
+  const sources = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1'], instruction, deps });
+  assert.deepEqual(sources.map((source) => [source.kind, source.name, source.artifactId]),
+    [['artifact', 'Prueba-PDF.pdf', 'aaa111']]);
+  await assert.rejects(resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f2'],
+    instruction, deps }), { code: 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS' },
+  'a newly attached different PDF with the same name must not be dropped for an older artifact');
+  const latest = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1'],
+    instruction: 'En la última versión editada de Prueba-PDF.pdf cambia el título.', deps });
+  assert.equal(latest[0].artifactId, 'bbb222', 'a latest-version request follows the lineage');
+  const quotedContent = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1'],
+    instruction: 'En el PDF recién editado cambia «Prueba-PDF.pdf» por «Nuevo nombre».', deps });
+  assert.equal(quotedContent[0].artifactId, 'bbb222', 'quoted replacement text is not a source filename');
+  const batch = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1', 'word'],
+    instruction: 'Edita todos los documentos, incluido Prueba-PDF.pdf recién editado, y conserva el formato.', deps });
+  assert.deepEqual(batch.map((source) => source.name), ['Prueba-PDF-final.pdf', 'Prueba-Word.docx'],
+    'an explicit batch must retain every source and keep its latest lineage version');
+});
+
+test('same visible PDF filename keeps the newest delivered bytes', async (t) => {
+  const artifactDir = tempArtifactDir({
+    aaa111: { metadata: { filename: 'Prueba-PDF.pdf', ownerUserId: USER,
+      validation: { documentEdit: { sourceFileId: 'f1' } } }, bytes: Buffer.from('v2') },
+    bbb222: { metadata: { filename: 'Prueba-PDF.pdf', ownerUserId: USER,
+      validation: { documentEdit: { sourceFileId: 'f1' } } }, bytes: Buffer.from('v3') },
+  });
+  t.after(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'Prueba-PDF.pdf' }], messages: [
+    { role: 'ASSISTANT', files: [{ artifactId: 'bbb222' }] },
+    { role: 'ASSISTANT', files: [{ artifactId: 'aaa111' }] },
+  ] });
+  const { deps } = baseDeps({ artifactDir });
+  const sources = await resolveEditSources({ prisma, userId: USER, chatId: 'chat-1', fileIds: ['f1'],
+    instruction: 'En Prueba-PDF.pdf recién editado cambia una palabra.', deps });
+  assert.deepEqual(sources.map((source) => source.artifactId), ['bbb222']);
+});
+
 test('agent-loop artifacts stored in the agent-task-state block are found as the latest version', async () => {
   const artifactDir = tempArtifactDir({
     '0f0639d747e79f60': { metadata: { id: '0f0639d747e79f60', filename: 'CARTA_rgp__editado_.docx', ownerUserId: USER, storedRelPath: 'v2.docx' }, bytes: Buffer.from('v2') },
