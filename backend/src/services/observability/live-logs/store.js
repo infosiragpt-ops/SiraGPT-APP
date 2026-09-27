@@ -275,10 +275,21 @@ class LiveLogStore {
     this.client = null;
   }
 
-  async flush() {
+  async flush({ force = false } = {}) {
     if (this.flushing || !this.client || !this.redisReady || this.paused || this.pending.length === 0) return 0;
+    // Hold each line for the repeat window so a flood of the same line
+    // collapses (×N) before it reaches Redis; a large backlog flushes anyway.
+    let take = this.pending.length;
+    if (!force && this.pending.length <= this.opts.flushBatch) {
+      const cutoff = this.now() - this.opts.repeatWindowMs;
+      take = 0;
+      // Bounded by the FIRST occurrence: a continuous flood becomes one row
+      // every repeat window, and nothing waits more than that window.
+      while (take < this.pending.length && this.pending[take].ts <= cutoff) take += 1;
+      if (take === 0) return 0;
+    }
     this.flushing = true;
-    const batch = this.pending.splice(0, this.opts.flushBatch);
+    const batch = this.pending.splice(0, Math.min(take, this.opts.flushBatch));
     try {
       const pipe = this.client.pipeline();
       const warnRank = LEVEL_RANK.warn;
