@@ -2278,6 +2278,15 @@ router.post(
     // against it aborted a turn before the model was even called (prod
     // 2026-09-26: 77 s preparing an image → aborted at 45 s → empty turn).
     let __ttfbClockStartedAt = __generateStartedAt;
+    // While attachments are being prepared the watchdog allows a longer,
+    // separate budget: the 45 s first-byte limit only applies to the model.
+    // A prep step that overran 45 s used to abort the turn BEFORE the model
+    // was called — the provider then saw an already-aborted signal (prod
+    // 2026-09-26, «(a+b)² =» screenshot, Grok 4.7).
+    let __ttfbLimitMs = (() => {
+      const n = Number(process.env.SIRAGPT_TURN_PREP_BUDGET_MS);
+      return Number.isFinite(n) && n >= 10_000 ? n : 120_000;
+    })();
 
     // A reconnect must never replace the original owner's stop controller.
     // The follower is attached to the in-process stream fanout below after
@@ -3228,6 +3237,7 @@ router.post(
             try {
               const hit = adTtfb.abortIfFirstByteOver45s({
                 startedAt: __ttfbClockStartedAt,
+                limitMs: __ttfbLimitMs,
                 now: Date.now(),
                 firstByteAt: __firstByteAt,
               });
@@ -3335,6 +3345,11 @@ router.post(
 
       // Attachments are ready: the first-byte budget now measures the model.
       __ttfbClockStartedAt = Date.now();
+      __ttfbLimitMs = undefined;
+      generateLog.info('attachments.prepared', {
+        attachmentCount: processedFiles.length,
+        prepMs: __ttfbClockStartedAt - __generateStartedAt,
+      });
 
       // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
       // Projects use the same injection pattern as CustomGpts (persona
