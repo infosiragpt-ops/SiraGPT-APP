@@ -43,6 +43,7 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { apiClient } from "@/lib/api"
+import { LiveLogsPanel } from "@/components/admin/live-logs/live-logs-panel"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -119,6 +120,14 @@ const rowTime = (r: AuditLogRow): number => {
 }
 
 export default function AdminLogsPage() {
+  // «Registros en vivo» (every backend line, live) is the default view;
+  // ?tab=auditoria deep-links the audit feed.
+  const [view, setView] = useState<"auditoria" | "vivo">("vivo")
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("tab") === "auditoria") setView("auditoria")
+    } catch { /* ignore */ }
+  }, [])
   const [rows, setRows] = useState<AuditLogRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -506,6 +515,31 @@ Devuelve:
         </div>
       </div>
 
+      <div role="tablist" aria-label="Vista de registros" className="inline-flex w-fit rounded-lg border border-border/70 bg-muted/40 p-0.5 text-sm">
+        {([
+          ["vivo", "Registros en vivo"],
+          ["auditoria", "Registro de auditoría"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            data-testid={`logs-view-${key}`}
+            onClick={() => setView(key)}
+            className={cn(
+              "rounded-md px-3 py-1.5 font-medium transition-colors",
+              view === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "vivo" && <LiveLogsPanel />}
+
+      <div className={cn(view !== "auditoria" && "hidden")}>
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -761,6 +795,7 @@ Devuelve:
           </div>
         </CardContent>
       </Card>
+      </div>
 
       {/* Event detail — full record + AI diagnosis. */}
       <Dialog open={!!detailRow} onOpenChange={(o) => { if (!o) setDetailRow(null) }}>
