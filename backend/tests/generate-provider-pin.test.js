@@ -26,6 +26,7 @@ const LIVE = [
   { model: 'claude-fable-5', provider: 'Anthropic' },
   { model: 'gpt-5.6-terra', provider: 'OpenAI' },
   { model: 'openai/gpt-5.6-terra', provider: 'OpenAI' },
+  { model: 'gpt-6-sol', provider: 'OpenAI' },
   { model: 'moonshotai/kimi-k2.6', provider: 'Kimi' },
   { model: 'moonshotai/kimi-k2.7-code', provider: 'Kimi' },
   { model: 'x-ai/grok-4', provider: 'xAI' },
@@ -125,6 +126,7 @@ test('normalizeModelForProvider strips native prefixes and never adds anthropic/
   assert.equal(service.__test.normalizeModelForProvider('Kimi', 'moonshotai/kimi-k2.6'), 'kimi-k2.6');
   assert.equal(service.__test.normalizeModelForProvider('Gemini', 'google/gemini-3.5-flash'), 'gemini-3.5-flash');
   assert.equal(service.__test.normalizeModelForProvider('OpenAI', 'openai/gpt-5.6-terra'), 'gpt-5.6-terra');
+  assert.equal(service.__test.normalizeModelForProvider('OpenAI', 'openai/gpt-6-sol'), 'gpt-6-sol');
   assert.equal(service.__test.normalizeModelForProvider('OpenRouter', 'claude-sonnet-4.5'), 'claude-sonnet-4.5');
 });
 

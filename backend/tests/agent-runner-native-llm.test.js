@@ -188,6 +188,7 @@ describe('native-llm module', () => {
     await loop.callModel({ client: { ...client, describe: () => ({ provider: 'OpenAI' }) }, model: 'openai/gpt-6-sol', messages: [{ role: 'user', content: 'hola' }], tools: [], maxTokens: 500 });
     assert.equal(calls[0].max_completion_tokens, 500);
     assert.equal('max_tokens' in calls[0], false);
+    assert.equal('temperature' in calls[0], false, 'AgentRunner must not add the unsupported sampling field');
     assert.equal(calls[1].max_tokens, 500);
     assert.equal('max_completion_tokens' in calls[1], false);
     assert.equal(calls[2].max_tokens, 500);
