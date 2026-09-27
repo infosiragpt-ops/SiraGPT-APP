@@ -39,6 +39,11 @@ const state = {
   // Resolving the request context requires utils/logger (pino). Wait until
   // index.js finished its synchronous boot so we never change module load order.
   contextAllowed: false,
+  // pino writes each line through `hooks.streamWrite` (tapped) and then to its
+  // stream. When stdout was hooked before pino loaded, pino detects the
+  // "tampered" stdout and writes through process.stdout.write too — the
+  // stream hook skips that identical chunk so every pino line is ONE event.
+  lastPinoLine: null,
   lastNoteAt: 0,
 };
 
@@ -180,7 +185,12 @@ function hookStream(stream, name) {
     if (!state.inCapture && state.enabled && state.sink) {
       state.inCapture = true;
       try {
-        captureText(chunkToText(chunk, encoding), state.pendingMethod || name);
+        const text = chunkToText(chunk, encoding);
+        if (state.lastPinoLine !== null && text === state.lastPinoLine) {
+          state.lastPinoLine = null; // already captured by the pino tap
+        } else {
+          captureText(text, state.pendingMethod || name);
+        }
       } catch (_) {
         /* never break the write */
       } finally {
@@ -219,7 +229,9 @@ function tapPinoLine(line) {
   if (state.inCapture || !state.enabled || !state.sink) return line;
   state.inCapture = true;
   try {
-    captureText(typeof line === 'string' ? line : String(line), 'pino');
+    const text = typeof line === 'string' ? line : String(line);
+    state.lastPinoLine = text;
+    captureText(text, 'pino');
   } catch (_) {
     /* ignore */
   } finally {

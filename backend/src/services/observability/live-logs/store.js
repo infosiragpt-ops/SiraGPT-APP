@@ -26,7 +26,9 @@ const DEFAULTS = Object.freeze({
   maxAll: 60_000,
   maxErr: 20_000,
   errRetentionMs: 7 * 24 * 60 * 60 * 1000,
-  reqRetentionSec: 7 * 24 * 60 * 60,
+  // The per-request index only needs to outlive the full-line stream
+  // (~hours); older errors are still found by scanning the error stream.
+  reqRetentionSec: 12 * 60 * 60,
   reqMaxLines: 600,
   pendingMax: 5000,
   flushIntervalMs: 300,
@@ -112,6 +114,7 @@ class LiveLogStore {
       maxErr: numEnv(env, 'SIRAGPT_LIVE_LOGS_MAX_ERRORS', DEFAULTS.maxErr, { min: 500, max: 200_000 }),
       errRetentionMs: numEnv(env, 'SIRAGPT_LIVE_LOGS_ERROR_DAYS', 7, { min: 1, max: 30 }) * 24 * 60 * 60 * 1000,
       absoluteMaxBytes: numEnv(env, 'SIRAGPT_LIVE_LOGS_REDIS_MAX_MB', 256, { min: 16, max: 4096 }) * 1024 * 1024,
+      reqRetentionSec: numEnv(env, 'SIRAGPT_LIVE_LOGS_REQUEST_HOURS', 12, { min: 1, max: 168 }) * 60 * 60,
     };
     this.keys = {
       all: `${this.opts.prefix}all`,
@@ -430,6 +433,14 @@ class LiveLogStore {
     if (this.client && this.redisReady && typeof this.client.lrange === 'function') {
       try {
         const ids = await this.client.lrange(this.keys.req(id), 0, -1);
+        if ((!ids || ids.length === 0) && typeof this.client.xrevrange === 'function') {
+          // Index expired (older turn): scan the streams for that request.
+          const [all, errs] = await Promise.all([
+            this.search({ reqId: id }, { limit: 600, maxScan: 20_000 }).catch(() => ({ lines: [] })),
+            this.search({ reqId: id, minLevel: 'warn' }, { limit: 600, maxScan: 20_000 }).catch(() => ({ lines: [] })),
+          ]);
+          for (const e of [...all.lines, ...errs.lines]) if (e && e.id) byId.set(e.id, e);
+        }
         const missing = (ids || []).filter((x) => !byId.has(x));
         if (missing.length) {
           const pipe = this.client.pipeline();

@@ -180,6 +180,7 @@ Ver `docs/memory-architecture.md`.
 | `SIRAGPT_LIVE_LOGS_RING` | In-memory ring size used for the live backfill (default 5000) |
 | `SIRAGPT_LIVE_LOGS_REDIS_MAX_MB` | Pause log persistence above this Redis size when `maxmemory` is 0 (default 256); with `maxmemory` set it pauses at 60 % |
 | `SIRAGPT_LIVE_LOGS_REDIS_PREFIX` | Redis key prefix (default `siragpt:logs:`) |
+| `SIRAGPT_LIVE_LOGS_REQUEST_HOURS` | How long the per-request line index lives (default 12 h; older turns are found by scanning the error stream) |
 | `SIRAGPT_GENERATION_LOG` | One `[generation]` line per image/video/speech/music generation (default on outside tests; `0` disables) |
 
 ---

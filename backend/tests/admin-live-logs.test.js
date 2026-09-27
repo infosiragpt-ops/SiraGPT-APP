@@ -198,6 +198,33 @@ test('pino tap returns the line unchanged and captures it', async () => {
   });
 });
 
+test('real pino: each line is captured exactly once on both write paths', async () => {
+  const pino = require('pino');
+  await withSink(async (events) => {
+    // Path 1 — stdout hooked before pino loaded: pino writes through the
+    // hooked stream AND calls the streamWrite tap. Must stay ONE event.
+    const written = [];
+    const hookedDest = { write(s) { written.push(s); return true; } };
+    capture._hookStream(hookedDest, 'stdout');
+    const logger = pino({ hooks: { streamWrite: capture.tapPinoLine } }, hookedDest);
+    logger.error({ reqId: 'r-7', apiKey: 'sk-live-ZZZZYYYYXXXXWWWWVVVV' }, 'provider exploded');
+    logger.info('all good');
+    assert.equal(written.length, 2, 'pino output itself is untouched');
+    assert.equal(events.length, 2);
+    assert.deepEqual(events.map((e) => e.level), ['error', 'info']);
+    assert.equal(events[0].via, 'pino');
+    assert.equal(events[0].reqId, 'r-7');
+    assert.ok(!JSON.stringify(events).includes('ZZZZYYYYXXXX'));
+    // Path 2 — SonicBoom-style destination that bypasses the hooked stream:
+    // only the tap sees it.
+    const plainDest = { write() { return true; } };
+    const logger2 = pino({ hooks: { streamWrite: capture.tapPinoLine } }, plainDest);
+    logger2.warn('slow provider');
+    assert.equal(events.length, 3);
+    assert.equal(events[2].level, 'warn');
+  });
+});
+
 // ── Store ───────────────────────────────────────────────────────────────
 
 function ev(over = {}) {
@@ -307,6 +334,23 @@ test('Redis flush: all stream, error stream for warn+, per-request index', async
   assert.equal(hist.stream, 'errors');
   assert.deepEqual(hist.lines.map((l) => l.msg), ['bad line']);
   store.stop();
+});
+
+test('request trail survives an expired index by scanning the streams', async () => {
+  const fake = fakeRedis();
+  let t = 70_000;
+  const store = new LiveLogStore({ env: {}, now: () => t, redisFactory: () => fake.client });
+  store.start();
+  store.redisReady = true;
+  store.push(ev({ msg: 'old turn start', reqId: 'req-old', ts: (t += 1) }));
+  store.push(ev({ msg: 'old turn failed', level: 'error', reqId: 'req-old', ts: (t += 1) }));
+  await store.flush();
+  delete fake.lists['siragpt:logs:req:req-old'];
+  store.ring = new Array(store.opts.ringMax);
+  store.ringSize = 0;
+  const lines = await store.requestLines('req-old');
+  store.stop();
+  assert.deepEqual(lines.map((l) => l.msg), ['old turn start', 'old turn failed']);
 });
 
 test('memory guard pauses persistence before Redis (shared with BullMQ) fills up', async () => {
