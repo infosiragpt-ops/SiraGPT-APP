@@ -5,6 +5,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { classifyAuditReport } = require('./audit-backend-production.cjs');
+const { auditTimeoutMs, runWithAuditRetries } = require('./lib/npm-audit-retry.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const CONFIG_PATH = path.join(__dirname, 'audit-production-allowlist.json');
@@ -62,7 +63,7 @@ function runAudit({ run = spawnSync } = {}) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 16 * 1024 * 1024,
-    timeout: 60000,
+    timeout: auditTimeoutMs(),
   });
 
   if (!result || result.error || result.signal || ![0, 1].includes(result.status))
@@ -142,7 +143,9 @@ function main() {
 
 if (require.main === module) {
   try {
-    main();
+    // Bounded retry for npm audit transport failures only; blocked advisories
+    // fail on the first attempt (see scripts/lib/npm-audit-retry.cjs).
+    runWithAuditRetries(() => main(), { label: 'audit-allowlist' });
   } catch (error) {
     console.error(`\n[audit-allowlist] ${error.message}`);
     process.exit(1);

@@ -8921,6 +8921,8 @@ async function tryApplyLiteralDocxTitleEdit({ input, requestText = '' } = {}) {
   return { buffer: edited.buffer, validation };
 }
 
+const NAMED_NON_WORD_DOCUMENT = Symbol('named_non_word_document');
+
 async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent }) {
   const docxEngine = require('./docx-engine');
   const editor = require('./document-editor/chat-document-editor');
@@ -8930,7 +8932,7 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
       extractFileIds: require('./message-attachments').extractFileIdsFromMessageFiles,
     },
   });
-  if (!sources.some((source) => docxEngine.isWordFilename(source.name))) return null;
+  const hasWordSource = sources.some((source) => docxEngine.isWordFilename(source.name));
   // The canonical editor owns batches too: it resolves the latest version,
   // keeps the selected client, and verifies every source before publishing.
   // Preserve an explicit family scope ("ambos Word" + a reference PDF) using
@@ -8945,9 +8947,40 @@ async function tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText,
     }
   }
   const request = String(requestText || '').normalize('NFC').toLowerCase();
-  const named = sources.filter((source) => request.includes(source.name.normalize('NFC').toLowerCase()));
-  if (named.length === 1 && !docxEngine.isWordFilename(named[0].name)) return null;
-  if (!docxEngine.docxEngineEnabled()) {
+  const namedSources = (candidates) => candidates.filter((source) => [source.name, source.originalName,
+    source.metadata?.validation?.documentEdit?.sourceFilename]
+    .filter(Boolean).some((name) => request.includes(String(name).normalize('NFC').toLowerCase())));
+  let named = namedSources(sources);
+  // A follow-up may carry only the latest Word's recovered file ID even
+  // though the PDF it names belongs to an earlier multi-file delivery.
+  // Recover that related batch by chat ownership and select its latest PDF
+  // artifact before the Word-only precision parser can reject the request.
+  if (named.length !== 1 && /\.(?:pdf|xlsx?|xlsm|pptx?)\b/i.test(request)) {
+    const related = await editor.resolveEditSources({
+      prisma, userId, chatId, fileIds: [], includeRelatedSources: true,
+      deps: {
+        artifactDir: require('./agents/task-tools').ARTIFACT_DIR,
+        extractFileIds: require('./message-attachments').extractFileIdsFromMessageFiles,
+      },
+    });
+    const relatedNamed = namedSources(related);
+    if (relatedNamed.length === 1 && !docxEngine.isWordFilename(relatedNamed[0].name)) named = relatedNamed;
+  }
+  // A Word in the chat history must not make the Word-only precision parser
+  // reject an explicitly named PDF, spreadsheet or presentation later.
+  const namedNonWord = named.length === 1 && !docxEngine.isWordFilename(named[0].name);
+  // Page operations keep the existing PDF adapter. Text changes need the
+  // selected-model editor that already handles PDFs in mixed-file batches.
+  const namedPdfTextEdit = namedNonWord && /\.pdf$/i.test(named[0].name) && !parsePdfEditRequest(requestText);
+  if (namedNonWord && !namedPdfTextEdit) return NAMED_NON_WORD_DOCUMENT;
+  // No Word source means the Word precision parser must never claim this
+  // turn, even if the request contains quoted literals to preserve.
+  if (!hasWordSource && !namedPdfTextEdit) return sources.length ? NAMED_NON_WORD_DOCUMENT : null;
+  if (namedPdfTextEdit) {
+    const target = named[0];
+    selectedFileIds = [target.kind === 'artifact' ? `artifact:${target.artifactId}` : target.row.id];
+  }
+  if (!namedPdfTextEdit && !docxEngine.docxEngineEnabled()) {
     const error = new Error('La edición de Word no está disponible en este momento. El original no se modificó.');
     error.code = 'DOCX_EDIT_UNAVAILABLE';
     throw error;
@@ -9010,11 +9043,13 @@ async function tryGenerateSourcePreservingDocumentEdit({
   // Word files with a live model: the docx engine edits the document in
   // place (the model reads its structure and fills/edits the right fields).
   // No annex/append fallback for Word — failure is reported honestly.
+  let namedNonWordDocument = false;
   if (llm) {
     const engineHit = await tryDocxEngineEdit({ prisma, userId, chatId, fileIds, requestText, signal, llm, onEvent });
-    if (engineHit) return engineHit;
+    namedNonWordDocument = engineHit === NAMED_NON_WORD_DOCUMENT;
+    if (engineHit && !namedNonWordDocument) return engineHit;
   }
-  if (parseDocxPrecisionRequest(requestText)) {
+  if (!namedNonWordDocument && parseDocxPrecisionRequest(requestText)) {
     // Reuse the canonical ownership/version resolver. The legacy heuristic
     // selector can prefer a historical upload based on extracted-text guesses;
     // an exact edit must use the explicit upload or latest owned delivered copy.

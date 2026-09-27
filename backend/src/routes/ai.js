@@ -1691,7 +1691,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null } = {}) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null, activityTrace = null } = {}) {
   const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
     ? observabilityLog
     : generatePersistenceLog;
@@ -1831,6 +1831,12 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
             reasoningDetails: (reasoningPayload && reasoningPayload.details != null)
               ? reasoningPayload.details
               : undefined,
+            // AgentRunner turns (edición milimétrica): the stage timeline the
+            // user watched live, so a reload shows the same steps. A harness
+            // run owns agent_metadata instead (one timeline per turn).
+            ...(activityTrace && typeof activityTrace === 'object' && !agentRun
+              ? { agentMetadata: activityTrace }
+              : {}),
           }
         });
 
@@ -1976,7 +1982,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           maxAttempts: 3,
         });
         setTimeout(() => {
-          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog })
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog, activityTrace })
             .catch((retryErr) => persistenceLog.error('persistence.retry_crashed', retryErr, {
               attempt: _attempt + 2,
               maxAttempts: 3,
@@ -2296,6 +2302,15 @@ router.post(
     // against it aborted a turn before the model was even called (prod
     // 2026-09-26: 77 s preparing an image → aborted at 45 s → empty turn).
     let __ttfbClockStartedAt = __generateStartedAt;
+    // While attachments are being prepared the watchdog allows a longer,
+    // separate budget: the 45 s first-byte limit only applies to the model.
+    // A prep step that overran 45 s used to abort the turn BEFORE the model
+    // was called — the provider then saw an already-aborted signal (prod
+    // 2026-09-26, «(a+b)² =» screenshot, Grok 4.7).
+    let __ttfbLimitMs = (() => {
+      const n = Number(process.env.SIRAGPT_TURN_PREP_BUDGET_MS);
+      return Number.isFinite(n) && n >= 10_000 ? n : 120_000;
+    })();
 
     // A reconnect must never replace the original owner's stop controller.
     // The follower is attached to the in-process stream fanout below after
@@ -3249,6 +3264,7 @@ router.post(
             try {
               const hit = adTtfb.abortIfFirstByteOver45s({
                 startedAt: __ttfbClockStartedAt,
+                limitMs: __ttfbLimitMs,
                 now: Date.now(),
                 firstByteAt: __firstByteAt,
               });
@@ -3371,6 +3387,11 @@ router.post(
 
       // Attachments are ready: the first-byte budget now measures the model.
       __ttfbClockStartedAt = Date.now();
+      __ttfbLimitMs = undefined;
+      generateLog.info('attachments.prepared', {
+        attachmentCount: processedFiles.length,
+        durationMs: __ttfbClockStartedAt - __generateStartedAt,
+      });
 
       // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
       // Projects use the same injection pattern as CustomGpts (persona
@@ -7802,6 +7823,9 @@ router.post(
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
                   req._agentRun = agenticResult.agentRun || null;
+                  // AgentRunner turns: the stage timeline persisted with the
+                  // assistant row (messages.agent_metadata.activityTrace).
+                  req._agentActivityTrace = agenticResult.agentActivityTrace || null;
                   // The live stream already contains artifact cards. Keep the
                   // compact persistence envelope separately from the model
                   // answer so post-processing and token accounting continue to
@@ -8391,7 +8415,7 @@ router.post(
                 null,
                 req._agentRun || null,
                 0,
-                { observabilityLog: generateLog, rlhfFeedback },
+                { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || null },
               );
               if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
                 req._activeGenerateTurn.resolve(savedChat);
@@ -8893,7 +8917,7 @@ router.post(
           __reasoningSink,
           req._agentRun || null,
           0,
-          { observabilityLog: generateLog, rlhfFeedback },
+          { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || null },
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);

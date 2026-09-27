@@ -41,6 +41,16 @@ const ERROR_WORD_RE = /(?:^|[\s[(:'"])(?:[A-Z][A-Za-z]{2,}Error|Error|Exception)
 // Soft signals: something went wrong but the process handled it.
 const WARN_WORD_RE = /\b(?:failed|failure|fail(?:s|ing)?|fatal|crash(?:ed)?|panic|cannot|could not|unable to|no se pudo|fall[oó]|rechaz\w*|timed? ?out|timeout|aborted|denied|refused|invalid|unauthori[sz]ed|forbidden|not found|rate[- ]?limited|quota|insufficient|degraded|fallback|retry(?:ing)?|reintent\w*)\b/i;
 
+const ERROR_EMOJI_RE = /[❌✖🚨⛔💥]/u;
+// Diagnostic tags ([models-dbg], [perf], [timing]…) are debug noise, not failures.
+const DEBUG_TAG_RE = /(?:^|[-_:\s])(?:dbg|debug|trace|timing|perf|bench|verbose)(?:$|[-_:\s])/i;
+// pino-http's per-request completion line duplicates middleware/request-logger
+// (which also carries the user); the admin log console's own requests are noise.
+const PINO_HTTP_DONE_RE = /^request (?:completed|aborted)$/;
+const SELF_PATH_RE = /^\/api\/admin\/logs\//;
+const QUIET_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const QUIET_MAX_MS = 1500;
+
 const BRACKET_TAG_RE = /^\s*(?:[^\s[]{1,4}\s+)?\[([A-Za-z0-9][A-Za-z0-9 :._/@#-]{1,47})\]/;
 const WORKER_TAG_RE = /(?:worker|queue|runner|cron|job|scheduler|watchdog|sweeper|codex-runs|bull)/i;
 
@@ -91,7 +101,12 @@ function summarizeJson(obj) {
   const url = firstString(obj.path, obj.url, obj.route, obj.req && obj.req.url, obj.endpoint);
   const status = statusOf(obj);
   const dur = Number(obj.durMs ?? obj.responseTime ?? obj.duration_ms ?? obj.durationMs);
-  const text = firstString(obj.msg, obj.message, obj.event, obj.action);
+  const msgText = firstString(obj.msg, obj.message);
+  const eventText = firstString(obj.event, obj.action);
+  // `{msg:'ai.generate', event:'ai.generate.request.accepted'}` → show the event.
+  const text = eventText && msgText && eventText !== msgText && eventText.startsWith(msgText)
+    ? eventText
+    : firstString(msgText, eventText);
   const errMsg = obj.err && typeof obj.err === 'object' ? firstString(obj.err.message, obj.err.type) : firstString(obj.error && obj.error.message, typeof obj.error === 'string' ? obj.error : '');
   const parts = [];
   if (method && url) parts.push(`${method} ${url}`);
@@ -165,14 +180,32 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
     status = statusOf(obj);
     if (status >= 500) level = maxLevel(level, 'error');
     else if (status >= 400 && status !== 401 && status !== 404) level = maxLevel(level, 'warn');
-    if (obj.err && typeof obj.err === 'object' && (obj.err.message || obj.err.stack)) level = maxLevel(level, 'error');
+    const hasErr = Boolean(obj.err && typeof obj.err === 'object' && (obj.err.message || obj.err.stack));
+    if (hasErr) level = maxLevel(level, 'error');
+    const reqPath = firstString(obj.path, obj.url, obj.req && obj.req.url).split('?')[0];
+    if (!hasErr && obj.req && obj.res && PINO_HTTP_DONE_RE.test(firstString(obj.msg))) return { drop: 'duplicate' };
+    if (reqPath && SELF_PATH_RE.test(reqPath) && (status == null || status < 500)) return { drop: 'self' };
+    const reqMethod = firstString(obj.method, obj.req && obj.req.method).toUpperCase();
+    const dur = Number(obj.durMs ?? obj.responseTime);
+    if (!hasErr && reqPath && QUIET_METHODS.has(reqMethod) && status != null && status < 400
+      && Number.isFinite(dur) && dur < QUIET_MAX_MS && (level === 'info' || level === 'debug')) {
+      // A fast, successful read (polls, catalog/credits refreshes): kept and
+      // searchable, but out of the default «info y superior» view.
+      level = 'debug';
+    }
     msg = summarizeJson(obj);
     body = raw.trim().slice(0, JSON_BODY_MAX);
   } else {
     ({ msg, body } = splitMessage(raw));
+    const strong = FATAL_RE.test(raw) || STACK_RE.test(raw) || ERROR_WORD_RE.test(raw) || ERROR_EMOJI_RE.test(msg);
+    const soft = WARN_WORD_RE.test(msg);
     if (FATAL_RE.test(raw)) level = maxLevel(level, 'fatal');
-    else if (STACK_RE.test(raw) || ERROR_WORD_RE.test(raw)) level = maxLevel(level, 'error');
-    else if (WARN_WORD_RE.test(msg)) level = maxLevel(level, 'warn');
+    else if (strong) level = maxLevel(level, 'error');
+    else if (soft) level = maxLevel(level, 'warn');
+    // console.error with nothing that reads like a failure is a notice, not a red error.
+    if (method === 'console.error' && !strong && !soft) level = 'warn';
+    const lineTag = inferTag(raw, null);
+    if (lineTag && DEBUG_TAG_RE.test(lineTag) && !strong) level = 'debug';
   }
 
   const tag = inferTag(raw, obj);

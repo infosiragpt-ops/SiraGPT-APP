@@ -8,12 +8,12 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts?: Record<string, string>
 }
 
-function frontendJobSource(): string {
-  const start = workflow.indexOf("\n  frontend:")
-  const end = workflow.indexOf("\n  backend:", start)
-  assert.notEqual(start, -1, "CI workflow must define the frontend job")
-  assert.notEqual(end, -1, "CI workflow must define the backend job after frontend")
-  return workflow.slice(start, end)
+function jobSource(id: string): string {
+  const start = workflow.indexOf(`\n  ${id}:\n`)
+  assert.notEqual(start, -1, `CI workflow must define the ${id} job`)
+  const rest = workflow.slice(start + 1)
+  const next = rest.slice(1).search(/\n  [a-z0-9-]+:\n/)
+  return next === -1 ? rest : rest.slice(0, next + 1)
 }
 
 function stepSource(job: string, name: string): string {
@@ -41,9 +41,11 @@ function matchesGlob(file: string, pattern: string): boolean {
 
 describe("frontend CI test gates", () => {
   it("runs compiled root tests and stable-pool Vitest as blocking frontend steps", () => {
-    const frontend = frontendJobSource()
+    // The test gates run in their own job, in parallel with `Frontend · build`.
+    const frontend = jobSource("frontend-tests")
     const compiledRoot = stepSource(frontend, "Unit & integration tests")
     const vitest = stepSource(frontend, "Vitest component & lib tests (hard gate)")
+    stepSource(frontend, "TypeScript check (hard gate)")
 
     assert.match(compiledRoot, /^\s*run:\s*npm test\s*$/m)
     assert.doesNotMatch(compiledRoot, /continue-on-error\s*:/)
@@ -51,8 +53,16 @@ describe("frontend CI test gates", () => {
     assert.doesNotMatch(vitest, /continue-on-error\s*:/)
 
     const timeout = frontend.match(/\btimeout-minutes:\s*(\d+)/)
-    assert.ok(timeout, "frontend job must define a timeout")
-    assert.ok(Number(timeout[1]) >= 20, "frontend timeout must cover both test gates and build")
+    assert.ok(timeout, "frontend-tests job must define a timeout")
+    assert.ok(Number(timeout[1]) >= 20, "frontend-tests timeout must cover every test gate")
+
+    // Both frontend jobs are required by the aggregate check.
+    const build = jobSource("frontend")
+    assert.match(stepSource(build, "Next.js build"), /^\s*run:\s*npm run build\s*$/m)
+    const gate = jobSource("ci")
+    assert.match(gate, /needs:\s*\[[^\]]*\bfrontend\b[^\]]*\bfrontend-tests\b[^\]]*\]/)
+    assert.match(gate, /needs\.frontend-tests\.result/)
+    assert.match(gate, /needs\.frontend\.result/)
   })
 
   it("discovers the I16 authenticated-fetch, password, and upload regressions", () => {
