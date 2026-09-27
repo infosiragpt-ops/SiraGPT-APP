@@ -11,7 +11,13 @@
  *
  * F6 — web tools (web_search / web_fetch / browser_act) are appended when
  * the SIRAGPT_AGENT_WEB kill switch allows them (default ON, OFF under
- * NODE_ENV=test). IMPORTANT split of worlds: the sandbox tools above run
+ * NODE_ENV=test).
+ *
+ * Edición milimétrica (docs/specs/edicion-milimetrica/SPEC.md, Fase B): with
+ * SIRAGPT_OFFICE_ENGINE !== '0' (default ON) the runner also gets
+ * inspect_document / office_edit / verify_visual and render_preview v2
+ * (./tools.office.js over sira_office.py). Every tool accepts an optional
+ * `description` — a short Spanish phrase the user sees in the timeline. IMPORTANT split of worlds: the sandbox tools above run
  * inside the F5 gVisor sandbox with `--network none`; the web tools run in
  * the Node backend process (Playwright in its own child browser process)
  * behind their own SSRF guard — see ./browser/web-tools.js. Everything they
@@ -19,6 +25,11 @@
  */
 
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
+const {
+  DESCRIPTION_PARAM,
+  OFFICE_TOOL_DEFINITIONS,
+  makeOfficeToolExecutors,
+} = require('./tools.office');
 const {
   webToolsEnabled,
   WEB_TOOL_DEFINITIONS,
@@ -151,6 +162,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           code: { type: 'string', description: 'Python source to execute.' },
         },
         required: ['code'],
@@ -167,6 +179,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           command: { type: 'string', description: 'Bash command to run.' },
         },
         required: ['command'],
@@ -182,6 +195,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           path: { type: 'string' },
           offset: { type: 'integer' },
           limit: { type: 'integer' },
@@ -199,6 +213,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           path: { type: 'string' },
           content: { type: 'string' },
         },
@@ -215,6 +230,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           path: { type: 'string' },
         },
         additionalProperties: false,
@@ -230,6 +246,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           path: { type: 'string', description: 'pptx/docx path relative to /workspace.' },
         },
         required: ['path'],
@@ -246,6 +263,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           path: { type: 'string', description: 'File path relative to /workspace.' },
           old_str: { type: 'string', description: 'Exact existing text to replace (unique in the file).' },
           new_str: { type: 'string', description: 'Replacement text.' },
@@ -264,6 +282,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           pattern: { type: 'string', description: 'Glob pattern, relative to /workspace.' },
         },
         required: ['pattern'],
@@ -280,6 +299,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           pattern: { type: 'string', description: 'Text or extended regex to search for.' },
           path: { type: 'string', description: 'File or directory relative to /workspace (default ".").' },
         },
@@ -297,6 +317,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           topic: { type: 'string', description: 'Subject of the deck, e.g. embarazo.' },
           title: { type: 'string', description: 'Title slide text.' },
           color: { type: 'string', description: 'User-requested color: name or #hex. Omit if the user did not ask for one.' },
@@ -330,6 +351,7 @@ const BASE_TOOL_DEFINITIONS = [
       parameters: {
         type: 'object',
         properties: {
+          description: DESCRIPTION_PARAM,
           path: { type: 'string', description: 'pptx path relative to /workspace.' },
           color: { type: 'string', description: 'Hex or named color (blanco, rosado, #1E3A8A).' },
           slide_number: { type: 'integer', description: '1-based slide; omit to paint all slides.' },
@@ -363,7 +385,15 @@ for p in files:
 print(json.dumps({"ok": True, "frames": report, "count": len(report)}))
 `.trim();
 
-function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
+/**
+ * Edición milimétrica kill switch: '0' restores the pre-Fase-B tool set
+ * (render_preview v1 only, no office tools). Default ON.
+ */
+function officeEngineEnabled(env = process.env) {
+  return String((env && env.SIRAGPT_OFFICE_ENGINE) ?? '').trim() !== '0';
+}
+
+function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
   const doc = makeDocExecutors(sandbox);
   const applyBg = setSlideBackgrounds
     || require('../document-editing/pptx-adapter').setSlideBackgrounds;
@@ -575,6 +605,23 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
     },
   };
 
+  // Edición milimétrica (Fase B): the office executors are merged AFTER the
+  // base set, so render_preview v2 replaces v1 — v1 stays as its fallback
+  // for a sandbox without the engine. `office.enabled` lets tests force it.
+  const officeOpts = office || {};
+  const officeOn = officeOpts.enabled !== undefined
+    ? Boolean(officeOpts.enabled)
+    : officeEngineEnabled(officeOpts.env || process.env);
+  if (officeOn) {
+    Object.assign(executors, makeOfficeToolExecutors(sandbox, {
+      visionVerifier: officeOpts.visionVerifier || null,
+      attachImages: Boolean(officeOpts.attachImages),
+      thumbs: Boolean(officeOpts.thumbs),
+      onFailure: typeof officeOpts.onFailure === 'function' ? officeOpts.onFailure : null,
+      fallbackRender: executors.render_preview,
+    }));
+  }
+
   // F6 — web tools run in the Node process, NOT inside the gVisor sandbox
   // (the sandbox keeps --network none). `web.enabled` lets tests force the
   // gate either way; `web` also carries the test injectables
@@ -593,14 +640,30 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
  * when the SIRAGPT_AGENT_WEB kill switch allows them.
  */
 function buildToolDefinitions(env = process.env) {
-  return webToolsEnabled(env)
-    ? [...BASE_TOOL_DEFINITIONS, ...WEB_TOOL_DEFINITIONS]
-    : [...BASE_TOOL_DEFINITIONS];
+  const base = officeEngineEnabled(env) ? withOfficeTools(BASE_TOOL_DEFINITIONS) : [...BASE_TOOL_DEFINITIONS];
+  return webToolsEnabled(env) ? [...base, ...WEB_TOOL_DEFINITIONS] : base;
+}
+
+/**
+ * render_preview v1 is replaced IN PLACE by v2 and the other office tools
+ * follow it, so the office workflow reads as one group in the tool list.
+ */
+function withOfficeTools(definitions) {
+  const v2 = OFFICE_TOOL_DEFINITIONS.find((d) => d.function.name === 'render_preview');
+  const others = OFFICE_TOOL_DEFINITIONS.filter((d) => d.function.name !== 'render_preview');
+  const out = [];
+  for (const def of definitions) {
+    if (def.function.name === 'render_preview') out.push(v2, ...others);
+    else out.push(def);
+  }
+  return out;
 }
 
 module.exports = {
   makeToolExecutors,
   buildToolDefinitions,
+  officeEngineEnabled,
+  OFFICE_TOOL_DEFINITIONS,
   BASE_TOOL_DEFINITIONS,
   WEB_TOOL_DEFINITIONS,
   webToolsEnabled,

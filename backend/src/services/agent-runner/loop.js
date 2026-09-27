@@ -821,6 +821,23 @@ function isLlmCreditError(err) {
   return /\b402\b|credit balance is too low|insufficient credits?|requires more credits|can only afford|payment required/i.test(message);
 }
 
+// Same-turn identical-call cache: never for tools that mutate files, and
+// never for tools whose result depends on files that may have changed since
+// (office inspect/render/verify) — a stale verification must not pass.
+const SAME_TURN_CACHE_EXCLUDE_RE = /^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_|office_|inspect_document|render_preview|verify_visual)/i;
+
+/**
+ * Edición milimétrica (Fase B): every tool may carry `description`, a short
+ * Spanish phrase written by the model for the user's timeline. Plain text
+ * only: control characters and runs of whitespace collapse, 120 chars max.
+ */
+function toolCallDescription(args) {
+  const raw = args && typeof args === 'object' ? args.description : null;
+  if (typeof raw !== 'string') return undefined;
+  const clean = raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+  return clean || undefined;
+}
+
 function previewOf(value, max = 200) {
   const s = typeof value === 'string' ? value : JSON.stringify(value);
   if (!s) return '';
@@ -2330,7 +2347,7 @@ async function runAgentLoop({
           }
         } catch (_) { /* computer refuse fail-closed only on explicit helper refuse */ }
         if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function'
-          && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
+          && !SAME_TURN_CACHE_EXCLUDE_RE.test(String(mapped || name || ''))) {
           const hit = adapter.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache });
           if (hit && hit.cacheHit) {
             result = hit.result;
@@ -2338,13 +2355,16 @@ async function runAgentLoop({
           }
         }
       } catch (_) { /* 3H63 subagent/cache fail-open */ }
+      const description = toolCallDescription(args);
       onEvent({
         type: 'tool_call',
         iteration,
         tool: mapped,
         args,
         preview: previewOf(args.code || args.command || args.path || args.color || args),
-        label: mapped === 'render_preview' ? 'Verificando resultado' : 'Ejecutando código',
+        label: description || (mapped === 'render_preview' ? 'Verificando resultado' : 'Ejecutando código'),
+        description,
+        callId: call && call.id,
         viaReact,
       });
 
@@ -2537,7 +2557,7 @@ async function runAgentLoop({
       try {
         const adCache = loadEngineAdapter();
         if (adCache && typeof adCache.cacheIdenticalToolCallSameTurn === 'function' && !cacheHit
-          && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
+          && !SAME_TURN_CACHE_EXCLUDE_RE.test(String(mapped || name || ''))) {
           adCache.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache, result });
         }
         if (String(result).startsWith('ERROR:')) {
@@ -2682,6 +2702,7 @@ async function runAgentLoop({
         ok,
         preview: previewOf(result, 400),
         label: ok ? 'Verificando resultado' : 'Reintentando',
+        callId: call && call.id,
       });
       messages.push({
         role: 'tool',
