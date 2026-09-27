@@ -13,7 +13,7 @@ const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-spss-artifact
 process.env.AGENT_ARTIFACT_DIR = artifactDir;
 const objectStorage = require('../src/services/object-storage');
 const { INTERNAL } = require('../src/services/agents/task-tools');
-const { resolveReadOnlyGeneratedArtifactFollowup } = require('../src/services/agents/generated-artifact-followup');
+const { resolveReadOnlyGeneratedArtifactFollowup, compareGeneratedSavXlsx } = require('../src/services/agents/generated-artifact-followup');
 
 const data = [
   'columns = [f"P{i:02d}" for i in range(1, 21)]',
@@ -179,6 +179,24 @@ async function createAndVerify(filename, python, expectedFormat, events) {
   assert.match(chatRun.finalAnswer, /400 valores: 0 diferencias/);
   assert.match(chatRun.finalAnswer, /20 etiquetas de variables/);
   assert.doesNotMatch(chatRun.finalAnswer, /[a-f0-9]{16}|\/app\/uploads\/agent-artifacts/i);
+  // A validated card can outlive corrupted object-storage bytes. The same
+  // reader must identify the failing phase without leaking ids, paths or data
+  // and must never claim that the matrices match.
+  const savBinary = binaries.get(sav.result.artifactId);
+  binaries.set(sav.result.artifactId, {
+    ...savBinary,
+    bytes: Buffer.from('$FL2corrupted-after-validation'),
+  });
+  const broken = await compareGeneratedSavXlsx({
+    refs,
+    goal: 'Sin crear ni modificar: abre y compara el SAV y el Excel que acabas de entregar; verifica los 400 valores.',
+    userId: 'spss-runtime-smoke',
+    chatId: 'spss-excel-pair',
+  });
+  assert.equal(broken.ok, false);
+  assert.equal(broken.failureStage, 'sav_read');
+  assert.match(broken.answer, /etapa: lectura del SAV/);
+  assert.doesNotMatch(broken.answer, /400 valores: 0 diferencias|[a-f0-9]{16}|\/app\/uploads\/agent-artifacts/i);
   process.stdout.write('create_document + normal-chat follow-up: R2-hydrated SAV/XLSX 20 x 20 and 400 values compared without provider\n');
 })().catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);

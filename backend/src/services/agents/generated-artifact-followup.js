@@ -199,15 +199,22 @@ function isGeneratedSavXlsxComparison(goal, refs = []) {
 }
 
 const SAV_XLSX_COMPARISON_SOURCE = [
-  'import json, numbers, pandas as pd, pyreadstat',
-  'from decimal import Decimal',
-  'from openpyxl import load_workbook',
-  'files = list(ARTIFACT_FILES.values())',
-  'sav_path = next(item["path"] for item in files if item["filename"].lower().endswith(".sav"))',
-  'xlsx_path = next(item["path"] for item in files if item["filename"].lower().endswith(".xlsx"))',
-  'frame, metadata = pyreadstat.read_sav(sav_path)',
-  'book = load_workbook(xlsx_path, read_only=True, data_only=True)',
+  'import json',
+  'stage = "dependencies"',
+  'book = None',
   'try:',
+  '    import numbers, pandas as pd, pyreadstat',
+  '    from decimal import Decimal',
+  '    from openpyxl import load_workbook',
+  '    stage = "artifact_paths"',
+  '    files = list(ARTIFACT_FILES.values())',
+  '    sav_path = next(item["path"] for item in files if item["filename"].lower().endswith(".sav"))',
+  '    xlsx_path = next(item["path"] for item in files if item["filename"].lower().endswith(".xlsx"))',
+  '    stage = "sav_read"',
+  '    frame, metadata = pyreadstat.read_sav(sav_path)',
+  '    stage = "xlsx_read"',
+  '    book = load_workbook(xlsx_path, read_only=True, data_only=True)',
+  '    stage = "matrix_compare"',
   '    sheet = book.active',
   '    rows = sheet.iter_rows(values_only=True)',
   '    headers = [str(value) if value is not None else "" for value in next(rows, ())]',
@@ -228,18 +235,49 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   '        excel_row_count += 1',
   '    comparable = same_headers and excel_row_count == len(frame)',
   '    if not comparable: differences, compared = None, 0',
-  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "comparedCells": compared, "differentCells": differences, "labelCount": sum(bool(label) for label in metadata.column_labels), "headersMatch": same_headers, "matrixComparable": comparable, "columnsMatchP01P20": sav_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
+  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "comparedCells": compared, "differentCells": differences, "labelCount": sum(bool(label) for label in (metadata.column_labels or [])), "headersMatch": same_headers, "matrixComparable": comparable, "columnsMatchP01P20": sav_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
+  'except Exception:',
+  '    print(json.dumps({"failureStage": stage}))',
   'finally:',
-  '    book.close()',
+  '    if book is not None:',
+  '        book.close()',
 ].join('\n');
+
+const COMPARISON_FAILURE_LABELS = Object.freeze({
+  artifact_access: 'acceso a los archivos',
+  artifact_paths: 'selección de los archivos',
+  dependencies: 'preparación de los lectores',
+  sav_read: 'lectura del SAV',
+  xlsx_read: 'lectura del Excel',
+  matrix_compare: 'comparación de las matrices',
+  timeout: 'tiempo de lectura',
+  executor: 'ejecución del lector',
+  result_format: 'validación del resultado',
+});
+
+function comparisonFailure(stage) {
+  const safeStage = Object.hasOwn(COMPARISON_FAILURE_LABELS, stage) ? stage : 'executor';
+  // Only the fixed stage name enters logs and the reply. Never log raw Python
+  // stderr, artifact ids, paths, document bytes, or storage references.
+  console.warn(`[generated-artifact-followup] sav_xlsx_compare_failed stage=${safeStage}`);
+  return {
+    ok: false,
+    failureStage: safeStage,
+    answer: `No pude abrir y comparar los bytes del SAV y el Excel de este chat (etapa: ${COMPARISON_FAILURE_LABELS[safeStage]}). No puedo concluir si coinciden; vuelve a intentarlo. Esta comprobación directa no llamó al modelo seleccionado.`,
+  };
+}
+
+function executorFailureStage(execution) {
+  if (execution?.timedOut) return 'timeout';
+  const error = String(execution?.error || '');
+  if (/archivos generados|propietario y el chat|Identificador de archivo/.test(error)) return 'artifact_access';
+  if (/ModuleNotFoundError|ImportError/.test(String(execution?.stderr || ''))) return 'dependencies';
+  return 'executor';
+}
 
 async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } = {}) {
   if (!isGeneratedSavXlsxComparison(goal, refs)) return null;
   const { INTERNAL } = require('./task-tools');
-  const failed = {
-    ok: false,
-    answer: 'No pude abrir y comparar los bytes del SAV y el Excel de este chat. No puedo concluir si coinciden; vuelve a intentarlo. Esta comprobación directa no llamó al modelo seleccionado.',
-  };
   let execution;
   try {
     execution = await INTERNAL.pythonExec.execute({
@@ -251,13 +289,14 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } =
       generatedArtifactRefs: refs,
       onEvent,
     });
-  } catch { return failed; }
-  if (!execution?.ok) return failed;
+  } catch { return comparisonFailure('executor'); }
+  if (!execution?.ok) return comparisonFailure(executorFailureStage(execution));
   let result;
   try { result = JSON.parse(String(execution.stdout || '').trim().split('\n').at(-1)); }
-  catch { return failed; }
+  catch { return comparisonFailure('result_format'); }
+  if (result?.failureStage) return comparisonFailure(result.failureStage);
   const fields = ['savRows', 'savColumns', 'excelRows', 'excelColumns', 'labelCount', 'comparedCells'];
-  if (!result || fields.some((field) => !Number.isSafeInteger(result[field]) || result[field] < 0)) return failed;
+  if (!result || fields.some((field) => !Number.isSafeInteger(result[field]) || result[field] < 0)) return comparisonFailure('result_format');
   if (result.matrixComparable !== true) {
     return {
       ok: false,
@@ -266,7 +305,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent } =
   }
   if (!Number.isSafeInteger(result.differentCells) || result.differentCells < 0
     || result.comparedCells !== result.savRows * result.savColumns
-    || result.differentCells > result.comparedCells) return failed;
+    || result.differentCells > result.comparedCells) return comparisonFailure('result_format');
   const columnNote = result.columnsMatchP01P20 === true
     ? 'Las columnas son P01–P20.'
     : 'Las columnas del SAV no son exactamente P01–P20.';
