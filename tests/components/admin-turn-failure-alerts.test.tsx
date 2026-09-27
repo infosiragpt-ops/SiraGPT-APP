@@ -100,6 +100,41 @@ describe("TurnFailureAlertsProvider (admin-wide listener)", () => {
     expect(document.title).toBe("Admin · SiraGPT")
   })
 
+  it("new system issues and regressions play the stronger «critical» tone and add to the badge", async () => {
+    window.localStorage.setItem(ERROR_SOUND_STORAGE_KEY, "1")
+    const empty = { serverTime: new Date().toISOString(), count: 0, items: [] }
+    const fetchRecent = vi.fn(async () => empty)
+    const issueResponses = [
+      // seed: the backlog counts but never sounds
+      { serverTime: new Date().toISOString(), count: 1, items: [{ id: "a1", issueId: "i1", createdAt: new Date().toISOString(), type: "nuevo" as const, title: "TypeError: x", culprit: null, kind: "backend", kindLabel: null, level: "error" }] },
+      { serverTime: new Date().toISOString(), count: 1, items: [{ id: "a2", issueId: "i2", createdAt: new Date().toISOString(), type: "regresion" as const, title: "ReplyError: ERR rate-limited", culprit: null, kind: "redis", kindLabel: "Redis", level: "error" }] },
+    ]
+    const fetchIssueAlerts = vi.fn(async () => issueResponses.shift() || empty)
+    const audio = instrumentedAudio()
+    function IssueProbe() {
+      const alerts = useTurnFailureAlerts()
+      return (
+        <div>
+          <span data-testid="issues">{alerts?.unseenIssues ?? -1}</span>
+          <span data-testid="total">{alerts?.totalUnseen ?? -1}</span>
+        </div>
+      )
+    }
+    render(
+      <TurnFailureAlertsProvider pollMs={1000} fetchRecent={fetchRecent} fetchIssueAlerts={fetchIssueAlerts} audioFactory={audio.factory}>
+        <IssueProbe />
+      </TurnFailureAlertsProvider>,
+    )
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId("issues").textContent).toBe("1")
+    expect(audio.started).toHaveLength(0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(screen.getByTestId("issues").textContent).toBe("2")
+    expect(screen.getByTestId("total").textContent).toBe("2")
+    expect(audio.started).toEqual([1046.5, 830.61, 1046.5, 830.61])
+    expect(document.title).toBe("(2) Admin · SiraGPT")
+  })
+
   it("stays silent while the sound toggle is off", async () => {
     const fetchRecent = vi
       .fn()

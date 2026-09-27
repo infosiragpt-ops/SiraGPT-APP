@@ -15,7 +15,7 @@ test("admin layout mounts the admin-wide failed-turn listener inside the admin g
 
 test("the «Logs» menu item shows the unseen failure badge", () => {
   const sidebar = read("components/admin-sidebar.tsx")
-  assert.match(sidebar, /useTurnFailureAlerts\(\)\?\.unseen/)
+  assert.match(sidebar, /useTurnFailureAlerts\(\)\?\.totalUnseen/, "failed turns + new system issues")
   assert.match(sidebar, /item\.url === "\/admin\/logs" && unseenFailures > 0/)
   assert.match(sidebar, /data-testid="admin-logs-failure-badge"/)
 })
@@ -27,6 +27,11 @@ test("Logs opens on «Fallos de respuesta» with the global error-sound toggle",
   assert.match(page, /const logsTabs: LogsTab\[\] = \[/)
   assert.match(page, /value: "fallos",\s*label: "Fallos de respuesta",/)
   assert.match(page, /\{ value: "auditoria", label: "Auditoría", render: \(\) => auditPanel \}/)
+  assert.match(page, /value: "errores",\s*label: "Errores del sistema",/)
+  assert.match(page, /render: \(\) => <SystemIssuesPanel \/>/)
+  // Tab order: Fallos de respuesta · Errores del sistema · Auditoría
+  assert.ok(page.indexOf('value: "fallos"') < page.indexOf('value: "errores"'))
+  assert.ok(page.indexOf('value: "errores"') < page.indexOf('value: "auditoria"'))
   assert.match(page, /\{logsTabs\.map\(\(t\) => \(\s*<TabsTrigger key=\{t\.value\} value=\{t\.value\}/)
   assert.match(page, /render: \(\) => <TurnFailuresPanel \/>/)
   assert.match(page, /Sonido de errores: \{alerts\?\.soundOn \? "activado" : "desactivado"\}/)
@@ -71,4 +76,14 @@ test("the /agentes voice catalog asks for voices only once it is opened", () => 
   assert.match(modal, /configured === false/)
   const hook = read("hooks/use-voices.tsx")
   assert.match(hook, /globalConfigured = response\?\.configured !== false/)
+})
+
+test("new system issues sound with the «critical» tone; repeats never reach the listener", () => {
+  const alerts = read("lib/admin/turn-failure-alerts.tsx")
+  assert.match(alerts, /playErrorChime\(ensureAudio\(\), "critical"\)/)
+  assert.match(alerts, /apiClient\.getAdminSystemIssuesRecent\(since\)/)
+  assert.match(alerts, /ISSUES_SEEN_AT_STORAGE_KEY = "sira-admin-system-issues-seen-at"/)
+  const panel = read("components/admin/system-issues/system-issues-panel.tsx")
+  assert.match(panel, /alerts\?\.setViewingIssues\(true\)/)
+  assert.match(panel, /<IssueSparkline values=\{it\.sparkline\}/)
 })

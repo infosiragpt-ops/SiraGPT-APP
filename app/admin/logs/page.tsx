@@ -49,6 +49,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { apiClient } from "@/lib/api"
 import { useTurnFailureAlerts } from "@/lib/admin/turn-failure-alerts"
 import { TurnFailuresPanel } from "@/components/admin/turn-failures/turn-failures-panel"
+import { SystemIssuesPanel } from "@/components/admin/system-issues/system-issues-panel"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -790,6 +791,12 @@ Devuelve:
       badge: alerts && alerts.unseen > 0 && tab !== "fallos" ? alerts.unseen : 0,
       render: () => <TurnFailuresPanel />,
     },
+    {
+      value: "errores",
+      label: "Errores del sistema",
+      badge: alerts && alerts.unseenIssues > 0 && tab !== "errores" ? alerts.unseenIssues : 0,
+      render: () => <SystemIssuesPanel />,
+    },
     { value: "auditoria", label: "Auditoría", render: () => auditPanel },
   ]
 
@@ -800,7 +807,7 @@ Devuelve:
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
           <p className="text-sm text-muted-foreground">
-            Rastreador en vivo: cada pregunta que la plataforma no respondió bien, más la auditoría del sistema.
+            En vivo: cada pregunta que la plataforma no respondió bien, cada error del sistema agrupado y la auditoría.
           </p>
         </div>
       </div>

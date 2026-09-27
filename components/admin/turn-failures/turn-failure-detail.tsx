@@ -48,7 +48,7 @@ function Block({ label, children }: { label: string; children: React.ReactNode }
  * from Admin → Logs «Registros en vivo» (GET /api/admin/logs/request/:reqId).
  * Stays hidden while that endpoint answers 404 (not deployed / no lines).
  */
-function RequestLogsSection({ reqIds }: { reqIds: string[] }) {
+export function RequestLogsSection({ reqIds }: { reqIds: string[] }) {
   const reqId = reqIds[0] || ""
   const [lines, setLines] = useState<string[] | null>(null)
   const [open, setOpen] = useState(false)
@@ -202,6 +202,23 @@ export function TurnFailureDetailDialog({
             )}
 
             {Array.isArray(m.reqIds) && m.reqIds.length > 0 && <RequestLogsSection reqIds={m.reqIds.map(String)} />}
+
+            {Array.isArray(m.notes) && m.notes.some((n) => n.kind === "system_error" && n.data && n.data.fingerprint) && (
+              <Block label="Errores del sistema durante este turno">
+                <ul className="space-y-1 text-sm" data-testid="turn-failure-system-errors">
+                  {m.notes.filter((n) => n.kind === "system_error" && n.data && n.data.fingerprint).slice(0, 5).map((n, i) => (
+                    <li key={`${String(n.data?.fingerprint)}-${i}`}>
+                      <a
+                        href={`/admin/logs?tab=errores&fp=${encodeURIComponent(String(n.data?.fingerprint))}`}
+                        className="font-mono text-xs underline decoration-dotted underline-offset-2 hover:text-foreground"
+                      >
+                        {String(n.data?.title || n.data?.fingerprint)}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </Block>
+            )}
 
             {Array.isArray(m.notes) && m.notes.length > 0 && (
               <Block label="Detalle técnico">
