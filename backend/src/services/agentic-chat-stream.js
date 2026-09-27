@@ -779,12 +779,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   return agentFirstEnabled();
 }
 
+  function isStandaloneSavXlsxMatrixRequest(userQuery, matrix) {
+    if (!matrix) return false;
+    const normalized = String(userQuery || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().replace(/\s+/g, ' ').trim();
+    // This complete-request grammar covers the simple two-file request only.
+    // Any additional clause or output, however phrased, keeps the model's
+    // python_exec gate; a file parity check cannot prove an extra analysis.
+    const match = normalized.match(/^(?:dame|crea(?:me)?|genera(?:me)?|prepara(?:me)?|hazme)\s+un(?:os)?\s+(?:documentos?|archivos?)\s+de\s+spss\s+con\s+una\s+muestra\s+de\s+(\d{1,5})\s+de\s+(\d{1,3})\s+preguntas?\s+y\s+un\s+excel(?:[.!?]\s*usa\s+solo\s+datos\s+sinteticos)?[.!?]?$/);
+    return !!match
+      && Number(match[1]) === matrix.rows
+      && Number(match[2]) === matrix.columns;
+  }
+
   function buildChatFinalizeProfile({
     userQuery,
     fileIds = [],
     fileMetadata = [],
     hasImageAttachment = false,
     availableToolNames = new Set(),
+    artifactDeliveryContract = null,
   } = {}) {
     const kinds = classifyAttachmentKinds(fileMetadata);
     const imageOnlyFallback = hasImageAttachment === true
@@ -823,6 +838,17 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         gateTools = gateTools.filter((tool) => tool !== 'docintel_analyze' && tool !== 'rag_retrieve');
       }
     } catch (_) { /* fail-open to legacy gating */ }
+    // SAV/XLSX matrix delivery is checked against the actual file bytes by
+    // validateSavXlsxDelivery. That server-side comparison performs the
+    // computation, but is not a model tool step; requiring an additional
+    // python_exec call would reject a fully verified pair before it is read.
+    // Independent calculations requested alongside the files still need
+    // their own execution proof; comparing matrices cannot prove those.
+    if (artifactDeliveryContract?.active
+      && artifactDeliveryContract.savXlsxMatrix
+      && isStandaloneSavXlsxMatrixRequest(userQuery, artifactDeliveryContract.savXlsxMatrix)) {
+      gateTools = gateTools.filter((tool) => tool !== 'python_exec');
+    }
     const requiredTools = gateTools.filter((tool) => available.has(tool));
     const minimumToolCalls = Object.fromEntries(
       Object.entries(profile.minimumToolCalls || {}).filter(([tool]) => requiredTools.includes(tool))
@@ -1968,6 +1994,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       fileMetadata: Array.isArray(toolContext.fileMetadata) ? toolContext.fileMetadata : [],
       hasImageAttachment: toolContext.hasImageAttachment === true,
       availableToolNames,
+      artifactDeliveryContract,
     });
     if (generatedArtifactRefs.length) {
       const { requireGeneratedArtifactRead } = require('./agents/generated-artifact-followup');

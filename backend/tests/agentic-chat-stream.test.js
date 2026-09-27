@@ -982,6 +982,92 @@ test('SAV and Excel generation cannot finalize at 1×1 and can repair to a verif
   assert.ok(result.steps.length >= 10, 'the first finalize must be rejected before the repaired pair');
 });
 
+test('SAV and Excel byte comparison satisfies computation proof without a redundant model python_exec call', async (t) => {
+  const followup = require('../src/services/agents/generated-artifact-followup');
+  let comparisons = 0;
+  t.mock.method(followup, 'compareGeneratedSavXlsx', async ({ refs, forDeliveryValidation }) => {
+    assert.equal(forDeliveryValidation, true);
+    assert.deepEqual(refs.map((ref) => ref.id), ['sav20', 'xlsx20']);
+    comparisons += 1;
+    return { ok: true, metrics: {
+      savRows: 20, savColumns: 20, excelRows: 20, excelColumns: 20,
+      labelCount: 20, comparedCells: 400, differentCells: 0,
+      headersMatch: true, matrixComparable: true,
+    } };
+  });
+  const artifacts = {
+    'data.sav': { id: 'sav20', filename: 'data.sav', format: 'sav', downloadUrl: '/sav20' },
+    'data.xlsx': { id: 'xlsx20', filename: 'data.xlsx', format: 'xlsx', downloadUrl: '/xlsx20' },
+  };
+  const script = [
+    toolCallMessage('create_document', { filename: 'data.sav' }),
+    toolCallMessage('verify_artifact', { artifactId: 'sav20' }),
+    toolCallMessage('create_document', { filename: 'data.xlsx' }),
+    toolCallMessage('verify_artifact', { artifactId: 'xlsx20' }),
+    finalizeMessage('Entrego el SAV y el Excel con 20 casos y 20 preguntas.'),
+  ];
+  const { res } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai: makeFakeOpenAI(script), model: 'gpt-4o-mini',
+    userQuery: 'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel. Usa solo datos sintéticos.',
+    res, maxSteps: 8,
+    toolContext: { userId: 'owner', chatId: 'chat-a' },
+    toolsOverride: [
+      {
+        name: 'create_document', description: 'create file',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+        execute: async ({ filename }, ctx) => {
+          const artifact = artifacts[filename];
+          ctx.onEvent({ type: 'file_artifact', artifact });
+          return { ok: true, ...artifact };
+        },
+      },
+      {
+        name: 'verify_artifact', description: 'verify file',
+        parameters: { type: 'object', properties: { artifactId: { type: 'string' } }, required: ['artifactId'] },
+        execute: async ({ artifactId }) => ({ ok: true, artifactId }),
+      },
+      {
+        name: 'python_exec', description: 'compute',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => { throw new Error('The byte comparison already supplies computation proof'); },
+      },
+    ],
+  });
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.artifacts.length, 2);
+  assert.equal(comparisons, 1);
+});
+
+test('ordinary statistical requests still require executable computation', () => {
+  const profile = agenticStream._internal.buildChatFinalizeProfile({
+    userQuery: 'calcula la media de estos datos',
+    availableToolNames: new Set(['python_exec']),
+  });
+  assert.ok(profile.requiredTools.includes('python_exec'));
+});
+
+test('SAV and Excel delivery plus extra analysis or output still requires model computation', () => {
+  const { buildArtifactDeliveryContract } = require('../src/services/agents/artifact-delivery-contract');
+  for (const extra of [
+    'calcula el alfa de Cronbach',
+    'calcula la media',
+    'haz una regresión',
+    'incluye una tabla de contingencia',
+    'incluye una matriz de covarianza',
+  ]) {
+    const query = `dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel; ${extra}`;
+    const artifactDeliveryContract = buildArtifactDeliveryContract(query, { multipleArtifacts: false });
+    assert.equal(artifactDeliveryContract.active, true);
+    const profile = agenticStream._internal.buildChatFinalizeProfile({
+      userQuery: query,
+      artifactDeliveryContract,
+      availableToolNames: new Set(['create_document', 'verify_artifact', 'python_exec']),
+    });
+    assert.ok(profile.requiredTools.includes('python_exec'), extra);
+  }
+});
+
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {
   const { buildThreadWorkContext } = agenticStream._internal;
   const context = buildThreadWorkContext([
