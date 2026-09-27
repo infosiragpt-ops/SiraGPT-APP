@@ -2958,7 +2958,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     // create_document / generateAutoDocument fabricate a generic filler
     // document — the exact silent fallback F2 removes. Honest Spanish error
     // instead.
-    if (agentRunnerFailure && agentRunnerRunnerOnly) {
+    if (agentRunnerFailure && (agentRunnerRunnerOnly || agentRunnerFailure.reason === 'E_PROVIDER')) {
       let honestAnswer;
       try {
         honestAnswer = require('../agent-runner').buildAgentRunnerFailureMessage(

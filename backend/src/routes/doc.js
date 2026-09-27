@@ -439,7 +439,7 @@ router.post(
         logRouting('agent_runner_failed', agentRunnerResult.reason || 'no_output');
         errorMsg = agentRunnerResult.message;
         publicError = {
-          code: 'agent_runner_failed',
+          code: agentRunnerResult.reason === 'E_PROVIDER' ? 'E_PROVIDER' : 'agent_runner_failed',
           reason: agentRunnerResult.reason || 'no_output',
           message: String(agentRunnerResult.message || ''),
           error: String(agentRunnerResult.message || ''),

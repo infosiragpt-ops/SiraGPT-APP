@@ -292,22 +292,20 @@ test('office visual verifier: real engine in a sandbox — composite + thumbnail
   }
 });
 
-test('runner follows the model picked in the composer (first rung), operator pin still wins', () => {
-  const { runnerModelSpec } = require('../src/services/agent-runner');
+test('runner keeps the model picked in the composer on its own API', () => {
+  const { runnerModelSpec, resolveRunnerLlmCandidate } = require('../src/services/agent-runner');
   assert.equal(runnerModelSpec('DeepSeek', 'deepseek-v4-pro'), 'DeepSeek:deepseek-v4-pro');
   assert.equal(runnerModelSpec('xAI', 'grok-4.7'), 'xAI:grok-4.7');
-  assert.equal(runnerModelSpec('Custom', 'mi-modelo'), null, 'Custom / unknown providers keep the ladder order');
+  assert.equal(runnerModelSpec('Custom', 'mi-modelo'), 'Custom:mi-modelo');
   assert.equal(runnerModelSpec('DeepSeek', ''), null);
-  const { resolveDocAgentCandidates } = require('../src/services/doc-agent/llm-runtime');
   const env = { XAI_API_KEY: 'xai-live-key', DEEPSEEK_API_KEY: 'ds-live-key' };
-  const order = resolveDocAgentCandidates({ model: runnerModelSpec('xAI', 'grok-4.7'), env }).map((c) => `${c.provider}:${c.model}`);
-  assert.equal(order[0], 'xAI:grok-4.7', 'the picked model is the first rung');
-  assert.ok(order.some((c) => c.startsWith('DeepSeek:')), 'the ladder remains for provider errors');
+  const chosen = resolveRunnerLlmCandidate({ pickedModel: runnerModelSpec('xAI', 'grok-4.7'), env });
+  assert.equal(`${chosen.provider}:${chosen.model}`, 'xAI:grok-4.7');
   const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
   assert.match(read('src/services/agentic-chat-stream.js'), /pickedModel: require\('\.\/agent-runner'\)\.runnerModelSpec\(provider, model\),/);
   const index = read('src/services/agent-runner/index.js');
-  assert.match(index, /resolveDocAgentCandidates\(\{ model: explicitRunnerModel\(\) \|\| pickedModel \|\| null \}\)/);
-  assert.match(index, /if \(!llm\) llm = createRunnerLlmClient\(\{ onEvent, pickedModel \}\);/);
+  assert.match(index, /createFailoverClient\(\[selected\], \{ createClient \}\)/);
+  assert.match(index, /if \(!llm\) llm = createRunnerLlmClient\(\{ pickedModel \}\);/);
 });
 
 /* ── wiring (source contracts) ───────────────────────────────────────────── */

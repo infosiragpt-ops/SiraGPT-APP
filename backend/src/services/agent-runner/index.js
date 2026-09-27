@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { createSandbox } = require('../doc-agent/sandbox');
 const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
-const { resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
+const { parseModelSpec, resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
@@ -286,9 +286,9 @@ function explicitRunnerModel(env = process.env) {
 const PICKER_LADDER_PROVIDERS = new Set(['DeepSeek', 'Meta', 'Gemini', 'xAI', 'OpenAI', 'OpenRouter']);
 
 /**
- * "Provider:model" of the model picked in the composer, when its provider is a
- * rung of the runner ladder (engines follow the picked model; Custom / other
- * providers keep the ladder order).
+ * "Provider:model" for the model picked in the composer. Unsupported
+ * providers are kept here so the runner can report their unavailability
+ * instead of selecting another model.
  */
 // The picker row may carry an aggregator slug («deepseek/deepseek-v4-pro»):
 // a direct provider API rejects it with a 400 that never fails over («The
@@ -304,32 +304,63 @@ const DIRECT_SLUG_PREFIX = Object.freeze({
 });
 
 function runnerModelSpec(provider, model) {
-  const p = String(provider || '').trim();
+  const p = String(provider || '').trim() || 'Unresolved';
   let m = String(model || '').trim();
-  if (!m || !PICKER_LADDER_PROVIDERS.has(p)) return null;
+  if (!m) return null;
   const prefix = DIRECT_SLUG_PREFIX[p];
   if (prefix) m = m.replace(prefix, '') || m;
   return `${p}:${m}`;
 }
 
 /**
- * Production LLM for the runner: provider ladder with per-call failover. The
- * operator pin (env) wins; otherwise the model picked in the composer goes
- * first and the ladder only takes over on provider errors.
+ * Keep every AgentRunner model call on the same provider and model. When the
+ * composer chose a model, an unavailable API cannot silently use the ladder.
  */
-function createRunnerLlmClient({ onEvent, pickedModel = null } = {}) {
-  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() || pickedModel || null }), {
-    onFailover: (info) => {
-      try { console.warn('[agent-runner] llm failover:', info.from, '→', info.to, info.status || '', info.message); } catch (_) { /* ignore */ }
-      if (typeof onEvent === 'function') { try { onEvent({ type: 'llm_failover', ...info }); } catch (_) { /* ignore */ } }
-    },
-  });
+const RUNNER_PROVIDER_MESSAGE = 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
+
+function runnerProviderError(err) {
+  const failure = new Error(RUNNER_PROVIDER_MESSAGE);
+  failure.code = 'E_PROVIDER';
+  const status = Number(err?.status || err?.statusCode || err?.response?.status);
+  if (Number.isFinite(status) && status > 0) failure.status = status;
+  return failure;
+}
+
+function resolveRunnerLlmCandidate({ pickedModel = null, env = process.env } = {}) {
+  const requested = pickedModel || explicitRunnerModel(env);
+  const candidates = resolveDocAgentCandidates({ model: requested || null, env });
+  if (!requested) {
+    if (candidates.length) return candidates[0];
+    throw runnerProviderError();
+  }
+  const selected = parseModelSpec(requested);
+  if (!selected?.provider || !PICKER_LADDER_PROVIDERS.has(selected.provider)) throw runnerProviderError();
+  const candidate = candidates.find((entry) => entry.provider === selected.provider && entry.model === selected.model);
+  if (!candidate) throw runnerProviderError();
+  return candidate;
+}
+
+function createRunnerLlmClient({ pickedModel = null, env = process.env, createClient } = {}) {
+  const selected = resolveRunnerLlmCandidate({ pickedModel, env });
+  const client = createFailoverClient([selected], { createClient });
+  return {
+    ...client,
+    chat: { completions: { create: async (...args) => {
+      try {
+        return await client.chat.completions.create(...args);
+      } catch (err) {
+        if (args[1]?.signal?.aborted || err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err;
+        throw runnerProviderError(err);
+      }
+    } } },
+  };
 }
 
 /** A run needs at least one configured provider (CI dummy keys do not count). */
-function canCallLlm({ client } = {}) {
+function canCallLlm({ client, pickedModel = null } = {}) {
   if (client) return true;
-  return resolveDocAgentCandidates({ model: explicitRunnerModel() }).length > 0;
+  try { return Boolean(resolveRunnerLlmCandidate({ pickedModel })); }
+  catch (_) { return false; }
 }
 
 function resolveOutputEditSource(name, sources) {
@@ -762,7 +793,7 @@ async function runAgentRunner({
       };
     }
 
-    if (!llm) llm = createRunnerLlmClient({ onEvent, pickedModel });
+    if (!llm) llm = createRunnerLlmClient({ pickedModel });
 
     // ── F7 (multimodal) hook ─────────────────────────────────────────────
     // Vision / voice / bounded computer-use extras. Kill switches:
@@ -811,6 +842,9 @@ async function runAgentRunner({
       turnWallMs: documentTurnWallMs(),
     });
     throwIfAborted(abortScope.signal);
+    if (result.stoppedReason === 'E_PROVIDER') {
+      return { ...result, outputs: [], driver: sandbox.driver, model: resolvedModel };
+    }
     outputs = await collectTurnOutputs();
 
     let outputAttempt = 1;
@@ -852,6 +886,9 @@ async function runAgentRunner({
         turnWallMs: documentTurnWallMs(),
       });
       throwIfAborted(abortScope.signal);
+      if (result.stoppedReason === 'E_PROVIDER') {
+        return { ...result, outputs: [], driver: sandbox.driver, model: resolvedModel };
+      }
       outputs = await collectTurnOutputs();
     }
     outputs = dropIntermediateOutputs(outputs, result && result.steps);
@@ -1001,6 +1038,7 @@ const AGENT_RUNNER_FAILURE_COPY = {
 
 function buildAgentRunnerFailureMessage(reason, detail) {
   const key = String(reason || 'no_output');
+  if (key === 'E_PROVIDER') return `E_PROVIDER: No pude generar el documento. ${RUNNER_PROVIDER_MESSAGE}`;
   const why = AGENT_RUNNER_FAILURE_COPY[key] || `el agente no pudo completar la tarea (${key})`;
   const extra = detail ? ` Detalle técnico: ${String(detail).slice(0, 300)}` : '';
   return `No pude generar el documento: ${why}. `
@@ -1031,7 +1069,8 @@ async function executeAgentRunnerTurn(params = {}) {
       summary: '',
       artifacts: [],
       steps: [],
-      stoppedReason: 'no_llm',
+      stoppedReason: params.pickedModel || explicitRunnerModel() ? 'E_PROVIDER' : 'no_llm',
+      errorMessage: params.pickedModel || explicitRunnerModel() ? RUNNER_PROVIDER_MESSAGE : null,
     };
   }
   // F4 — genuinely multi-step goals run the hierarchical orchestrator
@@ -1054,7 +1093,7 @@ async function executeAgentRunnerTurn(params = {}) {
     } catch (err) {
       // User cancellation is not a runner failure — let the caller unwind.
       if (params.signal?.aborted || err?.name === 'AbortError') throw err;
-      const reason = isLlmCreditError(err) ? 'llm_402' : 'exception';
+      const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception';
       try { console.warn('[agent-runner] orchestrated turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
       return {
         ok: false,
@@ -1104,7 +1143,7 @@ async function executeAgentRunnerTurn(params = {}) {
     if (params.signal?.aborted) throw err;
     // Never throw for real failures: the routes need the reason to show an
     // honest error instead of silently falling back to the generic pipeline.
-    const reason = isLlmCreditError(err) ? 'llm_402' : 'exception';
+    const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception';
     try { console.warn('[agent-runner] turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
     return {
       ok: false,
@@ -1264,6 +1303,7 @@ module.exports = {
   runnerModelSpec,
   shouldRunAgentRunner,
   createRunnerLlmClient,
+  resolveRunnerLlmCandidate,
   explicitRunnerModel,
   canCallLlm,
   isRunnerOnlyDocumentTurn,

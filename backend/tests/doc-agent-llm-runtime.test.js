@@ -151,9 +151,9 @@ describe('agent runner wiring (source contract)', () => {
   test('the document runner and the orchestrator never build a bare OpenRouter client', () => {
     assert.doesNotMatch(runner, /createOpenRouterClient\(\)/);
     assert.doesNotMatch(orchestrator, /createOpenRouterClient\(\)/);
-    // Fase G: the runner's ladder starts with the model picked in the composer.
-    assert.match(runner, /if \(!llm\) llm = createRunnerLlmClient\(\{ onEvent, pickedModel \}\);/);
-    assert.match(orchestrator, /llm = createRunnerLlmClient\(\{ onEvent: emit \}\);/);
+    // AgentRunner routes the picked model to its own API.
+    assert.match(runner, /if \(!llm\) llm = createRunnerLlmClient\(\{ pickedModel \}\);/);
+    assert.match(orchestrator, /llm = createRunnerLlmClient\(\{ pickedModel \}\);/);
   });
 
   test('canCallLlm counts every configured provider and ignores CI placeholders', () => {
@@ -178,4 +178,79 @@ describe('agent runner wiring (source contract)', () => {
       }
     }
   });
+});
+
+test('AgentRunner keeps a selected model on its provider when that API returns 402', async () => {
+  const { createRunnerLlmClient } = require('../src/services/agent-runner');
+  const calls = [];
+  const client = createRunnerLlmClient({
+    pickedModel: 'xAI:grok-4.7',
+    env: { XAI_API_KEY: 'xai-test', DEEPSEEK_API_KEY: 'ds-test' },
+    createClient: (candidate) => ({ chat: { completions: { create: async () => {
+      calls.push(candidate.provider);
+      throw httpError(402, 'quota');
+    } } } }),
+  });
+  await assert.rejects(
+    () => client.chat.completions.create({ model: 'ignored', messages: [] }),
+    { code: 'E_PROVIDER' },
+  );
+  assert.deepEqual(calls, ['xAI']);
+});
+
+test('AgentRunner preserves a user abort instead of reporting E_PROVIDER', async () => {
+  const { createRunnerLlmClient } = require('../src/services/agent-runner');
+  const abort = new Error('cancelled');
+  abort.name = 'AbortError';
+  const client = createRunnerLlmClient({
+    pickedModel: 'xAI:grok-4.7',
+    env: { XAI_API_KEY: 'xai-test', DEEPSEEK_API_KEY: 'ds-test' },
+    createClient: () => ({ chat: { completions: { create: async () => { throw abort; } } } }),
+  });
+  await assert.rejects(
+    () => client.chat.completions.create({ model: 'ignored', messages: [] }),
+    (error) => error === abort,
+  );
+});
+
+test('AgentRunner rejects an unavailable or unsupported selection before calling another API', () => {
+  const { resolveRunnerLlmCandidate, runnerModelSpec } = require('../src/services/agent-runner');
+  const env = { DEEPSEEK_API_KEY: 'ds-test' };
+  assert.equal(runnerModelSpec('Anthropic', 'claude-test'), 'Anthropic:claude-test');
+  assert.equal(runnerModelSpec(null, 'deepseek-v4-pro'), 'Unresolved:deepseek-v4-pro');
+  assert.throws(
+    () => resolveRunnerLlmCandidate({ pickedModel: 'xAI:grok-4.7', env }),
+    { code: 'E_PROVIDER' },
+  );
+  assert.throws(
+    () => resolveRunnerLlmCandidate({ pickedModel: 'Anthropic:claude-test', env }),
+    { code: 'E_PROVIDER' },
+  );
+  assert.equal(resolveRunnerLlmCandidate({ env }).provider, 'DeepSeek');
+  assert.equal(
+    resolveRunnerLlmCandidate({
+      pickedModel: 'xAI:grok-4.7',
+      env: { ...env, XAI_API_KEY: 'xai-test', SIRAGPT_AGENT_RUNNER_MODEL: 'DeepSeek:deepseek-v4-pro' },
+    }).provider,
+    'xAI',
+    'the composer choice takes precedence over an operator default',
+  );
+});
+
+test('a document turn with a missing selected API returns visible E_PROVIDER', async () => {
+  const { runAgentRunnerForDocRoute } = require('../src/services/agent-runner');
+  const previous = process.env.XAI_API_KEY;
+  delete process.env.XAI_API_KEY;
+  try {
+    const result = await runAgentRunnerForDocRoute({
+      prompt: 'crea un documento Word sobre el ciclo del agua',
+      pickedModel: 'xAI:grok-4.7',
+    });
+    assert.equal(result.agentRunnerClaimed, true);
+    assert.equal(result.reason, 'E_PROVIDER');
+    assert.match(result.message, /^E_PROVIDER:/);
+  } finally {
+    if (previous === undefined) delete process.env.XAI_API_KEY;
+    else process.env.XAI_API_KEY = previous;
+  }
 });

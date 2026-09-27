@@ -174,6 +174,7 @@ async function runOrchestrator({
   files = [],
   instruction,
   model,
+  pickedModel = null,
   client,
   onEvent = () => {},
   driver,
@@ -248,10 +249,9 @@ async function runOrchestrator({
     throwIfAborted(abortScope.signal);
     let llm = client || null;
     if (!llm) {
-      // Same provider ladder + failover as the single runner — never a bare
-      // OpenRouter client (see agent-runner/index.js createRunnerLlmClient).
+      // Use the same selected model throughout planning and execution.
       const { createRunnerLlmClient } = require('../index'); // eslint-disable-line global-require
-      llm = createRunnerLlmClient({ onEvent: emit });
+      llm = createRunnerLlmClient({ pickedModel });
     }
     const plannerClient = wrapClientWithBudgets(llm, [runTracker], { onExceeded: emitBudgetExceeded });
     const planner = plannerFn || defaultPlanner;
@@ -286,6 +286,7 @@ async function runOrchestrator({
     } catch (err) {
       throwIfAborted(abortScope.signal);
       if (err?.code === 'BUDGET_EXCEEDED') return failure('budget_exceeded', err.message);
+      if (err?.code === 'E_PROVIDER') return failure('E_PROVIDER', err.message);
       if (isLlmCreditError(err)) return failure('llm_402', err?.message || String(err));
       return failure('plan_failed', err?.message || String(err));
     }
@@ -319,6 +320,7 @@ async function runOrchestrator({
         } catch (err) {
           throwIfAborted(abortScope.signal);
           if (err?.code === 'BUDGET_EXCEEDED') return failure('budget_exceeded', err.message);
+          if (err?.code === 'E_PROVIDER') return failure('E_PROVIDER', err.message);
           if (isLlmCreditError(err)) return failure('llm_402', err?.message || String(err));
           return failure('plan_failed', `replan inválido: ${err?.message || String(err)}`);
         }
@@ -379,7 +381,9 @@ async function runOrchestrator({
         });
         const validOutputs = (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);
         for (const step of (run.steps || [])) allSteps.push({ node: node.id, role: node.role, ...step });
-        if (run.stoppedReason === 'llm_402') {
+        if (run.stoppedReason === 'E_PROVIDER') {
+          nodeResult = { status: 'failed', reason: 'E_PROVIDER', error: run.errorMessage || null };
+        } else if (run.stoppedReason === 'llm_402') {
           nodeResult = { status: 'failed', reason: 'llm_402', error: run.errorMessage || null };
         } else if (validOutputs.length || (['final', 'fast_path', 'verification_failed'].includes(run.stoppedReason) && String(run.finalText || '').trim())) {
           // Same contract as a single runner turn: a delivered verified file
@@ -402,7 +406,7 @@ async function runOrchestrator({
         if (abortScope.signal.aborted) throw err;
         const reason = err?.code === 'BUDGET_EXCEEDED'
           ? 'budget_exceeded'
-          : (isLlmCreditError(err) ? 'llm_402' : 'exception');
+          : (err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception');
         nodeResult = { status: 'failed', reason, error: err?.message || String(err) };
       }
 
@@ -512,6 +516,7 @@ async function runOrchestratorForChat({
   attachedFiles = [],
   instruction,
   model,
+  pickedModel = null,
   client,
   signal,
   onEvent = () => {},
@@ -537,6 +542,7 @@ async function runOrchestratorForChat({
     files: resolved.files,
     instruction,
     model,
+    pickedModel,
     client,
     onEvent,
     driver,
