@@ -247,6 +247,142 @@ describe('classify — HTTP filter', () => {
     assert.equal(classify.isRecordableHttpFailure(429, { error: 'Monthly API limit exceeded' }), false);
     assert.equal(classify.isRecordableHttpFailure(429, { error: 'xAI rate limited' }), true);
   });
+
+  it('provider not configured / feature disabled is a config state at ANY status', () => {
+    assert.equal(classify.isRecordableHttpFailure(400, { error: 'ElevenLabs API key not configured', code: 'provider_not_configured' }), false);
+    assert.equal(classify.isRecordableHttpFailure(424, { error: 'Feature disabled on this server' }), false);
+    assert.equal(classify.isRecordableHttpFailure(500, { error: 'OPENAI_API_KEY not configured' }), false);
+    assert.equal(classify.isRecordableHttpFailure(503, { ok: false, error: 'El servicio de música no está configurado.' }), false);
+  });
+});
+
+describe('media generation failures (image / video / music / voice)', () => {
+  const generation = require('../src/services/observability/turn-failures/generation');
+  let prisma;
+  beforeEach(() => {
+    prisma = fakePrisma();
+    turnFailures.__setStoreForTests(createTurnFailureStore({ prisma }));
+  });
+  afterEach(() => turnFailures.__setStoreForTests(null));
+  const flush = () => new Promise((r) => setTimeout(r, 30));
+  const genReq = (body = {}) => ({
+    method: 'POST',
+    baseUrl: '/api/ai',
+    route: { path: '/generate-image' },
+    originalUrl: '/api/ai/generate-image',
+    headers: { 'user-agent': 'Mozilla/5.0 (Macintosh) Chrome/140.0 Safari/537.36', 'x-request-id': 'req-gen-1' },
+    user: { id: 'u1', email: 'luis@example.com' },
+    body,
+  });
+
+  it('names the reason: moderation, timeout, credits, rate limit, empty, degenerate', () => {
+    const cause = (d) => generation.generationCause(d);
+    assert.equal(cause({ kind: 'image', provider: 'xai', message: 'Request blocked by content moderation' }), 'Generación de imagen: rechazada por moderación · xAI');
+    assert.equal(cause({ kind: 'image', message: 'Image generation timeout' }), 'Generación de imagen: tiempo agotado');
+    assert.equal(cause({ kind: 'music', code: 'INSUFFICIENT_CREDITS', message: 'x' }), 'Generación de música: sin saldo en el proveedor');
+    assert.equal(cause({ kind: 'video', message: 'Video generation rate limit exceeded' }), 'Generación de video: límite de peticiones del proveedor');
+    assert.equal(cause({ kind: 'image', message: 'Image provider did not return any image data.' }), 'Generación de imagen: el proveedor no devolvió resultado');
+    assert.equal(cause({ kind: 'speech', degenerate: 'archivo_vacio', provider: 'elevenlabs' }), 'Generación de voz: archivo vacío (0 bytes) · ElevenLabs');
+    assert.equal(cause({ kind: 'image', degenerate: 'imagen_en_blanco' }), 'Generación de imagen: imagen en blanco');
+    assert.equal(generation.generationKindOfTool('generate_music'), 'music');
+    assert.equal(generation.generationKindOfTool('web_search'), null);
+  });
+
+  it('a failed media tool inside a chat turn → herramienta_fallida + subtype, even with a polite answer', async () => {
+    const res = fakeRes();
+    const tap = turnFailures.beginTurn(genReq({ chatId: 'chat-img', prompt: 'hazme un gato astronauta' }), res, {
+      route: 'generate', context: { chatId: 'chat-img', idempotencyKey: 'turn-g1', prompt: 'hazme un gato astronauta', modelPicked: 'deepseek-v4-flash' },
+    });
+    await Promise.resolve();
+    turnFailures.observeGenerationToolEvent({ type: 'tool_output', tool: 'generate_image', preview: 'Generando imagen…', partial: true });
+    turnFailures.observeGenerationToolEvent(
+      { type: 'tool_output', tool: 'generate_image', ok: false, preview: 'Error: Your request was rejected by the safety system' },
+      { imageProvider: 'openai', imageModel: 'gpt-image-2' },
+    );
+    res.write(frame({ content: 'No pude generar la imagen porque el proveedor la rechazó.' }));
+    const cls = turnFailures.finishTurn(tap, { finalText: 'No pude generar la imagen porque el proveedor la rechazó.' });
+    assert.equal(cls.category, 'herramienta_fallida');
+    assert.equal(cls.subtype, 'generacion_imagen');
+    await flush();
+    assert.equal(prisma.rows.length, 1);
+    const m = prisma.rows[0].metadata;
+    assert.equal(m.subtype, 'generacion_imagen');
+    assert.equal(m.cause, 'Generación de imagen: rechazada por moderación · OpenAI');
+    assert.equal(m.prompt, 'hazme un gato astronauta');
+    const note = m.notes.find((n) => n.kind === 'generation_failure');
+    assert.equal(note.data.model, 'gpt-image-2');
+  });
+
+  it('the agent retrying successfully clears the error; a 0-byte artifact never clears', async () => {
+    const res = fakeRes();
+    const tap = turnFailures.beginTurn(genReq({}), res, { route: 'generate', context: { prompt: 'una canción', idempotencyKey: 't2' } });
+    await Promise.resolve();
+    turnFailures.observeGenerationToolEvent({ type: 'tool_output', tool: 'generate_music', ok: false, preview: 'timeout' });
+    turnFailures.observeGenerationToolEvent({ type: 'tool_output', tool: 'generate_music', ok: true, preview: 'Música lista' });
+    res.write(frame({ content: 'Aquí tienes tu canción.' }));
+    assert.equal(turnFailures.finishTurn(tap, { finalText: 'Aquí tienes tu canción.' }), null, 'recovered in the same turn → normal');
+
+    const res2 = fakeRes();
+    const tap2 = turnFailures.beginTurn(genReq({}), res2, { route: 'generate', context: { prompt: 'léelo en voz alta', idempotencyKey: 't3' } });
+    await Promise.resolve();
+    turnFailures.observeGenerationToolEvent({ type: 'file_artifact', artifact: { mime: 'audio/mpeg', kind: 'speech', sizeBytes: 0, downloadUrl: '/x' } });
+    turnFailures.observeGenerationToolEvent({ type: 'tool_output', tool: 'generate_speech', ok: true, preview: 'Audio listo' });
+    res2.write(frame({ content: 'Listo, aquí está el audio.' }));
+    const cls = turnFailures.finishTurn(tap2, { finalText: 'Listo, aquí está el audio.' });
+    assert.equal(cls.category, 'herramienta_fallida');
+    assert.equal(cls.subtype, 'generacion_voz');
+    assert.match(cls.cause, /archivo vacío/);
+  });
+
+  it('composer routes record one row with provider / model / prompt, and mute the generic HTTP row', async () => {
+    const req = genReq({ prompt: 'logo minimalista', provider: 'Gemini', model: 'imagen-4.0-generate-001', chatId: 'chat-9' });
+    const mw = turnFailures.httpFailureMiddleware();
+    const res = fakeRes();
+    await new Promise((resolve) => mw(req, res, resolve));
+    await turnFailures.recordGenerationFailure(req, {
+      kind: 'image', code: 'provider_quota', message: 'RESOURCE_EXHAUSTED: quota exceeded', status: 429, startedAt: Date.now() - 4200,
+      userSaw: 'No se pudo generar la imagen: límite del proveedor',
+    });
+    res.status(429).json({ error: 'límite', code: 'provider_quota' });
+    await flush();
+    assert.equal(prisma.rows.length, 1, 'no second generic «POST … → 429» row');
+    const m = prisma.rows[0].metadata;
+    assert.equal(m.category, 'herramienta_fallida');
+    assert.equal(m.subtype, 'generacion_imagen');
+    assert.equal(m.prompt, 'logo minimalista');
+    assert.equal(m.providerUsed, 'Gemini');
+    assert.equal(m.modelLabel, 'imagen-4.0-generate-001');
+    assert.equal(m.whatUserSaw, 'No se pudo generar la imagen: límite del proveedor');
+    assert.equal(m.generation.reason, 'limite');
+    assert.deepEqual(m.reqIds, ['req-gen-1']);
+    assert.ok(m.totalMs >= 4000);
+  });
+
+  it('never records «not configured» or requests without a user', async () => {
+    await turnFailures.recordGenerationFailure(genReq({}), { kind: 'speech', code: 'ELEVENLABS_NOT_CONFIGURED', message: 'ElevenLabs API key not configured' });
+    await turnFailures.recordGenerationFailure({ ...genReq({}), user: null }, { kind: 'image', message: 'boom' });
+    await flush();
+    assert.equal(prisma.rows.length, 0);
+  });
+
+  it('detects a blank generated picture (flat colour) and records it off the response path', async () => {
+    const sharp = require('sharp');
+    const blank = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 255, g: 255, b: 255 } } }).png().toBuffer();
+    const pixels = Buffer.alloc(64 * 64 * 3);
+    for (let i = 0; i < pixels.length; i += 1) pixels[i] = (i * 37) % 256;
+    const busy = await sharp(pixels, { raw: { width: 64, height: 64, channels: 3 } }).png().toBuffer();
+    assert.equal(await generation.isBlankImage(blank), true);
+    assert.equal(await generation.isBlankImage(busy), false);
+    assert.equal(await generation.isBlankImage(Buffer.from('not an image')), false);
+
+    const req = genReq({ prompt: 'un paisaje', provider: 'fal', model: 'fal-ai/flux/schnell', chatId: 'chat-b' });
+    assert.equal(await turnFailures.recordBlankImagesIfAny(req, [{ b64: busy.toString('base64') }], { provider: 'fal' }), false);
+    assert.equal(await turnFailures.recordBlankImagesIfAny(req, [{ b64: blank.toString('base64') }], { provider: 'fal', model: 'fal-ai/flux/schnell' }), true);
+    await flush();
+    assert.equal(prisma.rows.length, 1);
+    assert.equal(prisma.rows[0].metadata.cause, 'Generación de imagen: imagen en blanco · fal.ai');
+    assert.equal(prisma.rows[0].metadata.whatUserSaw, 'Una imagen en blanco');
+  });
 });
 
 describe('store — record / merge / flood / queries', () => {
@@ -540,6 +676,19 @@ describe('httpFailureMiddleware — non-2xx on user endpoints', () => {
 
 describe('wiring contracts', () => {
   const read = (p) => fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+
+  it('media generation is tracked on the agentic path and on every composer route', () => {
+    const stream = read('src/services/agentic-chat-stream.js');
+    assert.match(stream, /require\('\.\/observability\/turn-failures'\)\.observeGenerationToolEvent\(evt, toolContext\)/);
+    const tools = read('src/services/agents/visual-media-tools.js');
+    assert.match(tools, /noteBlankImage\(buffer, \{\s*tool: 'generate_image'/);
+    const ai = read('src/routes/ai.js');
+    for (const kind of ['image', 'speech', 'music', 'video']) {
+      assert.match(ai, new RegExp(`turnFailures\\.recordGenerationFailure\\(req, \\{\\s*kind: '${kind}'`), kind);
+    }
+    assert.match(ai, /turnFailures\.recordBlankImagesIfAny\(req, imageResults/);
+    assert.match(ai, /resourceKey: `video:\$\{req\.params\.operationId\}`/);
+  });
 
   it('generate route installs the tap before the mirror guard and finalizes in finally', () => {
     const ai = read('src/routes/ai.js');

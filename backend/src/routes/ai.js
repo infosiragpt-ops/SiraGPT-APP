@@ -9527,6 +9527,7 @@ router.post(
     ? next()
     : requirePaidPlan({ feature: 'voice_generation' })(req, res, next)),
   async (req, res) => {
+    const __genStartedAt = Date.now();
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
@@ -9620,6 +9621,16 @@ router.post(
         await fs.unlink(result.audioPath).catch(() => {});
         return;
       }
+      if (Number.isFinite(Number(result.sizeBytes)) && Number(result.sizeBytes) === 0) {
+        turnFailures.recordGenerationFailure(req, {
+          kind: 'speech',
+          degenerate: 'archivo_vacio',
+          provider: usedProvider,
+          model: selectedModel || null,
+          startedAt: __genStartedAt,
+          userSaw: 'Un audio vacío',
+        }).catch(() => {});
+      }
 
       const modelLabel = usedProvider === 'gemini'
         ? 'Gemini 2.5 Flash TTS'
@@ -9689,6 +9700,16 @@ router.post(
       const status = error?.code === 'TEXT_REQUIRED' ? 400
         : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED' || error?.code === 'VOICESTUDIO_NOT_CONFIGURED') ? 503
           : 502;
+      if (status === 502) {
+        turnFailures.recordGenerationFailure(req, {
+          kind: 'speech',
+          code: error?.code || null,
+          message: error?.message || String(error || ''),
+          status,
+          model: selectedModel || null,
+          startedAt: __genStartedAt,
+        }).catch(() => {});
+      }
       return res.status(status).json({
         ok: false,
         error: error?.code === 'VOICESTUDIO_BUSY' || error?.code === 'VOICESTUDIO_TIMEOUT'
@@ -9716,6 +9737,7 @@ router.post(
   authenticateToken,
   requirePaidPlan({ feature: 'music_generation' }),
   async (req, res) => {
+    const __genStartedAt = Date.now();
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
@@ -9838,6 +9860,16 @@ router.post(
           : (code === 'INSUFFICIENT_CREDITS' || code === 'RATE_LIMITED') ? 402
             : 502;
       console.error('[ai/generate-music] all providers failed:', lastErr?.message || lastErr);
+      if (status !== 400 && status !== 503) {
+        turnFailures.recordGenerationFailure(req, {
+          kind: 'music',
+          code: code || null,
+          message: lastErr?.message || String(lastErr || ''),
+          status,
+          model: req.body?.model || resolved?.label || null,
+          startedAt: __genStartedAt,
+        }).catch(() => {});
+      }
       return res.status(status).json({
         ok: false,
         error: status === 402
@@ -10839,6 +10871,7 @@ router.post(
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
+    const __genStartedAt = Date.now();
     const requestAbortController = new AbortController();
     let clientDisconnected = false;
     // Declarado FUERA del try para que el bloque catch pueda invocarlo
@@ -11156,6 +11189,17 @@ router.post(
         throw new Error('Image provider did not return any image data.');
       }
 
+      // A blank picture is a failed generation for the user even though the
+      // provider answered: «Fallos de respuesta» records it off the response
+      // path (never delays or changes what the user receives).
+      turnFailures.recordBlankImagesIfAny(req, imageResults, {
+        provider: (imageResults[0] && imageResults[0].provider) || provider,
+        model: (imageResults[0] && imageResults[0].model) || model,
+        prompt,
+        chatId,
+        startedAt: __genStartedAt,
+      });
+
       // Si el usuario canceló de verdad (abort explícito) no persistimos.
       // Pero un simple cierre de conexión con chat válido (detachOnDisconnect)
       // NO debe descartar la imagen: seguimos para guardarla en el chat.
@@ -11276,6 +11320,14 @@ router.post(
       // multi-KB provider JSON to the client or into a persisted chat message.
       const classified = classifyImageGenError(error);
       console.error('Image generation error:', classified.code, error?.status || '', classified.message);
+      turnFailures.recordGenerationFailure(req, {
+        kind: 'image',
+        code: classified.code,
+        message: classified.message,
+        status: classified.httpStatus,
+        startedAt: __genStartedAt,
+        userSaw: `No se pudo generar la imagen: ${classified.message}`,
+      }).catch(() => {});
       // El cliente se fue (corte del edge proxy) pero teníamos un chat para
       // persistir: dejamos constancia del fallo como mensaje del asistente
       // para que el polling del frontend lo muestre en vez de colgarse.
@@ -11335,6 +11387,7 @@ router.post(
   authenticateToken,
   requirePaidPlan({ feature: 'video_generation' }),
   async (req, res) => {
+    const __genStartedAt = Date.now();
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -11702,6 +11755,21 @@ router.post(
 
       } catch (videoServiceError) {
         console.error('❌ Video service error:', videoServiceError.response?.data || videoServiceError.message);
+        {
+          const vStatus = videoServiceError.response?.status || (videoServiceError.code === 'ECONNREFUSED' ? 503 : 500);
+          const vData = videoServiceError.response?.data || {};
+          if (vStatus !== 400) {
+            turnFailures.recordGenerationFailure(req, {
+              kind: 'video',
+              code: vData.code || videoServiceError.code || null,
+              message: vData.message || vData.error || videoServiceError.message,
+              status: vStatus,
+              provider: 'fal',
+              model: req.body?.model || null,
+              startedAt: __genStartedAt,
+            }).catch(() => {});
+          }
+        }
 
         // Handle specific video service errors
         if (videoServiceError.code === 'ECONNREFUSED') {
@@ -11733,6 +11801,14 @@ router.post(
 
     } catch (error) {
       console.error('🚨 Video generation error:', error);
+      turnFailures.recordGenerationFailure(req, {
+        kind: 'video',
+        code: error?.code || null,
+        message: error?.message || 'Video generation failed',
+        status: 500,
+        model: req.body?.model || null,
+        startedAt: __genStartedAt,
+      }).catch(() => {});
       res.status(500).json({ error: error.message || 'Video generation failed' });
     }
   }
@@ -11988,6 +12064,20 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
       }
 
       if (['failed', 'cancelled'].includes(String(statusResponse.data.status || '').toLowerCase())) {
+        if (String(statusResponse.data.status || '').toLowerCase() === 'failed') {
+          // One «Fallos de respuesta» row per failed operation (polls merge
+          // into it through the stable operation key).
+          turnFailures.recordGenerationFailure(req, {
+            kind: 'video',
+            code: statusResponse.data.code || 'video_failed',
+            message: statusResponse.data.error || statusResponse.data.message || 'No se pudo crear el video.',
+            provider: 'fal',
+            model: (statusResponse.data.result && statusResponse.data.result.model) || statusResponse.data.model || null,
+            prompt: statusResponse.data.prompt || '',
+            resourceKey: `video:${req.params.operationId}`,
+            userSaw: `No se pudo crear el video. ${statusResponse.data.error || statusResponse.data.message || ''}`.trim(),
+          }).catch(() => {});
+        }
         try {
           const { operationId } = req.params;
           const finalStatus = String(statusResponse.data.status || '').toLowerCase();

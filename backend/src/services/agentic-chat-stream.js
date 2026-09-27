@@ -1977,6 +1977,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* res may be a stub in tests */ }
     function onEvent(evt) {
       if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
+      // Image / video / music / voice tools that fail (or deliver a 0-byte
+      // file) inside this turn → «Fallos de respuesta» (advisory, never throws).
+      require('./observability/turn-failures').observeGenerationToolEvent(evt, toolContext);
       try {
         if (!evt || evt.type !== 'file_artifact' || !evt.artifact || !evt.artifact.downloadUrl) return;
         const a = evt.artifact;

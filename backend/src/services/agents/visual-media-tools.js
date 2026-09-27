@@ -318,6 +318,12 @@ const generateImage = {
       const artifacts = [];
       for (let index = 0; index < result.images.length; index += 1) {
         const buffer = Buffer.from(result.images[index].b64, 'base64');
+        // A flat-colour picture is a failed generation for the user →
+        // «Fallos de respuesta» (only while a chat turn is tracked; bounded).
+        // eslint-disable-next-line no-await-in-loop
+        await require('../observability/turn-failures').noteBlankImage(buffer, {
+          tool: 'generate_image', provider: result.provider, model: result.model,
+        });
         const filename = `image_${crypto.randomBytes(4).toString('hex')}${result.images.length > 1 ? `_${index + 1}` : ''}.png`;
         const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
           model: result.model, provider: result.provider, aspectRatio, quality: ctx.imageQuality || quality,

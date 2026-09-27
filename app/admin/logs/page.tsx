@@ -26,7 +26,7 @@
  * a URL, so polling is the security-respecting, no-backend-change path.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Copy, Download, RefreshCw, Search, Sparkles, Volume2, VolumeX } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -144,13 +144,22 @@ const rowTime = (r: AuditLogRow): number => {
   return Number.isFinite(t) ? t : 0
 }
 
+type LogsTab = {
+  value: string
+  label: string
+  /** Unseen count shown on the tab while another tab is active. */
+  badge?: number
+  render: () => ReactNode
+}
+
 export default function AdminLogsPage() {
   const alerts = useTurnFailureAlerts()
   const [tab, setTab] = useState<string>("fallos")
-  // ?tab=auditoria deep-links the audit feed (desktop notifications open ?tab=fallos).
+  // ?tab=<value> deep-links a tab (desktop notifications open ?tab=fallos).
   useEffect(() => {
     try {
-      if (new URLSearchParams(window.location.search).get("tab") === "auditoria") setTab("auditoria")
+      const wanted = new URLSearchParams(window.location.search).get("tab")
+      if (wanted && /^[a-z0-9-]{2,40}$/.test(wanted)) setTab(wanted)
     } catch { /* ignore */ }
   }, [])
   const [showWarnings, setShowWarnings] = useState(false)
@@ -505,34 +514,8 @@ Devuelve:
       ? "Reconectando…"
       : "En pausa (pestaña oculta)"
 
-  return (
-    <div className="flex flex-col gap-4 p-4 md:p-6">
-      <div className="flex items-center gap-2">
-        <SidebarTrigger />
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
-          <p className="text-sm text-muted-foreground">
-            Rastreador en vivo: cada pregunta que la plataforma no respondió bien, más la auditoría del sistema.
-          </p>
-        </div>
-      </div>
-
-      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="fallos" data-testid="logs-tab-fallos">
-            Fallos de respuesta
-            {alerts && alerts.unseen > 0 && tab !== "fallos" && (
-              <span className="ml-1.5 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold leading-4 text-white tabular-nums">{alerts.unseen}</span>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="auditoria" data-testid="logs-tab-auditoria">Registro de auditoría</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="fallos" className="mt-0">
-          {tab === "fallos" && <TurnFailuresPanel />}
-        </TabsContent>
-
-        <TabsContent value="auditoria" className="mt-0">
+  const auditPanel = (
+    <>
       <Card>
         <CardHeader className="pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -795,8 +778,50 @@ Devuelve:
           </div>
         </CardContent>
       </Card>
+    </>
+  )
 
-        </TabsContent>
+  // Tabs are data: a new view («Errores del sistema», «Registros en vivo»…)
+  // is one entry here. `?tab=<value>` deep-links any of them.
+  const logsTabs: LogsTab[] = [
+    {
+      value: "fallos",
+      label: "Fallos de respuesta",
+      badge: alerts && alerts.unseen > 0 && tab !== "fallos" ? alerts.unseen : 0,
+      render: () => <TurnFailuresPanel />,
+    },
+    { value: "auditoria", label: "Auditoría", render: () => auditPanel },
+  ]
+
+  return (
+    <div className="flex flex-col gap-4 p-4 md:p-6">
+      <div className="flex items-center gap-2">
+        <SidebarTrigger />
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Logs</h1>
+          <p className="text-sm text-muted-foreground">
+            Rastreador en vivo: cada pregunta que la plataforma no respondió bien, más la auditoría del sistema.
+          </p>
+        </div>
+      </div>
+
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+        <TabsList>
+          {logsTabs.map((t) => (
+            <TabsTrigger key={t.value} value={t.value} data-testid={`logs-tab-${t.value}`}>
+              {t.label}
+              {t.badge ? (
+                <span className="ml-1.5 rounded-full bg-red-600 px-1.5 text-[10px] font-semibold leading-4 text-white tabular-nums">{t.badge}</span>
+              ) : null}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+
+        {logsTabs.map((t) => (
+          <TabsContent key={t.value} value={t.value} className="mt-0">
+            {tab === t.value && t.render()}
+          </TabsContent>
+        ))}
       </Tabs>
 
       {/* Event detail — full record + AI diagnosis. */}

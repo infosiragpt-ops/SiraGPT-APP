@@ -15,6 +15,8 @@
  *   recordClientSignal(body, req)             → browser-side failures
  *   recordFeedbackFailure(ctx)                → thumbs-down
  *   recordAgentTaskFailure(task, status)      → agent tasks / transcription
+ *   noteGenerationFailure(data)               → media generation inside a turn
+ *   recordGenerationFailure(req, data)        → composer image/video/music/voice routes
  *   httpFailureMiddleware()                   → non-2xx on user endpoints
  *
  * Kill switch: SIRAGPT_TURN_FAILURES=0. Off by default under NODE_ENV=test
@@ -33,6 +35,8 @@ const {
   currentTurn,
 } = require('./tap');
 const { createTurnFailureStore, itemsToCsv, redact, sanitizeDeep } = require('./store');
+const generation = require('./generation');
+const { isConfigStateMessage } = require('../config-state');
 
 const SIN_CIERRE_MS = Number(process.env.SIRAGPT_TURN_SIN_CIERRE_MS || 10 * 60 * 1000);
 const INFLIGHT_MAX_AGE_MS = 3 * 60 * 60 * 1000;
@@ -138,6 +142,7 @@ function buildTurnMetadata({ ctx = {}, classification, tap = null, source = 'ser
     severity: classification.severity,
     sound: classification.sound,
     cause: classification.cause,
+    subtype: classification.subtype || null,
     fingerprint,
     reasons: classification.reasons || [],
     route: ctx.route || (tap && tap.route) || null,
@@ -512,6 +517,198 @@ function recordAgentTaskFailure(task = {}, status = '') {
   }
 }
 
+// ── Media generation (image / video / music / voice) ─────────────────
+
+function generationFields(data = {}) {
+  const kind = data.kind || generation.generationKindOfTool(data.tool);
+  return {
+    kind,
+    tool: data.tool ? String(data.tool).slice(0, 60) : null,
+    provider: data.provider ? String(data.provider).slice(0, 60) : null,
+    model: data.model ? String(data.model).slice(0, 120) : null,
+    code: data.code ? String(data.code).slice(0, 80) : null,
+    message: data.message ? redact(data.message, 300) : null,
+    degenerate: data.degenerate ? String(data.degenerate).slice(0, 40) : null,
+  };
+}
+
+/**
+ * A media generation failed (or came back degenerate) INSIDE a chat turn —
+ * the agentic tools path. The end-of-turn finalizer turns the note into
+ * herramienta_fallida + subtype (generacion_imagen / _video / _musica / _voz).
+ */
+function noteGenerationFailure(data = {}) {
+  const fields = generationFields(data);
+  if (!generation.generationMeta(fields.kind)) return;
+  if (!fields.degenerate && isConfigStateMessage(fields.message, fields.code)) return;
+  noteTurn('generation_failure', fields);
+}
+
+function artifactGenerationKind(artifact = {}) {
+  const kind = String(artifact.kind || artifact.category || '').toLowerCase();
+  if (kind === 'music') return 'music';
+  if (kind === 'speech' || kind === 'voice') return 'speech';
+  const mime = String(artifact.mime || '').toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'speech';
+  return null;
+}
+
+/**
+ * Agentic tool events (ctx.onEvent) seen during a chat turn: a failed media
+ * tool notes a generation failure, a later success of the same kind (the
+ * agent retried) clears it, and a 0-byte generated artifact is degenerate.
+ */
+function observeGenerationToolEvent(evt, ctx = {}) {
+  try {
+    if (!evt || typeof evt !== 'object' || !currentTurn()) return;
+    if (evt.type === 'tool_output' && evt.partial !== true) {
+      const kind = generation.generationKindOfTool(evt.tool);
+      if (!kind) return;
+      if (evt.ok === false) {
+        noteGenerationFailure({
+          kind,
+          tool: evt.tool,
+          message: evt.preview || evt.error || '',
+          provider: kind === 'image' ? ctx.imageProvider : null,
+          model: kind === 'image' ? ctx.imageModel : null,
+        });
+      } else if (evt.ok === true) {
+        noteTurn('generation_ok', { kind, tool: evt.tool });
+      }
+      return;
+    }
+    if (evt.type === 'file_artifact' && evt.artifact) {
+      const size = Number(evt.artifact.sizeBytes);
+      if (!Number.isFinite(size) || size !== 0) return;
+      const kind = artifactGenerationKind(evt.artifact);
+      if (!kind) return;
+      noteGenerationFailure({
+        kind,
+        degenerate: 'archivo_vacio',
+        provider: evt.artifact.provider || null,
+        model: evt.artifact.model || null,
+      });
+    }
+  } catch (_) { /* advisory */ }
+}
+
+/**
+ * The composer's direct generation routes (/ai/generate-image, -video,
+ * -music, -speech): one «Fallos de respuesta» row per failed request, with
+ * provider / model / prompt. Marks the request so the non-2xx middleware
+ * does not write a second, generic row for it.
+ */
+function recordGenerationFailure(req, data = {}) {
+  try {
+    if (!enabled() || !req || !req.user) return Promise.resolve({});
+    const fields = generationFields(data);
+    const meta = generation.generationMeta(fields.kind);
+    if (!meta) return Promise.resolve({});
+    // Provider not configured is a config state, not a failed request.
+    if (!fields.degenerate && isConfigStateMessage(fields.message, fields.code)) return Promise.resolve({});
+    req._turnFailureRecorded = true;
+    const reason = generation.generationReason(fields);
+    const category = 'herramienta_fallida';
+    const catMeta = classify.CATEGORIES[category];
+    const classification = {
+      category,
+      label: catMeta.label,
+      severity: catMeta.severity,
+      sound: catMeta.sound,
+      cause: generation.generationCause(fields),
+      reasons: ['generation_failure', meta.subtype, reason.code],
+      subtype: meta.subtype,
+    };
+    const reqBody = req.body && typeof req.body === 'object' ? req.body : {};
+    const chatId = cleanId(data.chatId || reqBody.chatId);
+    const reqId = req.requestId || req.id || (req.headers && req.headers['x-request-id']) || null;
+    const route = data.route
+      || (req.route && typeof req.route.path === 'string' ? `${req.baseUrl || ''}${req.route.path}` : maskPath(req.originalUrl || req.url));
+    return persist({
+      ctx: {
+        route,
+        chatId,
+        resourceId: `${chatId || 'sin-chat'}:gen:${data.resourceKey || reqId || `${meta.subtype}:${Date.now()}`}`,
+        userId: req.user.id || req.user.userId || null,
+        userEmail: req.user.email || null,
+        prompt: data.prompt || reqBody.prompt || reqBody.text || '',
+        modelPicked: fields.model || (typeof reqBody.model === 'string' ? reqBody.model : null),
+        modelLabel: fields.model || (typeof reqBody.model === 'string' ? reqBody.model : null),
+        modelUsed: fields.model,
+        providerUsed: fields.provider || (typeof reqBody.provider === 'string' ? reqBody.provider : null),
+        reqId,
+        startedAt: data.startedAt || Date.now(),
+        endedAt: Date.now(),
+        statusCode: data.status || null,
+        userAgent: req.headers ? req.headers['user-agent'] : null,
+        endReason: reason.code,
+        finalText: data.userSaw || '',
+        errorFrames: fields.message ? [{ code: fields.code || reason.code, message: fields.message }] : [],
+      },
+      classification,
+      source: 'server',
+      extra: {
+        generation: {
+          kind: fields.kind,
+          subtype: meta.subtype,
+          reason: reason.code,
+          provider: fields.provider,
+          model: fields.model,
+          degenerate: fields.degenerate,
+        },
+      },
+    });
+  } catch (_) {
+    return Promise.resolve({});
+  }
+}
+
+/**
+ * Inside a chat turn (agentic generate_image): note a blank picture. Only
+ * decodes when a turn is being tracked; bounded by isBlankImage's timeout.
+ */
+async function noteBlankImage(buffer, data = {}) {
+  try {
+    if (!enabled() || !currentTurn()) return false;
+    if (!(await generation.isBlankImage(buffer))) return false;
+    noteGenerationFailure({ ...data, kind: 'image', degenerate: 'imagen_en_blanco' });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Generated pictures that came back blank (a flat colour). Runs off the
+ * response path — never delays or changes what the user receives — and
+ * records ONE row for the request when any image is blank.
+ */
+function recordBlankImagesIfAny(req, images = [], data = {}) {
+  if (!enabled() || !req || !req.user) return Promise.resolve(false);
+  const list = (Array.isArray(images) ? images : []).slice(0, 5);
+  return (async () => {
+    let blank = 0;
+    for (const img of list) {
+      const b64 = typeof img === 'string' ? img : (img && img.b64);
+      if (!b64) continue;
+      let buffer;
+      try { buffer = Buffer.from(String(b64), 'base64'); } catch (_) { continue; }
+      // eslint-disable-next-line no-await-in-loop
+      if (await generation.isBlankImage(buffer)) blank += 1;
+    }
+    if (!blank) return false;
+    await recordGenerationFailure(req, {
+      ...data,
+      kind: 'image',
+      degenerate: 'imagen_en_blanco',
+      userSaw: blank > 1 ? `${blank} imágenes en blanco` : 'Una imagen en blanco',
+    });
+    return true;
+  })().catch(() => false);
+}
+
 // ── Non-2xx on user-facing endpoints ──────────────────────────────────
 
 const HTTP_SKIP_PREFIX_RE = /^\/api\/(admin|health|healthz|telemetry|metrics|version|internal|auth|csrf|webhooks?|stripe|payments\/stripe\/webhook|free-ia\/metrics|codex\/health|status)(\/|$)/;
@@ -540,6 +737,7 @@ function httpFailureMiddleware() {
     res.on('finish', () => {
       try {
         if (req._turnTap) return; // the turn route classifies itself
+        if (req._turnFailureRecorded) return; // already recorded with more detail
         const status = Number(res.statusCode);
         const method = String(req.method || 'GET').toUpperCase();
         if (status >= 400 && status < 500 && method === 'GET') return;
@@ -597,6 +795,11 @@ module.exports = {
   recordClientSignal,
   recordFeedbackFailure,
   recordAgentTaskFailure,
+  noteGenerationFailure,
+  noteBlankImage,
+  observeGenerationToolEvent,
+  recordGenerationFailure,
+  recordBlankImagesIfAny,
   httpFailureMiddleware,
   sweepUnfinished,
   buildTurnMetadata,

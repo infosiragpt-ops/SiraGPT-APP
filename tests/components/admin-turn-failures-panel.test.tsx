@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   getAdminTurnFailureStats: vi.fn(),
   exportAdminTurnFailuresCsv: vi.fn(),
   getAdminTurnFailuresRecent: vi.fn(),
+  getAdminRequestLogs: vi.fn(),
 }))
 vi.mock("@/lib/api", () => ({ apiClient: api }))
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -99,6 +100,8 @@ describe("TurnFailuresPanel", () => {
   it("opens the full detail: stages, technical notes and the chat link", async () => {
     api.getAdminTurnFailures.mockResolvedValue({ items: [failure], total: 1, page: 1, limit: 25 })
     api.getAdminTurnFailureStats.mockResolvedValue(stats)
+    // «Registros en vivo» not deployed yet → its button stays hidden.
+    api.getAdminRequestLogs.mockRejectedValue(Object.assign(new Error("Not found"), { status: 404 }))
     render(<TurnFailuresPanel />)
     fireEvent.click(await screen.findByTestId("turn-failure-row"))
     const detail = await screen.findByTestId("turn-failure-detail")
@@ -107,6 +110,47 @@ describe("TurnFailuresPanel", () => {
     expect(within(detail).getByText(/attachment_missing/)).toBeTruthy()
     expect(within(detail).getByText("Abrir chat").closest("a")?.getAttribute("href")).toBe("/agentes/c1")
     expect(within(detail).getByText("Safari 26.5 · macOS")).toBeTruthy()
+    await waitFor(() => expect(api.getAdminRequestLogs).toHaveBeenCalledWith("263c0fd5"))
+    expect(within(detail).queryByTestId("turn-failure-request-logs")).toBeNull()
+  })
+
+  it("shows «Registros de esta petición» when the live-logs endpoint answers", async () => {
+    api.getAdminTurnFailures.mockResolvedValue({ items: [failure], total: 1, page: 1, limit: 25 })
+    api.getAdminTurnFailureStats.mockResolvedValue(stats)
+    api.getAdminRequestLogs.mockResolvedValue({
+      lines: [{ ts: "2026-09-26T21:04:05.123Z", level: "error", msg: "[ai-service] Image file not found" }],
+    })
+    render(<TurnFailuresPanel />)
+    fireEvent.click(await screen.findByTestId("turn-failure-row"))
+    const detail = await screen.findByTestId("turn-failure-detail")
+    const button = await within(detail).findByTestId("turn-failure-request-logs")
+    expect(button.textContent).toContain("Ver 1 registro de 263c0fd5")
+    fireEvent.click(button)
+    expect(within(detail).getByTestId("turn-failure-request-log-lines").textContent)
+      .toContain("21:04:05.123 ERROR  [ai-service] Image file not found")
+  })
+
+  it("labels a failed media generation with its subtype and generator", async () => {
+    const generationFailure = {
+      ...failure,
+      id: "al_2",
+      category: "herramienta_fallida",
+      categoryLabel: "Herramienta fallida",
+      cause: "Generación de imagen: rechazada por moderación · xAI",
+      metadata: {
+        ...failure.metadata,
+        subtype: "generacion_imagen",
+        generation: { kind: "image", provider: "xai", model: "grok-2-image", reason: "moderacion" },
+      },
+    }
+    api.getAdminTurnFailures.mockResolvedValue({ items: [generationFailure], total: 1, page: 1, limit: 25 })
+    api.getAdminTurnFailureStats.mockResolvedValue(stats)
+    api.getAdminRequestLogs.mockRejectedValue(new Error("Not found"))
+    render(<TurnFailuresPanel />)
+    fireEvent.click(await screen.findByTestId("turn-failure-row"))
+    const detail = await screen.findByTestId("turn-failure-detail")
+    expect(within(detail).getByText("Generación de imagen")).toBeTruthy()
+    expect(within(detail).getByText("xai · grok-2-image")).toBeTruthy()
   })
 
   it("shows a calm empty state when nothing failed", async () => {

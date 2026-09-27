@@ -1,9 +1,12 @@
 "use client"
 
-import { Copy, ExternalLink } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Copy, ExternalLink, ScrollText } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { apiClient } from "@/lib/api"
+import { extractRequestLogLines } from "@/lib/admin/request-logs"
 import type { AdminTurnFailureItem } from "@/lib/admin/turn-failures-types"
 import { cn } from "@/lib/utils"
 import {
@@ -14,6 +17,13 @@ import {
   severityBadgeClass,
   severityLabel,
 } from "./turn-failure-labels"
+
+const SUBTYPE_LABELS: Record<string, string> = {
+  generacion_imagen: "Generación de imagen",
+  generacion_video: "Generación de video",
+  generacion_musica: "Generación de música",
+  generacion_voz: "Generación de voz",
+}
 
 function Field({ label, children, mono = false }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
@@ -30,6 +40,41 @@ function Block({ label, children }: { label: string; children: React.ReactNode }
       <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       {children}
     </div>
+  )
+}
+
+/**
+ * «Registros de esta petición»: the backend log lines of the failed request,
+ * from Admin → Logs «Registros en vivo» (GET /api/admin/logs/request/:reqId).
+ * Stays hidden while that endpoint answers 404 (not deployed / no lines).
+ */
+function RequestLogsSection({ reqIds }: { reqIds: string[] }) {
+  const reqId = reqIds[0] || ""
+  const [lines, setLines] = useState<string[] | null>(null)
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    setLines(null)
+    setOpen(false)
+    if (!reqId) return
+    apiClient.getAdminRequestLogs(reqId).then((payload) => {
+      if (!cancelled) setLines(extractRequestLogLines(payload))
+    }).catch(() => { /* 404 → the button stays hidden */ })
+    return () => { cancelled = true }
+  }, [reqId])
+  if (!lines) return null
+  return (
+    <Block label="Registros de esta petición">
+      <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)} data-testid="turn-failure-request-logs">
+        <ScrollText className="mr-1.5 h-3.5 w-3.5" />
+        {open ? "Ocultar registros" : `Ver ${lines.length} registro${lines.length === 1 ? "" : "s"} de ${reqId}`}
+      </Button>
+      {open && (
+        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/40 p-3 font-mono text-[11px] leading-relaxed" data-testid="turn-failure-request-log-lines">
+          {lines.length ? lines.join("\n") : "Sin registros para esta petición."}
+        </pre>
+      )}
+    </Block>
   )
 }
 
@@ -90,6 +135,10 @@ export function TurnFailureDetailDialog({
               <Field label="Versión (commit)" mono>{m.commit}</Field>
               <Field label="Ocurrencias">{String(item.occurrences || 1)}</Field>
               <Field label="Request id" mono>{Array.isArray(m.reqIds) ? m.reqIds.join(" ") : null}</Field>
+              {m.subtype ? <Field label="Subtipo">{SUBTYPE_LABELS[m.subtype] || m.subtype}</Field> : null}
+              {m.generation && (m.generation.provider || m.generation.model) ? (
+                <Field label="Generador">{[m.generation.provider, m.generation.model].filter(Boolean).join(" · ")}</Field>
+              ) : null}
             </div>
 
             {Array.isArray(m.fallbackChain) && m.fallbackChain.length > 0 && (
@@ -151,6 +200,8 @@ export function TurnFailureDetailDialog({
                 </ul>
               </Block>
             )}
+
+            {Array.isArray(m.reqIds) && m.reqIds.length > 0 && <RequestLogsSection reqIds={m.reqIds.map(String)} />}
 
             {Array.isArray(m.notes) && m.notes.length > 0 && (
               <Block label="Detalle técnico">

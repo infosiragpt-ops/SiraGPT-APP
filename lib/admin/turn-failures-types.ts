@@ -56,6 +56,16 @@ export type TurnFailureMetadata = {
   browser?: string | null
   signals?: TurnFailureSignal[]
   occurrences?: number
+  /** generacion_imagen / generacion_video / generacion_musica / generacion_voz */
+  subtype?: string | null
+  generation?: {
+    kind?: string | null
+    subtype?: string | null
+    reason?: string | null
+    provider?: string | null
+    model?: string | null
+    degenerate?: string | null
+  } | null
   [key: string]: unknown
 }
 

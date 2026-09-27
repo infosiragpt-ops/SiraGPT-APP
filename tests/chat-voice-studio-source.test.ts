@@ -27,7 +27,8 @@ describe("Sira Voz (VoiceStudio) — free local voice studio in /agentes", () =>
 
   it("makes dictation free: local whisper first, VoiceStudio second, ElevenLabs only for paid plans", () => {
     assert.match(elevenRoute, /router\.post\('\/speech-to-text', authenticateToken, markVoiceTranscriptionTier, upload\.single\('audio'\)/)
-    assert.match(elevenRoute, /if \(!ELEVENLABS_API_KEY \|\| req\.freeVoiceTranscription\) \{\s*\n\s*return freeSpeechToText\(req, res\);/)
+    // The key is read per request (the admin-connections bridge applies it at runtime).
+    assert.match(elevenRoute, /if \(!elevenLabsApiKey\(\) \|\| req\.freeVoiceTranscription\) \{\s*\n\s*return freeSpeechToText\(req, res\);/)
     assert.match(elevenRoute, /localWhisper\.transcribeLocal\(filePath, \{ language \}\)/)
     assert.match(elevenRoute, /'\.m4b'/, "audiobooks (.m4b) must be servable by the audio route")
   })

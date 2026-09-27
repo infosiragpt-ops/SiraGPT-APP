@@ -23,8 +23,12 @@ test("the «Logs» menu item shows the unseen failure badge", () => {
 test("Logs opens on «Fallos de respuesta» with the global error-sound toggle", () => {
   const page = read("app/admin/logs/page.tsx")
   assert.match(page, /useState<string>\("fallos"\)/)
-  assert.match(page, /<TabsTrigger value="fallos"[^>]*>\s*Fallos de respuesta/)
-  assert.match(page, /<TurnFailuresPanel \/>/)
+  // Tabs are data: one entry per view, rendered by a single map.
+  assert.match(page, /const logsTabs: LogsTab\[\] = \[/)
+  assert.match(page, /value: "fallos",\s*label: "Fallos de respuesta",/)
+  assert.match(page, /\{ value: "auditoria", label: "Auditoría", render: \(\) => auditPanel \}/)
+  assert.match(page, /\{logsTabs\.map\(\(t\) => \(\s*<TabsTrigger key=\{t\.value\} value=\{t\.value\}/)
+  assert.match(page, /render: \(\) => <TurnFailuresPanel \/>/)
   assert.match(page, /Sonido de errores: \{alerts\?\.soundOn \? "activado" : "desactivado"\}/)
   assert.doesNotMatch(page, /const beep = useCallback/, "only failed user turns may sound — the generic audit beep is gone")
   assert.match(page, /isWarnClientEvent/, "warn-level client noise is collapsed")
@@ -46,7 +50,25 @@ test("the chat stream reports browser-side turn failures with ids only", () => {
 test("the alerts provider sounds only failures, throttled, and unlocks audio on the toggle", () => {
   const alerts = read("lib/admin/turn-failure-alerts.tsx")
   assert.match(alerts, /playErrorChime\(ensureAudio\(\), "soft"\)/, "the toggle click plays a soft preview (autoplay unlock)")
+  assert.match(alerts, /audioFactory = getErrorSoundContext/, "one shared AudioContext for every admin view")
+  assert.match(alerts, /from "@\/lib\/admin\/error-sound"/)
   assert.match(alerts, /createAlertThrottle\(\{ minIntervalMs: 5000/)
   assert.match(alerts, /new Notification\(/)
-  assert.match(alerts, /ERROR_SOUND_STORAGE_KEY = "sira-admin-error-sound"/)
+  assert.match(read("lib/admin/error-sound.ts"), /ERROR_SOUND_STORAGE_KEY = "sira-admin-error-sound"/)
+})
+
+test("the failure detail offers the request's backend log lines only when that endpoint exists", () => {
+  const detail = read("components/admin/turn-failures/turn-failure-detail.tsx")
+  assert.match(detail, /apiClient\.getAdminRequestLogs\(reqId\)/)
+  assert.match(detail, /if \(!lines\) return null/, "hidden until GET /admin/logs/request/:reqId answers")
+  const api = read("lib/api.ts")
+  assert.match(api, /\/admin\/logs\/request\/\$\{encodeURIComponent\(reqId\)\}`, \{ suppressFailureLog: true, maxRetries: 0 \}/)
+})
+
+test("the /agentes voice catalog asks for voices only once it is opened", () => {
+  const modal = read("components/voice/voice-catalog-modal.tsx")
+  assert.match(modal, /useVoices\(\{ enabled: open \}\)/)
+  assert.match(modal, /configured === false/)
+  const hook = read("hooks/use-voices.tsx")
+  assert.match(hook, /globalConfigured = response\?\.configured !== false/)
 })

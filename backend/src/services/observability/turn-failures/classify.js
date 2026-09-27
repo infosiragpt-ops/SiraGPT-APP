@@ -1,5 +1,8 @@
 'use strict';
 
+const { isConfigStateMessage } = require('../config-state');
+const generation = require('./generation');
+
 /**
  * turn-failures/classify — pure outcome classification for one user turn.
  *
@@ -195,6 +198,21 @@ function providerLabel(provider) {
   return PROVIDER_LABELS[raw.toLowerCase()] || raw;
 }
 
+// Last generation failure the agent did not recover from: a later success of
+// the same kind (it retried) clears an error; a degenerate result (blank
+// image, 0-byte file) is what the user saw and never clears.
+function unresolvedGenerationFailure(notes) {
+  if (!Array.isArray(notes)) return null;
+  const recovered = new Set();
+  for (let i = notes.length - 1; i >= 0; i -= 1) {
+    const n = notes[i];
+    if (!n || !n.data) continue;
+    if (n.kind === 'generation_ok') recovered.add(n.data.kind);
+    else if (n.kind === 'generation_failure' && (n.data.degenerate || !recovered.has(n.data.kind))) return n;
+  }
+  return null;
+}
+
 function lastNote(notes, kind) {
   if (!Array.isArray(notes)) return null;
   for (let i = notes.length - 1; i >= 0; i -= 1) {
@@ -303,6 +321,18 @@ function classifyTurnOutcome(outcome = {}) {
     return out('error_visible', `${hf.method || 'POST'} ${hf.endpoint || outcome.route || ''} → ${hf.status}${hf.code ? ` ${hf.code}` : ''}`.trim(), ['http_status']);
   }
 
+  // A media generation that failed or came back degenerate: the user asked
+  // for an image/video/audio and did not get it, whatever the text says.
+  const genNote = unresolvedGenerationFailure(notes);
+  if (genNote && genNote.data) {
+    const d = genNote.data;
+    const meta = generation.generationMeta(d.kind);
+    return {
+      ...out('herramienta_fallida', generation.generationCause(d), ['generation_failure', meta && meta.subtype].filter(Boolean)),
+      subtype: meta ? meta.subtype : null,
+    };
+  }
+
   const toolFatal = notes.find((n) => n && n.kind === 'tool_failure' && n.data && n.data.fatal);
   if (errorFrames.length) {
     const first = errorFrames[0];
@@ -358,7 +388,7 @@ function classifyTurnOutcome(outcome = {}) {
 
 /** 4xx statuses worth recording (not auth / validation / not-found noise). */
 const RECORDABLE_4XX = new Set([402, 408, 413, 415, 424, 429]);
-const QUOTA_NOISE_RE = /monthly (?:api |video generation |plan |quota |)?limit exceeded|plan quota exceeded|quota exceeded|l[ií]mite mensual|not[ _]?configured/i;
+const QUOTA_NOISE_RE = /monthly (?:api |video generation |plan |quota |)?limit exceeded|plan quota exceeded|quota exceeded|l[ií]mite mensual/i;
 
 function isRecordableHttpFailure(status, body) {
   const code = Number(status);
@@ -366,7 +396,10 @@ function isRecordableHttpFailure(status, body) {
   const text = (() => {
     try { return typeof body === 'string' ? body : JSON.stringify(body || {}); } catch (_) { return ''; }
   })();
-  if (code >= 500) return !/not[ _]?configured/i.test(text);
+  // Provider not configured / feature disabled is a config state, never a
+  // failed turn — whatever status the route picked (400, 424, 503…).
+  if (isConfigStateMessage(text)) return false;
+  if (code >= 500) return true;
   if (!RECORDABLE_4XX.has(code)) return false;
   if (code === 429 && QUOTA_NOISE_RE.test(text)) return false;
   return true;

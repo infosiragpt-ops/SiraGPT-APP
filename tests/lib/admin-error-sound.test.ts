@@ -1,11 +1,16 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  ERROR_SOUND_STORAGE_KEY,
+  __resetErrorSoundForTests,
   createAlertThrottle,
+  isErrorSoundEnabled,
   playErrorChime,
+  playErrorSound,
   soundTierFor,
   strongestTier,
+  unlockErrorSound,
   type AudioContextLike,
-} from "@/lib/admin/error-chime"
+} from "@/lib/admin/error-sound"
 
 function fakeAudio(state = "running") {
   const oscillators: Array<{ type: string; freqs: number[]; started: number[]; stopped: number[] }> = []
@@ -48,6 +53,7 @@ describe("error chime — severity mapping", () => {
   it("a batch sounds as its strongest member", () => {
     expect(strongestTier([{ category: "usuario_reporto" }, { category: "respuesta_no_entendible" }])).toBe("soft")
     expect(strongestTier([{ category: "usuario_reporto" }, { category: "colgado" }])).toBe("strong")
+    expect(strongestTier([{ category: "colgado" }, { sound: "critical" }])).toBe("critical")
   })
 })
 
@@ -95,5 +101,47 @@ describe("error chime — Web Audio synthesis", () => {
     expect(ctx.resume).toHaveBeenCalled()
     expect(playErrorChime(null, "strong")).toEqual([])
     expect(playErrorChime({ currentTime: 0, destination: {}, createOscillator: () => { throw new Error("x") }, createGain: () => ({}) } as any)).toEqual([])
+  })
+})
+
+describe("error sound — critical tier and the shared player", () => {
+  afterEach(() => {
+    __resetErrorSoundForTests()
+    window.localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  it("critical = two high–low bursts (four tones), distinct from strong", () => {
+    const { ctx, oscillators } = fakeAudio()
+    expect(playErrorChime(ctx, "critical")).toEqual([1046.5, 830.61, 1046.5, 830.61])
+    expect(oscillators.every((o) => o.type === "square")).toBe(true)
+  })
+
+  it("playErrorSound reuses ONE shared context and honours the shared toggle", () => {
+    const created: ReturnType<typeof fakeAudio>[] = []
+    function FakeCtor(this: unknown) {
+      const audio = fakeAudio("suspended")
+      created.push(audio)
+      return audio.ctx
+    }
+    vi.stubGlobal("AudioContext", FakeCtor as unknown as typeof AudioContext)
+
+    // Off by default: nothing plays, no context is even created.
+    expect(isErrorSoundEnabled()).toBe(false)
+    expect(playErrorSound("strong")).toEqual([])
+    expect(created).toHaveLength(0)
+
+    // The toggle click unlocks (creates + resumes) the shared context…
+    const unlocked = unlockErrorSound()
+    expect(created).toHaveLength(1)
+    expect(unlocked?.resume).toHaveBeenCalled()
+
+    // …and every later chime, from any view, lands on that same context.
+    window.localStorage.setItem(ERROR_SOUND_STORAGE_KEY, "1")
+    expect(playErrorSound("strong")).toEqual([880, 698.46, 587.33])
+    expect(playErrorSound("soft")).toEqual([659.25, 523.25])
+    expect(created).toHaveLength(1)
+    expect(created[0].oscillators).toHaveLength(5)
+    expect(playErrorSound("critical", { force: true })).toHaveLength(4)
   })
 })

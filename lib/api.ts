@@ -287,6 +287,20 @@ function normalizedEndpointPath(endpoint: string): string {
   return pathOnly.replace(/\/$/, "") || "/"
 }
 
+// «Not configured» / «feature disabled» answers (no ElevenLabs key, Stripe
+// billing off…) are a configuration state, not a failure the user hit. Mirror
+// of backend/src/services/observability/config-state.js.
+const CONFIG_STATE_RE = /not[\s_-]?configured|no\s+est[aá]\s+configurad[oa]|sin\s+configurar|feature[\s_-]?(?:is[\s_-]?)?disabled|feature[\s_-]?not[\s_-]?enabled|service[\s_-]?disabled|provider_not_configured/i
+
+export function isConfigStateFailure(args: {
+  status?: number | null
+  message?: string
+  extra?: Record<string, unknown> | null
+}): boolean {
+  if (!(Number(args.status) >= 400)) return false
+  return CONFIG_STATE_RE.test(`${args.message || ""} ${JSON.stringify(args.extra || {})}`)
+}
+
 function isExpectedAuthApiFailure(args: {
   endpoint: string
   method: string
@@ -1061,12 +1075,10 @@ class ApiClient {
     if (args.endpoint.startsWith("/telemetry")) return
     if (isExpectedAuthApiFailure(args)) return
     if (isExpectedMissingChat(args)) return
-    // A stable "not configured" 503 (e.g. Stripe billing off) is an expected
-    // config state, not a server outage — don't report it as a server-error.
-    if (
-      Number(args.status) === 503 &&
-      /not[ _]?configured/i.test(`${args.message || ""} ${JSON.stringify(args.extra || {})}`)
-    ) return
+    // A stable "not configured" answer (Stripe billing off, ElevenLabs without
+    // a key…) is an expected config state, whatever the status — never a
+    // user-facing error.
+    if (isConfigStateFailure(args)) return
     reportClientLog({
       source: "api",
       severity: args.status && args.status >= 500 ? "error" : "warn",
@@ -1226,14 +1238,16 @@ class ApiClient {
           (error as any).status = response.status;
           (error as any).statusCode = response.status;
           (error as any).errorData = errorData;
-          this._reportApiFailure({
-            endpoint,
-            method,
-            status: response.status,
-            requestId: getResponseHeader(response, "X-Request-Id"),
-            message: error.message,
-            extra: { code: errorData.code || errorData.error || null },
-          })
+          if (!options.suppressFailureLog) {
+            this._reportApiFailure({
+              endpoint,
+              method,
+              status: response.status,
+              requestId: getResponseHeader(response, "X-Request-Id"),
+              message: error.message,
+              extra: { code: errorData.code || errorData.error || null },
+            })
+          }
           throw error;
         }
 
@@ -1262,14 +1276,16 @@ class ApiClient {
           (error as any).status = response.status;
           (error as any).statusCode = response.status;
           (error as any).errorData = errorData;
-          this._reportApiFailure({
-            endpoint,
-            method,
-            status: response.status,
-            requestId: getResponseHeader(response, "X-Request-Id"),
-            message: error.message,
-            extra: { code: errorData.code || errorData.error || null },
-          })
+          if (!options.suppressFailureLog) {
+            this._reportApiFailure({
+              endpoint,
+              method,
+              status: response.status,
+              requestId: getResponseHeader(response, "X-Request-Id"),
+              message: error.message,
+              extra: { code: errorData.code || errorData.error || null },
+            })
+          }
           throw error;
         }
 
@@ -3538,6 +3554,13 @@ class ApiClient {
   async getAdminTurnFailuresRecent(since?: string | null): Promise<AdminTurnFailureRecent> {
     const query = this._cleanParams({ since: since || undefined })
     return this.request(`/admin/turn-failures/recent${query ? `?${query}` : ''}`)
+  }
+
+  // Backend log lines of one request (Admin → Logs «Registros en vivo»).
+  // A 404 means that view is not deployed (or has nothing for the id): the
+  // caller hides its button, so the probe must never raise telemetry.
+  async getAdminRequestLogs(reqId: string): Promise<unknown> {
+    return this.request(`/admin/logs/request/${encodeURIComponent(reqId)}`, { suppressFailureLog: true, maxRetries: 0 })
   }
 
   async exportAdminTurnFailuresCsv(params?: {

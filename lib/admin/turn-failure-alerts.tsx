@@ -16,14 +16,15 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { apiClient } from "@/lib/api"
 import type { AdminTurnFailureRecent, AdminTurnFailureRecentItem } from "@/lib/admin/turn-failures-types"
 import {
+  ERROR_SOUND_STORAGE_KEY,
   createAlertThrottle,
-  createBrowserAudioContext,
+  getErrorSoundContext,
   playErrorChime,
   strongestTier,
   type AudioContextLike,
-} from "@/lib/admin/error-chime"
+} from "@/lib/admin/error-sound"
 
-export const ERROR_SOUND_STORAGE_KEY = "sira-admin-error-sound"
+export { ERROR_SOUND_STORAGE_KEY }
 export const SEEN_AT_STORAGE_KEY = "sira-admin-turn-failures-seen-at"
 const DEFAULT_POLL_MS = 10_000
 const HIDDEN_POLL_MS = 20_000
@@ -86,7 +87,8 @@ export function TurnFailureAlertsProvider({
   children,
   pollMs = DEFAULT_POLL_MS,
   fetchRecent = defaultFetchRecent,
-  audioFactory = createBrowserAudioContext,
+  // Default: the admin panel's shared AudioContext (lib/admin/error-sound).
+  audioFactory = getErrorSoundContext,
   now = defaultNow,
 }: ProviderProps) {
   // Props live in refs so callbacks stay stable and the poll loop never
