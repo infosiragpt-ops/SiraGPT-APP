@@ -71,9 +71,12 @@ const SelectTrigger = React.forwardRef<HTMLButtonElement, SelectTriggerProps>(
 )
 SelectTrigger.displayName = "SelectTrigger"
 
-const SelectValue = ({ placeholder }: { placeholder?: string }) => {
+// The closed list is not mounted, so the trigger cannot read the selected
+// item's text: callers that want a label instead of the raw value pass it as
+// children (e.g. «Todos los tipos» for "all").
+const SelectValue = ({ placeholder, children }: { placeholder?: string; children?: React.ReactNode }) => {
   const { value } = useSelect()
-  return <span>{value || placeholder}</span>
+  return <span>{children ?? (value || placeholder)}</span>
 }
 
 interface SelectContentProps {
