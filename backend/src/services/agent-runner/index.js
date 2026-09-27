@@ -25,7 +25,7 @@ const { createOfficeFailureReporter, verificationFailureFromSteps } = require('.
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
-const { applySavXlsxDeliveryGate } = require('./sav-xlsx-delivery');
+const { applySavXlsxDeliveryGate, createSavXlsxFinalEventGate } = require('./sav-xlsx-delivery');
 const { needsVerification } = require('./verify');
 
 function assessDelivery(run = {}) {
@@ -637,13 +637,14 @@ async function runAgentRunner({
   // F3: guarantee exactly ONE 'cancelled' trace per aborted run, no matter
   // where the abort lands (inside the loop, between phases, in the sandbox).
   const rawOnEvent = onEvent;
+  const pairFinalEvents = createSavXlsxFinalEventGate(task, rawOnEvent);
   let cancelledSeen = false;
   onEvent = (ev) => {
     if (ev && ev.type === 'cancelled') {
       if (cancelledSeen) return;
       cancelledSeen = true;
     }
-    rawOnEvent(ev);
+    pairFinalEvents.onEvent(ev);
   };
   let sandbox = null;
   let f7 = null; // F7 (multimodal) extras — cleaned up in finally
@@ -955,6 +956,7 @@ async function runAgentRunner({
     if (pairGate.active && !pairGate.ok && result.stoppedReason === 'verification_failed') {
       onEvent({ type: 'output_invalid', name: 'SAV/Excel', reason: 'sav_xlsx_matrix_invalid' });
     }
+    pairFinalEvents.release({ ok: pairGate.ok, result });
 
     // An edit that ends with its visual verification failed reaches the user
     // unverified: surface it to the admin turn-failure tracker.

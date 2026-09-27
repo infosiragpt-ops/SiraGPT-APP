@@ -10,6 +10,37 @@ function formatOf(output) {
   return String(output?.name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || '';
 }
 
+/** Keep a model's “Listo” out of SSE until the pair's bytes have passed. */
+function createSavXlsxFinalEventGate(instruction, emit) {
+  const contract = buildArtifactDeliveryContract(instruction, { multipleArtifacts: false });
+  const active = Boolean(contract.active && contract.savXlsxMatrix);
+  let pendingFinal = null;
+  return {
+    onEvent(event) {
+      if (active && event?.type === 'final') {
+        pendingFinal = event;
+        return;
+      }
+      emit(event);
+    },
+    release({ ok, result } = {}) {
+      if (!active || !pendingFinal) return;
+      const finalEvent = pendingFinal;
+      pendingFinal = null;
+      if (ok && result?.stoppedReason === 'final') {
+        emit(finalEvent);
+      } else {
+        emit({
+          ...finalEvent,
+          text: result?.errorMessage || 'No pude verificar los archivos SAV y Excel solicitados.',
+          label: 'Sin verificar',
+          verified: false,
+        });
+      }
+    },
+  };
+}
+
 async function inspectExactPair(sandbox, outputs) {
   const sav = outputs.find((output) => formatOf(output) === 'sav');
   const xlsx = outputs.find((output) => formatOf(output) === 'xlsx');
@@ -101,4 +132,4 @@ async function applySavXlsxDeliveryGate({ instruction = '', outputs = [], result
   };
 }
 
-module.exports = { applySavXlsxDeliveryGate };
+module.exports = { applySavXlsxDeliveryGate, createSavXlsxFinalEventGate };

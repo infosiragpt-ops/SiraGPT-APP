@@ -80,6 +80,11 @@ test('F2: a direct SPSS document and Excel request claims the document runner', 
     assert.deepEqual(agentRunner.missingRequestedSavExcel(prompt, [{ format: 'sav' }]), ['Excel'], prompt);
   }
   assert.equal(agentRunner.shouldRunAgentRunner({ text: 'dame un resumen del documento de SPSS y el Excel' }), false);
+  assert.equal(agentRunner.shouldRunAgentRunner({
+    text: 'investiga y prepara un paquete con un SAV y un Excel de una muestra de 20 con 20 preguntas',
+    fileIds: [],
+    hasPriorArtifacts: false,
+  }), false, 'a broader multi-step request keeps its existing route');
 });
 
 test('F2: every style/color follow-up claims the runner AND routes into the agentic chat', () => {

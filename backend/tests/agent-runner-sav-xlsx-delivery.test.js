@@ -6,7 +6,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { applySavXlsxDeliveryGate } = require('../src/services/agent-runner/sav-xlsx-delivery');
+const {
+  applySavXlsxDeliveryGate,
+  createSavXlsxFinalEventGate,
+} = require('../src/services/agent-runner/sav-xlsx-delivery');
+const { persistOutputs } = require('../src/services/agent-runner/artifacts');
 
 const PROMPT = 'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel. Usa solo datos sintéticos.';
 const GENERATE_PAIR = [
@@ -80,3 +84,59 @@ for (const [name, size, divergent, expectedOk, expectedReason] of [
     }
   });
 }
+
+test('AgentRunner never emits model success before the SAV/Excel bytes pass', () => {
+  const rejectedEvents = [];
+  const rejected = createSavXlsxFinalEventGate(PROMPT, (event) => rejectedEvents.push(event));
+  rejected.onEvent({ type: 'iteration_start', label: 'Pensando' });
+  rejected.onEvent({ type: 'final', text: 'Listo.', label: 'Listo', verified: true });
+  assert.deepEqual(rejectedEvents.map((event) => event.type), ['iteration_start']);
+  rejected.release({ ok: false, result: { stoppedReason: 'verification_failed', errorMessage: 'Los 400 valores difieren.' } });
+  assert.equal(rejectedEvents.at(-1).type, 'final');
+  assert.equal(rejectedEvents.at(-1).verified, false);
+  assert.equal(rejectedEvents.at(-1).label, 'Sin verificar');
+  assert.doesNotMatch(rejectedEvents.at(-1).text, /Listo/i);
+
+  const acceptedEvents = [];
+  const accepted = createSavXlsxFinalEventGate(PROMPT, (event) => acceptedEvents.push(event));
+  accepted.onEvent({ type: 'final', text: 'Listo.', label: 'Listo', verified: true });
+  assert.equal(acceptedEvents.length, 0);
+  accepted.release({ ok: true, result: { stoppedReason: 'final' } });
+  assert.deepEqual(acceptedEvents, [{ type: 'final', text: 'Listo.', label: 'Listo', verified: true }]);
+});
+
+test('AgentRunner final event gate leaves other document turns unchanged', () => {
+  const events = [];
+  const gate = createSavXlsxFinalEventGate('crea una presentación del embarazo', (event) => events.push(event));
+  const final = { type: 'final', text: 'Listo.', label: 'Listo', verified: true };
+  gate.onEvent(final);
+  assert.deepEqual(events, [final]);
+});
+
+test('AgentRunner emits no downloadable Excel card when the requested SAV is missing', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-partial-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const generated = spawnSync('python3', ['-c', GENERATE_PAIR, root, '20', '0'], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const onlyExcel = pairOutputs(root).filter((output) => output.name.endsWith('.xlsx'));
+  const gated = await applySavXlsxDeliveryGate({
+    instruction: PROMPT,
+    outputs: onlyExcel,
+    result: { stoppedReason: 'final', finalText: 'Listo.' },
+    sandbox: makeSandbox(root),
+  });
+  assert.equal(gated.ok, false);
+  assert.equal(gated.result.stoppedReason, 'verification_failed');
+  assert.equal(gated.outputs[0].valid, false);
+
+  let saves = 0;
+  const events = [];
+  const artifacts = await persistOutputs({
+    outputs: gated.outputs,
+    saveArtifact: () => { saves += 1; return { id: 'unexpected', filename: 'muestra.xlsx', downloadUrl: '/unexpected' }; },
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(saves, 0);
+  assert.deepEqual(artifacts, []);
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+});
