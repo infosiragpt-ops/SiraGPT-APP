@@ -1,4 +1,9 @@
 const fs = require('fs');
+// Lazy: message-attachments requires this module's siblings; avoid a cycle at load.
+function isTranscriptionToFileRequest(prompt) {
+  try { return require('./message-attachments').isTranscriptionToFileRequest(prompt); } catch { return false; }
+}
+
 const objectStorage = require('./object-storage');
 const os = require('os');
 const path = require('path');
@@ -122,6 +127,11 @@ function wantsNewPresentationDeliverable(prompt = '') {
 function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
+  // «transcribir en un documento word»: the attachment is the SOURCE of a new
+  // file, not a document to edit. Prod 2026-09-27: the transform verb below
+  // (transcrib…) sent it here and the editor answered «No pude editar el
+  // archivo original»; the user never got the Word.
+  if (isTranscriptionToFileRequest(prompt)) return false;
   // Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf + imágenes"
   // must create a NEW .pptx from sources — never "preserve PDF + anexos".
   if (wantsNewPresentationDeliverable(prompt)) return false;

@@ -1,6 +1,13 @@
 const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('./software-build-intent');
 const { classifyAttachmentKinds } = require('./agentic-execution-profile');
 
+function transcriptionToFileFormat(text) {
+  try {
+    const ma = require('../message-attachments');
+    return ma.isTranscriptionRequest(text) ? ma.transcriptionFileOutputFormat(text) : null;
+  } catch { return null; }
+}
+
 const WORDISH_RE = /\b(word|docx|informe|tesis|ensayo|monograf[ií]a|reporte|paper|art[ií]culo|marco te[oó]rico|legal|contrato|documento)\b/i;
 const SHEET_RE = /\b(excel|xlsx|spreadsheet|tabla|tabular|kpi|dashboard|f[oó]rmula|c[aá]lculo|presupuesto|base de datos|costos|margen|filas|columnas)\b/i;
 const DECK_RE = /\b(ppt|pptx|powerpoint|presentaci[oó]n|slides?|diapositivas?|pitch|defensa|exposici[oó]n|deck)\b/i;
@@ -228,8 +235,12 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     return 'chat_only';
   }
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
-  const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
-  const explicitFileFormat = EXPLICIT_WORD_OUTPUT_RE.test(requestText)
+  // «transcribir en un docuemnto word»: a typo-tolerant explicit file output
+  // (shared detector) counts as much as a correctly spelled one.
+  const typoTolerantFileFormat = Boolean(options.transcriptionToFile);
+  const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText) || typoTolerantFileFormat;
+  const explicitFileFormat = typoTolerantFileFormat
+    || EXPLICIT_WORD_OUTPUT_RE.test(requestText)
     || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
     || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
     || EXPLICIT_PDF_OUTPUT_RE.test(requestText);
@@ -282,7 +293,10 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
     return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
   }
   const explicitDocument = WORDISH_RE.test(requestText) || SHEET_RE.test(requestText) || DECK_RE.test(requestText) || PDF_RE.test(requestText);
-  if (explicitDocument) return 'doc_required';
+  // «transcribe en un docuemnto exel»: the strict SHEET/DECK/PDF regexes miss
+  // the misspelled format word, but the typo-tolerant detector already knows
+  // the user asked for a file — this is a required deliverable, not chat.
+  if (explicitDocument || typoTolerantFileFormat) return 'doc_required';
   if (estimatedWords >= 900) return 'doc_suggested';
   if (estimatedWords >= 500 || LONG_DELIVERABLE_RE.test(requestText)) return 'doc_suggested';
   if (format !== 'docx' && estimatedWords >= 300) return 'doc_suggested';
@@ -339,7 +353,9 @@ function buildDocumentDeliveryPolicy({
   // decisions (format, mode) must come from `requestText` so the
   // assistant's wording can never promote a chat turn to doc_required.
   const text = compactText(`${requestText} ${finalText || ''}`);
-  const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
+  // Shared detector (message-attachments): tolerates «docuemnto word» etc.
+  const transcriptionToFile = transcriptionToFileFormat(requestText);
+  const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !transcriptionToFile && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
   const chatOnlyDirective = hasChatOnlyDirective(requestText);
   const explicitOutput = hasExplicitDocumentOutputRequest(requestText);
   const sourceMapChat = Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText)
@@ -351,10 +367,11 @@ function buildDocumentDeliveryPolicy({
     );
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
-  const format = detectFormat(requestText, requestedFormat);
+  const format = transcriptionToFile || detectFormat(requestText, requestedFormat);
   const template = detectTemplate(text, format);
   const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], {
     transcriptionOnly,
+    transcriptionToFile,
     chatOnlyDirective,
     fileMetadata,
   });

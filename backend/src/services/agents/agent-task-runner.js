@@ -57,6 +57,7 @@ const {
   buildUploadedFileContext,
   isImageFile,
   isPlainTranscriptionRequest,
+  isTranscriptionToFileRequest,
   resolveStoredFilePath,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
@@ -1739,6 +1740,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   if (!user?.id) throw new Error('agent task payload missing user.id');
   throwIfAborted(externalSignal);
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
+  // «transcribir en un documento word» with a readable attachment: the
+  // file's text becomes the body of a NEW document (docx/pdf/xlsx/pptx).
+  const transcriptionToFileRequest = isTranscriptionToFileRequest(displayGoal || goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
   const generatedArtifactRefs = await resolveReadOnlyGeneratedArtifactFollowup(prisma, {
     userId: user.id,
@@ -3930,10 +3934,21 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     if (documentPolicy.autoGenerate && artifacts.length === 0 && !wantsSourcePreservingEdit) {
       try {
+        // A transcription-to-file turn ships the attachment's own text, not
+        // the model's summary of it: the user asked for the transcript in a
+        // Word, so the Word must contain the transcript.
+        let documentBody = finalMarkdown;
+        if (transcriptionToFileRequest && hasAttachedFiles) {
+          const sourceText = await buildTranscriptionTextFromFiles(prisma, { userId: user.id, fileIds: files });
+          if (sourceText && sourceText.trim()) {
+            documentBody = sourceText;
+            emit({ type: 'checkpoint', label: 'Transcripción tomada del archivo adjunto', status: 'saved', payload: { textLength: sourceText.length } });
+          }
+        }
         const generated = await generateAutoDocument({
           task,
           goal: displayGoal,
-          finalText: finalMarkdown,
+          finalText: documentBody,
           policy: documentPolicy,
           signal: controller.signal,
           emit,
