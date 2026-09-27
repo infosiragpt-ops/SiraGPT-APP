@@ -776,6 +776,7 @@ interface ChatContextType {
   addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => Promise<boolean> | boolean
+  renameChat: (chatId: string, title: string) => Promise<boolean>
   selectedModel: string
   setSelectedModel: (model: string) => void
   selectedEffort: string
@@ -2974,6 +2975,39 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentChat, isAuthenticated])
 
+  // Rename used by the /agentes header title menu. Patches the sidebar
+  // list and the open chat optimistically, then persists and re-syncs the
+  // chat from the server (same flow the sidebar's inline editor follows).
+  const renameChat = useCallback(async (chatId: string, rawTitle: string): Promise<boolean> => {
+    const title = (rawTitle || "").trim()
+    if (!isAuthenticated || !chatId || !title) return false
+    let previousTitle: string | undefined
+    setChats((prev) => prev.filter((chat) => chat && chat.id).map((chat) => {
+      if (chat.id !== chatId) return chat
+      previousTitle = chat.title
+      return { ...chat, title }
+    }))
+    setCurrentChat((prev) => (prev && prev.id === chatId ? { ...prev, title } : prev))
+    try {
+      await apiClient.updateChat(chatId, { title })
+      try {
+        const refreshed = (await apiClient.getChat(chatId))?.chat
+        if (refreshed?.id === chatId) {
+          setCurrentChat((prev) => (prev && prev.id === chatId ? refreshed : prev))
+        }
+      } catch { /* optimistic title stays */ }
+      return true
+    } catch (error) {
+      console.error("Failed to rename chat:", error)
+      const revert = previousTitle
+      if (typeof revert === "string") {
+        setChats((prev) => prev.map((chat) => (chat.id === chatId ? { ...chat, title: revert } : chat)))
+        setCurrentChat((prev) => (prev && prev.id === chatId ? { ...prev, title: revert } : prev))
+      }
+      return false
+    }
+  }, [isAuthenticated])
+
   const deleteChat = useCallback(
     async (chatId: string): Promise<boolean> => {
       if (!isAuthenticated) return false
@@ -4366,17 +4400,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const createNewChatRef = useRef(createNewChat)
   const selectChatRef = useRef(selectChat)
   const deleteChatRef = useRef(deleteChat)
+  const renameChatRef = useRef(renameChat)
   const loadMoreChatsRef = useRef(loadMoreChats)
   const resetChatsRef = useRef(resetChats)
   useEffect(() => { createNewChatRef.current = createNewChat }, [createNewChat])
   useEffect(() => { selectChatRef.current = selectChat }, [selectChat])
   useEffect(() => { deleteChatRef.current = deleteChat }, [deleteChat])
+  useEffect(() => { renameChatRef.current = renameChat }, [renameChat])
   useEffect(() => { loadMoreChatsRef.current = loadMoreChats }, [loadMoreChats])
   useEffect(() => { resetChatsRef.current = resetChats }, [resetChats])
   const stableCreateNewChat = useCallback(((...args: Parameters<typeof createNewChat>) =>
     createNewChatRef.current(...args)) as typeof createNewChat, [])
   const stableSelectChat = useCallback((chatId: string) => selectChatRef.current(chatId), [])
   const stableDeleteChat = useCallback((chatId: string) => deleteChatRef.current(chatId), [])
+  const stableRenameChat = useCallback((chatId: string, title: string) => renameChatRef.current(chatId, title), [])
   const stableLoadMoreChats = useCallback(() => loadMoreChatsRef.current(), [])
   const stableResetChats = useCallback(() => resetChatsRef.current(), [])
 
@@ -4391,6 +4428,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setCurrentChat,
     selectChat: stableSelectChat,
     deleteChat: stableDeleteChat,
+    renameChat: stableRenameChat,
     createNewChat: stableCreateNewChat,
     loadMoreChats: stableLoadMoreChats,
     resetChats: stableResetChats,
@@ -4398,7 +4436,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }), [
     chats, pagination, hasMoreChats, isLoadingMore, isLoading,
     currentChatId, currentChatTitle,
-    setCurrentChat, stableSelectChat, stableDeleteChat, stableCreateNewChat,
+    setCurrentChat, stableSelectChat, stableDeleteChat, stableRenameChat, stableCreateNewChat,
     stableLoadMoreChats, stableResetChats, getCurrentChatSnapshot,
   ])
 
@@ -4477,6 +4515,7 @@ interface ChatListContextType {
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   selectChat: (chatId: string) => void
   deleteChat: (chatId: string) => Promise<boolean> | boolean
+  renameChat: (chatId: string, title: string) => Promise<boolean>
   createNewChat: ChatContextType["createNewChat"]
   loadMoreChats: () => Promise<void>
   resetChats: () => void
@@ -4577,6 +4616,7 @@ export function useChat(): ChatContextType {
     addThesisMessage: current.addThesisMessage,
     clearCurrentChat: current.clearCurrentChat,
     deleteChat: list.deleteChat,
+    renameChat: list.renameChat,
     selectedModel: mf.selectedModel,
     setSelectedModel: mf.setSelectedModel,
     selectedEffort: mf.selectedEffort,

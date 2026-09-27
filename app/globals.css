@@ -1047,6 +1047,16 @@ details[open] > summary .think-chevron,
   overflow-wrap: anywhere;
 }
 
+/* Claude-style reading rhythm for assistant prose: serif body at 17px with a
+   slightly taller leading than the generic 1.6 rule above. Code, tables and
+   the user bubble stay sans/mono. */
+.chat-assistant-message .prose.font-serif :is(p, li, blockquote) {
+  line-height: 1.65;
+}
+.chat-assistant-message .prose.font-serif :is(pre, code, kbd, samp) {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .chat-assistant-message :is(pre, code, table, blockquote, a),
 .chat-user-bubble :is(pre, code, table, blockquote, a) {
   max-width: 100%;
