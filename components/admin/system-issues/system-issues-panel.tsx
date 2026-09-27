@@ -37,6 +37,11 @@ import {
 
 const PAGE_SIZE = 25
 const REFRESH_MS = 15_000
+const SORT_LABELS: Record<string, string> = {
+  recientes: "Más recientes",
+  frecuentes: "Más frecuentes 24 h",
+  usuarios: "Más usuarios",
+}
 
 type Filters = { status: string; kind: string; q: string; sort: string }
 const DEFAULT_FILTERS: Filters = { status: "abiertos", kind: "all", q: "", sort: "recientes" }
@@ -187,7 +192,9 @@ export function SystemIssuesPanel() {
         <div className="w-40">
           <div className="mb-1 text-[11px] font-medium text-muted-foreground">Estado</div>
           <Select value={filters.status} onValueChange={(v) => setFilter({ status: v })}>
-            <SelectTrigger className="h-8 text-xs" data-testid="system-issues-status-filter"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 text-xs" data-testid="system-issues-status-filter">
+              <SelectValue>{ISSUE_STATUS_FILTERS.find((s) => s.value === filters.status)?.label || filters.status}</SelectValue>
+            </SelectTrigger>
             <SelectContent>
               {ISSUE_STATUS_FILTERS.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
             </SelectContent>
@@ -196,7 +203,9 @@ export function SystemIssuesPanel() {
         <div className="w-48">
           <div className="mb-1 text-[11px] font-medium text-muted-foreground">Tipo</div>
           <Select value={filters.kind} onValueChange={(v) => setFilter({ kind: v })}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue>{filters.kind === "all" ? "Todos los tipos" : kindLabel(filters.kind)}</SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos los tipos</SelectItem>
               {ISSUE_KIND_ORDER.map((k) => <SelectItem key={k} value={k}>{kindLabel(k)}</SelectItem>)}
@@ -206,7 +215,9 @@ export function SystemIssuesPanel() {
         <div className="w-40">
           <div className="mb-1 text-[11px] font-medium text-muted-foreground">Orden</div>
           <Select value={filters.sort} onValueChange={(v) => setFilter({ sort: v })}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue>{SORT_LABELS[filters.sort] || filters.sort}</SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="recientes">Más recientes</SelectItem>
               <SelectItem value="frecuentes">Más frecuentes 24 h</SelectItem>

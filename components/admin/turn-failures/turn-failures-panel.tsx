@@ -291,7 +291,9 @@ export function TurnFailuresPanel() {
         <div className="w-48">
           <div className="mb-1 text-[11px] font-medium text-muted-foreground">Tipo</div>
           <Select value={filters.category} onValueChange={(v) => setFilter({ category: v })}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue>{filters.category === "all" ? "Todos los tipos" : categoryLabel(filters.category)}</SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos los tipos</SelectItem>
               {CATEGORY_ORDER.map((c) => <SelectItem key={c} value={c}>{CATEGORY_LABELS[c]}</SelectItem>)}
@@ -301,7 +303,9 @@ export function TurnFailuresPanel() {
         <div className="w-44">
           <div className="mb-1 text-[11px] font-medium text-muted-foreground">Modelo</div>
           <Select value={filters.model} onValueChange={(v) => setFilter({ model: v })}>
-            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue>{filters.model === "all" ? "Todos los modelos" : filters.model}</SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos los modelos</SelectItem>
               {modelOptions.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
