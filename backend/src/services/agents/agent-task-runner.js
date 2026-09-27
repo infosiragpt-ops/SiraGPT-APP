@@ -30,7 +30,7 @@ const { buildToolRuntimePlan } = require('./enterprise-tool-gateway');
 const { buildAgenticQaBoardReview } = require('./agentic-qa-board');
 const { buildAgenticOperatingCore } = require('./agentic-operating-core');
 const durableExecutionStore = require('./durable-execution-store');
-const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
+const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence, isAttachedFactQuestion } = require('./document-delivery-policy');
 const outputFormat = require('../output-format-contract');
 const { getQueueName } = require('./agent-task-queue');
 const {
@@ -1146,6 +1146,10 @@ function shouldUseDeterministicAttachmentAnswer({
   if (String(env.AGENT_TASK_ATTACHMENT_FASTPATH || '').trim() === '0') return false;
   if (!Array.isArray(files) || files.length === 0) return false;
   if (documentPolicy?.mode !== 'chat_only' || documentPolicy?.autoGenerate) return false;
+  // Sentence extraction can summarize a document, but it cannot prove that a
+  // specific requested fact exists. Route fact questions through retrieval so
+  // an absent answer can be reported instead of quoting an unrelated passage.
+  if (isAttachedFactQuestion(goal, files)) return false;
 
   const request = normalizedKey(goal);
   if (!request) return false;

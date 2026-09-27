@@ -624,6 +624,11 @@ function inferExplicitExtension(raw, tokenAnalysis = null) {
   const excludedExtensions = new Set((tokenAnalysis?.excluded_formats || []).map((item) => item.extension));
   const n = normalize(raw);
   const requestedFormats = detectRequestedOutputFormats(raw);
+  // A fact mentioned inside an attached document is source content, not an
+  // implicit output format. An explicit "en Word" request still takes priority.
+  if (tokenAnalysis?.context?.asks_existing_document_question
+    && !tokenAnalysis?.context?.has_generation_action
+    && requestedFormats.length === 0) return null;
   const allowedRegexFormats = requestedFormats.filter((item) => !excludedExtensions.has(item.ext));
   if (allowedRegexFormats.length > 0) return allowedRegexFormats[0].ext;
   if (requestedFormats.length > 0 && excludedExtensions.size > 0) return null;
