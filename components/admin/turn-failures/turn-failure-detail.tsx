@@ -180,7 +180,7 @@ export function TurnFailureDetailDialog({
                 <ol className="space-y-1 border-l border-border/70 pl-3 text-sm" data-testid="turn-failure-stages">
                   {m.stages.map((st, i) => (
                     <li key={`${st.label}-${i}`} className="flex items-baseline gap-2">
-                      <span className="w-14 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground">{formatDuration(st.atMs)}</span>
+                      <span className="w-20 shrink-0 whitespace-nowrap text-right font-mono text-[11px] tabular-nums text-muted-foreground">{formatDuration(st.atMs)}</span>
                       <span className="text-foreground">{st.label}</span>
                       {st.tool && <span className="font-mono text-[11px] text-muted-foreground">{st.tool}</span>}
                     </li>
