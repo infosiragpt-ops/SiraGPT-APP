@@ -103,11 +103,18 @@ export function snapshotDocumentEditTargets(attachments: readonly unknown[]): Ar
   })
 }
 
+// «Sube a 15 … y resalta esa celda», «subraya el título», «resáltalo en
+// amarillo»: the formatting verb points at a concrete spot of the file.
+// «Resalta los puntos clave del documento» asks for an answer, so the bare
+// verb is not enough. Runs on lowercased, accent-free text.
+const HIGHLIGHT_EDIT_RE = /\b(?:resalt|subray)\w*\b[^.;\n]{0,60}?\b(?:celdas?|filas?|columnas?|titulos?|subtitulos?|encabezados?|parrafos?|palabra|frase|linea)\b|\b(?:resalt|subray)\w*\b[^.;\n]{0,60}?\ben\s+(?:amarillo|verde|rojo|azul|naranja|rosado|celeste|negrita|cursiva)\b|\b(?:resalt|subray)\w*\s+["'“«]/
+
 /** Language-only explicit-edit detector. Attachments are resolved by the admission helper. */
 export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
   const text = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
   if (/^no (?:cambies|cambiar|modifiques) nada\b/.test(text)) return true
   if (clauseLooksLikeEdit(text)) return true
+  if (HIGHLIGHT_EDIT_RE.test(text)) return true
   // Real follow-ups name the file first and ask later ("en el mismo documento
   // ## CARTA…_editado_.docx\n\nDOCX quiero que agregues observaciones…").
   // Drop file names/markdown and evaluate each sentence on its own.

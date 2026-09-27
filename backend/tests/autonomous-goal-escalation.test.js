@@ -128,3 +128,52 @@ test('maybeCreateAutonomousGoalRun is a no-op for ordinary chat', async () => {
   assert.equal(result.created, false);
   assert.equal(result.decision.shouldEscalate, false);
 });
+
+// Prod 2026-09-27: in a thesis chat, four one-line replies («y puedes resolver
+// ejercicios más avanzado?», «entiendo», «excelente estaré pidiéndote ayuda»,
+// «cuando es 2+2?») each scored 0 on their own but 4 from the history
+// (research + verification words, partly from the assistant's own replies)
+// and each started a background /goal research run.
+const THESIS_HISTORY = [
+  { role: 'user', content: 'Ayúdame con mi tesis: necesito la metodología, los resultados y las referencias en APA 7.' },
+  { role: 'assistant', content: 'Claro. Verifica que tus fuentes sean reales; revisemos los resultados y las conclusiones.' },
+  { role: 'user', content: 'Gracias, ahora resuelve este ejercicio de (a+b)^2.' },
+  { role: 'assistant', content: 'Resultado: a² + 2ab + b². Puedo validar más ejercicios si quieres.' },
+];
+
+test('short follow-ups in a thesis chat never start an autonomous run (prod regression)', () => {
+  for (const prompt of [
+    'y puedes resolver ejercicios mas avanzado?',
+    'entiendo',
+    'excelente estare pidiéndote ayuda',
+    'cuando es 2+2?',
+    '¿cuántos días tiene un mes?',
+    'continúa',
+    'gracias, verifica el resultado por favor',
+  ]) {
+    const decision = buildAutonomousGoalEscalation({ prompt, history: THESIS_HISTORY });
+    assert.equal(decision.shouldEscalate, false, `«${prompt}» must answer normally`);
+  }
+});
+
+test("the assistant's own words never count as the user's intent", () => {
+  const decision = buildAutonomousGoalEscalation({
+    history: [
+      { role: 'assistant', content: 'Puedo investigar artículos científicos con DOI y verificar referencias APA 7 durante semanas.' },
+    ],
+    prompt: 'Sigue en segundo plano hasta terminar.',
+  });
+  // Long-running request (3) alone is below the threshold: the research scope
+  // came only from the assistant, so it must not be credited to the user.
+  assert.equal(decision.reasons.includes('research_or_thesis_scope'), false);
+  assert.equal(decision.shouldEscalate, false);
+});
+
+test('an explicit durable request in the current message still escalates', () => {
+  const decision = buildAutonomousGoalEscalation({
+    history: THESIS_HISTORY,
+    prompt: 'Sigue investigando en segundo plano durante varios días y verifica todas las referencias.',
+  });
+  assert.equal(decision.shouldEscalate, true);
+  assert.ok(decision.reasons.includes('long_running_language'));
+});
