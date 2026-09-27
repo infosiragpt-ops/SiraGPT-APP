@@ -370,6 +370,15 @@ jobs:
           NODE_ENV: test
         run: node --test tests/agent-runner-office-tools.test.js tests/agent-runner-office-evals.test.js
 
+      # Shard 4 discovers this bank without LibreOffice and proves that the
+      # fast path fails closed. Run the same bank on shard 1 as well so its
+      # successful color/Gracias cases require real rendered frames.
+      - name: PowerPoint scenario bank with real previews
+        if: matrix.shard == 1
+        env:
+          NODE_ENV: test
+        run: node --test tests/agent-runner-scenario-bank.test.js
+
       - name: Configure Redis for auth-security readiness
         run: |
           docker exec "${{ job.services.redis.id }}" redis-cli CONFIG SET maxmemory 268435456
