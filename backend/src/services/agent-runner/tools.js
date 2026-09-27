@@ -28,7 +28,9 @@ const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
 const {
   DESCRIPTION_PARAM,
   OFFICE_TOOL_DEFINITIONS,
+  OUTPUTS_SNAPSHOT,
   makeOfficeToolExecutors,
+  outputsSnapshot,
 } = require('./tools.office');
 const {
   webToolsEnabled,
@@ -619,7 +621,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
       thumbs: Boolean(officeOpts.thumbs),
       onFailure: typeof officeOpts.onFailure === 'function' ? officeOpts.onFailure : null,
       fallbackRender: executors.render_preview,
+      onVerify: typeof officeOpts.onVerify === 'function' ? officeOpts.onVerify : null,
     }));
+    // Lets the loop tell a read-only execute_python from one that changed a
+    // deliverable (gate v2). Symbol key: a model can never call it as a tool.
+    executors[OUTPUTS_SNAPSHOT] = (opts) => outputsSnapshot(sandbox, opts);
   }
 
   // F6 — web tools run in the Node process, NOT inside the gVisor sandbox
