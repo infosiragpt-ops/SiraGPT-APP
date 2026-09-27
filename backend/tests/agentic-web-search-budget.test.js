@@ -87,6 +87,9 @@ test('the dispatch-level budget caps unwrapped tools, in parallel too, per group
   assert.equal(searches, 2, 'scientific_search counts as a web lookup');
   assert.match(looks[2].error, /Límite de 2 búsquedas web/);
   assert.deepEqual(checkWebToolBudget('python_exec', {}, { searches: 0, reads: 0 }), { ok: true });
+  // Cowork's browse_page opens a real browser (~9 s per page in production): it is a page read.
+  assert.equal(checkWebToolBudget('browse_page', { read_url: 2, web_fetch: 1 }, { searches: 2, reads: 3 }).ok, false);
+  assert.equal(checkWebToolBudget('browse_page', { read_url: 2 }, { searches: 2, reads: 3 }).ok, true);
 });
 
 test('wiring: the route passes its fresh sources and the loop starts from them', () => {
