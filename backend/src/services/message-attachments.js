@@ -625,7 +625,7 @@ function dedupeEvidence(items = []) {
 }
 
 async function retrieveRelevantEvidence(prisma, { userId, row, query, limit = 16 } = {}) {
-  if (!query || !row?.id || !prisma?.file?.findFirst) return [];
+  if (!query || !row?.id || !prisma?.file?.findFirst) return { evidence: [], searched: false };
   try {
     const documentIntelligence = require('./document-intelligence');
     const primary = await documentIntelligence.retrieveEvidence(prisma, {
@@ -634,10 +634,10 @@ async function retrieveRelevantEvidence(prisma, { userId, row, query, limit = 16
       query,
       limit,
     });
-    return dedupeEvidence(primary.evidence || []);
+    return { evidence: dedupeEvidence(primary.evidence || []), searched: true };
   } catch (err) {
     console.warn(`[message-attachments] document evidence unavailable for ${row.id}:`, err?.message || err);
-    return [];
+    return { evidence: [], searched: false };
   }
 }
 
@@ -886,14 +886,25 @@ async function buildUploadedFileContext(prisma, {
       : row.documentText;
     // Exact fact lookups ("¿cuánto?", identifiers, years, cell values) need
     // retrieval as much as summaries. No keyword gate on "analiza/extrae".
-    const evidence = String(query || '').trim() && !genericOverview
+    const retrieval = String(query || '').trim() && !genericOverview
       ? await retrieveRelevantEvidence(prisma, {
         userId,
         row,
         query,
         limit: evidenceLimit,
       })
-      : [];
+      : { evidence: [], searched: false };
+    const evidence = retrieval.evidence;
+    // For a factual lookup, a completed search with zero hits is a verified
+    // evidence gap. Do not reintroduce unrelated raw text or first chunks as
+    // "context" after the retriever deliberately returned no evidence.
+    // Overviews, bibliography and transcription still need document text;
+    // retrieval errors keep the existing fallback path.
+    if (retrieval.searched && !evidence.length && !synthesisRequest
+      && !bibliographyRequest && !isExactDocumentExtractionQuestion(query)) {
+      const note = '[No se encontró evidencia para esta pregunta en los fragmentos disponibles del archivo. No atribuyas una respuesta a este archivo.]';
+      return `${headers[index]}\n${note.slice(0, perFileBudget)}`;
+    }
     const effectiveEvidence = synthesisRequest
       ? evidence
         .map((item) => ({ ...item, text: prepareDocumentTextForProfessionalSynthesis(item.text) }))

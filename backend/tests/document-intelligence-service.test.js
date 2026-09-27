@@ -104,6 +104,25 @@ test('spreadsheet chunks retain sheet identity, repeated headers and exact late-
   assert.deepEqual(await documentIntelligence.retrieveEvidence(prisma, { userId: 'other', fileId: file.id, query: 'sarcopenia' }), { evidence: [], totalChunks: 0 });
 });
 
+test('document evidence does not cite unrelated chunks when the answer is absent', async () => {
+  const text = 'Sheet: Ventas\nColumns (2): Año | Ingresos\nHeader row: 1. Column range: A:B.\nRow coordinates: 2\nTotal data rows: 1\n---\n2025\t1200';
+  const file = { id: 'sales-file', userId: 'owner', originalName: 'ventas.xlsx', extractedText: text };
+  const chunks = documentIntelligence.buildChunks(file, text);
+  const prisma = {
+    file: { async findFirst({ where }) { return where.userId === file.userId ? file : null; } },
+    documentAnalysis: { async findFirst() { return { id: 'sales-analysis' }; } },
+    documentChunk: { async findMany() { return chunks; } },
+  };
+
+  const found = await documentIntelligence.retrieveEvidence(prisma, { userId: 'owner', fileId: file.id, query: '2025', limit: 1 });
+  assert.equal(found.evidence[0].sourceLabel, 'Ventas!A2:B2');
+  assert.equal(found.evidence[0].metadata.cellRange, 'A2:B2');
+
+  const missing = await documentIntelligence.retrieveEvidence(prisma, { userId: 'owner', fileId: file.id, query: 'sarcopenia', limit: 1 });
+  assert.deepEqual(missing, { evidence: [], totalChunks: 1 });
+  assert.deepEqual(await documentIntelligence.retrieveEvidence(prisma, { userId: 'other', fileId: file.id, query: '2025' }), { evidence: [], totalChunks: 0 });
+});
+
 test('document evidence recovers late short identifiers and accent-insensitive terms without changing values', async () => {
   const chunks = Array.from({ length: 40 }, (_, index) => ({
     ordinal: index + 1,
@@ -330,4 +349,18 @@ test('DocumentIntelligence compares documents with evidence and deltas', async (
   assert.ok(result.comparisons[0].sharedTerms.includes('estrategia'));
   assert.ok(result.documents.every((doc) => doc.evidence.length >= 1));
   assert.ok(result.documents.every((doc) => doc.tableCount >= 1));
+});
+
+test('document comparison keeps unmatched representative text out of evidence', async () => {
+  const prisma = createPrismaMock([
+    { id: 'sales', userId: 'owner', originalName: 'ventas.md', mimeType: 'text/markdown', extractedText: '# Ventas\nLos ingresos de 2025 fueron 1200 soles.' },
+    { id: 'costs', userId: 'owner', originalName: 'costos.md', mimeType: 'text/markdown', extractedText: '# Costos\nLos gastos de 2025 fueron 700 soles.' },
+  ]);
+  const result = await documentIntelligence.compareDocuments(prisma, {
+    userId: 'owner', fileIds: ['sales', 'costs'], query: 'sarcopenia',
+  });
+
+  assert.equal(result.documents.length, 2);
+  assert.ok(result.documents.every((doc) => doc.summary && doc.chunkCount > 0));
+  assert.ok(result.documents.every((doc) => doc.evidence.length === 0));
 });
