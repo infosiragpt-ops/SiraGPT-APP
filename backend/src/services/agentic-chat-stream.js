@@ -785,6 +785,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     fileMetadata = [],
     hasImageAttachment = false,
     availableToolNames = new Set(),
+    artifactDeliveryContract = null,
   } = {}) {
     const kinds = classifyAttachmentKinds(fileMetadata);
     const imageOnlyFallback = hasImageAttachment === true
@@ -823,6 +824,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         gateTools = gateTools.filter((tool) => tool !== 'docintel_analyze' && tool !== 'rag_retrieve');
       }
     } catch (_) { /* fail-open to legacy gating */ }
+    // SAV/XLSX matrix delivery is checked against the actual file bytes by
+    // validateSavXlsxDelivery. That server-side comparison performs the
+    // computation, but is not a model tool step; requiring an additional
+    // python_exec call would reject a fully verified pair before it is read.
+    if (artifactDeliveryContract?.active && artifactDeliveryContract.savXlsxMatrix) {
+      gateTools = gateTools.filter((tool) => tool !== 'python_exec');
+    }
     const requiredTools = gateTools.filter((tool) => available.has(tool));
     const minimumToolCalls = Object.fromEntries(
       Object.entries(profile.minimumToolCalls || {}).filter(([tool]) => requiredTools.includes(tool))
@@ -1968,6 +1976,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       fileMetadata: Array.isArray(toolContext.fileMetadata) ? toolContext.fileMetadata : [],
       hasImageAttachment: toolContext.hasImageAttachment === true,
       availableToolNames,
+      artifactDeliveryContract,
     });
     if (generatedArtifactRefs.length) {
       const { requireGeneratedArtifactRead } = require('./agents/generated-artifact-followup');
