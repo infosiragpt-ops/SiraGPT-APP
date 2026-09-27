@@ -942,7 +942,14 @@ class OcrEngine {
     try {
       const imageBuffer = buffer || await fs.readFile(filePath);
       const dataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      // Bounded: the SDK default (10 min timeout, 2 retries with backoff) kept
+      // a small PNG in OCR for ~43 s when the vision API answered 429.
+      const visionTimeoutMs = numberFromEnv('OCR_VISION_TIMEOUT_MS', 25_000);
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        timeout: visionTimeoutMs >= 1000 ? visionTimeoutMs : 25_000,
+        maxRetries: 1,
+      });
 
       const response = await openai.chat.completions.create({
         model: config.visionModel,

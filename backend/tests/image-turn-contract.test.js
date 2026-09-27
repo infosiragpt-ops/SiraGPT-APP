@@ -210,3 +210,86 @@ describe('generate route wiring (source contract)', () => {
     assert.match(src, /return `\/uploads\/\$\{file\.userId\}\/\$\{file\.filename\}`;/);
   });
 });
+
+// Second pass (prod 2026-09-27, after #816): the turn still stalled ~47 s
+// because messageAttachments.buildUploadedFileContext → ensureImageOcr ran
+// tesseract + the OCR vision fallback (43 s, 0 chars) for an image the upload
+// pipeline was still processing, and that prep overran the 45 s first-byte
+// budget before the model was called.
+describe('request paths never re-extract what the pipeline is processing', () => {
+  const messageAttachments = require('../src/services/message-attachments');
+  const ocrEngine = require('../src/services/ocr-engine');
+
+  function prismaWithStage(stage, text = null) {
+    return {
+      file: {
+        async findUnique() { return { processingStage: stage, extractedText: text }; },
+        async update() { return {}; },
+      },
+    };
+  }
+
+  function stubOcr(t) {
+    const calls = [];
+    const original = ocrEngine.extractFromImage;
+    ocrEngine.extractFromImage = async (p) => { calls.push(p); return { text: 'texto OCR', ocr: {} }; };
+    t.after(() => { ocrEngine.extractFromImage = original; });
+    return calls;
+  }
+
+  test('an image still extracting is not OCR-ed; with waitMs 0 the turn does not wait', async (t) => {
+    const calls = stubOcr(t);
+    const row = { id: 'img-9', mimeType: 'image/png', originalName: 'f.png', path: __filename, extractedText: null };
+    const started = Date.now();
+    const out = await messageAttachments.ensureImageOcr(prismaWithStage('extracting'), row, 'u1', { imageTextWaitMs: 0 });
+    assert.equal(calls.length, 0);
+    assert.equal(out, row);
+    assert.ok(Date.now() - started < 1000);
+  });
+
+  test('a finished pipeline without useful text is not OCR-ed again', async (t) => {
+    const calls = stubOcr(t);
+    const row = { id: 'img-10', mimeType: 'image/png', originalName: 'f.png', path: __filename, extractedText: null };
+    const out = await messageAttachments.ensureImageOcr(prismaWithStage('ready', ''), row, 'u1');
+    assert.equal(calls.length, 0);
+    assert.equal(out, row);
+  });
+
+  test('a legacy row (no pipeline stage) gets one bounded OCR pass', async (t) => {
+    const calls = stubOcr(t);
+    const row = { id: 'img-11', mimeType: 'image/png', originalName: 'f.png', path: __filename, extractedText: null };
+    const out = await messageAttachments.ensureImageOcr(prismaWithStage(null), row, 'u1');
+    assert.equal(calls.length, 1);
+    assert.equal(out.extractedText, 'texto OCR');
+  });
+
+  test('the chat builds attachment context without waiting for image OCR', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../src/services/chat-attachment-recovery.js'), 'utf8');
+    assert.match(src, /buildUploadedFileContext\(prisma, \{[\s\S]{0,260}imageTextWaitMs: 0,/);
+  });
+
+  test('document analysis does not reprocess a file the pipeline is extracting', async (t) => {
+    const fileProcessor = require('../src/services/fileProcessor');
+    const original = fileProcessor.processFile;
+    let calls = 0;
+    fileProcessor.processFile = async () => { calls++; return { extractedText: 'x' }; };
+    t.after(() => { fileProcessor.processFile = original; });
+    const documentIntelligence = require('../src/services/document-intelligence');
+    const prisma = {
+      file: {
+        async findUnique() { return { processingStage: 'extracting', extractedText: null }; },
+        async update() { return {}; },
+      },
+    };
+    const file = { id: 'doc-9', userId: 'u1', originalName: 'a.pdf', filename: 'a.pdf', mimeType: 'application/pdf', path: __filename, size: 10, extractedText: null, createdAt: new Date() };
+    await documentIntelligence.analyzeFile(prisma, { userId: 'u1', fileRecord: file, force: true });
+    assert.equal(calls, 0, 'no second extraction while the pipeline works on it');
+  });
+
+  test('attachment prep has its own budget; 45 s applies to the model only', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../src/routes/ai.js'), 'utf8');
+    assert.match(src, /let __ttfbLimitMs = \(\(\) => \{/);
+    assert.match(src, /startedAt: __ttfbClockStartedAt,\s*limitMs: __ttfbLimitMs,/);
+    assert.match(src, /__ttfbClockStartedAt = Date\.now\(\);\s*__ttfbLimitMs = undefined;/);
+  });
+});
