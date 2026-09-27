@@ -772,6 +772,13 @@ async function runResolvedDocumentEdit({
     // intact instead of allowing one Word candidate to reject every file.
     if (precision?.error?.code === 'DOCX_EDIT_INSTRUCTION_REQUIRED'
       && isExplicitBatch(instruction) && quotedReplacementCount(instruction) > 0) precision = null;
+    // «En el capítulo 5 cambia el subtítulo «DESARROLLO 5» por «ANÁLISIS DE
+    // RESULTADOS»»: a location the literal replacer cannot resolve (capítulo,
+    // tabla, portada, página…) goes to the selected-model editor as a whole —
+    // it finds the place and its verification (changed parts, intent review,
+    // visual review) checks nothing else moved — instead of asking the user
+    // for a paragraph number.
+    if (precision?.error?.code === 'DOCX_EDIT_UNSUPPORTED_LOCATION' && !precisionOnly) precision = null;
     let selected = sources.length === 1 ? sources[0] : null;
     if (precision?.sourceFilename) {
       // Only the parser's filename OUTSIDE the quoted edit is authoritative.

@@ -90,3 +90,11 @@ test('unknown location qualifiers, negations and conditional edits cannot be sil
     'Cambia "a" por "b" si el documento no tiene errores',
   ]) assert.match(parse(prompt)?.error?.code || '', /^DOCX_EDIT_/, prompt);
 });
+
+test('a named target between the verb and the quotes is still one literal pair', () => {
+  assert.deepEqual(parse('cambia el nombre de la empresa «ACME» por «Globex»'), { edit: { needle: 'ACME', replacement: 'Globex' } });
+  assert.deepEqual(parse('Reemplaza la cita «García, 2020» por «García, 2021»'), { edit: { needle: 'García, 2020', replacement: 'García, 2021' } });
+  // A location the literal replacer cannot resolve is reported (the editor
+  // hands it to the selected-model engine), never guessed.
+  assert.equal(parse('En el capítulo 5 cambia el subtítulo «DESARROLLO 5» por «ANÁLISIS DE RESULTADOS».').error.code, 'DOCX_EDIT_UNSUPPORTED_LOCATION');
+});

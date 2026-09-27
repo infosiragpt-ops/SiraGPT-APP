@@ -46,7 +46,10 @@ function parseDocxPrecisionRequest(instruction = '') {
   }
   // A question about an edit is not authorization to perform it.
   if (/^\s*(?:explica\w*|describe\w*|que (?:significa|pasaria)|como (?:puedo|se)|what|explain)\b/.test(text)) return null;
-  const pairRe = new RegExp(`\\b${VERB}\\s+(?:(?:de|del|el|la|los|las|texto|frase|palabra|letra|caracter|valor|exacto|exacta)\\s+)*${MARK}\\s*(?:por|con|a|to|with|→|->)\\s*${MARK}`, 'g');
+  // Up to six plain words may name the target between the verb and the
+  // first quote («cambia el subtítulo «X» por «Y»», «cambia el nombre de la
+  // empresa «X» por «Y»»); the scope words outside the pair still apply.
+  const pairRe = new RegExp(`\\b${VERB}\\s+(?:[a-z0-9]+\\s+){0,6}${MARK}\\s*(?:por|con|a|to|with|→|->)\\s*${MARK}`, 'g');
   const pairs = [...text.matchAll(pairRe)];
   if (!pairs.length) {
     if (preserve || values.length >= 2 || /\b(?:letra|caracter)\b/.test(text))

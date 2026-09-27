@@ -408,3 +408,33 @@ test('wiring: /document-edit answers or fails clearly within its time budget', (
   assert.match(route, /code: editBudgetExceeded \? 'TIMEOUT'/);
   assert.match(route, /clearTimeout\(editBudgetTimer\)/);
 });
+
+test('Word: a quoted replacement at a location the literal replacer cannot resolve goes to the model editor', async () => {
+  const { runChatDocumentEdit } = require('../src/services/document-editor/chat-document-editor');
+  const { parseDocxPrecisionRequest } = require('../src/services/document-editing/docx-precision-intent');
+  const USER = 'user-loc';
+  const prisma = {
+    file: { findMany: async (q) => [{ id: 'f1', userId: USER, originalName: 'tesis_larga.docx' }].filter((r) => q.where.id.in.includes(r.id)) },
+    message: { findMany: async () => [] },
+  };
+  let docxCalls = 0;
+  const deps = {
+    env: {},
+    docxEngine: { docxEngineEnabled: () => true, editWordDocument: async () => { docxCalls += 1; return { ok: false, status: 'failed', message: 'probe' }; } },
+    artifactDir: fs.mkdtempSync(path.join(require('os').tmpdir(), 'loc-')),
+    objectStorage: { toLocalTemp: async () => { throw new Error('not remote'); } },
+    readSourceBuffer: async () => ({ buffer: Buffer.from('PKdocx'), cleanup: async () => {} }),
+    extractFileIds: () => [],
+    saveArtifact: () => { throw new Error('nothing to save'); },
+    runDocumentAgent: async () => { throw new Error('Word stays on the docx engine'); },
+    tryApplyLiteralDocxTitleEdit: async () => null,
+    parseDocxPrecisionRequest,
+    parseDocxImageRequest: () => null,
+    makeVisualVerifier: () => null,
+    log: () => {},
+  };
+  const res = await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'], llm: { client: {}, model: 'picked' }, deps,
+    instruction: 'En el capítulo 5 cambia el subtítulo «DESARROLLO 5» por «ANÁLISIS DE RESULTADOS».' });
+  assert.equal(docxCalls, 1, 'the docx engine got the whole request');
+  assert.notEqual(res.code, 'DOCX_EDIT_UNSUPPORTED_LOCATION');
+});
