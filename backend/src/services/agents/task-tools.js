@@ -60,6 +60,7 @@ function artifactIdFor(buf, scope = '') {
 
 const EXTENSION_TO_MIME = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  sav:  'application/x-spss-sav',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   pdf:  'application/pdf',
@@ -284,6 +285,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
 // because /\S/ matches gibberish bytes. Each entry is [extension, [bytes
 // matching at offset 0]]. PDF "%" + "PDF-" we anchor at offset 0.
 const BINARY_MAGIC_SIGNATURES = {
+  sav:  [[0x24, 0x46, 0x4c, 0x32], [0x24, 0x46, 0x4c, 0x33]], // SPSS $FL2/$FL3; full read is required below.
   png:  [[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]],
   jpg:  [[0xff, 0xd8, 0xff]],
   jpeg: [[0xff, 0xd8, 0xff]],
@@ -379,6 +381,38 @@ function assertArtifactValidation(ext, buffer) {
     throw err;
   }
   return validation;
+}
+
+// A $FL2 header alone does not prove that an SPSS system file is usable.
+// Both creation and verification reopen the finished file with the same
+// reader. Missing pyreadstat is a hard failure, never a size-only pass.
+async function inspectSavArtifact(filePath, signal) {
+  const source = [
+    'import json',
+    `path = ${JSON.stringify(filePath)}`,
+    'try:',
+    '    import pyreadstat',
+    '    frame, _metadata = pyreadstat.read_sav(path)',
+    '    rows, columns = frame.shape',
+    '    if rows < 1 or columns < 1:',
+    '        raise ValueError("empty data table")',
+    '    result = {"ok": True, "rowCount": int(rows), "columnCount": int(columns), "columns": [str(name) for name in frame.columns[:100]]}',
+    'except ImportError:',
+    '    result = {"ok": False, "error": "pyreadstat no está instalado; el entorno no puede abrir archivos SPSS .sav"}',
+    'except Exception as exc:',
+    '    result = {"ok": False, "error": "El archivo SPSS .sav no se pudo abrir: " + type(exc).__name__}',
+    'print(json.dumps(result))',
+  ].join('\n');
+  const run = await sandbox.run({ language: 'python', source, timeoutMs: 12000, signal });
+  if (!run.ok) {
+    return { ok: false, error: run.timedOut ? 'Tiempo agotado al verificar SPSS .sav' : 'No se pudo ejecutar el verificador SPSS .sav' };
+  }
+  const lastLine = (run.stdout || '').trim().split('\n').filter(Boolean).pop();
+  try {
+    const result = JSON.parse(lastLine);
+    if (typeof result?.ok === 'boolean') return result;
+  } catch { /* malformed verifier output fails closed */ }
+  return { ok: false, error: 'El verificador SPSS .sav no devolvió un resultado válido' };
 }
 
 // Clamp a numeric timeout into a [min, max] range with a default
@@ -614,7 +648,7 @@ const webSearch = {
 
 const createDocument = {
   name: 'create_document',
-  description: 'Execute a Python script that writes a downloadable file (.xlsx / .docx / .pptx / .pdf / .csv / .svg / .md / .txt) to the path in the env var OUT_PATH. The framework will pick up the file and register it as a user-downloadable artifact. Use python-docx, openpyxl, python-pptx, reportlab — all pre-installed. The script MUST write to os.environ["OUT_PATH"]. '
+  description: 'Execute a Python script that writes a downloadable file (.xlsx / .docx / .pptx / .pdf / .csv / .svg / .md / .txt / .sav) to the path in the env var OUT_PATH. The framework will pick up the file and register it as a user-downloadable artifact. Use python-docx, openpyxl, python-pptx, reportlab — all pre-installed. For SPSS .sav use pyreadstat.write_sav(dataframe, os.environ["OUT_PATH"]); DataFrame.to_spss does not exist. SPSS requires pyreadstat in the execution environment and fails explicitly if unavailable. The script MUST write to os.environ["OUT_PATH"]. '
     + 'PROFESSIONAL-DESIGN REQUIREMENTS (the user receives this file as a finished deliverable — style it like a person would by hand): '
     + 'XLSX (openpyxl): dark header fill (PatternFill solid 0F172A) with white bold font, ws.freeze_panes="A2", ws.auto_filter.ref over the data range, real column widths (ws.column_dimensions), number_format per column ("#,##0.00" money, "#,##0" counts, "dd/mm/yyyy" dates), zebra striping optional; KPIs/totals as REAL formulas (=SUM/AVERAGE), never hardcoded results. '
     + 'DOCX (python-docx): a real title (Heading 0/Title) — NEVER echo the user instruction as title —, body 11-12pt, headings per section, tables with header shading; no filler or meta text ("generado por", placeholders). '
@@ -624,7 +658,7 @@ const createDocument = {
   parameters: {
     type: 'object',
     properties: {
-      filename: { type: 'string', description: 'Filename including extension (xlsx/docx/pptx/pdf/csv/svg/md/txt). Max 120 chars.' },
+      filename: { type: 'string', description: 'Filename including extension (xlsx/docx/pptx/pdf/csv/svg/md/txt/sav). Max 120 chars.' },
       python:   { type: 'string', description: 'Full Python source. It must write the final file to os.environ["OUT_PATH"].' },
       description: { type: 'string', description: 'One-line human-readable description for the step card.' },
       timeoutMs: { type: 'integer', minimum: 1000, maximum: 60000 },
@@ -654,6 +688,20 @@ const createDocument = {
     // would clobber the other's artifact mid-write.
     const tmpOut = path.join(ARTIFACT_DIR, `pending-${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${cleanName}`);
     const ext = path.extname(cleanName).slice(1).toLowerCase();
+
+    if (ext === 'sav') {
+      const dependency = await sandbox.run({
+        language: 'python',
+        source: 'import pandas, pyreadstat\nprint("SPSS_READY")',
+        timeoutMs: 5000,
+        signal: ctx.signal,
+      });
+      if (!dependency.ok || !(dependency.stdout || '').includes('SPSS_READY')) {
+        const error = 'No se puede crear un archivo SPSS .sav: pyreadstat y pandas deben estar disponibles en el entorno de ejecución.';
+        ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: error });
+        return { ok: false, error };
+      }
+    }
 
     ctx.onEvent?.({
       type: 'tool_call',
@@ -730,7 +778,7 @@ const createDocument = {
     }
 
     const hasContract = ctx.taskContract && Array.isArray(ctx.taskContract.success_tests) && ctx.taskContract.success_tests.length > 0;
-    if (!hasContract && validationError) {
+    if ((!hasContract || ext === 'sav') && validationError) {
       // Legacy path (no contract): keep the old hard-fail on heuristic.
       try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
       const payload = {
@@ -747,6 +795,15 @@ const createDocument = {
         preview: `${validationError}. Regenera el archivo con estructura profesional y vuelve a verificar.`,
       });
       return payload;
+    }
+    if (ext === 'sav') {
+      const savInspection = await inspectSavArtifact(tmpOut, ctx.signal);
+      if (!savInspection.ok) {
+        try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
+        ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: savInspection.error });
+        return { ok: false, error: savInspection.error, validation };
+      }
+      validation.spss = savInspection;
     }
     // TaskContract review: every produced artifact is tested against
     // the contract's deterministic success_tests. If any fail the
@@ -1714,6 +1771,17 @@ const verifyArtifact = {
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;
 
+    if (ext === 'sav') {
+      const summary = await inspectSavArtifact(full, ctx.signal);
+      summary.ext = ext;
+      summary.sizeBytes = sizeBytes;
+      summary.filename = metadata?.filename || entry.slice(id.length + 1);
+      summary.artifactId = id;
+      summary.validation = metadata?.validation || null;
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: Boolean(summary.ok), preview: summarisePreview(summary) });
+      return summary;
+    }
+
     // Stdlib-only Python: openpyxl/python-docx might be missing in
     // some environments; we degrade gracefully and still return
     // size + extension so the agent at least confirms the file exists.
@@ -1850,6 +1918,7 @@ function summarisePreview(s) {
   if (s.ext) parts.push(`.${s.ext}`);
   if (typeof s.sizeBytes === 'number') parts.push(`${Math.max(1, Math.round(s.sizeBytes / 1024))} KB`);
   if (Array.isArray(s.sheets)) parts.push(`${s.sheets.length} hojas, ${s.totalRows ?? 0} filas`);
+  if (typeof s.rowCount === 'number' && typeof s.columnCount === 'number') parts.push(`${s.rowCount} casos, ${s.columnCount} variables`);
   if (typeof s.paragraphCount === 'number') parts.push(`${s.paragraphCount} párrafos`);
   if (typeof s.slideCount === 'number') parts.push(`${s.slideCount} diapositivas`);
   if (typeof s.lineCount === 'number') parts.push(`${s.lineCount} líneas`);
