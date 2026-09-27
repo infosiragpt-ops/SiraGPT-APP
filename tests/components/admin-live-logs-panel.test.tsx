@@ -76,6 +76,62 @@ describe("LiveLogsPanel", () => {
     expect(s.calls[0].filter.level).toBe("info")
   })
 
+  // Luis (2026-09-27): a checkbox before the time to pick lines (warnings
+  // included) and copy just those, in the same text the export produces.
+  it("checkboxes select lines without opening the detail; «Copiar seleccionadas» copies only those, in log order", async () => {
+    const s = fakeStream()
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })
+    render(<LiveLogsPanel openStream={s.openStream as any} />)
+    await waitFor(() => expect(s.openStream).toHaveBeenCalled())
+    s.emit({ event: "hello", data: { now: Date.now() } })
+    s.emit({ event: "lines", data: [
+      mk("1-0", { msg: "ok line" }),
+      mk("2-0", { level: "warn", msg: "[config-validator] 3 warning(s) for env=production" }),
+      mk("3-0", { level: "error", msg: "boom failure" }),
+    ] })
+    await screen.findByText("boom failure")
+    expect(screen.queryByTestId("live-logs-selection")).toBeNull()
+    const boxes = screen.getAllByTestId("live-log-select")
+    expect(boxes).toHaveLength(3)
+    fireEvent.click(boxes[2])
+    fireEvent.click(boxes[1])
+    expect(screen.queryByTestId("live-log-detail")).toBeNull()
+    expect(screen.getByTestId("live-logs-selection").textContent).toMatch(/2 líneas seleccionadas/)
+    expect((boxes[1] as HTMLInputElement).checked).toBe(true)
+    expect((boxes[0] as HTMLInputElement).checked).toBe(false)
+    fireEvent.click(screen.getByTestId("live-logs-copy-selected"))
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    const text = writeText.mock.calls[0][0] as string
+    expect(text).toMatch(/WARN {2}\[backend\] - \[config-validator\] 3 warning\(s\) for env=production\n.*ERROR \[backend\] - boom failure$/)
+    expect(text).not.toMatch(/ok line/)
+    fireEvent.click(screen.getByTestId("live-logs-clear-selection"))
+    expect(screen.queryByTestId("live-logs-selection")).toBeNull()
+  })
+
+  it("Shift+click selects a range and the header box selects or clears everything loaded", async () => {
+    const s = fakeStream()
+    render(<LiveLogsPanel openStream={s.openStream as any} />)
+    await waitFor(() => expect(s.openStream).toHaveBeenCalled())
+    s.emit({ event: "lines", data: [mk("1-0"), mk("2-0"), mk("3-0"), mk("4-0")] })
+    await screen.findByText("line 4-0")
+    const boxes = screen.getAllByTestId("live-log-select")
+    fireEvent.click(boxes[0])
+    fireEvent.click(boxes[3], { shiftKey: true })
+    expect(screen.getByTestId("live-logs-selection").textContent).toMatch(/4 líneas seleccionadas/)
+    const all = screen.getByTestId("live-logs-select-all") as HTMLInputElement
+    expect(all.checked).toBe(true)
+    fireEvent.click(all)
+    expect(screen.queryByTestId("live-logs-selection")).toBeNull()
+    fireEvent.click(all)
+    expect(screen.getByTestId("live-logs-selection").textContent).toMatch(/4 líneas seleccionadas/)
+    // Space on a focused row toggles it; Enter still opens the detail.
+    const row = screen.getByText("line 2-0").closest("[data-testid='live-log-row']") as HTMLElement
+    fireEvent.keyDown(row, { key: " " })
+    expect(screen.getByTestId("live-logs-selection").textContent).toMatch(/3 líneas seleccionadas/)
+    expect(all.indeterminate).toBe(true)
+  })
+
   it("clicking a line opens the detail with context and the request trail button", async () => {
     const s = fakeStream()
     render(<LiveLogsPanel openStream={s.openStream as any} />)
