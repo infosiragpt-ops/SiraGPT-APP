@@ -189,6 +189,39 @@ const CUSTOM_GPT_DOCUMENT_TOOL_NAMES = new Set([
   'document_edit',
 ]);
 
+// Web lookups per agentic turn. A news question ran 22 searches in 6 steps
+// (74 s) although the route had already injected 10 fresh results.
+const WEB_LOOKUP_TOOLS = new Set(['web_search', 'deep_search', 'x_search']);
+
+function webSearchBudget({ preGroundedSources = 0, env = process.env } = {}) {
+  const configured = Math.floor(Number(env.SIRAGPT_AGENTIC_WEB_SEARCH_BUDGET));
+  const limit = Number.isFinite(configured) && configured > 0 ? configured : 8;
+  return preGroundedSources > 0 ? Math.min(limit, 2) : limit;
+}
+
+/** Copies of the web lookup tools that stop after `limit` calls this turn. */
+function withWebSearchBudget(tools, limit) {
+  let used = 0;
+  return (Array.isArray(tools) ? tools : []).map((tool) => {
+    if (!tool || !WEB_LOOKUP_TOOLS.has(tool.name) || typeof tool.execute !== 'function') return tool;
+    const inner = tool.execute;
+    return {
+      ...tool,
+      execute: async (args, ctx) => {
+        if (used >= limit) {
+          return {
+            ok: false,
+            budgetExhausted: true,
+            error: `Límite de ${limit} búsquedas web en este turno alcanzado. Responde ya con las fuentes que tienes y cítalas.`,
+          };
+        }
+        used += 1;
+        return inner(args, ctx);
+      },
+    };
+  });
+}
+
 function applyCustomGptCapabilityGates(tools, capabilities) {
   const source = Array.isArray(tools) ? tools : [];
   const capGate = String(process.env.SIRAGPT_GPT_CAPABILITIES_GATING || '').trim().toLowerCase();
@@ -874,6 +907,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // the model is told the answer needs current sources; freshness → default
       // recency window when the model omits it.
       webSearchIntent = null,
+      // { sources } when the route already injected fresh web results
+      // («Fresh Web Context») into this turn's system prompt.
+      webGrounding = null,
       // Per-GPT tool capability toggles (null = legacy GPT → no gating).
       customGptCapabilities = null,
       // Semantic skill-plan ids from the preflight router. These are advisory
@@ -1756,6 +1792,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // it picked (web / academic / X / GitHub) unless a media intent already won.
     const jevWebTool = webSearchIntent && webSearchIntent.force && availableToolNames.has(webSearchIntent.tool) ? webSearchIntent.tool : null;
     if (!initialToolChoice && jevWebTool) initialToolChoice = jevWebTool;
+    // The route already ran the opening web search and injected its results:
+    // the model starts from them instead of searching the same thing again.
+    const preGroundedSources = Math.max(0, Math.floor(Number(webGrounding && webGrounding.sources) || 0));
+    if (preGroundedSources > 0 && initialToolChoice === 'web_search') initialToolChoice = null;
+    const webLookupLimit = webSearchBudget({ preGroundedSources });
     // Jev's freshness window becomes the default when the model omits it.
     if (webSearchIntent && webSearchIntent.freshness) {
       for (const tool of tools) {
@@ -1765,6 +1806,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         tool.__jevFreshness = webSearchIntent.freshness;
       }
     }
+    tools = withWebSearchBudget(tools, webLookupLimit);
     // Document merge ("combina estos 2 words en 1"): force document_edit as
     // the FIRST tool call — its deterministic merge fast-path produces the
     // fused .docx without depending on the model choosing the right tool.
@@ -1856,7 +1898,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // web data and no media tool was force-selected, force the FIRST step to be
     // a web_search so the model cannot answer "no tengo información" from stale
     // memory. The model still controls every step after the first.
-    if (!initialToolChoice && availableToolNames.has('web_search')) {
+    if (!initialToolChoice && preGroundedSources === 0 && availableToolNames.has('web_search')) {
       try {
         const { detectWebSearchIntent } = require('./web-search-intent');
         const wsi = detectWebSearchIntent(userQuery);
@@ -2044,6 +2086,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Memoria persistente: el índice del usuario ya está en el system prompt. Abre un tema con `memory_read_topic`, busca con `memory_search` (grep primero), recupera lo hablado en otros chats con `chat_history_search`, busca en Drive/Gmail del usuario con `connector_search`, y guarda hechos nuevos y duraderos con `memory_write` en esta misma conversación (nunca secretos ni detalles efímeros). Si el usuario pide olvidar algo, usa `memory_forget`.',
+      preGroundedSources > 0
+        ? `Ya tienes ${preGroundedSources} resultados web recientes para esta pregunta en «Fresh Web Context»: responde con ellos y cita sus enlaces. Usa \`web_search\` solo si falta un dato concreto (hasta ${webLookupLimit} búsquedas en este turno).`
+        : '',
       webSearchIntent && webSearchIntent.suggest
         ? `Jev (juez de turno) estima que esta petición necesita fuentes actuales (${webSearchIntent.need === 'web_required' ? 'imprescindible' : 'recomendable'}): busca con \`${webSearchIntent.tool}\`${webSearchIntent.freshness ? ` usando freshness=${webSearchIntent.freshness}` : ''} antes de afirmar datos que cambian con el tiempo, y cita las URLs.`
         : '',
@@ -3156,6 +3201,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       baseWebTools,
       buildDefaultTools,
       applyCustomGptCapabilityGates,
+      webSearchBudget,
+      withWebSearchBudget,
       buildChatFinalizeProfile,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,

@@ -7802,6 +7802,11 @@ router.post(
                   thinkingLevel: req._thinkingLevel || null,
                   thinkingLevelExplicit: req._thinkingLevelExplicit === true && req._thinkingLevel !== 'disabled',
                   webSearchIntent: req._rlcdWebSearch || null,
+                  // The fresh results already in the system prompt: the loop
+                  // answers from them instead of re-running the same search.
+                  webGrounding: Array.isArray(webSearchSources) && webSearchSources.length
+                    ? { sources: webSearchSources.length }
+                    : null,
                   turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision
                   // (intent/difficulty) lets the agentic loop hand the model a
