@@ -116,7 +116,10 @@ function refuseLiveComputer(req, toolName, session) {
 
 async function ensureMemberDesktop(req) {
   const identity = identityFor(req);
-  const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: identity.userId } });
+  // The orchestrator answers 503 for a moment while it (re)starts a desktop;
+  // prod 2026-09-27 the same request succeeded 4 s later. One short retry
+  // hides that blip instead of surfacing «Computadora no disponible».
+  const desktop = await orchFetchWithRetry('/sessions', { method: 'POST', body: { userId: identity.userId } });
   if (identity.conversationBound) {
     requireProvenIsolation(identity);
     applyAttachClosed({ session: desktop, identity });
@@ -158,6 +161,22 @@ router.get('/embed-auth', requireFlag, authenticateToken, (req, res) => {
   if (!memberId(req)) return res.status(401).json({ error: 'unauthorized' });
   return res.status(204).end();
 });
+
+const ORCH_RETRY_DELAY_MS = Number.parseInt(process.env.AGENT_COMPUTER_ORCH_RETRY_MS || '1500', 10);
+async function orchFetchWithRetry(path, init, attempts = 2) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await orchFetch(path, init);
+    } catch (err) {
+      lastErr = err;
+      const transient = Number(err && err.status) === 503 || err?.code === 'ORCH_UNAVAILABLE';
+      if (!transient || attempt === attempts) throw err;
+      await new Promise((resolve) => setTimeout(resolve, ORCH_RETRY_DELAY_MS));
+    }
+  }
+  throw lastErr;
+}
 
 router.post('/sessions', requireFlag, authenticateToken, async (req, res) => {
   try {

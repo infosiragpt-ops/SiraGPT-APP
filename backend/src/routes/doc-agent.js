@@ -22,9 +22,12 @@ const fs = require('fs/promises');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { runDocumentAgent, DEFAULT_MODEL } = require('../services/doc-agent');
+const { TASK_ERROR_LABELS } = require('../utils/task-error-classifier');
+const { redactErrorMessage } = require('../utils/secret-redactor');
 
 const prisma = require('../config/database');
 const router = express.Router();
+const PUBLIC_ERROR_CODES = new Set(['E_PROVIDER', 'E_PARAMS', 'E_QUOTA', 'E_TIMEOUT', 'E_CANCELLED', 'E_CONTENT']);
 
 const MIME_BY_EXT = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -130,7 +133,14 @@ router.post(
 
       send({ type: 'done', finalText: result.finalText, iterations: result.iterations, stoppedReason: result.stoppedReason, driver: result.driver, artifacts });
     } catch (err) {
-      send({ type: 'error', message: err?.message || 'doc agent failed' });
+      const code = PUBLIC_ERROR_CODES.has(err?.code) ? err.code : 'doc_agent_failed';
+      console.error('[doc-agent] run failed:', code, redactErrorMessage(err));
+      send({
+        type: 'error', code,
+        message: code === 'E_PROVIDER'
+          ? 'El servicio de IA no pudo completar la edición. Reintenta o elige otro modelo.'
+          : (TASK_ERROR_LABELS[code] || 'No se pudo completar la edición.'),
+      });
     } finally {
       clearInterval(heartbeat);
       try { res.end(); } catch (_) { /* already closed */ }

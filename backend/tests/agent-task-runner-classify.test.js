@@ -307,3 +307,26 @@ test('buildAttachmentGroundedFallbackAnswer: returns professional document answe
   assert.match(answer, /Siguiente paso recomendado/);
   assert.doesNotMatch(answer, /Nota operativa|runtime principal|respuesta segura/i);
 });
+
+// Prod 2026-09-27: «model failover: grok-4.7 → Cerebras → OpenAI:gpt-4o-mini»
+// with a dead OpenAI key burned a round-trip on every failover. A key the
+// provider already rejected is not a fallback.
+test('resolveAgentModelFailoverRuntimes skips providers whose key was rejected', () => {
+  const { resolveAgentModelFailoverRuntimes } = require('../src/services/agents/agent-task-runner');
+  const keyHealth = require('../src/utils/provider-key-health');
+  const env = { CEREBRAS_API_KEY: 'c-key', OPENAI_API_KEY: 'dead-key', GEMINI_API_KEY: 'g-key', DEEPSEEK_API_KEY: 'd-key' };
+  keyHealth.clear();
+  try {
+    const before = resolveAgentModelFailoverRuntimes({ detected: { provider: 'xAI' } }, env).map((r) => r.provider);
+    assert.deepEqual(before, ['Cerebras', 'OpenAI', 'Gemini', 'DeepSeek']);
+    keyHealth.markRejected('OpenAI', 'dead-key', Object.assign(new Error('401 Incorrect API key provided'), { status: 401 }));
+    const after = resolveAgentModelFailoverRuntimes({ detected: { provider: 'xAI' } }, env);
+    assert.deepEqual(after.map((r) => r.provider), ['Cerebras', 'Gemini', 'DeepSeek']);
+    assert.ok(after.every((r) => r.apiKeyEnv), 'runtimes carry the env name so a later rejection can be memoised');
+    // A rotated key re-arms the provider.
+    const rotated = resolveAgentModelFailoverRuntimes({ detected: { provider: 'xAI' } }, { ...env, OPENAI_API_KEY: 'fresh-key' });
+    assert.ok(rotated.some((r) => r.provider === 'OpenAI'));
+  } finally {
+    keyHealth.clear();
+  }
+});

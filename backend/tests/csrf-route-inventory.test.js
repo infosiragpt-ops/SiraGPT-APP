@@ -186,3 +186,22 @@ test('index mounts the catch-all cookie-auth gate after cookies and before API r
     'public generated-app mounts must not receive a strict CSRF gate',
   );
 });
+
+// Prod 2026-09-27: anonymous visitors and expired Safari sessions produced
+// «POST /api/auth/refresh → 403 csrf_invalid» in a loop. Without a login
+// cookie or a Bearer there is nothing to forge: authentication answers 401.
+test('auth CSRF selector lets credential-less /refresh and /logout reach authentication', () => {
+  const { createAuthCsrfMiddleware, isCredentiallessSessionMaintenance } = require('../src/middleware/csrf-route-policy');
+  const calls = [];
+  const csrf = createAuthCsrfMiddleware((_req, _res, next) => { calls.push('csrf'); next(); });
+  const run = (req) => new Promise((resolve) => csrf(req, {}, () => resolve()));
+  const base = { method: 'POST', headers: {}, cookies: {} };
+  assert.equal(isCredentiallessSessionMaintenance({ ...base, path: '/refresh' }), true);
+  assert.equal(isCredentiallessSessionMaintenance({ ...base, path: '/logout/' }), true);
+  assert.equal(isCredentiallessSessionMaintenance({ ...base, path: '/login' }), false, 'login keeps CSRF');
+  assert.equal(isCredentiallessSessionMaintenance({ ...base, path: '/refresh', cookies: { token: 'abc' } }), false, 'a cookie session keeps CSRF');
+  assert.equal(isCredentiallessSessionMaintenance({ ...base, path: '/refresh', headers: { authorization: 'Bearer x' } }), false);
+  return run({ ...base, path: '/refresh' })
+    .then(() => run({ ...base, path: '/refresh', cookies: { token: 'abc' } }))
+    .then(() => assert.deepEqual(calls, ['csrf'], 'CSRF ran only for the cookie session'));
+});

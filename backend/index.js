@@ -1586,6 +1586,18 @@ async function startServer() {
     } catch (_) { /* permission audit is best-effort */ }
 
     const server = app.listen(PORT, HOST, () => {
+        // Warm the embedding client once: the first chat turn after every
+        // publish blew the enrichment budget («feedback-exemplars exceeded
+        // 900ms», prod 2026-09-27) on a cold TLS/session to the provider.
+        // Best effort, off with SIRAGPT_EMBED_WARMUP=0.
+        if (process.env.SIRAGPT_EMBED_WARMUP !== '0' && process.env.NODE_ENV !== 'test') {
+            const warm = setTimeout(() => {
+                try {
+                    require('./src/services/rag-service').embed(['siragpt warmup']).catch(() => {});
+                } catch (_) { /* embeddings not configured */ }
+            }, 3000);
+            if (typeof warm.unref === 'function') warm.unref();
+        }
         // --- HTTP timeouts ---------------------------------------------------
         // The Next.js front-end proxies every /api/* call to this Express
         // process over a keep-alive HTTP connection. Node's default

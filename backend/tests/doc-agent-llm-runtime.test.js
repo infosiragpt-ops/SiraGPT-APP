@@ -6,6 +6,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const rt = require('../src/services/doc-agent/llm-runtime');
+const { runDocAgentLoop } = require('../src/services/doc-agent/loop');
+const { callModel } = require('../src/services/agent-runner/loop');
 
 const ALL_KEYS = {
   DEEPSEEK_API_KEY: 'ds',
@@ -58,6 +60,33 @@ describe('provider inference + model spec', () => {
 });
 
 describe('candidate ladder', () => {
+  test('an explicitly selected document model is pinned to its own API', () => {
+    const selected = rt.resolveDocAgentRunCandidates({ model: 'DeepSeek:deepseek-v4-pro', env: ALL_KEYS });
+    assert.deepEqual(selected.map((entry) => [entry.provider, entry.model]), [['DeepSeek', 'deepseek-v4-pro']]);
+    const pickerSlug = rt.resolveDocAgentRunCandidates({ model: 'deepseek/deepseek-v4-pro', env: ALL_KEYS });
+    assert.deepEqual(pickerSlug.map((entry) => [entry.provider, entry.model]), [['DeepSeek', 'deepseek-v4-pro']]);
+    const router = rt.resolveDocAgentRunCandidates({ model: 'OpenRouter:deepseek/deepseek-v4-pro', env: ALL_KEYS });
+    assert.deepEqual(router.map((entry) => [entry.provider, entry.model]), [['OpenRouter', 'deepseek/deepseek-v4-pro']]);
+    const xai = rt.resolveDocAgentRunCandidates({ model: 'x-ai/grok-4.7', env: ALL_KEYS });
+    assert.deepEqual(xai.map((entry) => [entry.provider, entry.model]), [['xAI', 'grok-4.7']]);
+    assert.throws(
+      () => rt.resolveDocAgentRunCandidates({ model: 'anthropic/claude-4', env: ALL_KEYS }),
+      { code: 'E_PROVIDER' },
+      'an unknown vendor slug must not be routed through a configured OpenRouter key',
+    );
+    assert.throws(
+      () => rt.resolveDocAgentRunCandidates({ model: 'Anthropic:anthropic/claude-4', env: ALL_KEYS }),
+      { code: 'E_PROVIDER' },
+      'an unknown provider prefix must not imply OpenRouter',
+    );
+    assert.throws(
+      () => rt.resolveDocAgentRunCandidates({ model: 'OpenAI:gpt-6-sol', env: { DEEPSEEK_API_KEY: 'configured' } }),
+      { code: 'E_PROVIDER' },
+      'missing selected API must not silently use DeepSeek',
+    );
+    assert.ok(rt.resolveDocAgentRunCandidates({ env: ALL_KEYS }).length > 1, 'the default route retains its existing ladder');
+  });
+
   test('DeepSeek leads by default and only configured providers are listed', () => {
     const c = rt.resolveDocAgentCandidates({ env: { DEEPSEEK_API_KEY: 'a', GEMINI_API_KEY: 'b' } });
     assert.deepEqual(c.map((x) => [x.provider, x.model]), [['DeepSeek', 'deepseek-v4-pro'], ['Gemini', 'gemini-3.5-flash']]);
@@ -91,6 +120,75 @@ describe('candidate ladder', () => {
 });
 
 describe('failover client', () => {
+  test('a DeepSeek tool turn keeps its reasoning, then strips it when xAI takes over', async () => {
+    const seen = [];
+    let deepSeekCalls = 0;
+    const client = rt.createFailoverClient([
+      { provider: 'DeepSeek', model: 'deepseek-v4-pro' },
+      { provider: 'xAI', model: 'grok-4.7' },
+    ], { createClient: (candidate) => ({ chat: { completions: { create: async (payload) => {
+      seen.push({ provider: candidate.provider, payload });
+      if (candidate.provider === 'DeepSeek') {
+        deepSeekCalls += 1;
+        if (deepSeekCalls === 1) return { choices: [{ message: {
+          content: null,
+          reasoning_content: 'razonamiento original',
+          tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+        } }] };
+        assert.equal(payload.messages[1].reasoning_content, 'razonamiento original');
+        throw httpError(503, 'temporary provider failure');
+      }
+      assert.equal('reasoning_content' in payload.messages[1], false);
+      return { choices: [{ message: { content: 'Continué con el archivo.' } }] };
+    } } } }) });
+    const messages = [{ role: 'user', content: 'lee el documento' }];
+    const result = await runDocAgentLoop({
+      client, model: 'deepseek-v4-pro', messages,
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: {} } } }],
+      executors: { read_file: async () => 'contenido' }, maxIterations: 2,
+    });
+    assert.equal(result.finalText, 'Continué con el archivo.');
+    assert.deepEqual(seen.map((entry) => entry.provider), ['DeepSeek', 'DeepSeek', 'xAI']);
+    assert.equal(messages[1].reasoning_content, 'razonamiento original', 'the runner transcript stays intact');
+  });
+
+  test('DeepSeek receives placeholders for legacy assistant turns without reasoning', async () => {
+    let sent;
+    const client = rt.createFailoverClient([{ provider: 'DeepSeek', model: 'deepseek-v4-pro' }], {
+      createClient: () => ({ chat: { completions: { create: async (payload) => {
+        sent = payload;
+        return { choices: [{ message: { content: 'ok' } }] };
+      } } } }),
+    });
+    const messages = [
+      { role: 'user', content: 'primera tarea' },
+      { role: 'assistant', content: 'respuesta previa' },
+      { role: 'user', content: 'segunda tarea' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'old-call', type: 'function', function: { name: 'read_file', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'old-call', content: 'contenido' },
+    ];
+    await callModel({ client, model: 'deepseek-v4-pro', messages, tools: [], maxTokens: 500 });
+    assert.equal(sent.messages[1].reasoning_content, '');
+    assert.equal(sent.messages[3].reasoning_content, '');
+    assert.equal('reasoning_content' in messages[1], false);
+    assert.equal('reasoning_content' in messages[3], false);
+  });
+
+  test('a provider switch also adapts the completion-token parameter', async () => {
+    let received;
+    const client = rt.createFailoverClient([
+      { provider: 'DeepSeek', model: 'deepseek-v4-pro' },
+      { provider: 'OpenAI', model: 'gpt-6-sol' },
+    ], { createClient: (candidate) => ({ chat: { completions: { create: async (payload) => {
+      if (candidate.provider === 'DeepSeek') throw httpError(503, 'temporary provider failure');
+      received = payload;
+      return { choices: [{ message: { content: 'ok' } }] };
+    } } } }) });
+    await client.chat.completions.create({ messages: [{ role: 'user', content: 'hola' }], max_tokens: 300 });
+    assert.equal(received.max_completion_tokens, 300);
+    assert.equal('max_tokens' in received, false);
+  });
+
   test('quota/auth/transport errors move to the next provider and stick there', async () => {
     const log = [];
     const events = [];

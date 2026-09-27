@@ -19,6 +19,13 @@ import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import {
+  emailRuleKey,
+  mapRegistrationErrorData,
+  nameRuleKey,
+  passwordRuleKey,
+  type RegistrationErrorData,
+} from "@/lib/auth/registration-errors"
 
 type FieldErrors = {
   name?: string
@@ -98,7 +105,16 @@ function RegisterPageContent() {
         toast.error("No se pudo crear la cuenta. Inténtalo de nuevo.")
       }
     } catch (error) {
-      toast.error("No se pudo crear la cuenta. Inténtalo de nuevo.")
+      // A 400 carries the field the server rejected (name / email / password,
+      // email already registered): show it under the field instead of a
+      // generic toast — prod 2026-09-27, three 400s in a row with no hint.
+      const data = (error as { errorData?: RegistrationErrorData } | null)?.errorData
+      const mapped = mapRegistrationErrorData(data, (key) => t(key as never))
+      if (Object.keys(mapped.fieldErrors).length > 0) {
+        setErrors((prev) => ({ ...prev, ...mapped.fieldErrors }))
+        return
+      }
+      toast.error(mapped.message || "No se pudo crear la cuenta. Inténtalo de nuevo.")
     } finally {
       setIsLoading(false)
     }
@@ -107,10 +123,15 @@ function RegisterPageContent() {
   // Inline, field-level validation (mirrors the login page) so users get
   // immediate feedback instead of a sequence of toasts.
   const validateForm = React.useCallback(() => {
+    // Same rules as the backend schema (lib/auth/registration-errors mirrors
+    // RegisterRequestSchema): what passes here never comes back as a 400.
     const next: FieldErrors = {}
-    if (!formData.name.trim()) next.name = t("nameRequired")
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) next.email = t("emailInvalid")
-    if (formData.password.length < 6) next.password = t("passwordTooShort")
+    const nameKey = nameRuleKey(formData.name)
+    if (nameKey) next.name = t(nameKey as never)
+    const emailKey = emailRuleKey(formData.email)
+    if (emailKey) next.email = t(emailKey as never)
+    const passwordKey = passwordRuleKey(formData.password)
+    if (passwordKey) next.password = t(passwordKey as never)
     if (formData.confirmPassword !== formData.password) next.confirmPassword = t("passwordsNoMatch")
     if (!formData.agreeToTerms) next.agreeToTerms = t("agreeTermsRequired")
     setErrors(next)

@@ -341,6 +341,25 @@ function buildTurnTranscript(userMessage, assistantMessage) {
  * array of `{ fact, category, confidence }` — empty when the model
  * returned nothing usable.
  */
+/**
+ * Parse the extraction model's JSON. `max_tokens` can cut the answer mid-array
+ * («Unexpected end of JSON input», prod 2026-09-27): every complete fact
+ * object is salvaged instead of discarding the whole turn. Code fences are
+ * tolerated. Returns null when nothing parseable is left.
+ */
+function parseExtractionPayload(raw) {
+  const text = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (_) { /* fall through to salvage */ }
+  const facts = [];
+  for (const match of text.matchAll(/\{[^{}]*"fact"\s*:\s*"(?:[^"\\]|\\.)*"[^{}]*\}/g)) {
+    try { facts.push(JSON.parse(match[0])); } catch (_) { /* broken tail item */ }
+  }
+  return facts.length ? { facts, salvaged: true } : null;
+}
+
 async function extractFacts(openai, userMessage, assistantMessage) {
   if (!openai) return [];
   const transcript = buildTurnTranscript(userMessage, assistantMessage);
@@ -358,7 +377,11 @@ async function extractFacts(openai, userMessage, assistantMessage) {
       ],
     });
     const raw = resp.choices?.[0]?.message?.content || '{}';
-    const parsed = JSON.parse(raw);
+    const parsed = parseExtractionPayload(raw);
+    if (!parsed) {
+      console.warn('[long-term-memory] extraction returned no parseable JSON');
+      return [];
+    }
     if (!Array.isArray(parsed.facts)) return [];
     return parsed.facts
       .filter(f => f && typeof f.fact === 'string' && f.fact.trim().length > 0)
@@ -514,6 +537,7 @@ async function memoryStats(userId) {
 }
 
 module.exports = {
+  parseExtractionPayload, // exported for tests
   extractFacts,          // exported for tests (pure async fn, no side effects)
   extractFactsAsync,     // fire-and-forget
   recallFacts,

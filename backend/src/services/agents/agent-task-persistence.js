@@ -86,10 +86,31 @@ async function updateExistingAgentTask(where, data) {
     ? where
     : { ...where, status: { notIn: Array.from(TERMINAL_STATUSES) } };
 
-  const result = await prisma.agentTask.updateMany({
-    where: guardedWhere,
-    data: updateData,
-  });
+  let result;
+  try {
+    result = await prisma.agentTask.updateMany({
+      where: guardedWhere,
+      data: updateData,
+    });
+  } catch (err) {
+    // P2003 on chatId: the chat was deleted while the task ran. The FK is
+    // ON DELETE SET NULL, so the row survives with chatId null and every
+    // later write that still carries the old chatId fails — prod 2026-09-27:
+    // 28 «Foreign key constraint violated on agent_tasks_chatId_fkey» in one
+    // second and a task left `running` for the stale-run watchdog. Keep the
+    // task, drop the dangling reference.
+    if (err?.code === 'P2003' && updateData.chatId) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(`[agent-task-persistence] chat ${updateData.chatId} no longer exists — task ${data.id || data.jobId || '?'} continues without chat`);
+      }
+      result = await prisma.agentTask.updateMany({
+        where: guardedWhere,
+        data: { ...updateData, chatId: null },
+      });
+    } else {
+      throw err;
+    }
+  }
   if (result.count > 0) {
     return prisma.agentTask.findFirst({ where });
   }

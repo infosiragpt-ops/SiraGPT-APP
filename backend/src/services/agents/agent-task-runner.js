@@ -1506,11 +1506,16 @@ function resolveAgentModelFailoverRuntimes(profile, env = process.env) {
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
   ];
   const runtimes = [];
+  const keyHealth = require('../../utils/provider-key-health');
   for (const target of candidates) {
     if (target.provider === failedProvider) continue;
     if (!env[target.apiKeyEnv]) continue;
+    // A key the provider already rejected (401/403, memoised 5 min) is not a
+    // fallback: prod 2026-09-27 «grok-4.7 → Cerebras → OpenAI:gpt-4o-mini»
+    // spent a round-trip on the dead OpenAI key at every failover.
+    if (keyHealth.isRejected(target.provider, env[target.apiKeyEnv])) continue;
     const client = buildOpenAICompatibleClient(target, env);
-    if (client) runtimes.push({ client, model: target.model, provider: target.provider });
+    if (client) runtimes.push({ client, model: target.model, provider: target.provider, apiKeyEnv: target.apiKeyEnv });
   }
   return runtimes;
 }
@@ -2643,7 +2648,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         userId: user.id,
         fileIds: files,
         task,
-        goal: displayGoal,
         documentPolicy,
         signal: controller.signal,
         emit,
@@ -2653,7 +2657,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           emit({ type: 'step_start', id: currentStepId, label: 'Creando el documento con la transcripción', icon: 'file-text' });
         },
         buildTranscriptionTextFromFiles,
-        generateAutoDocument,
       });
       if (currentStepId) {
         emit({ type: 'step_done', id: currentStepId, ok: fast.handled });
@@ -3750,6 +3753,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           resumeCheckpoint: failoverResume,
         });
         if (!isUnrecoveredModelFailure(result.stoppedReason)) break;
+        // Remember an auth rejection so the next failover skips this runtime.
+        try {
+          const keyHealth = require('../../utils/provider-key-health');
+          const detail = result.error || result.errorMessage || result.lastError || null;
+          if (failoverRuntime.apiKeyEnv && keyHealth.isInvalidKeyError(detail)) {
+            keyHealth.markRejected(failoverRuntime.provider, process.env[failoverRuntime.apiKeyEnv], detail);
+          }
+        } catch (_) { /* memo is best effort */ }
       }
     }
 

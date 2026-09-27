@@ -123,6 +123,26 @@ function resolveDocAgentCandidates({ model, env = process.env } = {}) {
   return out;
 }
 
+function resolveDocAgentRunCandidates({ model, env = process.env } = {}) {
+  if (!String(model || '').trim()) return resolveDocAgentCandidates({ env });
+  const raw = String(model).trim();
+  // Picker rows can carry a provider-prefixed model id. A selected DeepSeek
+  // row uses its own API; an explicit OpenRouter:model spec keeps the router.
+  const direct = /^(deepseek|google|gemini|x-ai|xai|meta|openai)\/(.+)$/i.exec(raw);
+  const provider = direct ? (PROVIDER_ALIASES[direct[1].toLowerCase().replace('-', '')] || null) : null;
+  const spec = provider ? `${provider}:${direct[2]}` : raw;
+  const selected = parseModelSpec(spec);
+  const candidates = resolveDocAgentCandidates({ model: spec, env });
+  // An unknown vendor/model slug must not become an implicit OpenRouter run.
+  // The user can opt into that transport explicitly with OpenRouter:model.
+  const implicitRouter = selected?.provider === 'OpenRouter' && !/^openrouter\s*:/i.test(raw);
+  const match = implicitRouter ? null : candidates.find((candidate) => candidate.provider === selected?.provider && candidate.model === selected?.model);
+  if (match) return [match];
+  const error = new Error('El modelo seleccionado no está disponible. Reintenta o elige otro modelo.');
+  error.code = 'E_PROVIDER';
+  throw error;
+}
+
 function errorStatus(err) {
   if (!err) return null;
   const status = Number(err.status || err.statusCode || (err.response && err.response.status));
@@ -151,6 +171,36 @@ function defaultCreateClient(candidate) {
   });
 }
 
+function payloadForCandidate(payload, candidate) {
+  const provider = String(candidate.wireProvider || candidate.provider || '').toLowerCase();
+  const request = { ...payload, model: candidate.model, ...(candidate.extra || {}) };
+  if (Array.isArray(request.messages)) {
+    request.messages = request.messages.map((message) => {
+      if (!message || message.role !== 'assistant') return message;
+      const hasReasoning = Object.prototype.hasOwnProperty.call(message, 'reasoning_content');
+      if (provider === 'deepseek') {
+        // Historical and synthetic tool turns were not produced by DeepSeek.
+        // They still need the field when its thinking-mode request has tools.
+        return hasReasoning || !Array.isArray(request.tools)
+          ? message : { ...message, reasoning_content: '' };
+      }
+      if (!hasReasoning) return message;
+      const { reasoning_content: _ignored, ...withoutReasoning } = message;
+      return withoutReasoning;
+    });
+  }
+  // A failover may change transports within one call. Adapt the token field
+  // for the candidate that actually receives the payload, not the first one.
+  if (provider === 'openai' && Object.prototype.hasOwnProperty.call(request, 'max_tokens')) {
+    if (!Object.prototype.hasOwnProperty.call(request, 'max_completion_tokens')) request.max_completion_tokens = request.max_tokens;
+    delete request.max_tokens;
+  } else if (provider !== 'openai' && Object.prototype.hasOwnProperty.call(request, 'max_completion_tokens')) {
+    if (!Object.prototype.hasOwnProperty.call(request, 'max_tokens')) request.max_tokens = request.max_completion_tokens;
+    delete request.max_completion_tokens;
+  }
+  return request;
+}
+
 /**
  * OpenAI-compatible façade (`chat.completions.create`) over an ordered list of
  * candidates. A candidate that fails with a failover-class error is moved to
@@ -172,7 +222,7 @@ function createFailoverClient(candidates, { createClient = defaultCreateClient, 
       const candidate = order[0];
       try {
         const response = await clientFor(candidate).chat.completions.create(
-          { ...payload, model: candidate.model, ...(candidate.extra || {}) },
+          payloadForCandidate(payload, candidate),
           opts,
         );
         return response;
@@ -200,6 +250,7 @@ module.exports = {
   inferProvider,
   parseModelSpec,
   resolveDocAgentCandidates,
+  resolveDocAgentRunCandidates,
   isFailoverError,
   createFailoverClient,
   defaultCreateClient,

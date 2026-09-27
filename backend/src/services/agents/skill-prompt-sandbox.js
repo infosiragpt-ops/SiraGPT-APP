@@ -59,6 +59,17 @@ function sandboxSkillPrompt(raw, opts = {}) {
   };
 }
 
+const SKILL_ERROR_MESSAGE_MAX = 200;
+function redactSkillErrorMessage(error) {
+  const raw = error && typeof error === 'object' ? (error.message || error.code || '') : error;
+  const text = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return text
+    .replace(/\b(sk|xai|gsk|AIza)[-_A-Za-z0-9]{12,}/g, '[redacted]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]{8,}/gi, 'Bearer [redacted]')
+    .slice(0, SKILL_ERROR_MESSAGE_MAX);
+}
+
 function buildSkillRunAuditRecord(record = {}) {
   const errorCode = record.ok === true ? null : classifySkillError(record.error);
   const payload = {
@@ -70,6 +81,9 @@ function buildSkillRunAuditRecord(record = {}) {
     clearance: record.clearance ? String(record.clearance).slice(0, 32) : null,
     policyMode: record.policyMode ? String(record.policyMode).slice(0, 16) : null,
     errorCode,
+    // Why it failed, in one redacted line: prod 2026-09-27 «summarize
+    // ok=false skill_failed» gave nothing to act on.
+    errorMessage: record.ok === true ? null : redactSkillErrorMessage(record.error),
     pluginSkill: record.pluginSkill === true,
   };
   if (Array.isArray(record.hits) && record.hits.length) {

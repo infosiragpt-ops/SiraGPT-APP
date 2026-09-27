@@ -309,6 +309,21 @@ export function isConfigStateFailure(args: {
   return CONFIG_STATE_RE.test(`${args.message || ""} ${JSON.stringify(args.extra || {})}`)
 }
 
+/**
+ * A 400 `validation_failed` (or «User already exists») is the user's own input
+ * on a form, answered with field details the page renders inline. Reporting it
+ * filed every typo as «frontend_error_boundary:/auth/register» in Admin →
+ * Logs (prod 2026-09-27) and hid real failures behind it.
+ */
+function isUserInputValidationFailure(args: {
+  status?: number | null
+  extra?: Record<string, unknown>
+}): boolean {
+  if (Number(args.status) !== 400) return false
+  const code = String(args.extra?.code || "").toLowerCase()
+  return code === "validation_failed" || code.startsWith("auth.") || code === "user already exists"
+}
+
 function isExpectedAuthApiFailure(args: {
   endpoint: string
   method: string
@@ -1052,6 +1067,11 @@ class ApiClient {
   // Refresh-token state — when a 401 fires, we attempt /auth/refresh once
   // and queue concurrent requests until it resolves.
   private _refreshing: Promise<boolean> | null = null;
+  // After a refresh fails, every polling 401 retried it (prod 2026-09-27:
+  // «POST /api/auth/refresh → 403» every ~15 s from one Safari tab). One
+  // failure closes the session and blocks new attempts for a minute.
+  private _refreshBlockedUntil = 0;
+  private readonly REFRESH_FAILURE_COOLDOWN_MS = 60_000;
   private _pendingQueue: Array<{
     resolve: (value: any) => void;
     reject: (err: any) => void;
@@ -1087,6 +1107,7 @@ class ApiClient {
   }): void {
     if (args.endpoint.startsWith("/telemetry")) return
     if (isExpectedAuthApiFailure(args)) return
+    if (isUserInputValidationFailure(args)) return
     if (isExpectedMissingChat(args)) return
     // A stable "not configured" answer (Stripe billing off, ElevenLabs without
     // a key…) is an expected config state, whatever the status — never a
@@ -1433,6 +1454,7 @@ class ApiClient {
     if (this._refreshing) {
       return this._refreshing;
     }
+    if (Date.now() < this._refreshBlockedUntil) return false;
 
     const tryRefreshRequest = async (includeBearer: boolean): Promise<boolean> => {
       const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -1482,8 +1504,13 @@ class ApiClient {
       if (refreshedWithCookie) return true;
 
       // Refresh failed — clear stale localStorage token so the next request
-      // does not keep sending a poisoned Authorization header.
+      // does not keep sending a poisoned Authorization header, and tell the
+      // auth context the session is over so pollers stop instead of retrying.
       this.setToken(null);
+      this._refreshBlockedUntil = Date.now() + this.REFRESH_FAILURE_COOLDOWN_MS;
+      if (typeof window !== 'undefined') {
+        try { window.dispatchEvent(new CustomEvent('siragpt:session-expired')); } catch { /* noop */ }
+      }
       return false;
     })();
 
@@ -1494,6 +1521,7 @@ class ApiClient {
 
   setToken(token: string | null) {
     this.token = token;
+    if (token) this._refreshBlockedUntil = 0;
     if (typeof window !== 'undefined') {
       if (token) {
         localStorage.setItem('auth-token', token);
