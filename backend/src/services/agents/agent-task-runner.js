@@ -2176,8 +2176,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     : await buildUploadedFileContext(prisma, {
       userId: user.id,
       fileIds: files,
-      query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
-      maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
+      // Transcription-to-file wants the whole document, not query-matched
+      // excerpts (the request's words are never in the transcript itself).
+      query: deterministicAttachmentAnswer || transcriptionToFileRequest ? '' : displayGoal || goal,
+      maxChars: deterministicAttachmentAnswer || transcriptionToFileRequest ? 120000 : 36000,
     });
 
   // ── Image-only turns go to VISION ─────────────────────────────────

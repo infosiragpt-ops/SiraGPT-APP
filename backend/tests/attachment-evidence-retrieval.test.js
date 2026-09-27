@@ -165,3 +165,22 @@ test('partial extraction and partial indexing remain visible next to the affecte
   assert.doesNotMatch(blocks[2], /\[Cobertura parcial:/);
   assert.ok(blocks.every((block) => block.includes('9187.42')));
 });
+
+// Prod 2026-09-27: «transcribir en un docuemnto word» on a .md transcript. The
+// retriever searched the file for the request's own words, found nothing,
+// replaced the file with «No se encontró evidencia…» and the runner refused
+// the turn as thin_attachment_context (0 palabras útiles). A transcription
+// asks for the document's text itself — never for query-matched passages.
+test('a transcription request keeps the document text even when no passage matches its words', async () => {
+  const { prisma, reads } = corpus([{ id: 'transcripcion', name: 'Transcripcion_min15-65.md', chunks: [
+    chunk(1, '[00:15:02] Facilitadora: Buenas tardes a todas y todos, retomamos el círculo restaurativo con el acuerdo de escucha activa.'),
+    chunk(2, '[00:21:30] Facilitadora: Registramos dos acuerdos: la disculpa en el círculo y un seguimiento en dos semanas.'),
+  ] }]);
+  for (const query of ['transcribir en un docuemnto word', 'transcribe esto', 'transcríbelo a pdf']) {
+    const context = await buildUploadedFileContext(prisma, { userId: 'owner', fileIds: ['transcripcion'], query, maxChars: 4000 });
+    assert.doesNotMatch(context, /No se encontr[oó] evidencia/i, query);
+    assert.match(context, /círculo restaurativo/, query);
+    assert.match(context, /seguimiento en dos semanas/, query);
+  }
+  assert.equal(reads(), 0, 'transcription never runs the evidence retriever');
+});

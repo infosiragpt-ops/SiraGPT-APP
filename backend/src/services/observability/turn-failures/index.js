@@ -476,6 +476,7 @@ function recordFeedbackFailure({ userId, userEmail, chatId, messageId, reasonCod
 function agentTaskCause(stopped, status, { isMedia = false, partialMedia = false } = {}) {
   if (isMedia) return partialMedia ? 'Transcripción: algunos archivos fallaron' : 'Transcripción: falló';
   const code = String(stopped || '');
+  if (/thin_attachment_context/i.test(code)) return 'Adjunto sin texto útil: la tarea se rechazó sin usar el archivo';
   if (/source_preserving_document_target_not_found/i.test(code)) return 'Editor de documentos: no ubicó el fragmento a editar';
   if (/source_preserving|document_edit/i.test(code)) return 'Editor de documentos: edición no completada';
   if (/agent_runner|runner_failed|llm_402|no_llm/i.test(code)) return 'Agente de documentos: no entregó el archivo';
@@ -510,9 +511,13 @@ function recordAgentTaskFailure(task = {}, status = '') {
     );
     const failedStatus = status === 'error' || status === 'failed';
     const partialMedia = status === 'completed' && /media_batch_(failed|partial)/.test(stopped);
-    if (!failedStatus && !partialMedia) return Promise.resolve({});
+    // The runner "completes" a turn it refused because the attachment read as
+    // empty (thin_attachment_context): the user asked for work on a file and
+    // got a refusal instead — a lost attachment, tracked (prod 2026-09-27).
+    const thinAttachment = status === 'completed' && /thin_attachment_context/.test(stopped);
+    if (!failedStatus && !partialMedia && !thinAttachment) return Promise.resolve({});
     const isMedia = /media_batch|transcri/.test(stopped) && !/document/.test(stopped);
-    const category = 'herramienta_fallida';
+    const category = thinAttachment ? 'adjunto_perdido' : 'herramienta_fallida';
     const meta = classify.CATEGORIES[category];
     const cause = agentTaskCause(stopped, status, { isMedia, partialMedia });
     const classification = {
