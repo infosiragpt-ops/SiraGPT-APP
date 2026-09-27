@@ -1265,8 +1265,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           fileIds: preloopFileIds,
           instruction: userQuery,
           model,
-          // Engines follow the model picked in the composer (first rung of
-          // the runner ladder; failover only on provider errors).
+          // Keep document generation on the model and provider picked in the composer.
           pickedModel: require('./agent-runner').runnerModelSpec(provider, model),
           signal,
           onEvent: (ev) => {
