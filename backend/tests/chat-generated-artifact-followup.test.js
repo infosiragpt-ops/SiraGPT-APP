@@ -12,7 +12,7 @@ process.env.AGENT_ARTIFACT_DIR = artifactDir;
 
 const objectStorage = require('../src/services/object-storage');
 const { saveArtifact, INTERNAL } = require('../src/services/agents/task-tools');
-const { resolveChatGeneratedArtifactFollowup } = require('../src/services/agents/generated-artifact-followup');
+const { resolveChatGeneratedArtifactFollowup, compareGeneratedSavXlsx } = require('../src/services/agents/generated-artifact-followup');
 const { runAgenticChat, isHandledAgenticChatResult } = require('../src/services/agentic-chat-stream');
 const PRODUCTION_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.';
 const MODEL_DRIVEN_READ_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl e informa si ambos son legibles. Si no puedes acceder a uno, dilo explícitamente.';
@@ -169,6 +169,33 @@ test('an explicit SAV/XLSX parity request reads the validated bytes even when th
   assert.match(result.finalAnswer, /sin llamar al modelo seleccionado/);
   assert.doesNotMatch(result.finalAnswer, new RegExp(`${sav.id}|${xlsx.id}|\/app\/uploads\/agent-artifacts`));
   assert.doesNotMatch(result.persistedContent, /grok-4\.7/);
+});
+
+test('the same binary comparison is available to the creation finalization gate', async (t) => {
+  const [sav, xlsx] = artifactPair();
+  const taskTools = require('../src/services/agents/task-tools');
+  const originalExecute = taskTools.INTERNAL.pythonExec.execute;
+  t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
+  taskTools.INTERNAL.pythonExec.execute = async (args, ctx) => {
+    assert.match(args.source, /pyreadstat\.read_sav/);
+    assert.match(args.source, /openpyxl/);
+    assert.equal(ctx.userId, 'owner');
+    assert.equal(ctx.chatId, 'chat-a');
+    assert.deepEqual(ctx.generatedArtifactRefs.map((ref) => ref.id), [sav.id, xlsx.id]);
+    return { ok: true, stdout: JSON.stringify({
+      savRows: 20, savColumns: 20, excelRows: 20, excelColumns: 20,
+      comparedCells: 400, differentCells: 0, labelCount: 20,
+      headersMatch: true, matrixComparable: true, columnsMatchP01P20: true,
+    }) };
+  };
+  const result = await compareGeneratedSavXlsx({
+    refs: [sav, xlsx],
+    goal: 'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
+    userId: 'owner', chatId: 'chat-a', forDeliveryValidation: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.metrics.comparedCells, 400);
+  assert.equal(result.metrics.differentCells, 0);
 });
 
 test('deterministic SAV/XLSX comparison reports a read error instead of inventing parity', async (t) => {
