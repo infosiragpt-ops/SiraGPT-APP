@@ -244,7 +244,9 @@ async function runDocxEngineEdit({
 
   const executors = makeDocxToolExecutors(session, {
     onFinish,
-    onEdit: ({ tool }) => emit({ label: 'Editando el documento', detail: tool }),
+    // Each tool call already has its own stage v2 row (phrase, detail,
+    // status): a second «Editando el documento» row per edit was noise.
+    onEdit: () => {},
   });
   const tools = toOpenAiTools(TOOL_SPECS);
   const userContent = [
