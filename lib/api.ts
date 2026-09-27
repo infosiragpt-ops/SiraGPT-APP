@@ -3559,9 +3559,11 @@ class ApiClient {
     return this.request('/admin/turn-failures/stats')
   }
 
+  // Background poll of the admin-wide listener: a failure is retried on the
+  // next tick and must never raise telemetry of its own.
   async getAdminTurnFailuresRecent(since?: string | null): Promise<AdminTurnFailureRecent> {
     const query = this._cleanParams({ since: since || undefined })
-    return this.request(`/admin/turn-failures/recent${query ? `?${query}` : ''}`)
+    return this.request(`/admin/turn-failures/recent${query ? `?${query}` : ''}`, { suppressFailureLog: true, maxRetries: 0 })
   }
 
   // «Errores del sistema» — backend/frontend errors grouped into issues.
@@ -3585,7 +3587,7 @@ class ApiClient {
 
   async getAdminSystemIssuesRecent(since?: string | null): Promise<AdminSystemIssueRecent> {
     const query = this._cleanParams({ since: since || undefined })
-    return this.request(`/admin/system-issues/recent${query ? `?${query}` : ''}`)
+    return this.request(`/admin/system-issues/recent${query ? `?${query}` : ''}`, { suppressFailureLog: true, maxRetries: 0 })
   }
 
   async getAdminSystemIssue(id: string): Promise<{ item: SystemIssueDetail }> {
