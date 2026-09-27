@@ -432,3 +432,17 @@ test("Luis's exact uppercase/typo follow-up and its paraphrases are admitted as 
     "analiza las observaciones del documento",
   ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
 })
+
+test("SPEC eval prompts are explicit edits; bare highlight requests stay answers", () => {
+  for (const prompt of [
+    "Sube a 15 los ensayos de compresión no confinada y resalta esa celda.",
+    "Parafrasea el párrafo que cita a García (2020) sin tocar la cita.",
+    "Pon en negrita solo «baja capacidad portante».",
+    "Cambia 2024 por 2025 en la portada.",
+    "Mueve la nota 2 mm a la derecha y ponla verde.",
+    "subraya el título", "resáltalo en amarillo", "resalta «baja capacidad portante»",
+  ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), true, prompt)
+  for (const prompt of [
+    "resalta los puntos clave del documento", "destaca las ideas principales del texto", "sube el archivo a drive",
+  ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+})

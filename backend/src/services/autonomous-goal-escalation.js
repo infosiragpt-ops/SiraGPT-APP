@@ -18,7 +18,10 @@ const goalEvents = require('./goal-events');
 const goalQueue = require('./goal-queue');
 
 const EXPLICIT_GOAL_COMMAND_RE = /^\s*\/goal\b|\b(?:modo\s+goal|goal\s+mode)\b/i;
-const LONG_RUNNING_RE = /\b(?:meses?|semanas?|d[ií]as?|horas?|sin\s+detenerse|sin\s+parar|no\s+pares?|background|segundo\s+plano|aunque\s+(?:cierre|salga)|persistente|durable|auto.?ejecut|contin[uú]a(?:r)?|long.?running)\b/i;
+// Explicit long-running intent only. Bare «días», «horas» or «continúa»
+// used to match ordinary questions («¿cuántos días…?», «continúa») and, with
+// a thesis chat's history, pushed every follow-up into a research run.
+const LONG_RUNNING_RE = /\b(?:(?:durante|por|en)\s+(?:(?:\d+|varios|varias|muchos|muchas|unos|unas)\s+)?(?:meses?|semanas?|d[ií]as?|horas?)|todo\s+el\s+d[ií]a|sin\s+detenerse|sin\s+parar|no\s+pares?|background|segundo\s+plano|aunque\s+(?:cierre|salga)|persistente|durable|auto.?ejecut|contin[uú]a(?:r)?\s+(?:trabajando|investigando|hasta)|hasta\s+terminar|long.?running)\b/i;
 const RESEARCH_RE = /\b(?:investiga|investigaci[oó]n|tesis|art[ií]culos?\s+cient[ií]ficos?|doi|scopus|scite|apa\s*7|referencias?|bibliograf[ií]a|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?|marco\s+te[oó]rico|realidad\s+problem[aá]tica)\b/i;
 const VERIFY_RE = /\b(?:verifica|validar|validaci[oó]n|fuentes?\s+reales?|real\s+verificable|no\s+inventes?|citas?\s+reales?|referencias?\s+correctas?|estatus\s+verde|ci\s+verde|green\s+status)\b/i;
 const MULTI_AGENT_RE = /\b(?:agentes?|miles\s+de\s+tareas|muchos\s+hilos|aut[oó]nom[oa]s?|controlar\s+cualquier\s+cosa|planificar|organizar|dirigir|ejecutar|controlar)\b/i;
@@ -49,13 +52,42 @@ function buildAutonomousGoalEscalation({
     return { shouldEscalate: false, score: 0, reasons: ['empty_prompt'], depth: 'quick', agentKind: 'research' };
   }
 
+  // Only the user's own earlier messages give context — never the
+  // assistant's replies, whose words («resultados», «verifica»…) used to
+  // escalate every later message of a thesis chat.
   const historyText = Array.isArray(history)
-    ? history.slice(-8).map((m) => normalizeText(m?.content || m?.text || '')).filter(Boolean).join(' ')
+    ? history
+      .filter((m) => String(m?.role || 'user').toLowerCase() === 'user')
+      .slice(-8)
+      .map((m) => normalizeText(m?.content || m?.text || ''))
+      .filter(Boolean)
+      .join(' ')
     : '';
   const text = `${historyText} ${current}`.trim();
   const hasExplicitGoalCommand = EXPLICIT_GOAL_COMMAND_RE.test(current);
   const reasons = [];
   let score = 0;
+
+  // The CURRENT message must ask for durable/autonomous work itself (an
+  // explicit /goal, long-running language or an OpenClaw autonomy request).
+  // History can add scope to such a request, but can never turn «entiendo»
+  // or «¿cuánto es 2+2?» into a background research run (prod 2026-09-27:
+  // four one-line replies each started a /goal run from history alone).
+  const currentAsksForAutonomy = hasExplicitGoalCommand
+    || LONG_RUNNING_RE.test(current)
+    || OPENCLAW_AUTONOMY_RE.test(current);
+  if (!currentAsksForAutonomy) {
+    const codeTask = Boolean(codeIntent?.isCodeTask) || CODE_RE.test(current);
+    return {
+      shouldEscalate: false,
+      score: 0,
+      reasons: codeTask
+        ? ['current_message_not_autonomous', 'code_task_prefers_codex']
+        : ['current_message_not_autonomous'],
+      depth: 'quick',
+      agentKind: codeTask ? 'codex' : 'research',
+    };
+  }
 
   if (hasExplicitGoalCommand) { score += 4; reasons.push('explicit_goal_command'); }
   if (LONG_RUNNING_RE.test(text)) { score += 3; reasons.push('long_running_language'); }

@@ -288,8 +288,9 @@ const OFFICE_TOOL_DEFINITIONS = [
  *   (motor ausente, salida inválida, timeout, sandbox caído) — las que afectan la respuesta al
  *   usuario. Nunca para errores de la operación que el modelo puede corregir. Fail-open.
  * @param {Function|null} [opts.fallbackRender]  render_preview v1: se usa si el motor no está
- * @param {Function|null} [opts.onVerify]  ({ after, passed, visionOk }) tras cada verify_visual:
- *   el turno sabe si un modelo de visión revisó el resultado (visionOk null = no hubo revisión).
+ * @param {Function|null} [opts.onVerify]  ({ after, passed, visionOk, checksOk, paginationChanged }) tras
+ *   cada verify_visual: el turno sabe si un modelo de visión revisó el resultado (visionOk null = no
+ *   hubo revisión) y las métricas F.2 ven desacuerdos visión/checks y cambios de paginación.
  */
 function makeOfficeToolExecutors(sandbox, {
   visionVerifier = null, attachImages = false, thumbs = false, onFailure = null, fallbackRender = null,
@@ -421,7 +422,15 @@ function makeOfficeToolExecutors(sandbox, {
       text += `\n• Checklist del usuario: ${checklist.map((c, i) => `${i + 1}) ${c}`).join(' ')}`;
       const passed = res.ok === true && visionOk !== false;
       if (typeof onVerify === 'function') {
-        try { onVerify({ after, passed, visionOk }); } catch (_) { /* observer only */ }
+        try {
+          onVerify({
+            after,
+            passed,
+            visionOk,
+            checksOk: res.ok === true,
+            paginationChanged: Boolean(res.visual && res.visual.pagination_changed),
+          });
+        } catch (_) { /* observer only */ }
       }
       text += `\nVEREDICTO: ${passed ? 'VERIFICADO' : 'NO VERIFICADO — corrige lo marcado con ✗ y vuelve a verificar'}`;
       const body = passed ? text : `ERROR: verificación fallida\n${text}`;

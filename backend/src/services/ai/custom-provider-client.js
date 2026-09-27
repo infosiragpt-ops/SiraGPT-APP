@@ -376,8 +376,14 @@ function unwrapStoredKey(stored, decryptFn) {
   if (typeof decrypt !== 'function') return null;
   try {
     return decrypt(stored.slice(KEY_PREFIX.length));
-  } catch (err) {
-    console.error('[custom-provider-client] decrypt failed:', err && err.message);
+  } catch (_err) {
+    // Encrypted with an older server key: a configuration state the admin
+    // fixes by re-saving the key (Admin → Conexiones shows «Clave ilegible»).
+    // Warned once per process, never an ERROR per request.
+    if (!unwrapStoredKey.warned) {
+      unwrapStoredKey.warned = true;
+      console.warn('[custom-provider-client] clave ilegible en una conexión personalizada; vuelve a guardarla en Admin → Conexiones.');
+    }
     return null;
   }
 }

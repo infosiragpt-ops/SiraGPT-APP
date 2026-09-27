@@ -23,6 +23,7 @@ const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
 const { agentThumbsEnabled } = require('./trace');
+const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 
 // Edición milimétrica (Fase C): the before/after image is reviewed by a
 // separate vision model (multimodal/vision-ladder.js). Off under
@@ -77,6 +78,7 @@ const {
   resolveTurnFiles,
   persistOutputs,
   hasConversationArtifacts,
+  sanitizeUploadName,
 } = require('./artifacts');
 const {
   isAsyncEnabled,
@@ -197,6 +199,14 @@ function isImageFile(file) {
   return IMAGE_FILE_RE.test(String(file.name || file.originalName || file.filename || ''));
 }
 
+// «Sube a 15 … y resalta esa celda»: a formatting verb aimed at a concrete
+// spot of the attached file is an edit even without a WORK_RE verb.
+function isHighlightEdit(text) {
+  try {
+    return require('../agents/agentic-trigger').isHighlightEditRequest(text);
+  } catch (_) { return false; }
+}
+
 function shouldRunAgentRunner({
   files = [],
   fileIds = [],
@@ -208,7 +218,7 @@ function shouldRunAgentRunner({
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
   if (isRunnerOnlyDocumentTurn(t)) return true;
-  const work = WORK_RE.test(t);
+  const work = WORK_RE.test(t) || isHighlightEdit(t);
   if ((hasFiles || hasPriorArtifacts) && work) return true;
   return false;
 }
@@ -265,12 +275,6 @@ function createRunnerLlmClient({ onEvent } = {}) {
 function canCallLlm({ client } = {}) {
   if (client) return true;
   return resolveDocAgentCandidates({ model: explicitRunnerModel() }).length > 0;
-}
-
-function sanitizeUploadName(name, index) {
-  const base = String(name || `file-${index + 1}`).split(/[\\/]/).pop();
-  const clean = base.replace(/[^\w.\-() À-ɏ]/g, '_').slice(0, 180);
-  return clean || `file-${index + 1}`;
 }
 
 function resolveOutputEditSource(name, sources) {
@@ -424,6 +428,11 @@ async function runAgentRunner({
       const f = files[i];
       if (!f || !Buffer.isBuffer(f.buffer)) continue;
       const name = sanitizeUploadName(f.name, i);
+      if (names.some((staged) => staged.toLowerCase() === name.toLowerCase())) {
+        const error = new Error(`Hay varios archivos llamados ${name}. Indica cuál deseas editar; no modifiqué ninguno.`);
+        error.code = 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS';
+        throw error;
+      }
       await sandbox.putFile(`uploads/${name}`, f.buffer);
       names.push(name);
       if (f.isPriorArtifact) priorNames.push(name);
@@ -461,6 +470,7 @@ async function runAgentRunner({
     ];
 
     let lastVerify = null;
+    const verifies = [];
     const executors = {
       ...makeToolExecutors(sandbox, {
         office: {
@@ -472,7 +482,7 @@ async function runAgentRunner({
           attachImages: loopSeesImages(),
           // Stage v2 thumbnails (render / verify) for the timeline.
           thumbs: agentThumbsEnabled(),
-          onVerify: (v) => { lastVerify = v; },
+          onVerify: (v) => { lastVerify = v; verifies.push(v); recordVerify(v); },
         },
       }),
       ...f8.executors,
@@ -653,6 +663,8 @@ async function runAgentRunner({
       const verifyFailure = verificationFailureFromSteps(result && result.steps);
       if (verifyFailure) reportOfficeFailure(verifyFailure);
     } catch (_) { /* reporting never breaks a turn */ }
+    // F.2 metrics + one [office-edit] line per document turn.
+    recordOfficeTurn({ steps: result && result.steps, stoppedReason: result && result.stoppedReason, verifies, chatId });
     if (result && result.stoppedReason === 'final') {
       result = { ...result, finalText: withVisionHonesty(result.finalText, lastVerify) };
     }

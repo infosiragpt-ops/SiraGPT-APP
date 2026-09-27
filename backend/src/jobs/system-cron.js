@@ -702,7 +702,13 @@ function start(opts = {}) {
         // eslint-disable-next-line global-require
         const store = require('../services/observability/turn-failures').getStore();
         const res = await store.sweepExpired();
-        logger.info?.(`[system-cron] sweep-turn-failures done: ${JSON.stringify(res)}`);
+        // Same retention pass for «Errores del sistema» (issues silent for
+        // SIRAGPT_SYSTEM_ISSUE_RETENTION_DAYS, alert rows after 7 days).
+        // eslint-disable-next-line global-require
+        const issues = await require('../services/observability/system-errors').getStore().sweepExpired({
+          retentionDays: Number(process.env.SIRAGPT_SYSTEM_ISSUE_RETENTION_DAYS) || 30,
+        }).catch((err) => ({ error: err && err.message }));
+        logger.info?.(`[system-cron] sweep-turn-failures done: ${JSON.stringify({ ...res, systemIssues: issues })}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-turn-failures failed: ${err && err.message}`);

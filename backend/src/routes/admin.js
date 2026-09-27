@@ -2759,6 +2759,85 @@ router.get('/logs/live', adminLiveLogs.live);
 router.get('/logs/search', adminLiveLogs.search);
 router.get('/logs/request/:reqId', adminLiveLogs.request);
 
+// ── System issues (Admin → Logs → «Errores del sistema») ──────────────
+// Backend / frontend errors grouped by fingerprint (Sentry-like): status
+// nuevo → en revisión → resuelto / ignorado; a resolved issue that recurs is
+// reopened as a regression. `recent` feeds the admin-wide listener (sound +
+// badge) with NEW issues and regressions only.
+function systemIssueListParams(req) {
+  return {
+    status: req.query.status || 'abiertos',
+    kind: req.query.kind || null,
+    q: req.query.q || null,
+    from: req.query.from || null,
+    to: req.query.to || null,
+    sort: req.query.sort || 'recientes',
+    page: req.query.page,
+    limit: req.query.limit,
+  };
+}
+
+router.get('/system-issues', async (req, res) => {
+  try {
+    const store = require('../services/observability/system-errors').getStore();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await store.list(systemIssueListParams(req)));
+  } catch (err) {
+    console.error('[admin/system-issues] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'No se pudieron cargar los errores del sistema' });
+  }
+});
+
+router.get('/system-issues/stats', async (_req, res) => {
+  try {
+    const store = require('../services/observability/system-errors').getStore();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await store.stats());
+  } catch (err) {
+    console.error('[admin/system-issues/stats] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'No se pudieron calcular los errores del sistema' });
+  }
+});
+
+router.get('/system-issues/recent', async (req, res) => {
+  try {
+    const store = require('../services/observability/system-errors').getStore();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await store.recent({ since: req.query.since || null }));
+  } catch (err) {
+    console.error('[admin/system-issues/recent] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'No se pudieron consultar los errores nuevos' });
+  }
+});
+
+router.get('/system-issues/:id', async (req, res) => {
+  try {
+    const store = require('../services/observability/system-errors').getStore();
+    const item = await store.get(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Error no encontrado' });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ item });
+  } catch (err) {
+    console.error('[admin/system-issues/:id] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'No se pudo leer el error' });
+  }
+});
+
+router.patch('/system-issues/:id', async (req, res) => {
+  try {
+    const status = String((req.body && req.body.status) || '');
+    const store = require('../services/observability/system-errors').getStore();
+    const actor = req.user ? { id: req.user.id, email: req.user.email, name: req.user.name } : {};
+    const item = await store.setStatus(req.params.id, status, actor);
+    if (!item) return res.status(404).json({ error: 'Error no encontrado' });
+    res.json({ item });
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ error: err.message });
+    console.error('[admin/system-issues/:id PATCH] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'No se pudo cambiar el estado' });
+  }
+});
+
 async function runAuditLogQuery(req) {
   const { query: auditQuery } = require('../services/audit-query');
   let q = auditQuery(prisma);

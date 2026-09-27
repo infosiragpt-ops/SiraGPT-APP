@@ -141,3 +141,18 @@ test('typo / caps / accent tolerant edit detection (Luis prod message + paraphra
     assert.equal(isFuzzyDocumentEditRequest(prompt), false, prompt);
   }
 });
+
+test('the SPEC eval prompts route as edits; bare highlight/paraphrase questions do not', () => {
+  const { isDocumentEditRequest, isHighlightEditRequest } = require('../src/services/agents/agentic-trigger');
+  for (const prompt of [
+    'Sube a 15 los ensayos de compresión no confinada y resalta esa celda.',
+    'Parafrasea el párrafo que cita a García (2020) sin tocar la cita.',
+    'subraya el título', 'resáltalo en amarillo', 'resalta «baja capacidad portante»',
+    'Cambia 2024 por 2025 en la portada.',
+  ]) assert.equal(isDocumentEditRequest(prompt), true, prompt);
+  assert.equal(isHighlightEditRequest('resalta los puntos clave del documento'), false);
+  for (const prompt of [
+    'resalta los puntos clave del documento', 'destaca las ideas principales del texto',
+    'sube el archivo a drive', 'hazme una portada para mi libro',
+  ]) assert.equal(isDocumentEditRequest(prompt), false, prompt);
+});

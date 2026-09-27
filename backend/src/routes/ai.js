@@ -5900,7 +5900,19 @@ router.post(
                 generateLog.info('rlcd.media_refined_by_jev', { action: __refined.action, kind: __refined.kind, raw: __refined.raw, calibrated: __refined.calibrated, jevTool: __refined.jev && __refined.jev.tool, latencyMs: __refined.jev && __refined.jev.latencyMs });
               }
             } catch (_) { /* advisory */ }
-            if (req._rlcdMedia.ask && req._rlcdMedia.question && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
+            // An attached document plus an edit instruction («Cambia 2024 por
+            // 2025 en la portada.») is an edit of that file: the media
+            // question must not pre-empt the document editor.
+            let __documentEditTurn = false;
+            try {
+              __documentEditTurn = (typeof processedFiles !== 'undefined' && Array.isArray(processedFiles))
+                && processedFiles.some((file) => file && !isImageMime(file.mimeType || file.type))
+                && require('../services/agents/agentic-trigger').isDocumentEditRequest(prompt);
+            } catch (_) { __documentEditTurn = false; }
+            if (__documentEditTurn && req._rlcdMedia.ask) {
+              generateLog.info('rlcd.media_ask_skipped', { reason: 'document_edit_turn' });
+            }
+            if (!__documentEditTurn && req._rlcdMedia.ask && req._rlcdMedia.question && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
               intentTriageDecision = { action: 'ask', question: req._rlcdMedia.question, reason: 'rlcd_media_uncertain', source: 'rlcd_media', score: 1 - (req._rlcdMedia.calibrated || 0) };
             }
             if (req._rlcdMedia.kind) {

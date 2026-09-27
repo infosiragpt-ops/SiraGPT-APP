@@ -576,6 +576,30 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 
 ---
 
+## Edición milimétrica de Office (AgentRunner)
+
+Motor `sira_office.py` en el sandbox + tools `inspect_document` / `office_edit` /
+`render_preview` v2 / `verify_visual`, revisión con visión, gate de
+verificación v2, timeline con miniaturas. Spec:
+`docs/specs/edicion-milimetrica/SPEC.md`. Métricas F.2 en `/metrics`
+(`office_verify_total`, `office_verify_attempts_per_turn`,
+`office_pagination_changed_total`, `office_vision_disagreement_total`,
+`office_tool_latency_ms`) + una línea `[office-edit]` por turno. Evals de los 10
+escenarios contra la ruta real: `node scripts/run-office-evals.js --user <id>
+--fixtures <dir>` (dentro del contenedor del backend).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_OFFICE_ENGINE` | `1` | `0` = comportamiento previo a la Fase B: sin tools de oficina, render v1, gate de verificación anterior |
+| `SIRAGPT_OFFICE_ENGINE_TIMEOUT_MS` | `170000` | Tope por llamada al motor (mín. 10 s, máx. 600 s) |
+| `SIRAGPT_VISUAL_VERIFY_VISION` | `1` (off en `NODE_ENV=test`) | Revisión del antes/después con un modelo de visión |
+| `SIRAGPT_VISION_VERIFY_MODEL` | escalera | Fuerza el modelo de visión (`Proveedor:modelo` o id). Sin él: el modelo elegido si ve imágenes → `deepseek-flash` → `grok-4.6` → `gemini-3.5-flash` / `gemini-3-flash-preview` → `gpt-5.6-sol`; un 400/404/415/422 degrada 6 h |
+| `SIRAGPT_DEEPSEEK_VISION_MODEL` / `SIRAGPT_XAI_VISION_MODEL` / `SIRAGPT_GEMINI_VISION_MODEL` / `SIRAGPT_OPENAI_VISION_MODEL` | ver arriba | Modelo de visión por proveedor en la escalera |
+| `SIRAGPT_AGENT_VISION_IN_LOOP` | `0` | `1` adjunta las imágenes al loop (solo si el modelo del loop tiene visión); se conservan las 2 últimas |
+| `SIRAGPT_AGENT_THUMBS` | `1` (off en `NODE_ENV=test`) | Miniaturas (≤2 por paso, ≤80 KB) en el SSE del timeline |
+| `SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS` | `60000` | Presupuesto de compactación del loop (8000–120000); el pedido y el último mapa del documento se restauran tras compactar |
+| `SIRAGPT_AGENT_RUNNER_MAX_TOKENS` | `8192` en turnos de documentos | Salida por llamada al modelo |
+
 ## Chat attachments — any format (optional)
 
 Every file type is accepted in the `/agentes` composer. Defaults need no configuration.
@@ -607,6 +631,30 @@ Normal turns write nothing. All defaults are safe for production.
 | `SIRAGPT_TURN_FAILURE_RATE_LIMIT` | `30` | Max new rows per identical cause per minute (floods are counted, not stored) |
 | `SIRAGPT_TURN_SIN_CIERRE_MS` | `600000` | A turn with no activity and no finalize for this long is recorded as «Turno sin cerrar» |
 | `SYSTEM_CRON_TURN_FAILURE_SWEEP_SCHEDULE` | `50 4 * * *` | Retention sweep schedule (UTC) |
+
+### Errores del sistema (Admin → Logs → «Errores del sistema»)
+
+Backend / frontend errors of siragpt.com grouped into issues by fingerprint
+(`backend/src/services/observability/system-errors/`, AuditLog rows
+`system_issue`, `system_issue_alert`, `system_issue_status`; no migration).
+Captures `console.error` (and provider/Redis/Prisma/queue `console.warn`),
+uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIRAGPT_SYSTEM_ERRORS` | on (off under `NODE_ENV=test`) | `0` disables capture (the page then stays empty) |
+| `SIRAGPT_SYSTEM_ERRORS_FLUSH_MS` | `5000` | How often captured events are grouped and written |
+| `SIRAGPT_SYSTEM_ISSUE_RETENTION_DAYS` | `30` | Issues silent for this long are deleted by the `sweep-turn-failures` cron; alert rows after 7 days |
+| `SIRAGPT_ENVIRONMENT` | `NODE_ENV` | Environment label stored on every sample |
+
+### Stale-run watchdog (`backend/src/jobs/stale-run-watchdog.js`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `STALE_RUN_WATCHDOG_DISABLED` | off | `1` turns the scan off |
+| `STALE_RUN_WARN_MINUTES` / `STALE_RUN_CRITICAL_MINUTES` | `15` / `45` | Silence before a non-terminal run alerts (warn / critical) — once per run and severity, persisted in AuditLog (`stale_run_alerted`) |
+| `STALE_RUN_ALERT_COOLDOWN_MINUTES` | `30` | In-memory cooldown between sweeps (first-level cache) |
+| `STALE_RUN_ABANDON_HOURS` | `24` | A live run (agent task `queued`/`running`, codex run `running`/`waiting_approval`) silent this long is closed as «abandonado» (agent task → `failed`; codex plan awaiting approval → `cancelled`; codex run → `error`, reason in `error`), recorded once (`stale_run_abandoned`), never alerted again. Terminal rows (`completed`/`failed`/`cancelled`/`error`/`done`) are never scanned. `0` never closes |
 
 ## Billing failover and provider keys (optional)
 
