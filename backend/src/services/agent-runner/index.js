@@ -198,6 +198,14 @@ function isImageFile(file) {
   return IMAGE_FILE_RE.test(String(file.name || file.originalName || file.filename || ''));
 }
 
+// «Sube a 15 … y resalta esa celda»: a formatting verb aimed at a concrete
+// spot of the attached file is an edit even without a WORK_RE verb.
+function isHighlightEdit(text) {
+  try {
+    return require('../agents/agentic-trigger').isHighlightEditRequest(text);
+  } catch (_) { return false; }
+}
+
 function shouldRunAgentRunner({
   files = [],
   fileIds = [],
@@ -209,7 +217,7 @@ function shouldRunAgentRunner({
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
   if (isRunnerOnlyDocumentTurn(t)) return true;
-  const work = WORK_RE.test(t);
+  const work = WORK_RE.test(t) || isHighlightEdit(t);
   if ((hasFiles || hasPriorArtifacts) && work) return true;
   return false;
 }

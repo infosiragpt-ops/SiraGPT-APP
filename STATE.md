@@ -53,7 +53,8 @@ orquestador live de #484 se conservó.
   software… déjalo listo en producción»; «todo esto quiero que pueda hacer
   nuestro software de siragpt.com»). Extiende el contrato de F1
   (`render_preview` y la regla de verificación); no reabre F7.
-- **Orden:** A → B → C → D → E → F, una fase por PR, cada una con su gate.
+- **Orden:** A → B → C → D → E → F → G, una fase por PR, cada una con su gate
+  (G: el editor de documentos del chat pasa al mismo motor, verificación y timeline).
 - **Ajustes vigentes sobre el SPEC** (mandan las reglas y decisiones más nuevas):
   la regla «solo DeepSeek» quedó superada — los motores siguen al modelo elegido
   en el composer y la revisión con visión usa una escalera de proveedores con
@@ -65,9 +66,10 @@ orquestador live de #484 se conservó.
 | A | Motor `sira_office.py` en el sandbox + imagen con poppler y fuentes métricas + pruebas Python en CI | **COMPLETED** — PR #813 (`f7b85ba6`), en siragpt.com. CI shard 1: 34/34 pruebas Python con LibreOffice real. `siragpt-doc-sandbox:latest` reconstruida en la Lenovo (anterior: `:rollback-20260926`); contenedor nuevo: Calibri→Carlito, Times→Liberation Serif, Arial→Liberation Sans, pdftoppm 24.02, SMOKE PASS. Prueba en producción por el driver remoto real: «Lima, 2024→2025» → verify OK, 1 zona de 2×3 mm, 16 partes idénticas |
 | B | Tools del runner (`inspect_document`, `office_edit`, `render_preview` v2, `verify_visual`) + `description` + `callId` | **COMPLETED** — PR #817 (`93ee3919`), en siragpt.com. Prueba en producción dentro de `iliagpt-backend` con el sandbox remoto real: las 4 tools expuestas; `inspect_document` ubica «Lima, 2024» (párrafo 8, run rojo C00000) en 0,6 s; `office_edit` escribe `outputs/tesis-editado.docx` en 0,8 s (solo `word/document.xml`); `verify_visual` → VERIFICADO en 5,0 s (1 zona, x 113–115 mm, y 148–151 mm; 16 partes idénticas; 2 → 2 páginas); `render_preview` v2 en 2,4 s; cero fallas de infraestructura. Turno real del runner con la escalera de modelos: inspect → office_edit «Cambiar año 2024 por 2025 en la portada» → verify_visual OK, con la frase del modelo en el timeline |
 | C | Revisión con visión + gate de verificación v2 + contexto que no pierde el pedido | **COMPLETED** — PR #821 (`657d41d7`), en siragpt.com. Escalera de visión en producción: `deepseek-flash` → `grok-4.6` → `gemini-3.5-flash` → `gemini-3-flash-preview` → `gpt-5.6-sol`. `verify_visual` con veredicto real: checklist correcta → visión ✓ y VERIFICADO (8,4 s); checklist falsa («título en azul») → visión ✗ («el título sigue en negro», y señaló el cambio fuera de la lista) → NO VERIFICADO. Turno real del runner bajo gate v2: inspect → office_edit «Cambiando año 2024→2025 y título a azul oscuro» → verify_visual ✓ → respuesta con la lista de cambios, 1 archivo, 42 s |
-| D | Eventos SSE enriquecidos (stage v2) + miniaturas + persistencia del trace | **MERGED** — PR #826 (`038db0f4`); la evidencia de producción va en el PR siguiente |
+| D | Eventos SSE enriquecidos (stage v2) + miniaturas + persistencia del trace | **COMPLETED** — PR #826 (`038db0f4`), en siragpt.com. Turno real de chat (`/api/ai/generate` con Word adjunto) en 46 s: filas stage v2 `list_files` → `inspect_document` → `office_edit` → `verify_visual`, cada una con `callId`, `kind`, `status` y la frase del modelo; miniatura (8 KB) en el resultado de `verify_visual`; trace persistido en `messages.agent_metadata` (`agent_runner_trace` v2, 16 eventos, `durationMs` 40 451, sin base64); la miniatura se sirve como artefacto del dueño (`/api/agent/artifact/<id>`: 200 image/jpeg con sesión, 401 sin sesión); respuesta «Listo… VERIFICADO». Hallazgo de la prueba: con un Word adjunto, «Cambia 2024 por 2025 en la portada.» recibía la pregunta de RLCD «¿Quieres que genere una imagen…?» — corregido en F |
 | E | Timeline en el chat (UI, aprobada) | **IN_PROGRESS** (este PR) |
-| F | Evals (10 escenarios), métricas y flags | pendiente |
+| F | Evals (10 escenarios), métricas y flags + admisión de los pedidos de los escenarios | **IN_PROGRESS** (este PR) |
+| G | El editor de documentos del chat en el mismo motor, verificación y timeline | pendiente |
 
 ---
 

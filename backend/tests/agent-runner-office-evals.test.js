@@ -133,3 +133,23 @@ test('graders FAIL plausible wrong edits (they never trust the agent)', { skip: 
     await sandbox.destroy();
   }
 });
+
+test('every SPEC scenario prompt reaches an edit path on /generate (never a media question)', () => {
+  const agentRunner = require('../src/services/agent-runner');
+  const { isDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
+  for (const scenario of SCENARIOS) {
+    const files = [{ name: scenario.fixture }];
+    const claimed = agentRunner.shouldRunAgentRunner({ files, text: scenario.prompt });
+    assert.ok(claimed || isDocumentEditRequest(scenario.prompt), `${scenario.id}: «${scenario.prompt}» no llega a ningún editor`);
+  }
+  // Highlight verbs alone stay answers; a concrete spot makes them edits.
+  const docx = [{ name: 'tesis.docx' }];
+  assert.equal(agentRunner.shouldRunAgentRunner({ files: docx, text: 'resalta los puntos clave del documento' }), false);
+  assert.equal(agentRunner.shouldRunAgentRunner({ files: docx, text: 'subraya el título en amarillo' }), true);
+  // «Cambia 2024 por 2025 en la portada.» with a Word attached was answered
+  // with «¿Quieres que genere una imagen…?»: the RLCD media question now
+  // yields to a document edit turn.
+  const ai = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
+  assert.match(ai, /__documentEditTurn = \(typeof processedFiles !== 'undefined'[\s\S]{0,200}isDocumentEditRequest\(prompt\)/);
+  assert.match(ai, /if \(!__documentEditTurn && req\._rlcdMedia\.ask && req\._rlcdMedia\.question/);
+});
