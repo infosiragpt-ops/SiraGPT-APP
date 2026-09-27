@@ -187,7 +187,10 @@ async function pickFailoverModel({
   try {
     rows = await db.aiModel.findMany({
       where: { isActive: true, type: { in: ['TEXT', 'IMAGE'] } },
-      select: { name: true, displayName: true, provider: true, type: true, description: true },
+      // curateVisibleTextModels keeps only rows with isActive === true — the
+      // same select as GET /api/ai/models, or every row is dropped (live bug
+      // 2026-09-27: 18 active rows → 0 candidates → no failover).
+      select: { id: true, name: true, displayName: true, provider: true, type: true, description: true, isActive: true },
       orderBy: { createdAt: 'asc' },
     });
   } catch (_) {
