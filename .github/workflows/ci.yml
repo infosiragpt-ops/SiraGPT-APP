@@ -980,7 +980,13 @@ jobs:
         env:
           NODE_ENV: production
           NODE_OPTIONS: --max-old-space-size=6144
-        run: npx next build --no-lint
+        # `npm run build`/`npm run dev` run the prebuild/predev hook that copies
+        # the Monaco editor into public/code-editor; `npx next build` skips npm
+        # lifecycle hooks, so run it explicitly (the code workspace specs need it).
+        run: |
+          set -euo pipefail
+          node scripts/prepare-code-editor.cjs
+          npx next build --no-lint
 
       - name: Start the production server and run critical-path e2e (hard gate)
         env:
