@@ -389,6 +389,16 @@ function __setTerminalNotifier(fn) {
 }
 
 function notifyTerminalObservation(task, status) {
+  // Turn failure tracker: a failed agent task (or a transcription batch with
+  // failed files) is a failed user turn for Admin → Logs. Fire-and-forget,
+  // off in tests unless SIRAGPT_TURN_FAILURES=1.
+  try {
+    // eslint-disable-next-line global-require
+    const turnFailures = require('../observability/turn-failures');
+    if (turnFailures.enabled()) {
+      Promise.resolve().then(() => turnFailures.recordAgentTaskFailure(task, status)).catch(() => {});
+    }
+  } catch (_) { /* advisory */ }
   try {
     terminalNotifier({ task, status, env: process.env });
   } catch (err) {

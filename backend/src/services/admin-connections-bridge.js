@@ -297,16 +297,16 @@ async function applyCustomConnectionEnv() {
 
 async function probeKey(providerKey, apiKey) {
   const spec = PROVIDER_PROBE[providerKey];
-  if (!spec || !apiKey) return false;
+  if (!spec || !apiKey) return { ok: false, status: 0, error: 'missing_api_key' };
   try {
     const res = await fetch(spec.url, {
       method: 'GET',
       headers: { Accept: 'application/json', ...spec.auth(apiKey) },
       signal: AbortSignal.timeout(8000),
     });
-    return res.ok;
-  } catch {
-    return false;
+    return { ok: res.ok, status: res.status, error: res.ok ? null : `HTTP ${res.status}` };
+  } catch (err) {
+    return { ok: false, status: 0, error: String(err?.message || err || 'probe failed') };
   }
 }
 
@@ -321,6 +321,7 @@ async function probeKey(providerKey, apiKey) {
  */
 async function reconcileCatalog() {
   const prisma = require('../config/database');
+  const { describeConnectionProbeFailure } = require('./connection-probe-reason');
   const results = {};
   for (const [providerKey, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
     const key = [envVar, ...(PROVIDER_ENV_ALIASES[providerKey] || [])]
@@ -336,7 +337,8 @@ async function reconcileCatalog() {
       results[providerKey] = { healthy: true, reason: 'unprobed' };
       continue;
     }
-    results[providerKey] = { healthy: await probeKey(providerKey, key), reason: 'probed' };
+    const probe = await probeKey(providerKey, key);
+    results[providerKey] = { healthy: probe.ok, reason: 'probed', status: probe.status, error: probe.error };
   }
 
   // Mirror to admin_connections rows so the panel sees the health.
@@ -349,7 +351,9 @@ async function reconcileCatalog() {
       data: {
         lastSyncedAt: new Date(),
         lastSyncOk: !!r.healthy,
-        lastSyncError: r.healthy ? null : (r.reason === 'no_key' ? 'no key configured' : 'upstream probe failed'),
+        lastSyncError: r.healthy ? null : (r.reason === 'no_key'
+          ? 'Sin API key configurada.'
+          : describeConnectionProbeFailure({ providerKey: c.providerKey, status: r.status, error: r.error }).slice(0, 240)),
       },
     }).catch(() => {});
   }

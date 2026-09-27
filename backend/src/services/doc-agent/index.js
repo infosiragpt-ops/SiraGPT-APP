@@ -22,6 +22,7 @@ const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
 const { buildDocAgentSystemPrompt } = require('./skills');
 const { runDocAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
 const { validateEditedFile, MAX_ATTEMPTS } = require('./validate');
+const { validateEditedPdf } = require('./pdf-output-validation');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { resolveDocAgentCandidates, createFailoverClient } = require('./llm-runtime');
 
@@ -235,7 +236,7 @@ async function runDocumentAgent({
     // Single-file baseline for the milimetric diff (multi-file: no baseline).
     const baseline = files.length === 1 && Buffer.isBuffer(files[0].buffer) ? files[0].buffer : null;
 
-    const reviewOutputs = (outs) => {
+    const reviewOutputs = async (outs) => {
       // An output byte-identical to an input is a copy, not an edit — a flaky
       // model sometimes repacks the file without applying any change.
       for (const out of outs) {
@@ -250,6 +251,17 @@ async function runDocumentAgent({
       for (const out of outs) {
         if (out.valid === false) continue;
         const ext = String(out.name).split('.').pop().toLowerCase();
+        if (ext === 'pdf') {
+          const sourcePdf = files.length === 1 && /\.pdf$/i.test(String(files[0]?.name || ''))
+            ? files[0].buffer : null;
+          const verdict = await validateEditedPdf({ originalBuffer: sourcePdf,
+            editedBuffer: out.buffer, instruction: task });
+          if (!verdict.ok) {
+            out.valid = false;
+            onEvent({ type: 'output_invalid', name: out.name, reason: verdict.reason });
+          }
+          continue;
+        }
         if (!['docx', 'xlsx', 'pptx'].includes(ext)) continue;
         const verdict = validateEditedFile({ originalBuffer: baseline, editedBuffer: out.buffer, instruction: task });
         if (!verdict.ok) {
@@ -261,7 +273,7 @@ async function runDocumentAgent({
         if (verdict.diff) out.changeReport = { changed: verdict.diff.changed, added: verdict.diff.added };
       }
     };
-    reviewOutputs(outputs);
+    await reviewOutputs(outputs);
 
     // Rollback retries: discard, restart from the pristine copy and retry with
     // the error as context (max 3 attempts total). Same sandbox — uploads are
@@ -298,7 +310,7 @@ async function runDocumentAgent({
       onEvent({ type: 'phase', phase: 'validate', attempt });
       outputs = await collectValidOutputs(sandbox, onEvent);
       throwIfAborted(abortScope.signal);
-      reviewOutputs(outputs);
+      await reviewOutputs(outputs);
     }
 
     throwIfAborted(abortScope.signal);

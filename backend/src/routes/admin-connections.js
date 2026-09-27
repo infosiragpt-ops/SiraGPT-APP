@@ -20,6 +20,7 @@ const { encrypt, decrypt } = require('../utils/encryption');
 const { applyAdminConnections, reconcileCatalog } = require('../services/admin-connections-bridge');
 const modelSyncService = require('../services/model-sync-service');
 const { invalidate: invalidateResponseCache } = require('../middleware/response-cache');
+const { describeConnectionProbeFailure, redactProbeDetail } = require('../services/connection-probe-reason');
 
 const router = express.Router();
 router.use(authenticateToken, requireAdminRoutePermission);
@@ -65,7 +66,12 @@ async function discoverConnectionModels(connId) {
       data: {
         lastSyncedAt: new Date(),
         lastSyncOk: !!result.ok,
-        lastSyncError: result.ok ? null : String(result.error || 'discovery failed').slice(0, 240),
+        lastSyncError: result.ok ? null : describeConnectionProbeFailure({
+          providerKey: conn.providerKey,
+          providerLabel: conn.providerLabel,
+          status: result.status,
+          error: result.error,
+        }).slice(0, 240),
       },
     }).catch(() => {});
 
@@ -354,6 +360,9 @@ router.post('/health-check', async (req, res) => {
 // ─── POST /api/admin/connections/:id/test ───────────────────────────
 // Calls the upstream /models endpoint and stores the success/failure
 // on the row. Returns the model list so the UI can preview.
+// The provider rejecting the key / out of credits / unreachable is the
+// ANSWER to the test, not a server fault: 200 `{ ok:false, reason }` with a
+// Spanish sentence the panel shows as-is. Only our own faults are 5xx.
 router.post('/:id/test', async (req, res) => {
   let conn;
   try {
@@ -373,17 +382,29 @@ router.post('/:id/test', async (req, res) => {
       apiKey: decryptKey(conn.apiKey),
     });
 
+    const reason = result.ok ? null : describeConnectionProbeFailure({
+      providerKey: conn.providerKey,
+      providerLabel: conn.providerLabel,
+      status: result.status,
+      error: result.error,
+    });
+
     await prisma.adminConnection.update({
       where: { id: conn.id },
       data: {
         lastSyncedAt: new Date(),
         lastSyncOk: !!result.ok,
-        lastSyncError: result.ok ? null : String(result.error || 'probe failed').slice(0, 240),
+        lastSyncError: result.ok ? null : reason.slice(0, 240),
       },
     }).catch(() => {});
 
     if (!result.ok) {
-      return res.status(502).json({ ok: false, status: result.status || 0, error: String(result.error || 'probe failed').slice(0, 400) });
+      return res.json({
+        ok: false,
+        status: result.status || 0,
+        reason,
+        error: redactProbeDetail(result.error || 'probe failed'),
+      });
     }
 
     if (result.created || result.updated) invalidateResponseCache({ namespace: 'ai-models' });

@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
+import { connectionTestFailureMessage } from "@/lib/admin/connection-test-message"
 
 const KNOWN_URLS = [
   "https://api.fal.ai/v1",
@@ -293,7 +294,7 @@ export default function AdminConnectionsPage() {
       const r: any = await apiClient.testAdminConnection(c.id)
       toast.dismiss(t)
       if (r?.ok) toast.success(`OK — ${r.count} modelo(s) disponibles`)
-      else toast.error(`Falló: ${r?.error || `HTTP ${r?.status}`}`)
+      else toast.error(connectionTestFailureMessage(r))
       load()
     } catch (e: any) {
       toast.dismiss(t)
@@ -440,6 +441,11 @@ export default function AdminConnectionsPage() {
                             <Badge variant="outline" className="text-[10px] py-0">{c.modelIds.length} modelo(s)</Badge>
                           )}
                         </div>
+                        {c.lastSyncedAt && !c.lastSyncOk && c.lastSyncError && (
+                          <p data-testid="connection-last-error" className="mt-1 truncate text-[11px] text-red-600" title={c.lastSyncError}>
+                            {c.lastSyncError}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Button variant="ghost" size="sm" onClick={() => testConn(c)} title="Probar /models">
@@ -598,7 +604,11 @@ function ConnectionDialog({
         try {
           const syncResult: any = await apiClient.testAdminConnection(savedConnection.id)
           toast.dismiss(t)
-          toast.success(`Conexión guardada. ${syncResult?.imported ?? syncResult?.count ?? 0} modelo(s) sincronizado(s) como inactivos.`)
+          if (syncResult?.ok === false) {
+            toast.warning(`Conexión guardada, pero la prueba falló: ${connectionTestFailureMessage(syncResult)}`)
+          } else {
+            toast.success(`Conexión guardada. ${syncResult?.imported ?? syncResult?.count ?? 0} modelo(s) sincronizado(s) como inactivos.`)
+          }
         } catch (syncError: any) {
           toast.dismiss(t)
           toast.warning(`Conexión guardada, pero no se pudieron sincronizar modelos: ${syncError?.message || syncError}`)

@@ -953,6 +953,18 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           : reason.startsWith('project_')
             ? 'project_clone_repo'
             : 'document_edit';
+      // Turn failure tracker: an honest failure answer is still a failed
+      // turn for the admin log (the user did not get the edit/preview).
+      if (/(_failed|_error)$/.test(reason)) {
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: reason.startsWith('agent_runner') ? 'agent_runner' : preloopTool,
+            reason,
+            fatal: true,
+            message: finalAnswer.slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
+      }
       return {
         finalAnswer,
         persistedContent: buildPersistedContent({
@@ -1984,6 +1996,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* res may be a stub in tests */ }
     function onEvent(evt) {
       if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
+      // Image / video / music / voice tools that fail (or deliver a 0-byte
+      // file) inside this turn → «Fallos de respuesta» (advisory, never throws).
+      require('./observability/turn-failures').observeGenerationToolEvent(evt, toolContext);
       try {
         if (!evt || evt.type !== 'file_artifact' || !evt.artifact || !evt.artifact.downloadUrl) return;
         const a = evt.artifact;

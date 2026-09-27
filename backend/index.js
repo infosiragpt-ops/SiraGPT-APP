@@ -1017,6 +1017,11 @@ app.use(otelRequestContextMiddleware);
 // observation per response.
 const { redMetricsMiddleware } = require('./src/middleware/red-metrics');
 app.use(redMetricsMiddleware);
+// Turn failure tracker: a user-facing endpoint answering 5xx (or a
+// recordable 4xx such as 402/413/429-provider) lands in Admin → Logs →
+// «Fallos de respuesta». Turn routes that classify themselves (/generate,
+// /document-edit, /doc/generate) are skipped via req._turnTap.
+app.use(require('./src/services/observability/turn-failures').httpFailureMiddleware());
 
 // SLO tracker — records per-endpoint counters used by /metrics. Must
 // run after request-id/otel context (set above) so the matched route

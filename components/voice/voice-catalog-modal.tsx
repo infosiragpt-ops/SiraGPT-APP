@@ -238,7 +238,9 @@ export default function VoiceCatalogModal({
   stability,
   onStabilityChange,
 }: VoiceCatalogModalProps) {
-  const { voices, loading } = useVoices()
+  // The modal is always mounted next to the composer; only ask for the
+  // catalog once it is actually opened.
+  const { voices, loading, configured } = useVoices({ enabled: open })
   const [query, setQuery] = React.useState("")
   const [genderFilter, setGenderFilter] = React.useState("all")
   const [categoryFilter, setCategoryFilter] = React.useState("all")
@@ -367,6 +369,11 @@ export default function VoiceCatalogModal({
             <div className="flex h-48 flex-col items-center justify-center gap-2 text-zinc-400">
               <Loader2 className="h-6 w-6 animate-spin" />
               <span className="text-sm">Cargando voces…</span>
+            </div>
+          ) : configured === false ? (
+            <div data-testid="voice-catalog-not-configured" className="flex h-48 flex-col items-center justify-center gap-2 text-center text-zinc-400">
+              <Sparkles className="h-6 w-6" />
+              <span className="text-sm">Las voces de ElevenLabs no están configuradas en este servidor.</span>
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-zinc-400">

@@ -41,6 +41,16 @@ const ERROR_WORD_RE = /(?:^|[\s[(:'"])(?:[A-Z][A-Za-z]{2,}Error|Error|Exception)
 // Soft signals: something went wrong but the process handled it.
 const WARN_WORD_RE = /\b(?:failed|failure|fail(?:s|ing)?|fatal|crash(?:ed)?|panic|cannot|could not|unable to|no se pudo|fall[oó]|rechaz\w*|timed? ?out|timeout|aborted|denied|refused|invalid|unauthori[sz]ed|forbidden|not found|rate[- ]?limited|quota|insufficient|degraded|fallback|retry(?:ing)?|reintent\w*)\b/i;
 
+const ERROR_EMOJI_RE = /[❌✖🚨⛔💥]/u;
+// Diagnostic tags ([models-dbg], [perf], [timing]…) are debug noise, not failures.
+const DEBUG_TAG_RE = /(?:^|[-_:\s])(?:dbg|debug|trace|timing|perf|bench|verbose)(?:$|[-_:\s])/i;
+// pino-http's per-request completion line duplicates middleware/request-logger
+// (which also carries the user); the admin log console's own requests are noise.
+const PINO_HTTP_DONE_RE = /^request (?:completed|aborted)$/;
+const SELF_PATH_RE = /^\/api\/admin\/logs\//;
+const QUIET_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const QUIET_MAX_MS = 1500;
+
 const BRACKET_TAG_RE = /^\s*(?:[^\s[]{1,4}\s+)?\[([A-Za-z0-9][A-Za-z0-9 :._/@#-]{1,47})\]/;
 const WORKER_TAG_RE = /(?:worker|queue|runner|cron|job|scheduler|watchdog|sweeper|codex-runs|bull)/i;
 
@@ -85,20 +95,71 @@ function statusOf(obj) {
   return null;
 }
 
+// Keys already shown elsewhere (or noise) — never repeated as `key=value`.
+const DETAIL_SKIP = new Set([
+  'level', 'lvl', 'severity', 'time', 't', 'ts', 'timestamp', 'pid', 'hostname', 'v',
+  'msg', 'message', 'event', 'action', 'component', 'name', 'module', 'tag', 'service',
+  'userId', 'user_id', 'reqId', 'requestId', 'request_id', 'chatId', 'chat_id', 'conversationId',
+  'ip', 'ua', 'userAgent', 'method', 'path', 'url', 'route', 'endpoint', 'status', 'statusCode',
+  'durMs', 'responseTime', 'req', 'res', 'err', 'alert', 'trace_id', 'span_id', 'trace_flags',
+]);
+const DETAIL_PRIORITY = ['code', 'reason', 'provider', 'model', 'scope', 'stage', 'kind', 'domain', 'file', 'hits', 'count', 'durationMs', 'ms'];
+
+/** Up to `max` short `key=value` details so metric/event lines say something. */
+function scalarDetails(obj, max = 4) {
+  const out = [];
+  const seen = new Set();
+  const add = (key) => {
+    if (out.length >= max || seen.has(key) || DETAIL_SKIP.has(key)) return;
+    const value = obj[key];
+    if (value == null || value === '') return;
+    if (typeof value === 'string' && value.length <= 60 && !/[\n\r]/.test(value)) out.push(`${key}=${value}`);
+    else if (typeof value === 'number' || typeof value === 'boolean') out.push(`${key}=${value}`);
+    else if (Array.isArray(value)) out.push(`${key}=[${value.length}]`);
+    else return;
+    seen.add(key);
+  };
+  for (const key of DETAIL_PRIORITY) add(key);
+  for (const key of Object.keys(obj)) add(key);
+  return out;
+}
+
+/** Does a structured record itself say something failed? */
+function jsonFailureSignal(obj) {
+  if (obj.ok === false || obj.aborted === true) return true;
+  if (typeof obj.error === 'string' ? obj.error.trim() : obj.error && obj.error.message) return true;
+  return /^(?:error|critical|fatal)$/i.test(String(obj.severity || ''));
+}
+
 /** One-line human summary of a structured (JSON) log record. */
 function summarizeJson(obj) {
   const method = firstString(obj.method, obj.req && obj.req.method);
   const url = firstString(obj.path, obj.url, obj.route, obj.req && obj.req.url, obj.endpoint);
   const status = statusOf(obj);
   const dur = Number(obj.durMs ?? obj.responseTime ?? obj.duration_ms ?? obj.durationMs);
-  const text = firstString(obj.msg, obj.message, obj.event, obj.action);
+  const msgText = firstString(obj.msg, obj.message);
+  const eventText = firstString(obj.event, obj.action);
+  // `{msg:'ai.generate', event:'ai.generate.request.accepted'}` → show the event.
+  const text = eventText && msgText && eventText !== msgText && eventText.startsWith(msgText)
+    ? eventText
+    : firstString(msgText, eventText);
   const errMsg = obj.err && typeof obj.err === 'object' ? firstString(obj.err.message, obj.err.type) : firstString(obj.error && obj.error.message, typeof obj.error === 'string' ? obj.error : '');
   const parts = [];
   if (method && url) parts.push(`${method} ${url}`);
   if (status) parts.push(`→ ${status}`);
   if (Number.isFinite(dur) && dur >= 0 && (method || status)) parts.push(`(${Math.round(dur)} ms)`);
   if (text && !(text === 'request completed' && parts.length)) parts.push(text);
+  const alert = obj.alert && typeof obj.alert === 'object' ? obj.alert : null;
+  if (alert && (alert.title || alert.message)) {
+    // alert_emitted → «[critical] [agent-task] run estancado 478h …»
+    parts.push(`· ${alert.severity ? `[${alert.severity}] ` : ''}${firstString(alert.title, alert.message)}`);
+  }
   if (errMsg && !parts.join(' ').includes(errMsg)) parts.push(`— ${errMsg}`);
+  if (parts.length && !(method && url) && !alert) {
+    // Event/metric lines (`doc_sandbox`, `web_search_many`…): add the key facts.
+    const details = scalarDetails(obj).filter((d) => !errMsg || !d.startsWith('error='));
+    if (details.length) parts.push(`· ${details.join(' ')}`);
+  }
   if (!parts.length) {
     const keys = Object.keys(obj).filter((k) => !['level', 'time', 'pid', 'hostname', 'v', 'ts', 'timestamp'].includes(k)).slice(0, 4);
     parts.push(keys.map((k) => `${k}=${typeof obj[k] === 'object' ? JSON.stringify(obj[k]).slice(0, 60) : String(obj[k]).slice(0, 60)}`).join(' '));
@@ -160,19 +221,41 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
   }
 
   if (obj) {
-    const declared = normalizeLevelValue(obj.level ?? obj.severity ?? obj.lvl);
+    const declared = normalizeLevelValue(obj.level ?? obj.lvl) || normalizeLevelValue(obj.severity);
     if (declared) level = declared;
+    // A structured record without a level is a metric/event: which console
+    // method printed it is not a failure signal — its own fields are.
+    else if (!jsonFailureSignal(obj)) level = 'info';
+    else if (level !== 'error') level = 'warn';
     status = statusOf(obj);
     if (status >= 500) level = maxLevel(level, 'error');
     else if (status >= 400 && status !== 401 && status !== 404) level = maxLevel(level, 'warn');
-    if (obj.err && typeof obj.err === 'object' && (obj.err.message || obj.err.stack)) level = maxLevel(level, 'error');
+    const hasErr = Boolean(obj.err && typeof obj.err === 'object' && (obj.err.message || obj.err.stack));
+    if (hasErr) level = maxLevel(level, 'error');
+    const reqPath = firstString(obj.path, obj.url, obj.req && obj.req.url).split('?')[0];
+    if (!hasErr && obj.req && obj.res && PINO_HTTP_DONE_RE.test(firstString(obj.msg))) return { drop: 'duplicate' };
+    if (reqPath && SELF_PATH_RE.test(reqPath) && (status == null || status < 500)) return { drop: 'self' };
+    const reqMethod = firstString(obj.method, obj.req && obj.req.method).toUpperCase();
+    const dur = Number(obj.durMs ?? obj.responseTime);
+    if (!hasErr && reqPath && QUIET_METHODS.has(reqMethod) && status != null && status < 400
+      && Number.isFinite(dur) && dur < QUIET_MAX_MS && (level === 'info' || level === 'debug')) {
+      // A fast, successful read (polls, catalog/credits refreshes): kept and
+      // searchable, but out of the default «info y superior» view.
+      level = 'debug';
+    }
     msg = summarizeJson(obj);
     body = raw.trim().slice(0, JSON_BODY_MAX);
   } else {
     ({ msg, body } = splitMessage(raw));
+    const strong = FATAL_RE.test(raw) || STACK_RE.test(raw) || ERROR_WORD_RE.test(raw) || ERROR_EMOJI_RE.test(msg);
+    const soft = WARN_WORD_RE.test(msg);
     if (FATAL_RE.test(raw)) level = maxLevel(level, 'fatal');
-    else if (STACK_RE.test(raw) || ERROR_WORD_RE.test(raw)) level = maxLevel(level, 'error');
-    else if (WARN_WORD_RE.test(msg)) level = maxLevel(level, 'warn');
+    else if (strong) level = maxLevel(level, 'error');
+    else if (soft) level = maxLevel(level, 'warn');
+    // console.error with nothing that reads like a failure is a notice, not a red error.
+    if (method === 'console.error' && !strong && !soft) level = 'warn';
+    const lineTag = inferTag(raw, null);
+    if (lineTag && DEBUG_TAG_RE.test(lineTag) && !strong) level = 'debug';
   }
 
   const tag = inferTag(raw, obj);
