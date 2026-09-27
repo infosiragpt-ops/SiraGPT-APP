@@ -316,7 +316,11 @@ test('real HTTP upload -> background edit -> authenticated download preserves tw
   assert.ok(uploaded.body.files.every((file) => file.success === true));
   const fileIds = uploaded.body.files.map((file) => file.id);
   assert.equal(new Set(fileIds).size, 2);
-  assert.equal(openAiCalls.files, 2, 'only the external OpenAI Files boundary is stubbed');
+  // OpenAI Files is an optional, background enhancement that follows the
+  // CURRENT key (Admin → Conexiones swaps it at runtime). This gate runs with
+  // OPENAI_API_KEY unset, so the upload never calls OpenAI — and it never
+  // waits for it either.
+  assert.equal(openAiCalls.files, 0, 'no OpenAI Files call without an OpenAI key');
   assert.equal(openAiCalls.content, 0, 'the deterministic editor must not call a content model');
 
   const editResponse = await request(app)
