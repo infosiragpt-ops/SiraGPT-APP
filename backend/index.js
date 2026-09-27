@@ -1,5 +1,13 @@
 require('./src/config/load-env').loadEnvFiles();
 
+// ── Live logs (Admin → Logs → «Registros en vivo») ─────────
+// Hook the process streams before anything else prints so boot logs are
+// captured too. Capturing never changes what is printed; every line is
+// redacted and tagged with its request context. SIRAGPT_LIVE_LOGS=0 disables.
+const liveLogs = require('./src/services/observability/live-logs');
+liveLogs.install();
+if (process.env.NODE_ENV !== 'test') liveLogs.start();
+
 // Install shutdown ownership before heavy startup so Windows IPC requests (and
 // Unix signals) cannot be lost while services are still being required.
 let earlyShutdownRequest = null;
@@ -998,6 +1006,9 @@ app.use(httpLogger);
 // every response (including errors).
 const { requestIdMiddleware } = require('./src/middleware/request-id');
 app.use(requestIdMiddleware);
+// Live logs: remember the request in the logging context so every line it
+// prints carries user / route / chat (resolved lazily, after auth runs).
+app.use(liveLogs.requestContextMiddleware);
 const { otelRequestContextMiddleware } = require('./src/middleware/otel-request-context');
 app.use(otelRequestContextMiddleware);
 // RED method (Rate, Errors, Duration) per matched route. Sits after

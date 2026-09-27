@@ -356,13 +356,22 @@ test('runAgentLoop stops after max consecutive unrepairable tool args', async ()
   assert.equal(executed, 0);
 });
 
-test('compactUntilTokenBudget runs before callModel and keeps system + pins', async () => {
+test('compactUntilTokenBudget runs before callModel and keeps system + pins', async (t) => {
+  // Edición milimétrica Fase C: the compaction budget is the CONTEXT budget
+  // (SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS, floor 8000), no longer
+  // max(1500, max_tokens) — so the transcript here must really exceed it.
+  const prevBudget = process.env.SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS;
+  process.env.SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS = '8000';
+  t.after(() => {
+    if (prevBudget === undefined) delete process.env.SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS;
+    else process.env.SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS = prevBudget;
+  });
   const messages = [
     { role: 'system', content: 'SYSTEM_PIN_KEEP' },
     { role: 'user', content: 'MUST: keep-this-anchor-xyz' },
   ];
   for (let i = 0; i < 40; i += 1) {
-    messages.push({ role: 'user', content: `blob-${i}- ${'x'.repeat(400)}` });
+    messages.push({ role: 'user', content: `blob-${i}- ${'x'.repeat(4000)}` });
   }
   const before = messages.length;
   let seenAtModel = 0;

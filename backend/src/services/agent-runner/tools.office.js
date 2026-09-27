@@ -23,9 +23,9 @@
  * Contrato con loop.js
  *   - Un executor devuelve un string, o un objeto
  *       { text, __f7Image?: { base64, mediaType }, __thumbs?: [{ base64, mediaType }] }
- *     IMPORTANTE: el hook F7 de loop.js hoy solo convierte a texto los objetos que
- *     traen __f7Image. Antes de activar thumbs (opción `thumbs: true`) aplica el
- *     parche de loop.js descrito en el SPEC (Fase D), o el loop verá "[object Object]".
+ *     El hook de loop.js (Fase D) convierte cualquier objeto a su `text`; las
+ *     miniaturas (opción `thumbs: true`, flag SIRAGPT_AGENT_THUMBS) viajan en el
+ *     evento stage v2 del timeline, nunca al modelo.
  *   - Nunca lanza: los errores vuelven como 'ERROR: …' → el paso queda ok:false.
  */
 
@@ -283,16 +283,23 @@ const OFFICE_TOOL_DEFINITIONS = [
  * @param {object} [opts]
  * @param {Function|null} [opts.visionVerifier]  de multimodal/visual-verifier.js (null = sin visión)
  * @param {boolean} [opts.attachImages]  adjuntar la imagen al loop (solo si el modelo del loop tiene visión)
- * @param {boolean} [opts.thumbs]        devolver miniaturas para el timeline (requiere el parche de loop.js)
+ * @param {boolean} [opts.thumbs]        devolver miniaturas para el timeline (stage v2)
  * @param {Function|null} [opts.onFailure]  ({ tool, code, error }) para fallas de INFRAESTRUCTURA
  *   (motor ausente, salida inválida, timeout, sandbox caído) — las que afectan la respuesta al
  *   usuario. Nunca para errores de la operación que el modelo puede corregir. Fail-open.
  * @param {Function|null} [opts.fallbackRender]  render_preview v1: se usa si el motor no está
+ * @param {Function|null} [opts.onVerify]  ({ after, passed, visionOk }) tras cada verify_visual:
+ *   el turno sabe si un modelo de visión revisó el resultado (visionOk null = no hubo revisión).
  */
 function makeOfficeToolExecutors(sandbox, {
   visionVerifier = null, attachImages = false, thumbs = false, onFailure = null, fallbackRender = null,
+  onVerify = null,
 } = {}) {
   function reportInfra(tool, res) {
+    if (res && !res.infra && /no está instalado/.test(String(res.error || ''))) {
+      // soffice / poppler missing in the sandbox image: the user gets no render.
+      res = { ...res, infra: true, code: 'renderer_unavailable' };
+    }
     if (!res || !res.infra || typeof onFailure !== 'function') return;
     try {
       Promise.resolve(onFailure({ tool, code: res.code || 'engine_error', error: String(res.error || '').slice(0, 500) }))
@@ -413,6 +420,9 @@ function makeOfficeToolExecutors(sandbox, {
       }
       text += `\n• Checklist del usuario: ${checklist.map((c, i) => `${i + 1}) ${c}`).join(' ')}`;
       const passed = res.ok === true && visionOk !== false;
+      if (typeof onVerify === 'function') {
+        try { onVerify({ after, passed, visionOk }); } catch (_) { /* observer only */ }
+      }
       text += `\nVEREDICTO: ${passed ? 'VERIFICADO' : 'NO VERIFICADO — corrige lo marcado con ✗ y vuelve a verificar'}`;
       const body = passed ? text : `ERROR: verificación fallida\n${text}`;
       return withImages(cap(body), res.composites && res.composites[0], res.thumbs && res.thumbs[0]);
@@ -439,6 +449,36 @@ async function outputsFingerprint(sandbox, { signal } = {}) {
   } catch (_) {
     return null;
   }
+}
+
+// Per-file snapshot of /workspace/outputs ({ path: "size mtime_ns" }). The
+// loop diffs two of them around execute_python/bash so the verification gate
+// knows WHICH deliverables changed (a docx → visual verification required).
+const SNAPSHOT_PY = 'import json,os;o={};'
+  + "[o.__setitem__(os.path.join(r,f),'%d %d'%(os.stat(os.path.join(r,f)).st_size,os.stat(os.path.join(r,f)).st_mtime_ns)) for r,_,n in os.walk('outputs') for f in n];"
+  + 'print(json.dumps(o))';
+
+/** Symbol key: executors[OUTPUTS_SNAPSHOT]() — never reachable as a tool name. */
+const OUTPUTS_SNAPSHOT = Symbol.for('siragpt.agentRunner.outputsSnapshot');
+
+async function outputsSnapshot(sandbox, { signal } = {}) {
+  try {
+    const r = await sandbox.exec(`cd /workspace && python3 -c "${SNAPSHOT_PY}"`, { timeoutMs: 15_000, signal });
+    if (Number(r.exitCode) !== 0) return null;
+    const parsed = JSON.parse(String(r.stdout || '').trim().split('\n').pop() || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Paths added, removed or rewritten between two snapshots (null when unknown). */
+function changedOutputs(before, after) {
+  if (!before || !after) return null;
+  const changed = [];
+  for (const [p, sig] of Object.entries(after)) if (before[p] !== sig) changed.push(p);
+  for (const p of Object.keys(before)) if (!(p in after)) changed.push(p);
+  return changed.sort();
 }
 
 /** Categoría de ícono para el timeline (la usa trace.js en la Fase D). */
@@ -474,6 +514,9 @@ module.exports = {
   makeOfficeToolExecutors,
   installOfficeEngine,
   outputsFingerprint,
+  outputsSnapshot,
+  changedOutputs,
+  OUTPUTS_SNAPSHOT,
   defaultDst,
   toRel,
   runEngine,

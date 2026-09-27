@@ -22,6 +22,56 @@ const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
+const { agentThumbsEnabled } = require('./trace');
+
+// Edición milimétrica (Fase C): the before/after image is reviewed by a
+// separate vision model (multimodal/vision-ladder.js). Off under
+// NODE_ENV=test and with SIRAGPT_VISUAL_VERIFY_VISION=0.
+function buildVisionVerifier({ pickedModel, env = process.env, onFailover } = {}) {
+  if (String(env.SIRAGPT_VISUAL_VERIFY_VISION || '').trim() === '0' || env.NODE_ENV === 'test') return null;
+  try {
+    const { resolveVisionCandidates, createVisionClient } = require('./multimodal/vision-ladder');
+    const { makeVisionVerifier } = require('./multimodal/visual-verifier');
+    const client = createVisionClient(resolveVisionCandidates({ pickedModel, env }), { onFailover });
+    return client ? makeVisionVerifier({ client }) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Images go INTO the loop only when explicitly enabled AND the loop model sees
+// images (an image_url to a text model is a 400 with no failover).
+function loopSeesImages(env = process.env) {
+  if (String(env.SIRAGPT_AGENT_VISION_IN_LOOP || '').trim() !== '1') return false;
+  try {
+    const { resolveModelCapabilities } = require('../agent-harness/model-capabilities');
+    const pinned = explicitRunnerModel(env);
+    return Boolean(pinned && resolveModelCapabilities(pinned).supportsImages);
+  } catch (_) {
+    return false;
+  }
+}
+
+const OFFICE_FILE_RE = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
+// Document turns get room for a batch of edits (a paraphrase must not be cut
+// mid-JSON, hallazgo 7). An explicit SIRAGPT_AGENT_RUNNER_MAX_TOKENS wins.
+function documentTurnMaxTokens(names = [], env = process.env) {
+  if (String(env.SIRAGPT_AGENT_RUNNER_MAX_TOKENS || '').trim()) return null;
+  return names.some((n) => OFFICE_FILE_RE.test(String(n))) ? 8192 : null;
+}
+
+const VISION_NOTE_RE = /revisi[oó]n visual|modelo de visi[oó]n|sin visi[oó]n|no hubo revisi[oó]n/i;
+/**
+ * The reply must say when no vision model looked at the result (SPEC §6.1.5):
+ * the automatic checks ran, a model did not see the image.
+ */
+function withVisionHonesty(finalText, lastVerify) {
+  const text = String(finalText || '');
+  if (!lastVerify || !lastVerify.passed || lastVerify.visionOk !== null) return text;
+  if (VISION_NOTE_RE.test(text)) return text;
+  const note = 'Verificación automática: se renderizaron las páginas, se compararon antes y después y se revisó el texto; no hubo revisión con modelo de visión.';
+  return text ? `${text}\n\n${note}` : note;
+}
 const { runAgentLoop, MAX_ITERATIONS_DEFAULT, isLlmCreditError } = require('./loop');
 const {
   resolveTurnFiles,
@@ -410,10 +460,24 @@ async function runAgentRunner({
       { role: 'user', content: task },
     ];
 
+    let lastVerify = null;
     const executors = {
-      ...makeToolExecutors(sandbox, { office: { onFailure: reportOfficeFailure } }),
+      ...makeToolExecutors(sandbox, {
+        office: {
+          onFailure: reportOfficeFailure,
+          visionVerifier: buildVisionVerifier({
+            pickedModel: model,
+            onFailover: (info) => { try { onEvent({ type: 'vision_failover', ...info }); } catch (_) { /* trace only */ } },
+          }),
+          attachImages: loopSeesImages(),
+          // Stage v2 thumbnails (render / verify) for the timeline.
+          thumbs: agentThumbsEnabled(),
+          onVerify: (v) => { lastVerify = v; },
+        },
+      }),
       ...f8.executors,
     };
+    const loopMaxTokens = documentTurnMaxTokens(names);
 
     // Deterministic fast-paths are allowed ONLY for exact edits on an
     // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
@@ -538,6 +602,7 @@ async function runAgentRunner({
       maxIterations,
       onEvent,
       signal: abortScope.signal,
+      maxTokens: loopMaxTokens,
     });
     throwIfAborted(abortScope.signal);
     outputs = await collectValidOutputs(sandbox, onEvent, editContext);
@@ -576,6 +641,7 @@ async function runAgentRunner({
         maxIterations: Math.min(maxIterations, 8),
         onEvent,
         signal: abortScope.signal,
+        maxTokens: loopMaxTokens,
       });
       throwIfAborted(abortScope.signal);
       outputs = await collectValidOutputs(sandbox, onEvent, editContext);
@@ -587,6 +653,9 @@ async function runAgentRunner({
       const verifyFailure = verificationFailureFromSteps(result && result.steps);
       if (verifyFailure) reportOfficeFailure(verifyFailure);
     } catch (_) { /* reporting never breaks a turn */ }
+    if (result && result.stoppedReason === 'final') {
+      result = { ...result, finalText: withVisionHonesty(result.finalText, lastVerify) };
+    }
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.
@@ -987,6 +1056,9 @@ module.exports = {
   loadOfficeHelpersPy,
   installSiraOfficeEngine,
   SIRA_OFFICE_ENGINE_REL,
+  buildVisionVerifier,
+  documentTurnMaxTokens,
+  withVisionHonesty,
   MAX_ITERATIONS_DEFAULT,
   MAX_OUTPUT_RETRIES,
   CREATE_DOC_RE,
