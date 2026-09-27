@@ -95,6 +95,15 @@ test('filename and markdown helpers', () => {
   assert.match(md, /^# Transcripción\n/);
   assert.match(md, /«a\.md», «b\.md»/);
   assert.equal(md.split('\n\n').slice(2).join('\n\n').trim(), 'uno\n\ndos\n\ntres');
+  const headed = fastPath.transcriptionDocumentMarkdown({
+    sourceNames: ['acta.html'],
+    text: 'HTML document — "Acta" — 176 words, 1165 chars\n---\nPrimera línea\nPDF document — 3 page(s), 900 characters extracted\n---\nSegunda línea',
+    now: new Date('2026-09-27T12:00:00Z'),
+  });
+  assert.doesNotMatch(headed, /document —|^---$/m);
+  assert.match(headed, /Primera línea\n\nSegunda línea/);
+  assert.equal(fastPath.stripExtractorHeaders('Word document — 12 characters extracted, structure preserved as markdown\n---\nHola'), 'Hola');
+  assert.equal(fastPath.stripExtractorHeaders('Un document — no es cabecera porque va en medio'), 'Un document — no es cabecera porque va en medio');
   const unknown = fastPath.buildTranscriptionDeliveryMarkdown({ fileCount: 3, format: 'pdf', artifact: { filename: 'x.pdf', downloadUrl: '/x' } });
   assert.match(unknown, /los 3 archivos adjuntos en un documento PDF/);
 });
