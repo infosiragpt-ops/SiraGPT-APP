@@ -102,7 +102,7 @@ import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/docume
 import { OfficeFileIcon, officeKindForMime, officeKindForName, officeKindLabel } from "@/components/office-file-icon"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { contentWithoutHiddenImages, parseMessageFilesForRender } from "@/lib/chat/message-rendering"
-import { imageAssetsFromMessages, type WorkspaceImage } from "@/lib/image-workspace"
+import { imageAssetForRenderedFile, imageAssetsFromMessages, type WorkspaceImage } from "@/lib/image-workspace"
 const ImageWorkspace = dynamic(() => import('./images/ImageWorkspace'), { ssr: false })
 import { getAudioMediaMeta, isAudioComposerFile, isVideoComposerFile, resolveComposerMediaSrc } from "@/lib/chat/composer-files"
 import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
@@ -1609,10 +1609,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     }, [message.files])
     const visibleMessageContent = useMemo(() => contentWithoutHiddenImages(message.content, message.files), [message.content, message.files])
     const viewerImages = useMemo(() => imageAssetsFromMessages([message]), [message])
-    const openImage = (url: string) => {
-        const asset = viewerImages.find(item => item.url === url)
+    const openImage = (url: string, file?: any) => {
+        const asset = file
+            ? imageAssetForRenderedFile(file, viewerImages, message.chatId, message.id)
+            : viewerImages.find(item => item.url === url)
         if (asset && onImagePreview) onImagePreview(asset)
-        else setSelectedImage(url)
+        else setSelectedImage(asset?.url || url)
     }
 
     const hasRenderableUserFiles = useMemo(() => {
@@ -3168,7 +3170,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     file={file}
                                                     src={src}
                                                     index={index}
-                                                    onOpen={openImage}
+                                                    onOpen={(url) => openImage(url, file)}
                                                     onLoad={() => {
                                                         const imgKey = `file-${index}`;
                                                         if (!imageLoadedRef.current.has(imgKey)) {

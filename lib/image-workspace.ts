@@ -60,6 +60,12 @@ export function imageAssetFromFile(file: any, chatId?: string, messageId?: strin
   }
 }
 
+/** Open a rendered card by its persisted file identity, even when its thumbnail has a different URL. */
+export function imageAssetForRenderedFile(file: any, assets: WorkspaceImage[], chatId?: string, messageId?: string): WorkspaceImage | null {
+  const source = imageAssetFromFile(file, chatId, messageId)
+  return assets.find(asset => asset.id === source.id) || (source.url ? source : null)
+}
+
 /** Model identity is binding; a missing/inactive choice never picks a replacement. */
 export function resolveImageWorkspaceModel(asset: WorkspaceImage, selected?: { name: string; provider: string }) {
   const name = String(selected ? selected.name : asset.model || '').trim()
