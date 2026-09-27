@@ -1280,8 +1280,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const persistedTrace = isAssistant && !liveActivity.length ? (message as any).agentMetadata : null;
     const hydratedActivity = useMemo(() => hydrateActivityTrace(persistedTrace), [persistedTrace]);
     const activityLog: any[] = liveActivity.length ? liveActivity : hydratedActivity;
-    // Tool-call steps (AgentRunner): one timeline on the rail, with thumbnails.
-    const hasRunnerTrace = isAssistant && hasPairedActivity(activityLog);
+    // Tool-call steps (AgentRunner, document editor): one timeline on the
+    // rail, with thumbnails. The document editor flags its turn from the first
+    // frame (activityRail) so the rail never swaps renderer mid-turn.
+    const hasRunnerTrace = isAssistant && (hasPairedActivity(activityLog)
+        || ((message as any).activityRail === true && activityLog.length > 0));
+    const activityLive = Boolean(isStreaming) || activityLog.some((step: any) => step && step.status === 'active');
     const persistedTraceDuration = (() => {
         if (liveActivity.length || !persistedTrace) return null;
         try {
@@ -3394,7 +3398,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         ) : !message.error && hasRunnerTrace && !isThinking ? (
                             // AgentRunner turn: every tool call is one row on the
                             // rail (phrase, icon, thumbnail, what ran / came back).
-                            <ActivityRail steps={activityLog} live={Boolean(isStreaming)} durationMs={activityDuration} />
+                            <ActivityRail steps={activityLog} live={activityLive} durationMs={activityLive ? null : activityDuration} />
                         ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming || (hasActivityTrace && !isThinking)) ? (
                             <ThinkingTrace
                                 reasoning={reasoningView.reasoning}

@@ -261,9 +261,27 @@ function explicitRunnerModel(env = process.env) {
   return env.SIRAGPT_AGENT_RUNNER_MODEL || env.SIRAGPT_DOC_AGENT_MODEL || env.OPENROUTER_MODEL || null;
 }
 
-/** Production LLM for the runner: provider ladder with per-call failover. */
-function createRunnerLlmClient({ onEvent } = {}) {
-  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() }), {
+const PICKER_LADDER_PROVIDERS = new Set(['DeepSeek', 'Meta', 'Gemini', 'xAI', 'OpenAI', 'OpenRouter']);
+
+/**
+ * "Provider:model" of the model picked in the composer, when its provider is a
+ * rung of the runner ladder (engines follow the picked model; Custom / other
+ * providers keep the ladder order).
+ */
+function runnerModelSpec(provider, model) {
+  const p = String(provider || '').trim();
+  const m = String(model || '').trim();
+  if (!m || !PICKER_LADDER_PROVIDERS.has(p)) return null;
+  return `${p}:${m}`;
+}
+
+/**
+ * Production LLM for the runner: provider ladder with per-call failover. The
+ * operator pin (env) wins; otherwise the model picked in the composer goes
+ * first and the ladder only takes over on provider errors.
+ */
+function createRunnerLlmClient({ onEvent, pickedModel = null } = {}) {
+  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() || pickedModel || null }), {
     onFailover: (info) => {
       try { console.warn('[agent-runner] llm failover:', info.from, '→', info.to, info.status || '', info.message); } catch (_) { /* ignore */ }
       if (typeof onEvent === 'function') { try { onEvent({ type: 'llm_failover', ...info }); } catch (_) { /* ignore */ } }
@@ -342,6 +360,24 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
   return outputs;
 }
 
+/**
+ * An office_edit chain (first edit → verification → correction) leaves every
+ * version in outputs/; only the LAST link is the deliverable. An output that a
+ * later successful office_edit used as its `src` is an intermediate version
+ * and is not delivered (never drops everything).
+ */
+function dropIntermediateOutputs(outputs = [], steps = []) {
+  const consumed = new Set();
+  for (const step of Array.isArray(steps) ? steps : []) {
+    if (!step || step.tool !== 'office_edit' || step.ok === false) continue;
+    const src = String((step.args && (step.args.src || step.args.path)) || '').replace(/^\/?workspace\//, '');
+    if (src.startsWith('outputs/')) consumed.add(src.slice('outputs/'.length));
+  }
+  if (!consumed.size) return outputs;
+  const kept = outputs.filter((out) => !consumed.has(out.name));
+  return kept.length ? kept : outputs;
+}
+
 async function runAgentRunner({
   files = [],
   instruction,
@@ -357,6 +393,8 @@ async function runAgentRunner({
   // F4: optional system-prompt suffix (role prompt of an orchestrated
   // sub-agent). Empty for normal single-runner turns.
   systemAppend = '',
+  // "Provider:model" picked in the composer (runnerModelSpec): first rung.
+  pickedModel = null,
   // F4: text-producing sub-agents (researcher/data_analyst/verifier) may
   // legitimately finish without a file — skip the no-output retry loop for
   // them. Single-runner document turns keep the default (true).
@@ -567,7 +605,7 @@ async function runAgentRunner({
       };
     }
 
-    if (!llm) llm = createRunnerLlmClient({ onEvent });
+    if (!llm) llm = createRunnerLlmClient({ onEvent, pickedModel });
 
     // ── F7 (multimodal) hook ─────────────────────────────────────────────
     // Vision / voice / bounded computer-use extras. Kill switches:
@@ -656,6 +694,7 @@ async function runAgentRunner({
       throwIfAborted(abortScope.signal);
       outputs = await collectValidOutputs(sandbox, onEvent, editContext);
     }
+    outputs = dropIntermediateOutputs(outputs, result && result.steps);
 
     // An edit that ends with its visual verification failed reaches the user
     // unverified: surface it to the admin turn-failure tracker.
@@ -709,6 +748,7 @@ async function runAgentRunnerForChat({
   attachedFiles = [],
   instruction,
   model,
+  pickedModel = null,
   client,
   signal,
   onEvent = () => {},
@@ -731,6 +771,7 @@ async function runAgentRunnerForChat({
     files: resolved.files,
     instruction,
     model,
+    pickedModel,
     client,
     onEvent,
     driver,
@@ -1044,6 +1085,8 @@ function orchestratorEnabled(env) {
 }
 
 module.exports = {
+  dropIntermediateOutputs,
+  runnerModelSpec,
   shouldRunAgentRunner,
   createRunnerLlmClient,
   explicitRunnerModel,

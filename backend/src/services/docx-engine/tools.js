@@ -226,8 +226,21 @@ const TOOL_SPECS = [
 
 const EDIT_TOOLS = new Set(['fill_field', 'set_cell', 'set_cells', 'replace_text', 'insert_paragraph', 'insert_table_row', 'delete', 'set_format', 'set_checkbox', 'fill_content_control']);
 
+// Optional phrase the user reads in the timeline for this step (edición
+// milimétrica, Fase G). Executors ignore it.
+const STEP_DESCRIPTION_PARAM = Object.freeze({
+  type: 'string',
+  description: 'Frase corta en español (máx. 80 caracteres) de lo que haces; el usuario la ve en el timeline. Ej.: "Completando el título de la investigación".',
+});
+
+function withStepDescription(schema) {
+  const base = schema && typeof schema === 'object' ? schema : { type: 'object', properties: {} };
+  if (base.properties && base.properties.description) return base;
+  return { ...base, properties: { ...(base.properties || {}), description: STEP_DESCRIPTION_PARAM } };
+}
+
 function toOpenAiTools(specs = TOOL_SPECS) {
-  return specs.map((spec) => ({ type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.input_schema } }));
+  return specs.map((spec) => ({ type: 'function', function: { name: spec.name, description: spec.description, parameters: withStepDescription(spec.input_schema) } }));
 }
 
 function formatChanges(changes) {

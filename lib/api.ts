@@ -1027,7 +1027,12 @@ export interface VoiceStudioJob {
 
 export type DocumentEditStreamEvent =
   | { type: 'start'; streamId: string }
-  | { type: 'stage'; label: string; detail?: string }
+  | {
+      type: 'stage'; label: string; detail?: string
+      // Stage v2 (edición milimétrica): one timeline row per tool call.
+      step?: string; tool?: string; callId?: string; kind?: string; status?: string
+      description?: string; preview?: string; ok?: boolean; thumbs?: string[]
+    }
   | { type: 'done'; ok: boolean; code?: string; content: string; files: any[]; assistantMessageId: string | null; chatId: string }
 
 class ApiClient {

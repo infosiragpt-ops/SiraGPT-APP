@@ -66,6 +66,20 @@ function describeChangeForUser(change) {
   }
 }
 
+/** «✓ requisito — evidencia | ✗ requisito — evidencia» → short ✓/✗ lines. */
+function visionItems(text) {
+  const line = String(text || '').split('\n').find((l) => /Revisión visual \(modelo de visión\)/.test(l));
+  if (!line) return [];
+  return line.replace(/^.*?Revisión visual \(modelo de visión\):\s*/, '')
+    .split(/\s*\|\s*/)
+    .map((item) => item.trim())
+    .filter((item) => /^[✓✗]/.test(item))
+    .map((item) => {
+      const [head] = item.split(' — ');
+      return head.length > 140 ? `${head.slice(0, 139)}…` : head;
+    });
+}
+
 function buildUserSummary({ modelSummary, changes, verification, filename }) {
   const lines = [];
   const clean = String(modelSummary || '').trim();
@@ -85,6 +99,14 @@ function buildUserSummary({ modelSummary, changes, verification, filename }) {
     else facts.push(`${r.pagesAfter} página(s)`);
   }
   if (facts.length) lines.push('', `Verificado: ${facts.join('; ')}.`);
+  // Edición milimétrica: say whether a vision model reviewed the rendered pages.
+  if (r.visual && r.visual.unavailable !== true) {
+    if (r.visual.visionOk === true) lines.push('', 'Revisión visual: un modelo de visión comparó el antes y el después y confirmó el cambio.');
+    else if (r.visual.visionOk === false) lines.push('', 'Revisión visual: el modelo de visión marcó dudas; los controles automáticos del documento sí pasaron.');
+    else lines.push('', 'Revisión visual: se compararon las páginas antes y después (sin modelo de visión disponible).');
+    // The reviewer's own ✓ / ✗ lines (harvested from feat/visual-verify-loop).
+    for (const item of visionItems(r.visual.summary).slice(0, 6)) lines.push(`- ${item}`);
+  }
   if (r.intent?.missing_information?.length) lines.push('', `Datos que faltan: ${r.intent.missing_information.join('; ')}.`);
   lines.push('', 'El archivo original se conserva.');
   return lines.join('\n');
@@ -101,6 +123,7 @@ async function editWordDocument({
   extraContext = '',
   render: renderOverride,
   convert: convertOverride,
+  visualVerify = null,
 } = {}) {
   signal?.throwIfAborted();
   const isDoc = /\.doc$/i.test(filename);
@@ -126,6 +149,7 @@ async function editWordDocument({
     onEvent,
     render,
     extraContext,
+    visualVerify,
   });
   if (!result.ok) {
     const fallback = result.status === 'needs_input'
