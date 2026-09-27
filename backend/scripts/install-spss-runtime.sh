@@ -4,7 +4,7 @@ set -eu
 # The production backend runs agent Python with the image's python3. Alpine
 # has pandas/numpy packages, but pyreadstat publishes glibc Linux wheels, so
 # build its pinned source release against musl and remove the compiler.
-apk add --no-cache python3 py3-pip py3-pandas
+apk add --no-cache python3 py3-pip py3-pandas py3-openpyxl
 apk add --no-cache --virtual .spss-build-deps \
   build-base python3-dev py3-wheel cython zlib-dev
 
