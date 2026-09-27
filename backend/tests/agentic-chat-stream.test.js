@@ -127,6 +127,15 @@ function makeFakeRes() {
   };
 }
 
+function visibleArtifactIds(frames) {
+  return frames.flatMap((frame) => {
+    const content = String(frame?.content || '');
+    const match = content.match(/```agent-task-state\n([^\n]+)\n```/);
+    if (!match) return [];
+    return JSON.parse(match[1]).artifacts.map((artifact) => artifact.id);
+  });
+}
+
 // Scripted fake OpenAI client. Each call to chat.completions.create
 // returns the next response in the queue. Each response is plain JSON
 // matching the OpenAI tool-calling shape react-agent expects.
@@ -874,6 +883,32 @@ test('buildPersistedContent leaves non-artifact answers as plain text', () => {
   assert.equal(buildPersistedContent(freshState(), 'Respuesta simple.'), 'Respuesta simple.');
 });
 
+test('runAgenticChat still surfaces a single requested document as soon as it is created', async () => {
+  const { res, frames } = makeFakeRes();
+  let visibleDuringCreation = false;
+  const result = await agenticStream.runAgenticChat({
+    openai: makeFakeOpenAI([
+      toolCallMessage('create_document', { filename: 'datos.xlsx' }),
+      finalizeMessage('Excel listo.'),
+    ]),
+    model: 'gpt-4o-mini', userQuery: 'Prepara un Excel', res,
+    toolsOverride: [{
+      name: 'create_document', description: 'create file',
+      parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+      execute: async (_args, ctx) => {
+        ctx.onEvent({ type: 'file_artifact', artifact: {
+          id: 'single-xlsx', filename: 'datos.xlsx', format: 'xlsx', downloadUrl: '/single-xlsx',
+        } });
+        visibleDuringCreation = visibleArtifactIds(frames()).includes('single-xlsx');
+        return { ok: true, artifactId: 'single-xlsx' };
+      },
+    }],
+  });
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(visibleDuringCreation, true);
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.id), ['single-xlsx']);
+});
+
 test('runAgenticChat blocks finalize until every requested artifact is created and verified', async () => {
   const openai = makeFakeOpenAI([
     toolCallMessage('create_document', { filename: 'informe.docx' }, 'create_word'),
@@ -883,7 +918,7 @@ test('runAgenticChat blocks finalize until every requested artifact is created a
     toolCallMessage('verify_artifact', { artifactId: 'pdf1' }, 'verify_pdf'),
     finalizeMessage('Entregables listos.'),
   ]);
-  const { res } = makeFakeRes();
+  const { res, frames } = makeFakeRes();
   const artifacts = {
     'informe.docx': { id: 'word1', filename: 'informe.docx', format: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', downloadUrl: '/word1' },
     'informe.pdf': { id: 'pdf1', filename: 'informe.pdf', format: 'pdf', mime: 'application/pdf', downloadUrl: '/pdf1' },
@@ -922,6 +957,101 @@ test('runAgenticChat blocks finalize until every requested artifact is created a
   assert.equal(result.artifacts.length, 2);
   assert.deepEqual(result.artifacts.map((artifact) => artifact.format).sort(), ['docx', 'pdf']);
   assert.ok(result.steps.length >= 6, 'guard should force the missing PDF workflow before finalizing');
+  const cardsByFrame = frames().filter((frame) => frame.replace && String(frame.content).includes('```agent-task-state'))
+    .map((frame) => visibleArtifactIds([frame]));
+  const visibleCards = cardsByFrame.filter((ids) => ids.length > 0);
+  assert.ok(visibleCards.length > 0, 'the complete delivery should appear in the stream');
+  assert.ok(visibleCards.every((ids) => ids.sort().join(',') === 'pdf1,word1'),
+    'the two requested cards become visible together only after verification');
+});
+
+test('runAgenticChat keeps an incomplete multi-file delivery out of the live stream after Stop', async () => {
+  const controller = new AbortController();
+  const { res, frames } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai: makeFakeOpenAI([toolCallMessage('create_document', { filename: 'datos.xlsx' })]),
+    model: 'gpt-4o-mini',
+    userQuery: 'Prepara un documento SPSS y un Excel con datos sintéticos',
+    res,
+    signal: controller.signal,
+    toolsOverride: [{
+      name: 'create_document', description: 'create file',
+      parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+      execute: async (_args, ctx) => {
+        ctx.onEvent({ type: 'file_artifact', artifact: {
+          id: 'only-xlsx', filename: 'datos.xlsx', format: 'xlsx', downloadUrl: '/only-xlsx',
+        } });
+        controller.abort();
+        return { ok: true, artifactId: 'only-xlsx' };
+      },
+    }],
+  });
+  assert.equal(result.stoppedReason, 'aborted');
+  assert.deepEqual(result.artifacts, []);
+  assert.deepEqual(visibleArtifactIds(frames()), []);
+  assert.doesNotMatch(result.persistedContent, /only-xlsx/);
+});
+
+test('runAgenticChat withholds a partial delivery when the model exhausts verification repairs', async () => {
+  const { res, frames } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai: makeFakeOpenAI([
+      toolCallMessage('create_document', { filename: 'datos.xlsx' }),
+      finalizeMessage('Listos los archivos.'),
+      finalizeMessage('Listos los archivos.'),
+      finalizeMessage('Listos los archivos.'),
+    ]),
+    model: 'gpt-4o-mini',
+    userQuery: 'Prepara un documento SPSS y un Excel con datos sintéticos',
+    res,
+    maxSteps: 5,
+    toolsOverride: [{
+      name: 'create_document', description: 'create file',
+      parameters: { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
+      execute: async (_args, ctx) => {
+        ctx.onEvent({ type: 'file_artifact', artifact: {
+          id: 'only-xlsx', filename: 'datos.xlsx', format: 'xlsx', downloadUrl: '/only-xlsx',
+        } });
+        return { ok: true, artifactId: 'only-xlsx' };
+      },
+    }],
+  });
+  assert.match(result.stoppedReason, /^verification_failed/);
+  assert.deepEqual(result.artifacts, []);
+  assert.deepEqual(visibleArtifactIds(frames()), []);
+  assert.doesNotMatch(result.persistedContent, /only-xlsx/);
+});
+
+test('runAgenticChat records a degraded multi-file delivery as failed in the harness', async (t) => {
+  const reactAgent = require('../src/services/react-agent');
+  const harnessModule = require('../src/services/agent-harness/run-agent-turn');
+  let finishedReason = null;
+  t.mock.method(reactAgent, 'run', async () => ({
+    finalAnswer: 'Los dos archivos están listos.',
+    stoppedReason: 'finalized',
+    steps: [],
+    exhaustedTools: ['verify_artifact'],
+  }));
+  t.mock.method(harnessModule, 'attachHarness', async ({ tools }) => ({
+    tools,
+    onStepStart() {},
+    onStepDone() {},
+    finish({ stoppedReason }) {
+      finishedReason = stoppedReason;
+      return { stoppedReason };
+    },
+  }));
+  const { res } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai: makeFakeOpenAI([]),
+    model: 'gpt-4o-mini',
+    userQuery: 'Prepara un documento SPSS y un Excel con datos sintéticos',
+    res,
+  });
+  assert.equal(result.stoppedReason, 'verification_failed:artifact_delivery');
+  assert.deepEqual(result.artifacts, []);
+  assert.equal(finishedReason, result.stoppedReason);
+  assert.equal(result.agentRun?.stoppedReason, result.stoppedReason);
 });
 
 test('SAV and Excel generation cannot finalize at 1×1 and can repair to a verified 20×20 pair', async (t) => {
@@ -981,6 +1111,8 @@ test('SAV and Excel generation cannot finalize at 1×1 and can repair to a verif
   assert.equal(result.stoppedReason, 'finalized');
   assert.deepEqual(inspected, [['savold', 'xlsxold'], ['savnew', 'xlsxnew']]);
   assert.ok(result.steps.length >= 10, 'the first finalize must be rejected before the repaired pair');
+  assert.deepEqual(result.artifacts.map((artifact) => artifact.id).sort(), ['savnew', 'xlsxnew'],
+    'obsolete draft files must not appear alongside the verified pair');
 });
 
 test('SAV and Excel byte comparison satisfies computation proof without a redundant model python_exec call', async (t) => {
