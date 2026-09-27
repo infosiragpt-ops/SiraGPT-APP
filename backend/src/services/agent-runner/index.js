@@ -202,6 +202,18 @@ function inferColorFromText(text) {
   return null;
 }
 
+function previewRendered(preview) {
+  const body = typeof preview === 'string' ? preview : preview?.text;
+  if (typeof body !== 'string' || !body.trim() || body.startsWith('ERROR:')) return false;
+  try {
+    const result = JSON.parse(body);
+    return result?.ok === true && result.skipped !== true
+      && Array.isArray(result.frames) && result.frames.length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
 const STYLE_EDIT_RE = /\b(ponlas?|p[ií]ntalas?|colorea|uniformisa|uniformiza|c[aá]mbialas|cambia(?:rles)?|fondo|hex)\b/i;
 // Any named color from the shared palette (naranja, turquesa, dorado, …),
 // the word "color", or a #hex — kept in sync with tools.NAMED_COLORS so a
@@ -783,13 +795,35 @@ async function runAgentRunner({
       const previewTarget = outputs.find((o) => o.valid !== false);
       onEvent({ type: 'tool_call', tool: 'render_preview', label: 'Verificando resultado', preview: previewTarget.name });
       const preview = await executors.render_preview({ path: `outputs/${previewTarget.name}` });
+      const rendered = previewRendered(preview);
       onEvent({
         type: 'tool_result',
         tool: 'render_preview',
-        ok: !String(preview).startsWith('ERROR:'),
+        ok: rendered,
         preview,
         label: 'Verificando resultado',
       });
+      const fastPathSteps = [
+        { tool: color ? 'set_slide_background' : 'execute_python', ok: true },
+        { tool: 'render_preview', ok: rendered },
+      ];
+      if (!rendered) {
+        reportOfficeFailure({
+          tool: 'render_preview', code: 'preview_failed', fatal: true,
+          error: 'La presentación se editó, pero no se pudo renderizar para verificarla.',
+        });
+        onEvent({ type: 'output_invalid', name: previewTarget.name, reason: 'preview_failed' });
+        onEvent({ type: 'outputs', count: 0, names: [], label: 'Sin verificación visual' });
+        return {
+          finalText: 'No pude verificar visualmente la presentación editada. No entregué el archivo sin comprobar.',
+          outputs: [],
+          driver: sandbox.driver,
+          model: resolvedModel,
+          iterations: 0,
+          steps: fastPathSteps,
+          stoppedReason: 'verification_failed',
+        };
+      }
       const namesOut = outputs.map((o) => o.name).join(', ');
       const summary = color
         ? `Listo. Generé ${namesOut} con el color pedido (#${color}).`
@@ -801,7 +835,7 @@ async function runAgentRunner({
         driver: sandbox.driver,
         model: resolvedModel,
         iterations: 0,
-        steps: [],
+        steps: fastPathSteps,
         stoppedReason: 'fast_path',
       };
     }
