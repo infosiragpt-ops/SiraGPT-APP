@@ -175,7 +175,7 @@ async function createAndVerify(filename, python, expectedFormat, events) {
   const chatRun = await require('../src/services/agentic-chat-stream').runAgenticChat({
     openai: selectedModel,
     model: 'grok-4.7', provider: 'xAI',
-    userQuery: 'Abre el SAV y Excel que acabas de generar y compara los 400 valores',
+    userQuery: 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.',
     history: [], res: response, maxSteps: 3,
     selection: { decision: { intent: 'data_analysis' }, signals: { hasFiles: false } },
     toolContext: { userId: 'spss-runtime-smoke', chatId: 'spss-excel-pair', fileIds: [], prisma: chatPrisma },

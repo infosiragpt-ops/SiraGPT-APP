@@ -40,8 +40,8 @@ function isReadOnlyGeneratedArtifactFollowup(goal) {
 function requestedFormats(goal) {
   const text = normalized(goal);
   const formats = new Set();
-  if (/\b(?:spss|sav)\b|\.sav\b/.test(text)) formats.add('sav');
-  if (/\b(?:excel|xlsx)\b|\.xlsx\b/.test(text)) formats.add('xlsx');
+  if (/\b(?:spss|sav)\b|\.sav\b|\bpyreadstat\.read_sav\b/.test(text)) formats.add('sav');
+  if (/\b(?:excel|xlsx|openpyxl)\b|\.xlsx\b/.test(text)) formats.add('xlsx');
   if (/\b(?:word|docx)\b|\.docx\b/.test(text)) formats.add('docx');
   if (/\b(?:powerpoint|pptx?)\b|\.pptx\b/.test(text)) formats.add('pptx');
   if (/\bpdf\b|\.pdf\b/.test(text)) formats.add('pdf');

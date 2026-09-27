@@ -14,6 +14,7 @@ const objectStorage = require('../src/services/object-storage');
 const { saveArtifact, INTERNAL } = require('../src/services/agents/task-tools');
 const { resolveChatGeneratedArtifactFollowup } = require('../src/services/agents/generated-artifact-followup');
 const { runAgenticChat } = require('../src/services/agentic-chat-stream');
+const PRODUCTION_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.';
 
 function deliveredMessage(id, artifacts) {
   return {
@@ -49,7 +50,7 @@ test('normal chat recovers only the last validated SAV/XLSX delivery for its own
   const wrongChat = saveArtifact({ filename: 'wrong.xlsx', base64: Buffer.from('bad').toString('base64'), ownerUserId: 'owner', chatId: 'chat-b', validation: { passed: true } });
   const message = deliveredMessage('delivery', [sav, xlsx, invalid, foreign, wrongChat]);
   const prisma = chatPrisma('owner', 'chat-a', [deliveredMessage('later-text', []), message]);
-  const goal = 'Abre el SAV y Excel que acabas de generar y compara los 400 valores';
+  const goal = PRODUCTION_GOAL;
   const refs = await resolveChatGeneratedArtifactFollowup(prisma, { userId: 'owner', chatId: 'chat-a', goal, providedFileIds: [] });
   assert.deepEqual(refs.map(({ id }) => id), [sav.id, xlsx.id]);
   assert.deepEqual(await resolveChatGeneratedArtifactFollowup(prisma, { userId: 'other', chatId: 'chat-a', goal }), []);
@@ -99,7 +100,7 @@ test('normal chat follow-up forces byte reading via selected model and R2, witho
     openai,
     model: 'grok-4.7',
     provider: 'xAI',
-    userQuery: 'Abre el SAV y Excel que acabas de generar y compara los 400 valores',
+    userQuery: PRODUCTION_GOAL,
     history: [
       { role: 'user', content: 'Crea los dos archivos.' },
       { role: 'assistant', ...deliveredMessage('delivery', [sav, xlsx]) },
@@ -133,7 +134,7 @@ test('normal chat never claims equality when the byte-reading tool is unavailabl
   }) } } };
   const result = await runAgenticChat({
     openai, model: 'grok-4.7', provider: 'xAI',
-    userQuery: 'Abre el SAV y Excel que acabas de generar y compara los 400 valores',
+    userQuery: PRODUCTION_GOAL,
     res: response, maxSteps: 3,
     toolsOverride: [{ name: 'read_file', description: 'not the artifact tool', parameters: { type: 'object', properties: {} }, execute: async () => ({ ok: false }) }],
     toolContext: { userId: 'owner', chatId: 'chat-a', fileIds: [], prisma: chatPrisma('owner', 'chat-a', [deliveredMessage('delivery', [sav, xlsx])]) },
@@ -158,7 +159,7 @@ test('normal chat does not borrow an older SAV when the latest delivery contains
   }) } } };
   const result = await runAgenticChat({
     openai, model: 'grok-4.7', provider: 'xAI',
-    userQuery: 'Abre el SAV y Excel que acabas de generar y compara los 400 valores',
+    userQuery: PRODUCTION_GOAL,
     res: response, maxSteps: 3,
     toolsOverride: [{ name: 'read_file', description: 'not the artifact tool', parameters: { type: 'object', properties: {} }, execute: async () => ({ ok: false }) }],
     toolContext: { userId: 'owner', chatId: 'chat-a', fileIds: [], prisma: chatPrisma('owner', 'chat-a', [deliveredMessage('latest', [xlsx]), deliveredMessage('older', [sav, xlsx])]) },
