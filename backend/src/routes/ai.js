@@ -7546,6 +7546,7 @@ router.post(
             // client; if we then fall back to the plain stream we must wipe
             // that sentinel first (aiService.generateStream only appends).
             let __agenticDidStream = false;
+            let __chatGeneratedRefs = [];
             // ─── Agentic chat path (feature-flagged) ─────────────────
             // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
             // do OpenAI-style tool calls AND there are no images
@@ -7566,7 +7567,17 @@ router.post(
                 documentEditRequested = require('../services/agents/agentic-trigger')
                   .isDocumentEditRequest(prompt);
               } catch (_) { documentEditRequested = false; }
-              const shouldRunAgentic = Boolean(verifiedCodingWorkspace) || agenticStream.shouldUseAgenticChat({
+              __chatGeneratedRefs = await require('../services/agents/generated-artifact-followup')
+                .resolveChatGeneratedArtifactFollowup(prisma, {
+                  userId,
+                  chatId: canPersist ? chatId : null,
+                  // `processedFiles` may contain an older uploaded document
+                  // reattached by chat history; only this request's files can
+                  // disqualify a generated-artifact follow-up.
+                  providedFileIds: Array.isArray(req.body?.files) ? req.body.files : [],
+                  goal: prompt,
+                });
+              const shouldRunAgentic = __chatGeneratedRefs.length > 0 || Boolean(verifiedCodingWorkspace) || agenticStream.shouldUseAgenticChat({
                 prompt,
                 history: priorHistory,
                 files: processedFiles || [],
@@ -7616,7 +7627,7 @@ router.post(
               const __agenticWillRun = (
                 agenticStream.isEnabled()
                 && (shouldRunAgentic || __rlcdLane.forced === true || (req._rlcdMedia && req._rlcdMedia.force === true) || documentEditRequested || createDocRequested)
-                && !(__rlcdLane.vetoed === true && !verifiedCodingWorkspace && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
+                && !(__rlcdLane.vetoed === true && __chatGeneratedRefs.length === 0 && !verifiedCodingWorkspace && !documentEditRequested && !createDocRequested && !(req._rlcdMedia && req._rlcdMedia.force === true))
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
                 && !isSiraMiniAlias(actualModel)
@@ -7715,7 +7726,7 @@ router.post(
                 const agenticToolOpenAI = actualProvider === 'Anthropic'
                   ? createProviderClient('OpenAI')
                   : agenticClient;
-                const agenticFileIds = (processedFiles || [])
+                const agenticFileIds = (__chatGeneratedRefs.length ? [] : (processedFiles || []))
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
                   .map(String);
@@ -7727,7 +7738,7 @@ router.post(
                 // rag_retrieve/docintel remain the fallback for the overflow.
                 let agenticAttachedDocuments = '';
                 try {
-                  const agenticDocs = (processedFiles || [])
+                  const agenticDocs = (__chatGeneratedRefs.length ? [] : (processedFiles || []))
                     .filter((file) => file && !isImageMime(file.mimeType || file.type));
                   // NaN-only fallback: respect an explicit 0 (floors to the
                   // 8 KB/file minimum below) instead of `|| 120000` eating it.
@@ -7834,6 +7845,7 @@ router.post(
                       ? Math.max(0.01, Number(req.body.coworkBudget.maxCostUsd))
                       : null,
                     fileIds: agenticFileIds,
+                    generatedArtifactRefs: __chatGeneratedRefs,
                     fileMetadata: (processedFiles || []).map((file) => ({
                       id: file && (file.id || file.fileId || file.uploadId || file.databaseId),
                       mimeType: file && (file.mimeType || file.type || file.contentType),
@@ -7923,6 +7935,12 @@ router.post(
             } catch (agenticErr) {
               generateLog.warnError('agentic.loop_failed', agenticErr);
               // Fall through to aiService.generateStream below.
+            }
+
+            if (__chatGeneratedRefs.length) {
+              const message = 'No pude abrir y verificar los archivos generados en este chat. No puedo concluir si sus datos coinciden; vuelve a intentarlo.';
+              if (!res.writableEnded) res.write(`data: ${JSON.stringify({ replace: true, content: message })}\n\n`);
+              return message;
             }
 
             // Never report a plain-text completion as a successful code edit.

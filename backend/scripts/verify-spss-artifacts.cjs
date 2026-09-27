@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { PassThrough } = require('node:stream');
 
 const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-spss-artifacts-'));
 process.env.AGENT_ARTIFACT_DIR = artifactDir;
@@ -114,9 +115,7 @@ async function createAndVerify(filename, python, expectedFormat, events) {
     goal: 'Sin crear ni modificar: abre y compara el SAV y el Excel que acabas de entregar; verifica los 400 valores.',
   });
   assert.equal(refs.length, 2);
-  const compared = await INTERNAL.pythonExec.execute({
-    timeoutMs: 30000,
-    source: [
+  const comparisonSource = [
       'import json, pyreadstat',
       'from openpyxl import load_workbook',
       'files = list(ARTIFACT_FILES.values())',
@@ -131,7 +130,10 @@ async function createAndVerify(filename, python, expectedFormat, events) {
       'result = {"savShape": list(frame.shape), "excelShape": [len(values), len(headers)], "mismatches": int(mismatches), "labelCount": sum(bool(label) for label in metadata.column_labels)}',
       'book.close()',
       'print(json.dumps(result))',
-    ].join('\n'),
+    ].join('\n');
+  const compared = await INTERNAL.pythonExec.execute({
+    timeoutMs: 30000,
+    source: comparisonSource,
   }, {
     userId: 'spss-runtime-smoke',
     chatId: 'spss-excel-pair',
@@ -141,7 +143,52 @@ async function createAndVerify(filename, python, expectedFormat, events) {
   assert.deepEqual(JSON.parse(compared.stdout.trim().split('\n').at(-1)), {
     savShape: [20, 20], excelShape: [20, 20], mismatches: 0, labelCount: 20,
   });
-  process.stdout.write('create_document + follow-up Python: R2-hydrated SAV/XLSX 20 x 20 and 400 values verified\n');
+  // The real /agentes route enters agentic-chat-stream, not /api/agent/task.
+  // Reopen the same saved delivery with files:[] through that chat runner and
+  // prove its first model-selected tool sees both R2-hydrated binaries.
+  const cards = saved.map((artifact) => ({ id: artifact.artifactId, filename: artifact.filename }));
+  const chatPrisma = {
+    generatedArtifact: { findMany: async () => [] },
+    chat: { findFirst: async ({ where }) => where.userId === 'spss-runtime-smoke' && where.id === 'spss-excel-pair' ? { id: where.id } : null },
+    message: { findMany: async () => [{
+      id: 'delivery-message',
+      content: '```agent-task-state\n' + JSON.stringify({ artifacts: cards, done: true }) + '\n```\n\nArchivos listos.',
+    }] },
+  };
+  const response = new PassThrough();
+  response.on('data', () => {});
+  response.flushHeaders = () => {};
+  response.setHeader = () => {};
+  let firstToolChoice = null;
+  let calls = 0;
+  const selectedModel = { chat: { completions: { create: async (args) => {
+    if (calls++ === 0) {
+      firstToolChoice = args.tool_choice;
+      return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+        id: 'compare-pair', type: 'function', function: { name: 'python_exec', arguments: JSON.stringify({ source: comparisonSource, timeoutMs: 30000 }) },
+      }] } }] };
+    }
+    return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{
+      id: 'finish', type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: 'Comparé las 20 preguntas en los 20 registros: 400 de 400 valores coinciden.', confidence: 'high' }) },
+    }] } }] };
+  } } } };
+  const chatRun = await require('../src/services/agentic-chat-stream').runAgenticChat({
+    openai: selectedModel,
+    model: 'grok-4.7', provider: 'xAI',
+    userQuery: 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.',
+    history: [], res: response, maxSteps: 3,
+    selection: { decision: { intent: 'data_analysis' }, signals: { hasFiles: false } },
+    toolContext: { userId: 'spss-runtime-smoke', chatId: 'spss-excel-pair', fileIds: [], prisma: chatPrisma },
+  });
+  assert.equal(firstToolChoice?.function?.name, 'python_exec');
+  const chatRead = chatRun.steps.find((step) => step.actions?.some((action) => action.tool === 'python_exec'));
+  const chatOutput = chatRead?.actions?.find((action) => action.tool === 'python_exec')?.observation;
+  assert.equal(chatOutput?.ok, true, chatOutput?.stderr || 'chat did not read both files');
+  assert.deepEqual(JSON.parse(chatOutput.stdout.trim().split('\n').at(-1)), {
+    savShape: [20, 20], excelShape: [20, 20], mismatches: 0, labelCount: 20,
+  });
+  assert.match(chatRun.finalAnswer, /400 de 400 valores coinciden/);
+  process.stdout.write('create_document + normal-chat follow-up: R2-hydrated SAV/XLSX 20 x 20 and 400 values verified\n');
 })().catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);
   process.exitCode = 1;
