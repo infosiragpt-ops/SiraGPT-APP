@@ -362,7 +362,9 @@ async function loadSourceFiles(sources, deps) {
     if (buffer.length > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) {
       throw new DocumentEditError('FILE_TOO_LARGE', MESSAGES.FILE_TOO_LARGE);
     }
-    files.push({ name: source.name, buffer });
+    // A delivered earlier version is the latest state of the document: the
+    // office engine continues from it (isPriorArtifact → prompt).
+    files.push({ name: source.name, buffer, ...(source.kind === 'artifact' ? { isPriorArtifact: true } : {}) });
   }
   return files;
 }
@@ -489,6 +491,18 @@ function stageFor(event) {
     case 'tool_call': return { label: 'Editando el documento', detail: String(event.preview || event.tool || '').slice(0, 160) };
     default: return null;
   }
+}
+
+/**
+ * Office-engine events that belong to a tool call (callId) travel as stage v2
+ * (one timeline row per tool, with kind / status / detail / thumbnails); the
+ * legacy doc-agent events keep their editor phrases.
+ */
+function relayStage(event) {
+  if (event && event.callId) {
+    try { return require('../agent-runner/trace').toStageEvent(event); } catch { /* fall back */ }
+  }
+  return stageFor(event);
 }
 
 /** The loop's final text talks about sandbox paths; the user only needs the change summary. */
@@ -813,11 +827,20 @@ async function runResolvedDocumentEdit({
       return await editDocxImage({ wordFile, imageEdit, instruction, prisma, userId, chatId, fileIds, signal, deps, emit });
     }
     if (wordFile && !llm.client) return { ok: false, code: 'ENGINE_FAILED', message: MESSAGES.ENGINE_FAILED };
-    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env)) {
+    // Indent / tracked changes / paraphrases go to the office engine below.
+    const wordOnOfficeEngine = Boolean(wordFile) && typeof deps.wordNeedsOfficeEngine === 'function'
+      && deps.wordNeedsOfficeEngine(instruction, deps.env);
+    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env) && !wordOnOfficeEngine) {
       const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
       const extraContext = [await loadRecentUserText({ prisma, userId, chatId, instruction }), batchContext].filter(Boolean).join('\n');
       let edited;
       try {
+        let visualVerify = null;
+        try {
+          visualVerify = typeof deps.makeVisualVerifier === 'function'
+            ? deps.makeVisualVerifier({ pickedModel: llm.model, env: deps.env })
+            : null;
+        } catch { visualVerify = null; }
         edited = await deps.docxEngine.editWordDocument({
           buffer: wordFile.buffer,
           filename: wordFile.name,
@@ -827,6 +850,7 @@ async function runResolvedDocumentEdit({
           extraContext,
           signal,
           onEvent: emit,
+          ...(visualVerify ? { visualVerify } : {}),
         });
       } catch (err) {
         if (signal?.aborted) throw err;
@@ -920,7 +944,9 @@ async function runResolvedDocumentEdit({
         route: 'sandbox', // A global route override cannot replace the picked provider.
         signal,
         maxIterations: DOC_AGENT_MAX_ITERATIONS,
-        onEvent: (event) => { const stage = stageFor(event); if (stage) emit(stage); },
+        userId,
+        chatId,
+        onEvent: (event) => { const stage = relayStage(event); if (stage) emit(stage); },
       });
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -991,7 +1017,20 @@ function resolveDeps(injected) {
     readSourceBuffer: lazy('readSourceBuffer', () => require('../source-preserving-document-edit').readSourceBuffer),
     extractFileIds: lazy('extractFileIds', () => require('../message-attachments').extractFileIdsFromMessageFiles),
     saveArtifact: lazy('saveArtifact', () => require('../agents/task-tools').saveArtifact),
-    runDocumentAgent: lazy('runDocumentAgent', () => require('../doc-agent').runDocumentAgent),
+    // Edición milimétrica (Fase G): Excel / PowerPoint run on the AgentRunner
+    // office engine; PDFs and other formats keep the sandbox doc-agent loop
+    // (its PDF skills). SIRAGPT_DOCUMENT_EDITOR_ENGINE=legacy keeps that loop
+    // for everything.
+    runDocumentAgent: lazy('runDocumentAgent', () => {
+      const office = require('./office-engine');
+      const legacy = require('../doc-agent').runDocumentAgent;
+      if (!office.officeEditorEnabled(injected.env || process.env)) return legacy;
+      return (options) => (office.officeEngineHandles(options && options.files)
+        ? office.runOfficeEditorEngine(options)
+        : legacy(options));
+    }),
+    makeVisualVerifier: lazy('makeVisualVerifier', () => require('./office-engine').makeOfficeVisualVerifier),
+    wordNeedsOfficeEngine: lazy('wordNeedsOfficeEngine', () => require('./office-engine').wordNeedsOfficeEngine),
     tryDeterministicEdit: lazy('tryDeterministicEdit', () => require('../source-preserving-document-edit').tryGenerateSourcePreservingDocumentEdit),
     parseDocxPrecisionRequest: lazy('parseDocxPrecisionRequest', () => (...args) => require('../document-editing/docx-precision-intent').parseDocxPrecisionRequest(...args)),
     applyDocxPrecisionEdit: lazy('applyDocxPrecisionEdit', () => (...args) => require('../document-editing/docx-precision-edit').applyDocxPrecisionEdit(...args)),
@@ -1019,5 +1058,5 @@ module.exports = {
   toAssistantFiles,
   cleanSummary,
   MESSAGES,
-  INTERNAL: { buildEditorClient, stageFor, artifactIdFromRef, withTransientRetry, withDeepSeekToolTranscript },
+  INTERNAL: { buildEditorClient, stageFor, relayStage, artifactIdFromRef, withTransientRetry, withDeepSeekToolTranscript },
 };

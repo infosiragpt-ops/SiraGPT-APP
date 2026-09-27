@@ -75,6 +75,7 @@ const TOOL_CALL_LABELS = Object.freeze({
 });
 
 const THINKING_TYPES = new Set(['iteration_start', 'thought']);
+const STAGE_KINDS = new Set(['terminal', 'document', 'search', 'web', 'edit', 'image', 'check', 'thinking']);
 const MAX_DESCRIPTION_CHARS = 120;
 const MAX_DETAIL_CHARS = 600;
 const MAX_THUMBS = 2;
@@ -202,7 +203,9 @@ function applyStageV2(base, ev, type) {
   }
   if (!callId || (type !== 'tool_call' && type !== 'tool_result')) return;
   base.callId = callId;
-  const kind = KIND_BY_TOOL[String(ev.tool || '')];
+  // Producers that know their icon family (the docx engine) send `kind`.
+  const kind = (typeof ev.kind === 'string' && STAGE_KINDS.has(ev.kind) ? ev.kind : null)
+    || KIND_BY_TOOL[String(ev.tool || '')];
   if (kind) base.kind = kind;
   if (type === 'tool_call') {
     base.status = 'running';

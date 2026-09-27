@@ -10210,12 +10210,22 @@ router.post(
     const processedFiles = fileIds.length
       ? (await Promise.all(fileIds.map((id) => loadUserFile(id, userId).catch(() => null)))).filter(Boolean)
       : [];
+    // Edición milimétrica (Fase G): the editor's stage timeline is persisted
+    // with the assistant row (agent_metadata.activityTrace), like runner turns.
+    let editorTrace = null;
+    try {
+      const { createActivityTraceCollector, createArtifactThumbSaver } = require('../services/agent-runner/activity-trace');
+      editorTrace = createActivityTraceCollector({ saveThumb: createArtifactThumbSaver({ userId }) });
+    } catch (_) { editorTrace = null; }
     const persist = async (content, assistantFiles = []) => {
+      let activityTrace = null;
+      try { activityTrace = editorTrace ? editorTrace.toMetadata() : null; } catch (_) { activityTrace = null; }
       try {
         const saved = await saveChatAndTrackUsage(
           userId, chatId, prompt, content, prompt.length + content.length, actualModel,
           processedFiles, assistantFiles, false,
           { idempotencyKey, streamId, source: 'document-editor' }, userPlan,
+          null, null, 0, { activityTrace },
         );
         return saved?.assistantMessage?.id || null;
       } catch (saveErr) {
@@ -10234,7 +10244,14 @@ router.post(
         instruction: prompt,
         llm: { client, model: actualModel, provider: actualProvider, toolCallMode },
         signal: controller.signal,
-        onEvent: (stage) => send({ type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}) }),
+        onEvent: (stage) => {
+          if (!stage || !stage.label) return;
+          // Stage v2 fields (callId / kind / status / description / detail /
+          // thumbs) travel as-is; legacy stages keep { label, detail }.
+          const frame = { ...stage, type: 'stage' };
+          try { if (editorTrace) editorTrace.push(frame); } catch (_) { /* trace never breaks the edit */ }
+          send(frame);
+        },
       });
       const files = toAssistantFiles(result.artifacts || []);
       const { deliverDocumentEdit } = require('../services/document-editor/deliver-edit');

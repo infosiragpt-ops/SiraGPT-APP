@@ -939,12 +939,18 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // Edición milimétrica (SPEC §7 D.3): the stage timeline of an AgentRunner
     // turn, persisted with the message so a reload shows the same steps.
     let agentRunnerTrace = null;
+    // Fase G: the document-edit pre-step (docx engine / office engine) streams
+    // the same stage v2 timeline and persists it the same way.
+    let documentEditTrace = null;
     const finishSourcePreservingPreloop = (stoppedReason, answer, artifacts = []) => {
       const finalAnswer = String(answer || '').trim();
       const reason = String(stoppedReason || '');
       let agentActivityTrace = null;
-      if (agentRunnerTrace && (reason === 'agent_runner' || reason === 'agent_runner_failed')) {
-        try { agentActivityTrace = agentRunnerTrace.toMetadata(); } catch (_) { agentActivityTrace = null; }
+      const turnTrace = (reason === 'agent_runner' || reason === 'agent_runner_failed')
+        ? agentRunnerTrace
+        : (reason.startsWith('source_preserving_document') ? documentEditTrace : null);
+      if (turnTrace) {
+        try { agentActivityTrace = turnTrace.toMetadata(); } catch (_) { agentActivityTrace = null; }
       }
       const preloopTool = reason.startsWith('github_')
         ? 'github_open_repo'
@@ -1125,6 +1131,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           fileIds: preloopFileIds,
           instruction: userQuery,
           model,
+          // Engines follow the model picked in the composer (first rung of
+          // the runner ladder; failover only on provider errors).
+          pickedModel: require('./agent-runner').runnerModelSpec(provider, model),
           signal,
           onEvent: (ev) => {
             Promise.resolve((async () => {
@@ -1182,7 +1191,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         } = require('./source-preserving-document-edit');
         if (isSourcePreservingEditRequest(userQuery, preloopFileIds)) {
           documentEditPreloopAttempted = true;
-          await writeSse(res, { type: 'stage', label: 'Editando documento original', tool: 'document_edit' });
+          try {
+            const { createActivityTraceCollector, createArtifactThumbSaver } = require('./agent-runner/activity-trace');
+            documentEditTrace = createActivityTraceCollector({
+              saveThumb: createArtifactThumbSaver({ userId: toolContext.userId }),
+            });
+          } catch (_) { documentEditTrace = null; }
+          const editStartStage = { type: 'stage', label: 'Editando documento original', tool: 'document_edit' };
+          if (documentEditTrace) documentEditTrace.push(editStartStage);
+          await writeSse(res, editStartStage);
           const preserved = await tryGenerateSourcePreservingDocumentEdit({
             prisma: toolContext.prisma,
             userId: toolContext.userId,
@@ -1192,7 +1209,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             displayPrompt: userQuery,
             signal,
             llm: { client: openai, model, provider, toolCallMode },
-            onEvent: (stage) => { writeSse(res, { type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}), tool: 'document_edit' }).catch(() => {}); },
+            onEvent: (stage) => {
+              if (!stage || !stage.label) return;
+              // Stage v2 frames (a tool call of the editor) keep their tool and
+              // pairing fields; legacy frames stay document_edit stages.
+              const frame = stage.callId
+                ? { ...stage, type: 'stage' }
+                : { type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}), tool: 'document_edit' };
+              if (documentEditTrace) { try { documentEditTrace.push(frame); } catch (_) { /* trace never breaks the edit */ } }
+              writeSse(res, frame).catch(() => {});
+            },
           });
           if (preserved?.clarification) {
             const answer = String(preserved.content || '').trim();

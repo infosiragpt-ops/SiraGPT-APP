@@ -46,6 +46,12 @@ function requestAuthorsContent(instruction) {
     && /\b(?:comentarios?|observacion(?:es)?|sugerencias?|justificacion(?:es)?|descripcion(?:es)?|recomendacion(?:es)?|conclusion(?:es)?|argumentos?|explicacion(?:es)?|fundament\w*|notas?)\b/.test(t);
 }
 
+/** «cambia los márgenes», «ponlo horizontal», «tamaño A4»: the section may change. */
+function requestTouchesPageSetup(instruction) {
+  const t = String(instruction || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\b(?:margen(?:es)?|margin\w*|orientacion|horizontal|vertical|apaisad\w*|landscape|portrait|tamano de (?:la )?(?:pagina|hoja)|a4|carta|oficio|legal|columnas?)\b/.test(t);
+}
+
 function clipResult(text) {
   const s = String(text ?? '');
   return s.length > MAX_TOOL_RESULT_CHARS ? `${s.slice(0, MAX_TOOL_RESULT_CHARS)}\n… (resultado recortado)` : s;
@@ -57,16 +63,52 @@ function safeArgs(raw) {
   try { return JSON.parse(String(raw)); } catch { return { __parse_error: String(raw).slice(0, 300) }; }
 }
 
-function stageForTool(name, args) {
+// Stage v2 (edición milimétrica, Fase G): every docx tool call is one timeline
+// row — the model's phrase (or a derived one), the icon family, what ran and
+// what came back — paired by callId, the same shape the AgentRunner emits.
+const DOCX_TOOL_KIND = Object.freeze({
+  doc_outline: 'document',
+  doc_read: 'document',
+  doc_find: 'search',
+  finish: 'check',
+});
+
+function quoteShort(value, max = 60) {
+  const s = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  return `«${s.length > max ? `${s.slice(0, max - 1)}…` : s}»`;
+}
+
+/** The phrase the user reads for a docx tool call (the model's own when given). */
+function docxStepPhrase(name, args = {}) {
+  const own = typeof args.description === 'string' ? args.description.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  if (own) return own.slice(0, 120);
   switch (name) {
-    case 'doc_outline': return { label: 'Leyendo la estructura del documento' };
-    case 'doc_read': case 'doc_find': return { label: 'Revisando el documento', detail: String(args.id || args.query || '').slice(0, 80) };
-    case 'finish': return { label: 'Verificando el documento editado' };
-    case 'undo': return { label: 'Corrigiendo la edición' };
-    default: {
-      const what = args.label || args.cell || args.find || args.target || args.after || args.table || args.checkbox || '';
-      return { label: 'Editando el documento', detail: String(what).slice(0, 80) };
-    }
+    case 'doc_outline': return 'Leyendo la estructura del documento';
+    case 'doc_read': return 'Revisando el documento';
+    case 'doc_find': return args.query ? `Buscando ${quoteShort(args.query)}` : 'Buscando en el documento';
+    case 'fill_field': return args.label ? `Completando ${quoteShort(String(args.label).replace(/[:：]\s*$/, ''))}` : 'Completando un campo';
+    case 'set_cell': return 'Escribiendo en la tabla';
+    case 'set_cells': return Array.isArray(args.cells) && args.cells.length > 1 ? `Escribiendo en ${args.cells.length} celdas de la tabla` : 'Escribiendo en la tabla';
+    case 'replace_text': return args.find ? `Reemplazando ${quoteShort(args.find)}` : 'Reemplazando texto';
+    case 'insert_paragraph': return 'Agregando un párrafo';
+    case 'insert_table_row': return 'Agregando una fila a la tabla';
+    case 'delete': return 'Eliminando contenido';
+    case 'set_format': return 'Aplicando formato';
+    case 'set_checkbox': return 'Marcando una casilla';
+    case 'fill_content_control': return 'Completando un control del formulario';
+    case 'undo': return 'Corrigiendo la edición';
+    case 'finish': return 'Comparando antes y después';
+    default: return 'Editando el documento';
+  }
+}
+
+function docxStepDetail(name, args = {}) {
+  try {
+    const { previewArgs } = require('../agent-runner/trace');
+    return previewArgs(name, args);
+  } catch (_) {
+    return '';
   }
 }
 
@@ -85,6 +127,7 @@ async function runDocxEngineEdit({
   render = null,
   maxIterations = MAX_ITERATIONS,
   extraContext = '',
+  visualVerify = null,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runDocxEngineEdit: client is required');
   const emit = (stage) => { try { onEvent(stage); } catch { /* UI relay never breaks the edit */ } };
@@ -98,7 +141,7 @@ async function runDocxEngineEdit({
   } : null;
   if (originalRender) originalRender();
 
-  const state = { finished: false, status: null, summary: '', verification: null, editedBuffer: null, verifyRounds: 0, authorNudged: false };
+  const state = { finished: false, status: null, summary: '', verification: null, editedBuffer: null, verifyRounds: 0, authorNudged: false, lastThumbs: null };
   const authorsContent = requestAuthorsContent(instruction);
 
   const onFinish = async ({ status = 'done', summary = '', expected_values: expectedValues = [] } = {}) => {
@@ -125,6 +168,7 @@ async function runDocxEngineEdit({
       expectedValues: Array.isArray(expectedValues) ? expectedValues : [],
       render,
       originalRender,
+      allowSectionChange: requestTouchesPageSetup(instruction),
     });
     if (verification.ok) {
       emit({ label: 'Comprobando que los cambios cumplen tu petición' });
@@ -138,6 +182,39 @@ async function runDocxEngineEdit({
         verification.issues.push('No se pudo verificar que la edición cumple la petición. No se entregará el archivo sin esa comprobación.');
       }
       verification.ok = verification.issues.length === 0;
+    }
+    // Edición milimétrica (Fase G): the same visual verification as the
+    // AgentRunner — page render, changed zones in mm, before/after composite
+    // and the vision review. Deterministic checks rule: a vision veto asks
+    // for one more revision, and on the last round it is only reported.
+    if (verification.ok && typeof visualVerify === 'function') {
+      try {
+        const visual = await visualVerify({
+          originalBuffer: buffer,
+          editedBuffer: edited,
+          filename,
+          instruction,
+          expectedValues: Array.isArray(expectedValues) ? expectedValues : [],
+          signal,
+        });
+        if (visual) {
+          verification.report.visual = {
+            ok: visual.ok, visionOk: visual.visionOk ?? null, unavailable: Boolean(visual.unavailable),
+            summary: String(visual.text || '').slice(0, 2000),
+          };
+          if (Array.isArray(visual.thumbs) && visual.thumbs.length) state.lastThumbs = visual.thumbs.slice(0, 2);
+          const lastRound = state.verifyRounds + 1 >= MAX_VERIFY_ROUNDS;
+          if (visual.ok === false && !visual.unavailable && !(lastRound && visual.checksOk === true)) {
+            verification.issues.push(...(Array.isArray(visual.issues) && visual.issues.length
+              ? visual.issues
+              : ['La revisión visual no confirmó el cambio pedido en el documento renderizado.']));
+            verification.ok = false;
+          }
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        verification.report.visual = { ok: null, unavailable: true };
+      }
     }
     state.verifyRounds += 1;
     state.verification = verification;
@@ -215,16 +292,27 @@ async function runDocxEngineEdit({
       };
     }
     messages.push({ role: 'assistant', content: msg.content || null, tool_calls: calls, ...(msg.reasoning_content !== undefined ? { reasoning_content: msg.reasoning_content } : {}) });
-    for (const call of calls) {
+    for (let index = 0; index < calls.length; index += 1) {
+      const call = calls[index];
       throwIfAborted(signal);
       const name = call?.function?.name || '';
       const args = safeArgs(call?.function?.arguments);
-      emit(stageForTool(name, args));
+      const callId = String(call?.id || `docx_${iteration}_${index}`);
+      const phrase = docxStepPhrase(name, args);
+      const kind = DOCX_TOOL_KIND[name] || 'edit';
+      const detail = docxStepDetail(name, args);
+      emit({ step: 'tool_call', tool: name, callId, kind, status: 'running',
+        label: phrase, description: phrase, ...(detail ? { detail } : {}) });
       let result;
       if (args.__parse_error) result = `ERROR: los argumentos no son JSON válido: ${args.__parse_error}`;
       else if (!executors[name]) result = `ERROR: herramienta desconocida "${name}". Disponibles: ${Object.keys(executors).join(', ')}`;
       else if (state.finished) result = 'La edición ya terminó.';
       else result = await executors[name](args);
+      const failed = /^ERROR/.test(String(result)) || /^VERIFICACI[OÓ]N CON PROBLEMAS|no aprobó la edición/i.test(String(result));
+      const thumbs = name === 'finish' && state.lastThumbs ? state.lastThumbs : null;
+      emit({ step: 'tool_result', tool: name, callId, kind, status: failed ? 'error' : 'done', ok: !failed,
+        label: phrase, description: phrase, detail: String(result).slice(0, 400), ...(thumbs ? { thumbs } : {}) });
+      if (name === 'finish') state.lastThumbs = null;
       messages.push({ role: 'tool', tool_call_id: call.id || `call_${iteration}_${name}`, content: clipResult(result) });
     }
   }
@@ -241,4 +329,4 @@ async function runDocxEngineEdit({
   return { ok: false, status: 'failed', summary: '', changes: session.changes, verification: state.verification, iterations: iteration };
 }
 
-module.exports = { requestAuthorsContent, runDocxEngineEdit, SYSTEM_PROMPT };
+module.exports = { requestAuthorsContent, requestTouchesPageSetup, runDocxEngineEdit, SYSTEM_PROMPT, docxStepPhrase, DOCX_TOOL_KIND };

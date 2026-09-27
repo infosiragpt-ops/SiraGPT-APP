@@ -37,6 +37,15 @@ function parseJsonLoose(raw) {
   try { return JSON.parse(body.slice(start, end + 1)); } catch (_) { return null; }
 }
 
+function responseText(response) {
+  const message = response && response.choices && response.choices[0] && response.choices[0].message;
+  if (!message) return '';
+  if (typeof message.content === 'string') return message.content;
+  return Array.isArray(message.content)
+    ? message.content.map((part) => (part && typeof part.text === 'string' ? part.text : '')).join('')
+    : '';
+}
+
 function resolveVisionModel(env = process.env) {
   return String(env.SIRAGPT_VISION_VERIFY_MODEL || 'deepseek-flash').trim();
 }
@@ -48,7 +57,9 @@ function resolveVisionModel(env = process.env) {
  * @param {number} [opts.maxImages]
  * @returns {null|Function} verifyWithVision({ images, checklist, summary, signal }) → { ok: true|false|null, text, raw? }
  */
-function makeVisionVerifier({ client, model = resolveVisionModel(), maxImages = 3, maxTokens = 900 } = {}) {
+// Reasoning vision models (deepseek-flash) spend part of max_tokens thinking:
+// with 900 the JSON came back cut or empty in 3 of 4 production reviews.
+function makeVisionVerifier({ client, model = resolveVisionModel(), maxImages = 3, maxTokens = 4000 } = {}) {
   if (!client || !client.chat || !client.chat.completions || typeof client.chat.completions.create !== 'function') {
     return null;
   }
@@ -71,13 +82,15 @@ function makeVisionVerifier({ client, model = resolveVisionModel(), maxImages = 
         ],
         max_tokens: maxTokens,
         temperature: 0,
-      }, signal ? { signal } : undefined);
+      }, signal ? { signal } : undefined, {
+        // An empty or JSON-less answer lets the ladder try the next model.
+        accept: (candidate) => Boolean(parseJsonLoose(responseText(candidate))),
+      });
     } catch (err) {
       if (signal && signal.aborted) throw err;
       return { ok: null, text: `visión no disponible (${err && err.message ? err.message : err}); se usa solo la verificación automática` };
     }
-    const raw = response && response.choices && response.choices[0] && response.choices[0].message
-      ? response.choices[0].message.content : '';
+    const raw = responseText(response);
     const json = parseJsonLoose(raw);
     if (!json) {
       return { ok: null, text: 'el modelo de visión no devolvió JSON; se usa solo la verificación automática', raw };
@@ -96,5 +109,6 @@ module.exports = {
   VISUAL_REVIEW_SYSTEM_PROMPT,
   makeVisionVerifier,
   parseJsonLoose,
+  responseText,
   resolveVisionModel,
 };
