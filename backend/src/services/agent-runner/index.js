@@ -189,6 +189,17 @@ const COLOR_WORD_RE = new RegExp(
   'i',
 );
 const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|pon|ponle|ponme|coloca|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|inserta|reemplaza|borra|elimina)\b/i;
+// The deterministic paint fast path recolors EVERY slide background. It only
+// fits «ponlas todas rosadas» / «cambia el fondo a #1E3A8A»: «Mueve la nota
+// 2 mm a la derecha y ponla verde» painted all three slides green and never
+// moved the note (eval pptx-nota-mover-verde). A named element or a movement
+// goes to the loop, which edits that shape.
+const SLIDE_BACKGROUND_RE = /\b(fondos?|background|ponlas|p[ií]ntalas|c[aá]mbialas|col[oó]realas|uniformi[sz]a\w*|todas)\b/i;
+const SHAPE_TARGET_RE = /\b(notas?|cuadros?|recuadros?|t[ií]tulos?|subt[ií]tulos?|textos?|formas?|flechas?|celdas?|tablas?|im[aá]gen(?:es)?|logos?|letras?|fuentes?|bordes?|l[ií]neas?|[ií]conos?|gr[aá]ficos?|botones|bot[oó]n|palabras?|frases?|mueve|mover|mu[eé]vela|desplaza\w*)\b|\d+(?:[.,]\d+)?\s*(?:mm|cm|pt|px)\b/i;
+function isSlideBackgroundColorRequest(text) {
+  const t = String(text || '');
+  return SLIDE_BACKGROUND_RE.test(t) && !SHAPE_TARGET_RE.test(t);
+}
 // Pictures are read by the vision runtime, never by the document runner: an
 // attached screenshot must not turn «¿cuánto es?» into a document task.
 const IMAGE_FILE_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/i;
@@ -261,9 +272,27 @@ function explicitRunnerModel(env = process.env) {
   return env.SIRAGPT_AGENT_RUNNER_MODEL || env.SIRAGPT_DOC_AGENT_MODEL || env.OPENROUTER_MODEL || null;
 }
 
-/** Production LLM for the runner: provider ladder with per-call failover. */
-function createRunnerLlmClient({ onEvent } = {}) {
-  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() }), {
+const PICKER_LADDER_PROVIDERS = new Set(['DeepSeek', 'Meta', 'Gemini', 'xAI', 'OpenAI', 'OpenRouter']);
+
+/**
+ * "Provider:model" of the model picked in the composer, when its provider is a
+ * rung of the runner ladder (engines follow the picked model; Custom / other
+ * providers keep the ladder order).
+ */
+function runnerModelSpec(provider, model) {
+  const p = String(provider || '').trim();
+  const m = String(model || '').trim();
+  if (!m || !PICKER_LADDER_PROVIDERS.has(p)) return null;
+  return `${p}:${m}`;
+}
+
+/**
+ * Production LLM for the runner: provider ladder with per-call failover. The
+ * operator pin (env) wins; otherwise the model picked in the composer goes
+ * first and the ladder only takes over on provider errors.
+ */
+function createRunnerLlmClient({ onEvent, pickedModel = null } = {}) {
+  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() || pickedModel || null }), {
     onFailover: (info) => {
       try { console.warn('[agent-runner] llm failover:', info.from, '→', info.to, info.status || '', info.message); } catch (_) { /* ignore */ }
       if (typeof onEvent === 'function') { try { onEvent({ type: 'llm_failover', ...info }); } catch (_) { /* ignore */ } }
@@ -342,6 +371,74 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
   return outputs;
 }
 
+/**
+ * A persistent chat workspace (persistKey = chatId) keeps earlier turns'
+ * outputs/. Those files are history, never this turn's deliverable: a loop
+ * that stopped before editing re-delivered the previous deck as «Listo.
+ * Generé …». At turn start they move to tmp/previous-outputs/ (still
+ * readable), so outputs/ only holds what this turn writes. The latest version
+ * the user works on is staged in uploads/ anyway.
+ */
+async function archivePreviousOutputs(sandbox) {
+  if (!sandbox || !sandbox.persistent || typeof sandbox.exec !== 'function') return false;
+  try {
+    const res = await sandbox.exec(
+      'rm -rf /workspace/tmp/previous-outputs && mkdir -p /workspace/tmp/previous-outputs'
+        + ' && find /workspace/outputs -mindepth 1 -maxdepth 1 -exec mv {} /workspace/tmp/previous-outputs/ \\;',
+      { timeoutMs: 20_000 },
+    );
+    return !res || res.exitCode === undefined || res.exitCode === 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Fallback when the archive could not run: never deliver a file identical to
+// one that was already there before the turn.
+async function fingerprintOutputs(sandbox) {
+  const seen = new Map();
+  if (!sandbox || !sandbox.persistent || typeof sandbox.collectOutputs !== 'function') return seen;
+  try {
+    for (const out of await sandbox.collectOutputs()) {
+      if (out && out.name && Buffer.isBuffer(out.buffer)) {
+        seen.set(out.name, require('crypto').createHash('sha256').update(out.buffer).digest('hex'));
+      }
+    }
+  } catch (_) { /* no snapshot → nothing is excluded */ }
+  return seen;
+}
+
+function dropPreviousTurnOutputs(outputs = [], previous = new Map(), onEvent = () => {}) {
+  if (!previous || !previous.size) return outputs;
+  return (Array.isArray(outputs) ? outputs : []).filter((out) => {
+    const hash = out && Buffer.isBuffer(out.buffer)
+      ? require('crypto').createHash('sha256').update(out.buffer).digest('hex') : null;
+    const unchanged = Boolean(out && hash && previous.get(out.name) === hash);
+    if (unchanged) {
+      try { onEvent({ type: 'output_invalid', name: out.name, reason: 'previous_turn_output' }); } catch (_) { /* trace only */ }
+    }
+    return !unchanged;
+  });
+}
+
+/**
+ * An office_edit chain (first edit → verification → correction) leaves every
+ * version in outputs/; only the LAST link is the deliverable. An output that a
+ * later successful office_edit used as its `src` is an intermediate version
+ * and is not delivered (never drops everything).
+ */
+function dropIntermediateOutputs(outputs = [], steps = []) {
+  const consumed = new Set();
+  for (const step of Array.isArray(steps) ? steps : []) {
+    if (!step || step.tool !== 'office_edit' || step.ok === false) continue;
+    const src = String((step.args && (step.args.src || step.args.path)) || '').replace(/^\/?workspace\//, '');
+    if (src.startsWith('outputs/')) consumed.add(src.slice('outputs/'.length));
+  }
+  if (!consumed.size) return outputs;
+  const kept = outputs.filter((out) => !consumed.has(out.name));
+  return kept.length ? kept : outputs;
+}
+
 async function runAgentRunner({
   files = [],
   instruction,
@@ -357,6 +454,8 @@ async function runAgentRunner({
   // F4: optional system-prompt suffix (role prompt of an orchestrated
   // sub-agent). Empty for normal single-runner turns.
   systemAppend = '',
+  // "Provider:model" picked in the composer (runnerModelSpec): first rung.
+  pickedModel = null,
   // F4: text-producing sub-agents (researcher/data_analyst/verifier) may
   // legitimately finish without a file — skip the no-output retry loop for
   // them. Single-runner document turns keep the default (true).
@@ -438,6 +537,9 @@ async function runAgentRunner({
       if (f.isPriorArtifact) priorNames.push(name);
     }
     await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
+    const previousOutputs = (await archivePreviousOutputs(sandbox)) ? new Map() : await fingerprintOutputs(sandbox);
+    const collectTurnOutputs = async () => dropPreviousTurnOutputs(
+      await collectValidOutputs(sandbox, onEvent, editContext), previousOutputs, onEvent);
     const officeHelpersPy = loadOfficeHelpersPy();
     if (officeHelpersPy) {
       try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
@@ -498,7 +600,7 @@ async function runAgentRunner({
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
     const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
     let fastPathUsed = false;
-    if (color && pptxUpload && !isCreateRequest) {
+    if (color && pptxUpload && !isCreateRequest && isSlideBackgroundColorRequest(task)) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
       const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
       onEvent({
@@ -539,7 +641,7 @@ async function runAgentRunner({
       }
     }
 
-    let outputs = await collectValidOutputs(sandbox, onEvent, editContext);
+    let outputs = await collectTurnOutputs();
     if (fastPathUsed && outputs.filter((o) => o.valid !== false).length > 0) {
       const previewTarget = outputs.find((o) => o.valid !== false);
       onEvent({ type: 'tool_call', tool: 'render_preview', label: 'Verificando resultado', preview: previewTarget.name });
@@ -567,7 +669,7 @@ async function runAgentRunner({
       };
     }
 
-    if (!llm) llm = createRunnerLlmClient({ onEvent });
+    if (!llm) llm = createRunnerLlmClient({ onEvent, pickedModel });
 
     // ── F7 (multimodal) hook ─────────────────────────────────────────────
     // Vision / voice / bounded computer-use extras. Kill switches:
@@ -615,7 +717,7 @@ async function runAgentRunner({
       maxTokens: loopMaxTokens,
     });
     throwIfAborted(abortScope.signal);
-    outputs = await collectValidOutputs(sandbox, onEvent, editContext);
+    outputs = await collectTurnOutputs();
 
     let outputAttempt = 1;
     while (
@@ -654,8 +756,9 @@ async function runAgentRunner({
         maxTokens: loopMaxTokens,
       });
       throwIfAborted(abortScope.signal);
-      outputs = await collectValidOutputs(sandbox, onEvent, editContext);
+      outputs = await collectTurnOutputs();
     }
+    outputs = dropIntermediateOutputs(outputs, result && result.steps);
 
     // An edit that ends with its visual verification failed reaches the user
     // unverified: surface it to the admin turn-failure tracker.
@@ -709,6 +812,7 @@ async function runAgentRunnerForChat({
   attachedFiles = [],
   instruction,
   model,
+  pickedModel = null,
   client,
   signal,
   onEvent = () => {},
@@ -731,6 +835,7 @@ async function runAgentRunnerForChat({
     files: resolved.files,
     instruction,
     model,
+    pickedModel,
     client,
     onEvent,
     driver,
@@ -815,6 +920,7 @@ async function executeAgentRunnerTurn(params = {}) {
   const hasTurnFiles = (Array.isArray(params.fileIds) && params.fileIds.length > 0)
     || (Array.isArray(params.attachedFiles) && params.attachedFiles.length > 0);
   const colorFastPath = Boolean(inferColorFromText(instruction))
+    && isSlideBackgroundColorRequest(instruction)
     && (STYLE_EDIT_RE.test(instruction) || hasTurnFiles);
   const titleFastPath = isScopedSlideMutation(instruction) || Boolean(parsePresentationTitleEdit(instruction));
   if (!titleFastPath && !colorFastPath && !canCallLlm(params) && !params.client) {
@@ -874,6 +980,7 @@ async function executeAgentRunnerTurn(params = {}) {
         chatId: params.chatId,
         fileIds: params.fileIds,
         model: params.model,
+        pickedModel: params.pickedModel || null,
       }, { connection: params.queueConnection || connection });
       onEventSafe(params.onEvent, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner', jobId });
       return await waitForAgentRunnerJob({
@@ -936,6 +1043,7 @@ async function runAgentRunnerForDocRoute({
   prompt,
   fileIds = [],
   model,
+  pickedModel = null,
   client,
   signal,
   driver,
@@ -958,6 +1066,7 @@ async function runAgentRunnerForDocRoute({
     fileIds,
     instruction: text,
     model,
+    pickedModel,
     client,
     signal,
     driver,
@@ -1044,6 +1153,12 @@ function orchestratorEnabled(env) {
 }
 
 module.exports = {
+  dropIntermediateOutputs,
+  archivePreviousOutputs,
+  isSlideBackgroundColorRequest,
+  fingerprintOutputs,
+  dropPreviousTurnOutputs,
+  runnerModelSpec,
   shouldRunAgentRunner,
   createRunnerLlmClient,
   explicitRunnerModel,

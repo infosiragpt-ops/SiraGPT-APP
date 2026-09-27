@@ -709,6 +709,16 @@ async function resolveTranscriptionFileIds(prisma, {
  * an unrelated old upload is never hijacked by a "crea una app" task. Shared by
  * the chat route and the agent-task route.
  */
+// A question word alone («¿cuándo es 2+2?», «¿cómo estás?») is NOT a
+// follow-up about an earlier upload: it must also point at the document
+// (a document noun or an explicit reference). Edit verbs keep their old
+// behaviour — they only make sense on the chat's document. Prod 2026-09-27:
+// «cuando es 2+2?» re-attached the chat's (a+b)² screenshot to the new
+// message and re-sent it to the model.
+const DOC_QUESTION_RE = /\b(qu[eé]|cu[aá]l(es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|qui[eé]n(es)?|cu[aá]nto?s?|por qu[eé]|what|which|who|where|when|how|why|resume|res[uú]men|res[uú]me\w*|resumir|explica\w*|expl[ií]ca\w*|analiza\w*|an[aá]li[sz]\w*|de qu[eé] trata|menciona|dice|trata|contiene|summary|about|tell me)\b/i;
+const DOC_EDIT_RE = /\b(agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|corrig\w*|edit[ae]\w*|modific\w*|insert\w*|cambi\w*)\b/i;
+const DOC_REFERENCE_RE = /\b(documento|archivo|adjunto|fichero|pdf|word|docx?|excel|xlsx?|hoja|tabla|pptx?|diapositivas?|presentaci[oó]n|informe|reporte|tesis|investigaci[oó]n|art[ií]culo|t[ií]tulo|autor(es|a)?|objetivos?|conclusi[oó]n(es)?|resultados?|metodolog[ií]a|marco te[oó]rico|introducci[oó]n|antecedentes|justificaci[oó]n|hip[oó]tesis|variables?|secci[oó]n|cap[ií]tulo|p[aá]gina|p[aá]rrafo|anexos?|referencias|bibliograf[ií]a|celda|columna|fila|contenido|texto|imagen|foto|captura|transcripci[oó]n|audio|video|document|file|attachment|title|author|report|paper|page|section|chapter|research|de arriba|anterior|previo|mismo|misma)\b|\b(res[uú]me|expl[ií]ca|anal[ií]za|trad[uú]ce|revisa|corrige|l[eé]e)(lo|la|los|las)\b|\bde qu[eé] trata\b|\bqu[eé] dice\b/i;
+
 function looksLikeDocumentFollowupQuestion(text) {
   const raw = String(text || '').trim().toLowerCase();
   if (!raw || raw.length > 400) return false;
@@ -716,7 +726,21 @@ function looksLikeDocumentFollowupQuestion(text) {
   if (/\b(crea|cre[aá]me|genera|gener[aá]me|construye|desarrolla|dise[ñn]a|build|create|develop|investiga en internet|busca en (la )?(web|internet)|descarga|deploy|sube a|haz una (app|web|p[aá]gina))\b/i.test(v)) {
     return false;
   }
-  return /\b(qu[eé]|cu[aá]l(es)?|c[oó]mo|cu[aá]ndo|d[oó]nde|qui[eé]n(es)?|cu[aá]nto?s?|por qu[eé]|what|which|who|where|when|how|why|resume|res[uú]men|res[uú]me|resumir|explica|expl[ií]came|analiza|an[aá]lisis|de qu[eé] trata|t[ií]tulo|title|autor|objetivo|conclusi[oó]n|secci[oó]n|cap[ií]tulo|p[aá]gina|menciona|dice|trata|contiene|summary|about|tell me|agrega\w*|a[ñn]ad\w*|borr\w*|elimin\w*|quit\w*|reemplaz\w*|complet\w*|rellen\w*|corrig\w*|edit[ae]\w*|modific\w*|insert\w*|cambi\w*)\b/i.test(v);
+  if (DOC_EDIT_RE.test(v)) return true;
+  if (!DOC_REFERENCE_RE.test(v)) return false;
+  // Question word + document reference, or an elliptical follow-up such as
+  // «¿y la conclusión?» / «y el título del de arriba?».
+  return DOC_QUESTION_RE.test(v) || /\?\s*$/.test(raw) || /^\s*y\s/.test(raw);
+}
+
+// Earlier IMAGES are only re-used when the message is actually about them
+// («la imagen», «la foto», «el ejercicio de arriba», «resuélvelo»).
+const IMAGE_REFERENCE_RE = /\b(imagen(es)?|foto(s|graf[ií]a)?|captura|screenshot|pantallazo|dibujo|gr[aá]fico|diagrama|ejercicio|problema|ecuaci[oó]n|f[oó]rmula|la de arriba|el de arriba|anterior)\b|\bresu[eé]lve(lo|la|los|las)\b|\b(image|photo|picture)\b/i;
+
+function looksLikeImageFollowupQuestion(text) {
+  const raw = String(text || '').trim().toLowerCase();
+  if (!raw || raw.length > 400) return false;
+  return IMAGE_REFERENCE_RE.test(raw);
 }
 
 /**
@@ -1188,6 +1212,7 @@ module.exports = {
   normalizeClientMetadata,
   prepareDocumentTextForProfessionalSynthesis,
   looksLikeDocumentFollowupQuestion,
+  looksLikeImageFollowupQuestion,
   requestedParagraphCount,
   resolveChatDocumentFileIds,
   resolveStoredFilePath,

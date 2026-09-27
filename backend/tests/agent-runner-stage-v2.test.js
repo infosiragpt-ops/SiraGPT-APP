@@ -330,6 +330,9 @@ test('wiring: the chat streams + collects runner stages and persists them with t
   assert.match(stream, /agentRunnerTrace = createActivityTraceCollector\(\{\s*saveThumb: createArtifactThumbSaver\(\{ userId: toolContext\.userId \}\),/);
   assert.match(stream, /if \(agentRunnerTrace\) agentRunnerTrace\.push\(stage\);\s*await writeSse\(res, stage\);/);
   assert.match(stream, /reason === 'agent_runner' \|\| reason === 'agent_runner_failed'/);
+  // Fase G: the document-edit pre-step persists its timeline the same way.
+  assert.match(stream, /reason\.startsWith\('source_preserving_document'\) \? documentEditTrace : null/);
+  assert.match(stream, /if \(documentEditTrace\) \{ try \{ documentEditTrace\.push\(frame\); \}/);
   assert.match(stream, /\.\.\.\(agentActivityTrace \? \{ agentActivityTrace \} : \{\}\)/);
 
   const ai = read('src/routes/ai.js');

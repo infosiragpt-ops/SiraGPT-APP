@@ -228,3 +228,33 @@ test('agent task create_document: blocks invalid deliverables before artifact re
   assert.match(result.error, /artifact validation failed/);
   assert.equal(result.validation.passed, false);
 });
+
+test('agent task SPSS: never registers a fake SAV as a downloadable artifact', async () => {
+  const events = [];
+  const result = await INTERNAL.createDocument.execute({
+    filename: 'muestra.sav',
+    python: [
+      'import os',
+      'with open(os.environ["OUT_PATH"], "wb") as f:',
+      '    f.write(b"$FL2" + bytes(512))',
+    ].join('\n'),
+  }, {
+    userId: 'user-sav',
+    chatId: 'chat-sav',
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+});
+
+test('agent task SPSS: verifier fails closed on a SAV that cannot be reopened', async () => {
+  const artifact = saveArtifact({
+    filename: 'corrupto.sav',
+    base64: Buffer.concat([Buffer.from('$FL2'), Buffer.alloc(512)]).toString('base64'),
+    ownerUserId: 'user-sav',
+    chatId: 'chat-sav',
+  });
+  const verified = await INTERNAL.verifyArtifact.execute({ artifactId: artifact.id }, { userId: 'user-sav' });
+  assert.equal(verified.ok, false);
+  assert.match(verified.error, /SPSS|SAV|pyreadstat|invalid|corrupt/i);
+});

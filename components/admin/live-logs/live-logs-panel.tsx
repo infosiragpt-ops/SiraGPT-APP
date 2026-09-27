@@ -38,6 +38,12 @@ import { formatLogTime, levelBadgeClass, levelLabel, levelRowClass, sourceLabel,
 
 const ROW_H = 30
 const OVERSCAN = 12
+const LEVEL_FILTER_LABELS: Record<string, string> = {
+  info: "Info y superior",
+  all: "Todos (incl. depuración)",
+  warn: "Avisos y errores",
+  error: "Solo errores",
+}
 const STALE_MS = 45_000
 const GRID = "grid grid-cols-[92px_64px_minmax(90px,150px)_52px_minmax(0,1fr)] md:grid-cols-[104px_72px_minmax(110px,170px)_56px_minmax(120px,200px)_minmax(0,1fr)] items-center gap-2"
 
@@ -316,7 +322,7 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
         </label>
         <Select value={level} onValueChange={(v) => setLevel(v as LiveLogLevelFilter)}>
           <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Nivel mínimo">
-            <SelectValue />
+            <SelectValue>{LEVEL_FILTER_LABELS[level] || level}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="info">Info y superior</SelectItem>
@@ -327,7 +333,7 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
         </Select>
         <Select value={source} onValueChange={setSource}>
           <SelectTrigger className="h-8 w-[170px] text-xs" aria-label="Fuente">
-            <SelectValue placeholder="Fuente" />
+            <SelectValue>{source === "all" ? "Todas las fuentes" : source}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas las fuentes</SelectItem>

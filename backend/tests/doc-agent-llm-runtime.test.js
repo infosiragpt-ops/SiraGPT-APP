@@ -151,7 +151,8 @@ describe('agent runner wiring (source contract)', () => {
   test('the document runner and the orchestrator never build a bare OpenRouter client', () => {
     assert.doesNotMatch(runner, /createOpenRouterClient\(\)/);
     assert.doesNotMatch(orchestrator, /createOpenRouterClient\(\)/);
-    assert.match(runner, /if \(!llm\) llm = createRunnerLlmClient\(\{ onEvent \}\);/);
+    // Fase G: the runner's ladder starts with the model picked in the composer.
+    assert.match(runner, /if \(!llm\) llm = createRunnerLlmClient\(\{ onEvent, pickedModel \}\);/);
     assert.match(orchestrator, /llm = createRunnerLlmClient\(\{ onEvent: emit \}\);/);
   });
 

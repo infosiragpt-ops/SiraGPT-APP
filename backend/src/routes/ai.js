@@ -1580,6 +1580,23 @@ function respondGenerateTurnError(res, {
 // Idempotent USER-message persistence. Equal text is not a duplicate: users
 // may intentionally repeat a short instruction while another turn is still
 // running. Only a client-owned idempotencyKey/streamId may collapse writes.
+// Files recovered from earlier turns carry a marker so they feed the answer
+// but are never saved (or shown) as attachments of the new user message.
+const RECOVERED_FROM_HISTORY = Symbol.for('siragpt.recoveredFromHistory');
+
+function markRecoveredFromHistory(file) {
+  if (!file || typeof file !== 'object') return file;
+  const copy = { ...file };
+  // Enumerable so it survives `{ ...file }` copies (refreshProcessedFileExtracts
+  // spreads); symbol keys never reach JSON.stringify, so it is never persisted.
+  Object.defineProperty(copy, RECOVERED_FROM_HISTORY, { value: true, enumerable: true });
+  return copy;
+}
+
+function userAttachedOnly(files) {
+  return (Array.isArray(files) ? files : []).filter((f) => f && !f[RECOVERED_FROM_HISTORY]);
+}
+
 async function persistUserMessageOnce(chatId, content, filesJson = null, metadata = null, identityInput = null) {
   const identity = resolveTurnIdentity(identityInput || {});
   if (identity) {
@@ -1798,10 +1815,11 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         };
 
         if (!regenerate && !existingTurn?.userMessage) {
+          const userAttachedFiles = userAttachedOnly(processedFiles);
           await persistUserMessageOnce(
             chatId,
             prompt,
-            processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+            userAttachedFiles.length > 0 ? JSON.stringify(userAttachedFiles) : null,
             turnMetadata,
             { idempotencyKey, streamId },
           );
@@ -3296,6 +3314,10 @@ router.post(
       // recent chat document so RAG + file context still ground the answer.
       // Mirrors the agent-task fix — defense-in-depth so document analysis never
       // silently loses context on a follow-up. Best-effort; never blocks.
+      // Files recovered from earlier turns are CONTEXT for this answer, never
+      // attachments of the new user message (prod 2026-09-27: «cuando es 2+2?»
+      // was saved and shown with the chat's earlier (a+b)² screenshot).
+      let __recoveredFileRefs = null;
       if (isAuth && userId && canPersist && (!Array.isArray(files) || files.length === 0)
         && messageAttachments.looksLikeDocumentFollowupQuestion(prompt)) {
         try {
@@ -3306,6 +3328,9 @@ router.post(
           });
           if (Array.isArray(__reattachedDocs) && __reattachedDocs.length > 0) {
             files = __reattachedDocs;
+            __recoveredFileRefs = new Set(__reattachedDocs.map((ref) => String(
+              ref && typeof ref === 'object' ? (ref.id || ref.fileId || '') : ref,
+            )).filter(Boolean));
             generateLog.info('documents.reattached', { documentCount: __reattachedDocs.length });
           }
         } catch (__reattachErr) {
@@ -3328,6 +3353,19 @@ router.post(
             return processedFile;
           })
         ).then(results => results.filter(Boolean));
+
+        if (__recoveredFileRefs && __recoveredFileRefs.size > 0) {
+          const imageRelevant = messageAttachments.looksLikeImageFollowupQuestion(prompt);
+          processedFiles = processedFiles
+            .filter((pf) => {
+              const recovered = pf && __recoveredFileRefs.has(String(pf.id || pf.fileId || ''));
+              // An earlier IMAGE is only re-used when the message is about it.
+              return !(recovered && pf.attachmentKind === 'image' && !imageRelevant);
+            })
+            .map((pf) => (pf && __recoveredFileRefs.has(String(pf.id || pf.fileId || ''))
+              ? markRecoveredFromHistory(pf)
+              : pf));
+        }
 
         if (processedFiles.length > 0) {
           try {
@@ -3371,7 +3409,7 @@ router.post(
         try {
           const recovered = await recoverRecentChatDocumentFiles({ chatId, userId });
           if (recovered.length > 0) {
-            processedFiles = recovered;
+            processedFiles = recovered.map(markRecoveredFromHistory);
             for (const pf of recovered) {
               if (pf?.openaiFileId) openaiFiles.push(pf.openaiFileId);
             }
@@ -7340,10 +7378,11 @@ router.post(
               };
               let triageUserMessage = null;
               if (!regenerate) {
+                const triageUserFiles = userAttachedOnly(processedFiles);
                 triageUserMessage = await persistUserMessageOnce(
                   chatId,
                   prompt,
-                  processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+                  triageUserFiles.length > 0 ? JSON.stringify(triageUserFiles) : null,
                   triageTurnMetadata,
                   { idempotencyKey, streamId },
                 );
@@ -10195,12 +10234,22 @@ router.post(
     const processedFiles = fileIds.length
       ? (await Promise.all(fileIds.map((id) => loadUserFile(id, userId).catch(() => null)))).filter(Boolean)
       : [];
+    // Edición milimétrica (Fase G): the editor's stage timeline is persisted
+    // with the assistant row (agent_metadata.activityTrace), like runner turns.
+    let editorTrace = null;
+    try {
+      const { createActivityTraceCollector, createArtifactThumbSaver } = require('../services/agent-runner/activity-trace');
+      editorTrace = createActivityTraceCollector({ saveThumb: createArtifactThumbSaver({ userId }) });
+    } catch (_) { editorTrace = null; }
     const persist = async (content, assistantFiles = []) => {
+      let activityTrace = null;
+      try { activityTrace = editorTrace ? editorTrace.toMetadata() : null; } catch (_) { activityTrace = null; }
       try {
         const saved = await saveChatAndTrackUsage(
           userId, chatId, prompt, content, prompt.length + content.length, actualModel,
           processedFiles, assistantFiles, false,
           { idempotencyKey, streamId, source: 'document-editor' }, userPlan,
+          null, null, 0, { activityTrace },
         );
         return saved?.assistantMessage?.id || null;
       } catch (saveErr) {
@@ -10219,7 +10268,14 @@ router.post(
         instruction: prompt,
         llm: { client, model: actualModel, provider: actualProvider, toolCallMode },
         signal: controller.signal,
-        onEvent: (stage) => send({ type: 'stage', label: stage.label, ...(stage.detail ? { detail: stage.detail } : {}) }),
+        onEvent: (stage) => {
+          if (!stage || !stage.label) return;
+          // Stage v2 fields (callId / kind / status / description / detail /
+          // thumbs) travel as-is; legacy stages keep { label, detail }.
+          const frame = { ...stage, type: 'stage' };
+          try { if (editorTrace) editorTrace.push(frame); } catch (_) { /* trace never breaks the edit */ }
+          send(frame);
+        },
       });
       const files = toAssistantFiles(result.artifacts || []);
       const { deliverDocumentEdit } = require('../services/document-editor/deliver-edit');

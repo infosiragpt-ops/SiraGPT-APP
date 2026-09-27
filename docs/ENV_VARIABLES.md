@@ -599,6 +599,8 @@ escenarios contra la ruta real: `node scripts/run-office-evals.js --user <id>
 | `SIRAGPT_AGENT_THUMBS` | `1` (off en `NODE_ENV=test`) | Miniaturas (≤2 por paso, ≤80 KB) en el SSE del timeline |
 | `SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS` | `60000` | Presupuesto de compactación del loop (8000–120000); el pedido y el último mapa del documento se restauran tras compactar |
 | `SIRAGPT_AGENT_RUNNER_MAX_TOKENS` | `8192` en turnos de documentos | Salida por llamada al modelo |
+| `SIRAGPT_DOCUMENT_EDITOR_ENGINE` | `office` | Editor del chat (`/api/ai/document-edit`): Excel / PowerPoint / PDF en el loop de oficina del AgentRunner; `legacy` = loop anterior del sandbox |
+| `SIRAGPT_DOCUMENT_EDITOR_VISUAL_VERIFY` | `1` (off en `NODE_ENV=test`) | Verificación visual (sira_office + visión) en el `finish` del docx-engine de Word |
 
 ## Chat attachments — any format (optional)
 

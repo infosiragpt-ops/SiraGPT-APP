@@ -14,6 +14,14 @@ on:
       - next.config.mjs
       - docker-compose*.yml
       - .github/workflows/docker-build.yml
+  pull_request:
+    branches: [production-main]
+    paths:
+      - backend/Dockerfile
+      - backend/scripts/install-spss-runtime.sh
+      - backend/scripts/verify-spss-runtime.cjs
+      - backend/scripts/verify-spss-artifacts.cjs
+      - .github/workflows/docker-build.yml
   workflow_dispatch:
 
 env:
@@ -42,6 +50,7 @@ jobs:
           build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
 
       - name: Build frontend image (no push)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7
         with:
           context: .

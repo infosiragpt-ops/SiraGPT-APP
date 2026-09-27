@@ -313,11 +313,15 @@ class AIService {
         }
 
         if (provider === "DeepSeek") {
-            return new OpenAI({
+            // Native ids only: the picker's «DeepSeek V4 Pro» is named with
+            // its OpenRouter slug (`deepseek/deepseek-v4-pro`), which the
+            // direct API rejects with 400.
+            const { withDeepSeekDirectModelIds } = require('./ai/deepseek-billing-failover');
+            return withDeepSeekDirectModelIds(new OpenAI({
                 ...baseOpts,
                 apiKey: process.env.DEEPSEEK_API_KEY,
                 baseURL: "https://api.deepseek.com",
-            });
+            }));
         }
 
         if (isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim())) {

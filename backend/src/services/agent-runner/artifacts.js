@@ -84,13 +84,31 @@ async function hasConversationArtifacts(prisma, { userId, chatId } = {}) {
   return Boolean(latest);
 }
 
+// object-storage has no readFile: an R2 ref is materialised with toLocalTemp
+// (as readSourceBuffer does). Without this, every follow-up on a runner
+// artifact whose local copy was gone ran WITHOUT the latest version. A store
+// that offers readFile (tests / adapters) is still used as is.
+async function readStoredObject(objectStore, fs, ref) {
+  if (!ref) return null;
+  if (typeof objectStore.readFile === 'function') return objectStore.readFile(ref);
+  if (typeof objectStore.isRemote === 'function' && objectStore.isRemote(ref) && typeof objectStore.toLocalTemp === 'function') {
+    const local = await objectStore.toLocalTemp(ref);
+    try {
+      return await fs.readFile(local.path);
+    } finally {
+      try { await local.cleanup(); } catch (_) { /* best effort */ }
+    }
+  }
+  return null;
+}
+
 async function loadArtifactBuffer(row, { objectStorage, fsImpl, artifactDir } = {}) {
   if (!row) return null;
   const objectStore = objectStorage || require('../object-storage');
   const fs = fsImpl || require('fs/promises');
-  if (row.path && typeof objectStore.readFile === 'function') {
+  if (row.path) {
     try {
-      const buf = await objectStore.readFile(row.path);
+      const buf = await readStoredObject(objectStore, fs, row.path);
       if (Buffer.isBuffer(buf) && buf.length) return buf;
     } catch (_) { /* fall through */ }
   }
@@ -109,8 +127,8 @@ async function loadArtifactBuffer(row, { objectStorage, fsImpl, artifactDir } = 
       const root = path.resolve(artifactDir || require('../agents/task-tools').ARTIFACT_DIR);
       const meta = JSON.parse(await fs.readFile(path.join(root, `${row.id}.json`), 'utf8'));
       if (String(meta.ownerUserId) !== String(row.userId) || String(meta.chatId) !== String(row.chatId)) return null;
-      if (meta.storageRef && typeof objectStore.readFile === 'function') {
-        try { const buffer = await objectStore.readFile(meta.storageRef); if (Buffer.isBuffer(buffer) && buffer.length) return buffer; } catch { /* local copy below */ }
+      if (meta.storageRef) {
+        try { const buffer = await readStoredObject(objectStore, fs, meta.storageRef); if (Buffer.isBuffer(buffer) && buffer.length) return buffer; } catch { /* local copy below */ }
       }
       const full = path.resolve(root, String(meta.storedRelPath || `${row.id}-${meta.filename}`));
       if (!full.startsWith(root + path.sep)) return null;

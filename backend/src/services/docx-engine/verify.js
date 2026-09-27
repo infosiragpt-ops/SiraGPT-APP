@@ -57,6 +57,16 @@ function normalizeText(text) {
     .replace(/[\s\u00ad]+/g, '');
 }
 
+/**
+ * The body-level section properties (page size, margins, orientation,
+ * columns): the last w:sectPr of the document (paragraph-level ones — section
+ * breaks — come earlier). Harvested from feat/visual-verify-loop.
+ */
+function bodySectPr(xml) {
+  const matches = [...String(xml || '').matchAll(/<w:sectPr(?:\s[^>]*)?(?:\/>|>[\s\S]*?<\/w:sectPr>)/g)];
+  return matches.length ? matches[matches.length - 1][0] : '';
+}
+
 async function verifyEditedDocx({
   originalBuffer,
   editedBuffer,
@@ -64,6 +74,8 @@ async function verifyEditedDocx({
   expectedValues = [],
   render = null,
   originalRender = null,
+  // The user asked for margins / orientation / page size: the section may change.
+  allowSectionChange = false,
 } = {}) {
   const issues = [];
   const report = { changedParts, identicalEntries: 0, totalEntries: 0 };
@@ -113,6 +125,10 @@ async function verifyEditedDocx({
       continue;
     }
     const before = original.file(name)?.asText() || '';
+    if (name === 'word/document.xml' && !allowSectionChange && bodySectPr(before) !== bodySectPr(after)) {
+      report.sectionChanged = true;
+      issues.push('La configuración de página del documento (tamaño, márgenes u orientación) cambió. Restáurala: la edición debe limitarse al contenido pedido.');
+    }
     try {
       report.diff[name] = diffCount(paragraphSignatures(before), paragraphSignatures(after));
     } catch {
@@ -175,4 +191,4 @@ async function verifyEditedDocx({
   return { ok: issues.length === 0, issues, report };
 }
 
-module.exports = { verifyEditedDocx, diffCount, paragraphSignatures };
+module.exports = { bodySectPr, verifyEditedDocx, diffCount, paragraphSignatures };

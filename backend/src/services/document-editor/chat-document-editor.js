@@ -203,15 +203,71 @@ async function latestDerivedArtifacts({ prisma, userId, chatId, uploads, deps })
   });
 }
 
+function namesExactVisibleArtifact(instruction, filename) {
+  const name = String(filename || '').normalize('NFC').toLowerCase();
+  if (!name) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}_.-])${escaped}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu')
+    .test(sourceSelectionText(instruction));
+}
+
+function requestsEditedVersion(instruction) {
+  const text = String(instruction || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // "La última versión" asks for the newest lineage member even if its
+  // filename changed. "Prueba-PDF.pdf recién editado" names that copy itself.
+  return /\b(?:recien\s+editad[oa]s?|que\s+(?:acabas|acabamos)\s+de\s+editar)\b/.test(text);
+}
+
+async function exactNamedEditedArtifact({ prisma, userId, chatId, instruction, deps }) {
+  if (!requestsEditedVersion(instruction) || !chatId || !prisma?.message?.findMany) return null;
+  const messages = await prisma.message.findMany({
+    where: { chatId, role: 'ASSISTANT', deletedAt: null, chat: { userId } },
+    select: { role: true, files: true, content: true },
+    orderBy: { timestamp: 'desc' },
+    take: HISTORY_SCAN_MESSAGES,
+  }).catch(() => []);
+  const named = new Map();
+  for (const message of messages) {
+    if (message.role && message.role !== 'ASSISTANT') continue;
+    for (const ref of assistantFileRefs(message)) {
+      const artifactId = artifactIdFromRef(ref);
+      const metadata = artifactId && readOwnedArtifactMetadata(artifactId, userId, deps);
+      if (!metadata || !namesExactVisibleArtifact(instruction, metadata.filename)) continue;
+      const key = metadata.filename.normalize('NFC').toLowerCase();
+      // Messages are newest-first. Repeated filenames keep the latest bytes.
+      if (!named.has(key)) named.set(key, { kind: 'artifact', name: metadata.filename, artifactId, metadata });
+    }
+  }
+  return named.size === 1 ? named.values().next().value : null;
+}
+
 /**
  * Resolve which documents this turn edits. Explicit attachments win; a
  * follow-up scans the conversation newest-first and takes the latest document set,
  * whether it was delivered by the assistant or uploaded by the user.
  */
-async function resolveEditSources({ prisma, userId, chatId, fileIds = [], allowImageOnlyFollowup = false, includeRelatedSources = false, deps }) {
+async function resolveEditSources({ prisma, userId, chatId, fileIds = [], instruction = '', allowImageOnlyFollowup = false, includeRelatedSources = false, deps }) {
+  // An explicit, visible filename plus "recién editado" identifies a specific
+  // delivered version. A newer output with a different name may share its
+  // lineage, but must not silently replace the file the user named.
   const explicit = [...new Set((Array.isArray(fileIds) ? fileIds : []).map(uploadIdFromRef).filter(Boolean))];
+  const namedEdited = includeRelatedSources || isExplicitBatch(instruction) ? null
+    : await exactNamedEditedArtifact({ prisma, userId, chatId, instruction, deps });
+  let uploads = null;
+  if (namedEdited) {
+    uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
+    const sourceFileId = String(namedEdited.metadata?.validation?.documentEdit?.sourceFileId || '');
+    const sameName = (name) => String(name || '').normalize('NFC').toLowerCase()
+      === namedEdited.name.normalize('NFC').toLowerCase();
+    if (uploads.some((upload) => sameName(upload.name)
+      && (!sourceFileId || String(upload.row.id) !== sourceFileId))) {
+      throw new DocumentEditError('DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
+        `Hay otro archivo adjunto llamado ${namedEdited.name}. Indica cuál deseas editar; no modifiqué ninguno.`);
+    }
+    return [namedEdited];
+  }
   if (explicit.length) {
-    const uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
+    uploads = await loadOwnedUploads(prisma, userId, explicit.filter((id) => !/^artifact:/i.test(id)));
     const latest = await latestDerivedArtifacts({ prisma, userId, chatId, uploads, deps });
     const byId = new Map(uploads.map((upload, index) => [upload.row.id, latest[index]]));
     const images = allowImageOnlyFollowup ? await loadOwnedImageRows(prisma, userId, explicit) : [];
@@ -362,7 +418,9 @@ async function loadSourceFiles(sources, deps) {
     if (buffer.length > MAX_FILE_BYTES || total > MAX_TOTAL_BYTES) {
       throw new DocumentEditError('FILE_TOO_LARGE', MESSAGES.FILE_TOO_LARGE);
     }
-    files.push({ name: source.name, buffer });
+    // A delivered earlier version is the latest state of the document: the
+    // office engine continues from it (isPriorArtifact → prompt).
+    files.push({ name: source.name, buffer, ...(source.kind === 'artifact' ? { isPriorArtifact: true } : {}) });
   }
   return files;
 }
@@ -489,6 +547,18 @@ function stageFor(event) {
     case 'tool_call': return { label: 'Editando el documento', detail: String(event.preview || event.tool || '').slice(0, 160) };
     default: return null;
   }
+}
+
+/**
+ * Office-engine events that belong to a tool call (callId) travel as stage v2
+ * (one timeline row per tool, with kind / status / detail / thumbnails); the
+ * legacy doc-agent events keep their editor phrases.
+ */
+function relayStage(event) {
+  if (event && event.callId) {
+    try { return require('../agent-runner/trace').toStageEvent(event); } catch { /* fall back */ }
+  }
+  return stageFor(event);
 }
 
 /** The loop's final text talks about sandbox paths; the user only needs the change summary. */
@@ -682,7 +752,7 @@ async function runResolvedDocumentEdit({
     // it before parsing would turn an ambiguous precise follow-up into an edit
     // of the first attachment. Only the selected source is read below.
     const imageEdit = deps.parseDocxImageRequest(instruction);
-    let sources = resolved?.sources || await resolveEditSources({ prisma, userId, chatId, fileIds,
+    let sources = resolved?.sources || await resolveEditSources({ prisma, userId, chatId, fileIds, instruction,
       includeRelatedSources: isExplicitBatch(instruction), allowImageOnlyFollowup: Boolean(imageEdit), deps });
     if (!sources.length) {
       if (precisionOnly && !deps.parseDocxPrecisionRequest(instruction)) return null;
@@ -733,12 +803,15 @@ async function runResolvedDocumentEdit({
       const request = sourceSelectionText(instruction);
       const named = sources.filter((source) => sourceNames(source).some((name) => request.includes(name.normalize('NFC').toLowerCase())));
       const mentionedNames = new Set(named.flatMap(sourceNames).map((name) => name.normalize('NFC').toLowerCase()).filter((name) => request.includes(name)));
-      if ((!named.length || mentionedNames.size < named.length) && !isExplicitBatch(instruction)) return {
+      const batchRequested = isExplicitBatch(instruction);
+      if ((!named.length || mentionedNames.size < named.length) && !batchRequested) return {
         ok: false,
         code: wordSources ? 'DOCX_EDIT_SOURCE_AMBIGUOUS' : 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
         message: 'Hay varios documentos posibles. Indica el nombre del archivo que deseas editar o adjunta solamente ese documento; no modifiqué ninguno.',
       };
-      if (named.length) sources = named;
+      // A plural request that names only one member still includes the other
+      // documents. Two or more explicit names can scope "ambos" to that set.
+      if (named.length && (!batchRequested || named.length > 1)) sources = named;
     }
     const batchCounts = explicitBatchCounts(instruction);
     const batchSize = resolved?.batchNames?.length || sources.length;
@@ -813,11 +886,20 @@ async function runResolvedDocumentEdit({
       return await editDocxImage({ wordFile, imageEdit, instruction, prisma, userId, chatId, fileIds, signal, deps, emit });
     }
     if (wordFile && !llm.client) return { ok: false, code: 'ENGINE_FAILED', message: MESSAGES.ENGINE_FAILED };
-    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env)) {
+    // Indent / tracked changes / paraphrases go to the office engine below.
+    const wordOnOfficeEngine = Boolean(wordFile) && typeof deps.wordNeedsOfficeEngine === 'function'
+      && deps.wordNeedsOfficeEngine(instruction, deps.env);
+    if (wordFile && llm.client && deps.docxEngine.docxEngineEnabled(deps.env) && !wordOnOfficeEngine) {
       const client = buildEditorClient({ ...llm, deps: { ...deps, onFailover: (info) => deps.log('failover', info) } });
       const extraContext = [await loadRecentUserText({ prisma, userId, chatId, instruction }), batchContext].filter(Boolean).join('\n');
       let edited;
       try {
+        let visualVerify = null;
+        try {
+          visualVerify = typeof deps.makeVisualVerifier === 'function'
+            ? deps.makeVisualVerifier({ pickedModel: llm.model, env: deps.env })
+            : null;
+        } catch { visualVerify = null; }
         edited = await deps.docxEngine.editWordDocument({
           buffer: wordFile.buffer,
           filename: wordFile.name,
@@ -827,6 +909,7 @@ async function runResolvedDocumentEdit({
           extraContext,
           signal,
           onEvent: emit,
+          ...(visualVerify ? { visualVerify } : {}),
         });
       } catch (err) {
         if (signal?.aborted) throw err;
@@ -920,7 +1003,9 @@ async function runResolvedDocumentEdit({
         route: 'sandbox', // A global route override cannot replace the picked provider.
         signal,
         maxIterations: DOC_AGENT_MAX_ITERATIONS,
-        onEvent: (event) => { const stage = stageFor(event); if (stage) emit(stage); },
+        userId,
+        chatId,
+        onEvent: (event) => { const stage = relayStage(event); if (stage) emit(stage); },
       });
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -991,7 +1076,20 @@ function resolveDeps(injected) {
     readSourceBuffer: lazy('readSourceBuffer', () => require('../source-preserving-document-edit').readSourceBuffer),
     extractFileIds: lazy('extractFileIds', () => require('../message-attachments').extractFileIdsFromMessageFiles),
     saveArtifact: lazy('saveArtifact', () => require('../agents/task-tools').saveArtifact),
-    runDocumentAgent: lazy('runDocumentAgent', () => require('../doc-agent').runDocumentAgent),
+    // Edición milimétrica (Fase G): Excel / PowerPoint run on the AgentRunner
+    // office engine; PDFs and other formats keep the sandbox doc-agent loop
+    // (its PDF skills). SIRAGPT_DOCUMENT_EDITOR_ENGINE=legacy keeps that loop
+    // for everything.
+    runDocumentAgent: lazy('runDocumentAgent', () => {
+      const office = require('./office-engine');
+      const legacy = require('../doc-agent').runDocumentAgent;
+      if (!office.officeEditorEnabled(injected.env || process.env)) return legacy;
+      return (options) => (office.officeEngineHandles(options && options.files)
+        ? office.runOfficeEditorEngine(options)
+        : legacy(options));
+    }),
+    makeVisualVerifier: lazy('makeVisualVerifier', () => require('./office-engine').makeOfficeVisualVerifier),
+    wordNeedsOfficeEngine: lazy('wordNeedsOfficeEngine', () => require('./office-engine').wordNeedsOfficeEngine),
     tryDeterministicEdit: lazy('tryDeterministicEdit', () => require('../source-preserving-document-edit').tryGenerateSourcePreservingDocumentEdit),
     parseDocxPrecisionRequest: lazy('parseDocxPrecisionRequest', () => (...args) => require('../document-editing/docx-precision-intent').parseDocxPrecisionRequest(...args)),
     applyDocxPrecisionEdit: lazy('applyDocxPrecisionEdit', () => (...args) => require('../document-editing/docx-precision-edit').applyDocxPrecisionEdit(...args)),
@@ -1011,6 +1109,7 @@ function resolveDeps(injected) {
 
 module.exports = {
   documentStem,
+  isExplicitBatchRequest: isExplicitBatch,
   isContentGeneratingOfficeRequest,
   assistantFileRefs,
   runChatDocumentEdit,
@@ -1019,5 +1118,5 @@ module.exports = {
   toAssistantFiles,
   cleanSummary,
   MESSAGES,
-  INTERNAL: { buildEditorClient, stageFor, artifactIdFromRef, withTransientRetry, withDeepSeekToolTranscript },
+  INTERNAL: { buildEditorClient, stageFor, relayStage, artifactIdFromRef, withTransientRetry, withDeepSeekToolTranscript },
 };

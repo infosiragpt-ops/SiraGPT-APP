@@ -121,6 +121,10 @@ function buildSequentialAdj(calls) {
   for (let i = 0; i + 1 < names.length; i += 1) {
     const a = names[i];
     const b = names[i + 1];
+    // The same tool called several times in ONE batch («pinta las 3
+    // diapositivas» → 3× set_slide_background) is parallel work, not a
+    // plan cycle: a self-edge halted those turns at iteration 1.
+    if (a === b) continue;
     if (!adj[a]) adj[a] = [];
     if (adj[a].indexOf(b) < 0) adj[a].push(b);
   }

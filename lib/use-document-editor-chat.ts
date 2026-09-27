@@ -7,7 +7,8 @@ import { snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { collectDocumentEditReferences } from "./document-sandbox-client"
 import { readComposerPermission } from "./chat/composer-session"
 import { safeUUID } from "./safe-uuid"
-import { DOCUMENT_EDIT_STOPPED, advanceDocumentEditSteps, documentEditTaskState, failDocumentEditSteps } from "./document-editor-progress"
+import { DOCUMENT_EDIT_STOPPED } from "./document-editor-progress"
+import { appendActivity, finalizeActivity, type ActivityStep } from "./chat/activity-log"
 
 type Context = ReturnType<typeof useChat>
 type Chat = NonNullable<Context["currentChat"]>
@@ -57,9 +58,12 @@ export function useDocumentEditorChat(options: Options) {
     const now = Date.now()
     const userMessage = { id: `msg-user-doc-${now}`, chatId, role: "USER" as const, content: prompt,
       timestamp: new Date().toISOString(), files: snapshotComposerFilesForMessage([...attachments]) }
-    let steps = advanceDocumentEditSteps([], "Preparando la edición")
-    const assistantMessage = { id: `msg-ai-doc-${now}`, chatId, role: "ASSISTANT" as const, content: documentEditTaskState(steps, false),
-      timestamp: new Date().toISOString() }
+    // One timeline for the whole turn: the editor's stage frames (stage v2 —
+    // one row per tool call, thumbnails, detail) feed the activity log that
+    // ActivityRail renders; the answer replaces nothing but the empty content.
+    let activity: ActivityStep[] = appendActivity([], { label: "Preparando la edición", tool: "document_edit" })
+    const assistantMessage = { id: `msg-ai-doc-${now}`, chatId, role: "ASSISTANT" as const, content: "",
+      activityLog: activity, activityRail: true, timestamp: new Date().toISOString() }
     latest.current.setCurrentChat((current) => current?.id === chatId
       ? { ...current, messages: [...(current.messages || []), userMessage, assistantMessage] }
       : current)
@@ -69,9 +73,12 @@ export function useDocumentEditorChat(options: Options) {
     latest.current.markBusy(chatId, run.controller)
     let started = false
     let finished = false
-    const settle = (content: string, files?: unknown[]) => {
+    const settle = (content: string, files?: unknown[], failed = false) => {
       finished = true
-      updateMessage(chatId, assistantMessage.id, { content, ...(files && files.length ? { files } : {}) })
+      activity = failed
+        ? activity.map((step) => (step.status === "active" ? { ...step, status: "error" as const } : step))
+        : finalizeActivity(activity)
+      updateMessage(chatId, assistantMessage.id, { content, activityLog: activity, ...(files && files.length ? { files } : {}) })
     }
     try {
       await apiClient.editDocumentStream({
@@ -80,12 +87,12 @@ export function useDocumentEditorChat(options: Options) {
       }, (event: DocumentEditStreamEvent) => {
         if (event.type === "start") { started = true; return }
         if (event.type === "stage") {
-          steps = advanceDocumentEditSteps(steps, event.label, event.detail)
-          updateMessage(chatId, assistantMessage.id, { content: documentEditTaskState(steps, false) })
+          activity = appendActivity(activity, event)
+          updateMessage(chatId, assistantMessage.id, { activityLog: activity })
           return
         }
         if (event.type === "done") {
-          settle(event.content, event.files)
+          settle(event.content, event.files, !event.ok && event.code !== "CANCELLED")
           if (!event.ok && event.code !== "CANCELLED") latest.current.notify(event.content)
         }
       }, run.controller.signal)
@@ -102,8 +109,7 @@ export function useDocumentEditorChat(options: Options) {
         throw error
       } else if (!finished) {
         const message = error instanceof Error && error.message ? error.message : "No se pudo completar la edición del documento."
-        steps = failDocumentEditSteps(steps)
-        settle(documentEditTaskState(steps, true, message))
+        settle(message, undefined, true)
         latest.current.notify(message)
       }
     } finally {
