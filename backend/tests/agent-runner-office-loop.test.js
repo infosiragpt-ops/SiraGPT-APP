@@ -230,6 +230,73 @@ test('loop: identical office calls in one turn run again (no stale verification)
   assert.equal((loopSource.match(/!SAME_TURN_CACHE_EXCLUDE_RE\.test\(/g) || []).length, 2, 'both cache sites use the shared exclusion');
 });
 
+test('loop: a successful visual repair allows the SAV/Excel readback to finish', async () => {
+  const outputPath = 'outputs/encuesta_20x20.xlsx';
+  const verifyArgs = { after: outputPath, checklist: ['Los encabezados se ven completos'] };
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'adjust_column_widths()' } }] },
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'reopen_and_compare_sav_xlsx()' } }] },
+    { toolCalls: [{ name: 'inspect_document', args: { path: outputPath } }] },
+    { content: 'Creé y comprobé el SAV y el Excel.' },
+  ]);
+  const snapshots = [
+    { [outputPath]: '100 1' }, { [outputPath]: '120 2' },
+    { [outputPath]: '120 2' }, { [outputPath]: '120 2' },
+  ];
+  let snapshot = 0;
+  let verifies = 0;
+  const events = [];
+  const result = await runAgentLoop({
+    client, model: 'x', messages: [{ role: 'user', content: 'dame un documento de SPSS y un Excel' }],
+    tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+    executors: {
+      async verify_visual() {
+        verifies += 1;
+        return verifies === 1
+          ? 'ERROR: verificación fallida: faltan dos encabezados en el PDF visible'
+          : 'Verificación: encuesta_20x20.xlsx\n• Checks: ✓ encabezados\nVEREDICTO: VERIFICADO';
+      },
+      async execute_python() { return 'ok\n[exit 0]'; },
+      async inspect_document() { return '{"sheets":[{"name":"Datos","range":"A1:T21"}]}'; },
+      [office.OUTPUTS_SNAPSHOT]: async () => snapshots[Math.min(snapshot++, snapshots.length - 1)],
+    },
+    maxIterations: 8,
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(verifies, 2);
+  assert.equal(result.stoppedReason, 'final', 'a successful repair must not be classified as an oscillation');
+  assert.equal(result.steps.filter((step) => step.tool === 'execute_python').at(-1).mutated, false);
+  assert.equal(result.steps.findLast((step) => step.tool === 'verify_visual').ok, true);
+  assert.equal(events.some((event) => event.code === 'loop_oscillation_cut'), false);
+});
+
+test('loop: two failed visual checks still cut a repeated repair cycle', async () => {
+  const verifyArgs = { after: 'outputs/encuesta_20x20.xlsx', checklist: ['Encabezados completos'] };
+  const repairArgs = { code: 'adjust_column_widths()' };
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: repairArgs }] },
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: repairArgs }] },
+    { content: 'Listo.' },
+  ]);
+  const events = [];
+  const result = await runAgentLoop({
+    client, model: 'x', messages: [{ role: 'user', content: 'corrige el Excel' }],
+    tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+    executors: {
+      async verify_visual() { return 'ERROR: verificación fallida: encabezados ilegibles'; },
+      async execute_python() { return 'ok\n[exit 0]'; },
+    },
+    maxIterations: 8,
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(result.stoppedReason, 'loop_oscillation_cut');
+  assert.equal(events.some((event) => event.type === 'final'), false);
+});
+
 test('turn-failure hook: silent no-op without the tracker; reports once per (tool, reason) with it', async () => {
   const none = hook.createOfficeFailureReporter({ userId: 'u1', chatId: 'c1', loader: () => null });
   assert.equal(await none({ tool: 'verify_visual', code: 'engine_missing', error: 'x' }), false);
