@@ -387,7 +387,19 @@ function createRunnerLlmClient({ pickedModel = null, env = process.env, createCl
     ...client,
     chat: { completions: { create: async (...args) => {
       try {
-        return await client.chat.completions.create(...args);
+        const request = args[0];
+        // Pro defaults to high-effort thinking, which shares max_tokens with
+        // the JSON/code of a tool call. Reserve the runner's output budget for
+        // a complete call; leave explicit thinking choices and other turns as-is.
+        const proToolCall = selected.provider === 'DeepSeek'
+          && /^deepseek-v4-pro$/i.test(String(selected.model || ''))
+          && Array.isArray(request?.tools) && request.tools.length > 0
+          && !Object.prototype.hasOwnProperty.call(request, 'reasoning_effort')
+          && !Object.prototype.hasOwnProperty.call(request, 'thinking');
+        return await client.chat.completions.create(
+          proToolCall ? { ...request, reasoning_effort: 'none' } : request,
+          ...args.slice(1),
+        );
       } catch (err) {
         if (args[1]?.signal?.aborted || err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err;
         const failure = runnerProviderError(err);
