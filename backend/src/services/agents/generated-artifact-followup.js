@@ -226,8 +226,13 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   '    headers = [str(value) if value is not None else "" for value in next(rows, ())]',
   '    sav_headers = [str(value) for value in frame.columns]',
   '    same_headers = len(headers) == len(sav_headers) and len(set(headers)) == len(headers) and set(headers) == set(sav_headers)',
+  '    has_respondent_id = bool(sav_headers) and bool(headers) and sav_headers[0].strip().upper() == "ID" and headers[0].strip().upper() == "ID"',
+  '    question_start = 1 if has_respondent_id else 0',
+  '    question_headers = sav_headers[question_start:]',
   '    differences = 0 if same_headers else None',
   '    compared = 0',
+  '    respondent_ids_match = True',
+  '    seen_respondent_ids = set()',
   '    positions = {name: index for index, name in enumerate(headers)} if same_headers else {}',
   '    def normalized_cell(value):',
   '        if pd.isna(value): return ("null", "")',
@@ -236,12 +241,18 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   '    excel_row_count = 0',
   '    for excel_row in rows:',
   '        if same_headers and excel_row_count < len(frame):',
-  '            differences += sum(normalized_cell(frame.iloc[excel_row_count, col]) != normalized_cell(excel_row[positions[name]]) for col, name in enumerate(sav_headers))',
-  '            compared += len(sav_headers)',
+  '            if has_respondent_id:',
+  '                sav_id = normalized_cell(frame.iloc[excel_row_count, 0])',
+  '                excel_id = normalized_cell(excel_row[0])',
+  '                if sav_id[0] == "null" or not str(sav_id[1]).strip() or sav_id != excel_id or sav_id in seen_respondent_ids: respondent_ids_match = False',
+  '                seen_respondent_ids.add(sav_id)',
+  '            differences += sum(normalized_cell(frame.iloc[excel_row_count, col]) != normalized_cell(excel_row[positions[name]]) for col, name in enumerate(sav_headers) if col >= question_start)',
+  '            compared += len(question_headers)',
   '        excel_row_count += 1',
   '    comparable = same_headers and excel_row_count == len(frame)',
   '    if not comparable: differences, compared = None, 0',
-  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "comparedCells": compared, "differentCells": differences, "labelCount": sum(bool(label) for label in (metadata.column_labels or [])), "headersMatch": same_headers, "matrixComparable": comparable, "columnsMatchP01P20": sav_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
+  '    labels = metadata.column_labels or []',
+  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "savQuestionColumns": len(question_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "excelQuestionColumns": len(headers) - question_start, "comparedCells": compared, "differentCells": differences, "labelCount": sum(label is not None and bool(str(label).strip()) for label in labels[question_start:]), "headersMatch": same_headers, "matrixComparable": comparable, "hasRespondentId": has_respondent_id, "respondentIdsMatch": respondent_ids_match, "columnsMatchP01P20": question_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
   'except Exception:',
   '    print(json.dumps({"failureStage": stage}))',
   'finally:',
@@ -310,8 +321,16 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, fo
       answer: `Abrí los archivos de este chat. SAV: ${result.savRows} × ${result.savColumns}; Excel: ${result.excelRows} × ${result.excelColumns}. Las filas o columnas no coinciden, así que no puedo calcular un número fiable de diferencias celda por celda. El SAV conserva ${result.labelCount} etiquetas de variables.`,
     };
   }
+  if (result.hasRespondentId === true && result.respondentIdsMatch !== true) {
+    return {
+      ok: false,
+      metrics: result,
+      answer: 'Abrí el SAV y el Excel, pero sus identificadores de participantes no coinciden o no son únicos. No puedo validar el par como equivalente.',
+    };
+  }
+  const questionColumns = Number.isSafeInteger(result.savQuestionColumns) ? result.savQuestionColumns : result.savColumns;
   if (!Number.isSafeInteger(result.differentCells) || result.differentCells < 0
-    || result.comparedCells !== result.savRows * result.savColumns
+    || result.comparedCells !== result.savRows * questionColumns
     || result.differentCells > result.comparedCells) return comparisonFailure('result_format');
   const columnNote = result.columnsMatchP01P20 === true
     ? 'Las columnas son P01–P20.'
@@ -319,7 +338,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, fo
   return {
     ok: true,
     metrics: result,
-    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias. El SAV conserva ${result.labelCount} etiquetas de variables.`,
+    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${result.hasRespondentId === true ? 'La columna ID adicional coincide entre ambos. ' : ''}${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias en las preguntas. El SAV conserva ${result.labelCount} etiquetas de variables.`,
   };
 }
 
