@@ -18,6 +18,10 @@ const {
     classifyProviderError,
 } = require('./ai-product-os/litellm-gateway');
 const { applyAnthropicCacheToMessages } = require('./anthropic-cache-formatter');
+const openaiSampling = require('./ai/openai-sampling-params');
+// Billing failover walks at most this many funded replacements per turn
+// (prod 2026-09-28: the first replacement, xAI, had no credit either).
+const MAX_BILLING_FAILOVER_HOPS = 2;
 
 // Turn failure tracker context (Admin → Logs → «Fallos de respuesta»). The
 // notes only matter when the turn fails; they never alter a response.
@@ -882,6 +886,11 @@ class AIService {
             const billingFailoverMod = require('./ai/billing-failover');
             const providerOverrides = new Map();
             let billingFailover = null;
+            // Prod 2026-09-28: Anthropic «sin saldo» → xAI, which had no credit
+            // either → user error. A fallback that is itself unfunded is marked
+            // and the next funded candidate is tried (max MAX_BILLING_FAILOVER_HOPS).
+            let billingFailoverHops = 0;
+            const billingFailoverTried = new Set();
             const turnHasImages = workingMessages.some((msg) => Array.isArray(msg && msg.content)
                 && msg.content.some((part) => part && part.type === 'image_url'));
             for (let m = 0; m < modelChain.length; m++) {
@@ -982,11 +991,23 @@ class AIService {
                             try {
                                 return await attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
                             } catch (error) {
+                                if (currentProvider !== 'OpenAI' || Number(error?.status) !== 400) throw error;
+                                // Reasoning-class OpenAI model that rejects a
+                                // sampling knob («Unsupported value:
+                                // 'temperature'»): retry once without it and
+                                // memoise the model so later turns skip it.
+                                const unsupported = openaiSampling.unsupportedSamplingParamFromError(error);
+                                if (unsupported && Object.prototype.hasOwnProperty.call(payload, unsupported)) {
+                                    openaiSampling.rememberUnsupported(currentRuntimeModel, unsupported);
+                                    console.warn(`[generateStream] ${currentRuntimeModel}: '${unsupported}' rejected (${error.message}); retrying without it`);
+                                    openaiSampling.stripUnsupportedSampling(currentRuntimeModel, payload);
+                                    delete payload[unsupported];
+                                    return attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
+                                }
                                 // Composer "Esfuerzo" on an OpenAI model we
                                 // misclassified: drop reasoning_effort once
                                 // instead of failing the turn.
-                                if (currentProvider !== 'OpenAI' || !payload.reasoning_effort
-                                    || Number(error?.status) !== 400 || !/reasoning/i.test(String(error?.message || ''))) {
+                                if (!payload.reasoning_effort || !/reasoning/i.test(String(error?.message || ''))) {
                                     throw error;
                                 }
                                 console.warn(`[generateStream] ${currentRuntimeModel}: reasoning_effort rejected (${error.message}); retrying without it`);
@@ -1193,25 +1214,30 @@ class AIService {
                     }
                 }
 
-                if (!hasStreamedAnyContent && !billingFailover && m === modelChain.length - 1
+                if (!hasStreamedAnyContent && billingFailoverHops < MAX_BILLING_FAILOVER_HOPS && m === modelChain.length - 1
                     && billingFailoverMod.enabled() && billingFailoverMod.isBillingError(lastError)
                     && !(signal && signal.aborted)) {
                     billingFailoverMod.markOutOfCredit(currentProvider, lastError);
+                    billingFailoverTried.add(currentProvider);
                     if (pinnedUser) continue;
                     let candidate = null;
                     try {
                         candidate = await billingFailoverMod.pickFailoverModel({
-                            fromProvider: currentProvider,
-                            fromModel: currentModel,
+                            fromProvider: billingFailover ? billingFailover.from.provider : currentProvider,
+                            fromModel: billingFailover ? billingFailover.from.model : currentModel,
                             needsVision: turnHasImages,
+                            excludeProviders: [...billingFailoverTried],
                         });
                     } catch (pickErr) {
                         console.warn('[billing-failover] no se pudo elegir un modelo de reemplazo:', pickErr?.message || pickErr);
                     }
                     if (candidate) {
+                        billingFailoverHops += 1;
                         const notice = billingFailoverMod.buildNotice({ fromLabel: candidate.fromLabel, toLabel: candidate.label });
                         billingFailover = {
-                            from: { provider: currentProvider, model: currentModel, label: candidate.fromLabel },
+                            from: billingFailover
+                                ? { ...billingFailover.from }
+                                : { provider: currentProvider, model: currentModel, label: candidate.fromLabel },
                             to: { provider: candidate.provider, model: candidate.model, label: candidate.label },
                             notice,
                             noticeText: `_${notice}_\n\n`,
@@ -1219,7 +1245,7 @@ class AIService {
                         };
                         providerOverrides.set(candidate.model, candidate.provider);
                         modelChain.push(candidate.model);
-                        console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} sin saldo (${Number(lastError?.status || lastError?.statusCode) || 'billing'}) → ${candidate.provider}:${candidate.model}`);
+                        console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} sin saldo (${Number(lastError?.status || lastError?.statusCode) || 'billing'}) → ${candidate.provider}:${candidate.model}${billingFailoverHops > 1 ? ` (salto ${billingFailoverHops}/${MAX_BILLING_FAILOVER_HOPS})` : ''}`);
                         if (typeof onModelFailover === 'function') {
                             try {
                                 onModelFailover({
