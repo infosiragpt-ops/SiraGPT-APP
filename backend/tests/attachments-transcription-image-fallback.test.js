@@ -42,8 +42,8 @@ test("agent runner: pictures never claim a document turn; «gracias» is not wor
   assert.equal(shouldRunAgentRunner({ files: [{ name: "foto.png" }, { name: "a.docx" }], text: "agrega una tabla" }), true);
 });
 
-test("transcription ladder: openai → xai → meta → local; xai rung uses the multipart /stt helper", async () => {
-  assert.deepEqual(transcriber.providerOrder({ env: {} }), ["openai", "xai", "meta", "local"]);
+test("transcription ladder: openai → groq → xai → meta (flag) → local; xai rung uses the multipart /stt helper", async () => {
+  assert.deepEqual(transcriber.providerOrder({ env: {} }), ["openai", "groq", "xai", "meta", "local"]);
   const env = { XAI_API_KEY: "xai-test", TRANSCRIBE_PROVIDERS: "openai,xai,meta,local" };
   const names = transcriber.cloudProviders({ env }).map((p) => p.name);
   assert.deepEqual(names, ["xai"], "without OpenAI/Meta keys only the xAI rung is usable");
