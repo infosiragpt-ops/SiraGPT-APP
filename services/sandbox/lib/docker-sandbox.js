@@ -74,7 +74,7 @@ async function dockerAvailable() {
 }
 
 /** Create one container session. Optional workspaceKey mounts a named volume. */
-async function createDockerSession({ workspaceKey } = {}) {
+async function createDockerSession({ workspaceKey, processRunner = runProcess, makeStage = fs.mkdtemp } = {}) {
   const name = `sira-doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const key = String(workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
   const args = [
@@ -88,19 +88,29 @@ async function createDockerSession({ workspaceKey } = {}) {
   ];
   if (key) args.push('-v', `sira-ws-${key}:/workspace`);
   args.push(IMAGE, 'sleep', 'infinity');
-  const run = await runProcess('docker', args, { timeoutMs: 30_000 });
-  if (run.exitCode !== 0) throw new Error(`docker run failed: ${run.stderr || run.stdout}`);
-  const stage = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-stage-'));
+  const run = await processRunner('docker', args, { timeoutMs: 30_000 });
+  if (run.exitCode !== 0) {
+    // docker run can time out after creating the container. Its random name is
+    // already known, so try to remove it even when no session ID was issued.
+    await processRunner('docker', ['rm', '-f', name], { timeoutMs: 15_000 }).catch(() => {});
+    throw new Error(`docker run failed: ${run.stderr || run.stdout}`);
+  }
+  let stage;
+  let containerIds;
+  try {
+    stage = await makeStage(path.join(os.tmpdir(), 'sira-stage-'));
+    // `docker cp` preserves the HOST file's uid/gid, so copied-in files are
+    // NOT writable by the container's non-root user. Probe once for chown.
+    const idProbe = await processRunner('docker', ['exec', name, 'sh', '-c', 'echo "$(id -u):$(id -g)"'], { timeoutMs: 10_000 });
+    containerIds = /^\d+:\d+$/.test(idProbe.stdout.trim()) ? idProbe.stdout.trim() : '10001:10001';
+  } catch (err) {
+    await processRunner('docker', ['rm', '-f', name], { timeoutMs: 15_000 }).catch(() => {});
+    if (stage) { try { fsSync.rmSync(stage, { recursive: true, force: true }); } catch (_) {} }
+    throw err;
+  }
   let destroyed = false;
-  const dexec = (args, opts) => runProcess('docker', args, opts);
-
-  // `docker cp` preserves the HOST file's uid/gid, so copied-in files are NOT
-  // writable by the container's non-root user — in-place edits would fail with
-  // EACCES. Record the container user's ids once so putFile can chown each
-  // copied file back to it (the chown runs as root via `exec -u root`, which
-  // the daemon permits regardless of no-new-privileges).
-  const idProbe = await dexec(['exec', name, 'sh', '-c', 'echo "$(id -u):$(id -g)"'], { timeoutMs: 10_000 });
-  const containerIds = /^\d+:\d+$/.test(idProbe.stdout.trim()) ? idProbe.stdout.trim() : '10001:10001';
+  let destroying = null;
+  const dexec = (args, opts) => processRunner('docker', args, opts);
 
   return {
     name,
@@ -149,9 +159,17 @@ async function createDockerSession({ workspaceKey } = {}) {
       return out;
     },
     async destroy() {
-      if (destroyed) return; destroyed = true;
-      await dexec(['rm', '-f', name], { timeoutMs: 15_000 }).catch(() => {});
-      try { fsSync.rmSync(stage, { recursive: true, force: true }); } catch (_) {}
+      if (destroyed) return;
+      if (destroying) return destroying;
+      destroying = (async () => {
+        const removed = await dexec(['rm', '-f', name], { timeoutMs: 15_000 });
+        if (removed.exitCode !== 0 && !/No such container/i.test(removed.stderr || '')) {
+          throw new Error('docker session removal failed');
+        }
+        destroyed = true;
+        try { fsSync.rmSync(stage, { recursive: true, force: true }); } catch (_) {}
+      })();
+      try { await destroying; } finally { destroying = null; }
     },
   };
 }
