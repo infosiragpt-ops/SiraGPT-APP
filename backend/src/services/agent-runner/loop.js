@@ -3000,6 +3000,12 @@ async function runAgentLoop({
         ...stepOutputs,
         ...(mapped === 'verify_visual' && !ok && isRendererUnavailable(result) ? { renderUnavailable: true } : {}),
       });
+      // A verified Office repair is progress, not an A-B-A-B loop. Start a
+      // fresh oscillation window so readback after the successful check can
+      // proceed; failed checks and all other tool pairs keep the cut intact.
+      if (mapped === 'verify_visual' && ok && /^VEREDICTO: VERIFICADO(?:\s|$)/m.test(String(result))) {
+        loopFingerprints.length = 0;
+      }
       if (mapped === 'inspect_document' && ok) {
         pinnedContext.inspectCallId = (call && call.id) || `call_${iteration}_${mapped}`;
         pinnedContext.inspectContent = String(result);
