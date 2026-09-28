@@ -38,16 +38,36 @@ function isInvalidKeyError(err) {
     && !/rate ?limit|quota/i.test(message);
 }
 
-function markRejected(provider, key, err = null, env = process.env) {
+/**
+ * @param {string} provider
+ * @param {string} key
+ * @param {Error|null} err
+ * @param {object} env
+ * @param {{ reason?: 'auth'|'billing', ttlMs?: number }} [opts] — `billing`
+ *   marks a key that is valid but unfunded (402/429 «no credits», 400 «credit
+ *   balance is too low», 403 «used all available credits»): the ladders skip
+ *   it exactly like an invalid one until the TTL expires or the key changes.
+ */
+function markRejected(provider, key, err = null, env = process.env, opts = {}) {
   const name = String(provider || '').toLowerCase();
   if (!name) return;
+  const reason = opts && opts.reason === 'billing' ? 'billing' : 'auth';
+  const customTtl = Number(opts && opts.ttlMs);
   rejected.set(name, {
     at: Date.now(),
     fingerprint: fingerprint(key),
     status: Number((err && (err.status || err.statusCode)) || 0) || null,
     message: err ? String(err.message || '').slice(0, 160) : null,
-    ttlMs: ttlMs(env),
+    ttlMs: Number.isFinite(customTtl) && customTtl >= 1000 ? customTtl : ttlMs(env),
+    reason,
   });
+}
+
+/** 'auth' | 'billing' | null when the provider is not currently rejected. */
+function rejectionReason(provider, key) {
+  if (!isRejected(provider, key)) return null;
+  const entry = rejected.get(String(provider || '').toLowerCase());
+  return entry ? entry.reason || 'auth' : null;
 }
 
 /** True when the SAME key was rejected recently. A new key re-arms the provider. */
@@ -67,9 +87,9 @@ function clear(provider = null) {
 function snapshot() {
   const out = {};
   for (const [name, entry] of rejected) {
-    out[name] = { rejectedAt: new Date(entry.at).toISOString(), status: entry.status, expiresInMs: Math.max(0, entry.ttlMs - (Date.now() - entry.at)) };
+    out[name] = { rejectedAt: new Date(entry.at).toISOString(), status: entry.status, reason: entry.reason || 'auth', expiresInMs: Math.max(0, entry.ttlMs - (Date.now() - entry.at)) };
   }
   return out;
 }
 
-module.exports = { isInvalidKeyError, markRejected, isRejected, clear, snapshot, fingerprint, DEFAULT_TTL_MS };
+module.exports = { isInvalidKeyError, markRejected, isRejected, rejectionReason, clear, snapshot, fingerprint, DEFAULT_TTL_MS };

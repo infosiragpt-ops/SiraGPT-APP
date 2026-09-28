@@ -86,6 +86,7 @@ const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
+const { wrapOpenAIChatClient } = require('../services/ai/openai-sampling-params');
 const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
 const conversationCompactor = require('../services/conversation-compactor');
@@ -454,9 +455,11 @@ function createProviderClient(provider, opts = {}) {
 
   // Custom / Ollama / HuggingFace already handled at the top via
   // createCustomProviderClient — never fall through to OpenAI.
-  return new OpenAI({
+  // First-party OpenAI: reasoning-class models reject temperature/top_p, so
+  // the client strips them up front and retries once on «Unsupported value».
+  return wrapOpenAIChatClient(new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
-  });
+  }));
 }
 
 /**
@@ -2758,7 +2761,17 @@ router.post(
           activeTurn = null;
         }
         if (activeTurn) {
-          const activeWait = await waitForActiveTurn(activeTurn);
+          let activeWait = await waitForActiveTurn(activeTurn);
+          // Prod 2026-09-28: when the owner failed, every waiting replay
+          // became a new owner (20–30 fresh generates). Followers re-wait on
+          // whoever claimed the key first (≤3 hops): one generate per key.
+          for (let hop = 0; hop < 3 && activeWait.outcome !== 'replay'; hop += 1) {
+            const claimed = activeGenerateTurns.get(activeGenerateTurnKey);
+            if (!claimed || claimed === activeTurn) break;
+            generateLog.info('idempotency.active_turn_followed', { hop: hop + 1 });
+            activeTurn = claimed;
+            activeWait = await waitForActiveTurn(activeTurn);
+          }
           if (activeWait.outcome === 'replay') {
             fullResponseContent = activeWait.turn.assistantMessage.content || '';
             generateLog.info('idempotency.active_turn_replayed', { hasChat: Boolean(chatId) });

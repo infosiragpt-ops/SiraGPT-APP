@@ -630,7 +630,7 @@ describe('chat turn idempotency', () => {
 
     assert.ok(activeStart >= 0 && activeEnd > activeStart);
     assert.match(activeSource, /activeTurn\.requestFingerprint !== generateIdempotencyRequestHash/);
-    assert.match(activeSource, /const activeWait = await waitForActiveTurn\(activeTurn\)/);
+    assert.match(activeSource, /(?:const|let) activeWait = await waitForActiveTurn\(activeTurn\)/);
     assert.match(
       activeSource,
       /activeWait\.outcome === 'replay'[\s\S]*?streamDuplicateTurnReplay/,

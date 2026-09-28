@@ -53,12 +53,16 @@ function orphanToUser(m) {
 
 /**
  * @param {Array<object>} messages
- * @returns {{ messages: Array<object>, repaired: number }}
+ * @returns {{ messages: Array<object>, repaired: number, kinds: Record<string, number> }}
+ *   `kinds` counts each repair: idless_tool_calls, legacy_result_bound,
+ *   orphan_result, missing_result.
  */
 function normalizeToolTranscript(messages) {
   const src = Array.isArray(messages) ? messages.filter(Boolean) : [];
   const out = [];
   let repaired = 0;
+  const kinds = {};
+  const fix = (kind) => { repaired += 1; kinds[kind] = (kinds[kind] || 0) + 1; };
   let i = 0;
   while (i < src.length) {
     const m = src[i];
@@ -68,7 +72,7 @@ function normalizeToolTranscript(messages) {
         // Empty / id-less tool_calls: send a plain assistant turn.
         const { tool_calls: _drop, ...rest } = m;
         out.push({ ...rest, content: typeof rest.content === 'string' ? rest.content : (rest.content == null ? '' : rest.content) });
-        repaired += 1;
+        fix('idless_tool_calls');
         i += 1;
         continue;
       }
@@ -91,10 +95,10 @@ function normalizeToolTranscript(messages) {
             const id = [...pending][0];
             pending.delete(id);
             results.push({ ...n, tool_call_id: id });
-            repaired += 1;
+            fix('legacy_result_bound');
           } else {
             deferred.push(orphanToUser(n));
-            repaired += 1;
+            fix('orphan_result');
           }
         } else {
           deferred.push(n);
@@ -103,7 +107,7 @@ function normalizeToolTranscript(messages) {
       }
       for (const id of pending) {
         results.push({ role: 'tool', tool_call_id: id, content: `[${callName(m, id)}] ${OMITTED_RESULT}` });
-        repaired += 1;
+        fix('missing_result');
       }
       // Keep the provider's expected order: results in call order.
       const order = new Map(ids.map((id, idx) => [id, idx]));
@@ -115,14 +119,14 @@ function normalizeToolTranscript(messages) {
     if (isToolMessage(m)) {
       // No open call group: orphan.
       out.push(orphanToUser(m));
-      repaired += 1;
+      fix('orphan_result');
       i += 1;
       continue;
     }
     out.push(m);
     i += 1;
   }
-  return { messages: out, repaired };
+  return { messages: out, repaired, kinds };
 }
 
 /** True for the strict-provider errors this module exists to prevent. */

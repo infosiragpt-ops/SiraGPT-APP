@@ -1,4 +1,5 @@
 const OpenAI = require('openai');
+const { wrapOpenAIChatClient } = require('../ai/openai-sampling-params');
 const reactAgent = require('../react-agent');
 const { statusForAgentStopReason, canRecoverAgentStopReason } = require('./react-run-outcome');
 const { buildTaskTools, saveArtifact } = require('./task-tools');
@@ -1444,7 +1445,13 @@ function buildOpenAICompatibleClient(target, env = process.env) {
   opts.timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
   const maxRetries = Number.parseInt(process.env.AGENT_TASK_LLM_MAX_RETRIES || '', 10);
   opts.maxRetries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 2;
-  return new OpenAI(opts);
+  const client = new OpenAI(opts);
+  // First-party OpenAI only (OpenRouter keeps `temperature` for openai/*
+  // slugs): reasoning-class models reject sampling knobs with a 400.
+  if (!target.baseURL || /(^|\.)openai\.com/i.test(String(target.baseURL))) {
+    return wrapOpenAIChatClient(client, { provider: target.provider || 'OpenAI' });
+  }
+  return client;
 }
 
 function normalizeAgentRuntimeModel(selectedModel) {
