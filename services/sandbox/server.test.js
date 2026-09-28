@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
-process.env.SANDBOX_API_KEY = 'sandbox-capacity-test-key';
+process.env.SANDBOX_API_KEY = 'test-key';
 process.env.SANDBOX_MAX_CONCURRENCY = '8';
 const { buildServer, sessions } = require('./server');
 const { createDockerSession } = require('./lib/docker-sandbox');
