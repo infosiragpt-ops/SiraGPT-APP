@@ -96,6 +96,61 @@ describe('multi-artifact delivery contract', () => {
     assert.equal(complete.ok, true);
     assert.equal(complete.comparedCells, 400);
 
+    const demographics = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 20, savColumns: 24, savQuestionColumns: 20, savDemographicColumns: 3,
+        excelRows: 20, excelColumns: 24, excelQuestionColumns: 20, excelDemographicColumns: 3,
+        comparedCells: 400, demographicComparedCells: 60,
+        differentCells: 0, labelCount: 20,
+        hasRespondentId: true, respondentIdsMatch: true,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(demographics.ok, true, 'matching optional demographics do not count as questions');
+    assert.equal(demographics.comparedCells, 400);
+
+    const skippedDemographics = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 20, savColumns: 24, savQuestionColumns: 20, savDemographicColumns: 3,
+        excelRows: 20, excelColumns: 24, excelQuestionColumns: 20, excelDemographicColumns: 3,
+        comparedCells: 400, demographicComparedCells: 0,
+        differentCells: 0, labelCount: 20,
+        hasRespondentId: true, respondentIdsMatch: true,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(skippedDemographics.ok, false, 'metadata cells must also be compared');
+
+    const changedDemographic = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 20, savColumns: 24, savQuestionColumns: 20, savDemographicColumns: 3,
+        excelRows: 20, excelColumns: 24, excelQuestionColumns: 20, excelDemographicColumns: 3,
+        comparedCells: 400, demographicComparedCells: 60,
+        differentCells: 1, differentDemographicCells: 1, labelCount: 20,
+        hasRespondentId: true, respondentIdsMatch: true,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(changedDemographic.ok, false);
+    assert.match(changedDemographic.message, /demogr[aá]fic/i);
+
+    const unknownExtraColumn = await contractService.validateSavXlsxDelivery(contract, {
+      artifacts,
+      inspectPair: async () => ({ ok: true, metrics: {
+        savRows: 20, savColumns: 25, savQuestionColumns: 21, savDemographicColumns: 3,
+        excelRows: 20, excelColumns: 25, excelQuestionColumns: 21, excelDemographicColumns: 3,
+        comparedCells: 420, demographicComparedCells: 60,
+        differentCells: 0, labelCount: 21,
+        hasRespondentId: true, respondentIdsMatch: true,
+        headersMatch: true, matrixComparable: true,
+      } }),
+    });
+    assert.equal(unknownExtraColumn.ok, false, 'unknown extra columns remain questions');
+    assert.match(unknownExtraColumn.message, /20 filas.*20 preguntas/);
+
     const repairedArtifacts = [
       ...artifacts,
       { id: 'sav-2', filename: 'muestra-corregida.sav', format: 'sav', downloadUrl: '/sav-2' },

@@ -224,12 +224,19 @@ async function validateSavXlsxDelivery(contract, { artifacts = [], inspectPair }
     };
   }
   const hasRespondentId = metrics.hasRespondentId === true;
+  const savDemographicColumns = metrics.savDemographicColumns ?? 0;
+  const excelDemographicColumns = metrics.excelDemographicColumns ?? 0;
+  const savQuestionColumns = metrics.savQuestionColumns ?? (metrics.savColumns - Number(hasRespondentId));
+  const excelQuestionColumns = metrics.excelQuestionColumns ?? (metrics.excelColumns - Number(hasRespondentId));
   const correctShape = metrics.savRows === expected.rows
     && metrics.excelRows === expected.rows
-    && metrics.savColumns === expected.columns + Number(hasRespondentId)
-    && metrics.excelColumns === expected.columns + Number(hasRespondentId)
-    && (!hasRespondentId || (metrics.savQuestionColumns === expected.columns
-      && metrics.excelQuestionColumns === expected.columns));
+    && Number.isSafeInteger(savDemographicColumns)
+    && savDemographicColumns >= 0 && savDemographicColumns <= 3
+    && excelDemographicColumns === savDemographicColumns
+    && savQuestionColumns === expected.columns
+    && excelQuestionColumns === expected.columns
+    && metrics.savColumns === expected.columns + savDemographicColumns + Number(hasRespondentId)
+    && metrics.excelColumns === expected.columns + excelDemographicColumns + Number(hasRespondentId);
   if (!correctShape) {
     return {
       ok: false, active: true, missingTools: ['create_document'],
@@ -252,11 +259,16 @@ async function validateSavXlsxDelivery(contract, { artifacts = [], inspectPair }
     };
   }
   const expectedCells = expected.rows * expected.columns;
-  if (metrics.comparedCells !== expectedCells || metrics.differentCells !== 0) {
+  const expectedDemographicCells = expected.rows * savDemographicColumns;
+  if (metrics.comparedCells !== expectedCells
+    || (metrics.demographicComparedCells ?? 0) !== expectedDemographicCells
+    || metrics.differentCells !== 0) {
     return {
       ok: false, active: true, missingTools: ['create_document'],
-      message: `Finalization blocked: hay diferencias entre el SAV y el Excel; deben coincidir los ${expectedCells} valores.`,
-      repairInstructions: 'Repara los datos de ambos archivos y compara cada celda antes de finalizar.',
+      message: metrics.differentDemographicCells > 0
+        ? 'Finalization blocked: hay diferencias en los datos demográficos entre el SAV y el Excel.'
+        : `Finalization blocked: hay diferencias entre el SAV y el Excel; deben coincidir las ${expectedCells} respuestas y todos los datos demográficos.`,
+      repairInstructions: 'Repara las respuestas y los datos demográficos de ambos archivos y compara cada celda antes de finalizar.',
     };
   }
   return { ok: true, active: true, comparedCells: expectedCells, labelCount: metrics.labelCount };
