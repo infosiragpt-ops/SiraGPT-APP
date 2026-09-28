@@ -250,8 +250,20 @@ function stripUnknownToolCallProperties(call) {
   const out = {};
   let stripped = 0;
   for (const key of Object.keys(call)) {
-    if (TOOL_CALL_KEEP.includes(key)) out[key] = call[key];
-    else stripped += 1;
+    if (TOOL_CALL_KEEP.includes(key)) {
+      out[key] = call[key];
+    } else if (key === 'extra_content') {
+      // Gemini 3 requires this opaque signature on the next tool-result turn.
+      // Keep only its documented wire field, not arbitrary provider metadata.
+      const signature = call.extra_content?.google?.thought_signature;
+      if (typeof signature === 'string' && signature) {
+        out.extra_content = { google: { thought_signature: signature } };
+      } else {
+        stripped += 1;
+      }
+    } else {
+      stripped += 1;
+    }
   }
   if (out.function && typeof out.function === 'object') {
     const fn = {};
