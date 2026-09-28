@@ -175,10 +175,13 @@ async function withAttachmentTaskEnv(label, reactRun, fn) {
   const restoreEnv = rememberEnv(['AGENT_TASK_ATTACHMENT_FASTPATH']);
   const prisma = require('../src/config/database');
   const aiService = require('../src/services/ai-service');
+  const documentIntelligence = require('../src/services/document-intelligence');
   const originalFindMany = prisma.file.findMany;
+  const originalFindFirst = prisma.file.findFirst;
+  const originalAnalyzeFile = documentIntelligence.analyzeFile;
   const originalGetClient = aiService.getClient;
   const recoveryCalls = [];
-  prisma.file.findMany = async () => [{
+  const fileRow = {
     id: `file-${label}`,
     userId: `user-task-${label}`,
     filename: 'informe.pdf',
@@ -195,7 +198,14 @@ async function withAttachmentTaskEnv(label, reactRun, fn) {
     ].join(' '),
     openaiFileId: null,
     documentAnalysis: null,
-  }];
+  };
+  // Every DB read the attachment context makes is stubbed: with a real
+  // database behind the un-stubbed retriever (CI's postgres) the fake file
+  // id is «not found», the context becomes the «sin evidencia» note and the
+  // thin-attachment guard ends the turn before the model is ever called.
+  prisma.file.findMany = async () => [fileRow];
+  prisma.file.findFirst = async () => fileRow;
+  documentIntelligence.analyzeFile = async () => null;
   aiService.getClient = (provider) => ({
     chat: {
       completions: {
@@ -215,6 +225,8 @@ async function withAttachmentTaskEnv(label, reactRun, fn) {
     });
   } finally {
     prisma.file.findMany = originalFindMany;
+    prisma.file.findFirst = originalFindFirst;
+    documentIntelligence.analyzeFile = originalAnalyzeFile;
     aiService.getClient = originalGetClient;
     restoreEnv();
   }
