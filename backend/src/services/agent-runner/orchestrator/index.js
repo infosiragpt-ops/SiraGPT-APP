@@ -24,6 +24,7 @@
 const { composeAbortSignals, throwIfAborted } = require('../../../utils/abort-signals');
 const { resolveMaxRuntimeMs } = require('../../doc-agent');
 const { isLlmCreditError } = require('../loop');
+const { logProviderFailure } = require('../provider-failure-diagnostics');
 const { resolveTurnFiles, persistOutputs } = require('../artifacts');
 const { createBlackboard } = require('./blackboard');
 const { rolePrompt, roleLabel, HIGH_STAKES_ROLES } = require('./roles');
@@ -286,7 +287,10 @@ async function runOrchestrator({
     } catch (err) {
       throwIfAborted(abortScope.signal);
       if (err?.code === 'BUDGET_EXCEEDED') return failure('budget_exceeded', err.message);
-      if (err?.code === 'E_PROVIDER') return failure('E_PROVIDER', err.message);
+      if (err?.code === 'E_PROVIDER') {
+        logProviderFailure(err, 0);
+        return failure('E_PROVIDER', err.message);
+      }
       if (isLlmCreditError(err)) return failure('llm_402', err?.message || String(err));
       return failure('plan_failed', err?.message || String(err));
     }
@@ -320,7 +324,10 @@ async function runOrchestrator({
         } catch (err) {
           throwIfAborted(abortScope.signal);
           if (err?.code === 'BUDGET_EXCEEDED') return failure('budget_exceeded', err.message);
-          if (err?.code === 'E_PROVIDER') return failure('E_PROVIDER', err.message);
+          if (err?.code === 'E_PROVIDER') {
+            logProviderFailure(err, completedOrder.length);
+            return failure('E_PROVIDER', err.message);
+          }
           if (isLlmCreditError(err)) return failure('llm_402', err?.message || String(err));
           return failure('plan_failed', `replan inválido: ${err?.message || String(err)}`);
         }

@@ -95,6 +95,7 @@ function withVisionHonesty(finalText, lastVerify) {
   return text ? `${text}\n\n${note}` : note;
 }
 const { runAgentLoop, MAX_ITERATIONS_DEFAULT, isLlmCreditError } = require('./loop');
+const { logProviderFailure } = require('./provider-failure-diagnostics');
 const {
   resolveTurnFiles,
   persistOutputs,
@@ -347,6 +348,7 @@ const RUNNER_PROVIDER_MESSAGE = 'El modelo seleccionado no está disponible. Rei
 function runnerProviderError(err) {
   const failure = new Error(RUNNER_PROVIDER_MESSAGE);
   failure.code = 'E_PROVIDER';
+  failure.failureOrigin = err ? 'upstream' : 'preflight';
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
   if (Number.isFinite(status) && status > 0) failure.status = status;
   return failure;
@@ -384,7 +386,10 @@ function createRunnerLlmClient({ pickedModel = null, env = process.env, createCl
         return await client.chat.completions.create(...args);
       } catch (err) {
         if (args[1]?.signal?.aborted || err?.name === 'AbortError' || err?.code === 'ABORT_ERR') throw err;
-        throw runnerProviderError(err);
+        const failure = runnerProviderError(err);
+        failure.failureTransport = selected.provider === 'OpenRouter' ? 'aggregator' : 'direct';
+        failure.failureProvider = selected.provider;
+        throw failure;
       }
     } } },
   };
@@ -1168,6 +1173,9 @@ async function executeAgentRunnerTurn(params = {}) {
     && (STYLE_EDIT_RE.test(instruction) || hasTurnFiles);
   const titleFastPath = isScopedSlideMutation(instruction) || Boolean(parsePresentationTitleEdit(instruction));
   if (!titleFastPath && !colorFastPath && !canCallLlm(params) && !params.client) {
+    if (params.pickedModel || explicitRunnerModel()) {
+      logProviderFailure({ failureOrigin: 'preflight' });
+    }
     return {
       ok: false,
       skipped: true,
@@ -1199,6 +1207,7 @@ async function executeAgentRunnerTurn(params = {}) {
       // User cancellation is not a runner failure — let the caller unwind.
       if (params.signal?.aborted || err?.name === 'AbortError') throw err;
       const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception';
+      if (reason === 'E_PROVIDER') logProviderFailure(err);
       try { console.warn('[agent-runner] orchestrated turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
       return {
         ok: false,
@@ -1249,6 +1258,7 @@ async function executeAgentRunnerTurn(params = {}) {
     // Never throw for real failures: the routes need the reason to show an
     // honest error instead of silently falling back to the generic pipeline.
     const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception';
+    if (reason === 'E_PROVIDER') logProviderFailure(err);
     try { console.warn('[agent-runner] turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
     return {
       ok: false,

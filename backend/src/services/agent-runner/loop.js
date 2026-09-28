@@ -12,6 +12,7 @@ const {
 } = require('./verify');
 const { OUTPUTS_SNAPSHOT, changedOutputs: diffOutputSnapshots } = require('./tools.office');
 const { labelForToolCall, agentThumbsEnabled } = require('./trace');
+const { logProviderFailure } = require('./provider-failure-diagnostics');
 const {
   repairToolArgs,
   isTransientLlmError,
@@ -986,6 +987,7 @@ function assistantTranscriptMessage(msg, toolCalls) {
         if (!sameArguments) {
           const error = new Error('Signed tool call changed during repair');
           error.code = 'E_PROVIDER';
+          error.failureOrigin = 'signed_call_changed';
           error.publicMessage = 'El modelo envió una llamada de herramienta incompatible con su firma. Reintenta con el mismo modelo.';
           throw error;
         }
@@ -1060,6 +1062,7 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
       if (choice?.finish_reason === 'length' && Array.isArray(choice.message?.tool_calls) && choice.message.tool_calls.length > 0) {
         const error = new Error('A tool call was truncated at the model output limit');
         error.code = 'E_PROVIDER';
+        error.failureOrigin = 'tool_call_truncated';
         error.publicMessage = 'La respuesta del modelo se cortó antes de completar una herramienta. Reintenta con una solicitud más breve o elige otro modelo.';
         throw error;
       }
@@ -1680,6 +1683,7 @@ async function runAgentLoop({
       });
       if (signal?.aborted) bail(iteration);
       if (err?.code === 'E_PROVIDER') {
+        logProviderFailure(err, iteration);
         const message = err.publicMessage || 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
         onEvent({ type: 'error', code: 'E_PROVIDER', message, retryable: true, iteration });
         return {
@@ -2149,6 +2153,7 @@ async function runAgentLoop({
     );
     if (signedCalls.some((original) => !toolCalls.some((call) => call.id === original.id
       && call.extra_content?.google?.thought_signature === original.extra_content.google.thought_signature))) {
+      logProviderFailure({ failureOrigin: 'signed_call_dropped' }, iteration);
       const publicMessage = 'El modelo envió una llamada de herramienta incompatible con su firma. Reintenta con el mismo modelo.';
       onEvent({ type: 'error', code: 'E_PROVIDER', message: publicMessage, iteration });
       return {
@@ -2268,6 +2273,7 @@ async function runAgentLoop({
       messages.push(assistantTranscriptMessage(msg, toolCalls));
     } catch (err) {
       if (err?.code !== 'E_PROVIDER') throw err;
+      logProviderFailure(err, iteration);
       const publicMessage = err.publicMessage || 'El modelo no pudo continuar con la herramienta. Reintenta.';
       onEvent({ type: 'error', code: 'E_PROVIDER', message: publicMessage, iteration });
       return {

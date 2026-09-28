@@ -291,7 +291,7 @@ test('AgentRunner keeps a selected model on its provider when that API returns 4
   });
   await assert.rejects(
     () => client.chat.completions.create({ model: 'ignored', messages: [] }),
-    { code: 'E_PROVIDER' },
+    { code: 'E_PROVIDER', status: 402, failureOrigin: 'upstream', failureTransport: 'direct', failureProvider: 'xAI' },
   );
   assert.deepEqual(calls, ['xAI']);
 });
