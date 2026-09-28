@@ -314,6 +314,70 @@ function safeArgs(raw) {
 const SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE =
   'No entregué el documento editado porque ninguna copia generada superó la validación de integridad. Conservé el archivo original y no generé un documento sustituto.';
 
+// A follow-up edit of a document generated earlier in the chat that no
+// editor could complete. Honest: no HTML preview or script as a substitute.
+const GENERATED_DOCUMENT_EDIT_FAILURE_MESSAGE =
+  'No pude editar el documento que generé antes en este chat: no logré cargar la última versión del archivo. '
+  + 'No lo reemplacé por una vista HTML ni por un script. Vuelve a intentarlo o adjunta el archivo y lo edito sobre esa versión.';
+
+// Office formats a follow-up edit can target, from the words of the request.
+const OFFICE_EDIT_FORMAT_RULES = [
+  { format: 'pptx', re: /\b(?:pptx?|ppts|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|slides?|deck)\b|\.pptx?\b/i },
+  { format: 'docx', re: /\b(?:docx?|word)\b|\.docx?\b/i },
+  { format: 'xlsx', re: /\b(?:xlsx?|excel|hoja\s+de\s+c[aá]lculo|planilla)\b|\.xlsx?\b/i },
+];
+const OFFICE_EDIT_FORMATS = new Set(['pptx', 'pptm', 'potx', 'docx', 'docm', 'dotx', 'xlsx', 'xlsm', 'xltx']);
+// What the loop produced INSTEAD of the document (incident: .html + .py).
+const OFFICE_SUBSTITUTE_FORMATS = new Set(['html', 'htm', 'py', 'js', 'ts', 'md', 'markdown', 'txt', 'json', 'svg', 'png', 'jpg', 'jpeg', 'csv', 'sh']);
+
+function officeFormatsNamedIn(text = '') {
+  const t = String(text || '');
+  return OFFICE_EDIT_FORMAT_RULES.filter((rule) => rule.re.test(t)).map((rule) => rule.format);
+}
+
+// pptm → pptx, dotx → docx…: the family the honesty check accepts.
+function officeEditFamily(format) {
+  const f = String(format || '').toLowerCase().replace(/^.*\./, '');
+  if (!OFFICE_EDIT_FORMATS.has(f)) return null;
+  return f.startsWith('ppt') || f === 'potx' ? 'pptx' : f.startsWith('doc') || f === 'dotx' ? 'docx' : 'xlsx';
+}
+
+// A generated artifact the chat loop cannot edit (no upload to mount): the
+// follow-up goes to the AgentRunner or ends honestly.
+const GENERATED_EDIT_TARGET_FORMATS = new Set([...OFFICE_EDIT_FORMATS, 'pdf']);
+
+// The user explicitly asks for ANOTHER format or a derived output (a
+// dashboard, a page, markdown, a summary…): not a same-file Office edit, so
+// create_artifact stays and html / md / csv outputs are the deliverable.
+const NON_OFFICE_DELIVERABLE_RE = /\b(?:html?|p[aá]gina\s+web|sitio\s+web|landing|dashboard|tablero|markdown|md|csv|json|png|jpe?g|svg|script|python)\b|\b(?:convi[eé]rt\w*|convert\w*|exp[oó]rta\w*|export|transforma\w*|pasa(?:lo|la|los|las|r)?\s+a|p[aá]sa(?:lo|la|los|las)\s+a|guarda(?:lo|la|r)?\s+como|res[uú]m(?:e|es|ir|elo|ela|eme|emelo|id[oa])|extr[aá](?:e|er|elo|ela|igas?)|extract\w*|summari[sz]\w*)\b/i;
+function requestsNonOfficeDeliverable(text = '') {
+  return NON_OFFICE_DELIVERABLE_RE.test(String(text || ''));
+}
+
+function isQuestionOrAdviceTurn(text = '') {
+  try {
+    return require('./agent-runner').isQuestionOrAdviceRequest(text);
+  } catch (_) {
+    return /\?\s*$/.test(String(text || '').trim());
+  }
+}
+
+function artifactFormatOf(artifact = {}) {
+  const fromFormat = String(artifact.format || '').toLowerCase().replace(/^\./, '');
+  if (fromFormat) return fromFormat;
+  const name = String(artifact.filename || artifact.name || '');
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+function officeEditSubstituteMessage(formats = []) {
+  const noun = formats.length === 1
+    ? ({ pptx: 'la presentación', docx: 'el documento de Word', xlsx: 'el libro de Excel' }[formats[0]] || 'el documento')
+    : 'el documento';
+  return `No pude editar ${noun} en este turno, así que no lo doy por terminado: no lo reemplazo por una página HTML ni por un script. `
+    + 'El archivo original no se modificó. Vuelve a intentarlo y lo edito sobre la última versión.';
+}
+
 function sourcePreservingResultValidation(item) {
   return item?.validation || item?.artifact?.validation || null;
 }
@@ -1301,27 +1365,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // pipeline — that silent fallback produced the 8-slide template decks.
     let agentRunnerClaimedTurn = false;
     let agentRunnerFailure = null;
-    try {
-      const {
-        shouldRunAgentRunner,
-        executeAgentRunnerTurn,
-        hasConversationArtifacts,
-      } = require('./agent-runner');
-      let prior = false;
-      if (toolContext.prisma && toolContext.userId && toolContext.chatId) {
-        try {
-          prior = await hasConversationArtifacts(toolContext.prisma, {
-            userId: toolContext.userId,
-            chatId: toolContext.chatId,
-          });
-        } catch (_) { prior = false; }
-      }
-      if (!codingWorkspace && shouldRunAgentRunner({
-        fileIds: preloopFileIds,
-        hasPriorArtifacts: prior,
-        text: userQuery,
-      })) {
-        agentRunnerClaimedTurn = true;
+    // The chat already holds a generated document (GeneratedArtifact row or
+    // artifact metadata). Read again below: an edit of a GENERATED file has
+    // no upload, so the loop's document_edit tool cannot reach it.
+    let prior = false;
+    // Names of this turn's uploads (format of an attached Office file).
+    const uploadedFileRefs = Array.isArray(toolContext.fileMetadata)
+      ? toolContext.fileMetadata.filter((file) => file && file.name)
+      : [];
+    // Format of the artifact this follow-up edits (latest, or the one the
+    // request names): 'pptx' / 'docx' / 'xlsx' route to the runner; an html
+    // page, a script or an image stays with the chat loop.
+    let priorArtifactFormat = null;
+    // Runs the AgentRunner on this turn. Returns the finished turn when it
+    // delivered (or failed with a partial delivery); otherwise records
+    // agentRunnerFailure and returns null.
+    const invokeAgentRunner = async () => {
+      agentRunnerClaimedTurn = true;
+      try {
+        const { executeAgentRunnerTurn } = require('./agent-runner');
         try {
           const { createActivityTraceCollector, createArtifactThumbSaver } = require('./agent-runner/activity-trace');
           agentRunnerTrace = createActivityTraceCollector({
@@ -1374,16 +1436,76 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           reason: ran?.stoppedReason || 'no_output',
           detail: ran?.errorMessage || null,
         };
-      }
-    } catch (agentRunnerErr) {
-      if (signal?.aborted) throw agentRunnerErr;
-      try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
-      if (agentRunnerClaimedTurn) {
+      } catch (agentRunnerErr) {
+        if (signal?.aborted) throw agentRunnerErr;
+        try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
         agentRunnerFailure = {
           reason: 'exception',
           detail: agentRunnerErr?.message || String(agentRunnerErr),
         };
       }
+      return null;
+    };
+    try {
+      const {
+        shouldRunAgentRunner,
+        hasConversationArtifacts,
+        getConversationArtifactFormat,
+      } = require('./agent-runner');
+      if (toolContext.prisma && toolContext.userId && toolContext.chatId) {
+        try {
+          prior = await hasConversationArtifacts(toolContext.prisma, {
+            userId: toolContext.userId,
+            chatId: toolContext.chatId,
+          });
+        } catch (_) { prior = false; }
+        if (prior && typeof getConversationArtifactFormat === 'function') {
+          try {
+            priorArtifactFormat = await getConversationArtifactFormat(toolContext.prisma, {
+              userId: toolContext.userId,
+              chatId: toolContext.chatId,
+              instruction: userQuery,
+            });
+          } catch (_) { priorArtifactFormat = null; }
+        }
+      }
+      if (!codingWorkspace && shouldRunAgentRunner({
+        files: uploadedFileRefs,
+        fileIds: preloopFileIds,
+        hasPriorArtifacts: prior,
+        priorArtifactFormat,
+        text: userQuery,
+      })) {
+        const finished = await invokeAgentRunner();
+        if (finished) return finished;
+      }
+    } catch (agentRunnerErr) {
+      if (signal?.aborted) throw agentRunnerErr;
+      try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
+    }
+    // A DESIGN upgrade («agrégale más diseño», «hazla más profesional») is
+    // not something the surgical quick editor can do: it read «agregarle un
+    // poco más» as «add one slide» and appended a filler «— ampliación»
+    // slide marked as done. Those turns belong to the AgentRunner only.
+    let officeEditFormats = [];
+    let designUpgradeTurn = false;
+    let designTarget = null;
+    try {
+      const { isDesignUpgradeRequest, resolveDesignTarget } = require('./agent-runner');
+      designTarget = resolveDesignTarget(userQuery, { priorArtifactFormat, files: uploadedFileRefs });
+      designUpgradeTurn = Boolean(designTarget) && isDesignUpgradeRequest(userQuery, { officeTarget: designTarget });
+    } catch (_) { designUpgradeTurn = false; }
+    // A request that ALSO reads as a professional rewrite of the text («hazlo
+    // más bonito y profesional el word») keeps the quick editor's
+    // professional_edit as a rescue.
+    let skipQuickEditorForDesign = designUpgradeTurn;
+    if (skipQuickEditorForDesign) {
+      try {
+        const { requestWantsProfessionalEditing } = require('./source-preserving-document-edit');
+        if (typeof requestWantsProfessionalEditing === 'function' && requestWantsProfessionalEditing(userQuery)) {
+          skipQuickEditorForDesign = false;
+        }
+      } catch (_) { /* keep the skip */ }
     }
     if (
       // fileIds may be empty on a follow-up that only names ## file.pptx —
@@ -1396,6 +1518,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // Never short-circuit "realiza una ppt de 30 slides de la tesis.pdf" into
       // source-preserving PDF annex editing — that must create a fresh .pptx.
       && !wantsNewDeckDeliverable
+      && !skipQuickEditorForDesign
     ) {
       try {
         const {
@@ -1545,6 +1668,44 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
+    // Follow-up edit of a GENERATED document (no upload in this turn) that
+    // the quick editor could not deliver (source not found, intent it cannot
+    // plan). The loop below has no editor for generated files — document_edit
+    // only mounts uploads and create_document / docintel are banned on edit
+    // turns — so it used to answer with an .html preview and a .py script.
+    // The AgentRunner loads the artifact (R2 included) and edits it; when it
+    // cannot, the turn ends with an honest error.
+    if (
+      !codingWorkspace
+      && documentEditPreloopAttempted
+      && prior
+      && preloopFileIds.length === 0
+      // Only an Office / PDF artifact: follow-ups on an html page, a script,
+      // a csv or an image keep the loop, which can edit those.
+      && GENERATED_EDIT_TARGET_FORMATS.has(String(priorArtifactFormat || '').toLowerCase())
+      // «revisa el documento y dime qué corregir» is answered in the chat.
+      && !isQuestionOrAdviceTurn(userQuery)
+    ) {
+      if (!agentRunnerClaimedTurn) {
+        const finished = await invokeAgentRunner();
+        if (finished) return finished;
+      }
+      let answer = null;
+      try {
+        answer = agentRunnerFailure
+          ? require('./agent-runner').buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail)
+          : null;
+      } catch (_) { answer = null; }
+      answer = answer || GENERATED_DOCUMENT_EDIT_FAILURE_MESSAGE;
+      await writeSse(res, { replace: true, content: answer });
+      logDocRouting('agent_runner_failed', `generated_document_edit_${agentRunnerFailure ? agentRunnerFailure.reason : 'no_source'}`);
+      return finishSourcePreservingPreloop(
+        agentRunnerFailure ? 'agent_runner_failed' : 'source_preserving_document_edit_failed',
+        answer,
+        [],
+      );
+    }
+
     // HARD STOP: the AgentRunner claimed this DOCUMENT turn (create-a-doc or
     // style/color follow-up) but did not deliver a file, and the surgical
     // editor above did not rescue it either. Continuing into the LLM loop
@@ -1558,7 +1719,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       let answer = null;
       try {
         const { isRunnerOnlyDocumentTurn, buildAgentRunnerFailureMessage } = require('./agent-runner');
-        runnerOnly = isRunnerOnlyDocumentTurn(userQuery);
+        runnerOnly = isRunnerOnlyDocumentTurn(userQuery, { priorArtifactFormat });
         answer = buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
       } catch (_) {
         answer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
@@ -2010,6 +2171,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         'docintel_compare',
       ]);
       tools = tools.filter((t) => t && t.name && !blockedOnEdit.has(t.name));
+    }
+    // An edit of a Word / Excel / PowerPoint file is delivered as that same
+    // file type. create_artifact (html / code) must never stand in for it —
+    // the incident answer was an .html «preview» plus a python script.
+    // Only a same-file edit: «haz un dashboard html con los datos del excel»,
+    // «pasa el excel a markdown» or «resume el word» ASK for another format.
+    if (
+      (documentEditIntent || documentMergeIntent || documentEditPreloopAttempted || agentRunnerClaimedTurn || designUpgradeTurn)
+      && !wantsNewDeckDeliverable
+      && !softwareBuildTurn
+      && !requestsNonOfficeDeliverable(userQuery)
+    ) {
+      officeEditFormats = officeFormatsNamedIn(userQuery);
+      if (!officeEditFormats.length && prior) {
+        const latestFamily = officeEditFamily(priorArtifactFormat);
+        if (latestFamily) officeEditFormats = [latestFamily];
+      }
+      if (!officeEditFormats.length && attachedFileCount > 0 && Array.isArray(toolContext.fileMetadata)) {
+        officeEditFormats = Array.from(new Set(toolContext.fileMetadata
+          .map((file) => officeEditFamily(artifactFormatOf({ filename: file && file.name })))
+          .filter(Boolean)));
+      }
+      if (officeEditFormats.length && Array.isArray(tools)) {
+        tools = tools.filter((t) => !(t && t.name === 'create_artifact'));
+      }
     }
     // F2: the AgentRunner claimed this turn and failed, and the surgical
     // editor did not rescue it either — the loop may still serve the EDIT
@@ -2729,6 +2915,33 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         stoppedReason = 'generated_artifact_read_failed';
       }
       finalAnswer = redactGeneratedArtifactText(finalAnswer);
+    }
+    // Office edit turn that ended with substitutes (.html / .py / images)
+    // and no file of the requested type: the answer must not present them as
+    // the edited document. Honest failure, substitute cards dropped from the
+    // persisted turn.
+    if (officeEditFormats.length && !signal?.aborted && Array.isArray(state.artifacts)) {
+      const acceptable = new Set(officeEditFormats.flatMap((format) => (
+        format === 'pptx' ? ['pptx', 'pptm', 'potx'] : format === 'docx' ? ['docx', 'docm', 'dotx'] : ['xlsx', 'xlsm', 'xltx']
+      )));
+      const delivered = state.artifacts.some((artifact) => acceptable.has(artifactFormatOf(artifact)));
+      const substitutes = state.artifacts.filter((artifact) => OFFICE_SUBSTITUTE_FORMATS.has(artifactFormatOf(artifact)));
+      if (!delivered && substitutes.length) {
+        for (const artifact of substitutes) {
+          const index = state.artifacts.indexOf(artifact);
+          if (index >= 0) state.artifacts.splice(index, 1);
+        }
+        finalAnswer = officeEditSubstituteMessage(officeEditFormats);
+        stoppedReason = 'source_preserving_document_edit_failed';
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: 'document_edit',
+            reason: 'office_edit_substitute_artifacts',
+            fatal: true,
+            message: substitutes.map((artifact) => artifact.filename).join(', ').slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
+      }
     }
     try {
       finalAnswer = require('./computer/login-handoff').filterModelPasswordPaste(finalAnswer);

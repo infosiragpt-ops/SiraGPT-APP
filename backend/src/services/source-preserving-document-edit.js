@@ -524,7 +524,17 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
   return editable;
 }
 
-function resolveGeneratedArtifactPath(row = {}) {
+/**
+ * Where the bytes of a generated artifact live: its local path, else the
+ * binary next to its metadata, else — when R2/MinIO is on — the object
+ * storage ref. saveArtifact() uploads the binary and startArtifactMirror()
+ * then DELETES the local copy, so without the storageRef fallback every
+ * follow-up edit of a generated file found no source in production and the
+ * editor returned null (incident 2026-09-28). readSourceBuffer()
+ * materialises the r2: ref. The remote ref is returned only when the
+ * metadata's owner and chat match the caller's (fail closed when unknown).
+ */
+function resolveGeneratedArtifactPath(row = {}, { userId = null, chatId = null } = {}) {
   const direct = String(row.path || '').trim();
   if (direct) {
     try {
@@ -534,6 +544,7 @@ function resolveGeneratedArtifactPath(row = {}) {
     }
   }
   try {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(row.id || ''))) return null;
     const metaPath = taskToolInternals.metadataPathFor
       ? taskToolInternals.metadataPathFor(String(row.id || ''))
       : path.join(ARTIFACT_DIR, `${row.id}.json`);
@@ -542,13 +553,20 @@ function resolveGeneratedArtifactPath(row = {}) {
     const candidates = [];
     if (meta.storedRelPath) candidates.push(path.join(ARTIFACT_DIR, meta.storedRelPath));
     if (meta.filename && row.id) candidates.push(path.join(ARTIFACT_DIR, `${row.id}-${meta.filename}`));
-    return candidates.find((candidate) => {
+    const local = candidates.find((candidate) => {
       try {
         return candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile();
       } catch {
         return false;
       }
-    }) || null;
+    });
+    if (local) return local;
+    const ref = String(meta.storageRef || '').trim();
+    if (!ref || !objectStorage.isRemote(ref)) return null;
+    if (userId && String(meta.ownerUserId || '') !== String(userId)) return null;
+    if (chatId && String(meta.chatId || '') !== String(chatId)) return null;
+    if (!userId && !chatId) return null;
+    return ref;
   } catch {
     return null;
   }
@@ -586,14 +604,14 @@ async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, 
       originalName: row.filename,
       mimeType: row.mime || EXTENSION_TO_MIME[row.format] || 'application/octet-stream',
       size: row.sizeBytes || 0,
-      path: resolveGeneratedArtifactPath(row),
+      path: resolveGeneratedArtifactPath(row, { userId, chatId }),
       extractedText: '',
       source: 'generated_artifact',
       createdAt: row.createdAt,
       validation: row.validation || null,
     }))
     .filter((row) => row.path && isSupportedSourcePreservingFile(row));
-  const messageArtifacts = await loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit });
+  const messageArtifacts = await loadRecentAssistantArtifactSourceFiles(prisma, { chatId, userId, limit });
   return dedupeFiles([...dbArtifacts, ...messageArtifacts]);
 }
 
@@ -626,7 +644,7 @@ function artifactFormatFromFilename(filename = '', mime = '') {
   return 'bin';
 }
 
-function normalizeAssistantArtifactFile(file = {}, timestamp = null) {
+function normalizeAssistantArtifactFile(file = {}, timestamp = null, { userId = null, chatId = null } = {}) {
   const artifactId = String(file.artifactId || file.id || artifactIdFromUrl(file.url || file.downloadUrl || file.download_url) || '').trim();
   const filename = file.filename || file.name || file.title || (artifactId ? `${artifactId}.bin` : '');
   const format = String(file.format || artifactFormatFromFilename(filename, file.mime || file.mimeType || file.type)).toLowerCase();
@@ -638,7 +656,9 @@ function normalizeAssistantArtifactFile(file = {}, timestamp = null) {
       return '';
     }
   })();
-  const resolvedPath = existingDirectPath || (artifactId ? resolveGeneratedArtifactPath({ id: artifactId, filename, format, mime: file.mime || file.mimeType }) : null);
+  const resolvedPath = existingDirectPath || (artifactId
+    ? resolveGeneratedArtifactPath({ id: artifactId, filename, format, mime: file.mime || file.mimeType }, { userId, chatId })
+    : null);
   if (!resolvedPath) return null;
   return {
     id: artifactId ? `artifact:${artifactId}` : `assistant-artifact:${filename}:${timestamp || ''}`,
@@ -655,7 +675,7 @@ function normalizeAssistantArtifactFile(file = {}, timestamp = null) {
   };
 }
 
-async function loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit = 8 } = {}) {
+async function loadRecentAssistantArtifactSourceFiles(prisma, { chatId, userId = null, limit = 8 } = {}) {
   if (!prisma?.message?.findMany || !chatId) return [];
   const messages = await prisma.message.findMany({
     where: { chatId, role: 'ASSISTANT', deletedAt: null },
@@ -666,7 +686,7 @@ async function loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit = 
   const files = [];
   for (const message of messages) {
     for (const file of parseMessageFiles(message.files)) {
-      const normalized = normalizeAssistantArtifactFile(file, message.timestamp);
+      const normalized = normalizeAssistantArtifactFile(file, message.timestamp, { userId, chatId });
       if (!normalized || !isSupportedSourcePreservingFile(normalized)) continue;
       files.push(normalized);
       if (files.length >= limit) return dedupeFiles(files);

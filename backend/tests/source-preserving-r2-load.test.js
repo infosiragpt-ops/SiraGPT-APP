@@ -80,3 +80,93 @@ test('readSourceBuffer reads a local path with a no-op cleanup', async () => {
     try { fs.unlinkSync(tmp); } catch { /* best-effort */ }
   }
 });
+
+// ── Generated artifacts offloaded to R2 (incident 2026-09-28) ────────────
+// saveArtifact() uploads the binary and startArtifactMirror() deletes the
+// local copy. The quick editor only looked on disk, found no source for a
+// follow-up edit of a generated deck, and returned null.
+
+const crypto = require('crypto');
+const {
+  INTERNAL: spInternal,
+} = require('../src/services/source-preserving-document-edit');
+const { ARTIFACT_DIR } = require('../src/services/agents/task-tools');
+
+function writeOffloadedArtifactMeta({ ownerUserId = 'u-r2', chatId = 'c-r2', filename = 'deck.pptx' } = {}) {
+  const id = crypto.randomBytes(8).toString('hex');
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+  const storedRelPath = `${id}-${filename}`;
+  const storageRef = `r2:agent-artifacts/${storedRelPath}`;
+  fs.writeFileSync(path.join(ARTIFACT_DIR, `${id}.json`), JSON.stringify({
+    id, filename, format: 'pptx', ownerUserId, chatId, storedRelPath, storageRef,
+    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  }));
+  return { id, storageRef, cleanup: () => { try { fs.unlinkSync(path.join(ARTIFACT_DIR, `${id}.json`)); } catch { /* best-effort */ } } };
+}
+
+function prismaWithRow(row) {
+  return {
+    generatedArtifact: { findMany: async () => [row] },
+  };
+}
+
+test('generated artifact whose local copy was offloaded to R2 is still a source (storageRef)', async () => {
+  const meta = writeOffloadedArtifactMeta();
+  try {
+    const sources = await spInternal.loadRecentGeneratedArtifactSourceFiles(prismaWithRow({
+      id: meta.id,
+      filename: 'deck.pptx',
+      mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      format: 'pptx',
+      path: path.join(os.tmpdir(), `gone-${meta.id}.pptx`),
+      createdAt: new Date(),
+    }), { userId: 'u-r2', chatId: 'c-r2' });
+    assert.equal(sources.length, 1);
+    assert.equal(sources[0].path, meta.storageRef, 'readSourceBuffer materialises the r2: ref');
+    assert.equal(sources[0].source, 'generated_artifact');
+  } finally {
+    meta.cleanup();
+  }
+});
+
+test('an offloaded artifact of another user or another chat is never loaded', async () => {
+  const foreignOwner = writeOffloadedArtifactMeta({ ownerUserId: 'someone-else' });
+  const foreignChat = writeOffloadedArtifactMeta({ chatId: 'other-chat' });
+  try {
+    for (const meta of [foreignOwner, foreignChat]) {
+      const sources = await spInternal.loadRecentGeneratedArtifactSourceFiles(prismaWithRow({
+        id: meta.id, filename: 'deck.pptx', format: 'pptx', path: null, createdAt: new Date(),
+      }), { userId: 'u-r2', chatId: 'c-r2' });
+      assert.deepEqual(sources, []);
+    }
+  } finally {
+    foreignOwner.cleanup();
+    foreignChat.cleanup();
+  }
+});
+
+test('assistant download cards of an offloaded artifact resolve to its storageRef too', async () => {
+  const meta = writeOffloadedArtifactMeta();
+  try {
+    const prisma = {
+      message: {
+        findMany: async () => [{
+          files: JSON.stringify([{ url: `/api/agent/artifact/${meta.id}?name=deck.pptx`, filename: 'deck.pptx' }]),
+          timestamp: new Date(),
+        }],
+      },
+    };
+    const sources = await spInternal.loadRecentAssistantArtifactSourceFiles(prisma, { chatId: 'c-r2', userId: 'u-r2' });
+    assert.equal(sources.length, 1);
+    assert.equal(sources[0].path, meta.storageRef);
+    // A traversal id from a crafted card URL never reaches the metadata read.
+    const crafted = {
+      message: {
+        findMany: async () => [{ files: JSON.stringify([{ url: '/api/agent/artifact/..%2F..%2Fetc%2Fpasswd', filename: 'x.pptx' }]), timestamp: new Date() }],
+      },
+    };
+    assert.deepEqual(await spInternal.loadRecentAssistantArtifactSourceFiles(crafted, { chatId: 'c-r2', userId: 'u-r2' }), []);
+  } finally {
+    meta.cleanup();
+  }
+});

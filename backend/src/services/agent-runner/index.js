@@ -104,6 +104,7 @@ const {
   resolveTurnFiles,
   persistOutputs,
   hasConversationArtifacts,
+  getConversationArtifactFormat,
   sanitizeUploadName,
 } = require('./artifacts');
 const {
@@ -183,6 +184,41 @@ function loadOfficeHelpersPy({ dir } = {}) {
   return text;
 }
 
+// sira_design.py — deterministic professional restyle (DESIGN WORKFLOW):
+// same lazy / fail-open contract. Without it the model restyles with its own
+// python-pptx / python-docx / openpyxl code.
+let siraDesignPyCache;
+function loadSiraDesignPy({ dir } = {}) {
+  const fromDefaultDir = !dir;
+  if (fromDefaultDir && siraDesignPyCache !== undefined) return siraDesignPyCache;
+  let text = null;
+  try {
+    text = fs.readFileSync(path.join(dir || __dirname, 'sira_design.py'), 'utf8');
+  } catch (_) {
+    text = null;
+  }
+  if (fromDefaultDir) siraDesignPyCache = text;
+  return text;
+}
+
+/**
+ * Tokens of the redesign: a color the user named wins (any runner color
+ * name or #hex), else the style keywords pick a professional theme.
+ */
+function designThemeForTask(task) {
+  try {
+    const { resolveDesignTheme } = require('./design-theme');
+    const theme = resolveDesignTheme({ prompt: task, colorHex: inferColorFromText(task) });
+    if (!theme) return null;
+    // A theme the user's words chose («elegante», «minimalista») is pinned:
+    // sira_design only rotates away from the DEFAULT theme on a repeat.
+    const fallback = resolveDesignTheme({ prompt: '' });
+    return { ...theme, pinned: Boolean(theme.colorLocked) || theme.id !== (fallback && fallback.id) };
+  } catch (_) {
+    return null;
+  }
+}
+
 // sira_office.py — office engine for millimetric edits with visual
 // verification (docs/specs/edicion-milimetrica/SPEC.md). Installed by
 // tools.office.js with the same lazy/fail-open contract as office_helpers.py:
@@ -259,19 +295,231 @@ function isHighlightEdit(text) {
   } catch (_) { return false; }
 }
 
+// ── Follow-up edits of an existing document (incident 2026-09-28) ─────────
+// «en la misma ppt ## deck.pptx puede agregarle un poco mas de diseño» never
+// reached the runner: WORK_RE lists whole verbs (\bagrega\b) and misses the
+// clitic forms («agregarle», «mejóralo», «hazla») and every design request
+// («más diseño», «más profesional», «rediseña»). These detectors work on
+// accent-free lowercase text so each conjugation needs one stem.
+function normalizeIntentText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Office family of a file format («pptm» → pptx…). Only these can be
+// redesigned: sira_design restyles pptx / docx / xlsx.
+const OFFICE_FAMILY = {
+  pptx: 'pptx', pptm: 'pptx', potx: 'pptx', ppt: 'pptx',
+  docx: 'docx', docm: 'docx', dotx: 'docx', doc: 'docx',
+  xlsx: 'xlsx', xlsm: 'xlsx', xltx: 'xlsx', xls: 'xlsx',
+};
+function officeFamily(format) {
+  const f = String(format || '').toLowerCase().replace(/^.*\./, '');
+  return OFFICE_FAMILY[f] || null;
+}
+
+// Which Office file the words of the request name. «libro» alone is a book:
+// only «libro de Excel / de cálculo» is a workbook.
+const DECK_REF_RE = /\b(ppt|pptx|ppts|powerpoint|power\s+point|presentacion(?:es)?|diapositivas?|laminas?|slides?|deck|presentation)\b|\S+\.(?:pptx?|pptm|potx)\b/;
+const SHEET_REF_RE = /\b(excel|xlsx|hoja\s+de\s+calculo|planilla|libro\s+de\s+(?:excel|calculo)|spreadsheet|workbook)\b|\S+\.(?:xlsx?|xlsm|xltx)\b/;
+const WORD_REF_RE = /\b(word|docx)\b|\S+\.(?:docx?|docm|dotx)\b/;
+const GENERIC_DOC_REF_RE = /\b(documento|informe|reporte|archivo|pdf|document|report|file)\b/;
+function officeFormatNamedIn(normalized) {
+  const t = String(normalized || '');
+  if (DECK_REF_RE.test(t)) return 'pptx';
+  if (SHEET_REF_RE.test(t)) return 'xlsx';
+  if (WORD_REF_RE.test(t)) return 'docx';
+  return null;
+}
+
+/**
+ * The Office file a design request would restyle: a format named in the
+ * text wins, then the conversation's latest artifact, then an uploaded
+ * Office file; a generic «documento / informe» is a target of unknown format
+ * ('document'). null = nothing Office to redesign.
+ */
+function resolveDesignTarget(text, { priorArtifactFormat = null, files = [] } = {}) {
+  const t = normalizeIntentText(text);
+  const named = officeFormatNamedIn(t);
+  if (named) return named;
+  const prior = officeFamily(priorArtifactFormat);
+  if (prior) return prior;
+  for (const file of Array.isArray(files) ? files : []) {
+    const fam = officeFamily(file && (file.name || file.originalName || file.filename));
+    if (fam) return fam;
+  }
+  return GENERIC_DOC_REF_RE.test(t) ? 'document' : null;
+}
+
+// Verbs. Improve verbs («mejora», «dale», «hazla», «que se vea…») take any
+// design object; add verbs («agrégale», «ponle») need a visual one; change
+// verbs only a GLOBAL look («cambia el diseño»).
+const DESIGN_IMPROVE_VERB_RE = /\b(mejor(?:a|ar|ala|alo|alas|alos|ale|ales|en|emos|ame|arla|arlo|arle|arles)|estiliz\w*|dale|dales|dele|denle|ponle|ponles|ponele|hazl[ao]s?|haz\s+que|hacer\s+que|deja(?:l[ao]s?)?|dejal[ao]s?|vuelvel[ao]s?|que\s+se\s+vea\w*|que\s+luzca\w*|se\s+vea\w*|luzca\w*|improve|improving|make\s+(?:it|the\s+\w+)|polish|give\s+(?:it|the\s+\w+))\b/;
+const DESIGN_TRUE_IMPROVE_RE = /\b(mejor(?:a|ar|ala|alo|alas|alos|ale|ales|en|emos|ame|arla|arlo|arle|arles)|improve|improving|polish)\b/;
+const DESIGN_ADD_VERB_RE = /\b(agreg\w*|anad\w*|incorpor\w*|dar(?:le|les)?|poner(?:le|les)?|pon|mete\w*|meter\w*|sum\w*le|add|give)\b/;
+const DESIGN_CHANGE_VERB_RE = /\b(cambi\w*|aplic\w*|actualiz\w*|renuev\w*|renov\w*|change|apply|update)\b/;
+// Nouns / adjectives that only describe the LOOK of a file.
+const DESIGN_VISUAL_RE = /\b(disen[oa]s?|disenad[oa]s?|format(?:o|os|ea\w*|eo)?|look|aspecto|apariencia|estetic\w*|visual\w*|colores|colorid[oa]s?|tipografi\w*|paletas?|bonit\w*|lind[oa]s?|vistos[oa]s?|llamativ\w*|presentable|design|layout|colors|typography|prettier|nicer|beautiful)\b/;
+// «que se vea mejor», «make the deck look more professional».
+const DESIGN_LOOK_PHRASE_RE = /\b(?:se\s+vea\w*|luzca\w*|se\s+mire\w*|look(?:s|ing)?)\s+(?:(?:mas|mucho|bastante|un\s+poco|more|much)\s+)*(?:mejor|bien|pro\w*|bonit\w*|elegante\w*|modern\w*|atractiv\w*|better|good|nice\w*|great|sleek|clean\w*)\b/;
+// Visual elements: a design object only for a real improve verb («mejora
+// los gráficos»); «agrégale gráficos / imágenes» adds CONTENT.
+const DESIGN_ELEMENT_RE = /\b(graficos?|iconos?|imagenes|infografias?|charts|icons|images)\b/;
+// Tone words also describe WRITING («hazlo más profesional», «más elegante»).
+// They mean design only for a deck or a workbook, which have no prose
+// register; a Word document with a tone word is a professional EDIT of its
+// text (the quick editor's professional_edit), never a redesign.
+const DESIGN_TONE_RE = /\b(profesional\w*|elegante\w*|modern[oa]s?|atractiv\w*|creativ[oa]s?|impactante\w*|sofisticad[oa]s?|ejecutiv[oa]s?|corporativ[oa]s?|minimalist\w*|estilos?|estilizad[oa]s?|pulid[oa]s?|limpi[oa]s?|professional|modern|polished|attractive|stylish|sleek|style|elegant|clean(?:er)?)\b/;
+const DESIGN_GLOBAL_OBJECT_RE = /\b(disen[oa]s?|estilos?|look|aspecto|apariencia|paletas?|estetic\w*|design|style|layout)\b/;
+// «mejora la presentación / la ppt / el excel»: the deck or the workbook
+// itself is the object of the improve verb.
+const IMPROVE_DECK_OR_SHEET_RE = /\bmejor(?:a|ar|ala|alo|alas|alos|en|emos|ame)\s+(?:(?:la|las|el|los|esta|estas|este|mi|mis|tu|tus)\s+)?(?:ppt|pptx|presentacion(?:es)?|diapositivas|laminas|slides|deck|powerpoint|excel|planilla|hoja\s+de\s+calculo)\b/;
+// «rediseña / embellece / moderniza» need no design object.
+const DESIGN_STANDALONE_RE = /\b(redisen\w*|embellec\w*|moderniz\w*|profesionaliz\w*|redesign\w*|restyl\w*|beautif\w*|revamp\w*)\b/;
+
+// Exclusions — what a design upgrade is NOT.
+// Content changes: the DESIGN WORKFLOW freezes the content, so a request to
+// rewrite / translate / summarise / correct / make the text clearer is a
+// content edit (quick editor professional_edit / surgical runner).
+const CONTENT_CHANGE_RE = /\b(redaccion|redact\w*|escritura|escrib\w*|contenidos?|textos?|claridad|interesante\w*|coheren\w*|ortografi\w*|gramatic\w*|traduc\w*|traduzc\w*|reescrib\w*|reescrit[oa]s?|reformul\w*|parafrase\w*|corrig\w*|correg\w*|correccion\w*|resum(?:e|es|ir|irlo|irla|elo|ela|elos|elas|eme|emelo|iendo|id[oa]s?)|sintetiz\w*|ejemplos?|argument\w*|translat\w*|rewrit\w*|proofread\w*|summari[sz]\w*|wording|writing|content)\b/;
+// «sin cambiar el contenido», «manteniendo el texto»: a design request that
+// explicitly keeps the content is still design.
+const KEEP_CONTENT_RE = /\b(?:sin\s+(?:cambiar|tocar|modificar|alterar|mover|perder|quitar)|manten\w*|conserv\w*|respet\w*|mismo|misma|igual|keep(?:ing)?|without\s+changing)\s+(?:(?:el|la|los|las|todo\s+el|todos\s+los|todo|su|sus|the)\s+)?(?:contenidos?|textos?|redaccion|informacion|datos|content|text)\b/g;
+// Writing-register targets: the object is prose, not an Office file.
+const WRITING_TARGET_RE = /\b(cartas?|correos?|e-?mails?|mails?|mensajes?|poemas?|poesias?|cuentos?|relatos?|historias?|introduccion|oracion(?:es)?|ensayos?|posts?|publicacion(?:es)?|tweets?|tuits?|captions?|bios?|biografia|discursos?|guion(?:es)?|cancion(?:es)?|slogans?|eslogan(?:es)?|titulares?|prompt|respuesta|explicacion|contestacion|letter|email|message|poem|essay|story)\b/;
+// Academic documents follow their institution's norms (fonts, spacing,
+// black headings): the template transform formats them, never a corporate
+// restyle.
+const ACADEMIC_DOC_RE = /\b(tesis|tesina|monografi\w*|articulo\s+cientifico|paper|informe\s+academico|trabajo\s+(?:de\s+)?(?:investigacion|grado|fin\s+de\s+(?:grado|carrera|master)|final|academico)|proyecto\s+de\s+(?:investigacion|tesis)|plan\s+de\s+tesis|thesis|dissertation)\b/;
+// Citation styles / institutional templates: template transform (doc-engine).
+const TEMPLATE_STANDARD_RE = /\b(apa|ieee|vancouver|upn|iso\s*690|chicago|mla|norma\w*|plantilla\w*|template)\b/;
+// Converting / exporting is a new deliverable, not a redesign («ponlo en
+// formato pdf», «pásalo a word», «exporta la ppt»).
+const CONVERSION_RE = /\b(conviert\w*|convert\w*|export\w*|pasa(?:lo|la|los|las|r)?\s+a|guarda(?:lo|la|r)?\s+como)\b|\bformato\s+(?:pdf|word|docx|excel|xlsx|pptx?|html|markdown|md|csv|png|jpe?g|imagen|txt|odt|rtf|epub)\b/;
+// Number formats are precise cell edits («dale formato de moneda a la C»).
+const NUMBER_FORMAT_RE = /\b(moneda|monetari\w*|contable|divisas?|fechas?|porcentaje\w*|porcentual\w*|decimal\w*|condicional\w*|numeric\w*|numeros?|miles|currency|percent\w*|conditional|dates?|decimals?)\b/;
+// A precise target → surgical edit, never a whole-file restyle.
+const DESIGN_PRECISE_TARGET_RE = /\b(titulos?|subtitulos?|parrafos?|celdas?|columnas?|filas?|rango|textos?|palabras?|frases?|notas?|tablas?|encabezados?|portada|logo|logotipo|pie\s+de\s+pagina|(?:diapositivas?|laminas?|slides?|paginas?|hojas?|secciones|seccion|graficos?|imagen(?:es)?)\s+(?:n(?:ro|um)?\.?\s*)?\d+|(?:primera|segunda|tercera|cuarta|quinta|ultima|penultima)\s+(?:diapositiva|lamina|slide|pagina|hoja)|columna\s+[a-z]\b)/;
+// Adding / removing units (slides, pages, sections, charts, images) is a
+// STRUCTURAL edit: the design workflow keeps the same count and content.
+const UNIT_NOUNS = '(?:laminas?|diapositivas?|slides?|paginas?|hojas?|secciones|seccion|filas?|columnas?|parrafos?|capitulos?|apartados?|tablas?|graficos?|graficas?|imagen(?:es)?|fotos?|diagramas?|portadas?|indices?|anexos?|pages?|sections?|rows?|columns?|tables?|charts?|images?)';
+const STRUCTURAL_VERB = '(?:agreg\\w*|anad\\w*|insert\\w*|incorpor\\w*|inclu\\w*|sum\\w*le|sum(?:a|ar)|coloc\\w*|quit\\w*|elimin\\w*|borr\\w*|suprim\\w*|sac\\w*|add\\w*|remov\\w*|delet\\w*)';
+const STRUCTURAL_DIRECT_RE = new RegExp(`\\b(?:${STRUCTURAL_VERB}|pon(?:le|les|er|erle)?)\\s+(?:(?:un|una|uno|unos|unas|otra|otro|otras|otros|el|la|los|las|mas|a|an|the|another|one|two|three|\\d{1,2}|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\\s+)?(?:(?:nuev[oa]s?|mas|ultim[oa]s?|primer[oa]?s?|new|more)\\s+)?${UNIT_NOUNS}\\b`);
+const STRUCTURAL_COUNTED_RE = new RegExp(`\\b${STRUCTURAL_VERB}\\b.{0,30}?\\b(?:un|una|otra|otro|unos|unas|a|an|another|\\d{1,2}|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\\s+(?:(?:nuev[oa]s?|mas)\\s+)?${UNIT_NOUNS}\\b`);
+// «diseño metodológico» and friends are thesis CONTENT, not visual design.
+const RESEARCH_DESIGN_RE = /\bdisen[oa]s?\s+(?:metodologic\w*|de\s+(?:la\s+)?investigacion|de\s+(?:la\s+)?muestra|muestral|experimental|cuasi\w*|no\s+experimental|de\s+estudio|del\s+estudio|de\s+investigacion|curricular|instruccional)\b/g;
+// Requests about the chat reply itself, not about a file.
+const NON_DOC_OBJECT_RE = /\b(?:tu|su|la|esta|esa)\s+(?:respuesta|explicacion|mensaje|resumen|contestacion)\b/;
+// Code/web targets belong to the coding/software paths, not the office runner.
+const SOFTWARE_TARGET_RE = /\b(?:codigo|code|pagina\s+web|sitio\s+web|web|landing|app|aplicacion|componente|interfaz|frontend|backend|api|repo|repositorio|html|css|script|python)\b/;
+const OFFICE_DOC_REF_RE = /\b(ppt|pptx|ppts|powerpoint|presentacion(?:es)?|diapositivas?|laminas?|slides?|deck|word|docx|documento|informe|excel|xlsx|hoja\s+de\s+calculo|planilla|libro\s+de\s+(?:excel|calculo)|pdf|presentation|document|report|spreadsheet|workbook)\b|\S+\.(?:pptx?|docx?|xlsx?|pdf)\b/;
+const SAME_DOC_CUE_RE = /\b(?:la|el|esta|este|esa|ese|en\s+la|en\s+el)\s+mism[oa]s?\b|##\s*\S+\.(?:pptx?|docx?|xlsx?|pdf)\b/;
+const FOLLOWUP_EDIT_VERB_RE = /\b(agreg\w*|anad\w*|insert\w*|modific\w*|quit\w*|actualiz\w*|complet\w*|incorpor\w*|incluy\w*|incluir\w*|sac\w*le|sacal[ao]s?|elimin\w*|borr\w*|reemplaz\w*|sustitu\w*|corrig\w*|correg\w*|arregl\w*|edit\w*|ajust\w*)\b/;
+
+// Questions and requests for advice are answered in the chat, never executed
+// on a file («¿cómo puedo mejorar el diseño de mi presentación?», «¿qué le
+// agregarías al informe?», «revisa el documento y dime qué corregir»).
+const DESIGN_QUESTION_RE = /^(?:\W*)(?:que\s+es|que\s+significa|que\s+son|cual(?:es)?\s+(?:es|son)|explica\w*|define|definicion|por\s+que|como\s+se\s+define|dime\s+que\s+es|what\s+(?:is|are|does)|explain|why)\b/;
+const ADVICE_RE = /\b(?:como\s+(?:puedo|podria|podemos|podriamos|hago|hacemos|hacer|se\s+puede|se\s+podria|deberia|debo|mejoro|mejorarias|mejorar(?:ia|la|lo)?|quedaria)|dame\s+(?:consejos|ideas|sugerencias|recomendaciones|tips|tu\s+opinion)|(?:consejos|ideas|sugerencias|recomendaciones|tips)\s+(?:para|de|sobre)|que\s+(?:opinas|piensas|te\s+parece|me\s+recomiendas|recomiendas|sugieres|me\s+sugieres|deberia|debo|podria|se\s+puede|se\s+podria|le\s+\w+(?:ias)|\w+(?:arias|erias|irias))|crees\s+que|te\s+parece\s+(?:que|bien)|dime\s+(?:que|como|si|cual|cuales|donde|en\s+que)|opinion\s+sobre|how\s+(?:can|could|do|should|would)\s+(?:i|we|you)|what\s+do\s+you\s+think|any\s+(?:tips|ideas|suggestions)|should\s+i)\b/;
+// «¿puedes agregarle más diseño a la ppt?» is a request, not a question.
+const POLITE_REQUEST_RE = /\b(?:puedes|podrias|pudieras|podras|podrian|pueden|quisieras|serias\s+tan|seria\s+posible|es\s+posible\s+que|me\s+ayudas?\s+a|can\s+you|could\s+you|would\s+you|will\s+you|please)\b|\bpuede\s+\w+(?:ar|er|ir)(?:le|la|lo|les|las|los|me|nos)?\b/;
+
+function isQuestionOrAdviceRequest(text) {
+  const raw = String(text || '').trim();
+  const t = normalizeIntentText(raw);
+  if (!t) return false;
+  if (DESIGN_QUESTION_RE.test(t) || ADVICE_RE.test(t)) return true;
+  if (POLITE_REQUEST_RE.test(t)) return false;
+  return /\?\s*$/.test(raw) || /^¿/.test(raw);
+}
+
+function isStructuralUnitEdit(t) {
+  return STRUCTURAL_DIRECT_RE.test(t) || STRUCTURAL_COUNTED_RE.test(t);
+}
+
+/**
+ * A request to make an EXISTING Office document LOOK better (design /
+ * format / professional look) without changing what it says. Pure text
+ * classifier; `officeTarget` ('pptx' | 'docx' | 'xlsx' | 'document' | null)
+ * is the file the request would restyle (resolveDesignTarget): tone words
+ * («más profesional», «más elegante», «con más estilo») mean design only for
+ * a deck or a workbook — for a Word document they ask for better WRITING.
+ */
+function isDesignUpgradeRequest(text, { officeTarget = null } = {}) {
+  const t = normalizeIntentText(text)
+    .replace(RESEARCH_DESIGN_RE, ' ')
+    .replace(KEEP_CONTENT_RE, ' ');
+  if (!t) return false;
+  if (isQuestionOrAdviceRequest(text)) return false;
+  if (NON_DOC_OBJECT_RE.test(t)) return false;
+  if (SOFTWARE_TARGET_RE.test(t) && !OFFICE_DOC_REF_RE.test(t)) return false;
+  if (TEMPLATE_STANDARD_RE.test(t) || ACADEMIC_DOC_RE.test(t)) return false;
+  if (CONTENT_CHANGE_RE.test(t) || WRITING_TARGET_RE.test(t)) return false;
+  if (NUMBER_FORMAT_RE.test(t) || DESIGN_PRECISE_TARGET_RE.test(t) || CONVERSION_RE.test(t)) return false;
+  if (isStructuralUnitEdit(t)) return false;
+  if (DESIGN_STANDALONE_RE.test(t)) return true;
+  const target = officeFormatNamedIn(t) || officeFamily(officeTarget) || null;
+  const deckOrSheet = target === 'pptx' || target === 'xlsx';
+  const visual = DESIGN_VISUAL_RE.test(t) || DESIGN_LOOK_PHRASE_RE.test(t);
+  const tone = DESIGN_TONE_RE.test(t);
+  if (DESIGN_TRUE_IMPROVE_RE.test(t) && DESIGN_ELEMENT_RE.test(t)) return true;
+  if (IMPROVE_DECK_OR_SHEET_RE.test(t)) return true;
+  if (DESIGN_LOOK_PHRASE_RE.test(t) && (visual || deckOrSheet || /\b(?:mejor|better)\b/.test(t))) return true;
+  const verb = DESIGN_IMPROVE_VERB_RE.test(t) || DESIGN_ADD_VERB_RE.test(t);
+  if (verb && visual) return true;
+  if (verb && tone && deckOrSheet) return true;
+  if (DESIGN_CHANGE_VERB_RE.test(t) && DESIGN_GLOBAL_OBJECT_RE.test(t) && (visual || deckOrSheet)) return true;
+  return false;
+}
+
+/**
+ * «agrégale una conclusión al word», «quítale la lámina 3 a la misma ppt»:
+ * a clitic/conjugated edit verb aimed at a document (noun, file name, «##
+ * file.ext» or «la misma …»). Never claims questions / advice or edits of the
+ * chat reply itself («quita lo del documento de tu explicación»).
+ */
+function isFollowupDocumentEdit(text) {
+  const t = normalizeIntentText(text);
+  if (!t || !FOLLOWUP_EDIT_VERB_RE.test(t)) return false;
+  if (isQuestionOrAdviceRequest(text)) return false;
+  if (NON_DOC_OBJECT_RE.test(t)) return false;
+  return OFFICE_DOC_REF_RE.test(t) || SAME_DOC_CUE_RE.test(t);
+}
+
 function shouldRunAgentRunner({
   files = [],
   fileIds = [],
   hasPriorArtifacts = false,
+  // Format of the conversation's latest artifact (resolved with the request
+  // text). Callers that only know hasPriorArtifacts still claim design turns
+  // that NAME their Office file («agrégale más diseño a la ppt»).
+  priorArtifactFormat = null,
   text = '',
 } = {}) {
   const documentFiles = (Array.isArray(files) ? files : []).filter((file) => !isImageFile(file));
   const hasFiles = documentFiles.length > 0
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
-  if (isRunnerOnlyDocumentTurn(t)) return true;
-  const work = WORK_RE.test(t) || isHighlightEdit(t);
-  if ((hasFiles || hasPriorArtifacts) && work) return true;
+  // Text-only runner-only claims (create-a-doc, style/color follow-ups). The
+  // design-upgrade branch of isRunnerOnlyDocumentTurn is NOT a claim on its
+  // own: without files or a prior artifact there is nothing to redesign.
+  if (isCreateOrStyleRunnerOnly(t)) return true;
+  const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat);
+  // A design claim needs an Office file to restyle: named in the text, the
+  // latest artifact (pptx/docx/xlsx), or an upload. A prior html page, image
+  // or script is edited by the chat loop, never «redesigned» here.
+  const designTarget = resolveDesignTarget(t, { priorArtifactFormat, files: documentFiles });
+  const designClaim = (Boolean(designTarget) || hasFiles)
+    && isDesignUpgradeRequest(t, { officeTarget: designTarget });
+  const work = WORK_RE.test(t)
+    || isHighlightEdit(t)
+    || isFollowupDocumentEdit(t)
+    || designClaim;
+  if ((hasFiles || hasPrior) && work) return true;
   return false;
 }
 
@@ -284,7 +532,7 @@ function shouldRunAgentRunner({
  * (Edit turns claimed via attached files + a work verb are NOT runner-only:
  * the surgical document_edit path may still legitimately handle them.)
  */
-function isRunnerOnlyDocumentTurn(text) {
+function isCreateOrStyleRunnerOnly(text) {
   const t = String(text || '');
   try {
     const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('../agents/software-build-intent');
@@ -294,6 +542,23 @@ function isRunnerOnlyDocumentTurn(text) {
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
   if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
   return false;
+}
+
+/**
+ * Also runner-only: a DESIGN upgrade of an Office file whose format is known
+ * — named in the text («agrégale más diseño a la ppt») or the chat's latest
+ * artifact (`priorArtifactFormat`: pptx / docx / xlsx). No other path can
+ * redesign a file — the surgical editor only swaps text, and the chat loop
+ * used to answer with an .html preview + a .py script instead of the deck. A
+ * failed runner therefore ends with an honest error. A prior html page or
+ * image is NOT an Office target: those turns keep the chat loop.
+ */
+function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null } = {}) {
+  const t = String(text || '');
+  if (isCreateOrStyleRunnerOnly(t)) return true;
+  const named = officeFormatNamedIn(normalizeIntentText(t));
+  const target = named || officeFamily(priorArtifactFormat);
+  return Boolean(target) && isDesignUpgradeRequest(t, { officeTarget: target });
 }
 
 function defaultModel() {
@@ -425,6 +690,14 @@ function resolveOutputEditSource(name, sources) {
   if (exact.length === 1) return exact[0];
   const editedBase = outputName.replace(/(?:[_ -](?:editado|edited|corregido|actualizado|titulo_actualizado))+(?=\.[^.]+$)/, '');
   const named = sources.filter((file) => basename(file.name) === editedBase);
+  // Versioned redesigns: deck-v2.pptx comes from deck.pptx, deck-v3 from deck-v2.
+  const versioned = outputName.match(/^(.*?)[-_ ]v(\d{1,3})(\.[^.]+)$/);
+  if (!named.length && versioned) {
+    const n = Number(versioned[2]);
+    const candidates = [`${versioned[1]}${versioned[3]}`, n > 2 ? `${versioned[1]}-v${n - 1}${versioned[3]}` : null].filter(Boolean);
+    const lineage = sources.filter((file) => candidates.includes(basename(file.name)));
+    if (lineage.length === 1) return lineage[0];
+  }
   if (named.length === 1) return named[0];
   // Duplicate names must not silently select an older reattached version.
   const relevant = exact.length ? exact : sources;
@@ -765,6 +1038,10 @@ async function runAgentRunner({
           if (officeHelpersPy) {
             try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
           }
+          const siraDesignPy = loadSiraDesignPy();
+          if (siraDesignPy) {
+            try { await sandbox.writeFile('tmp/sira_design.py', siraDesignPy); } catch (_) { /* agent restyles with its own code */ }
+          }
           try { await installSiraOfficeEngine(sandbox); } catch (err) {
             if (officeEngineEnabled()) {
               reportOfficeFailure({ tool: 'office_engine', code: 'install_failed', error: err && err.message });
@@ -796,11 +1073,34 @@ async function runAgentRunner({
     const isCreateRequest = (CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
       || requestsSavExcelDelivery(task);
     const creatingNewFile = isCreateRequest && !SOURCE_COPY_RE.test(task);
+    // «agrégale más diseño / hazla más profesional» on an existing Office
+    // file: the prompt switches to the DESIGN WORKFLOW (restyle the same
+    // file, keep all content, <stem>-v2.<ext>) and the theme tokens are
+    // saved next to sira_design.py. Computed here, not passed through
+    // executeAgentRunnerTurn, so every entry point (chat, queue, doc route,
+    // agent task) gets it.
+    // The file it restyles: the last edited version first, else the upload.
+    const designSource = [...priorNames, ...names].find((n) => OFFICE_FILE_RE.test(String(n))) || null;
+    const designUpgrade = !creatingNewFile
+      && Boolean(designSource)
+      && isDesignUpgradeRequest(task, { officeTarget: resolveDesignTarget(task, { priorArtifactFormat: designSource }) });
+    const designTheme = designUpgrade ? designThemeForTask(task) : null;
+    if (designTheme) {
+      try {
+        await toolSandbox.writeFile('tmp/sira_theme.json', JSON.stringify(designTheme, null, 2));
+        // Other themes, so a second «más diseño» on a redesigned file looks
+        // different instead of producing an identical -v3.
+        const { alternateThemes } = require('./design-theme');
+        await toolSandbox.writeFile('tmp/sira_theme_alternates.json', JSON.stringify(alternateThemes(designTheme.id)));
+      } catch (_) { /* tokens also ride in the prompt */ }
+    }
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,
       memoryBlock: f8.memoryBlock,
       creatingNewFile,
+      designUpgrade,
+      designTheme,
     });
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
@@ -840,7 +1140,9 @@ async function runAgentRunner({
     const color = inferColorFromText(task);
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
     let fastPathUsed = false;
-    if (color && pptxUpload && !isCreateRequest && isSlideBackgroundColorRequest(task)) {
+    // A redesign that mentions a color («rediséñala con fondo azul») is not a
+    // plain repaint: the loop restyles the whole deck with that color.
+    if (color && pptxUpload && !isCreateRequest && !designUpgrade && isSlideBackgroundColorRequest(task)) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
       const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
       onEvent({
@@ -853,6 +1155,7 @@ async function runAgentRunner({
       fastPathUsed = !String(painted).startsWith('ERROR:');
     } else if (
       pptxUpload
+      && !designUpgrade
       && /\b(gracias|thanks)\b/i.test(task)
       && /\b(l[aá]mina|diapositiva|slide|ppt|agrega|a[nñ]ade|pon)\b/i.test(task)
     ) {
@@ -1392,12 +1695,14 @@ async function runAgentRunnerForDocRoute({
   const text = String(prompt || '').trim();
   if (!text) return null;
   let prior = false;
+  let priorArtifactFormat = null;
   if (prisma && userId && chatId) {
     try {
       prior = await hasConversationArtifacts(prisma, { userId, chatId });
-    } catch (_) { prior = false; }
+      if (prior) priorArtifactFormat = await getConversationArtifactFormat(prisma, { userId, chatId, instruction: text });
+    } catch (_) { /* routing falls back to what was read */ }
   }
-  if (!shouldRunAgentRunner({ fileIds, hasPriorArtifacts: prior, text })) return null;
+  if (!shouldRunAgentRunner({ fileIds, hasPriorArtifacts: prior, priorArtifactFormat, text })) return null;
   const ran = await executeAgentRunnerTurn({
     prisma,
     userId,
@@ -1507,6 +1812,11 @@ module.exports = {
   explicitRunnerModel,
   canCallLlm,
   isRunnerOnlyDocumentTurn,
+  isDesignUpgradeRequest,
+  isFollowupDocumentEdit,
+  isQuestionOrAdviceRequest,
+  resolveDesignTarget,
+  officeFamily,
   shouldOrchestrate,
   steerAgentOrchestratorRun,
   orchestratorEnabled,
@@ -1524,6 +1834,8 @@ module.exports = {
   canCallLlm,
   defaultModel,
   loadOfficeHelpersPy,
+  loadSiraDesignPy,
+  designThemeForTask,
   installSiraOfficeEngine,
   SIRA_OFFICE_ENGINE_REL,
   buildVisionVerifier,
@@ -1535,6 +1847,7 @@ module.exports = {
   DOC_NOUN_RE,
   STYLE_EDIT_RE,
   hasConversationArtifacts,
+  getConversationArtifactFormat,
   collectValidOutputs,
   assessDelivery,
   missingRequestedSavExcel,

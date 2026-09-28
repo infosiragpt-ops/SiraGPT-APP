@@ -117,18 +117,32 @@ function extractRequestedTopic(text = '') {
   return '';
 }
 
+// «agregarle UN poco más de diseño», «ponle UN toque profesional»: the
+// article is not a count. «un/una/uno» followed by a vague quantity is
+// skipped; «agrega una más», «agrégale una de conclusiones» stay count 1.
+const VAGUE_QUANTITY_AFTER_RE = /^\s+(?:poco|poquito|pequeno|toque|toquecito|pizca|algo|tanto|mucho|mucha|bastante)\b/;
+const INDEFINITE_COUNT_WORDS = new Set(['un', 'una', 'uno']);
+
 function extractRequestedCount(text = '') {
   const countWords = Object.keys(SPANISH_COUNTS).join('|');
   const unit = '(?:slides?|diapositiv\\w*|laminas?|ppts?|pptx?|secciones?|apartados?|capitulos?|filas?|rows?)';
   const patterns = [
-    new RegExp(`\\b(\\d{1,2}|${countWords})\\s+${unit}\\b`),
-    new RegExp(`\\b(?:agreg\\w*|anad\\w*|insert\\w*|inclu\\w*|coloc\\w*|add)\\s+(\\d{1,2}|${countWords})\\b`),
+    new RegExp(`\\b(\\d{1,2}|${countWords})\\s+(?:nuevas?\\s+|mas\\s+)?${unit}\\b`),
+    new RegExp(`\\b(?:agreg\\w*|anad\\w*|insert\\w*|inclu\\w*|coloc\\w*|add)\\s+(\\d{1,2}|${countWords})\\b`, 'g'),
   ];
   for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (!match) continue;
-    const count = clampCount(parseCountToken(match[1]));
-    if (count) return count;
+    const matches = pattern.global ? [...text.matchAll(pattern)] : [text.match(pattern)].filter(Boolean);
+    for (const match of matches) {
+      const token = match[1];
+      const after = text.slice((match.index || 0) + match[0].length);
+      if (pattern.global) {
+        // Verb + number word: «agrega 2», «añade tres más», «agrega una más».
+        // «agrégale UN poco más (de diseño)» is not a count.
+        if (INDEFINITE_COUNT_WORDS.has(token) && VAGUE_QUANTITY_AFTER_RE.test(after)) continue;
+      }
+      const count = clampCount(parseCountToken(token));
+      if (count) return count;
+    }
   }
   if (/\b(?:una|un|a)\s+(?:nueva\s+)?(?:slide|diapositiva|lamina|ppt|ppts?|seccion|apartado|fila)\b/.test(text)) return 1;
   return null;
@@ -174,9 +188,22 @@ function inferUnit(text = '', format = '') {
   return format || null;
 }
 
+// The object of the add verb is the LOOK of the document («agrégale más
+// diseño», «ponle un toque profesional», «añade más color»), not new units.
+const DESIGN_OBJECT_WORDS = '(?:disen[oa]s?|estilos?|formato|format|colou?r(?:es)?|visual\\w*|estetic\\w*|profesional\\w*|elegan\\w*|modern\\w*|creativ\\w*|atractiv\\w*|bonit\\w*|llamativ\\w*|look|aspecto|apariencia|vida|dinamismo|graficos|iconos|imagenes)';
+const ADD_DESIGN_OBJECT_RE = new RegExp(
+  `\\b(?:agreg\\w*|anad\\w*|insert\\w*|inclu\\w*|incorpor\\w*|coloc\\w*|sum\\w*|pon(?:er|ga|le|me)?|dale|dar(?:le)?|add|append)\\s+`
+  + `(?:(?:un|una|algo|el|la|los|las)\\s+)?(?:(?:poco|poquito|toque|pizca|mas|mucho|mucha|bastante|mejor|nuevo|nueva)\\s+)*(?:(?:de|del)\\s+)?(?:(?:mas|mejor)\\s+)?${DESIGN_OBJECT_WORDS}\\b`,
+);
+
+function isDesignObjectRequest(text = '') {
+  return ADD_DESIGN_OBJECT_RE.test(text);
+}
+
 function parseStructuralAppendIntent(requestText = '', { format = '' } = {}) {
   const text = repairOfficeTypos(requestText);
   if (!text || !ADD_VERB_RE.test(text)) return null;
+  if (isDesignObjectRequest(text)) return null;
   const sameDocument = SAME_FILE_RE.test(text);
   const hasUnitNoun = SLIDE_NOUN_RE.test(text) || SECTION_NOUN_RE.test(text) || ROW_NOUN_RE.test(text);
   if (!hasUnitNoun && !sameDocument) return null;

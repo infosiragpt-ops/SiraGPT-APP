@@ -7599,8 +7599,31 @@ router.post(
               });
               let createDocRequested = false;
               try {
-                createDocRequested = require('../services/agent-runner').shouldRunAgentRunner({
+                const __agentRunner = require('../services/agent-runner');
+                // Follow-up on a document generated earlier in this chat
+                // («dale más diseño», «hazla más profesional»): without the
+                // prior-artifact bit the gate missed it, and the RLCD veto or
+                // the image gate could keep the turn off the agentic path.
+                // One indexed query, only for edit/design phrasings.
+                // The deck target is the most permissive one for the
+                // pre-check; the gate below decides with the real format.
+                let hasPriorArtifacts = false;
+                let priorArtifactFormat = null;
+                if (
+                  canPersist && chatId
+                  && (__agentRunner.isDesignUpgradeRequest(prompt, { officeTarget: 'pptx' }) || __agentRunner.isFollowupDocumentEdit(prompt))
+                ) {
+                  try {
+                    hasPriorArtifacts = await __agentRunner.hasConversationArtifacts(prisma, { userId, chatId });
+                    if (hasPriorArtifacts) {
+                      priorArtifactFormat = await __agentRunner.getConversationArtifactFormat(prisma, { userId, chatId, instruction: prompt });
+                    }
+                  } catch (_) { /* gate decides with what was read */ }
+                }
+                createDocRequested = __agentRunner.shouldRunAgentRunner({
                   files: processedFiles || [],
+                  hasPriorArtifacts,
+                  priorArtifactFormat,
                   text: prompt,
                 });
               } catch (_) { createDocRequested = false; }

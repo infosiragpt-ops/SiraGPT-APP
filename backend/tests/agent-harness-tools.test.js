@@ -197,6 +197,27 @@ test('create_artifact: persists through task-tools saveArtifact and emits file_a
   assert.equal(stored.length, 1);
 });
 
+test('create_artifact: a title that already has the extension keeps its name (generar_pptx.py)', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-artifacts-'));
+  const prevDir = process.env.AGENT_ARTIFACT_DIR;
+  process.env.AGENT_ARTIFACT_DIR = tmpDir;
+  t.after(() => {
+    if (prevDir === undefined) delete process.env.AGENT_ARTIFACT_DIR; else process.env.AGENT_ARTIFACT_DIR = prevDir;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+  delete require.cache[require.resolve('../src/services/agents/task-tools')];
+  delete require.cache[require.resolve('../src/services/agent-harness/tools/create-artifact-tool')];
+  const { buildCreateArtifactTool, artifactFilename } = require('../src/services/agent-harness/tools/create-artifact-tool');
+  const result = await buildCreateArtifactTool().execute(
+    { title: 'generar_pptx.py', type: 'code', language: 'python', content: 'print("hola")' },
+    { userId: 'u1', chatId: 'c1' },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.filename, 'generar_pptx.py', 'the dot before the extension is not deleted (was generar_pptxpy.py)');
+  assert.equal(artifactFilename('informe.final', 'md'), 'informe-final.md');
+  assert.equal(artifactFilename('Gestión administrativa — diseño v2 (preview)', 'html'), 'Gestion-administrativa-diseno-v2-preview.html');
+});
+
 test('create_artifact: schema rejects unknown types and empty content', () => {
   delete require.cache[require.resolve('../src/services/agent-harness/tools/create-artifact-tool')];
   const { buildCreateArtifactTool } = require('../src/services/agent-harness/tools/create-artifact-tool');

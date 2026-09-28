@@ -51,11 +51,26 @@ function slugifyTitle(title) {
   const slug = String(title || 'artifact')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
+    // Dots separate words ("v1.2", "informe.final"): keep them as a dash
+    // instead of gluing the words together.
+    .replace(/\.+/g, '-')
     .replace(/[^a-zA-Z0-9 _-]+/g, '')
     .trim()
     .replace(/\s+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
     .slice(0, 64);
   return slug || 'artifact';
+}
+
+// A title that already carries a file extension («generar_pptx.py») keeps
+// its name: the extension is removed before slugifying and set once. The old
+// slug deleted the dot and produced «generar_pptxpy.py».
+const TITLE_EXTENSION_RE = /\.(?:py|js|mjs|cjs|ts|tsx|jsx|html?|md|markdown|json|svg|txt|sql|sh|css|csv|yaml|yml|xml)$/i;
+
+function artifactFilename(title, ext) {
+  const base = String(title || '').trim().replace(TITLE_EXTENSION_RE, '');
+  return `${slugifyTitle(base)}.${ext}`;
 }
 
 function buildPreviewHtml(type, content) {
@@ -82,7 +97,7 @@ function buildCreateArtifactTool() {
       const ext = args.type === 'code'
         ? (CODE_EXTENSIONS[String(args.language || '').toLowerCase()] || 'txt')
         : config.ext;
-      const filename = `${slugifyTitle(args.title)}.${ext}`;
+      const filename = artifactFilename(args.title, ext);
       const { saveArtifact } = require('../../agents/task-tools');
       const saved = saveArtifact({
         filename,
@@ -130,4 +145,5 @@ module.exports = {
   TYPE_CONFIG,
   MAX_CONTENT_CHARS,
   slugifyTitle,
+  artifactFilename,
 };
