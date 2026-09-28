@@ -223,15 +223,25 @@ async function validateSavXlsxDelivery(contract, { artifacts = [], inspectPair }
       repairInstructions: 'Reabre los dos archivos originales, compara las celdas y repara cualquier diferencia antes de finalizar.',
     };
   }
+  const hasRespondentId = metrics.hasRespondentId === true;
   const correctShape = metrics.savRows === expected.rows
     && metrics.excelRows === expected.rows
-    && metrics.savColumns === expected.columns
-    && metrics.excelColumns === expected.columns;
+    && metrics.savColumns === expected.columns + Number(hasRespondentId)
+    && metrics.excelColumns === expected.columns + Number(hasRespondentId)
+    && (!hasRespondentId || (metrics.savQuestionColumns === expected.columns
+      && metrics.excelQuestionColumns === expected.columns));
   if (!correctShape) {
     return {
       ok: false, active: true, missingTools: ['create_document'],
       message: `Finalization blocked: el SAV y el Excel deben contener ${expected.rows} filas × ${expected.columns} preguntas.`,
       repairInstructions: 'Regenera ambos archivos con la muestra y el número de preguntas solicitados; luego vuelve a verificarlos.',
+    };
+  }
+  if (hasRespondentId && metrics.respondentIdsMatch !== true) {
+    return {
+      ok: false, active: true, missingTools: ['create_document'],
+      message: 'Finalization blocked: los identificadores de participantes del SAV y el Excel no coinciden o no son únicos.',
+      repairInstructions: 'Corrige la columna ID de ambos archivos y verifica que cada participante tenga un identificador único y coincidente.',
     };
   }
   if (metrics.labelCount !== expected.columns) {

@@ -30,6 +30,26 @@ const GENERATE_PAIR = [
   'book.save(os.path.join(root, "muestra.xlsx"))',
 ].join('\n');
 
+const GENERATE_PAIR_WITH_ID = [
+  'import os, sys, pandas as pd, pyreadstat',
+  'from openpyxl import Workbook',
+  'root, mode = sys.argv[1], sys.argv[2]',
+  'question_headers = [f"P{i:02d}" for i in range(1, 22 if mode == "id-extra" else 21)]',
+  'headers = ["ID", *question_headers] if mode != "extra" else ["Notas", *question_headers]',
+  'rows = [[person + 1, *[person * 20 + question + 1 for question in range(len(question_headers))]] for person in range(20)]',
+  'if mode == "duplicate-id": rows[1][0] = rows[0][0]',
+  'labels = [None, *[f"Pregunta {i:02d}" for i in range(1, len(question_headers) + 1)]]',
+  'pyreadstat.write_sav(pd.DataFrame(rows, columns=headers), os.path.join(root, "muestra.sav"), column_labels=labels)',
+  'book = Workbook()',
+  'sheet = book.active',
+  'sheet.title = "Respuestas"',
+  'sheet.append(headers)',
+  'for row in rows: sheet.append(row)',
+  'if mode == "different-id": sheet["A2"] = 999',
+  'if mode == "different-question": sheet["B2"] = 999',
+  'book.save(os.path.join(root, "muestra.xlsx"))',
+].join('\n');
+
 function makeSandbox(root) {
   return {
     async putFile(relative, buffer) {
@@ -44,6 +64,38 @@ function makeSandbox(root) {
       return { exitCode: run.status, stdout: run.stdout, stderr: run.stderr, timedOut: run.error?.code === 'ETIMEDOUT' };
     },
   };
+}
+
+for (const [mode, expectedOk, expectedReason] of [
+  ['matching', true, null],
+  ['different-id', false, /identificadores/i],
+  ['duplicate-id', false, /identificadores/i],
+  ['different-question', false, /diferencias/i],
+  ['extra', false, /20 filas.*20 preguntas/],
+  ['id-extra', false, /20 filas.*20 preguntas/],
+]) {
+  test(`AgentRunner SAV/Excel binary gate ${mode} respondent-ID case`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-id-gate-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const generated = spawnSync('python3', ['-c', GENERATE_PAIR_WITH_ID, root, mode], { encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
+    const result = await applySavXlsxDeliveryGate({
+      instruction: PROMPT,
+      outputs: pairOutputs(root),
+      result: { stoppedReason: 'final', finalText: 'Listo.' },
+      sandbox: makeSandbox(root),
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.ok, expectedOk);
+    if (expectedOk) {
+      assert.equal(result.result.savXlsxVerification.comparedCells, 400);
+      assert.equal(result.result.savXlsxVerification.labelCount, 20);
+      assert.equal(result.outputs.filter((output) => output.valid !== false).length, 2);
+    } else {
+      assert.match(result.result.errorMessage, expectedReason);
+      assert.equal(result.outputs.filter((output) => output.valid !== false).length, 0);
+    }
+  });
 }
 
 function pairOutputs(root) {
