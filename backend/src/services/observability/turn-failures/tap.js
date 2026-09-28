@@ -111,7 +111,28 @@ class TurnTap {
       return;
     }
     if (type === 'stage') {
-      this.stages.push({ label: shortText(frame.label || '', 140), tool: frame.tool ? shortText(frame.tool, 60) : undefined, at: now });
+      // Live-progress ticks only refresh a row already recorded by its begin:
+      // they would push the meaningful phases out of the last MAX_STAGES.
+      if (frame.step === 'tool_progress') return;
+      const stageId = typeof frame.stageId === 'string' && frame.stageId ? shortText(frame.stageId, 60) : null;
+      const status = frame.status === 'error' || frame.status === 'done' ? frame.status : null;
+      if (frame.step === 'tool_result' && stageId) {
+        // A live-progress result settles the row its begin recorded (one
+        // slot per phase): the outcome label and status, not a new phase.
+        const entry = [...this.stages].reverse().find((s) => s.stageId === stageId);
+        if (entry) {
+          entry.label = shortText(frame.label || entry.label, 140);
+          if (status) entry.status = status;
+          return;
+        }
+      }
+      this.stages.push({
+        label: shortText(frame.label || '', 140),
+        tool: frame.tool ? shortText(frame.tool, 60) : undefined,
+        at: now,
+        ...(stageId ? { stageId } : {}),
+        ...(status && frame.step === 'tool_result' ? { status } : {}),
+      });
       if (this.stages.length > MAX_STAGES) this.stages.splice(0, this.stages.length - MAX_STAGES);
       return;
     }

@@ -75,6 +75,9 @@ function sanitizeTaskRecord(record = {}) {
     fileIds: Array.isArray(record.fileIds) ? record.fileIds.map(String).slice(0, MAX_SIMULTANEOUS_DOCUMENTS) : [],
     displayGoal: String(record.displayGoal || '').slice(0, 4000),
     model: record.model || null,
+    // The user picked `model` in the composer: a retry or a boot resume keeps
+    // it (owner policy: a picked model is never switched).
+    modelPinned: record.modelPinned === true,
     status: record.status || 'running',
     createdAt: record.createdAt || now,
     updatedAt: record.updatedAt || now,

@@ -543,6 +543,18 @@ test('recovered MODERATED and FAILED images never rerun provider and are refunde
   assert.equal(refundCalls.length, 2);
 });
 
+// While the refund is unconfirmed the row must never tell the user they were
+// not charged — that claim is written only after the refund succeeds.
+function assertNeverClaimsNoCharge() {
+  const persisted = imageUpdateHistory.map((entry) => entry.data.errorMessage).filter(Boolean);
+  assert.ok(persisted.length > 0, 'the failure cause is persisted');
+  assert.ok(
+    persisted.every((text) => !/No se te cobró/.test(text)),
+    `an unconfirmed refund must not claim «No se te cobró»: ${persisted.join(' | ')}`,
+  );
+  assert.match(persisted[persisted.length - 1], /reembolso/);
+}
+
 test('provider failure with a failed strict refund becomes refund_pending and retryable', async () => {
   providerOutcome = {
     ok: false,
@@ -565,6 +577,7 @@ test('provider failure with a failed strict refund becomes refund_pending and re
     statusCode: 503,
     state: 'refund_pending',
   }]);
+  assertNeverClaimsNoCharge();
 });
 
 test('provider throw with a failed strict refund never reports refunded', async () => {
@@ -584,6 +597,7 @@ test('provider throw with a failed strict refund never reports refunded', async 
     statusCode: 503,
     state: 'refund_pending',
   }]);
+  assertNeverClaimsNoCharge();
 });
 
 test('READY image stays successful and charged when cached response is oversized', async () => {
@@ -849,4 +863,89 @@ test('image-provider: unknown provider returns PROVIDER_DOWN', async () => {
   const result = await real.generate({ prompt: 'x', provider: 'midjourney' });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'PROVIDER_DOWN');
+});
+
+test('a failed job serialises a Spanish errorMessage, never the provider\'s raw reason', async () => {
+  providerOutcome = {
+    ok: false,
+    code: 'PROVIDER_ERROR',
+    reason: '429 You exceeded your current quota, please check your plan and billing details. key sk-proj-abcdef',
+    providerUsed: 'mock',
+  };
+  const response = await request(buildImagesApp())
+    .post('/api/images/jobs')
+    .send({ prompt: 'a valid image prompt for the billing case' });
+
+  assert.equal(response.status, 201);
+  const message = response.body.image.errorMessage;
+  assert.equal(response.body.image.status, 'FAILED');
+  assert.equal(message, images.IMAGE_JOB_ERROR_COPY.billing);
+  assert.match(message, /saldo/);
+  assert.match(message, /No se te cobró/);
+  assert.doesNotMatch(message, /sk-|quota|billing details|429/i);
+  const persisted = imageUpdateHistory.map((entry) => entry.data.errorMessage).filter(Boolean);
+  assert.ok(persisted.length > 0);
+  assert.ok(persisted.every((text) => !/sk-|quota/i.test(text)), 'the raw reason is never persisted');
+  // The cause is written first without the «No se te cobró» claim; the claim
+  // lands only once the refund is confirmed.
+  assert.equal(refundCalls.length, 1);
+  assert.equal(persisted.length, 2);
+  assert.doesNotMatch(persisted[0], /No se te cobró/);
+  assert.match(persisted[0], /saldo/);
+  assert.equal(persisted[1], images.IMAGE_JOB_ERROR_COPY.billing);
+});
+
+test('pendingRefundImageJobError keeps the cause and drops the not-charged claim (moderation untouched)', () => {
+  const { pendingRefundImageJobError, publicImageJobError, IMAGE_JOB_ERROR_COPY } = images;
+  assert.equal(pendingRefundImageJobError(IMAGE_JOB_ERROR_COPY.moderated), IMAGE_JOB_ERROR_COPY.moderated);
+  assert.equal(
+    pendingRefundImageJobError(IMAGE_JOB_ERROR_COPY.billing),
+    'El proveedor del modelo de imágenes elegido no tiene saldo ahora. No cambié de modelo; elige otro modelo o inténtalo más tarde. Estamos confirmando el reembolso.',
+  );
+  assert.equal(
+    pendingRefundImageJobError(publicImageJobError('PROVIDER_ERROR', '429 Rate limit reached for images per minute. Please try again in 20s.', { modelLabel: 'GPT Image 2' })),
+    'El proveedor de GPT Image 2 alcanzó su límite de solicitudes por minuto. Espera 20 s y vuelve a intentarlo. Estamos confirmando el reembolso.',
+  );
+  assert.equal(
+    pendingRefundImageJobError(publicImageJobError('PROVIDER_ERROR', 'provider crashed', { modelLabel: 'GPT Image 2' })),
+    'GPT Image 2 no pudo generar la imagen. Inténtalo de nuevo. Estamos confirmando el reembolso.',
+  );
+  for (const text of Object.values(IMAGE_JOB_ERROR_COPY)) {
+    const pending = pendingRefundImageJobError(text);
+    assert.doesNotMatch(pending, /No se te cobró/, pending);
+    assert.ok(pending.length > 20);
+  }
+});
+
+test('publicImageJobError: moderation, causes and a generic copy — never raw text', () => {
+  const { publicImageJobError, IMAGE_JOB_ERROR_COPY } = images;
+  assert.equal(publicImageJobError('MODERATED', 'content_policy_violation: nsfw'), IMAGE_JOB_ERROR_COPY.moderated);
+  assert.equal(publicImageJobError('PROVIDER_ERROR', '402 Payment Required'), IMAGE_JOB_ERROR_COPY.billing);
+  assert.equal(publicImageJobError('PROVIDER_ERROR', '401 Incorrect API key provided: sk-abc'), IMAGE_JOB_ERROR_COPY.auth);
+  assert.equal(publicImageJobError('PROVIDER_ERROR', '429 Rate limit reached for images per minute'), IMAGE_JOB_ERROR_COPY.rate_limit);
+  assert.equal(publicImageJobError('PROVIDER_ERROR', '503 upstream overloaded'), IMAGE_JOB_ERROR_COPY.unavailable);
+  assert.equal(publicImageJobError('PROVIDER_ERROR', 'provider crashed'), IMAGE_JOB_ERROR_COPY.generic);
+  assert.equal(publicImageJobError('PROVIDER_ERROR', ''), IMAGE_JOB_ERROR_COPY.generic);
+});
+
+test('publicImageJobError names the image model and the exact cause (forbidden apart from auth, per-minute seconds)', () => {
+  const { publicImageJobError, IMAGE_JOB_ERROR_COPY } = images;
+  const opts = { modelLabel: 'GPT Image 2' };
+  assert.equal(
+    publicImageJobError('PROVIDER_ERROR', '402 Payment Required', opts),
+    'El proveedor de GPT Image 2 no tiene saldo ahora. No se te cobró y no cambié de modelo; elige otro modelo o inténtalo más tarde.',
+  );
+  assert.equal(
+    publicImageJobError('PROVIDER_ERROR', '403 Your organization must be verified to use the model gpt-image-2'),
+    IMAGE_JOB_ERROR_COPY.forbidden,
+    'an org-verification 403 is not a rejected key',
+  );
+  assert.match(publicImageJobError('PROVIDER_ERROR', '403 Your organization must be verified', opts), /^El proveedor de GPT Image 2 no permite usar este modelo ahora\./);
+  assert.match(
+    publicImageJobError('PROVIDER_ERROR', '429 Rate limit reached for images per minute. Please try again in 20s.', opts),
+    /^El proveedor de GPT Image 2 alcanzó su límite de solicitudes por minuto\. No se te cobró; espera 20 s y vuelve a intentarlo\.$/,
+  );
+  assert.equal(publicImageJobError('PROVIDER_ERROR', 'provider crashed', opts), 'GPT Image 2 no pudo generar la imagen. No se te cobró; inténtalo de nuevo.');
+  assert.equal(publicImageJobError('MODERATED', 'nsfw', opts), IMAGE_JOB_ERROR_COPY.moderated);
+  for (const text of Object.values(IMAGE_JOB_ERROR_COPY)) assert.doesNotMatch(text, /gpt-image|OpenRouter/i);
 });

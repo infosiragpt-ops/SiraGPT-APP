@@ -233,7 +233,7 @@ const crypto = require('crypto');
 const mime = require('mime-types');
 const sharp = require('sharp');
 
-const { enrichWithWebSearch, getTracer, getMemoryAdapter, webSearchPlanned } = require('../orchestration/gateway-adapter');
+const { enrichWithWebSearch, getTracer, getMemoryAdapter, webSearchPlanned, sanitizeWebSearchQuery } = require('../orchestration/gateway-adapter');
 
 const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
@@ -475,6 +475,39 @@ function createProviderClient(provider, opts = {}) {
  *
  * @returns {{ client: OpenAI, via: 'gateway' | 'direct' }}
  */
+/**
+ * Owner policy (Luis): a picked model is never switched, and when it cannot
+ * answer the user reads WHICH model (its picker display name, never a raw id
+ * or a transport) and WHY. Both helpers never throw.
+ */
+async function pickedModelLabelForTurn({ model, provider, catalogRow = null }) {
+  try {
+    return await require('../services/ai/picked-model-label').resolvePickedModelLabel({
+      model, provider, prisma, catalogRow,
+    });
+  } catch (_) {
+    return '';
+  }
+}
+
+/** «<modelo> no pudo responder: su conexión no está configurada. …» */
+async function unconfiguredModelMessage({ model, provider, catalogRow = null }) {
+  try {
+    const modelLabel = await pickedModelLabelForTurn({ model, provider, catalogRow });
+    return require('../services/ai/billing-failover').buildFailureMessage({ modelLabel, reason: 'unconfigured' })
+      || PROVIDER_UNAVAILABLE_MESSAGE;
+  } catch (_) {
+    return PROVIDER_UNAVAILABLE_MESSAGE;
+  }
+}
+
+/** The plan gate's copy, naming the model by its display name. */
+async function planGateMessage({ model, provider, catalogEntry, userPlan, catalogRow = null }) {
+  const label = await pickedModelLabelForTurn({ model, provider, catalogRow });
+  const plans = Array.isArray(catalogEntry && catalogEntry.plans) ? catalogEntry.plans.join(' o ') : '';
+  return `${label || 'El modelo elegido'} requiere un plan ${plans}. Tu plan actual: ${userPlan}.`;
+}
+
 function createProviderClientForRequest(provider, req, opts = {}) {
   if (opts.customConnection && opts.customConnection.url) {
     return { client: createProviderClient(provider, opts), via: 'direct' };
@@ -997,8 +1030,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
         isFallback: modelPolicy.fallbackModel.name === m.name,
         connected: providerConnectionReady(connectionProvider),
         // Provider out of credit (learned from a real turn): the picker shows
-        // «Sin saldo»; picking it still answers — the turn fails over to a
-        // funded model with a notice.
+        // «Sin saldo». A model the user picks is never switched: the turn
+        // keeps its provider and, if it still cannot answer, ends with an
+        // honest error naming the model and the cause (billing-failover
+        // buildFailureMessage). A per-minute window is not «Sin saldo».
         billingStatus: require('../services/ai/billing-failover').isOutOfCredit(connectionProvider) ? 'sin_saldo' : null,
         planAccess: {
           currentPlan: modelPolicy.currentPlan,
@@ -1720,7 +1755,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null, activityTrace = null } = {}) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, skipUsageMetering = false, rlhfFeedback = null, activityTrace = null } = {}) {
   const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
     ? observabilityLog
     : generatePersistenceLog;
@@ -1979,7 +2014,11 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       const isFreeAttachmentTurn = userPlan === 'FREE'
         && Array.isArray(processedFiles)
         && processedFiles.length > 0;
-      if (isFreeAttachmentTurn) {
+      if (skipUsageMetering) {
+        // A turn the provider never answered (the reply is only the honest
+        // failure notice) must not consume the user's quota or token meter.
+        persistenceLog.info('quota.metering_skipped', { reasonCode: 'model_error' });
+      } else if (isFreeAttachmentTurn) {
         persistenceLog.info('quota.attachment_exempt', {
           attachmentCount: processedFiles.length,
         });
@@ -2012,7 +2051,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           maxAttempts: 3,
         });
         setTimeout(() => {
-          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog, activityTrace })
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog, activityTrace, skipUsageMetering })
             .catch((retryErr) => persistenceLog.error('persistence.retry_crashed', retryErr, {
               attempt: _attempt + 2,
               maxAttempts: 3,
@@ -2239,6 +2278,9 @@ router.post(
     body('reason').optional({ nullable: true }).isString().isLength({ max: 500 }),
     body('reasonCode').optional({ nullable: true }).isString().isLength({ max: 32 }),
     body('notes').optional({ nullable: true }).isString().isLength({ max: 500 }),
+    // Live progress capability (lib/api.ts sends 2): begin / progress /
+    // result stage frames paired by stageId. Absent → legacy begin-only.
+    body('progressProtocol').optional().isInt({ min: 1, max: 9 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -2603,11 +2645,17 @@ router.post(
             retryable: fairRetryable,
           });
           if (!res.headersSent) {
-            if (fairRetryable) res.setHeader('Retry-After', '2');
+            // The queue knows the real wait (rate-limit window / queue slot):
+            // header and body carry it, never a constant 2 s.
+            const fairRetryAfterSeconds = fairRetryable
+              ? require('../services/ai/generate-queue-retry-after').fairQueueRetryAfterSeconds(fair)
+              : null;
+            if (fairRetryable) res.setHeader('Retry-After', String(fairRetryAfterSeconds));
             return res.status(status).json({
               error: fairCode,
               code: fairCode,
               retryable: fairRetryable,
+              ...(fairRetryable ? { retryAfterSeconds: fairRetryAfterSeconds } : {}),
               message: fairCode === 'duplicate_turn'
                 ? 'Ese generate ya está en vuelo. No lo dupliqué.'
                 : (fairCode === 'rate_limited'
@@ -2628,7 +2676,15 @@ router.post(
         const requestedModelBeforeQuota = model;
         const routed = resolveModelForUser(req.user, model);
         if (routed.blocked) {
-          return res.status(429).json({ error: 'quota_exceeded', reason: routed.reason });
+          // The user's own plan limit (not a provider failure): not
+          // retryable, with a Spanish message the composer can show as is.
+          return res.status(429).json({
+            error: 'quota_exceeded',
+            code: 'quota_exceeded',
+            retryable: false,
+            reason: routed.reason,
+            message: 'Alcanzaste el límite de tu plan. Revisa tu plan para continuar.',
+          });
         }
         if (routed.model && routed.model !== model) {
           model = routed.model;
@@ -3218,9 +3274,12 @@ router.post(
       }
       if (!_customResolution.isCustom && !providerConnectionReady(actualProvider)) {
         controller.abort();
+        // The picked model by name and the exact cause («no configurada»).
         return res.status(503).json({
           error: 'provider_unavailable',
-          message: PROVIDER_UNAVAILABLE_MESSAGE,
+          message: await unconfiguredModelMessage({ model, provider: actualProvider, catalogRow: _customResolution.catalog || null }),
+          retryable: false,
+          failureReason: 'unconfigured',
         });
       }
       let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
@@ -3236,7 +3295,7 @@ router.post(
         if (catalogEntry && !modelRouter.isPlanEligible(catalogEntry.plans, userPlan)) {
           return res.status(403).json({
             error: 'plan_does_not_include_model',
-            message: `El modelo "${catalogEntry.id}" requiere un plan ${catalogEntry.plans.join(' o ')}. Tu plan actual: ${userPlan}.`,
+            message: await planGateMessage({ model, provider: actualProvider, catalogEntry, userPlan, catalogRow: _customResolution.catalog || null }),
             requiredPlans: catalogEntry.plans,
             currentPlan: userPlan,
             upgradeRequired: true,
@@ -3286,6 +3345,21 @@ router.post(
         if (!label || clientGone || res.writableEnded) return;
         try { res.write(`data: ${JSON.stringify({ type: 'stage', label, ...extra })}\n\n`); } catch (_) { /* socket gone */ }
       };
+      // Live progress of the turn (services/turn-progress): only the phases
+      // that really run, with real facts (file names, counts, sources, model
+      // display names, attempt n of m). progressProtocol 2 clients get begin
+      // / progress / result rows paired by stageId; a stale tab gets the
+      // legacy begin-only frames. Persisted with the reply for the reload.
+      const { createTurnProgress } = require('../services/turn-progress');
+      const turnProgressLib = require('../services/turn-progress');
+      const { createActivityTraceCollector } = require('../services/agent-runner/activity-trace');
+      const turnProgress = createTurnProgress({
+        emitStage,
+        protocol: Number(req.body?.progressProtocol) === 2 ? 2 : 1,
+        canWriteProgress: () => !res.writableNeedDrain,
+        collector: createActivityTraceCollector(),
+      });
+      req._turnProgress = turnProgress;
       try {
         const adTtfb = require('../services/agent-runner/engine-adapter');
         if (typeof adTtfb.abortIfFirstByteOver45s === 'function') {
@@ -3355,8 +3429,11 @@ router.post(
       let processedFiles = [];
       let openaiFiles = [];
       let uploadedFileContextForTurn = '';
+      let __attachmentsHandle = null;
       if (isAuth && files && files.length > 0) {
-        emitStage(files.length === 1 ? 'Leyendo el archivo adjunto' : `Leyendo ${files.length} archivos adjuntos`, { tool: 'read_file' });
+        __attachmentsHandle = turnProgress.begin('attachments', turnProgressLib.attachmentsLabel(files, {
+          recovered: Boolean(__recoveredFileRefs && __recoveredFileRefs.size > 0),
+        }), { tool: 'read_file', kind: 'document', meta: { files: files.length } });
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
             const processedFile = await loadUserFile(fileRef, userId);
@@ -3366,9 +3443,12 @@ router.post(
             return processedFile;
           })
         ).then(results => results.filter(Boolean));
+        const __loadedFileCount = processedFiles.length;
 
+        let __skippedRecoveredImages = 0;
         if (__recoveredFileRefs && __recoveredFileRefs.size > 0) {
           const imageRelevant = messageAttachments.looksLikeImageFollowupQuestion(prompt);
+          const __beforeImageFilter = processedFiles.length;
           processedFiles = processedFiles
             .filter((pf) => {
               const recovered = pf && __recoveredFileRefs.has(String(pf.id || pf.fileId || ''));
@@ -3378,11 +3458,30 @@ router.post(
             .map((pf) => (pf && __recoveredFileRefs.has(String(pf.id || pf.fileId || ''))
               ? markRecoveredFromHistory(pf)
               : pf));
+          __skippedRecoveredImages = __beforeImageFilter - processedFiles.length;
+        }
+        // The names are known now (after the deliberate image filter): the
+        // row says which files it really reads.
+        if (processedFiles.length > 0) {
+          __attachmentsHandle.update({
+            label: turnProgressLib.attachmentsLabel(processedFiles, {
+              recovered: Boolean(__recoveredFileRefs && __recoveredFileRefs.size > 0),
+            }),
+            meta: { files: processedFiles.length },
+          });
+        } else if (__skippedRecoveredImages > 0 && __loadedFileCount === files.length) {
+          // Nothing failed: every file loaded and the earlier image(s) are
+          // not about this question.
+          __attachmentsHandle.done(__skippedRecoveredImages === 1
+            ? 'La imagen anterior no hace falta para esta pregunta'
+            : 'Las imágenes anteriores no hacen falta para esta pregunta', { detail: '', meta: { files: 0 } });
         }
 
         if (processedFiles.length > 0) {
           try {
-            processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles);
+            processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles, {
+              onProgress: turnProgressLib.attachmentExtractSink(__attachmentsHandle),
+            });
             uploadedFileContextForTurn = await chatAttachmentRecovery.buildChatUploadedFileContext(
               prisma,
               { userId, processedFiles, prompt },
@@ -3426,8 +3525,22 @@ router.post(
             for (const pf of recovered) {
               if (pf?.openaiFileId) openaiFiles.push(pf.openaiFileId);
             }
+            if (__attachmentsHandle && __attachmentsHandle.open) {
+              // Only files that really failed to load reach this point open
+              // (a deliberately skipped earlier image already settled it).
+              __attachmentsHandle.fail(__recoveredFileRefs && __recoveredFileRefs.size > 0
+                ? 'No pude abrir el documento anterior'
+                : 'No pude abrir el archivo adjunto', { detail: '' });
+            }
+            __attachmentsHandle = turnProgress.begin('attachments', turnProgressLib.attachmentsLabel(processedFiles, { recovered: true }), {
+              tool: 'read_file',
+              kind: 'document',
+              meta: { files: processedFiles.length },
+            });
             try {
-              processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles);
+              processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles, {
+                onProgress: turnProgressLib.attachmentExtractSink(__attachmentsHandle),
+              });
               uploadedFileContextForTurn = await chatAttachmentRecovery.buildChatUploadedFileContext(
                 prisma,
                 { userId, processedFiles, prompt },
@@ -3442,6 +3555,20 @@ router.post(
           }
         } catch (recoverErr) {
           generateLog.warnError('documents.history_recovery_failed', recoverErr);
+        }
+      }
+
+      if (__attachmentsHandle && __attachmentsHandle.open) {
+        if (processedFiles.length > 0) {
+          __attachmentsHandle.done(processedFiles.length === 1 ? 'Archivo listo' : 'Archivos listos', {
+            detail: turnProgressLib.attachmentsNote(processedFiles),
+            meta: { files: processedFiles.length },
+          });
+        } else {
+          // loadUserFile returned nothing for the files of this turn.
+          __attachmentsHandle.fail(__recoveredFileRefs && __recoveredFileRefs.size > 0
+            ? 'No pude abrir el documento anterior'
+            : 'No pude abrir el archivo adjunto', { detail: '' });
         }
       }
 
@@ -3538,6 +3665,15 @@ router.post(
             userPrompt: __publicWebQuery,
             qualityGuard: false,
             skipDoneSentinel: true,
+            // Honest failure copy names the model the picker shows (a
+            // getter: resolved only on failure, off the first-byte path).
+            modelLabel: () => require('../services/ai/picked-model-label').resolvePickedModelLabel({
+              model: actualModel,
+              provider: actualProvider,
+              prisma,
+              customCatalog: customConnection && _customResolution ? _customResolution.catalog || null : null,
+              catalogRow: _customResolution ? _customResolution.catalog || null : null,
+            }),
           });
           // No directive is ever executed in this branch. Scrub the most
           // dangerous legacy control syntax from the visible answer as an
@@ -3730,7 +3866,11 @@ router.post(
       }
       if (actualProvider !== 'Custom' && !providerConnectionReady(actualProvider)) {
         closeGenerateSseWithError(res, {
-          message: PROVIDER_UNAVAILABLE_MESSAGE,
+          message: await unconfiguredModelMessage({
+            model: actualModel,
+            provider: actualProvider,
+            catalogRow: _customResolution ? _customResolution.catalog || null : null,
+          }),
           code: 'provider_unavailable',
           recovered: false,
         });
@@ -3771,6 +3911,15 @@ router.post(
       const __pr3ExtraBlocks = [];
       let __pr3RecentTurns = [];
       let __conversationHistoryForUnderstanding = [];
+      const __promptCount = turnProgressLib.countWordsBounded(prompt);
+      const __promptWords = __promptCount.words;
+      const __promptWordsText = `${__promptCount.approx ? '~' : ''}${turnProgressLib.fmtInt(__promptWords)} ${__promptWords === 1 ? 'palabra' : 'palabras'}`;
+      const __understandingHandle = turnProgress.begin('understanding', 'Analizando tu mensaje', {
+        tool: 'plan',
+        kind: 'thinking',
+        detail: __promptWordsText,
+        meta: { words: __promptWords },
+      });
       try {
         if (userId && canPersist && chatId) {
           // Reuse the 80-message snapshot loaded earlier (filter block) to
@@ -3796,6 +3945,13 @@ router.post(
             role: m.role,
             text: m.content,
           }));
+          const __priorCount = __conversationHistoryForUnderstanding.length;
+          if (__priorCount > 0) {
+            __understandingHandle.update({
+              label: 'Revisando la conversación',
+              detail: `${turnProgressLib.fmtInt(__priorCount)} ${__priorCount === 1 ? 'mensaje previo' : 'mensajes previos'} · tu mensaje: ${__promptWordsText}`,
+            });
+          }
         }
       } catch (_pr3HistErr) { /* swallow — coref still useful with attachments only */ }
 
@@ -3856,6 +4012,7 @@ router.post(
           }
         }
       } catch (_pr3CorefErr) { /* swallow */ }
+      __understandingHandle.done();
 
       // Resolve the language policy promise started before quota check.
       // By the time we reach here, it has been running concurrently with
@@ -3908,8 +4065,19 @@ router.post(
           customGpt,
         });
         const _enrichmentBudgetMs = chatLatencyPolicy.enrichmentBudgetMs();
+        const __memoryHandle = _useSemanticEnrichment
+          ? turnProgress.begin('memory', _crossChatEnabled
+            ? 'Consultando tu memoria y conversaciones similares'
+            : 'Consultando tu memoria', { tool: 'memory', kind: 'search' })
+          : null;
+        // Live progress: a recall that failed or ran out of time is not «sin
+        // recuerdos» — the row says it could not look.
+        const __recallState = { memSettled: false, memFailed: false, crossSettled: false, crossFailed: false };
         const _memoryPromise = _useSemanticEnrichment
-          ? longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
+          ? longTermMemory.recallFacts(userId, prompt, 5).then((facts) => {
+              __recallState.memSettled = true; return facts;
+            }, (e) => {
+              __recallState.memSettled = true; __recallState.memFailed = true;
               generateLog.warnError('memory.recall_failed', e); return [];
             })
           : Promise.resolve([]);
@@ -3920,7 +4088,12 @@ router.post(
               excludeChatId: canPersist ? chatId : null,
               embedder: texts => rag.embed(texts),
               prismaClient: prisma,
-            }).catch((e) => { generateLog.warnError('memory.cross_chat_recall_failed', e); return []; })
+            }).then((turns) => {
+              __recallState.crossSettled = true; return turns;
+            }, (e) => {
+              __recallState.crossSettled = true; __recallState.crossFailed = true;
+              generateLog.warnError('memory.cross_chat_recall_failed', e); return [];
+            })
           : Promise.resolve([]);
         const _feedbackPromise = _useSemanticEnrichment && rlhfSteering.isSteeringEnabled()
           ? rlhfSteering.buildSteeringBlock({
@@ -4018,6 +4191,24 @@ router.post(
             reasonCode: _steer.reason || 'no_exemplars',
           });
         }
+        if (__memoryHandle) {
+          // Counts only: the recalled facts themselves never reach the timeline.
+          const __facts = Array.isArray(recalledMemoryFacts) ? recalledMemoryFacts.length : 0;
+          const __related = Array.isArray(crossChatTurnsForAttribution) ? crossChatTurnsForAttribution.length : 0;
+          const __memMissed = __recallState.memFailed || !__recallState.memSettled;
+          const __crossMissed = Boolean(_crossChatEnabled) && (__recallState.crossFailed || !__recallState.crossSettled);
+          const __memParts = [];
+          if (__facts > 0) __memParts.push(`${turnProgressLib.fmtInt(__facts)} ${__facts === 1 ? 'recuerdo' : 'recuerdos'}`);
+          if (__related > 0) __memParts.push(`${turnProgressLib.fmtInt(__related)} ${__related === 1 ? 'conversación relacionada' : 'conversaciones relacionadas'}`);
+          if (!__memParts.length && (__memMissed || __crossMissed)) {
+            __memoryHandle.fail('No pude consultar tu memoria', {
+              detail: __memMissed && !__recallState.memFailed ? 'La consulta tardó demasiado' : '',
+            });
+          } else {
+            if (__memParts.length && (__memMissed || __crossMissed)) __memParts.push('parte de la consulta no respondió');
+            __memoryHandle.done('Memoria consultada', { detail: __memParts.length ? __memParts.join(' · ') : 'sin recuerdos relevantes' });
+          }
+        }
       }
 
       // Attribution graph slot — kept for backwards compatibility.
@@ -4030,6 +4221,10 @@ router.post(
       // attached/project files are indexed once per chat/project and the
       // prompt receives compact, cited evidence snippets.
       let operationalRagContext = null;
+      // Lazy row: only a turn whose documents really get indexed / searched
+      // shows «Buscando los pasajes relevantes».
+      const __ragProgress = turnProgressLib.ragProgressSink(turnProgress);
+      let __ragFailed = false;
       if (userId && !__publicWebReadonly) {
         try {
           operationalRagContext = await operationalRag.buildRuntimeContext({
@@ -4041,8 +4236,10 @@ router.post(
             project,
             customGpt,
             openai: rag.getOpenAI(),
+            onProgress: __ragProgress.onProgress,
           });
         } catch (ragErr) {
+          __ragFailed = true;
           generateLog.warnError('rag.operational_unavailable', ragErr);
         }
       }
@@ -4086,6 +4283,7 @@ router.post(
         if (operationalRagContext && Array.isArray(operationalRagContext.hits) && operationalRagContext.hits.length >= 3) {
           const ragFilter = require('../services/rlcd/jev-rag-filter');
           if (ragFilter.isRagFilterEnabled()) {
+            __ragProgress.noteFiltering();
             const __filtered = await ragFilter.filterHits({
               query: prompt,
               hits: operationalRagContext.hits,
@@ -4104,6 +4302,7 @@ router.post(
                 retrievalMeta: operationalRagContext.retrievalMeta || {},
               });
               if (__filtered.decisionId) req._rlcdRagDecisionId = __filtered.decisionId;
+              __ragProgress.noteFiltered(__before, __filtered.hits.length);
               generateLog.info('rlcd.rag_filtered', { before: __before, after: __filtered.hits.length, dropped: __filtered.dropped, latencyMs: __filtered.latencyMs });
             }
           }
@@ -4111,6 +4310,7 @@ router.post(
       } catch (ragFilterErr) {
         generateLog.warnError('rag.rerank_failed', ragFilterErr);
       }
+      __ragProgress.finish(operationalRagContext, { error: __ragFailed });
 
       const evidenceBlock = operationalRagContext?.contextBlock
         ? `\n\n${operationalRagContext.contextBlock}`
@@ -4373,10 +4573,32 @@ router.post(
           source: 'ai.generate',
         });
         try {
-          documentEnrichment = await documentProfessionalAnalyzer.buildEnrichedFileContext({
-            prisma,
-            processedFiles,
-          });
+          const __docFiles = processedFiles.filter((f) => f && !isImageFileRecord(f));
+          const __docHandle = __docFiles.length > 0
+            ? turnProgress.begin('doc_analysis', __docFiles.length === 1 && (__docFiles[0].originalName || __docFiles[0].name)
+              ? `Analizando la estructura de «${String(__docFiles[0].originalName || __docFiles[0].name).slice(0, 60)}»`
+              : `Analizando la estructura de ${__docFiles.length} documentos`, { tool: 'read_file', kind: 'document', meta: { files: __docFiles.length } })
+            : null;
+          let __docAnalysisErr = null;
+          try {
+            documentEnrichment = await documentProfessionalAnalyzer.buildEnrichedFileContext({
+              prisma,
+              processedFiles,
+            });
+          } catch (__docErr) {
+            __docAnalysisErr = __docErr;
+          }
+          if (__docHandle) {
+            if (__docAnalysisErr) {
+              __docHandle.fail('No pude analizar la estructura del documento', { detail: '' });
+            } else {
+              const __docType = turnProgressLib.docTypeEs(documentEnrichment && documentEnrichment.primaryDocType);
+              __docHandle.done('Estructura analizada', {
+                detail: __docType ? `Tipo: ${__docType}` : '',
+              });
+            }
+          }
+          if (__docAnalysisErr) throw __docAnalysisErr;
           // Surface per-block telemetry as a single structured log line so
           // operators can grep for `[ai/enrichment]` and see which analyzer
           // failed or stalled on a given chat turn. Cheap to emit (one line
@@ -5633,6 +5855,7 @@ router.post(
       let ciraRuntimeBlock = '';
       let integrationRuntimeProfile = null;
       let enterpriseExecutionBlock = '';
+      const __planningHandle = turnProgress.begin('planning', 'Planificando la respuesta', { tool: 'plan', kind: 'thinking' });
       try {
         universalTaskContract = buildUniversalTaskContract({
           rawUserRequest: prompt,
@@ -6064,14 +6287,43 @@ router.post(
             const __planOk = !__targetCatalog
               || modelRouter.isPlanEligible(__targetCatalog.plans, (req.user && req.user.plan) || 'FREE');
             const __targetProvider = inferProviderFromModelId(__targetModel) || __route.selectedProvider;
-            if (__planOk && __targetProvider) {
+            // Only onto a provider whose connection is ready (key + base
+            // URL): re-routing to an unconfigured one turned a working turn
+            // into «proveedor no disponible». A user's own connection is a
+            // pick in all but name — never re-routed.
+            const __targetRuntimeProvider = __targetProvider
+              ? resolveGenerateProvider(__targetProvider, __targetModel)
+              : null;
+            // 'Custom' needs the user's own connection, which a re-route
+            // never has (providerConnectionReady('Custom') is always true).
+            const __targetReady = Boolean(__targetRuntimeProvider)
+              && !customConnection
+              && !isCustomProvider(__targetRuntimeProvider)
+              && providerConnectionReady(__targetRuntimeProvider);
+            // The new model must stream through ITS provider's client: build
+            // it first and switch model + provider + client together only
+            // when it exists, so a failed build never pairs the new model id
+            // with the previous provider's client.
+            let __targetResolution = null;
+            if (__planOk && __targetReady) {
+              try {
+                __targetResolution = createProviderClientForRequest(__targetRuntimeProvider, req, { model: __targetModel });
+              } catch (_clientErr) {
+                // Keep the current model, provider and client (logged below
+                // as routing.reroute_skipped).
+                __targetResolution = null;
+              }
+            }
+            if (__targetResolution && __targetResolution.client) {
               generateLog.info('routing.rerouted', {
                 action: __route.action,
                 reasonCode: __route.action === 'escalate' ? 'escalate' : 'auto_select',
                 success: true,
               });
               actualModel = __targetModel;
-              actualProvider = __targetProvider;
+              actualProvider = __targetRuntimeProvider;
+              _providerResolution = __targetResolution;
+              openai = __targetResolution.client;
             } else {
               generateLog.info('routing.reroute_skipped', {
                 reasonCode: 'not_applied',
@@ -6153,6 +6405,28 @@ router.post(
       } catch (contractErr) {
         generateLog.warnError('tasks.enterprise_contract_unavailable', contractErr);
       }
+      {
+        // What the plan decided, in facts: difficulty, the effort the user
+        // chose (only when chosen) and the model that will answer.
+        const __planParts = [];
+        const __difficulty = turnProgressLib.difficultyEs(req._cognitiveDecision && req._cognitiveDecision.difficulty && req._cognitiveDecision.difficulty.bucket);
+        if (__difficulty) __planParts.push(__difficulty);
+        // The chosen effort only when the model really gets it: never on a
+        // trivial turn (thinking is turned off there) nor for a model that
+        // does not reason.
+        if (req._thinkingLevelExplicit === true && req._trivialTurn !== true && !isTrivialChatTurn(prompt)) {
+          let __reasons = false;
+          try {
+            __reasons = require('../services/agent-harness/model-capabilities')
+              .resolveModelCapabilities(actualModel, { provider: actualProvider }).supportsReasoning === true;
+          } catch (_) { __reasons = false; }
+          const __level = __reasons ? turnProgressLib.thinkingLevelEs(req._thinkingLevel) : '';
+          if (__level) __planParts.push(__level);
+        }
+        const __modelName = turnProgressLib.displayNameFor(actualModel, actualProvider);
+        if (__modelName) __planParts.push(__modelName);
+        __planningHandle.done('Respuesta planificada', { detail: __planParts.join(' · ') });
+      }
 
       let coworkBlock = '';
       let autoFileContext = null;
@@ -6167,7 +6441,23 @@ router.post(
           if (prompt && prompt.length >= 200 && !processedFiles.length) {
             const autoFileBridge = require('../services/auto-file-bridge');
             if (autoFileBridge.shouldAutoFile(prompt) && autoFileBridge.isStructuredContent(prompt)) {
-              autoFileContext = await autoFileBridge.ingestPastedContent(userId, prompt);
+              const __autofileHandle = turnProgress.begin('autofile', 'Guardando el texto pegado como documento', { tool: 'read_file', kind: 'document' });
+              try {
+                autoFileContext = await autoFileBridge.ingestPastedContent(userId, prompt);
+              } catch (__autofileErr) {
+                __autofileHandle.fail('No pude guardar el texto pegado como documento', { detail: '' });
+                throw __autofileErr;
+              }
+              if (autoFileContext?.autoFiled) {
+                const __afParts = [];
+                if (autoFileContext.format) __afParts.push(String(autoFileContext.format).toUpperCase().slice(0, 12));
+                if (Number(autoFileContext.lineCount) > 0) __afParts.push(`${turnProgressLib.fmtInt(autoFileContext.lineCount)} ${Number(autoFileContext.lineCount) === 1 ? 'línea' : 'líneas'}`);
+                __autofileHandle.done(autoFileContext.fileName
+                  ? `Texto pegado guardado como «${String(autoFileContext.fileName).slice(0, 60)}»`
+                  : 'Texto pegado guardado como documento', { detail: __afParts.join(' · ') });
+              } else {
+                __autofileHandle.done('El texto pegado se usa tal cual', { detail: '' });
+              }
               if (autoFileContext?.autoFiled) {
                 coworkBlock += `\n\n## AUTO-FILED CONTENT\nThe user's pasted content was automatically filed as document "${autoFileContext.fileName}" (format: ${autoFileContext.format}, ${autoFileContext.charCount} chars, ${autoFileContext.lineCount} lines). Analyze it professionally as a document, not just raw text.`;
                 try {
@@ -6219,11 +6509,20 @@ router.post(
         // Announce the step only when a search really runs: «Buscando en la
         // web» on a «¿qué hay en esta imagen?» turn was a label, not a search.
         const _willSearchWeb = _webSearchAllowed && webSearchPlanned(_webGroundingPrompt, _webSearchOptions);
-        if (_willSearchWeb) emitStage('Buscando en la web', { tool: 'web_search' });
+        // The label quotes the query the search really runs (private URLs
+        // reduced to their origin), capped at 60 chars.
+        let __webHandle = null;
+        let __webFailed = false;
+        if (_willSearchWeb) __webHandle = turnProgress.begin('web', turnProgressLib.webLabel(sanitizeWebSearchQuery(_webGroundingPrompt)), { tool: 'web_search', kind: 'web' });
         const [_webCtx, _orchMem] = await Promise.all([
           _willSearchWeb
-            ? enrichWithWebSearch(_webGroundingPrompt, _webSearchOptions)
-                .catch((e) => { generateLog.warnError('web_search.unavailable', e); return null; })
+            ? enrichWithWebSearch(_webGroundingPrompt, {
+              ..._webSearchOptions,
+              // Provider errors degrade to null inside: the outcome tells a
+              // failed search from one that found nothing.
+              onOutcome: (outcome) => { if (outcome === 'failed') __webFailed = true; },
+            })
+                .catch((e) => { __webFailed = true; generateLog.warnError('web_search.unavailable', e); return null; })
             : Promise.resolve(null),
           _memoryAdapter
             ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch((e) => { generateLog.warnError('memory.orchestration_unavailable', e); return null; })
@@ -6234,7 +6533,12 @@ router.post(
         if (Array.isArray(_webCtx?.sources) && _webCtx.sources.length > 0) {
           const elapsedMs = Date.now() - _wsStart;
           webSearchSources = _webCtx.sources;
-          emitStage(webSearchSources.length === 1 ? 'Leyendo 1 fuente' : `Leyendo ${webSearchSources.length} fuentes`, { tool: 'web_fetch' });
+          if (__webHandle) {
+            __webHandle.done(webSearchSources.length === 1 ? 'Fuente encontrada' : 'Fuentes encontradas', {
+              detail: turnProgressLib.sourcesNote(webSearchSources),
+              meta: { sources: webSearchSources.length },
+            });
+          }
           webSearchMeta = {
             provider: _webCtx.source || 'web',
             query: _webCtx.query || _webGroundingPrompt.slice(0, 200),
@@ -6246,6 +6550,10 @@ router.post(
           try {
             res.write(`data: ${JSON.stringify({ type: 'web_sources', provider: webSearchMeta.provider, query: webSearchMeta.query, elapsedMs, sources: webSearchSources })}\n\n`);
           } catch { /* socket gone */ }
+        } else if (__webHandle && __webFailed) {
+          __webHandle.fail('La búsqueda en la web no respondió', { detail: '' });
+        } else if (__webHandle) {
+          __webHandle.done('La búsqueda no aportó fuentes', { detail: '' });
         }
       }
 
@@ -6335,6 +6643,7 @@ router.post(
             try { recent = activeMemory.listEntries(userId, { limit: 15 }) || []; } catch { recent = []; }
             let candidates = memoryEngine.dedupeCandidates(lexical, recent);
             if (candidates.length > 0) {
+              const __recallHandle = turnProgress.begin('memory', 'Recordando datos tuyos relevantes', { tool: 'memory', kind: 'search' });
               memoryMetrics.record('recall_decision');
               const reason = explicitCue
                 ? (mem.recall.reason || 'El usuario hace referencia a algo dicho anteriormente.')
@@ -6375,8 +6684,14 @@ router.post(
                try {
                  res.write(`data: ${JSON.stringify({ type: 'memory', reason: memoryMeta.reason, confidence: memoryMeta.confidence, items: memoryItems })}\n\n`);
                } catch { /* socket gone */ }
+               // Count only: the facts are shown by the MEMORIA section, never here.
+               __recallHandle.done(`Usando ${turnProgressLib.fmtInt(memoryItems.length)} ${memoryItems.length === 1 ? 'dato' : 'datos'} de tu memoria`, {
+                 detail: '',
+                 meta: { hits: memoryItems.length },
+               });
              } else {
                memoryMetrics.record('recall_empty');
+               __recallHandle.done('Ningún dato de tu memoria aplica a esta pregunta', { detail: '' });
              }
             }
           }
@@ -6699,6 +7014,7 @@ router.post(
       // assembled, keep the recent tail verbatim and inject the summary as a
       // cacheable system block. Fail-open: any error → no compaction.
       if (canPersist && !req._miniShortChitchat && historyMessages.length > 0) {
+        let __compactHandle = null;
         try {
           const __attachmentTokens = (Array.isArray(processedFiles) ? processedFiles : [])
             .reduce((acc, f) => acc + contextWindow.estimateTokens(String(f?.extractedText || '')), 0);
@@ -6712,7 +7028,7 @@ router.post(
           req._contextCompactionPlan = __compactionPlan;
           if (__compactionPlan.shouldCompact) {
             const __runtime = conversationCompactor.pickCompactionRuntime({ provider: actualProvider, model: actualModel });
-            emitStage(`Comprimiendo el contexto (${__compactionPlan.rowsToCompact.length} mensajes)`, { tool: 'compact' });
+            __compactHandle = turnProgress.begin('history', `Comprimiendo el contexto (${__compactionPlan.rowsToCompact.length} mensajes)`, { tool: 'compact', meta: { tokens: __compactionPlan.historyTokens } });
             const __result = await conversationCompactor.compactChat({
               prisma,
               chatId,
@@ -6738,7 +7054,9 @@ router.post(
                 source: __result.source,
                 reason: __compactionPlan.reason,
               };
-              emitStage(`Contexto comprimido · ${__result.coveredMessages} mensajes resumidos`, { tool: 'compact' });
+              __compactHandle.done(`Contexto comprimido · ${__result.coveredMessages} mensajes resumidos`, {
+                detail: `historial ~${turnProgressLib.fmtInt(__compactionPlan.historyTokens)} tokens → resumen ~${turnProgressLib.fmtInt(__result.meta.summaryTokens)} tokens + ${historyMessages.length} ${historyMessages.length === 1 ? 'mensaje reciente' : 'mensajes recientes'}`,
+              });
               generateLog.info('context.compacted', {
                 historyMessageCount: __result.coveredMessages,
                 tokenCount: __result.meta.summaryTokens,
@@ -6747,10 +7065,12 @@ router.post(
               });
             } else {
               generateLog.warn('context.compaction_not_applied');
+              __compactHandle.done('El contexto se mantuvo sin comprimir', { detail: '' });
             }
           }
         } catch (__compactErr) {
           generateLog.warnError('context.compaction_failed', __compactErr);
+          if (__compactHandle && __compactHandle.open) __compactHandle.fail('No pude comprimir el contexto', { detail: '' });
         }
       }
       if (__chatContextState?.contextSummary && !req._miniShortChitchat) {
@@ -7037,11 +7357,27 @@ router.post(
           tokenCount: fittedContext.totalTokens,
         });
       }
+      // The prompt size the model really receives (live progress: the model
+      // row and the agent's planning step quote it).
+      req._turnContextTokens = Number.isFinite(Number(fittedContext.totalTokens)) && Number(fittedContext.totalTokens) > 0
+        ? Math.round(Number(fittedContext.totalTokens))
+        : null;
+      if (fittedContext.droppedCount > 0) {
+        turnProgress.note('context', `Ajustando el contexto: omití ${fittedContext.droppedCount} ${fittedContext.droppedCount === 1 ? 'mensaje antiguo' : 'mensajes antiguos'}`, {
+          tool: 'compact',
+          ...(req._turnContextTokens ? { detail: `quedan ~${turnProgressLib.fmtInt(req._turnContextTokens)} tokens`, meta: { tokens: req._turnContextTokens } } : {}),
+        });
+      } else if (req._turnContextTokens) {
+        turnProgress.note('context', `Contexto listo · ~${turnProgressLib.fmtInt(req._turnContextTokens)} tokens`, {
+          tool: 'plan',
+          meta: { tokens: req._turnContextTokens },
+        });
+      }
 
       // SSE headers + flushHeaders were already sent during the early
-      // connection phase (after quota check). Just surface the resolved
-      // model name so clients can record the actual model used this turn.
-      try { res.write(`data: ${JSON.stringify({ type: 'model_resolved', model: actualModel, provider: actualProvider })}\n\n`); } catch { /* socket gone */ }
+      // connection phase (after quota check). Surface the model that will
+      // answer by its display name only — never a raw id or a transport.
+      try { res.write(`data: ${JSON.stringify({ type: 'model_resolved', label: turnProgress.modelLabel(actualModel, actualProvider) })}\n\n`); } catch { /* socket gone */ }
 
       // ─── Token-budget pre-flight (best-effort, fail-open) ─────────
       // Estimates input tokens vs the model's context window and the
@@ -7111,6 +7447,7 @@ router.post(
           });
           if (goalEscalation.created && goalEscalation.goalRunId) {
             autonomousGoalRunId = goalEscalation.goalRunId;
+            turnProgress.note('handoff', 'Tarea larga: la delego a un agente en segundo plano', { tool: 'pipeline' });
             if (cacheHandle && typeof cacheHandle.setAgentProgress === 'function') {
               cacheHandle.setAgentProgress({
                 taskId: autonomousGoalRunId,
@@ -7147,6 +7484,7 @@ router.post(
               goal: prompt,
             });
             codexRunId = codexRun.runId;
+            turnProgress.note('handoff', 'Tarea de código: iniciando el agente de programación', { tool: 'pipeline' });
             if (cacheHandle && typeof cacheHandle.setAgentProgress === 'function') {
               cacheHandle.setAgentProgress({ taskId: codexRunId, phase: 'plan', percent: 5 });
             }
@@ -7351,6 +7689,8 @@ router.post(
       // and end the SSE stream. The user's next message naturally
       // becomes the disambiguating reply, no extra wiring required.
       if (intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.question) {
+        turnProgress.settleAll();
+        turnProgress.note('clarify', 'Necesito una aclaración antes de seguir', { tool: 'plan' });
         const triageOptions = Array.isArray(intentTriageDecision.options)
           ? intentTriageDecision.options.filter(o => o && o.label)
           : [];
@@ -7464,6 +7804,8 @@ router.post(
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
       if (artifactGenerator.isArtifactRequest(prompt)) {
+        turnProgress.settleAll();
+        const __artifactHandle = turnProgress.begin('artifact', 'Diseñando la visualización interactiva', { tool: 'plan', kind: 'edit' });
         try {
           const imageDataUrls = [];
           for (const f of processedFiles) {
@@ -7493,6 +7835,11 @@ router.post(
             maxHtmlChars: 80000,
           });
           if (!art.refused && art.html) {
+            const __artifactBytes = Buffer.byteLength(String(art.html || ''), 'utf8');
+            __artifactHandle.done('Visualización lista', {
+              detail: turnProgressLib.fmtBytes(__artifactBytes),
+              meta: { bytes: __artifactBytes },
+            });
             const intro = imageDataUrls.length > 0
               ? `He preparado una visualización interactiva basada en la imagen. Usa los controles para manipular los parámetros y observar cómo cambia el resultado en tiempo real.`
               : `Aquí tienes una visualización interactiva. Usa los controles para explorar los valores.`;
@@ -7506,9 +7853,11 @@ router.post(
             if (cacheHandle) cacheHandle.complete();
           } else {
             generateLog.info('artifacts.generation_declined', { outcome: 'skipped' });
+            __artifactHandle.done('Respondo con texto en lugar de una visualización', { detail: '' });
           }
         } catch (artifactErr) {
           generateLog.warnError('artifacts.generation_failed', artifactErr);
+          __artifactHandle.fail('No pude generar la visualización; respondo con texto', { detail: '' });
         }
       }
       // Collector filled by aiService.generateStream when the model streams
@@ -7555,6 +7904,29 @@ router.post(
             planTier: __spanPlanTier,
           },
           async (span) => {
+            // The model's picker display name for the honest failure copy
+            // (owner policy: a picked model is never switched; the user is
+            // told which model and which cause). Real catalog / admin-row
+            // names only — never a prettified raw id. Memoised per model.
+            const __modelLabelCache = new Map();
+            const __turnModelLabel = async () => {
+              const key = `${actualProvider}::${actualModel}`;
+              if (!__modelLabelCache.has(key)) {
+                __modelLabelCache.set(key, require('../services/ai/picked-model-label').resolvePickedModelLabel({
+                  model: actualModel,
+                  provider: actualProvider,
+                  prisma,
+                  customCatalog: customConnection && _customResolution ? _customResolution.catalog || null : null,
+                  // The aiModel row this turn already read (every turn, not
+                  // only Custom ones): no second findFirst for admin rows.
+                  catalogRow: _customResolution ? _customResolution.catalog || null : null,
+                }).catch(() => ''));
+              }
+              return __modelLabelCache.get(key);
+            };
+            // Warm it now: resolved (usually without a DB read) by the time a
+            // failure needs it, so the lookup never delays the first byte.
+            void __turnModelLabel();
             // Set true once the agentic loop has streamed a sentinel to the
             // client; if we then fall back to the plain stream we must wipe
             // that sentinel first (aiService.generateStream only appends).
@@ -7599,8 +7971,31 @@ router.post(
               });
               let createDocRequested = false;
               try {
-                createDocRequested = require('../services/agent-runner').shouldRunAgentRunner({
+                const __agentRunner = require('../services/agent-runner');
+                // Follow-up on a document generated earlier in this chat
+                // («dale más diseño», «hazla más profesional»): without the
+                // prior-artifact bit the gate missed it, and the RLCD veto or
+                // the image gate could keep the turn off the agentic path.
+                // One indexed query, only for edit/design phrasings.
+                // The deck target is the most permissive one for the
+                // pre-check; the gate below decides with the real format.
+                let hasPriorArtifacts = false;
+                let priorArtifactFormat = null;
+                if (
+                  canPersist && chatId
+                  && (__agentRunner.isDesignUpgradeRequest(prompt, { officeTarget: 'pptx' }) || __agentRunner.isFollowupDocumentEdit(prompt))
+                ) {
+                  try {
+                    hasPriorArtifacts = await __agentRunner.hasConversationArtifacts(prisma, { userId, chatId });
+                    if (hasPriorArtifacts) {
+                      priorArtifactFormat = await __agentRunner.getConversationArtifactFormat(prisma, { userId, chatId, instruction: prompt });
+                    }
+                  } catch (_) { /* gate decides with what was read */ }
+                }
+                createDocRequested = __agentRunner.shouldRunAgentRunner({
                   files: processedFiles || [],
+                  hasPriorArtifacts,
+                  priorArtifactFormat,
                   text: prompt,
                 });
               } catch (_) { createDocRequested = false; }
@@ -7782,10 +8177,14 @@ router.post(
                   agenticCustomGptPersona = customGpt ? (masterPrompt.buildCustomGptPromptBlock(customGpt) || '') : '';
                 } catch (_) { agenticCustomGptPersona = ''; }
                 __agenticDidStream = true;
+                // Hand-off: the pipeline rows are settled; the loop reports
+                // its own model calls as `agent_model` rows.
+                turnProgress.settleAll();
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
+                  progress: turnProgress,
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   preferenceBlock: feedbackBlock || '',
@@ -7895,27 +8294,58 @@ router.post(
                 // it and re-generating via the plain stream.
                 const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult);
                 if (!__agenticOk && agenticResult && agenticResult.stoppedReason) {
-                  const degradedClassified = classifyGenerateError({
-                    message: agenticResult.finalAnswer || agenticResult.error || agenticResult.stoppedReason,
-                    code: agenticResult.stoppedReason,
+                  // One decision for every degraded run (agentic-degrade-policy):
+                  // a dry / rejected / rate-limited provider closes honestly
+                  // with the model's name and the exact cause instead of
+                  // re-asking the same provider through the plain stream; a
+                  // step timeout regenerates only for plain turns within
+                  // budget; a user Stop never regenerates. A socket merely
+                  // detached keeps going (the turn is persisted for replay).
+                  const __degrade = require('../services/ai/agentic-degrade-policy').decideAgenticDegrade({
+                    stoppedReason: agenticResult.stoppedReason,
+                    finalAnswer: agenticResult.finalAnswer,
+                    error: agenticResult.error,
+                    modelError: agenticResult.modelError || null,
+                    elapsedMs: Date.now() - __generateStartedAt,
+                    clientGone: res.writableEnded === true || res._siraGenerateSseClosed === true,
+                    // The user's Stop (POST /stop-stream → controller.abort()):
+                    // a Stop that lands while the model call is in flight ends
+                    // the loop with «model_error: Request was aborted.», which
+                    // must keep the trace and never regenerate.
+                    userStopped: Boolean(signal && signal.aborted),
+                    hasAttachments: (Array.isArray(processedFiles) && processedFiles.length > 0)
+                      || __chatGeneratedRefs.length > 0,
+                    modelLabel: await __turnModelLabel(),
                   });
-                  if (
-                    degradedClassified.code === 'E_TIMEOUT'
-                    || degradedClassified.code === 'E_GITHUB_CONNECT'
-                    || degradedClassified.code === 'E_SANDBOX'
-                  ) {
+                  if (__degrade.action === 'none') {
+                    // Stop / abort: what WAS generated stays; no regeneration.
+                    if (agenticResult.agentRun) req._agentRun = agenticResult.agentRun;
+                    generateLog.warn('agentic.degraded', { outcome: 'aborted', reasonCode: __degrade.reasonCode });
+                    if (__degrade.message) return __degrade.message;
+                    return typeof agenticResult.finalAnswer === 'string' ? agenticResult.finalAnswer : '';
+                  }
+                  if (__degrade.action === 'honest_close') {
                     generateLog.warn('agentic.degraded_honest', {
-                      outcome: degradedClassified.code,
-                      reason: agenticResult.stoppedReason,
+                      outcome: 'degraded',
+                      reasonCode: __degrade.reasonCode,
+                      ...(__degrade.status ? { status: __degrade.status } : {}),
                     });
+                    if (__turnTap && __degrade.failureReason) {
+                      try { __turnTap.set({ failureReason: __degrade.failureReason }); } catch (_) { /* advisory */ }
+                    }
                     if (!res.writableEnded && !res._siraGenerateSseClosed) {
                       closeGenerateSseWithError(res, {
-                        message: degradedClassified.message,
-                        code: degradedClassified.code,
+                        message: __degrade.message,
+                        code: __degrade.code,
                         recovered: false,
+                        // The client honours the wait the copy announced
+                        // and never auto-retries a cause a retry can't fix.
+                        ...(__degrade.retryable === false ? { retryable: false } : {}),
+                        ...(__degrade.retryAfterSeconds ? { retryAfterSeconds: __degrade.retryAfterSeconds } : {}),
+                        ...(__degrade.failureReason ? { failureReason: __degrade.failureReason } : {}),
                       });
                     }
-                    return degradedClassified.message;
+                    return __degrade.message;
                   }
                 }
                 if (__agenticOk) {
@@ -7978,11 +8408,14 @@ router.post(
             }
 
             {
-              const __imageCount = Array.isArray(processedFiles)
-                ? processedFiles.filter((f) => f && typeof f.mimeType === 'string' && f.mimeType.startsWith('image/')).length
+              // Hand-off to the model: pipeline rows are settled; the model
+              // row begins on the first real attempt (modelSink) and says
+              // «Conectando con <modelo>», the wait, retries and first byte.
+              turnProgress.settleAll();
+              const __imageCount = Array.isArray(filesForVision)
+                ? filesForVision.filter((f) => f && typeof f.mimeType === 'string' && f.mimeType.startsWith('image/')).length
                 : 0;
-              if (__imageCount > 0) emitStage(__imageCount === 1 ? 'Analizando la imagen' : `Analizando ${__imageCount} imágenes`, { tool: 'vision' });
-              emitStage('Pensando', { tool: 'model' });
+              if (__imageCount > 0) turnProgress.begin('vision', __imageCount === 1 ? 'Preparando la imagen para el modelo' : `Preparando ${__imageCount} imágenes para el modelo`, { tool: 'vision', kind: 'image', meta: { files: __imageCount } });
             }
             const out = await aiService.generateStream({
               provider: actualProvider,
@@ -8002,6 +8435,23 @@ router.post(
               skipDoneSentinel: true,
               reasoningSink: __reasoningSink,
               onModelFailover: (info) => { __modelFailover = info || null; },
+              // The picker's display name for the honest failure copy
+              // («<modelo> no pudo responder: <causa>…»). A getter: ai-service
+              // awaits it only on failure, so the lookup never sits on the
+              // first-byte path.
+              modelLabel: __turnModelLabel,
+              onProgress: turnProgress.modelSink({
+                contextTokens: req._turnContextTokens || null,
+                // The model that answers, by the name the picker shows for it
+                // (FlashGPT, a user's own connection…). The reasoning level
+                // comes from ai-service: only what the provider really gets.
+                modelId: actualModel,
+                modelLabel: turnProgressLib.displayNameFor(actualModel, actualProvider)
+                  || (customConnection && _customResolution && _customResolution.catalog
+                    && String(_customResolution.catalog.name || '').trim().toLowerCase() === String(actualModel || '').trim().toLowerCase()
+                    ? String(_customResolution.catalog.displayName || '')
+                    : ''),
+              }),
               maxOutputTokens: req._trivialTurn
                 ? Math.min(256, actualMaxOutputTokens || 256)
                 : actualMaxOutputTokens,
@@ -8034,7 +8484,35 @@ router.post(
                     partial: Boolean(info && info.partial),
                   });
                 } catch (_) { /* implicit signal is advisory */ }
+                // The exact cause the user was told (sin saldo / clave
+                // rechazada / no responde / límite por minuto…), for the
+                // turn-failure report and the operational log.
+                try {
+                  const failure = {
+                    failureReason: info && info.failureReason ? String(info.failureReason) : null,
+                    failureProvider: info && info.failureProvider ? String(info.failureProvider) : null,
+                    retryAfterSeconds: info && Number.isFinite(Number(info.retryAfterSeconds)) && info.retryAfterSeconds != null
+                      ? Number(info.retryAfterSeconds)
+                      : null,
+                  };
+                  if (failure.failureReason || failure.failureProvider) {
+                    if (__turnTap) __turnTap.set(failure);
+                    generateLog.warn('provider.failure_cause', {
+                      failureReason: failure.failureReason || 'unknown',
+                      failureProvider: failure.failureProvider ? failure.failureProvider.toLowerCase() : 'unknown',
+                      ...(failure.retryAfterSeconds != null ? { retryAfterSeconds: failure.retryAfterSeconds } : {}),
+                    });
+                  }
+                } catch (_) { /* advisory */ }
               },
+            }).catch((__streamErr) => {
+              // The stream threw before the images reached the model: the
+              // «Preparando la imagen…» row never says it was ready.
+              try {
+                const __visionRow = turnProgress.openHandle('vision');
+                if (__visionRow) __visionRow.fail('La imagen no llegó al modelo', { detail: '' });
+              } catch (_) { /* advisory */ }
+              throw __streamErr;
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't
@@ -8133,6 +8611,14 @@ router.post(
             processedFiles,
           })
         ) {
+          const __imageOnlyTurn = processedFiles.every((f) => isImageFileRecord(f));
+          const __firstDocName = (processedFiles.find((f) => f && !isImageFileRecord(f)) || {}).originalName
+            || (processedFiles.find((f) => f && !isImageFileRecord(f)) || {}).name || '';
+          const __rereadHandle = turnProgress.begin('post', __imageOnlyTurn
+            ? 'Volviendo a mirar la imagen porque la respuesta no la usó'
+            : (__firstDocName
+              ? `Releyendo «${String(__firstDocName).slice(0, 60)}» porque la respuesta no lo usó`
+              : 'Releyendo el archivo porque la respuesta no lo usó'), { tool: 'read_file', kind: 'document' });
           try {
             const recovered = await chatAttachmentRecovery.recoverChatAttachmentResponse({
               prisma,
@@ -8151,7 +8637,10 @@ router.post(
               /\b(?:solo\s+(?:el\s+)?n[uú]mero|solo\s+una\s+palabra|una\s+sola\s+palabra|one\s+word|only\s+the\s+(?:number|word))\b/i.test(prompt)
               || processedFiles.some((f) => isImageFileRecord(f))
             ) && cleanRecovered.length >= 1;
-            if (cleanRecovered && (cleanRecovered.length >= 40 || acceptShortRecovered)) {
+            const __rereadApplied = Boolean(cleanRecovered && (cleanRecovered.length >= 40 || acceptShortRecovered));
+            // Settled before the replacement text reaches the client.
+            __rereadHandle.done(__rereadApplied ? 'Respuesta rehecha con el contenido del archivo' : 'Se mantuvo la respuesta', { detail: '' });
+            if (__rereadApplied) {
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
               }
@@ -8160,6 +8649,7 @@ router.post(
             }
           } catch (recoveryErr) {
             generateLog.warnError('recovery.attachment_failed', recoveryErr);
+            if (__rereadHandle.open) __rereadHandle.fail('No pude releer el archivo', { detail: '' });
           }
         }
 
@@ -8299,7 +8789,25 @@ router.post(
                   }),
                 });
                 if (__sources.length) {
-                  const __jf = await jevFaith.checkAnswer({ question: prompt, answer: fullResponseContent, sources: __sources, language: (langResolution && langResolution.language) || 'es' });
+                  // The judge only checks answers of ≥120 chars (checkAnswer
+                  // returns null below that): no row claims a check that
+                  // never runs.
+                  const __faithHandle = String(fullResponseContent || '').trim().length >= 120
+                    ? turnProgress.begin('post', 'Comprobando que la respuesta esté respaldada por las fuentes', { tool: 'verify', kind: 'check' })
+                    : null;
+                  let __jf = null;
+                  try {
+                    __jf = await jevFaith.checkAnswer({ question: prompt, answer: fullResponseContent, sources: __sources, language: (langResolution && langResolution.language) || 'es' });
+                  } finally {
+                    if (__faithHandle) {
+                      const __support = __jf && ({ high: 'alto', low: 'bajo', unclear: 'no concluyente' })[String(__jf.verdict || '')];
+                      if (__support) {
+                        __faithHandle.done('Respaldo en las fuentes comprobado', { detail: `Respaldo: ${__support}` });
+                      } else {
+                        __faithHandle.fail('No se pudo comprobar el respaldo', { detail: '' });
+                      }
+                    }
+                  }
                   if (__jf) {
                     generateLog.info('rlcd.jev_faithfulness', { verdict: __jf.verdict, supported: __jf.supported, invented: __jf.invented, coverage: __jf.coverage, latencyMs: __jf.latencyMs });
                     if (__jf.outcome) {
@@ -8528,7 +9036,7 @@ router.post(
                 null,
                 req._agentRun || null,
                 0,
-                { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || null },
+                { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || req._turnProgress?.toMetadata({ durationMs: __firstByteAt ? __firstByteAt - __generateStartedAt : null }) || null },
               );
               if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
                 req._activeGenerateTurn.resolve(savedChat);
@@ -9040,7 +9548,7 @@ router.post(
           __reasoningSink,
           req._agentRun || null,
           0,
-          { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || null },
+          { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || req._turnProgress?.toMetadata({ durationMs: __firstByteAt ? __firstByteAt - __generateStartedAt : null }) || null },
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
@@ -9281,6 +9789,8 @@ router.post(
       }
 
       keepAlive = stopGenerateSseHeartbeat(keepAlive);
+      // Live progress: no pending progress timer outlives the turn.
+      try { req._turnProgress?.dispose(); } catch (_) { /* advisory */ }
       if (__firstByteWatchdog) {
         try { clearInterval(__firstByteWatchdog); } catch (_) {}
         __firstByteWatchdog = null;
@@ -10231,14 +10741,19 @@ router.post(
       }
     } catch (_) { /* same fail-open as /generate */ }
     if (!customConnection && !providerConnectionReady(actualProvider)) {
-      return res.status(503).json({ error: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE });
+      return res.status(503).json({
+        error: 'provider_unavailable',
+        message: await unconfiguredModelMessage({ model, provider: actualProvider }),
+        retryable: false,
+        failureReason: 'unconfigured',
+      });
     }
     const catalogEntry = modelRouter.getModel(model);
     const userPlan = req.user.plan || 'FREE';
     if (catalogEntry && !modelRouter.isPlanEligible(catalogEntry.plans, userPlan)) {
       return res.status(403).json({
         error: 'plan_does_not_include_model',
-        message: `El modelo "${catalogEntry.id}" requiere un plan ${catalogEntry.plans.join(' o ')}. Tu plan actual: ${userPlan}.`,
+        message: await planGateMessage({ model, provider: actualProvider, catalogEntry, userPlan }),
         requiredPlans: catalogEntry.plans,
         currentPlan: userPlan,
         upgradeRequired: true,
@@ -10340,11 +10855,32 @@ router.post(
       send(await deliverDocumentEdit({ result, files, persist, chatId }));
     } catch (err) {
       const cancelled = !editBudgetExceeded && (controller.signal.aborted || isAbortError(err));
+      // The model's provider failed: which model and which cause (sin saldo,
+      // clave rechazada, no responde, límite por minuto…), never a generic
+      // «inténtalo de nuevo» for a cause a retry cannot fix.
+      let providerFailure = null;
+      if (!editBudgetExceeded && !cancelled) {
+        try {
+          const bf = require('../services/ai/billing-failover');
+          const cause = bf.failureCauseFor(err);
+          if (cause) {
+            let retryAfterSeconds = null;
+            if (cause === 'rate_limit') {
+              const ms = bf.retryAfterMs(err);
+              if (Number.isFinite(ms) && ms > 0) retryAfterSeconds = Math.max(1, Math.ceil(ms / 1000));
+            }
+            const modelLabel = await pickedModelLabelForTurn({ model: actualModel, provider: actualProvider });
+            providerFailure = bf.buildFailureMessage({ modelLabel, reason: cause, retryAfterSeconds });
+          }
+        } catch (_) { providerFailure = null; }
+      }
       const content = editBudgetExceeded
         ? `La edición tardó más de ${Math.round(editBudgetMs / 60_000)} minutos y la detuve para no dejarte esperando. El documento original no se modificó; vuelve a intentarlo o divide el pedido en partes más pequeñas.`
         : cancelled
           ? 'Edición detenida. El documento original no se modificó.'
-          : 'No se pudo completar la edición del documento. El original no se modificó; inténtalo de nuevo.';
+          : providerFailure
+            ? `${providerFailure} El documento original no se modificó.`
+            : 'No se pudo completar la edición del documento. El original no se modificó; inténtalo de nuevo.';
       if (!cancelled) console.error('[ai/document-edit] failed:', editBudgetExceeded ? `time budget ${editBudgetMs} ms` : (err?.message || err));
       if (editBudgetExceeded) {
         try { turnFailures.noteTurn('provider_failure', { code: 'timeout', message: `document-edit superó ${Math.round(editBudgetMs / 1000)} s` }); } catch (_) { /* tracker optional */ }
@@ -10736,19 +11272,21 @@ function fromImageEngineProvider(provider, fallback) {
   return ENGINE_PROVIDER_TO_ROUTE_PROVIDER[String(provider || '').trim().toLowerCase()] || fallback;
 }
 
-// ── Image auth fallback ─────────────────────────────────────────────────
-// A picked image model is binding (the engine never substitutes). The one
-// exception is an OPERATOR failure: the picked provider rejects our API key
-// (401/403 / key missing). That is not a model choice the user made, so we
-// render with another active image model (preferring xAI → Gemini → fal →
-// OpenRouter) and record `substitutedFrom` on the generated file. Disable
-// with SIRAGPT_IMAGE_AUTH_FALLBACK=0.
+// ── Image auth fallback (opt-in) ────────────────────────────────────────
+// A picked image model is binding (the engine never substitutes). Owner
+// policy (Luis): a model the user picked is NEVER switched — when its
+// provider rejects our key, has no balance or forbids the model, the user is
+// told exactly which model and which cause (classifyImageGenError). An
+// operator may opt in with SIRAGPT_IMAGE_AUTH_FALLBACK=1 to render with
+// another active image model on a 401/403 / missing key (xAI → Gemini → fal →
+// OpenRouter), recording `substitutedFrom` on the generated file. Off by
+// default: the 403 regex also matches xAI's «used all credits».
 const IMAGE_AUTH_FAILURE_RE = /api key missing|invalid api key|incorrect api key|unauthorized|authentication|\b40[13]\b|forbidden|invalid_api_key/i;
 const IMAGE_FALLBACK_PROVIDER_ORDER = ['xai', 'gemini', 'fal', 'openrouter', 'openai'];
 
 function imageAuthFallbackEnabled(env = process.env) {
   const v = String(env.SIRAGPT_IMAGE_AUTH_FALLBACK ?? '').trim().toLowerCase();
-  return !(v === '0' || v === 'false' || v === 'off');
+  return v === '1' || v === 'true' || v === 'on';
 }
 
 function isImageAuthFailure(result) {
@@ -11137,6 +11675,9 @@ router.post(
       stopKeepAlive();
     });
 
+    // The picked image model's display name for the honest failure copy
+    // («<modelo> no pudo generar la imagen: <causa>…»). Never a raw id.
+    let imageModelLabel = '';
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
@@ -11225,6 +11766,9 @@ router.post(
         select: { id: true, name: true, provider: true, displayName: true, isActive: true, type: true },
       });
       const activeGrokImage = adminModel && isActiveGrokImageModel(adminModel);
+      imageModelLabel = await require('../services/ai/picked-model-label').resolvePickedModelLabel({
+        model, provider, catalogRow: adminModel || null,
+      }).catch(() => '');
       if (grokImageRequested) {
         if (!activeGrokImage) {
           return res.status(403).json({
@@ -11551,7 +12095,7 @@ router.post(
       // Classify into a clean, client-safe shape: maps provider quota/429
       // (e.g. Gemini RESOURCE_EXHAUSTED) to HTTP 429 and never echoes the raw
       // multi-KB provider JSON to the client or into a persisted chat message.
-      const classified = classifyImageGenError(error);
+      const classified = classifyImageGenError(error, { modelLabel: imageModelLabel });
       console.error('Image generation error:', classified.code, error?.status || '', classified.message);
       turnFailures.recordGenerationFailure(req, {
         kind: 'image',
@@ -11582,12 +12126,22 @@ router.post(
         if (!res.writableEnded) res.end();
         return;
       }
+      // retryable:false when re-asking cannot help (no balance, rejected
+      // key, forbidden model, no connection); the per-minute wait travels as
+      // retryAfterSeconds.
+      const imageErrorBody = {
+        error: classified.message,
+        code: classified.code,
+        ...(classified.retryable === false ? { retryable: false } : {}),
+        ...(classified.failureReason ? { failureReason: classified.failureReason } : {}),
+        ...(classified.retryAfterSeconds ? { retryAfterSeconds: classified.retryAfterSeconds } : {}),
+      };
       if (!res.headersSent) {
-        res.status(classified.httpStatus).json({ error: classified.message, code: classified.code });
+        res.status(classified.httpStatus).json(imageErrorBody);
       } else if (!res.writableEnded) {
         // Headers ya enviados como 200 (estábamos en modo keep-alive).
         // Mandamos el error en el cuerpo JSON para que el cliente lo vea.
-        res.end(JSON.stringify({ error: classified.message, code: classified.code }));
+        res.end(JSON.stringify(imageErrorBody));
       }
     }
   }
@@ -13432,11 +13986,21 @@ Every element should feel intentionally designed, polished, and premium. The use
         }
       }, 5000);
 
+      let webdevProviderFailed = false;
       try {
+        // The model's own terminal error frame (ai-service's honest «<modelo>
+        // no pudo responder: <causa>…» copy), caught from the buffer.
+        let webdevErrorFrame = null;
         const bufferedRes = {
           write(payload) {
             // Intentionally buffer provider output instead of streaming raw HTML.
             // The chat should only receive a validated, renderable artifact.
+            if (typeof payload === 'string' && payload.startsWith('data: {') && payload.includes('"type":"error"')) {
+              try {
+                const frame = JSON.parse(payload.slice(6).trim());
+                if (frame && frame.type === 'error' && frame.recovered !== true) webdevErrorFrame = frame;
+              } catch (_) { /* not a JSON frame */ }
+            }
             return typeof payload === 'string';
           }
         };
@@ -13450,69 +14014,85 @@ Every element should feel intentionally designed, polished, and premium. The use
           files: processedFiles,
           userPrompt: displayPrompt,
           qualityGuard: false,
+          // A getter: resolved only on failure, off the first-byte path.
+          modelLabel: () => require('../services/ai/picked-model-label').resolvePickedModelLabel({ model, provider, prisma }),
         });
 
-        let candidateHtml = extractDesignHtml(firstPass);
-        let quality = qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+        // The picked model could not answer: tell the user exactly which
+        // model and why (the buffered frame never reached them), and never
+        // build a site without it (no repair pass, no template fallback).
+        if (webdevErrorFrame && !signal.aborted) {
+          webdevProviderFailed = true;
+          fullResponseContent = String(webdevErrorFrame.message || webdevErrorFrame.error || '').trim();
+          closeGenerateSseWithError(res, {
+            message: fullResponseContent,
+            code: webdevErrorFrame.code || 'E_PROVIDER',
+            recovered: false,
+          });
+        }
+        if (!webdevProviderFailed) {
+          let candidateHtml = extractDesignHtml(firstPass);
+          let quality = qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
 
-        if (!candidateHtml || shouldRepairDesign(quality, 'balanced')) {
-          const fileContext = processedFiles.length
-            ? `\n\nReference files provided by the user:\n${processedFiles.map(file => `- ${file.name || 'file'} (${file.mimeType || 'unknown'})`).join('\n')}`
-            : '';
-          const designInstruction = `${displayPrompt}${fileContext}\n\nBuild a complete, visible, premium, responsive single-file website. The final answer must be a full HTML document with meaningful visible content, semantic sections, headings, responsive layout, and working vanilla-JS interactions.`;
+          if (!candidateHtml || shouldRepairDesign(quality, 'balanced')) {
+            const fileContext = processedFiles.length
+              ? `\n\nReference files provided by the user:\n${processedFiles.map(file => `- ${file.name || 'file'} (${file.mimeType || 'unknown'})`).join('\n')}`
+              : '';
+            const designInstruction = `${displayPrompt}${fileContext}\n\nBuild a complete, visible, premium, responsive single-file website. The final answer must be a full HTML document with meaningful visible content, semantic sections, headings, responsive layout, and working vanilla-JS interactions.`;
 
-          for await (const event of streamDesignGeneration(null, {
-            instruction: designInstruction,
-            kind: 'other',
-            fidelity: 'high',
-            effort: 'thorough',
-            model,
-            signal,
-          })) {
-            if (event.final) {
-              candidateHtml = event.full;
-              quality = event.quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+            for await (const event of streamDesignGeneration(null, {
+              instruction: designInstruction,
+              kind: 'other',
+              fidelity: 'high',
+              effort: 'thorough',
+              model,
+              signal,
+            })) {
+              if (event.final) {
+                candidateHtml = event.full;
+                quality = event.quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+              }
             }
           }
-        }
 
-        const finalQuality = quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
-        if (!candidateHtml || !finalQuality.passed) {
-          try {
-            const { ensureRenderableHtml } = require('../services/construir-mvp/webdev-hook');
-            const fallback = ensureRenderableHtml(candidateHtml, displayPrompt);
-            if (fallback && fallback.html) {
-              candidateHtml = fallback.html;
-            } else {
+          const finalQuality = quality || qualityReportForDesignHtml(candidateHtml, { kind: 'other', fidelity: 'high' });
+          if (!candidateHtml || !finalQuality.passed) {
+            try {
+              const { ensureRenderableHtml } = require('../services/construir-mvp/webdev-hook');
+              const fallback = ensureRenderableHtml(candidateHtml, displayPrompt);
+              if (fallback && fallback.html) {
+                candidateHtml = fallback.html;
+              } else {
+                const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
+                throw new Error(`Web artifact validation failed before delivery: ${failed}`);
+              }
+            } catch (fallbackErr) {
+              if (fallbackErr && /Web artifact validation failed/.test(fallbackErr.message)) throw fallbackErr;
               const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
               throw new Error(`Web artifact validation failed before delivery: ${failed}`);
             }
-          } catch (fallbackErr) {
-            if (fallbackErr && /Web artifact validation failed/.test(fallbackErr.message)) throw fallbackErr;
-            const failed = finalQuality?.issues?.map(issue => issue.id).join(', ') || 'empty_artifact';
-            throw new Error(`Web artifact validation failed before delivery: ${failed}`);
           }
-        }
 
-        fullResponseContent = `\`\`\`html\n${candidateHtml}\n\`\`\``;
-        try {
-          const { attachConstruirDeliverable } = require('../services/construir-mvp/webdev-hook');
-          const attached = await attachConstruirDeliverable({
-            prompt: displayPrompt,
-            html: candidateHtml,
-            userId,
-            chatId,
-            modelAlias: model,
-            requireSoftwareAsk: false,
-          });
-          if (attached && attached.delivery && attached.delivery.footer) {
-            fullResponseContent += `\n\n${attached.delivery.footer}`;
+          fullResponseContent = `\`\`\`html\n${candidateHtml}\n\`\`\``;
+          try {
+            const { attachConstruirDeliverable } = require('../services/construir-mvp/webdev-hook');
+            const attached = await attachConstruirDeliverable({
+              prompt: displayPrompt,
+              html: candidateHtml,
+              userId,
+              chatId,
+              modelAlias: model,
+              requireSoftwareAsk: false,
+            });
+            if (attached && attached.delivery && attached.delivery.footer) {
+              fullResponseContent += `\n\n${attached.delivery.footer}`;
+            }
+          } catch (construirErr) {
+            console.warn('[construir-mvp] webdev attach skipped:', construirErr && construirErr.message);
           }
-        } catch (construirErr) {
-          console.warn('[construir-mvp] webdev attach skipped:', construirErr && construirErr.message);
+          res.write(`data: ${JSON.stringify({ content: fullResponseContent })}\n\n`);
+          res.write(`data: [DONE]\n\n`);
         }
-        res.write(`data: ${JSON.stringify({ content: fullResponseContent })}\n\n`);
-        res.write(`data: [DONE]\n\n`);
       } catch (apiError) {
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
           console.warn('Web Dev AI Service stream aborted by client in route.');
@@ -13526,9 +14106,14 @@ Every element should feel intentionally designed, polished, and premium. The use
 
       const tokens = fullResponseContent.length + displayPrompt.length;
 
-      // Save chat and track usage in background
+      // Save chat and track usage in background. A provider failure is
+      // persisted as the honest reply but never metered.
       if (fullResponseContent.trim()) {
-        await saveChatAndTrackUsage(userId, chatId, displayPrompt, fullResponseContent, tokens, model, processedFiles);
+        await saveChatAndTrackUsage(
+          userId, chatId, displayPrompt, fullResponseContent, tokens, model, processedFiles,
+          [], false, null, null, null, null, 0,
+          { skipUsageMetering: webdevProviderFailed },
+        );
       }
 
     } catch (error) {

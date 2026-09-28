@@ -323,6 +323,11 @@ const BASE_TOOL_DEFINITIONS = [
           topic: { type: 'string', description: 'Subject of the deck, e.g. embarazo.' },
           title: { type: 'string', description: 'Title slide text.' },
           color: { type: 'string', description: 'User-requested color: name or #hex. Omit if the user did not ask for one.' },
+          theme: {
+            type: 'string',
+            enum: ['aurora', 'boardroom', 'minimal', 'editorial', 'consulting'],
+            description: 'Optional professional theme when the user asked for a style but no color: aurora (moderno, default), boardroom (ejecutivo oscuro), minimal, editorial (cálido/educativo), consulting (corporativo). Ignored when `color` is set.',
+          },
           outline: {
             type: 'array',
             description: 'Slides with REAL content from the user\'s request: [{title, bullets: ["…"]}, …].',
@@ -510,9 +515,40 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
       const title = String(args?.title || topic).trim();
       // The color is whatever the USER asked for (any name or #hex). When the
       // request has no color, fall back to a clean LIGHT theme — never pink.
-      const hex = normalizeHex(args?.color) || DEFAULT_DECK_COLOR;
+      const requestedHex = normalizeHex(args?.color);
+      let hex = requestedHex || DEFAULT_DECK_COLOR;
       const outline = normalizeOutline(args?.outline);
       const filename = String(args?.filename || `${topic.replace(/[^\w\-]+/g, '-').slice(0, 40) || 'presentacion'}.pptx`).replace(/\.pptx$/i, '') + '.pptx';
+      const plan = outline.length
+        ? outline
+        : buildSkeletonPlan({ title, topic, slides: args?.slides });
+      // Professional design system first (themes of pptx-design-system: cover,
+      // title rule, cards, KPI tiles, footer). A requested color stays the
+      // background of every slide. Any builder error falls back to the flat
+      // deck below, so a design bug never costs the user the file.
+      try {
+        const PptxGenJS = require('pptxgenjs');
+        const { resolveDesignTheme } = require('./design-theme');
+        const { buildThemedDeck } = require('./deck-builder');
+        const theme = resolveDesignTheme({ colorHex: requestedHex, themeId: requestedHex ? null : (args?.theme || 'aurora') });
+        if (theme && theme.palette) {
+          if (!requestedHex) hex = theme.palette.bg;
+          const buffer = await buildThemedDeck({ PptxGenJS, title, topic, plan, theme, colorLocked: Boolean(requestedHex) });
+          const outRel = `outputs/${filename}`;
+          await sandbox.writeFile(outRel, buffer);
+          return cap(JSON.stringify({
+            ok: true,
+            path: `/workspace/${outRel}`,
+            color: `#${hex}`,
+            defaultColor: !requestedHex,
+            theme: theme.id,
+            slides: plan.length + 1,
+            outlineProvided: outline.length > 0,
+            filename,
+          }));
+        }
+      } catch (_) { /* flat deck below */ }
+      hex = requestedHex || DEFAULT_DECK_COLOR;
       try {
         const PptxGenJS = require('pptxgenjs');
         const { INTERNAL } = require('../document-editing/pptx-adapter');
@@ -532,9 +568,6 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
         // only emit a minimal title/closing skeleton — deliberately WITHOUT
         // filler bullets ("puntos clave sobre X") so a stub can never pass for
         // real content; the prompt instructs the model to always send outline.
-        const plan = outline.length
-          ? outline
-          : buildSkeletonPlan({ title, topic, slides: args?.slides });
         const titleSlide = pptx.addSlide();
         paint(titleSlide);
         titleSlide.addText(title, {

@@ -31,6 +31,7 @@ const NUMERIC_LIMITS = Object.freeze({
   promptChars: [0, 100_000_000],
   recoveredCount: [0, 1_000_000],
   responseChars: [0, 100_000_000],
+  retryAfterSeconds: [0, 86_400],
   score: [0, 100],
   sourceCount: [0, 1_000_000],
   status: [100, 599],
@@ -74,6 +75,17 @@ const ENUM_VALUES = Object.freeze({
     'abort_err', 'aborted', 'econnrefused', 'econnreset', 'etimedout',
     'rate_limit_exceeded', 'timeout', 'unknown',
   ]),
+  // Why a provider could not answer (billing-failover.failureCauseFor) and
+  // which provider — the cause the user was told, never the provider's text.
+  failureReason: new Set([
+    'auth', 'billing', 'breaker', 'forbidden', 'rate_limit', 'reservation',
+    'unavailable', 'unconfigured', 'unfunded_memo', 'unknown',
+  ]),
+  failureProvider: new Set([
+    'anthropic', 'cerebras', 'custom', 'deepseek', 'gemini', 'google', 'groq',
+    'kimi', 'meta', 'mistral', 'openai', 'openrouter', 'sira', 'typesafe',
+    'unknown', 'xai', 'z.ai',
+  ]),
   errorName: new Set([
     'abort_error', 'aggregate_error', 'error', 'provider_request_error',
     'range_error', 'reference_error', 'syntax_error', 'timeout_error',
@@ -105,6 +117,12 @@ const ENUM_VALUES = Object.freeze({
     'disabled', 'empty_format', 'fail_open', 'missing_input', 'no_exemplars',
     'ok', 'skipped', 'below_threshold', 'extraction_thin', 'rate_capped',
     'already_honest', 'not_document', 'verbalized', 'structured', 'heuristic',
+    // Agentic degrade policy (services/ai/agentic-degrade-policy) + quota.
+    'model_error', 'step_timeout', 'provider_timeout', 'billing', 'auth',
+    'forbidden', 'unconfigured', 'breaker', 'rate_limit', 'runtime_budget',
+    'aborted', 'no_message', 'max_steps', 'invalid_tool_calls',
+    'tool_circuit_open', 'sandbox', 'github_connect', 'verification_failed',
+    'quota_exceeded',
   ]),
   resolvedLanguage: new Set([
     'ar', 'cs', 'da', 'de', 'en', 'es', 'fi', 'fr', 'he', 'hi', 'hu', 'id',
@@ -234,10 +252,12 @@ const ALLOWED_EVENTS = new Set([
   'prompt.kernel_pruning_failed',
   'prompt.short_chitchat_slimmed',
   'prompt.token_preflight_failed',
+  'provider.failure_cause',
   'public_web.grounding_unavailable',
   'public_web.usage_record_failed',
   'queue.rejected',
   'quota.attachment_exempt',
+  'quota.metering_skipped',
   'rag.operational_unavailable',
   'rag.rerank_failed',
   'rag.reranked',

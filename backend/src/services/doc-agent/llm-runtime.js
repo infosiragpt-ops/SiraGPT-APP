@@ -13,7 +13,14 @@
  * provider fails with a transport/quota/auth error. The OpenAI tool-calling
  * wire format is shared by all of them, so a run can switch providers between
  * iterations without losing the tool-call history.
+ *
+ * Every provider failure feeds the shared funding memo (billing-failover /
+ * provider-key-health) before it is rotated or rethrown: the picker shows
+ * «Sin saldo» for an empty account, and ladders start at a funded provider.
  */
+
+const billing = require('../ai/billing-failover');
+const keyHealth = require('../../utils/provider-key-health');
 
 const LADDER = Object.freeze([
   // DeepSeek native: V4 pro by default for document quality (AGENT_PRO_MODEL /
@@ -120,8 +127,19 @@ function resolveDocAgentCandidates({ model, env = process.env } = {}) {
   };
   const explicit = parseModelSpec(model || (env && env.SIRAGPT_DOC_AGENT_MODEL));
   if (explicit && explicit.model) push(ladderEntry(explicit.provider || 'OpenRouter'), explicit.model);
+  const pinned = out.length;
   for (const entry of LADDER) push(entry, null);
-  return out;
+  // Ladder rungs known to be unfunded (or with a rejected key) go last, in
+  // their original order: a run starts on a provider that can answer. They
+  // are never dropped, and the explicit model keeps its place.
+  const ladder = out.slice(pinned);
+  const unfunded = ladder.filter((c) => providerUnfunded(c.provider, env));
+  if (!unfunded.length) return out;
+  return [...out.slice(0, pinned), ...ladder.filter((c) => !unfunded.includes(c)), ...unfunded];
+}
+
+function providerUnfunded(provider, env) {
+  try { return Boolean(billing.isUnfunded(provider, env)); } catch (_) { return false; }
 }
 
 function resolveDocAgentRunCandidates({ model, env = process.env } = {}) {
@@ -162,7 +180,22 @@ function isFailoverError(err) {
     && !/abort(ed)? by (user|caller)/.test(msg);
 }
 
-function defaultCreateClient(candidate, { anthropicSdkClient = null } = {}) {
+const SDK_MAX_RETRIES_DEFAULT = 1;
+const LLM_TIMEOUT_MS_DEFAULT = 180_000;
+
+// The loop's callModelWithRetry owns retries; SDK retries on top multiplied
+// a permanent 429 into ~9 requests. 180 s fits an 8192-token document call.
+function sdkMaxRetries(env = process.env) {
+  const n = Number(env && env.SIRAGPT_DOC_AGENT_SDK_MAX_RETRIES);
+  return Number.isFinite(n) && n >= 0 ? Math.min(5, Math.floor(n)) : SDK_MAX_RETRIES_DEFAULT;
+}
+
+function llmTimeoutMs(env = process.env) {
+  const n = Number(env && env.SIRAGPT_DOC_AGENT_LLM_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 1000 ? Math.floor(n) : LLM_TIMEOUT_MS_DEFAULT;
+}
+
+function defaultCreateClient(candidate, { anthropicSdkClient = null, env = process.env } = {}) {
   if (candidate.provider === 'Anthropic') {
     const { createAnthropicStreamingClient } = require('../ai/first-party-chat-clients');
     return createAnthropicStreamingClient({
@@ -172,11 +205,20 @@ function defaultCreateClient(candidate, { anthropicSdkClient = null } = {}) {
   }
   // Lazy require: keeps this module loadable in tests without the SDK.
   const OpenAI = require('openai');
-  return new OpenAI({
+  const client = new OpenAI({
     apiKey: candidate.apiKey,
     baseURL: candidate.baseURL,
+    maxRetries: sdkMaxRetries(env),
+    timeout: llmTimeoutMs(env),
     ...(candidate.headers ? { defaultHeaders: candidate.headers } : {}),
   });
+  if (candidate.provider !== 'OpenAI') return client;
+  // GPT-5.x / o-series reject non-default sampling params; strip and retry.
+  try {
+    return require('../ai/openai-sampling-params').wrapOpenAIChatClient(client, { provider: 'OpenAI' });
+  } catch (_) {
+    return client;
+  }
 }
 
 function payloadForCandidate(payload, candidate) {
@@ -221,17 +263,137 @@ function payloadForCandidate(payload, candidate) {
   return request;
 }
 
+function isAbortLike(err, opts) {
+  if (opts && opts.signal && opts.signal.aborted) return true;
+  const name = String((err && err.name) || '');
+  const code = String((err && err.code) || '');
+  return name === 'AbortError' || name === 'APIUserAbortError' || code === 'ABORT_ERR';
+}
+
+function failureText(err) {
+  if (!err) return '';
+  const nested = err.error && typeof err.error === 'object' ? ` ${err.error.message || ''}` : '';
+  return `${err.message || ''}${nested}`;
+}
+
+// «You requested up to N tokens, but can only afford M»: the account still
+// has credit, only this reservation is too large. Memoising it would show
+// «Sin saldo» for a provider that answers smaller requests. OpenRouter's
+// wording carries both phrases («…or fewer max_tokens. … can only afford
+// 12»), so the amount decides first; a tiny allowance is an empty account.
+const AFFORDABLE_TOKENS_RE = /can only afford\s+(\d+)/i;
+const RESERVATION_HINT_RE = /fewer max_tokens/i;
+const MIN_USEFUL_AFFORDABLE_TOKENS = 1024;
+
+function isReservationSizeError(err) {
+  const text = failureText(err);
+  const match = AFFORDABLE_TOKENS_RE.exec(text);
+  if (match) return Number(match[1]) >= MIN_USEFUL_AFFORDABLE_TOKENS;
+  return RESERVATION_HINT_RE.test(text);
+}
+
+// Same rule as the runner's retry policy (native-llm isNoCreditError):
+// credit wording, never a quota window that reopens within the minute
+// («limit: 10 per minute… retry in 29s» is a rate limit, not «Sin saldo»).
+function isNoCreditFailure(err) {
+  try {
+    return require('../agent-runner/native-llm').isNoCreditError(err);
+  } catch (_) {
+    return billing.isBillingError(err);
+  }
+}
+
+const INVALID_KEY_TEXT_RE = /invalid[_ ]api[_ ]key|incorrect api key|api key not valid/i;
+
+/**
+ * Content-free cause of a provider failure: 'billing' (empty account),
+ * 'reservation' (credit left, but not for a reply this large), 'auth',
+ * 'forbidden', 'rate_limit', 'unavailable' or 'other'.
+ */
+function classifyProviderFailure(err) {
+  const status = errorStatus(err);
+  const text = failureText(err);
+  if (billing.isBillingError(err) && isNoCreditFailure(err)) {
+    return isReservationSizeError(err) ? 'reservation' : 'billing';
+  }
+  if (status === 401 || INVALID_KEY_TEXT_RE.test(text) || /authentication_error|authentication failed/i.test(text)) return 'auth';
+  if (status === 403) return 'forbidden';
+  if (status === 429) return 'rate_limit';
+  if ((status !== null && (status >= 500 || status === 408)) || (status === null && isFailoverError(err))) return 'unavailable';
+  return 'other';
+}
+
+/**
+ * Feed the shared memo from a provider failure: an empty account →
+ * billing-failover (the picker shows «Sin saldo», ladders skip it); a
+ * rejected key → provider-key-health. A plain 403 (model not enabled for
+ * this key) is not a dead key: embeddings/vision ladders keep using it.
+ * Aborts, reservation-size 402s, per-minute quota windows and transient
+ * faults record nothing.
+ *
+ * DeepSeek direct is special: with an OpenRouter key the chat answers the
+ * same DeepSeek model through OpenRouter (routes/ai.js wrapDeepSeekClient),
+ * so «Sin saldo» on the picker would be false. Only the direct key is
+ * benched (key health, reason billing): unpinned ladders start elsewhere.
+ * Never throws.
+ */
+function noteLlmProviderFailure(provider, apiKey, err, env = process.env) {
+  try {
+    if (!provider || !err || isAbortLike(err)) return;
+    if (billing.isBillingError(err)) {
+      if (!isNoCreditFailure(err) || isReservationSizeError(err)) return;
+      if (billing.normProvider(provider) === 'deepseek' && billing.currentKeyFor('OpenRouter', env)) {
+        if (apiKey) keyHealth.markRejected('deepseek', apiKey, err, env, { reason: 'billing' });
+        return;
+      }
+      billing.markOutOfCredit(provider, err, env);
+      return;
+    }
+    const forbiddenOnly = errorStatus(err) === 403 && !INVALID_KEY_TEXT_RE.test(failureText(err));
+    if (apiKey && !forbiddenOnly && keyHealth.isInvalidKeyError(err)) {
+      keyHealth.markRejected(String(provider).toLowerCase(), apiKey, err, env, { reason: 'auth' });
+    }
+  } catch (_) { /* the memo is advisory */ }
+}
+
+// The Retry-After hint of a rate limit, from headers or Gemini's "retry in 29s".
+function retryAfterHintMs(err) {
+  try {
+    const fromHeaders = require('../agent-runner/native-llm').retryAfterMsFromError(err);
+    if (fromHeaders != null) return fromHeaders;
+  } catch (_) { /* optional */ }
+  const match = /retry in\s+(\d+(?:\.\d+)?)\s*s/i.exec(failureText(err));
+  return match ? Math.ceil(Number(match[1]) * 1000) : null;
+}
+
+/**
+ * Content-free summary of the last provider failure, so callers that only
+ * see a wrapped error can tell the user the real cause. Never carries the
+ * provider's message text.
+ */
+function describeFailure(candidate, err) {
+  const cause = classifyProviderFailure(err);
+  const retryAfterMs = cause === 'rate_limit' ? retryAfterHintMs(err) : null;
+  return {
+    provider: candidate.provider,
+    status: errorStatus(err),
+    cause,
+    ...(Number.isFinite(retryAfterMs) ? { retryAfterMs } : {}),
+  };
+}
+
 /**
  * OpenAI-compatible façade (`chat.completions.create`) over an ordered list of
  * candidates. A candidate that fails with a failover-class error is moved to
  * the end for the rest of this client's life (sticky success: once a provider
  * answered, later iterations keep using it). Non-failover errors propagate.
  */
-function createFailoverClient(candidates, { createClient = defaultCreateClient, onFailover = () => {} } = {}) {
+function createFailoverClient(candidates, { createClient = defaultCreateClient, onFailover = () => {}, env = process.env } = {}) {
   const order = Array.isArray(candidates) ? candidates.filter(Boolean).slice() : [];
   if (!order.length) throw new Error('doc-agent: no LLM provider configured (DEEPSEEK_API_KEY, MODEL_API_KEY, GEMINI_API_KEY, XAI_API_KEY, OPENROUTER_API_KEY or OPENAI_API_KEY)');
   const clients = new Map();
   const attemptsLog = [];
+  let lastFailure = null;
   const clientFor = (candidate) => {
     if (!clients.has(candidate.provider)) clients.set(candidate.provider, createClient(candidate));
     return clients.get(candidate.provider);
@@ -245,9 +407,15 @@ function createFailoverClient(candidates, { createClient = defaultCreateClient, 
           payloadForCandidate(payload, candidate),
           opts,
         );
+        lastFailure = null;
         return response;
       } catch (err) {
         lastError = err;
+        if (!isAbortLike(err, opts)) {
+          // Before any wrapper replaces the error: the memo learns the real cause.
+          noteLlmProviderFailure(candidate.provider, candidate.apiKey, err, env);
+          lastFailure = describeFailure(candidate, err);
+        }
         const last = order.length === 1 || i === order.length - 1;
         if (!isFailoverError(err) || last || (opts && opts.signal && opts.signal.aborted)) throw err;
         order.push(order.shift());
@@ -260,7 +428,12 @@ function createFailoverClient(candidates, { createClient = defaultCreateClient, 
   };
   return {
     chat: { completions: { create } },
-    describe: () => ({ provider: order[0].provider, model: order[0].model, failovers: attemptsLog.slice() }),
+    describe: () => ({
+      provider: order[0].provider,
+      model: order[0].model,
+      failovers: attemptsLog.slice(),
+      ...(lastFailure ? { lastFailure: { ...lastFailure } } : {}),
+    }),
     candidates: () => order.map((c) => ({ provider: c.provider, model: c.model })),
   };
 }
@@ -273,6 +446,8 @@ module.exports = {
   resolveDocAgentCandidates,
   resolveDocAgentRunCandidates,
   isFailoverError,
+  classifyProviderFailure,
+  noteLlmProviderFailure,
   createFailoverClient,
   defaultCreateClient,
 };

@@ -179,3 +179,50 @@ test('ppts counts as a slide noun', () => {
   assert.equal(intent.count, 2);
 });
 
+
+// Incident 2026-09-28: «agregarle UN poco más de diseño» was read as «add one
+// slide» and the quick editor appended a filler «— ampliación» slide.
+describe('office user-intent parser — design requests are not «add N units»', () => {
+  test('the incident prompt is not an add_slides intent', () => {
+    const prompt = 'en la misma ppt ## gestion-administrativa-sostenibilidad.pptx puede agregarle un poco mas de diseño';
+    assert.equal(parseOfficeUserIntent(prompt, { format: 'pptx' }), null);
+    assert.equal(parseAddSlidesIntent(prompt), null);
+    assert.equal(parseStructuralAppendIntent(prompt, { format: 'pptx' }), null);
+  });
+
+  test('other design objects of an add verb are not units either', () => {
+    for (const prompt of [
+      'ponle un toque profesional a la misma ppt',
+      'añade más color a la misma ppt',
+      'agrégale más estilo a esta misma presentación',
+      'en este mismo word agrega un poco más de formato',
+    ]) {
+      assert.equal(parseOfficeUserIntent(prompt, { format: 'pptx' }), null, prompt);
+    }
+  });
+
+  test('real unit requests keep their count', () => {
+    const one = parseOfficeUserIntent('agrega una diapositiva de conclusiones', { format: 'pptx' });
+    assert.equal(one.kind, 'add_slides');
+    assert.equal(one.count, 1);
+    const two = parseOfficeUserIntent('agrega 2 láminas', { format: 'pptx' });
+    assert.equal(two.kind, 'add_slides');
+    assert.equal(two.count, 2);
+    assert.equal(parseOfficeUserIntent('agrega dos más en la misma ppt', { format: 'pptx' }).count, 2);
+    assert.equal(parseOfficeUserIntent('agrégale una diapositiva de conclusiones a la ppt', { format: 'pptx' }).count, 1);
+    assert.equal(parseOfficeUserIntent('agrega una diapositiva con más diseño', { format: 'pptx' }).count, 1);
+  });
+
+  test('elliptical «una más» on the same deck still adds ONE slide', () => {
+    for (const prompt of [
+      'agrega una más a la misma ppt',
+      'en la misma ppt agrega una más sobre costos',
+      'en la misma presentación agrega una más al final',
+      'en la misma ppt agrégale una de conclusiones',
+    ]) {
+      const intent = parseOfficeUserIntent(prompt, { format: 'pptx' });
+      assert.equal(intent && intent.kind, 'add_slides', prompt);
+      assert.equal(intent.count, 1, prompt);
+    }
+  });
+});

@@ -50,6 +50,10 @@ const {
 } = require('../services/free-ia-fallback-quota');
 const { sha256Hex } = require('../utils/canonical-json');
 
+// The user's own balance cannot cover the action (not a provider failure).
+const INSUFFICIENT_CREDITS_MESSAGE =
+  'Te quedaste sin créditos para esta acción. Revisa tu plan para continuar.';
+
 function pickIdempotencyKey(req) {
   return (
     req.get?.('Idempotency-Key') ||
@@ -517,8 +521,13 @@ function chargeCredits(spec = {}) {
         if (result.code === 'INSUFFICIENT') {
           const fallback = allowFreeIaFallback ? resolveFreeIaFallback() : null;
           if (!fallback) {
+            // `error` stays 'insufficient credits' (lib/code-chat-blocker.ts
+            // matches it); code/retryable/message make it self-explaining.
             return res.status(402).json({
               error: 'insufficient credits',
+              code: 'insufficient_credits',
+              retryable: false,
+              message: INSUFFICIENT_CREDITS_MESSAGE,
               feature,
               costRequested: String(amount),
             });
@@ -662,3 +671,4 @@ module.exports.deterministicRefundKey = deterministicRefundKey;
 module.exports.readCachedResponse = readCachedResponse;
 module.exports.startIdempotencyLeaseHeartbeat = startIdempotencyLeaseHeartbeat;
 module.exports.verifyIdempotentLeaseOwnership = verifyIdempotentLeaseOwnership;
+module.exports.INSUFFICIENT_CREDITS_MESSAGE = INSUFFICIENT_CREDITS_MESSAGE;

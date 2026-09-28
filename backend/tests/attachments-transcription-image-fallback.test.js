@@ -68,6 +68,10 @@ test("source pins: image auth fallback in the route, OCR budget, vision auth mem
   assert.match(ai, /function isImageAuthFailure\(result\)/);
   assert.match(ai, /async function pickImageAuthFallback\(/);
   assert.match(ai, /isImageAuthFailure\(result\) && imageAuthFallbackEnabled\(\)/);
+  // Owner policy: a picked image model is never switched unless the operator
+  // opts in (SIRAGPT_IMAGE_AUTH_FALLBACK=1); the default is off.
+  const gate = ai.slice(ai.indexOf("function imageAuthFallbackEnabled("), ai.indexOf("function isImageAuthFailure("));
+  assert.match(gate, /return v === '1' \|\| v === 'true' \|\| v === 'on';/);
   assert.match(ai, /substitutedFrom: imageResult\.substitutedFrom \|\| null/);
   const ocr = read("src/services/ocr-engine.js");
   assert.match(ocr, /SIRAGPT_OCR_IMAGE_BUDGET_MS/);

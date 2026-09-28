@@ -73,16 +73,26 @@ Step identity prefers `step_id`.
 - `ThinkingStatusLoader` — in-progress always mounts `PensandoBars` +
   the kit Spanish label. Terminal states keep check / X.
 - `ClaudeThinkingTimeline` header and `kind` `loader|sunburst` → the
-  same glyph. Since 2026-09-18 the live Pensando glyph is the **Claude asterisk**
-  (`components/claude-asterisk.tsx`, think accent `--think-accent` #D97757, slow
-  rotation + breathing, frozen under reduced motion); the celeste 3×3 dot matrix
-  and the old sunburst are **retired** for live Pensando. Collapsed rows read
-  «Pensó durante N s» on every flow (chat, agent loop, agentic steps).
+  same glyph. The live Pensando glyph is the **ThinkingCore**
+  (`components/brand/thinking-core.tsx` via `components/claude-asterisk.tsx`),
+  drawn in the monochrome think accent: `--think-accent` is the foreground
+  (black on light, white on dark; the clover green stays the brand logo only),
+  frozen to a soft pulse under reduced motion; the celeste 3×3 dot matrix
+  and the old sunburst are **retired** for live Pensando. Labels are muted
+  neutral greys (`--think-text`, `--think-dim`). Collapsed rows read
+  «Pensó durante N s · N pasos» on every flow (chat, agent loop, agentic steps).
+- Live progress (stage v3): the header shows the **real current step**
+  («Leyendo «contrato.pdf»», «Buscando en la web · “…”») with its own
+  seconds and a one-line note; finished steps get a check and their duration.
+  The rotating phrases are only the fallback for a bare «Pensando…». While
+  the answer streams the trace folds into one line («Redactando la respuesta ·
+  420 palabras»).
 - `ThinkingTrace` / `AgentTrace` / `ThinkingPlaceholder` emit
   `kind: "loader"` + `loaderState`. They never force `kind: "sunburst"`.
-- RunTrace live header uses the **kit label** (`Generando presentación…`
-  / `Pensando…`), not the active step string, so the header and the
-  step list never repeat the same copy.
+- RunTrace live header uses the **real step label** when the step carries
+  one (the step then leaves the rail list, so the copy is never repeated);
+  a bare «Pensando» keeps the kit label (`Generando presentación…` /
+  `Pensando…`).
 - English tool tokens (`create presentation · render preview`) are
   mapped to Spanish via `humanizeToolDetail`.
 - `/chat` assistant thinking surfaces use `ThinkingStatusLoader`.

@@ -18,7 +18,8 @@
  *     the actual turn needs a few hundred tokens. 1500 still fits a tool
  *     call plus arguments.
  *   - isTransientLlmError / backoffMs / sleep: bounded retry (LLM_RETRY_MAX=3)
- *     for 429/network blips; never retry 402 (permanent) or client errors.
+ *     for 429/network blips; never retry 402 (permanent), a rejected key or
+ *     a «no credit» 429 (only per-minute quota windows are retried).
  */
 
 const OPENAI_TIMEOUT_MS = Number.parseInt(process.env.AGENT_TASK_LLM_TIMEOUT_MS || '', 10) || 60_000;
@@ -155,9 +156,30 @@ function statusOf(err) {
   return Number(err?.status || err?.statusCode || err?.response?.status) || 0;
 }
 
+// A quota window that reopens within seconds/minutes (Gemini
+// RESOURCE_EXHAUSTED, "retry in 29s", per-minute token limits): retryable
+// even when the wording says "quota".
+const SHORT_QUOTA_WINDOW_RE = /retry in \d|per[ -]?minute|requests per|tokens per|RESOURCE_EXHAUSTED/i;
+
+function errorText(err) {
+  const nested = err && err.error && typeof err.error === 'object'
+    ? `${err.error.type || ''} ${err.error.code || ''} ${err.error.message || ''}`
+    : '';
+  return `${(err && err.code) || ''} ${(err && err.type) || ''} ${(err && err.message) || ''} ${nested}`;
+}
+
+/** «The account has no credit» (billing-failover's classifier), never a short quota window. */
+function isNoCreditError(err) {
+  let billing = false;
+  try { billing = require('../ai/billing-failover').isBillingError(err); } catch (_) { billing = false; }
+  return billing && !SHORT_QUOTA_WINDOW_RE.test(errorText(err));
+}
+
 function isTransientLlmError(err) {
   if (!err) return false;
   const status = statusOf(err);
+  if (status === 401) return false;            // rejected key — a retry cannot fix it
+  if (isNoCreditError(err)) return false;      // empty account — retrying only wastes calls
   if (status === 429) return true;             // rate limited — retry with backoff
   if (status >= 500 && status <= 599) return true;
   if (status >= 400 && status < 500) return false; // permanent client errors
@@ -188,11 +210,50 @@ function sleep(ms, signal) {
   });
 }
 
+const RETRY_AFTER_CAP_MS = 8000;
+const RATE_LIMIT_BASE_MS = 1500;
+
+function headerValue(headers, name) {
+  if (!headers) return null;
+  try {
+    if (typeof headers.get === 'function') return headers.get(name);
+  } catch (_) { return null; }
+  const direct = headers[name];
+  if (direct != null) return direct;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+  return key ? headers[key] : null;
+}
+
+/** Provider wait hint from `retry-after-ms` / `retry-after` headers, in ms (null when absent). */
+function retryAfterMsFromError(err) {
+  const headers = err && (err.headers || (err.response && err.response.headers));
+  const rawMs = headerValue(headers, 'retry-after-ms');
+  if (rawMs != null && rawMs !== '') {
+    const ms = Number(rawMs);
+    if (Number.isFinite(ms) && ms >= 0) return ms;
+  }
+  const raw = headerValue(headers, 'retry-after');
+  if (raw == null || raw === '') return null;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return secs * 1000;
+  const at = Date.parse(String(raw));
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
+}
+
 /**
  * Bounded retry wrapper around a chat.completions.create-style thunk.
  * Retries only transient failures (429/5xx/network), never 402/4xx.
+ * `shouldRetry` narrows that decision (default isTransientLlmError);
+ * `retryAfterMs(err)` supplies a wait hint when the error lost its headers.
+ * A provider hint is honoured up to 8 s; a 429 without one waits 1.5 s, 3 s…
  */
-async function callModelWithRetry(thunk, { signal, retryMax = LLM_RETRY_MAX, onRetry } = {}) {
+async function callModelWithRetry(thunk, {
+  signal,
+  retryMax = LLM_RETRY_MAX,
+  onRetry,
+  shouldRetry = isTransientLlmError,
+  retryAfterMs = null,
+} = {}) {
   let lastErr;
   for (let attempt = 0; attempt < Math.max(1, retryMax); attempt += 1) {
     if (signal?.aborted) { const e = new Error('aborted'); e.aborted = true; throw e; }
@@ -201,12 +262,19 @@ async function callModelWithRetry(thunk, { signal, retryMax = LLM_RETRY_MAX, onR
     } catch (err) {
       lastErr = err;
       if (signal?.aborted) throw err;
-      if (!isTransientLlmError(err)) throw err;
+      if (!shouldRetry(err)) throw err;
       if (attempt >= retryMax - 1) throw err;
       if (typeof onRetry === 'function') {
         try { onRetry({ attempt: attempt + 1, err }); } catch (_) { /* trace only */ }
       }
-      await sleep(backoffMs(attempt, { jitter: false }), signal);
+      let hinted = retryAfterMsFromError(err);
+      if (hinted == null && typeof retryAfterMs === 'function') {
+        try { hinted = retryAfterMs(err); } catch (_) { hinted = null; }
+      }
+      const delay = Number.isFinite(hinted) && hinted >= 0
+        ? Math.min(RETRY_AFTER_CAP_MS, hinted)
+        : backoffMs(attempt, { baseMs: statusOf(err) === 429 ? RATE_LIMIT_BASE_MS : 500, jitter: false });
+      await sleep(delay, signal);
     }
   }
   throw lastErr;
@@ -224,6 +292,9 @@ module.exports = {
   resolveAgentRunnerMaxTokens,
   repairToolArgs,
   isTransientLlmError,
+  isNoCreditError,
+  retryAfterMsFromError,
+  SHORT_QUOTA_WINDOW_RE,
   backoffMs,
   sleep,
   callModelWithRetry,

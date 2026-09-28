@@ -27,6 +27,10 @@
  *   - non-tool messages interleaved inside a tool-result group are deferred
  *     until the group is complete;
  *   - assistant messages with an empty `tool_calls` array lose the field.
+ *
+ * `sealToolTranscriptInPlace` applies the same repair to the runner's own
+ * array, where a pass (pruning, compaction, an early loop exit) mutated it, so
+ * the next LLM call does not re-repair a copy on every iteration.
  */
 
 const OMITTED_RESULT = '(resultado omitido: el historial fue compactado; repite la herramienta si lo necesitas)';
@@ -53,11 +57,15 @@ function orphanToUser(m) {
 
 /**
  * @param {Array<object>} messages
+ * @param {{ synthesizeMissing?: boolean, missingResultText?: string }} [opts]
+ *   `synthesizeMissing: false` leaves unanswered call ids open (the caller is
+ *   about to answer them); `missingResultText` replaces the default synthetic
+ *   body after the `[<tool>]` label.
  * @returns {{ messages: Array<object>, repaired: number, kinds: Record<string, number> }}
  *   `kinds` counts each repair: idless_tool_calls, legacy_result_bound,
  *   orphan_result, missing_result.
  */
-function normalizeToolTranscript(messages) {
+function normalizeToolTranscript(messages, { synthesizeMissing = true, missingResultText = OMITTED_RESULT } = {}) {
   const src = Array.isArray(messages) ? messages.filter(Boolean) : [];
   const out = [];
   let repaired = 0;
@@ -105,9 +113,11 @@ function normalizeToolTranscript(messages) {
         }
         j += 1;
       }
-      for (const id of pending) {
-        results.push({ role: 'tool', tool_call_id: id, content: `[${callName(m, id)}] ${OMITTED_RESULT}` });
-        fix('missing_result');
+      if (synthesizeMissing) {
+        for (const id of pending) {
+          results.push({ role: 'tool', tool_call_id: id, content: `[${callName(m, id)}] ${missingResultText || OMITTED_RESULT}` });
+          fix('missing_result');
+        }
       }
       // Keep the provider's expected order: results in call order.
       const order = new Map(ids.map((id, idx) => [id, idx]));
@@ -129,10 +139,60 @@ function normalizeToolTranscript(messages) {
   return { messages: out, repaired, kinds };
 }
 
+/**
+ * Repair the runner's own transcript in place. Kept messages stay the same
+ * objects: Gemini thought signatures and the non-enumerable Anthropic
+ * descriptors ride on them. Returns the normalize result (repaired/kinds).
+ */
+function sealToolTranscriptInPlace(messages, { synthesizeMissing = true, missingResultText } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return { repaired: 0, kinds: {} };
+  const normalized = normalizeToolTranscript(messages, {
+    synthesizeMissing,
+    ...(missingResultText ? { missingResultText } : {}),
+  });
+  if (normalized.repaired > 0) {
+    messages.length = 0;
+    for (const m of normalized.messages) messages.push(m);
+  }
+  return { repaired: normalized.repaired, kinds: normalized.kinds };
+}
+
+/**
+ * Index ranges of each tool-call unit: an assistant `tool_calls` message and
+ * the tool results that answer it (anything interleaved before the last
+ * result, such as a tool image, belongs to the unit). Pruners and compactors
+ * keep or drop a unit whole so they never leave an orphan behind.
+ * @returns {Array<{ start: number, end: number }>}
+ */
+function toolCallGroups(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const groups = [];
+  for (let i = 0; i < list.length; i += 1) {
+    const ids = new Set(callIds(list[i]));
+    if (!ids.size) continue;
+    let end = i;
+    let j = i + 1;
+    while (j < list.length && !(list[j] && list[j].role === 'assistant')) {
+      const n = list[j];
+      if (isToolMessage(n) && (!n.tool_call_id || ids.has(n.tool_call_id))) end = j;
+      j += 1;
+    }
+    groups.push({ start: i, end });
+    i = end;
+  }
+  return groups;
+}
+
 /** True for the strict-provider errors this module exists to prevent. */
 function isToolTranscriptError(err) {
   const msg = String((err && err.message) || err || '').toLowerCase();
   return /must be a response to a preceding message with 'tool_calls'|must be followed by tool messages|tool_call_id|preceding message with 'tool_calls'|no tool call with id|unexpected role 'tool'/.test(msg);
 }
 
-module.exports = { normalizeToolTranscript, isToolTranscriptError, OMITTED_RESULT };
+module.exports = {
+  normalizeToolTranscript,
+  sealToolTranscriptInPlace,
+  toolCallGroups,
+  isToolTranscriptError,
+  OMITTED_RESULT,
+};

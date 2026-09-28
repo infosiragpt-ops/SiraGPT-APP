@@ -526,7 +526,14 @@
     "toolSearching": "Buscando información",
     "toolReading": "Leyendo una fuente",
     "toolRunning": "Ejecutando código",
-    "toolUsing": "Usando {name}"
+    "toolUsing": "Usando {name}",
+    "composing": "Redactando la respuesta",
+    "composed": "Respuesta redactada",
+    "words": "{count, plural, one {{value} palabra} other {{value} palabras}}",
+    "steps": "{count, plural, one {# paso} other {# pasos}}",
+    "earlierSteps": "{count, plural, one {Ver # paso anterior} other {Ver # pasos anteriores}}",
+    "showReasoning": "Ver razonamiento",
+    "hideReasoning": "Ocultar razonamiento"
   },
   "agent": {
     "working": "Trabajando…",
@@ -545,7 +552,9 @@
     "deny": "Denegar",
     "permissionDeniedChip": "Denegado",
     "permissionError": "No se pudo enviar tu respuesta. Inténtalo de nuevo.",
-    "traceAria": "Actividad del agente"
+    "traceAria": "Actividad del agente",
+    "waitingApproval": "Esperando tu aprobación",
+    "paused": "En pausa"
   },
   "codex": {
     "timeline": {

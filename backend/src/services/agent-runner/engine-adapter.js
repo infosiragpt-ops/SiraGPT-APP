@@ -1870,6 +1870,30 @@ function estimateCompactTokens(messages) {
   return Math.ceil(bytes / 4);
 }
 
+/**
+ * How many messages from `idx` form one removable unit: an assistant
+ * tool_calls message with its results, or a contiguous run of tool messages.
+ * The caller stops when a span would reach the last message (always kept).
+ */
+function compactRemovalSpan(msgs, idx) {
+  const m = msgs[idx];
+  if (!m) return 1;
+  if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+    try {
+      const { toolCallGroups } = require('./tool-transcript');
+      const group = toolCallGroups(msgs.slice(idx))[0];
+      if (group && group.start === 0) return group.end + 1;
+    } catch (_) { /* fall back to a single message */ }
+    return 1;
+  }
+  if (m.role === 'tool') {
+    let end = idx;
+    while (end + 1 < msgs.length && msgs[end + 1] && msgs[end + 1].role === 'tool') end += 1;
+    return end - idx + 1;
+  }
+  return 1;
+}
+
 function compactUntilTokenBudget(messages, { remaining = 1500, keep = 6 } = {}) {
   let msgs = Array.isArray(messages) ? messages.slice() : [];
   const budget = Math.max(64, Number(remaining) || 1500);
@@ -1887,7 +1911,11 @@ function compactUntilTokenBudget(messages, { remaining = 1500, keep = 6 } = {}) 
         if (m && m.role !== 'system') { idx = i; break; }
       }
       if (idx < 0) break;
-      msgs.splice(idx, 1);
+      // A tool call and its results leave together: dropping one side alone
+      // leaves an orphan the next request has to repair. A unit that reaches
+      // the last message stays; the next rounds still shorten its bodies.
+      const count = compactRemovalSpan(msgs, idx);
+      if (idx + count <= msgs.length - 1) msgs.splice(idx, count);
       used = estimateCompactTokens(msgs);
     }
   }

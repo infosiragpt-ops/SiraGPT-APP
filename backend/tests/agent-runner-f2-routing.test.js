@@ -142,6 +142,31 @@ test('F2: logDocumentRouting normalizes records and never throws', () => {
   assert.equal(bare.path, 'skipped');
 });
 
+// ── Follow-up design edit of a generated deck (incident 2026-09-28) ────
+
+test('F2: the incident follow-up claims the runner on every entry that knows the chat has a document', () => {
+  const incident = 'en la misma ppt ## gestion-administrativa-sostenibilidad.pptx puede agregarle un poco mas de diseño';
+  // Chat preloop / ai.js gate / doc route: fileIds [] + prior artifact.
+  assert.equal(agentRunner.shouldRunAgentRunner({ fileIds: [], hasPriorArtifacts: true, text: incident }), true);
+  // /api/agent/task (agent-task-runner.js) calls the same gate with its own
+  // prior-artifact bit, then decides runner-only from the text alone: the
+  // named .pptx makes it runner-only, so a failure there is an honest error.
+  assert.equal(agentRunner.isRunnerOnlyDocumentTurn(incident), true);
+  // Without a document in the chat there is nothing to redesign.
+  assert.equal(agentRunner.shouldRunAgentRunner({ fileIds: [], hasPriorArtifacts: false, text: incident }), false);
+});
+
+test('F2: the ai.js createDocRequested gate knows about prior artifacts', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/routes/ai.js'), 'utf8');
+  const start = source.indexOf('let createDocRequested = false;');
+  assert.ok(start > 0);
+  const block = source.slice(start, start + 3200);
+  assert.match(block, /hasConversationArtifacts\(prisma, \{ userId, chatId \}\)/);
+  // The artifact's FORMAT decides: a prior html page is not an Office target.
+  assert.match(block, /getConversationArtifactFormat\(prisma, \{ userId, chatId, instruction: prompt \}\)/);
+  assert.match(block, /shouldRunAgentRunner\(\{[\s\S]*hasPriorArtifacts,[\s\S]*priorArtifactFormat,[\s\S]*text: prompt,[\s\S]*\}\)/);
+});
+
 // ── /api/agent/task entry (durable agent-task runner) ───────────────────
 
 function rememberEnv(keys) {

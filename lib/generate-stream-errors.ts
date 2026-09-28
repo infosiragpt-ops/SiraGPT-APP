@@ -3,25 +3,35 @@
  *
  * Terminal (stop Pensando, no retry budget, no persist-poll):
  *   empty-body 503, JSON connection_unavailable, JSON provider_unavailable,
- *   other 4xx except 429 / 408 / retryable 409 / csrf_invalid.
+ *   429 quota_exceeded (the user's plan), any `retryable: false`, and other
+ *   4xx except 429 / 408 / retryable 409 / csrf_invalid.
  *
  * Retryable (CSRF/cookie reconnect + provider budget):
- *   429, 408, retryable 409, 5xx that is not a dead connection,
+ *   429 rate limits, 408, retryable 409, 5xx that is not a dead connection,
  *   first-byte transport miss (Failed to fetch), mid-stream resume
  *   with a cursor. csrf_invalid is force-refreshed once by
  *   authenticatedFetch and must not consume this budget.
+ *
+ * The kind of every failure (and its Spanish copy) comes from
+ * lib/generate-retry-policy.ts; this module keeps the HTTP-shaped helpers.
  */
 
-export const CONNECTION_UNAVAILABLE_MESSAGE = "Conexión no disponible"
+import {
+  CONNECTION_UNAVAILABLE_MESSAGE,
+  PROVIDER_UNAVAILABLE_MESSAGE,
+  classifyGenerateFailure,
+  type GenerateFailureDecision,
+  type GenerateFailureKind,
+} from "./generate-retry-policy"
 
-export const PROVIDER_UNAVAILABLE_MESSAGE =
-  "Este modelo no está disponible ahora. No cambié a otro modelo. Reintenta, elige otro en el selector o reconecta el proveedor en Ajustes."
+export { CONNECTION_UNAVAILABLE_MESSAGE, PROVIDER_UNAVAILABLE_MESSAGE }
 
 type GenerateErrorDetails = {
   error?: unknown
   message?: unknown
   code?: unknown
   retryable?: unknown
+  upgradeRequired?: unknown
 } | null | undefined
 
 function detailText(details: GenerateErrorDetails): string {
@@ -54,17 +64,31 @@ export function isDeadGenerateConnection(
   return payload.length === 0
 }
 
+/** Policy decision for one HTTP failure of /api/ai/generate. */
+export function classifyGenerateHttpFailure(
+  status: number,
+  details?: GenerateErrorDetails,
+  retryAfterMs?: number | null,
+): GenerateFailureDecision {
+  return classifyGenerateFailure({
+    status,
+    code: details?.code,
+    error: details?.error,
+    message: details?.message,
+    retryable: details?.retryable,
+    retryAfterMs: retryAfterMs ?? null,
+    upgradeRequired: details?.upgradeRequired,
+  })
+}
+
 export function isGenerateHttpTerminal(
   status: number,
   details?: GenerateErrorDetails,
 ): boolean {
   if (!Number.isFinite(status) || status < 400) return false
   if (isDeadGenerateConnection(status, details)) return true
-  if (status === 429 || status === 408) return false
-  if (status === 409 && details?.retryable === true) return false
   if (isCsrfInvalidPayload(details)) return false
-  if (status >= 500) return false
-  return true
+  return !classifyGenerateHttpFailure(status, details).retryable
 }
 
 export function shouldRetryGenerateHttp(
@@ -83,57 +107,43 @@ export function shouldRetryGenerateHttp(
   const attempt = options.attempt ?? 1
   const maxAttempts = options.maxAttempts ?? 5
   if (attempt >= maxAttempts) return false
-  return (
-    status === 429
-    || status === 408
-    || (status === 409 && details?.retryable === true)
-    || (status >= 500 && !isDeadGenerateConnection(status, details))
-  )
+  return classifyGenerateHttpFailure(status, details).retryable
 }
 
-function isInternalErrorToken(text: string): boolean {
-  return /^(connection_unavailable|provider_unavailable|PROVIDER_CONNECTION_UNAVAILABLE)$/i.test(text)
-}
-
+/**
+ * Spanish copy for one HTTP failure. Never a bare «HTTP nnn»: a 502/504/52x
+ * reads as a SiraGPT update, raw codes become Spanish, and a human server
+ * message (e.g. «DeepSeek V4 Pro no pudo responder: …») is kept verbatim.
+ */
 export function friendlyGenerateHttpError(
   status: number,
   details?: GenerateErrorDetails,
 ): string {
-  const payloadMessage = String(details?.message || "").trim()
-  const payloadError = String(details?.error || "").trim()
-  if (isProviderUnavailablePayload(details)) {
-    if (payloadMessage && !isInternalErrorToken(payloadMessage) && payloadMessage.length < 240) {
-      return payloadMessage
-    }
-    return PROVIDER_UNAVAILABLE_MESSAGE
-  }
-  if (isConnectionUnavailablePayload(details) || status === 503) {
-    if (
-      payloadMessage
-      && !isInternalErrorToken(payloadMessage)
-      && payloadMessage.length < 240
-    ) {
-      return payloadMessage
-    }
-    return CONNECTION_UNAVAILABLE_MESSAGE
-  }
-  const payload = payloadMessage || payloadError
-  if (payload && payload.length < 240 && !/^https?:/i.test(payload) && !isInternalErrorToken(payload)) {
-    return payload
-  }
-  return `HTTP ${status}`
+  return classifyGenerateHttpFailure(status, details).userMessage
+}
+
+export type GenerateHttpError = Error & {
+  status: number
+  code?: string
+  kind: GenerateFailureKind
+  retryable: boolean
+  retryAfterMs: number | null
+  errorData?: unknown
 }
 
 export function attachGenerateHttpError(
   status: number,
   details?: GenerateErrorDetails,
-): Error & { status: number; code?: string } {
-  const error = new Error(friendlyGenerateHttpError(status, details)) as Error & {
-    status: number
-    code?: string
-  }
+  retryAfterMs?: number | null,
+): GenerateHttpError {
+  const decision = classifyGenerateHttpFailure(status, details, retryAfterMs)
+  const error = new Error(decision.userMessage) as GenerateHttpError
   error.status = status
   const code = String(details?.code || details?.error || "").trim()
   if (code) error.code = code
+  error.kind = decision.kind
+  error.retryable = decision.retryable
+  error.retryAfterMs = decision.retryAfterMs
+  if (details && typeof details === "object") error.errorData = details
   return error
 }

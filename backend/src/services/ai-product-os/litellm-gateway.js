@@ -901,7 +901,11 @@ function classifyProviderError(error) {
   const retryAfterMs = readRetryAfterMs(error);
   const quotaExhausted = status === 402
     || code.includes("insufficient_quota")
-    || message.match(/insufficient (?:credits?|quota)|exceeded your current quota|quota (?:is )?exhausted|billing (?:limit|quota)|add more .*credits?/i);
+    || message.match(/insufficient (?:credits?|quota)|exceeded your current quota|quota (?:is )?exhausted|billing (?:limit|quota)|add more .*credits?/i)
+    // Explicit no-credit wording only (OpenAI 429 «You have no credits
+    // remaining», xAI 403, Anthropic 400). Gemini RESOURCE_EXHAUSTED /
+    // «check quota» is a per-minute throttle and stays retryable.
+    || message.match(/no credits? (?:left|remaining)|used all (?:of )?(?:your |the )?(?:available )?credits|credit balance is too low|spending (?:limit|cap)/i);
   let errorClass = "unknown";
   if (status === 401 || status === 403 || code.includes("auth") || message.match(/api key|unauthori[sz]ed|forbidden/i)) {
     errorClass = "auth";

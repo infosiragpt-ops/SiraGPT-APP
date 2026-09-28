@@ -118,6 +118,15 @@ test('source contract: generateStream allows two billing hops, excludes tried pr
   assert.match(src, /billingFailoverHops \+= 1;/);
   // The user-facing note keeps the ORIGINAL model as «from» across hops.
   assert.match(src, /fromProvider: billingFailover \? billingFailover\.from\.provider : currentProvider/);
+  // A picked model never fails over (#902); only internal unpinned requests
+  // walk the ladder, skipping rungs already memoised as unfunded.
+  assert.match(src, /const failoverAllowed = !pinnedUser && !isPinnedLocalGenerate\(provider, model\);/);
+  assert.match(src, /if \(!failoverAllowed\) continue;/);
+  assert.match(src, /!skipUnfunded && attempt <= MAX_ATTEMPTS_PER_MODEL/);
+  assert.doesNotMatch(src, /if \(pinnedUser\) continue;/);
+  // Every failing rung feeds the memo; the picked model's error carries its cause.
+  assert.match(src, /billingFailoverMod\.recordProviderFailure\(currentProvider, lastError, failoverReason\)/);
+  assert.match(src, /billingFailoverMod\.annotateProviderFailure\(lastError, \{/);
   assert.equal(billing.buildNotice({ fromLabel: 'Claude Fable 5.1', toLabel: 'DeepSeek V4 Pro' }),
     'Claude Fable 5.1 no está disponible ahora (el proveedor no tiene saldo); respondí con DeepSeek V4 Pro.');
 });

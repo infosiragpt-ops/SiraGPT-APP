@@ -54,6 +54,8 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
 import { TraceRail, TraceRailRow } from "@/components/trace-rail"
 import { loaderLabel, mapEventToLoaderState, type LoaderState } from "@/lib/thinking-loaders"
+import { formatStepDuration, isGenericThinkingLabel } from "@/lib/chat/live-progress"
+import { CLAUDE_TIMELINE_VISIBLE_TRAIL } from "@/components/claude-thinking-timeline"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -89,6 +91,8 @@ interface TimelineStepProjection {
   searchCalls: ProjectedSearchCall[]
   /** Domains the agent is fetching ("Obteniendo datos de …"). */
   fetchTargets: string[]
+  /** Server-measured time of a finished step (sentinel startedAt → endedAt). */
+  durationMs?: number
 }
 
 const SEARCH_TOOL_RE = /search/i
@@ -183,10 +187,18 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
     })
     const rawDetail = row.description || (tools.length ? tools.filter((tool) => descriptionsDiffer(row.label, tool)).join(" · ") : "")
     const detailSource = humanizeToolDetail(rawDetail) || ""
+    // The backend's own note for the step (model + step count, what it
+    // decided, results / error category) wins over the derived one.
+    const ownDetail = typeof step.detail === "string" ? step.detail.replace(/\s+/g, " ").trim() : ""
+    const startedAt = Number(step.startedAt)
+    const endedAt = Number(step.endedAt)
+    const durationMs = step.status !== "running" && Number.isFinite(startedAt) && Number.isFinite(endedAt) && endedAt >= startedAt && startedAt > 0
+      ? endedAt - startedAt
+      : undefined
     const item: TimelineStepProjection = {
       id: row.id,
       label: row.label,
-      detail: detailSource || undefined,
+      detail: ownDetail || detailSource || undefined,
       status: row.status === "failed" ? "error" : row.status === "running" ? "running" : "done",
       phase: phaseFromStep(step, row.label),
       count: 1,
@@ -200,6 +212,7 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
       }),
       searchCalls,
       fetchTargets,
+      ...(durationMs !== undefined ? { durationMs } : {}),
     }
     const previous = projected[projected.length - 1]
     if (previous && previous.label === item.label && previous.detail === item.detail && previous.status === item.status) {
@@ -209,9 +222,17 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
       previous.loaderState = item.loaderState
       previous.searchCalls.push(...item.searchCalls)
       previous.fetchTargets.push(...item.fetchTargets.filter((t) => !previous.fetchTargets.includes(t)))
+      if (item.durationMs !== undefined) previous.durationMs = (previous.durationMs || 0) + item.durationMs
     } else {
       projected.push(item)
     }
+  }
+
+  // Finished steps say how long they took («Buscando fuentes · 12 resultados · 3,4 s»).
+  for (const item of projected) {
+    const took = item.status !== "running" ? formatStepDuration(item.durationMs) : ""
+    if (!took || (item.detail && item.detail.includes(took))) continue
+    item.detail = item.detail ? `${item.detail} · ${took}` : took
   }
 
   return projected
@@ -958,9 +979,17 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
   // Historical/error trace: collapsed by default so the answer surface
   // stays clean; one click reveals the full execution trail.
   const [traceExpanded, setTraceExpanded] = React.useState(false)
+  // Live rail: the last CLAUDE_TIMELINE_VISIBLE_TRAIL steps, older ones behind
+  // «Ver N pasos anteriores» (same limit as the thinking timeline).
+  const [liveShowAll, setLiveShowAll] = React.useState(false)
+  // Once the live header showed a note, its line stays reserved (no jumps).
+  const headerNoteSeenRef = React.useRef(false)
   // Live elapsed counter (Claude's "Thinking · 12s"). Anchored to the
   // first live render of this bubble; ticks once per second while live.
   const liveStartRef = React.useRef<number | null>(null)
+  // Per-step clock: when each step was first seen running on this client
+  // (the header counts the current step's own seconds, no clock skew).
+  const stepSeenRef = React.useRef<Map<string, number>>(new Map())
   const [elapsedSec, setElapsedSec] = React.useState(0)
   const live = !state.done && !state.error
   React.useEffect(() => {
@@ -977,6 +1006,11 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     () => [...timelineSteps].reverse().find((step) => step.status === "running"),
     [timelineSteps],
   )
+  const runningStepId = runningTimelineStep?.id
+  if (runningStepId && !stepSeenRef.current.has(runningStepId)) stepSeenRef.current.set(runningStepId, Date.now())
+  const stepElapsedSec = runningStepId
+    ? Math.max(0, Math.floor((Date.now() - (stepSeenRef.current.get(runningStepId) || Date.now())) / 1000))
+    : null
   const activePhase = React.useMemo(() => {
     return runningTimelineStep?.phase || phaseFromStatus(summary.status)
   }, [runningTimelineStep?.phase, summary.status])
@@ -1163,12 +1197,22 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     // shimmering line with the current step + a live elapsed counter +
     // chevron, and a dimmed step trace behind a left rail. No box, no
     // headers, no counters — the line IS the status.
-    const visibleSteps = timelineSteps.slice(-5)
     const headerLabel = runningTimelineStep?.label || summary.label
     const headerState =
       runningTimelineStep?.loaderState ||
       mapEventToLoaderState({ label: headerLabel, tool: runningTimelineStep?.tool })
     const headerKitLabel = loaderLabel(headerState)
+    // The header tells the real current step («Decidiendo el siguiente paso»
+    // · «paso 2 de 10 · DeepSeek V4 Pro»); only a bare «Pensando» falls back
+    // to the kit label / rotating phrases.
+    const headerLiveLabel = runningTimelineStep && !isGenericThinkingLabel(runningTimelineStep.label) ? runningTimelineStep.label : undefined
+    const headerNote = headerLiveLabel && runningTimelineStep?.detail && descriptionsDiffer(runningTimelineStep.label, runningTimelineStep.detail)
+      ? runningTimelineStep.detail
+      : null
+    const railSteps = headerLiveLabel ? timelineSteps.filter((step) => step.id !== runningTimelineStep?.id) : timelineSteps
+    const hiddenEarlier = liveShowAll ? 0 : Math.max(0, railSteps.length - CLAUDE_TIMELINE_VISIBLE_TRAIL)
+    const visibleSteps = hiddenEarlier ? railSteps.slice(hiddenEarlier) : railSteps
+    if (headerNote) headerNoteSeenRef.current = true
     return (
       <div
         role="status"
@@ -1185,8 +1229,10 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
           >
             <ThinkingStatusLoader
+              as="span"
               state={headerState}
-              elapsedSec={elapsedSec >= 3 ? elapsedSec : null}
+              label={headerLiveLabel}
+              elapsedSec={headerLiveLabel ? stepElapsedSec : elapsedSec >= 3 ? elapsedSec : null}
               announce={false}
             />
             {liveExpanded ? (
@@ -1208,23 +1254,49 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             </button>
           )}
         </div>
+        {headerNote ? (
+          <p data-step-note="1" aria-hidden="true" className="truncate pl-9 pr-8 font-sans text-[12px] leading-4 text-[var(--think-dim)]">
+            {headerNote}
+          </p>
+        ) : headerNoteSeenRef.current ? (
+          <span aria-hidden="true" data-step-note-slot="1" className="block min-h-4" />
+        ) : null}
+        {liveExpanded && headerLiveLabel && runningTimelineStep ? (
+          <div className="pl-9">
+            <StepResearchTrace searchCalls={runningTimelineStep.searchCalls} fetchTargets={runningTimelineStep.fetchTargets} />
+          </div>
+        ) : null}
 
         {liveExpanded && (
-          <TraceRail>
-            {visibleSteps.map((step) => (
-              <TraceRailRow
-                key={step.id}
-                label={step.status === "running" && !descriptionsDiffer(headerKitLabel, step.label) ? headerKitLabel : step.label}
-                labelText={step.label}
-                phase={step.phase}
-                status={step.status === "error" ? "failed" : step.status === "running" ? "running" : "done"}
-                count={step.count}
-                detail={step.detail && descriptionsDiffer(step.label, step.detail) ? step.detail : undefined}
+          // The rail is not announced (only the header is): expanding it or
+          // a step settling is never read out row by row.
+          <div aria-live="off">
+            {hiddenEarlier > 0 ? (
+              <button
+                type="button"
+                data-step-earlier="1"
+                onClick={() => setLiveShowAll(true)}
+                className="think-row ml-8 mt-1 bg-transparent py-0.5 text-left font-sans text-[12px] leading-5 text-[var(--think-dim)] transition-colors hover:text-[var(--think-text)]"
               >
-                <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
-              </TraceRailRow>
-            ))}
-          </TraceRail>
+                {`Ver ${hiddenEarlier} ${hiddenEarlier === 1 ? "paso anterior" : "pasos anteriores"}`}
+              </button>
+            ) : null}
+            <TraceRail>
+              {visibleSteps.map((step) => (
+                <TraceRailRow
+                  key={step.id}
+                  label={step.status === "running" && !descriptionsDiffer(headerKitLabel, step.label) ? headerKitLabel : step.label}
+                  labelText={step.label}
+                  phase={step.phase}
+                  status={step.status === "error" ? "failed" : step.status === "running" ? "running" : "done"}
+                  count={step.count}
+                  detail={step.detail && descriptionsDiffer(step.label, step.detail) ? step.detail : undefined}
+                >
+                  <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
+                </TraceRailRow>
+              ))}
+            </TraceRail>
+          </div>
         )}
       </div>
     )

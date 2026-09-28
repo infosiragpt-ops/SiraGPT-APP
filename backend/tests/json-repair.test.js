@@ -153,3 +153,19 @@ describe('repairJson — composite scenarios', () => {
     assert.equal(r.repaired, '{"a":1}');
   });
 });
+
+describe('balanceBrackets — nested truncation (memory extraction, 2026-09-28)', () => {
+  test('closes openers in reverse order', () => {
+    assert.equal(balanceBrackets('{"facts":[{"fact":"a"}'), '{"facts":[{"fact":"a"}]}');
+    assert.equal(balanceBrackets('[{"a":[1,{"b":2'), '[{"a":[1,{"b":2}]}]');
+  });
+  test('repairJson parses a facts array cut after a complete fact', () => {
+    const r = repairJson('{"facts":[{"fact":"a"}');
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.value, { facts: [{ fact: 'a' }] });
+    assert.ok(r.repairs.includes('balance_brackets'));
+  });
+  test('balanced input is returned unchanged', () => {
+    assert.equal(balanceBrackets('{"a":[1,2]}'), '{"a":[1,2]}');
+  });
+});

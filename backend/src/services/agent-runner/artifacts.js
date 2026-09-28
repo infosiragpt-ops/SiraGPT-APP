@@ -86,6 +86,19 @@ async function hasConversationArtifacts(prisma, { userId, chatId } = {}) {
   return Boolean(latest);
 }
 
+/**
+ * Format ('pptx', 'docx', 'html', 'png'…) of the artifact a follow-up edits:
+ * the latest one, or the one the request names. null when the chat has none.
+ * Routing uses it to tell an Office edit (runner, honest errors) from a
+ * follow-up on an html page, a script or an image (chat loop).
+ */
+async function getConversationArtifactFormat(prisma, { userId, chatId, instruction = '' } = {}) {
+  const latest = await getLatestConversationArtifact(prisma, { userId, chatId, instruction });
+  if (!latest) return null;
+  const ext = mimeToExt(latest.mime, latest.filename);
+  return ext && ext !== 'bin' ? ext : null;
+}
+
 // object-storage has no readFile: an R2 ref is materialised with toLocalTemp
 // (as readSourceBuffer does). Without this, every follow-up on a runner
 // artifact whose local copy was gone ran WITHOUT the latest version. A store
@@ -281,6 +294,7 @@ module.exports = {
   listConversationArtifacts,
   getLatestConversationArtifact,
   hasConversationArtifacts,
+  getConversationArtifactFormat,
   loadArtifactBuffer,
   resolveTurnFiles,
   persistOutputs,

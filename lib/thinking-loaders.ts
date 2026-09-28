@@ -6,13 +6,18 @@
  */
 
 export const SIRA_CELESTE = "#38BDF8"
-/** Thinking accent (clover green): the ThinkingCore glyph + active step colour. */
-export const CLAUDE_THINK_ACCENT = "#2E7D32"
+/**
+ * Thinking accent — monochrome: foreground. The ThinkingCore glyph inherits
+ * the text colour (black on light, white on dark) whenever `--think-accent`
+ * is not defined; the clover green stays the brand logo only (`--brand`).
+ */
+export const CLAUDE_THINK_ACCENT = "currentColor"
 
 /**
- * Short Spanish phrases the live «Pensando…» label cycles through while the
- * model streams reasoning, so the user is told frequently that work is
- * happening. Rotation never repeats the same phrase twice in a row.
+ * Short Spanish phrases a bare «Pensando…» label cycles through — the last
+ * resort when the step carries no real description (legacy backends, silent
+ * gaps). Real step labels always win. Rotation never repeats the same phrase
+ * twice in a row.
  */
 export const THINKING_LIVE_PHRASES = [
   "Pensando…",

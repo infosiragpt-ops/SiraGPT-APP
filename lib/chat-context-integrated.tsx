@@ -37,14 +37,25 @@ import {
   buildPendingGeneratePayload,
   clear as clearPending,
   clearTurn as clearPendingTurn,
+  clearTurnsForMessages,
   enableAutomaticRetry,
   findPendingTurnMatch,
+  getTurn as getPendingTurn,
+  isTurnLeasedByAnotherTab,
+  markTurnInFlight,
+  markTurnTerminal,
+  pendingTurnReplayState,
+  refreshTurnLease,
+  releaseTurnLease,
   retryAll,
+  scheduleTurnRetry,
   subscribeOnlineRetry,
+  supersedeOtherTurns,
   type PendingAIRequestEnvelope,
   type PendingMessage,
   type PendingRetryResult,
 } from "./pending-messages"
+import { GENERATE_ERROR_COPY, describeGenerateFailure } from "./generate-retry-policy"
 import { devLog } from "./dev-log"
 import {
   emitComputerNavigate,
@@ -59,17 +70,19 @@ import { startSerializedPreviewPoll, type SerializedPreviewPollController } from
 import { awaitCancellableChatStep } from "./chat/turn-cancellation"
 import { mentionPayloadForGenerate } from "./apps-mentions"
 
-// Helper function to check if error is related to monthly API limit
-const isMonthlyLimitError = (errorMessage: string) => {
-  const lowerMessage = errorMessage.toLowerCase();
-  return lowerMessage.includes('monthly api limit exceeded') ||
-    lowerMessage.includes('monthly limit exceeded') ||
-    lowerMessage.includes('monthly video generation limit exceeded') ||
-    lowerMessage.includes('free monthly queries exhausted') ||
-    lowerMessage.includes('free daily queries exhausted') ||
-    (lowerMessage.includes('monthly') && lowerMessage.includes('limit')) ||
-    (lowerMessage.includes('daily') && lowerMessage.includes('limit'));
-};
+// Only the USER's own plan quota / credits may open the upgrade prompt. A
+// bare 429 (rate limit, queue, capacity) or a provider's billing failure
+// never does: those are retried or explained, not sold.
+const isPlanQuotaFailure = (error: unknown): boolean => describeGenerateFailure(error).kind === 'quota';
+
+// A streaming turn refreshes its cross-tab lease this often (lease TTL is
+// 150 s; the per-tab id lives in lib/pending-messages). Stream activity
+// (tokens, activity lines) also refreshes it, at most every
+// TURN_LEASE_TOUCH_MS, because hidden tabs throttle timers to ~1/min.
+const TURN_LEASE_REFRESH_MS = 15_000;
+const TURN_LEASE_TOUCH_MS = 10_000;
+// A retryable failure waits at least this long before its automatic replay.
+const PENDING_REPLAY_MIN_DELAY_MS = 30_000;
 
 const normalizeChatError = (raw: string): string => {
   if (/does not support image/i.test(raw)) {
@@ -117,19 +130,34 @@ const normalizeChatError = (raw: string): string => {
   return raw
 };
 
-// Helper function to trigger upgrade modal
+/**
+ * Text for a failed turn. An error produced by the generate client already
+ * carries its kind and Spanish copy — including the server's transparent
+ * provider message («DeepSeek V4 Pro no pudo responder: …») — and is shown
+ * verbatim; anything else goes through normalizeChatError.
+ */
+const chatErrorText = (error: any, fallback: string): string => {
+  if (error && typeof error.kind === 'string' && typeof error.message === 'string' && error.message.trim()) {
+    return error.message.trim();
+  }
+  const normalized = normalizeChatError(String(error?.message || fallback));
+  return describeGenerateFailure({ ...(error || {}), message: normalized }).userMessage || normalized;
+};
+
+/** Plan-quota copy (Spanish), with a neutral usage hint when available. */
+const planQuotaMessage = (errorData?: any): string => {
+  const usageInfo = errorData && errorData.usage
+    ? ' Tu actividad del mes ya alcanzó el máximo disponible para tu plan.'
+    : '';
+  return `${GENERATE_ERROR_COPY.quota}${usageInfo}`;
+};
+
+// Helper function to trigger upgrade modal (plan quota / credits only)
 const triggerUpgradeModal = (errorMessage: string, errorData?: any) => {
   if (typeof window !== 'undefined') {
     // Trigger upgrade modal
     window.dispatchEvent(new CustomEvent('open-upgrade-modal'));
-
-    // Show toast with usage info if available
-    let usageInfo = '';
-    if (errorData && errorData.usage) {
-      const { current, limit } = errorData.usage;
-      usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
-    }
-    toast.error(`Monthly API limit exceeded.${usageInfo ? ' ' + usageInfo : ''} Please upgrade to continue.`);
+    toast.error(planQuotaMessage(errorData));
   }
 };
 
@@ -371,16 +399,28 @@ function createReasoningHandlers(opts: {
       ...(durationMs !== undefined ? { reasoningDurationMs: durationMs } : {}),
     })
   }
+  let finished = false
 
   return {
     onReasoning: (delta: string) => {
-      if (isCancelled()) return
+      if (isCancelled() || finished) return
       reasoningAcc += delta
       if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = null; flush(true) }, 80)
     },
     onReasoningDone: (durationMs: number) => {
-      if (isCancelled()) return
+      if (isCancelled() || finished) return
       flush(false, durationMs)
+    },
+    /**
+     * The stream is over (close or error): cancel the pending 80 ms flush and
+     * settle the trace, so a late timer can never flip it back to streaming.
+     */
+    finish: () => {
+      if (finished) return
+      finished = true
+      const pending = flushTimer !== null
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+      if (pending || reasoningAcc) flush(false)
     },
     onToolCall: (payload: { index: number; name?: string; argsDelta?: string }) => {
       if (isCancelled()) return
@@ -447,6 +487,31 @@ function settleActivity(msg: any, endedAt: number = Date.now()) {
     activityLog,
     thinkingEndedAt: msg?.thinkingEndedAt || endedAt,
   }
+}
+
+/** The assistant bubble shows something besides «Pensando». */
+function hasVisibleAssistantOutput(msg: any): boolean {
+  if (typeof msg?.content === 'string' && msg.content.trim()) return true
+  if (typeof msg?.reasoning === 'string' && msg.reasoning.trim()) return true
+  if (Array.isArray(msg?.agentSteps) && msg.agentSteps.length > 0) return true
+  if (Array.isArray(msg?.files) && msg.files.length > 0) return true
+  return false
+}
+
+/**
+ * Terminal state of an assistant placeholder, whatever ended the turn:
+ * activity settled, reasoning no longer streaming, no progress stage left —
+ * so «Pensando» can never outlive the request. With `error` the bubble shows
+ * it; with `markEmpty` a turn that produced nothing says so in Spanish.
+ */
+function finalizeAssistantPlaceholder(msg: any, opts: { error?: string | null; markEmpty?: boolean } = {}) {
+  const settled = settleActivity(msg)
+  const next = { ...settled, reasoningStreaming: false, progressStage: undefined }
+  if (opts.error) return { ...next, error: opts.error }
+  if (opts.markEmpty && !next.error && !hasVisibleAssistantOutput(next)) {
+    return { ...next, error: GENERATE_ERROR_COPY.empty }
+  }
+  return next
 }
 
 /**
@@ -1387,6 +1452,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         pendingOwnerId,
       );
       const turnMetadata = JSON.stringify({ idempotencyKey: turnIdempotencyKey });
+      // A new turn in this chat: older drafts of the chat are never replayed
+      // after it (that would answer an old prompt out of order). Replays of
+      // this very turn (reusePending) keep the others as they are.
+      if (!options?.reusePending) {
+        supersedeOtherTurns(activeChat.id, turnIdempotencyKey, pendingOwnerId);
+      }
 
       // STEP 1: User ka message UI mein dikhayein (agar already nahi dikhaya gaya)
       if (!skipUserMessage) {
@@ -1485,6 +1556,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       let streamFailed = false;
       let terminalSucceeded = false;
       let waitsForDefaultStreamTerminal = false;
+      // Cross-tab in-flight lease on this turn's pending draft (default branch).
+      let turnLeaseTimer: ReturnType<typeof setInterval> | null = null;
       const throwIfTurnCancelled = () => {
         if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) return;
         const cancelled = new Error('Request aborted');
@@ -2004,6 +2077,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             requestEnvelope,
             String(user.id),
           );
+          // This tab now streams the turn: other tabs (and this tab's own
+          // online/heartbeat replays) must not re-send it meanwhile. The
+          // lease is refreshed while streaming and released in `finally`.
+          markTurnInFlight(activeChat.id, turnIdempotencyKey, pendingOwnerId);
+          turnLeaseTimer = setInterval(() => {
+            refreshTurnLease(activeChat.id, turnIdempotencyKey, pendingOwnerId);
+          }, TURN_LEASE_REFRESH_MS);
+          let turnLeaseTouchedAt = Date.now();
+          const touchTurnLease = () => {
+            const now = Date.now();
+            if (now - turnLeaseTouchedAt < TURN_LEASE_TOUCH_MS) return;
+            turnLeaseTouchedAt = now;
+            refreshTurnLease(activeChat.id, turnIdempotencyKey, pendingOwnerId);
+          };
           const activeRequestEnvelope = retryablePending?.requestEnvelope || requestEnvelope;
           // Create new AbortController for this request
           abortControllerRef.current = controller;
@@ -2049,7 +2136,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
           streamBuffersRef.current.set(activeChat.id, fgBuffer);
 
-          const recoverPersistedTurnNow = async () => {
+          const recoverPersistedTurnNow = async (recoverOptions?: { attempts?: number }) => {
             const recovered = await pollPersistedAssistantTurn({
               getChat: (id) => apiClient.getChat(id),
               chatId: activeChat.id,
@@ -2058,7 +2145,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 turnKey: turnIdempotencyKey,
                 streamId,
               },
-              attempts: 4,
+              attempts: recoverOptions?.attempts ?? 4,
               delayMs: 0,
               isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
             });
@@ -2071,6 +2158,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
             )));
             return true;
+          };
+
+          const { finish: finishReasoning, ...reasoningStreamHandlers } = createReasoningHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+            conversationId: activeChat.id,
+          });
+          const isUserStopped = () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id);
+          const finalizePlaceholder = (opts: { error?: string | null; markEmpty?: boolean }) => {
+            setCurrentChat((prevChat) => {
+              if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+              return {
+                ...prevChat,
+                messages: prevChat.messages.map((msg) => (
+                  msg.id === aiMessagePlaceholder.id ? finalizeAssistantPlaceholder(msg, opts) : msg
+                )),
+              };
+            });
           };
 
           // STEP 3: Nayi streaming API call karein
@@ -2086,6 +2192,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               idempotencyKey: turnIdempotencyKey,
             }),
             (chunk) => {
+              touchTurnLease();
               // Always accumulate in the background-streams store so
               // the user sees progress even if they navigated away.
               bg.appendChunk(activeChat.id, chunk);
@@ -2102,6 +2209,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             async () => {
               // onClose: Jab stream khatam ho jaye
               terminalSucceeded = true;
+              finishReasoning();
               fgBuffer.flush();
               fgBuffer.dispose();
               streamBuffersRef.current.delete(activeChat.id);
@@ -2129,12 +2237,19 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   }),
                 );
               }
+              let recoveredOnClose = false;
               if (shouldPollPersistedTurnOnStreamClose({
                 deliveredContent: finalPartial,
                 seenDone: true,
                 streamFailed,
               })) {
-                try { await recoverPersistedTurnNow(); } catch { /* getChat failed; finally still idles */ }
+                try { recoveredOnClose = await recoverPersistedTurnNow(); } catch { /* getChat failed; finally still idles */ }
+              }
+              // A close with nothing delivered and nothing recovered must not
+              // leave «Pensando» on screen: settle the bubble and, when it is
+              // really empty, say so (a later sync still replaces it).
+              if (!finalPartial && !recoveredOnClose && !isUserStopped()) {
+                finalizePlaceholder({ markEmpty: true });
               }
               if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) {
                 // Do NOT force setIsStreaming(false) — sibling chats may still
@@ -2196,36 +2311,48 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               // Mirror the failure into BackgroundStreams so the
               // sidebar pill shows the error state for this chat.
               bg.fail(activeChat.id, error?.message || 'stream failed');
+              finishReasoning();
 
-              // Check for monthly API limit errors
+              // One classification drives everything: the upgrade prompt is
+              // only for the user's own plan quota / credits, never a bare 429.
               const errorMessage = error?.message || '';
-              const status = (error as any)?.status || (error as any)?.statusCode;
               const errorData = (error as any)?.errorData;
+              const failure = describeGenerateFailure(error);
+              const userStopped = isUserStopped() || error.name === 'AbortError';
 
-              if (status === 429 ||
-                isMonthlyLimitError(errorMessage) ||
-                (errorData && isMonthlyLimitError(errorData.error || ''))) {
+              // The durable draft follows the failure kind: a retryable one
+              // (network, rate limit, restart…) replays automatically no
+              // sooner than the server hint; anything else waits for a manual
+              // «Reintentar» and is never auto-replayed. A failure after part
+              // of the answer was painted is never replayed (the replay would
+              // reset what the user is reading).
+              if (!userStopped) {
+                if (failure.retryable && !(error as any)?.contentDelivered) {
+                  scheduleTurnRetry(activeChat.id, turnIdempotencyKey, pendingOwnerId, {
+                    retryAfterMs: failure.retryAfterMs,
+                    minDelayMs: PENDING_REPLAY_MIN_DELAY_MS,
+                    lastError: failure.kind,
+                  });
+                } else {
+                  markTurnTerminal(activeChat.id, turnIdempotencyKey, pendingOwnerId, failure.kind);
+                }
+              }
 
-                devLog('Monthly limit error detected in streaming');
+              if (failure.kind === 'quota') {
+
+                devLog('Plan quota error detected in streaming');
                 triggerUpgradeModal(errorMessage, errorData);
 
-                // Update message with monthly limit error
-                if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id) && error.name !== 'AbortError') {
+                // Update message with the plan-quota error (Spanish)
+                if (!userStopped) {
+                  const quotaMessage = planQuotaMessage(errorData);
                   setCurrentChat((prevChat) => {
                     if (!prevChat) return prevChat;
                     const newMessages = prevChat.messages.map((msg) => {
                       if (msg.id === aiMessagePlaceholder.id) {
-                        let usageInfo = '';
-                        if (errorData && errorData.usage) {
-                          const { current, limit } = errorData.usage;
-                          usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
-                        }
                         return {
-                          ...msg,
-                          content: msg.content?.trim()
-                            ? msg.content
-                            : `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                          error: "Monthly API limit exceeded"
+                          ...finalizeAssistantPlaceholder(msg, { error: quotaMessage }),
+                          content: msg.content?.trim() ? msg.content : quotaMessage,
                         };
                       }
                       return msg;
@@ -2249,32 +2376,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 abortControllerRef.current = null;
 
                 if (error.name !== 'AbortError') {
-                  setCurrentChat((prevChat) => {
-                    if (!prevChat) return prevChat;
-                    const newMessages = prevChat.messages.map((msg) => {
-                      if (msg.id === aiMessagePlaceholder.id) {
-                        return { ...msg, error: normalizeChatError(error.message || "An error occurred.") };
-                      }
-                      return msg;
-                    });
-                    return { ...prevChat, messages: newMessages };
-                  });
+                  finalizePlaceholder({ error: chatErrorText(error, 'Ocurrió un error al generar la respuesta.') });
                 }
               }
             },
             controller.signal, // Pass the abort signal
             {
-              ...createReasoningHandlers({
-                setChat: setCurrentChat,
-                messageId: aiMessagePlaceholder.id,
-                isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
-                conversationId: activeChat.id,
-              }),
-              ...createActivityHandlers({
-                setChat: setCurrentChat,
-                messageId: aiMessagePlaceholder.id,
-                isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
-              }),
+              ...reasoningStreamHandlers,
+              ...(() => {
+                const activityHandlers = createActivityHandlers({
+                  setChat: setCurrentChat,
+                  messageId: aiMessagePlaceholder.id,
+                  isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+                });
+                return {
+                  ...activityHandlers,
+                  onActivity: (text: string, event?: ActivityEvent) => {
+                    touchTurnLease();
+                    activityHandlers.onActivity(text, event);
+                  },
+                };
+              })(),
               ...createAgentTraceHandlers({
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
@@ -2454,33 +2576,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        // Check for monthly API limit errors
+        // Only the user's own plan quota / credits opens the upgrade prompt.
         const errorMessage = error?.message || '';
-        const status = (error as any)?.status || (error as any)?.statusCode;
         const errorData = (error as any)?.errorData;
+        const failure = describeGenerateFailure(error);
+        // A failure a replay cannot fix is never auto-replayed.
+        if (!failure.retryable) {
+          markTurnTerminal(activeChat.id, turnIdempotencyKey, pendingOwnerId, failure.kind);
+        }
 
-        if (status === 429 ||
-          isMonthlyLimitError(errorMessage) ||
-          (errorData && isMonthlyLimitError(errorData.error || ''))) {
+        if (failure.kind === 'quota') {
 
-          devLog('Monthly limit error detected in catch block');
+          devLog('Plan quota error detected in catch block');
           triggerUpgradeModal(errorMessage, errorData);
 
+          const quotaMessage = planQuotaMessage(errorData);
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
-                let usageInfo = '';
-                if (errorData && errorData.usage) {
-                  const { current, limit } = errorData.usage;
-                  usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
-                }
                 return {
-                  ...msg,
-                  content: msg.content?.trim()
-                    ? msg.content
-                    : `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                  error: "Monthly API limit exceeded"
+                  ...finalizeAssistantPlaceholder(msg, { error: quotaMessage }),
+                  content: msg.content?.trim() ? msg.content : quotaMessage,
                 };
               }
               return msg;
@@ -2489,11 +2606,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
         } else {
           // Handle other errors normally — only if placeholder doesn't already have real content
+          const failureText = chatErrorText(error, 'Ocurrió un error al generar la respuesta.');
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, error: normalizeChatError(error.message || "An error occurred.") };
+                return finalizeAssistantPlaceholder(msg, { error: failureText });
               }
               return msg;
             });
@@ -2507,6 +2625,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setCurrentStreamId(null);
         }
       } finally {
+        if (turnLeaseTimer) clearInterval(turnLeaseTimer);
+        if (waitsForDefaultStreamTerminal) {
+          releaseTurnLease(activeChat.id, turnIdempotencyKey, pendingOwnerId);
+        }
         markChatIdle(activeChat.id, streamId);
         pendingStopsRef.current.delete(activeChat.id);
         // Mark the background stream as done for non-default intents
@@ -2538,6 +2660,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // creating a second ASSISTANT placeholder/stream for the same USER turn.
       if (activeStreamingChatIdsRef.current.has(msg.chatId)) return 'defer'
 
+      // Another tab is streaming this turn (live lease), or this tab's
+      // generate client already runs this key: never a second POST.
+      const pendingTurnKey = msg.idempotencyKey || msg.turnKey || msg.id
+      if (isTurnLeasedByAnotherTab(msg.chatId, pendingTurnKey, msg.ownerId)) return 'defer'
+      if (apiClient.isGenerateTurnInFlight(pendingTurnKey)) return 'defer'
+
       let targetChat =
         currentChatRef.current?.id === msg.chatId
           ? currentChatRef.current
@@ -2555,10 +2683,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const pendingTurn = findPendingTurnMatch(messages, msg)
       const alreadyEchoed = pendingTurn.userIndex !== -1
 
-      // A completed retry is recognized exclusively by the persisted turn
-      // identity on both USER and ASSISTANT rows. Equal prompt text and a
-      // nearby timestamp are intentionally irrelevant.
-      if (pendingTurn.hasAssistantReply) return 'success'
+      // A completed retry is recognized by the persisted turn identity on
+      // both USER and ASSISTANT rows (equal prompt text is irrelevant). Any
+      // other ASSISTANT row after its USER row (a «Reintentar» regeneration)
+      // also answered it; a later USER turn means the conversation moved on
+      // and a replay would answer out of order. Never a second answer.
+      const replayState = pendingTurnReplayState(messages, msg)
+      if (replayState === 'answered') return 'success'
+      if (replayState === 'superseded') {
+        markTurnTerminal(msg.chatId, pendingTurnKey, msg.ownerId, 'superseded')
+        return 'defer'
+      }
+
+      // The await above may have raced a «Reintentar», an edit or a newer
+      // send: re-check that this turn is still ours to replay.
+      if (activeStreamingChatIdsRef.current.has(msg.chatId)) return 'defer'
+      const storedTurn = getPendingTurn(msg.chatId, pendingTurnKey, msg.ownerId)
+      if (!storedTurn || storedTurn.terminalKind || storedTurn.retryPolicy !== 'automatic') return 'defer'
 
       const terminal = await addMessage(
         msg.content,
@@ -3083,6 +3224,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Get messages that need to be deleted from backend (AI message + all subsequent messages)
     const messagesToDelete = currentChat.messages.slice(targetAiMessageIndex);
 
+    // «Reintentar» owns the retry of this turn from now on: its durable
+    // draft (and those of the turns deleted below) must never be replayed
+    // after the regeneration — that would answer the same prompt twice.
+    clearTurnsForMessages(
+      currentChat.id,
+      [originalUserMessage, ...messagesToDelete],
+      user?.id ? String(user.id) : undefined,
+    );
+
     devLog('Regenerating message at index:', targetAiMessageIndex);
     devLog('Messages before regeneration:', messagesBeforeRegeneration.length);
     devLog('Messages to delete from backend:', messagesToDelete.length);
@@ -3290,33 +3440,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             console.error("Streaming failed during regeneration:", error);
 
-            // Check for monthly API limit errors
+            // Only the user's own plan quota / credits opens the upgrade prompt.
             const errorMessage = error?.message || '';
-            const status = error?.status || error?.statusCode;
             const errorData = error?.errorData;
 
-            if (status === 429 ||
-              isMonthlyLimitError(errorMessage) ||
-              (errorData && isMonthlyLimitError(errorData.error || ''))) {
+            if (isPlanQuotaFailure(error)) {
 
-              devLog('Monthly limit error detected during regeneration');
+              devLog('Plan quota error detected during regeneration');
               triggerUpgradeModal(errorMessage, errorData);
 
+              const quotaMessage = planQuotaMessage(errorData);
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    let usageInfo = '';
-                    if (errorData && errorData.usage) {
-                      const { current, limit } = errorData.usage;
-                      usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
-                    }
                     return {
-                      ...msg,
-                      content: msg.content?.trim()
-                        ? msg.content
-                        : `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                      error: "Monthly API limit exceeded"
+                      ...finalizeAssistantPlaceholder(msg, { error: quotaMessage }),
+                      content: msg.content?.trim() ? msg.content : quotaMessage,
                     };
                   }
                   return msg;
@@ -3324,11 +3464,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 return { ...prevChat, messages: errorMessages };
               });
             } else {
+              const failureText = chatErrorText(error, 'No se pudo regenerar la respuesta.');
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, error: normalizeChatError(error.message || "An error occurred during regeneration.") };
+                    return finalizeAssistantPlaceholder(msg, { error: failureText });
                   }
                   return msg;
                 });
@@ -3429,6 +3570,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const originalMessage = currentChat.messages[messageIndex];
     const messagesUpToEdit = currentChat.messages.slice(0, messageIndex);
     const updatedFiles = files ?? originalMessage.files;
+
+    // The edited turn keeps its key but not its old prompt: its draft (and
+    // those of the turns after it, deleted by the edit) must never replay.
+    clearTurnsForMessages(
+      currentChat.id,
+      currentChat.messages.slice(messageIndex),
+      user?.id ? String(user.id) : undefined,
+    );
 
     const updatedUserMessage = {
       ...originalMessage,
@@ -3696,31 +3845,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (!controller.signal.aborted && !pendingStopsRef.current.has(currentChat.id)) {
             console.error("Streaming failed during regeneration:", error);
 
-            // Check for monthly API limit errors
+            // Only the user's own plan quota / credits opens the upgrade prompt.
             const errorMessage = error?.message || '';
-            const status = error?.status || error?.statusCode;
             const errorData = error?.errorData;
 
-            if (status === 429 ||
-              isMonthlyLimitError(errorMessage) ||
-              (errorData && isMonthlyLimitError(errorData.error || ''))) {
+            if (isPlanQuotaFailure(error)) {
 
-              devLog('Monthly limit error detected during edit and regeneration');
+              devLog('Plan quota error detected during edit and regeneration');
               triggerUpgradeModal(errorMessage, errorData);
 
+              const quotaMessage = planQuotaMessage(errorData);
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    let usageInfo = '';
-                    if (errorData && errorData.usage) {
-                      const { current, limit } = errorData.usage;
-                      usageInfo = ` You've used ${current?.toLocaleString()} out of ${limit?.toLocaleString()} tokens this month.`;
-                    }
                     return {
-                      ...msg,
-                      content: `Monthly API limit exceeded.${usageInfo} Please upgrade your plan to continue using the service.`,
-                      error: "Monthly API limit exceeded"
+                      ...finalizeAssistantPlaceholder(msg, { error: quotaMessage }),
+                      content: quotaMessage,
                     };
                   }
                   return msg;
@@ -3728,11 +3869,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 return { ...prevChat, messages: errorMessages };
               });
             } else {
+              const failureText = chatErrorText(error, 'No se pudo regenerar la respuesta.');
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, error: normalizeChatError(error.message || "An error occurred during regeneration.") };
+                    return finalizeAssistantPlaceholder(msg, { error: failureText });
                   }
                   return msg;
                 });
@@ -3815,7 +3957,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // latest closure is captured at call time, so listing it would
     // re-create the callback on every keystroke that flips the flag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat, isLoading, selectProvider, selectedModel, availableModels, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
+  }, [currentChat, user, isLoading, selectProvider, selectedModel, availableModels, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
 
   const pollVideoStatus = useCallback((
     operationId: string,

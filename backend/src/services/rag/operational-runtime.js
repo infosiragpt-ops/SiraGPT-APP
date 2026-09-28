@@ -103,6 +103,15 @@ function dedupeDocs(docs) {
   return out;
 }
 
+/**
+ * Live progress of the chat turn (services/turn-progress): structured,
+ * synchronous events only — never the document text, never an error message.
+ */
+function emitRagProgress(onProgress, event) {
+  if (typeof onProgress !== 'function') return;
+  try { onProgress(event); } catch (_) { /* progress is advisory */ }
+}
+
 async function ensureIndexed({
   rag,
   userId,
@@ -110,6 +119,7 @@ async function ensureIndexed({
   docs = [],
   chunkOptions,
   intentAnalysis = null,
+  onProgress = null,
 } = {}) {
   if (!rag || !userId) return { indexed: false, reason: 'missing rag/user', chunksAdded: 0, totalChunks: 0, skippedSources: [] };
   let cleanDocs = dedupeDocs(docs).filter(d => d && typeof d.text === 'string' && d.text.trim().length >= MIN_DOC_CHARS);
@@ -145,12 +155,22 @@ async function ensureIndexed({
     return { indexed: true, chunksAdded: 0, totalChunks: stats.chunks, skippedSources };
   }
 
+  emitRagProgress(onProgress, {
+    type: 'index_start',
+    files: toIngest.length,
+    file: String(toIngest[0]?.title || '').slice(0, 120),
+  });
   try {
     const result = await rag.ingest(userId, collection, toIngest.map(doc => ({
       text: doc.text,
       source: doc.source,
       title: doc.title,
     })), chunkOptions);
+    emitRagProgress(onProgress, {
+      type: 'index_done',
+      chunksAdded: result.chunksAdded || 0,
+      skipped: skippedSources.length,
+    });
     return {
       indexed: true,
       chunksAdded: result.chunksAdded || 0,
@@ -561,6 +581,11 @@ async function buildRuntimeContext({
   openai = null,
   k = DEFAULT_RETRIEVAL_K,
   logger = console,
+  // Live progress (optional): index_start {files, file}, index_done
+  // {chunksAdded, skipped}, graph_start, retrieve_start {docs},
+  // retrieve_done {hits, totalChunks, docs}, graph_query. Only emitted when
+  // the work really runs — a turn without documents emits nothing.
+  onProgress = null,
 } = {}) {
   const currentDocs = normaliseDocs(processedFiles);
   const projectDocs = normaliseDocs(project?.files || []);
@@ -588,7 +613,7 @@ async function buildRuntimeContext({
     fallbackSeed: docs.map(d => d.source).join('|'),
   });
   const allowedSources = docs.map(doc => doc.source);
-  const indexResult = await ensureIndexed({ rag, userId, collection, docs });
+  const indexResult = await ensureIndexed({ rag, userId, collection, docs, onProgress });
   const openaiClient = openai || (rag && typeof rag.getOpenAI === 'function' ? rag.getOpenAI() : null);
   const wantsGraphRag = shouldUseGraphRagForPrompt(prompt, docs);
   let graphIndexResult = null;
@@ -596,6 +621,7 @@ async function buildRuntimeContext({
   if (!indexResult.indexed && indexResult.chunksAdded === 0) {
     logger.warn?.('[operational-rag] indexing skipped:', indexResult.reason);
   } else if (wantsGraphRag) {
+    emitRagProgress(onProgress, { type: 'graph_start' });
     graphIndexResult = await ensureGraphRagReady({
       rag,
       openai: openaiClient,
@@ -626,6 +652,7 @@ async function buildRuntimeContext({
   };
 
   let hits = [];
+  emitRagProgress(onProgress, { type: 'retrieve_start', docs: docs.length });
   try {
     hits = await rag.retrieve(userId, collection, prompt, k, {
       ...retrievalMeta,
@@ -660,6 +687,13 @@ async function buildRuntimeContext({
     };
   }
 
+  emitRagProgress(onProgress, {
+    type: 'retrieve_done',
+    hits: Array.isArray(hits) ? hits.length : 0,
+    totalChunks: Number(indexResult && indexResult.totalChunks) || 0,
+    docs: docs.length,
+  });
+  if (wantsGraphRag) emitRagProgress(onProgress, { type: 'graph_query' });
   const graphAnswer = await maybeQueryGraphRag({
     openai: openaiClient,
     userId,

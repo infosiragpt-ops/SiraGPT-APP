@@ -174,6 +174,64 @@ test('getClient factory wires Anthropic / Kimi / xAI — not OpenRouter or OpenA
   }
 });
 
+// Failover rungs (billing-failover DEFAULT_ORDER: DeepSeek → Cerebras →
+// Gemini → Groq → Mistral → …) used to fall through to api.openai.com.
+test('getClient sends Cerebras / Groq / Mistral / Z.ai to their own hosts, never api.openai.com', () => {
+  const names = ['CEREBRAS_API_KEY', 'CEREBRAS_BASE_URL', 'GROQ_API_KEY', 'GROQ_BASE_URL', 'MISTRAL_API_KEY', 'MISTRAL_BASE_URL', 'ZAI_API_KEY', 'ZAI_BASE_URL'];
+  const prev = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  for (const name of names) delete process.env[name];
+  try {
+    process.env.CEREBRAS_API_KEY = 'cb-test-key';
+    process.env.GROQ_API_KEY = 'gq-test-key';
+    process.env.MISTRAL_API_KEY = 'ms-test-key';
+    process.env.ZAI_API_KEY = 'zai-test-key';
+    const expected = [
+      ['Cerebras', /api\.cerebras\.ai/, 'cb-test-key'],
+      ['Groq', /api\.groq\.com\/openai/, 'gq-test-key'],
+      ['Mistral', /api\.mistral\.ai/, 'ms-test-key'],
+      ['Z.ai', /api\.z\.ai/, 'zai-test-key'],
+      ['ZAI', /api\.z\.ai/, 'zai-test-key'],
+    ];
+    for (const [provider, host, key] of expected) {
+      const client = service.getClient(provider);
+      assert.match(String(client.baseURL || ''), host, provider);
+      assert.doesNotMatch(String(client.baseURL || ''), /api\.openai\.com/, provider);
+      assert.equal(client.apiKey, key, `${provider} uses its own key`);
+    }
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('getClient without the provider key throws the 503 «Conexión no disponible», never reuses the OpenAI key', () => {
+  const names = ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'CEREBRAS_API_KEY', 'GROQ_API_KEY', 'MISTRAL_API_KEY', 'ZAI_API_KEY', 'OPENAI_API_KEY'];
+  const prev = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  for (const name of names) delete process.env[name];
+  process.env.OPENAI_API_KEY = 'sk-openai-must-not-leak';
+  try {
+    for (const provider of ['Gemini', 'OpenRouter', 'DeepSeek', 'Cerebras', 'Groq', 'Mistral', 'Z.ai']) {
+      assert.throws(() => service.getClient(provider), (err) => {
+        assert.equal(err.code, 'PROVIDER_CONNECTION_UNAVAILABLE', provider);
+        assert.equal(err.status, 503, provider);
+        assert.equal(err.message, PROVIDER_UNAVAILABLE_MESSAGE);
+        assert.doesNotMatch(String(err.message), /sk-|OpenRouter|DeepSeek/);
+        return true;
+      }, provider);
+    }
+    // The Gemini alias key is enough.
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'g-alias-key';
+    assert.equal(service.getClient('Gemini').apiKey, 'g-alias-key');
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('Mini short_chitchat skips test-time-compute and slims the system prompt', () => {
   assert.match(aiRoute, /generateLog\.info\(\s*'reasoning\.test_time_compute_skipped'/);
   assert.match(aiRoute, /req\._miniShortChitchat/);

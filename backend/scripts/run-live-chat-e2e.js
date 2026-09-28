@@ -225,7 +225,9 @@ async function chatOnce({ prompt, fileIds = [], chatId = null }) {
           if (data === '[DONE]') continue;
           let j; try { j = JSON.parse(data); } catch { continue; }
           if (j.type) events.push(j.type);
-          if (j.type === 'model_resolved' && j.model) resolvedModel = j.model;
+          // The route names the model by its display name only (`label`);
+          // older servers sent the raw id as `model`.
+          if (j.type === 'model_resolved' && (j.label || j.model)) resolvedModel = j.label || j.model;
           if (typeof j.content === 'string') {
             if (j.replace) text = j.content; else text += j.content;
           }

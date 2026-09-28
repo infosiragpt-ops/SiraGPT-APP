@@ -140,7 +140,7 @@ Design notes: `docs/rag-embeddings.md`.
 | `SIRA_EMBED_TIMEOUT_MS` | `30000` | Per-request timeout for every rung. `SIRA_EMBED_MAX_RETRIES` (default `2`) bounds the OpenAI SDK's idempotent retries. |
 | `SIRAGPT_KEY_REJECT_MEMO_MS` | `300000` | How long a rejected key is remembered (`backend/src/utils/provider-key-health.js`). A new key (different fingerprint) or an admin "apply connection" re-arms the provider immediately. |
 | `SIRAGPT_MEMORY_EMBED_PROVIDER` | `auto` | Memory tables (1024-dim): `auto`/`ladder` use the ladder; `openai`, `gemini`, `voyage`, `jina`, `mistral` pin one rung. |
-| `SIRAGPT_MEMORY_LLM_MODEL` | provider default | Model for memory-fact extraction (`backend/src/services/memory-llm-client.js`), which now rides the failover ladder (DeepSeek → OpenAI → Anthropic → …) instead of a single OpenAI client. |
+| `SIRAGPT_MEMORY_LLM_MODEL` | `DeepSeek:deepseek-v4-flash` | Model (`Proveedor:modelo` or an id) for memory-fact extraction and nightly consolidation (`backend/src/services/memory-llm-client.js`, `memory/consolidation.js`). It rides the document-agent failover ladder (DeepSeek → Meta → Gemini → xAI → OpenRouter → OpenAI) with thinking off on DeepSeek V4; `SIRAGPT_DOC_AGENT_MODEL` is not inherited. |
 ## Memoria estilo Claude Code (vault + consolidación)
 
 Ver `docs/memory-architecture.md`.
@@ -485,6 +485,8 @@ needs the backend `.env` — no frontend rebuild.
 | `SIRAGPT_RESEARCH_EMAIL` | — | Email for polite User-Agent in scientific search |
 | `IDEMPOTENCY_ENABLED` | `false` | Enable Stripe-style replay protection |
 | `MAINTENANCE_MODE_ENABLED` | `false` | Enable 503 maintenance mode |
+| `SMTP_FROM_NAME` | `SiraGPT` | Sender display name of every outgoing mail (`backend/src/services/email.js`; quotes are dropped). The address stays `SMTP_USER` |
+| `SLACK_ENCRYPTION_KEY` | optional | 32-byte key (hex or base64) for saved Slack webhooks. Now optional: without it `SIRAGPT_ENCRYPTION_KEY` is used, else a stable HKDF subkey of the mandatory `ENCRYPTION_KEY`. Only a production server with none of the three answers `503 slack_encryption_unconfigured`; a webhook saved under an old random key must be pasted again once (`409 slack_reconnect_required`) |
 
 ## RLHF flywheel
 
@@ -600,6 +602,9 @@ escenarios contra la ruta real: `node scripts/run-office-evals.js --user <id>
 | `SIRAGPT_AGENT_THUMBS` | `1` (off en `NODE_ENV=test`) | Miniaturas (≤2 por paso, ≤80 KB) en el SSE del timeline |
 | `SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS` | `60000` | Presupuesto de compactación del loop (8000–120000); el pedido y el último mapa del documento se restauran tras compactar |
 | `SIRAGPT_AGENT_RUNNER_MAX_TOKENS` | `8192` en turnos de documentos | Salida por llamada al modelo |
+| `SIRAGPT_AGENT_RUNNER_TRUNCATION_MAX_TOKENS` | `16384` | Techo del reintento cuando el modelo corta una llamada a herramienta por `max_tokens`: min(2× el presupuesto, el techo de salida del modelo, este valor). Con 8192 (el techo de la mayoría de los modelos del catálogo) solo aplica el aviso de dividir el trabajo |
+| `SIRAGPT_DOC_AGENT_SDK_MAX_RETRIES` | `1` | Reintentos del SDK por llamada del AgentRunner / memoria / traducción (`doc-agent/llm-runtime.js`, máx. 5). El loop ya reintenta por su cuenta; `0` evita que un 429 sin saldo llegue dos veces al proveedor |
+| `SIRAGPT_DOC_AGENT_LLM_TIMEOUT_MS` | `180000` | Tope por llamada al modelo del AgentRunner (mín. 1000); cabe una respuesta de documento de 8192 tokens |
 | `SIRAGPT_DOCUMENT_EDITOR_ENGINE` | `office` | Editor del chat (`/api/ai/document-edit`): Excel / PowerPoint / PDF en el loop de oficina del AgentRunner; `legacy` = loop anterior del sandbox |
 | `SIRAGPT_DOCUMENT_EDITOR_VISUAL_VERIFY` | `1` (off en `NODE_ENV=test`) | Verificación visual (sira_office + visión) en el `finish` del docx-engine de Word |
 | `DOC_SANDBOX_QUEUE_WAIT_MS` | `90000` | Espera máxima en cola cuando el servicio de sandbox responde `429 at_capacity` (sondeo cada 2–5 s, checkpoint «Esperando un sandbox libre…»). Agotada la espera el turno falla como `sandbox_capacity` (categoría `capacity`, reintentable, «Cancelado por el sistema» en Admin → Logs). `0` = fallar al primer 429 |
@@ -654,6 +659,7 @@ Normal turns write nothing. All defaults are safe for production.
 | Variable | Default | Purpose |
 |---|---|---|
 | `SIRAGPT_TURN_FAILURES` | on (off under `NODE_ENV=test`) | `0` disables recording and the non-2xx middleware |
+| `SIRAGPT_TURN_PROGRESS` | on | Live progress of a chat turn (`backend/src/services/turn-progress.js`): begin / progress / result rows paired by `stageId` for clients that send `progressProtocol: 2`, with real facts (files, counts, sources, model display name, attempt n of m, wait seconds). `0` / `false` / `off` keeps only the legacy begin-only `stage` frames |
 | `SIRAGPT_TURN_FAILURE_RETENTION_DAYS` | `30` | Rows older than this are deleted by the `sweep-turn-failures` cron (they carry prompt excerpts) |
 | `SIRAGPT_TURN_FAILURE_RATE_LIMIT` | `30` | Max new rows per identical cause per minute (floods are counted, not stored) |
 | `SIRAGPT_TURN_SIN_CIERRE_MS` | `600000` | A turn with no activity and no finalize for this long is recorded as «Turno sin cerrar» |
@@ -709,7 +715,10 @@ it at runtime), so no client keeps a stale key.
 | Variable | Default | Purpose |
 |---|---|---|
 | `SIRAGPT_BILLING_FAILOVER` | on | `0` disables failover for unpinned internal requests; selected models never switch providers |
-| `SIRAGPT_BILLING_FAILOVER_MEMO_MS` | `600000` | How long a provider stays «sin saldo» before it is tried again |
-| `SIRAGPT_BILLING_FAILOVER_ORDER` | `xAI,DeepSeek,Gemini,OpenAI,Anthropic,Meta,Kimi,OpenRouter,Mistral,Groq,Cerebras,Z.ai` | Preference among funded providers (same tier first) |
+| `SIRAGPT_BILLING_FAILOVER_MEMO_MS` | `600000` | How long a provider stays «sin saldo» before it is tried again (a per-minute quota window is memoised only for its wait, 30–120 s, and is not shown as «Sin saldo») |
+| `SIRAGPT_BILLING_FAILOVER_ORDER` | `DeepSeek,Cerebras,Gemini,Groq,Mistral,OpenRouter,xAI,OpenAI,Anthropic,Meta,Kimi,Z.ai` | Preference among funded providers (same tier first) |
+| `SIRAGPT_BILLING_FAILOVER_LAST_RESORT` | on | When an unpinned internal request finds no funded model in the picker list, try the last-resort rungs (DeepSeek V4 Flash direct, then through its second transport, Gemini 2.5 Flash for image turns). `0` disables them. Never used for a model the user picked |
+| `SIRAGPT_AGENTIC_PLAIN_FALLBACK_MAX_MS` | `150000` | An agentic chat turn that hit a step timeout is regenerated once through the plain stream only when it has no attachments or generated files and started less than this many ms ago; otherwise it ends with an honest «tardó más de lo previsto» error (`backend/src/services/ai/agentic-degrade-policy.js`). A dry / rejected / rate-limited provider never regenerates: the turn ends naming the model and the cause |
+| `SIRAGPT_IMAGE_AUTH_FALLBACK` | off | `1` / `true` / `on` lets `/api/ai/generate-image` render with another active image model when the picked one's provider answers 401/403 or has no key (recorded as `substitutedFrom`). Off by default (owner policy: a picked model is never switched); the user instead reads which image model failed and why (sin saldo / clave rechazada / no permite el modelo / no configurado / límite por minuto) |
 | `SIRAGPT_OPENAI_FILES_UPLOAD` | on | `0` skips the optional OpenAI Files upload of documents (it now always runs in the background and is skipped while OpenAI rejects the key) |
 | `SIRAGPT_MODELS_DEBUG` | off | `1` prints `[models-dbg]` latency lines for `GET /api/ai/models` (debug level) |

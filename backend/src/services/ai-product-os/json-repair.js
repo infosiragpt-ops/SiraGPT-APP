@@ -11,7 +11,7 @@
  * Strategy (cheap-first, never throws):
  *   1. Strip ```json … ``` (or any ``` fence) wrappers.
  *   2. Trim leading/trailing prose around the JSON span.
- *   3. Balance braces/brackets by counting unescaped openers/closers.
+ *   3. Balance braces/brackets: close unclosed openers in reverse order.
  *   4. Remove trailing commas before } or ].
  *   5. Replace single-quoted strings with double-quoted equivalents
  *      (only when the input has no double quotes — heuristic).
@@ -76,10 +76,13 @@ function sliceJsonSpan(input) {
   return text.slice(start, lastClose + 1);
 }
 
+const CLOSER_FOR = Object.freeze({ '{': '}', '[': ']' });
+
 function balanceBrackets(input) {
-  // Count unescaped openers/closers ignoring strings.
-  let openCurly = 0, closeCurly = 0;
-  let openSquare = 0, closeSquare = 0;
+  // Track unclosed openers on a stack (ignoring strings) and close them in
+  // reverse opening order: a truncated `{"facts":[{…` needs `}]}`, not the
+  // invalid `}}]` that per-type counting produced.
+  const stack = [];
   let inStr = false, q = '', esc = false;
   for (const c of input) {
     if (inStr) {
@@ -89,15 +92,15 @@ function balanceBrackets(input) {
       continue;
     }
     if (c === '"' || c === '\'') { inStr = true; q = c; continue; }
-    if (c === '{') openCurly += 1;
-    else if (c === '}') closeCurly += 1;
-    else if (c === '[') openSquare += 1;
-    else if (c === ']') closeSquare += 1;
+    if (c === '{' || c === '[') { stack.push(c); continue; }
+    if (c === '}' || c === ']') {
+      // Pop back to the matching opener; a stray closer with no opener is ignored.
+      const at = stack.lastIndexOf(c === '}' ? '{' : '[');
+      if (at !== -1) stack.length = at;
+    }
   }
-  let out = input;
-  if (openCurly > closeCurly) out = out + '}'.repeat(openCurly - closeCurly);
-  if (openSquare > closeSquare) out = out + ']'.repeat(openSquare - closeSquare);
-  return out;
+  if (!stack.length) return input;
+  return input + stack.reverse().map((opener) => CLOSER_FOR[opener]).join('');
 }
 
 function stripTrailingCommas(input) {

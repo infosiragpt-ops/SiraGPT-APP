@@ -53,18 +53,19 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     }
   })
 
-  it("uses the clover green as the brand/think accent in both themes", () => {
+  it("uses the clover green as the brand accent in both themes; the thinking glyph is monochrome", () => {
     const css = source("app/globals.css")
     assert.match(css, /--brand: #2E7D32;/)
     assert.match(css, /--brand: #66BB6A;/)
-    assert.match(css, /--think-accent: #2E7D32;/)
-    assert.match(css, /--think-accent: #66BB6A;/)
+    // The thinking glyph is the foreground (black on light, white on dark), in both themes.
+    assert.equal((css.match(/--think-accent: hsl\(var\(--foreground\)\);/g) || []).length, 2)
+    assert.doesNotMatch(css, /--think-accent: #(2E7D32|66BB6A);/i)
     assert.match(css, /--clover-vein: #ffffff;/)
     assert.match(css, /--accent-violet: 123 46% 34%;/)
     assert.match(css, /--accent-violet: 122 39% 49%;/)
     assert.doesNotMatch(css, /--brand: #(7c5cff|5b4dff);/i)
-    assert.match(source("lib/thinking-loaders.ts"), /export const CLAUDE_THINK_ACCENT = "#2E7D32"/)
-    // The thinking glyph is the ThinkingCore (not the clover), drawn in the same clover green.
+    assert.match(source("lib/thinking-loaders.ts"), /export const CLAUDE_THINK_ACCENT = "currentColor"/)
+    // The thinking glyph is the ThinkingCore (not the clover), drawn in the monochrome think accent.
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /data-brand="thinking-core"/)
     assert.doesNotMatch(asterisk, /data-brand="clover"/)

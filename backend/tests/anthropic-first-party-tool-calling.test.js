@@ -120,7 +120,13 @@ test('AgentRunner never executes a Claude tool_use cut off by max_tokens', async
 
   assert.equal(result.stoppedReason, 'E_PROVIDER');
   assert.equal(executions, 0);
-  assert.equal(requests.length, 1, 'partial tool input is never replayed as a completed turn');
+  // Truncation recovery may retry with a larger budget and then a split
+  // request, but never replays the partial tool_use as a completed turn.
+  assert.ok(requests.length <= 3, `at most 3 model calls, got ${requests.length}`);
+  assert.ok(
+    requests.slice(1).every((r) => !JSON.stringify(r.messages).includes('toolu_partial')),
+    'partial tool input is never replayed as a completed turn',
+  );
   assert.ok(events.some((event) => event.type === 'error' && event.code === 'E_PROVIDER'));
   assert.ok(!events.some((event) => event.type === 'tool_call'));
 });

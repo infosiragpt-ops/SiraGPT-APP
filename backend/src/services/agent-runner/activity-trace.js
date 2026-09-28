@@ -25,8 +25,10 @@
 const MAX_TRACE_EVENTS = 60;
 const MAX_BUFFERED_EVENTS = 400;
 const MAX_PERSISTED_THUMBS = 6;
-const MAX_TEXT = { label: 160, description: 120, preview: 400, detail: 600, tool: 80, callId: 120, step: 40, kind: 20, status: 12 };
-const PERSISTED_FIELDS = ['step', 'tool', 'label', 'iteration', 'attempt', 'ok', 'preview', 'callId', 'description', 'kind', 'status', 'detail'];
+const MAX_TEXT = { label: 160, description: 120, preview: 400, detail: 600, tool: 80, callId: 120, step: 40, kind: 20, status: 12, stageId: 60, phase: 24 };
+// stageId / phase / elapsedMs: the chat pipeline's live-progress rows
+// (services/turn-progress) pair begin and result by stageId on reload.
+const PERSISTED_FIELDS = ['step', 'tool', 'label', 'iteration', 'attempt', 'ok', 'preview', 'callId', 'description', 'kind', 'status', 'detail', 'stageId', 'phase', 'elapsedMs'];
 const THINKING_STEPS = new Set(['iteration_start', 'thought']);
 const DATA_URL_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
@@ -86,6 +88,9 @@ function createActivityTraceCollector({
 
   function push(stage) {
     if (!stage || typeof stage !== 'object' || stage.type !== 'stage') return;
+    // Progress frames only refresh a live row: the reload replays begin /
+    // result, never the intermediate ticks.
+    if (stage.step === 'tool_progress') return;
     try {
       const entry = compactStage(stage, startedAt, now());
       if (Array.isArray(stage.thumbs) && stage.thumbs.length && typeof saveThumb === 'function') {

@@ -29,8 +29,8 @@ test('compaction runs before the prompt is assembled and announces itself on the
   const planAt = ai.indexOf('const __compactionPlan = conversationCompactor.planCompaction({');
   const loopAt = ai.indexOf('let messages = [systemInstruction];');
   assert.ok(planAt > 0 && loopAt > planAt, 'planning happens before the history is mapped into messages');
-  assert.match(ai, /emitStage\(`Comprimiendo el contexto \(\$\{__compactionPlan\.rowsToCompact\.length\} mensajes\)`, \{ tool: 'compact' \}\);/);
-  assert.match(ai, /emitStage\(`Contexto comprimido · \$\{__result\.coveredMessages\} mensajes resumidos`, \{ tool: 'compact' \}\);/);
+  assert.match(ai, /turnProgress\.begin\('history', `Comprimiendo el contexto \(\$\{__compactionPlan\.rowsToCompact\.length\} mensajes\)`/);
+  assert.match(ai, /__compactHandle\.done\(`Contexto comprimido · \$\{__result\.coveredMessages\} mensajes resumidos`/);
   assert.match(ai, /historyMessages = __compactionPlan\.rowsToKeep;/);
   assert.match(ai, /if \(canPersist && !req\._miniShortChitchat && historyMessages\.length > 0\) \{/);
 });

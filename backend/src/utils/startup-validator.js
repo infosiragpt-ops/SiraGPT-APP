@@ -550,8 +550,8 @@ function validateStartupEnvironment(env = process.env, options = {}) {
       key: 'SENTRY_DSN',
       label: 'Sentry DSN',
       severity: Severity.WARNING,
-      message: 'SENTRY_DSN is not set. Runtime errors in production will be invisible. Add a Sentry DSN to enable automatic error alerts.',
-      hint: 'Sign up at https://sentry.io, create a Node.js project, and copy the DSN into your Replit Secrets as SENTRY_DSN.',
+      message: 'SENTRY_DSN is not set. Runtime errors are still captured in Admin → Logs → «Errores del sistema»; Sentry would add external alerting (email/Slack notifications, release tags).',
+      hint: 'Optional: create a Node.js project at https://sentry.io and store its DSN as SENTRY_DSN in the production secrets.',
     });
   }
 

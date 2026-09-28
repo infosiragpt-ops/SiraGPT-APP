@@ -958,6 +958,10 @@ function sanitizeFinalAnswerDiagnostics(answer) {
  *   prompt, the trace is converted to a provider-safe transcript (no `tools`,
  *   no `tool_choice`, no role:'tool'), and fenced ```tool_call JSON blocks are
  *   parsed back into OpenAI-shaped tool_calls. See agents/prompted-tool-calling.
+ * @param {boolean} [opts.recordProviderFailures=true] — feed a failed model
+ *   call into the «sin saldo» / rejected-key memo (ai/billing-failover). A
+ *   caller that knows the real transport better than ctx.provider / the model
+ *   id (agent-task-runner) passes false and records it itself.
  */
 async function run(openai, opts) {
   const {
@@ -969,6 +973,12 @@ async function run(openai, opts) {
     onStepStart = () => {},
     onStepDone = () => {},
     onStep = () => {},
+    // Live progress (chat timeline): fired around every model call and the
+    // finalize-guard judge. Optional, synchronous, never awaited; a hook that
+    // throws never changes the run.
+    onModelCall = null,
+    onModelResponse = null,
+    onGuard = null,
     ctx = {},
     model = 'gpt-4o',
     extraSystem = '',
@@ -995,16 +1005,62 @@ async function run(openai, opts) {
     // mapping as the plain stream.
     thinkingLevel = null,
     thinkingLevelExplicit = false,
+    recordProviderFailures = true,
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
   if (!Array.isArray(tools)) throw new Error('react-agent: tools must be an array');
+
+  const fireHook = (fn, payload) => {
+    if (typeof fn !== 'function') return;
+    try {
+      const out = fn(payload);
+      if (out && typeof out.catch === 'function') out.catch(() => {});
+    } catch { /* progress hooks are advisory */ }
+  };
+  const guardCategory = (guard) => {
+    if (guard && guard.code) return String(guard.code).slice(0, 60);
+    if (guard && Array.isArray(guard.missingTools) && guard.missingTools.length) return 'missing_tools';
+    return 'rejected';
+  };
+  // The finalize guard with its live-progress row. The row is announced only
+  // when something is really checked: a guard calls `onCheckStart` right
+  // before a real review (the answer verifier's judge call), and a guard that
+  // rejects is announced with its repair. A guard that passes without
+  // checking anything (verification off, a short draft, fail-open Q&A)
+  // leaves no «Verificación superada» row.
+  const runFinalizeGuard = async (step, payload) => {
+    let announced = false;
+    const announce = () => {
+      if (announced) return;
+      announced = true;
+      fireHook(onGuard, { phase: 'start', step });
+    };
+    let guard;
+    try {
+      guard = await finalizeGuard({ ...payload, onCheckStart: announce });
+    } catch (err) {
+      guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
+    }
+    if (ctx?.signal?.aborted) {
+      if (announced) fireHook(onGuard, { phase: 'aborted', step });
+    } else if (guard?.ok === true) {
+      if (announced) fireHook(onGuard, { phase: 'pass', step });
+    } else {
+      announce();
+      fireHook(onGuard, { phase: 'repair', step, category: guardCategory(guard) });
+    }
+    return guard;
+  };
 
   attachToolFailureCircuit(ctx);
 
   let activeOpenai = openai;
   let activeModel = model;
   let activeProvider = ctx?.provider || null;
+  // Provider error that stopped the loop (status/code/short message), so the
+  // caller can tell «sin saldo» from a timeout without parsing stoppedReason.
+  let lastModelError = null;
 
   // `finalize` is always present. Even if a caller forgets to include
   // it in their toolset, the agent still has a way to terminate
@@ -1441,6 +1497,16 @@ async function run(openai, opts) {
         thinkingLevelExplicit,
       }) || {};
     } catch (_) { effortFields = {}; }
+    const finalizeStep = Boolean(toolChoice && typeof toolChoice === 'object'
+      && toolChoice.function && toolChoice.function.name === 'finalize');
+    fireHook(onModelCall, {
+      step,
+      maxSteps,
+      finalize: finalizeStep,
+      model: activeModel,
+      toolCount: prompted ? registry.length : toolsSchema.length,
+      stepTimeoutMs,
+    });
     try {
       if (prompted) {
         // Provider-safe payload: no tools/tool_choice params, no role:'tool'
@@ -1468,9 +1534,47 @@ async function run(openai, opts) {
       }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
+      const userAborted = Boolean(ctx?.signal && ctx.signal.aborted);
+      if (typeof onModelResponse === 'function') {
+        // The exact cause, by category (sin saldo, clave rechazada, límite
+        // por minuto…) — never the provider's own error text.
+        let category = null;
+        let retryAfterSeconds = null;
+        if (!userAborted) {
+          try {
+            const tp = require('./turn-progress');
+            category = tp.failureCategoryOf(err, { timedOut });
+            retryAfterSeconds = timedOut ? null : tp.retryAfterSecondsOf(err);
+          } catch { category = null; }
+        }
+        fireHook(onModelResponse, {
+          step,
+          durationMs: Date.now() - modelTelemetryStepStart,
+          toolNames: [],
+          finalize: finalizeStep,
+          failed: true,
+          timedOut,
+          aborted: userAborted,
+          stepTimeoutMs,
+          category,
+          retryAfterSeconds,
+          model: activeModel,
+        });
+      }
       stoppedReason = timedOut
         ? `model_error: step_timeout_${stepTimeoutMs}ms`
         : `model_error: ${err.message}`;
+      if (!timedOut && !(ctx?.signal && ctx.signal.aborted)) {
+        lastModelError = err;
+        // A dry account or rejected key is remembered for the picker and
+        // every failover ladder; a step timeout or a user Stop is not.
+        if (recordProviderFailures !== false) {
+          try {
+            const memoProvider = activeProvider || require('./ai/provider-inference').inferProviderFromModelId(activeModel);
+            require('./ai/billing-failover').recordProviderFailure(memoProvider, err);
+          } catch { /* advisory */ }
+        }
+      }
       try {
         require('../codex/model-telemetry').recordLlmTurn({
           model: activeModel,
@@ -1493,6 +1597,19 @@ async function run(openai, opts) {
     const choice = resp.choices?.[0];
     const msg = choice?.message;
     if (!msg) {
+      fireHook(onModelResponse, {
+        step,
+        durationMs: Date.now() - modelTelemetryStepStart,
+        toolNames: [],
+        finalize: finalizeStep,
+        failed: true,
+        timedOut: false,
+        aborted: false,
+        stepTimeoutMs,
+        category: 'empty',
+        retryAfterSeconds: null,
+        model: activeModel,
+      });
       try {
         require('../codex/model-telemetry').recordLlmTurn({
           model: activeModel,
@@ -1555,6 +1672,19 @@ async function run(openai, opts) {
       }
     }
 
+    {
+      const respondedTools = Array.isArray(msg.tool_calls)
+        ? msg.tool_calls.map((call) => call && call.function && call.function.name).filter(Boolean)
+        : [];
+      fireHook(onModelResponse, {
+        step,
+        durationMs: Date.now() - modelTelemetryStepStart,
+        toolNames: respondedTools.slice(0, 12),
+        finalize: finalizeStep || respondedTools.includes('finalize'),
+        failed: false,
+      });
+    }
+
     // Validate the complete control envelope before any handler can execute.
     // Provider/native duplicate IDs must not overwrite the parallel result Map
     // or associate one tool's observation with another tool's arguments.
@@ -1582,19 +1712,14 @@ async function run(openai, opts) {
       // feed a repair instruction back into the loop instead.
       const plainStepRecord = { step, thought, actions: [], usage };
       if (typeof finalizeGuard === 'function') {
-        let guard;
-        try {
-          guard = await finalizeGuard({
-            answer: thought || '',
-            confidence: null,
-            steps: steps.concat([plainStepRecord]),
-            currentStep: plainStepRecord,
-            unavailableTools: Array.from(exhaustedTools),
-            ctx,
-          });
-        } catch (err) {
-          guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
-        }
+        const guard = await runFinalizeGuard(step, {
+          answer: thought || '',
+          confidence: null,
+          steps: steps.concat([plainStepRecord]),
+          currentStep: plainStepRecord,
+          unavailableTools: Array.from(exhaustedTools),
+          ctx,
+        });
         if (ctx?.signal?.aborted) {
           stoppedReason = 'aborted';
           steps.push(plainStepRecord);
@@ -1896,19 +2021,14 @@ async function run(openai, opts) {
       if (toolName === 'finalize' && !toolFailed && typeof finalizeGuard === 'function') {
         const proposedAction = { tool: toolName, args: call.function?.arguments || '', observation };
         const proposedSteps = steps.concat([{ ...stepRecord, actions: stepRecord.actions.concat([proposedAction]) }]);
-        let guard;
-        try {
-          guard = await finalizeGuard({
-            answer: dispatch.result?.answer || '',
-            confidence: dispatch.result?.confidence || null,
-            steps: proposedSteps,
-            currentStep: stepRecord,
-            unavailableTools: Array.from(exhaustedTools),
-            ctx,
-          });
-        } catch (err) {
-          guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
-        }
+        const guard = await runFinalizeGuard(step, {
+          answer: dispatch.result?.answer || '',
+          confidence: dispatch.result?.confidence || null,
+          steps: proposedSteps,
+          currentStep: stepRecord,
+          unavailableTools: Array.from(exhaustedTools),
+          ctx,
+        });
         if (ctx?.signal?.aborted) {
           stoppedReason = 'aborted';
           observation = { error: 'verification_cancelled' };
@@ -2031,7 +2151,19 @@ async function run(openai, opts) {
 
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
-  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft };
+  let modelError = null;
+  if (lastModelError) {
+    let reason = null;
+    try { reason = require('./ai/billing-failover').failoverReasonFor(lastModelError); } catch { reason = null; }
+    modelError = {
+      status: Number(lastModelError.status || lastModelError.statusCode || (lastModelError.response && lastModelError.response.status)) || null,
+      code: lastModelError.code != null ? String(lastModelError.code).slice(0, 60) : null,
+      message: String(lastModelError.message || '').slice(0, 200),
+      reason,
+    };
+  }
+
+  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft, modelError };
 }
 
 module.exports = {

@@ -96,7 +96,18 @@ class CircuitBreaker {
     return Date.now() - this.lastFailureAt.getTime() >= this.resetTimeoutMs;
   }
 
-  async execute(fn) {
+  /**
+   * @param {function} fn
+   * @param {object} [opts]
+   * @param {function} [opts.isFailure] (err) => boolean | 'ignore'.
+   *   false — the error proves the provider answered (a caller's 4xx, no
+   *   credit): rethrown but counted as a success, so it never trips the
+   *   breaker and a HALF_OPEN probe that ends with it closes the breaker.
+   *   'ignore' — no evidence either way (the user's Stop): rethrown with no
+   *   state change and no failure drain; a HALF_OPEN probe slot is released
+   *   so the next call can probe.
+   */
+  async execute(fn, { isFailure } = {}) {
     if (this.state === STATES.OPEN) {
       if (this._shouldProbe()) {
         this._transition(STATES.HALF_OPEN);
@@ -116,8 +127,20 @@ class CircuitBreaker {
       this._onSuccess();
       return result;
     } catch (err) {
-      this._onFailure();
+      let verdict = true;
+      if (typeof isFailure === 'function') {
+        try { verdict = isFailure(err); } catch (_) { verdict = true; }
+      }
+      if (verdict === 'ignore') this._onNeutral();
+      else if (verdict) this._onFailure();
+      else this._onSuccess();
       throw err;
+    }
+  }
+
+  _onNeutral() {
+    if (this.state === STATES.HALF_OPEN && this.halfOpenCallCount > 0) {
+      this.halfOpenCallCount--;
     }
   }
 

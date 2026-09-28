@@ -962,6 +962,8 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       files: snapshot.fileIds || [],
       chatId: snapshot.chatId || null,
       model: snapshot.model || 'gpt-4o',
+      // A picked model stays picked on «Reintentar» (owner policy).
+      modelPinned: snapshot.modelPinned === true,
       maxSteps: snapshot.maxSteps || 60,
       maxRuntimeMs: snapshot.maxRuntimeMs || 2 * 60 * 60 * 1000,
       retryOf: snapshot.taskId,
@@ -2166,6 +2168,11 @@ function resolveAgentTaskBudget({ maxStepsRaw, maxRuntimeMsRaw, documentPolicy =
 // the request is rejected with 429 + the active task list so the client
 // can offer "espera o cancela una tarea". Env SIRAGPT_MAX_INFLIGHT_TASKS
 // (default 3, ≤0 disables). Best-effort: a store hiccup never blocks.
+/** True when the request names a model (the composer's pick), not the default. */
+function isUserPickedModel(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 function checkUserInflightCap(req, res) {
   const cap = Number.parseInt(process.env.SIRAGPT_MAX_INFLIGHT_TASKS || '3', 10);
   if (!Number.isFinite(cap) || cap <= 0) return true;
@@ -2296,6 +2303,9 @@ async function handleQueuedTaskRequest(req, res) {
     preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     chatId,
     model,
+    // The composer sent a model: the user picked it, so the runner keeps it
+    // and reports its provider's failure instead of switching (owner policy).
+    modelPinned: isUserPickedModel(req.body.model),
     maxSteps,
     maxRuntimeMs,
     documentPolicy,
@@ -2342,6 +2352,7 @@ async function handleQueuedTaskRequest(req, res) {
     fileMetadata: clientFileMetadata,
     preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     model,
+    modelPinned: payload.modelPinned === true,
     maxSteps,
     maxRuntimeMs,
     status: 'queued',
@@ -2514,6 +2525,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     fileMetadata: clientFileMetadata,
     preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     model,
+    modelPinned: isUserPickedModel(req.body.model),
     maxSteps,
     maxRuntimeMs,
     status: 'running',
@@ -2594,6 +2606,9 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     preferRecentArtifact: Boolean(req.body.preferRecentArtifact),
     chatId,
     model,
+    // The composer sent a model: the user picked it, so the runner keeps it
+    // and reports its provider's failure instead of switching (owner policy).
+    modelPinned: isUserPickedModel(req.body.model),
     maxSteps,
     maxRuntimeMs,
     documentPolicy,
@@ -3132,6 +3147,7 @@ function createTaskRecord({
   traceId = null,
   documentPolicy = null,
   status = 'running',
+  modelPinned = false,
 }) {
   pruneOldTasks();
   const now = new Date().toISOString();
@@ -3143,6 +3159,8 @@ function createTaskRecord({
     chatId,
     displayGoal,
     model,
+    // Once picked, always picked: a retry / resume of this task keeps it.
+    modelPinned: existingSnapshot?.modelPinned === true || modelPinned === true,
     controller,
     maxSteps,
     maxRuntimeMs,

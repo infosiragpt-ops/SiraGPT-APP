@@ -2157,42 +2157,97 @@ test('runAgenticChat forces document_edit after a non-provider runner failure on
 });
 
 test('runAgenticChat does not switch pipelines after E_PROVIDER on an attachment edit', async () => {
-  let modelCalls = 0;
-  let editCalls = 0;
-  const { res, frames } = makeFakeRes();
-  await withStubbedAgentRunner({
-    executeAgentRunnerTurn: async () => ({
-      ok: false,
-      skipped: false,
-      artifacts: [],
-      stoppedReason: 'E_PROVIDER',
-      errorMessage: 'El modelo seleccionado no está disponible.',
-    }),
-  }, async (fresh) => {
-    const result = await fresh.runAgenticChat({
-      openai: { chat: { completions: { create: async () => {
-        modelCalls += 1;
-        return finalizeMessage('must not run');
-      } } } },
-      model: 'gpt-4o-mini',
-      provider: 'OpenAI',
-      userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
-      history: [],
-      res,
-      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'] },
-      toolsOverride: [{
-        name: 'document_edit',
-        description: 'edit attached document',
-        parameters: { type: 'object', properties: {} },
-        execute: async () => { editCalls += 1; return { ok: true }; },
-      }],
+  // The picked model's provider HAS a key: the runner's upstream E_PROVIDER
+  // keeps the loop's own copy.
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'sk-live-looking-openai-key';
+  try {
+    let modelCalls = 0;
+    let editCalls = 0;
+    const { res, frames } = makeFakeRes();
+    await withStubbedAgentRunner({
+      executeAgentRunnerTurn: async () => ({
+        ok: false,
+        skipped: false,
+        artifacts: [],
+        stoppedReason: 'E_PROVIDER',
+        errorMessage: 'El modelo seleccionado no está disponible.',
+      }),
+    }, async (fresh) => {
+      const result = await fresh.runAgenticChat({
+        openai: { chat: { completions: { create: async () => {
+          modelCalls += 1;
+          return finalizeMessage('must not run');
+        } } } },
+        model: 'gpt-4o-mini',
+        provider: 'OpenAI',
+        userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+        history: [],
+        res,
+        toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'] },
+        toolsOverride: [{
+          name: 'document_edit',
+          description: 'edit attached document',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => { editCalls += 1; return { ok: true }; },
+        }],
+      });
+      assert.equal(modelCalls, 0);
+      assert.equal(editCalls, 0);
+      assert.deepEqual(result.artifacts, []);
+      // The visible text is the loop's exact cause (owner policy), without a
+      // raw «E_PROVIDER:» prefix; the code stays structured in stoppedReason.
+      assert.equal(result.finalAnswer, 'No pude generar el documento. El modelo seleccionado no está disponible.');
+      assert.doesNotMatch(result.finalAnswer, /E_PROVIDER/);
+      assert.equal(String(frames().filter((frame) => frame?.replace).pop()?.content || ''), result.finalAnswer);
     });
-    assert.equal(modelCalls, 0);
-    assert.equal(editCalls, 0);
-    assert.deepEqual(result.artifacts, []);
-    assert.match(result.finalAnswer, /^E_PROVIDER:/);
-    assert.match(String(frames().filter((frame) => frame?.replace).pop()?.content || ''), /^E_PROVIDER:/);
-  });
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+  }
+});
+
+test('runAgenticChat: a picked model without a connection names the model and «no está configurada»', async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const { res, frames } = makeFakeRes();
+    await withStubbedAgentRunner({
+      // The runner's preflight: no key for the picked model's provider.
+      executeAgentRunnerTurn: async () => ({
+        ok: false,
+        skipped: true,
+        artifacts: [],
+        stoppedReason: 'E_PROVIDER',
+        errorMessage: 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.',
+      }),
+    }, async (fresh) => {
+      const result = await fresh.runAgenticChat({
+        openai: { chat: { completions: { create: async () => finalizeMessage('must not run') } } },
+        model: 'gpt-4o-mini',
+        provider: 'OpenAI',
+        userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+        history: [],
+        res,
+        toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'] },
+        toolsOverride: [{
+          name: 'document_edit',
+          description: 'edit attached document',
+          parameters: { type: 'object', properties: {} },
+          execute: async () => ({ ok: true }),
+        }],
+      });
+      assert.equal(
+        result.finalAnswer,
+        'No pude generar el documento. GPT-4o Mini no pudo responder: su conexión no está configurada. No cambié de modelo; elige otro en el selector o inténtalo más tarde.',
+      );
+      assert.doesNotMatch(result.finalAnswer, /gpt-4o-mini|E_PROVIDER|OpenRouter/);
+      assert.equal(String(frames().filter((frame) => frame?.replace).pop()?.content || ''), result.finalAnswer);
+    });
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+  }
 });
 
 test('turnPolicy observe mode attaches summary without changing behaviour', async () => {
@@ -2506,4 +2561,366 @@ test('runAgenticChat: an interrupted document editor never falls through to the 
     Module._load = originalLoad;
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
   }
+});
+
+// ── Live progress of the loop (stream-design A.5) ──────────────────────────
+
+function lastSentinelState(frames) {
+  let state = null;
+  for (const frame of frames) {
+    const content = typeof frame?.content === 'string' ? frame.content : '';
+    const match = content.match(/```agent-task-state\n([^\n]+)\n```/);
+    if (match) state = JSON.parse(match[1]);
+  }
+  return state;
+}
+
+function allSentinelStates(frames) {
+  return frames.map((frame) => {
+    const content = typeof frame?.content === 'string' ? frame.content : '';
+    const match = content.match(/```agent-task-state\n([^\n]+)\n```/);
+    return match ? JSON.parse(match[1]) : null;
+  }).filter(Boolean);
+}
+
+test('live progress: planning step, timed decide steps, agent_step stage frames and tickers that never leak', async () => {
+  const realSetTimeout = global.setTimeout;
+  const realClearTimeout = global.clearTimeout;
+  const tickers = new Map();
+  global.setTimeout = function trackedSetTimeout(fn, ms, ...rest) {
+    const handle = realSetTimeout(fn, ms, ...rest);
+    if (ms === 12000 || ms === 30000) tickers.set(handle, { ms, fn, handle, cleared: false, fired: false });
+    return handle;
+  };
+  global.clearTimeout = function trackedClearTimeout(handle) {
+    const entry = tickers.get(handle);
+    if (entry) entry.cleared = true;
+    return realClearTimeout(handle);
+  };
+  const progressLog = [];
+  const progress = {
+    protocol: 2,
+    enabled: true,
+    begin(phase, label, opts = {}) {
+      const row = { phase, label, tool: opts.tool, detail: opts.detail, updates: [], result: null };
+      progressLog.push(row);
+      return {
+        update(u) { row.updates.push(u); },
+        done(l, o = {}) { row.result = { status: 'done', label: l, ...o }; },
+        fail(l, o = {}) { row.result = { status: 'error', label: l, ...o }; },
+      };
+    },
+  };
+  try {
+    let calls = 0;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const openai = {
+      chat: {
+        completions: {
+          create: async (args) => {
+            // The finalize-guard reviewer (no tools param): approve.
+            if (!args || !args.tools) return { choices: [{ message: { role: 'assistant', content: '{"pass": true}' } }] };
+            calls += 1;
+            if (calls === 1) {
+              await gate;
+              return toolCallMessage('web_search', { query: 'precio del cobre 2026' }, 'call_s1');
+            }
+            return finalizeMessage('El cobre cotiza alto según reuters.com y bbc.com.');
+          },
+        },
+      },
+    };
+    const { res, frames } = makeFakeRes();
+    const run = agenticStream.runAgenticChat({
+      openai,
+      model: 'deepseek-v4-pro',
+      userQuery: 'explícame qué es el cobre',
+      history: [],
+      res,
+      maxSteps: 5,
+      progress,
+      contextTokens: 12400,
+      toolsOverride: [{
+        name: 'web_search',
+        description: 'Search the web.',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+          required: ['query'],
+          additionalProperties: false,
+        },
+        execute: async () => ({
+          results: [
+            { url: 'https://www.reuters.com/a', title: 'a' },
+            { url: 'https://bbc.com/b', title: 'b' },
+            { url: 'https://reuters.com/c', title: 'c' },
+          ],
+        }),
+      }],
+    });
+    for (let i = 0; i < 200 && calls === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls, 1, 'the first model call is in flight');
+
+    const first = allSentinelStates(frames())[0];
+    assert.equal(first.steps[0].id, 'agentic-start');
+    assert.equal(first.steps[0].label, 'Planificando cómo responder');
+    assert.equal(typeof first.steps[0].startedAt, 'number');
+    assert.equal(first.steps[0].detail, 'DeepSeek V4 Pro');
+
+    const planning = lastSentinelState(frames()).steps[0];
+    // The route's prompt size is not the loop's own prompt: not quoted.
+    assert.match(planning.detail, /^paso 1 de 5 · DeepSeek V4 Pro · \d+ herramientas disponibles$/);
+
+    // The model is silent: the 12 s ticker tells a fact, not a canned phrase.
+    const pending = [...tickers.values()].filter((t) => !t.cleared);
+    assert.deepEqual(pending.map((t) => t.ms).sort(), [12000, 30000]);
+    // Fire them now (as the event loop would at 12 s / 30 s).
+    const fire = (t) => { realClearTimeout(t.handle); t.fired = true; t.fn(); };
+    fire(pending.find((t) => t.ms === 12000));
+    assert.equal(lastSentinelState(frames()).steps[0].detail, 'DeepSeek V4 Pro sin respuesta todavía · paso 1 de 5');
+    fire(pending.find((t) => t.ms === 30000));
+    assert.match(lastSentinelState(frames()).steps[0].detail, /^Tarda más de lo habitual · límite del paso \d+ s$/);
+
+    release();
+    const result = await run;
+    assert.equal(result.stoppedReason, 'finalized');
+
+    const final = lastSentinelState(frames());
+    const start = final.steps.find((s) => s.id === 'agentic-start');
+    assert.equal(start.status, 'done');
+    assert.ok(start.endedAt >= start.startedAt);
+    assert.match(start.detail, /^Decidió en .+: buscar en la web$/);
+    const tool = final.steps.find((s) => s.id === 'step-1-0');
+    assert.equal(tool.status, 'done');
+    assert.equal(typeof tool.startedAt, 'number');
+    assert.ok(tool.endedAt >= tool.startedAt);
+    assert.equal(tool.detail, '3 resultados · 2 dominios');
+    const decide = final.steps.find((s) => /-decide$/.test(s.id));
+    assert.ok(decide, 'the second model call is its own step');
+    assert.equal(decide.label, 'Decidiendo el siguiente paso');
+    assert.equal(decide.status, 'done');
+    assert.ok(decide.startedAt && decide.endedAt >= decide.startedAt);
+    assert.match(decide.detail, /^Listo en /);
+
+    const stageFrames = frames().filter((f) => f.type === 'stage' && f.tool === 'web_search');
+    assert.equal(stageFrames.length, 1);
+    assert.equal(stageFrames[0].phase, 'agent_step');
+    assert.equal(Object.prototype.hasOwnProperty.call(stageFrames[0], 'callId'), false);
+
+    const modelRows = progressLog.filter((row) => row.phase === 'agent_model');
+    // A 50-char answer is not reviewed (the verifier's fast path): no row
+    // claims a «Verificación superada» that never ran.
+    assert.deepEqual(modelRows.map((row) => row.label), [
+      'Planificando cómo responder',
+      'Decidiendo el siguiente paso',
+    ]);
+    assert.ok(modelRows.every((row) => row.tool === 'model' && row.result && row.result.status === 'done'));
+    assert.equal(final.steps.some((s) => /-verify-\d+$/.test(s.id)), false);
+    assert.ok(modelRows[0].updates.some((u) => u.detail === 'DeepSeek V4 Pro sin respuesta todavía · paso 1 de 5'));
+    for (const row of progressLog) {
+      assert.doesNotMatch(`${row.label} ${row.detail || ''}`, /deepseek-v4-pro|openrouter/i);
+    }
+
+    assert.ok(tickers.size >= 4, 'two tickers per model call');
+    assert.ok([...tickers.values()].every((t) => t.cleared || t.fired), 'no ticker survives the run');
+  } finally {
+    global.setTimeout = realSetTimeout;
+    global.clearTimeout = realClearTimeout;
+  }
+});
+
+test('live progress: a failed tool step says why by category; a short answer gets no verification row', async () => {
+  const openai = makeFakeOpenAI([
+    toolCallMessage('read_url', { url: 'https://example.com/lento' }, 'call_r1'),
+    finalizeMessage('No pude leer la página; esto es lo que sé.'),
+  ]);
+  const { res, frames } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'deepseek-v4-flash',
+    userQuery: 'lee https://example.com/lento y resume',
+    history: [],
+    res,
+    maxSteps: 4,
+    progress: { protocol: 2, enabled: true, begin: () => ({ update() {}, done() {}, fail() {} }) },
+    toolsOverride: [{
+      name: 'read_url',
+      description: 'Read a URL.',
+      parameters: {
+        type: 'object',
+        properties: { url: { type: 'string' } },
+        required: ['url'],
+        additionalProperties: false,
+      },
+      execute: async () => { throw new Error('fetch timed out after 15000ms (sk-hidden)'); },
+    }],
+  });
+  assert.ok(result.finalAnswer);
+  const final = lastSentinelState(frames());
+  const failed = final.steps.find((s) => s.id === 'step-1-0');
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.detail, 'Error: tiempo agotado');
+  assert.ok(failed.endedAt >= failed.startedAt);
+  // The answer is too short to be reviewed: nothing was verified, so no
+  // verification step is shown.
+  assert.equal(final.steps.some((s) => /-verify-\d+$/.test(s.id)), false);
+  assert.doesNotMatch(JSON.stringify(final.steps.map((s) => s.detail || '')), /sk-hidden/);
+});
+
+test('live progress: a reviewed answer shows the verification step, which the review really ran', async () => {
+  let reviews = 0;
+  const longAnswer = 'El cobre es un metal de transición muy buen conductor eléctrico y térmico. '.repeat(6);
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          if (!args || !args.tools) { reviews += 1; return { choices: [{ message: { role: 'assistant', content: '{"pass": true}' } }] }; }
+          return finalizeMessage(longAnswer);
+        },
+      },
+    },
+  };
+  const rows = [];
+  const progress = {
+    protocol: 2,
+    enabled: true,
+    begin(phase, label, opts = {}) {
+      const row = { phase, label, tool: opts.tool, result: null };
+      rows.push(row);
+      return { update() {}, done(l) { row.result = { status: 'done', label: l }; }, fail(l) { row.result = { status: 'error', label: l }; } };
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'deepseek-v4-pro',
+    userQuery: 'explícame con detalle qué es el cobre y para qué se usa',
+    history: [],
+    res,
+    maxSteps: 3,
+    progress,
+    toolsOverride: [],
+  });
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(reviews, 1, 'the reviewer really ran');
+  const verifyRow = rows.find((r) => r.tool === 'verify');
+  assert.ok(verifyRow, 'the real check is a visible row');
+  assert.deepEqual(verifyRow.result, { status: 'done', label: 'Verificación superada' });
+  const verifyStep = lastSentinelState(frames()).steps.find((s) => /-verify-\d+$/.test(s.id));
+  assert.equal(verifyStep.label, 'Verificación superada');
+});
+
+test('live progress off (stale tab / kill switch): the loop keeps the previous timeline', async () => {
+  for (const progress of [null, { protocol: 1, enabled: true, begin: () => { throw new Error('no rows on protocol 1'); } }, { protocol: 1, enabled: false, begin: () => { throw new Error('killed'); } }]) {
+    const openai = makeFakeOpenAI([
+      toolCallMessage('read_url', { url: 'https://example.com/private/path?token=SECRET' }, 'call_r1'),
+      finalizeMessage('Resumen breve de la página.'),
+    ]);
+    const { res, frames } = makeFakeRes();
+    const result = await agenticStream.runAgenticChat({
+      openai,
+      model: 'deepseek-v4-pro',
+      userQuery: 'lee https://example.com/private/path y resume',
+      history: [],
+      res,
+      maxSteps: 4,
+      progress,
+      toolsOverride: [{
+        name: 'read_url',
+        description: 'Read a URL.',
+        parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false },
+        execute: async () => ({ text: 'contenido' }),
+      }],
+    });
+    assert.ok(result.finalAnswer);
+    const states = allSentinelStates(frames());
+    assert.equal(states[0].steps[0].label, 'Analizando la pregunta', 'legacy first step');
+    const final = lastSentinelState(frames());
+    assert.equal(final.steps.some((s) => /-decide$|-verify-\d+$/.test(String(s.id))), false, 'no decide / verify steps');
+    const stage = frames().find((f) => f.type === 'stage' && f.tool === 'read_url');
+    assert.ok(stage);
+    assert.equal(Object.prototype.hasOwnProperty.call(stage, 'phase'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(stage, 'detail'), false);
+  }
+});
+
+test('live progress: a tool URL shows its domain only — never a path, token or OAuth code', async () => {
+  const openai = makeFakeOpenAI([
+    toolCallMessage('web_fetch', { url: 'https://docs.example.org/reset/abc123?token=SECRET&code=OAUTHCODE&state=S' }, 'call_w1'),
+    toolCallMessage('web_search', { query: 'estado de https://intranet.example.com/private/doc?sig=SIGNED123 hoy' }, 'call_w2'),
+    finalizeMessage('Listo.'),
+  ]);
+  const { res, frames } = makeFakeRes();
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'deepseek-v4-pro',
+    userQuery: 'revisa ese enlace y busca su estado',
+    history: [],
+    res,
+    maxSteps: 5,
+    progress: { protocol: 2, enabled: true, begin: () => ({ update() {}, done() {}, fail() {} }) },
+    toolsOverride: [
+      {
+        name: 'web_fetch',
+        description: 'Fetch a URL.',
+        parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false },
+        execute: async () => ({ text: 'ok' }),
+      },
+      {
+        name: 'web_search',
+        description: 'Search.',
+        parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+        execute: async () => ({ results: [] }),
+      },
+    ],
+  });
+  const final = lastSentinelState(frames());
+  const fetchStep = final.steps.find((s) => s.id === 'step-1-0');
+  assert.equal(fetchStep.detail, 'docs.example.org');
+  const stageFrames = frames().filter((f) => f.type === 'stage');
+  assert.equal(stageFrames.find((f) => f.tool === 'web_fetch').detail, 'docs.example.org');
+  const everything = JSON.stringify([stageFrames.map((f) => f.detail || ''), final.steps.map((s) => s.detail || '')]);
+  assert.doesNotMatch(everything, /SECRET|OAUTHCODE|abc123|SIGNED123|\/reset\/|\/private\//);
+});
+
+test('live progress: a failed model call names the model and the exact cause', async () => {
+  const openai = {
+    chat: { completions: { create: async () => { throw Object.assign(new Error('Insufficient Balance org_secret_7'), { status: 402 }); } } },
+  };
+  const { res, frames } = makeFakeRes();
+  const rows = [];
+  try {
+    await agenticStream.runAgenticChat({
+      openai,
+      model: 'deepseek-v4-pro',
+      userQuery: 'explícame qué es el cobre en detalle',
+      history: [],
+      res,
+      maxSteps: 3,
+      recordProviderFailures: false,
+      progress: {
+        protocol: 2,
+        enabled: true,
+        begin(phase, label) {
+          const row = { phase, label, result: null };
+          rows.push(row);
+          return { update() {}, done(l, o) { row.result = { status: 'done', ...(o || {}) }; }, fail(l, o) { row.result = { status: 'error', ...(o || {}) }; } };
+        },
+      },
+    });
+  } catch (_) { /* a dry provider may end the run: the timeline is what matters */ }
+  const start = allSentinelStates(frames()).map((st) => st.steps.find((s) => s.id === 'agentic-start')).filter(Boolean).pop();
+  assert.equal(start.status, 'error');
+  assert.equal(start.detail, 'DeepSeek V4 Pro no tiene saldo en su proveedor');
+  const failedRow = rows.find((r) => r.result && r.result.status === 'error');
+  assert.equal(failedRow.result.detail, 'DeepSeek V4 Pro no tiene saldo en su proveedor');
+  // The timeline (sentinel steps, stage frames, progress rows) never carries
+  // the provider's own error text.
+  const timeline = JSON.stringify([
+    allSentinelStates(frames()).map((st) => st.steps),
+    frames().filter((f) => f.type === 'stage'),
+    rows,
+  ]);
+  assert.doesNotMatch(timeline, /org_secret_7|Insufficient/);
 });

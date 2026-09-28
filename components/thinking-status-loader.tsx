@@ -33,6 +33,13 @@ export type ThinkingStatusLoaderProps = {
   hideLabel?: boolean
   /** Set false when nested inside another role=status region. */
   announce?: boolean
+  /**
+   * The caller announces this status itself (its own throttled live region):
+   * no screen-reader copy here, the chip is decorative.
+   */
+  silent?: boolean
+  /** Root element: `span` inside a button / summary (phrasing content only). */
+  as?: "div" | "span"
   className?: string
   onSettled?: (state: Extract<LoaderState, "completado" | "error">) => void
 }
@@ -70,35 +77,83 @@ function useFallbackElapsed(enabled: boolean): number {
   return enabled ? elapsed : 0
 }
 
-/** Throttled copy of `text` for screen readers (updates every THINKING_ANNOUNCE_INTERVAL_MS). */
-function useThrottledAnnouncement(text: string, enabled: boolean): string {
+/** Two step announcements are never closer than this (ms). */
+const ANNOUNCE_MIN_GAP_MS = 1500
+
+/**
+ * Throttled copy of `text` for screen readers (updates every
+ * THINKING_ANNOUNCE_INTERVAL_MS). A new step (`key` change) is announced right
+ * away, at most once per ANNOUNCE_MIN_GAP_MS; elapsed seconds and live counts
+ * only move on the throttle tick.
+ */
+export function useThrottledAnnouncement(text: string, enabled: boolean, key = ""): string {
   const [announced, setAnnounced] = React.useState(text)
   const latest = React.useRef(text)
   latest.current = text
+  const lastAt = React.useRef(0)
+  const lastKey = React.useRef(key)
   React.useEffect(() => {
     if (!enabled) {
       setAnnounced(text)
       return
     }
-    const id = window.setInterval(() => setAnnounced(latest.current), THINKING_ANNOUNCE_INTERVAL_MS)
+    const id = window.setInterval(() => {
+      lastAt.current = Date.now()
+      setAnnounced(latest.current)
+    }, THINKING_ANNOUNCE_INTERVAL_MS)
     return () => window.clearInterval(id)
     // `text` intentionally omitted: while live, announcements only move on the throttle tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled])
+  React.useEffect(() => {
+    if (!enabled || !key || key === lastKey.current) return
+    lastKey.current = key
+    if (Date.now() - lastAt.current < ANNOUNCE_MIN_GAP_MS) return
+    lastAt.current = Date.now()
+    setAnnounced(latest.current)
+  }, [enabled, key])
   return enabled ? announced : text
+}
+
+/** Announcement identity of a label: digits (counts, sizes) do not make a new step. */
+export function announcementKey(text: string): string {
+  return text.replace(/[\d.,]+/g, "#").replace(/\s+/g, " ").trim()
+}
+
+function TerminalGlyph({ state, px }: { state: "completado" | "error"; px: number }) {
+  const failed = state === "error"
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={px}
+      height={px}
+      aria-hidden="true"
+      data-thinking-loader-glyph={state}
+      className="pointer-events-none select-none"
+      style={{ width: px, height: px, color: failed ? "var(--step-failed,#B45353)" : "var(--step-done,#6B6660)" }}
+    >
+      {failed ? (
+        <path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      ) : (
+        <path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      )}
+    </svg>
+  )
 }
 
 /**
  * Status chip for Pensando / AgenticSteps / RunTrace header.
- * In-progress always uses PensandoBars (the ThinkingCore glyph, think accent #2E7D32).
- * Terminal states keep the static check / X. The step list (not this chip)
- * keeps semantic colors — running is --step-running blue, never brand-red.
+ * In-progress always uses PensandoBars (the ThinkingCore glyph, monochrome:
+ * `--think-accent` is the foreground — black on light, white on dark).
+ * Terminal states draw a quiet check / X in currentColor. Labels are a muted
+ * neutral grey (`--think-text`), never brand colours.
  *
- * Live «Pensando…» (state `pensando`, no label override) keeps telling the
- * user that work is happening: the label beats in sync with the core, cycles
- * a short phrase every ~3.5 s and shows «· 12 s» ticking every second. The
- * visual text is aria-hidden; a visually-hidden node updates every ~10 s so
- * `aria-live` regions are not spammed.
+ * With a real step label («Leyendo «contrato.pdf»») the chip shows it with
+ * «· 12 s» for that step. Only a bare «Pensando…» (state `pensando`, no label)
+ * falls back to cycling a short phrase every ~3.5 s. While in progress the
+ * visual text is aria-hidden; a visually-hidden node announces a new step
+ * right away and the ticking seconds only every ~10 s, so `aria-live` regions
+ * are not spammed.
  */
 const DENSITY_PX: Record<ThinkingStatusLoaderDensity, number> = {
   chip: 22,
@@ -113,6 +168,8 @@ export function ThinkingStatusLoader({
   density,
   hideLabel = false,
   announce = true,
+  silent = false,
+  as: Root = "div",
   className,
   onSettled,
 }: ThinkingStatusLoaderProps) {
@@ -123,6 +180,7 @@ export function ThinkingStatusLoader({
   const px = glyph ? DENSITY_PX.glyph : compact ? 28 : DENSITY_PX.chip
   const explicitLabel = String(label || "").trim().length > 0
   const live = state === "pensando" && !terminal && !hideLabel && !explicitLabel
+  const ticking = !terminal && !hideLabel
   const phrase = useThinkingLivePhrase(live)
   const fallbackElapsed = useFallbackElapsed(live && typeof elapsedSec !== "number")
   const elapsedValue =
@@ -130,7 +188,7 @@ export function ThinkingStatusLoader({
   const elapsed = elapsedValue === null ? null : formatElapsed(elapsedValue)
   const text = live ? phrase : baseText
   const spoken = elapsed ? `${text} ${elapsed}` : text
-  const announced = useThrottledAnnouncement(spoken, live)
+  const announced = useThrottledAnnouncement(spoken, ticking && !silent, live ? "" : announcementKey(text))
   const chip = loaderChipSrc(state)
 
   React.useEffect(() => {
@@ -142,11 +200,12 @@ export function ThinkingStatusLoader({
   }, [onSettled, state])
 
   return (
-    <div
-      role={announce ? "status" : undefined}
-      aria-live={announce ? "polite" : undefined}
+    <Root
+      role={announce && !silent ? "status" : undefined}
+      aria-live={announce && !silent ? "polite" : undefined}
       aria-atomic={announce ? true : undefined}
-      aria-label={live ? announced : baseText}
+      aria-label={silent ? undefined : ticking ? announced : baseText}
+      aria-hidden={silent ? true : undefined}
       data-thinking-loader={state}
       data-thinking-live={live ? "1" : undefined}
       data-loader-src={terminal ? loaderSrc(state) : chip}
@@ -165,30 +224,20 @@ export function ThinkingStatusLoader({
         aria-hidden="true"
       >
         {terminal ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={chip}
-            alt=""
-            width={px}
-            height={px}
-            className="pointer-events-none select-none object-contain"
-            style={{ width: px, height: px }}
-            draggable={false}
-            data-thinking-loader-img={chip}
-          />
+          <TerminalGlyph state={state === "error" ? "error" : "completado"} px={px} />
         ) : (
           <PensandoBars size={px} className="pointer-events-none select-none" />
         )}
       </span>
       {hideLabel ? null : (
         <span
-          aria-hidden={live ? true : undefined}
+          aria-hidden={ticking ? true : undefined}
           data-thinking-phrase={live ? text : undefined}
           className={cn(
             "min-w-0 truncate font-sans tracking-[-0.01em]",
-            compact ? "text-[13px] leading-5" : "text-[13.5px] font-medium leading-5",
-            state === "error" ? "text-[var(--step-failed,#B45353)]" : "text-[var(--step-running,#2E7D32)]",
-            state === "completado" && "text-[var(--step-done,#059669)]",
+            compact ? "text-[13px] leading-5" : "text-[13.5px] font-normal leading-5",
+            state === "error" ? "text-[var(--step-failed,#B45353)]" : "text-[var(--think-text,#57534E)]",
+            state === "completado" && "text-[var(--step-done,#6B6660)]",
             !terminal && "thinking-shimmer-text",
             live && "thinking-live-label",
           )}
@@ -198,14 +247,14 @@ export function ThinkingStatusLoader({
       )}
       {elapsed && !hideLabel ? (
         <span
-          aria-hidden={live ? true : undefined}
-          data-thinking-elapsed={live ? elapsedValue ?? undefined : undefined}
-          className="ml-1 shrink-0 font-sans text-[12px] tabular-nums leading-5 text-muted-foreground/70"
+          aria-hidden={ticking ? true : undefined}
+          data-thinking-elapsed={ticking ? elapsedValue ?? undefined : undefined}
+          className="-ml-1 shrink-0 font-sans text-[12px] tabular-nums leading-5 text-[var(--think-dim,#78716C)]"
         >
-          {live ? `· ${elapsed}` : elapsed}
+          {`· ${elapsed}`}
         </span>
       ) : null}
-      {live && !hideLabel ? (
+      {ticking && !silent ? (
         /* Read by the enclosing live region (this chip or the timeline); the
            visual phrase/elapsed spans above are aria-hidden so only this
            throttled copy reaches screen readers. */
@@ -213,7 +262,7 @@ export function ThinkingStatusLoader({
           {announced}
         </span>
       ) : null}
-    </div>
+    </Root>
   )
 }
 

@@ -2,10 +2,23 @@
 
 // Document agent LLM runtime: provider ladder + per-call failover. Offline.
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const rt = require('../src/services/doc-agent/llm-runtime');
+const billing = require('../src/services/ai/billing-failover');
+const keyHealth = require('../src/utils/provider-key-health');
+
+// Provider failures now feed the process-wide funding memo (billing-failover
+// + provider-key-health): isolate every test from the previous one.
+beforeEach(() => {
+  billing.__resetForTests();
+  keyHealth.clear();
+});
+afterEach(() => {
+  billing.__resetForTests();
+  keyHealth.clear();
+});
 const { runDocAgentLoop } = require('../src/services/doc-agent/loop');
 const { callModel, runAgentLoop } = require('../src/services/agent-runner/loop');
 
@@ -554,13 +567,28 @@ test('a document turn with a missing selected API returns visible E_PROVIDER', a
   const previous = process.env.XAI_API_KEY;
   delete process.env.XAI_API_KEY;
   try {
+    // The picker's admin row for Grok 4.7 (not in the static catalog).
+    const prisma = {
+      aiModel: {
+        findFirst: async ({ where }) => (where && where.name === 'grok-4.7'
+          ? { name: 'grok-4.7', displayName: 'Grok 4.7', provider: 'xAI', isActive: true }
+          : null),
+      },
+    };
     const result = await runAgentRunnerForDocRoute({
       prompt: 'crea un documento Word sobre el ciclo del agua',
       pickedModel: 'xAI:grok-4.7',
+      prisma,
     });
     assert.equal(result.agentRunnerClaimed, true);
     assert.equal(result.reason, 'E_PROVIDER');
-    assert.match(result.message, /^E_PROVIDER:/);
+    // Honest Spanish copy naming the model and the exact cause (owner
+    // policy), no raw «E_PROVIDER:» prefix (the code stays in `reason`).
+    assert.equal(
+      result.message,
+      'No pude generar el documento. Grok 4.7 no pudo responder: su conexión no está configurada. No cambié de modelo; elige otro en el selector o inténtalo más tarde.',
+    );
+    assert.doesNotMatch(result.message, /E_PROVIDER|grok-4\.7/);
   } finally {
     if (previous === undefined) delete process.env.XAI_API_KEY;
     else process.env.XAI_API_KEY = previous;

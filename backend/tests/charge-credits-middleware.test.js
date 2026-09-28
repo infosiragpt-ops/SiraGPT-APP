@@ -213,3 +213,18 @@ test('fallback and replay charges are never refunded', async () => {
     },
   }), null);
 });
+
+test('insufficient credits 402 keeps its error string and adds code, retryable and Spanish copy', async () => {
+  fakePrisma.setBalance('u1', 0n);
+  const ctx = context({ idempotencyKey: 'empty-balance-key' });
+  await chargeCredits({ feature: 'paraphrase', cost: 5 })(ctx.req, ctx.res, ctx.next);
+  const { statusCode, responseBody, nextCalls } = ctx.snapshot();
+  assert.equal(statusCode, 402);
+  assert.equal(nextCalls, 0);
+  // lib/code-chat-blocker.ts matches this exact string.
+  assert.equal(responseBody.error, 'insufficient credits');
+  assert.equal(responseBody.code, 'insufficient_credits');
+  assert.equal(responseBody.retryable, false);
+  assert.match(responseBody.message, /sin créditos/);
+  assert.equal(responseBody.message, chargeCredits.INSUFFICIENT_CREDITS_MESSAGE);
+});

@@ -298,6 +298,143 @@ function truncate(s, n) {
   return str.length <= n ? str : str.slice(0, n - 1) + '…';
 }
 
+// ── Live progress of the agentic loop (sentinel steps + agent_model rows) ──
+const turnProgressLib = require('./turn-progress');
+const LIVE_DETAIL_MAX = 200;
+const LIVE_TICK_REASONING_MS = 12000;
+const LIVE_TICK_SLOW_MS = 30000;
+
+function capitalizeFirst(text) {
+  const s = String(text || '');
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// What the model decided to do next, in plain Spanish («buscar en la web y
+// leer 2 páginas»). Unknown tools are counted, never named by their id.
+const LIVE_DECISION_VERBS = {
+  web_search: ['buscar en la web', (n) => `hacer ${n} búsquedas en la web`],
+  deep_search: ['investigar a fondo en la web', (n) => `hacer ${n} investigaciones en la web`],
+  scientific_search: ['buscar artículos científicos', (n) => `hacer ${n} búsquedas científicas`],
+  read_url: ['leer una página', (n) => `leer ${n} páginas`],
+  web_fetch: ['leer una página', (n) => `leer ${n} páginas`],
+  web_extract: ['extraer una página', (n) => `extraer ${n} páginas`],
+  rag_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
+  docintel_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
+  docintel_analyze: ['analizar tus documentos', () => 'analizar tus documentos'],
+  memory_recall: ['consultar tu memoria', () => 'consultar tu memoria'],
+  memory_search: ['consultar tu memoria', () => 'consultar tu memoria'],
+  python_exec: ['ejecutar Python', (n) => `ejecutar Python ${n} veces`],
+  create_document: ['crear un archivo', (n) => `crear ${n} archivos`],
+  document_edit: ['editar tu documento', () => 'editar tu documento'],
+  verify_artifact: ['verificar el archivo', (n) => `verificar ${n} archivos`],
+  generate_image: ['generar una imagen', (n) => `generar ${n} imágenes`],
+  create_chart: ['crear una gráfica', (n) => `crear ${n} gráficas`],
+  update_plan: ['actualizar el plan', () => 'actualizar el plan'],
+  finalize: ['responder', () => 'responder'],
+};
+
+function joinSpanish(parts) {
+  if (parts.length <= 1) return parts[0] || '';
+  return `${parts.slice(0, -1).join(', ')} y ${parts[parts.length - 1]}`;
+}
+
+function describeLiveDecision(toolNames, took) {
+  const counts = new Map();
+  for (const name of toolNames || []) {
+    if (!name) continue;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  if (counts.size === 0) return took ? `Respondió en ${took}` : 'Respondió';
+  if (counts.size === 1 && counts.has('finalize')) return took ? `Listo en ${took}` : 'Listo';
+  const phrases = [];
+  let others = 0;
+  for (const [name, n] of counts) {
+    const verbs = LIVE_DECISION_VERBS[name];
+    if (!verbs) { others += n; continue; }
+    const phrase = n > 1 ? verbs[1](n) : verbs[0];
+    if (!phrases.includes(phrase)) phrases.push(phrase);
+  }
+  if (others) phrases.push(others === 1 ? 'usar otra herramienta' : `usar ${others} herramientas más`);
+  const what = joinSpanish(phrases.slice(0, 4));
+  return took ? `Decidió en ${took}: ${what}` : `Decidió: ${what}`;
+}
+
+function liveSearchQuery(value) {
+  try {
+    // The query the search really runs: URLs reduced to their origin.
+    return require('../orchestration/gateway-adapter').sanitizeWebSearchQuery(value);
+  } catch (_) {
+    return String(value || '').replace(/https?:\/\/\S+/gi, '[URL]');
+  }
+}
+
+// The one argument that says what a tool call is about, when its label does
+// not already show it (a web domain, a path, a file name…). Never code or
+// secrets: a URL is reduced to its domain (a signed URL, `?token=` or an
+// OAuth `?code=&state=` callback never reaches the timeline) and a query is
+// sanitized and capped at 60 chars.
+function liveArgsDetail(args, label) {
+  if (!args || typeof args !== 'object') return '';
+  const shown = String(label || '');
+  for (const key of ['url', 'path', 'filename', 'query', 'title']) {
+    const value = args[key];
+    if (typeof value !== 'string' || !value.trim()) continue;
+    let text;
+    if (key === 'url') text = prettyDomain(value.trim());
+    else if (key === 'query') text = truncate(liveSearchQuery(value).replace(/\s+/g, ' ').trim(), 60);
+    else text = truncate(value.replace(/\s+/g, ' ').trim(), 120);
+    if (!text) return '';
+    if (shown.includes(text.replace(/…$/, ''))) return '';
+    return text;
+  }
+  return '';
+}
+
+function domainCount(list) {
+  const domains = new Set();
+  for (const item of list) {
+    const url = item && (item.url || item.link || item.href);
+    if (typeof url !== 'string') continue;
+    try { domains.add(new URL(url).hostname.replace(/^www\./, '')); } catch (_) { /* not a URL */ }
+  }
+  return domains.size;
+}
+
+// A short fact about what a tool returned («12 resultados · 3 dominios»).
+function liveResultDetail(obs) {
+  if (!obs || typeof obs !== 'object') return '';
+  const results = Array.isArray(obs.results) ? obs.results
+    : (Array.isArray(obs.sources) ? obs.sources : (Array.isArray(obs.hits) ? obs.hits : null));
+  if (results) {
+    const n = results.length;
+    if (!n) return 'Sin resultados';
+    const d = domainCount(results);
+    return `${turnProgressLib.fmtInt(n)} ${n === 1 ? 'resultado' : 'resultados'}${d > 1 ? ` · ${d} dominios` : ''}`;
+  }
+  return '';
+}
+
+// A failed tool, by category — the full cause stays in the step reasoning.
+function liveErrorCategory(text) {
+  const t = String(text || '');
+  if (/time ?out|timed out|tiempo agotado|ETIMEDOUT/i.test(t)) return 'tiempo agotado';
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|permission|permiso|denied|denegad/i.test(t)) return 'sin permiso';
+  if (/\b404\b|not found|no encontr/i.test(t)) return 'no encontrado';
+  if (/ECONN|ENOTFOUND|network|fetch failed|socket hang up|conexi[oó]n/i.test(t)) return 'conexión fallida';
+  if (/budget|l[ií]mite|limit|exhausted|agotad/i.test(t)) return 'límite alcanzado';
+  return 'falló la ejecución';
+}
+
+function guardCategoryEs(category) {
+  switch (String(category || '')) {
+    case 'missing_tools': return 'faltan pasos requeridos';
+    case 'E_VERIFICATION_REJECTED': return 'la respuesta no cumplía lo pedido';
+    case 'E_VERIFICATION_TIMEOUT': return 'la verificación tardó demasiado';
+    case 'E_CANCELLED': return 'verificación cancelada';
+    default: return 'la verificación pidió ajustes';
+  }
+}
+
 function prettyDomain(url) {
   if (!url) return '';
   try { return new URL(String(url)).hostname.replace(/^www\./, ''); }
@@ -313,6 +450,70 @@ function safeArgs(raw) {
 
 const SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE =
   'No entregué el documento editado porque ninguna copia generada superó la validación de integridad. Conservé el archivo original y no generé un documento sustituto.';
+
+// A follow-up edit of a document generated earlier in the chat that no
+// editor could complete. Honest: no HTML preview or script as a substitute.
+const GENERATED_DOCUMENT_EDIT_FAILURE_MESSAGE =
+  'No pude editar el documento que generé antes en este chat: no logré cargar la última versión del archivo. '
+  + 'No lo reemplacé por una vista HTML ni por un script. Vuelve a intentarlo o adjunta el archivo y lo edito sobre esa versión.';
+
+// Office formats a follow-up edit can target, from the words of the request.
+const OFFICE_EDIT_FORMAT_RULES = [
+  { format: 'pptx', re: /\b(?:pptx?|ppts|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|slides?|deck)\b|\.pptx?\b/i },
+  { format: 'docx', re: /\b(?:docx?|word)\b|\.docx?\b/i },
+  { format: 'xlsx', re: /\b(?:xlsx?|excel|hoja\s+de\s+c[aá]lculo|planilla)\b|\.xlsx?\b/i },
+];
+const OFFICE_EDIT_FORMATS = new Set(['pptx', 'pptm', 'potx', 'docx', 'docm', 'dotx', 'xlsx', 'xlsm', 'xltx']);
+// What the loop produced INSTEAD of the document (incident: .html + .py).
+const OFFICE_SUBSTITUTE_FORMATS = new Set(['html', 'htm', 'py', 'js', 'ts', 'md', 'markdown', 'txt', 'json', 'svg', 'png', 'jpg', 'jpeg', 'csv', 'sh']);
+
+function officeFormatsNamedIn(text = '') {
+  const t = String(text || '');
+  return OFFICE_EDIT_FORMAT_RULES.filter((rule) => rule.re.test(t)).map((rule) => rule.format);
+}
+
+// pptm → pptx, dotx → docx…: the family the honesty check accepts.
+function officeEditFamily(format) {
+  const f = String(format || '').toLowerCase().replace(/^.*\./, '');
+  if (!OFFICE_EDIT_FORMATS.has(f)) return null;
+  return f.startsWith('ppt') || f === 'potx' ? 'pptx' : f.startsWith('doc') || f === 'dotx' ? 'docx' : 'xlsx';
+}
+
+// A generated artifact the chat loop cannot edit (no upload to mount): the
+// follow-up goes to the AgentRunner or ends honestly.
+const GENERATED_EDIT_TARGET_FORMATS = new Set([...OFFICE_EDIT_FORMATS, 'pdf']);
+
+// The user explicitly asks for ANOTHER format or a derived output (a
+// dashboard, a page, markdown, a summary…): not a same-file Office edit, so
+// create_artifact stays and html / md / csv outputs are the deliverable.
+const NON_OFFICE_DELIVERABLE_RE = /\b(?:html?|p[aá]gina\s+web|sitio\s+web|landing|dashboard|tablero|markdown|md|csv|json|png|jpe?g|svg|script|python)\b|\b(?:convi[eé]rt\w*|convert\w*|exp[oó]rta\w*|export|transforma\w*|pasa(?:lo|la|los|las|r)?\s+a|p[aá]sa(?:lo|la|los|las)\s+a|guarda(?:lo|la|r)?\s+como|res[uú]m(?:e|es|ir|elo|ela|eme|emelo|id[oa])|extr[aá](?:e|er|elo|ela|igas?)|extract\w*|summari[sz]\w*)\b/i;
+function requestsNonOfficeDeliverable(text = '') {
+  return NON_OFFICE_DELIVERABLE_RE.test(String(text || ''));
+}
+
+function isQuestionOrAdviceTurn(text = '') {
+  try {
+    return require('./agent-runner').isQuestionOrAdviceRequest(text);
+  } catch (_) {
+    return /\?\s*$/.test(String(text || '').trim());
+  }
+}
+
+function artifactFormatOf(artifact = {}) {
+  const fromFormat = String(artifact.format || '').toLowerCase().replace(/^\./, '');
+  if (fromFormat) return fromFormat;
+  const name = String(artifact.filename || artifact.name || '');
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+function officeEditSubstituteMessage(formats = []) {
+  const noun = formats.length === 1
+    ? ({ pptx: 'la presentación', docx: 'el documento de Word', xlsx: 'el libro de Excel' }[formats[0]] || 'el documento')
+    : 'el documento';
+  return `No pude editar ${noun} en este turno, así que no lo doy por terminado: no lo reemplazo por una página HTML ni por un script. `
+    + 'El archivo original no se modificó. Vuelve a intentarlo y lo edito sobre la última versión.';
+}
 
 function sourcePreservingResultValidation(item) {
   return item?.validation || item?.artifact?.validation || null;
@@ -655,6 +856,23 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
  * @param {{ stoppedReason?: string, finalAnswer?: string } | null} result
  * @returns {boolean}
  */
+/**
+ * The AgentRunner's preflight E_PROVIDER for a picked model whose provider
+ * has no connection: «No pude generar el documento. <modelo> no pudo
+ * responder: su conexión no está configurada. …» (owner policy: the model by
+ * its display name and the exact cause). null for any other failure.
+ */
+async function runnerUnconfiguredAnswer(failure, provider, model, prisma = null) {
+  if (!failure || failure.reason !== 'E_PROVIDER') return null;
+  try {
+    const runner = require('./agent-runner');
+    if (typeof runner.runnerUnconfiguredFailureMessage !== 'function') return null;
+    return (await runner.runnerUnconfiguredFailureMessage(runner.runnerModelSpec(provider, model), { prisma })) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function isHandledAgenticChatResult(result) {
   if (!result || typeof result !== 'object') return false;
   const reason = String(result.stoppedReason || '').trim();
@@ -1036,6 +1254,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // RLHF phase-2 few-shot block (already retrieved by /generate). Empty
       // string when steering missed or was skipped. Fail-open: never required.
       preferenceBlock = '',
+      // Live progress of the turn (services/turn-progress, owned by the
+      // route): the loop's model calls become `agent_model` rows. Optional.
+      progress = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -1301,27 +1522,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // pipeline — that silent fallback produced the 8-slide template decks.
     let agentRunnerClaimedTurn = false;
     let agentRunnerFailure = null;
-    try {
-      const {
-        shouldRunAgentRunner,
-        executeAgentRunnerTurn,
-        hasConversationArtifacts,
-      } = require('./agent-runner');
-      let prior = false;
-      if (toolContext.prisma && toolContext.userId && toolContext.chatId) {
-        try {
-          prior = await hasConversationArtifacts(toolContext.prisma, {
-            userId: toolContext.userId,
-            chatId: toolContext.chatId,
-          });
-        } catch (_) { prior = false; }
-      }
-      if (!codingWorkspace && shouldRunAgentRunner({
-        fileIds: preloopFileIds,
-        hasPriorArtifacts: prior,
-        text: userQuery,
-      })) {
-        agentRunnerClaimedTurn = true;
+    // The chat already holds a generated document (GeneratedArtifact row or
+    // artifact metadata). Read again below: an edit of a GENERATED file has
+    // no upload, so the loop's document_edit tool cannot reach it.
+    let prior = false;
+    // Names of this turn's uploads (format of an attached Office file).
+    const uploadedFileRefs = Array.isArray(toolContext.fileMetadata)
+      ? toolContext.fileMetadata.filter((file) => file && file.name)
+      : [];
+    // Format of the artifact this follow-up edits (latest, or the one the
+    // request names): 'pptx' / 'docx' / 'xlsx' route to the runner; an html
+    // page, a script or an image stays with the chat loop.
+    let priorArtifactFormat = null;
+    // Runs the AgentRunner on this turn. Returns the finished turn when it
+    // delivered (or failed with a partial delivery); otherwise records
+    // agentRunnerFailure and returns null.
+    const invokeAgentRunner = async () => {
+      agentRunnerClaimedTurn = true;
+      try {
+        const { executeAgentRunnerTurn } = require('./agent-runner');
         try {
           const { createActivityTraceCollector, createArtifactThumbSaver } = require('./agent-runner/activity-trace');
           agentRunnerTrace = createActivityTraceCollector({
@@ -1374,16 +1593,76 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           reason: ran?.stoppedReason || 'no_output',
           detail: ran?.errorMessage || null,
         };
-      }
-    } catch (agentRunnerErr) {
-      if (signal?.aborted) throw agentRunnerErr;
-      try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
-      if (agentRunnerClaimedTurn) {
+      } catch (agentRunnerErr) {
+        if (signal?.aborted) throw agentRunnerErr;
+        try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
         agentRunnerFailure = {
           reason: 'exception',
           detail: agentRunnerErr?.message || String(agentRunnerErr),
         };
       }
+      return null;
+    };
+    try {
+      const {
+        shouldRunAgentRunner,
+        hasConversationArtifacts,
+        getConversationArtifactFormat,
+      } = require('./agent-runner');
+      if (toolContext.prisma && toolContext.userId && toolContext.chatId) {
+        try {
+          prior = await hasConversationArtifacts(toolContext.prisma, {
+            userId: toolContext.userId,
+            chatId: toolContext.chatId,
+          });
+        } catch (_) { prior = false; }
+        if (prior && typeof getConversationArtifactFormat === 'function') {
+          try {
+            priorArtifactFormat = await getConversationArtifactFormat(toolContext.prisma, {
+              userId: toolContext.userId,
+              chatId: toolContext.chatId,
+              instruction: userQuery,
+            });
+          } catch (_) { priorArtifactFormat = null; }
+        }
+      }
+      if (!codingWorkspace && shouldRunAgentRunner({
+        files: uploadedFileRefs,
+        fileIds: preloopFileIds,
+        hasPriorArtifacts: prior,
+        priorArtifactFormat,
+        text: userQuery,
+      })) {
+        const finished = await invokeAgentRunner();
+        if (finished) return finished;
+      }
+    } catch (agentRunnerErr) {
+      if (signal?.aborted) throw agentRunnerErr;
+      try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
+    }
+    // A DESIGN upgrade («agrégale más diseño», «hazla más profesional») is
+    // not something the surgical quick editor can do: it read «agregarle un
+    // poco más» as «add one slide» and appended a filler «— ampliación»
+    // slide marked as done. Those turns belong to the AgentRunner only.
+    let officeEditFormats = [];
+    let designUpgradeTurn = false;
+    let designTarget = null;
+    try {
+      const { isDesignUpgradeRequest, resolveDesignTarget } = require('./agent-runner');
+      designTarget = resolveDesignTarget(userQuery, { priorArtifactFormat, files: uploadedFileRefs });
+      designUpgradeTurn = Boolean(designTarget) && isDesignUpgradeRequest(userQuery, { officeTarget: designTarget });
+    } catch (_) { designUpgradeTurn = false; }
+    // A request that ALSO reads as a professional rewrite of the text («hazlo
+    // más bonito y profesional el word») keeps the quick editor's
+    // professional_edit as a rescue.
+    let skipQuickEditorForDesign = designUpgradeTurn;
+    if (skipQuickEditorForDesign) {
+      try {
+        const { requestWantsProfessionalEditing } = require('./source-preserving-document-edit');
+        if (typeof requestWantsProfessionalEditing === 'function' && requestWantsProfessionalEditing(userQuery)) {
+          skipQuickEditorForDesign = false;
+        }
+      } catch (_) { /* keep the skip */ }
     }
     if (
       // fileIds may be empty on a follow-up that only names ## file.pptx —
@@ -1396,6 +1675,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // Never short-circuit "realiza una ppt de 30 slides de la tesis.pdf" into
       // source-preserving PDF annex editing — that must create a fresh .pptx.
       && !wantsNewDeckDeliverable
+      && !skipQuickEditorForDesign
     ) {
       try {
         const {
@@ -1545,6 +1825,45 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
+    // Follow-up edit of a GENERATED document (no upload in this turn) that
+    // the quick editor could not deliver (source not found, intent it cannot
+    // plan). The loop below has no editor for generated files — document_edit
+    // only mounts uploads and create_document / docintel are banned on edit
+    // turns — so it used to answer with an .html preview and a .py script.
+    // The AgentRunner loads the artifact (R2 included) and edits it; when it
+    // cannot, the turn ends with an honest error.
+    if (
+      !codingWorkspace
+      && documentEditPreloopAttempted
+      && prior
+      && preloopFileIds.length === 0
+      // Only an Office / PDF artifact: follow-ups on an html page, a script,
+      // a csv or an image keep the loop, which can edit those.
+      && GENERATED_EDIT_TARGET_FORMATS.has(String(priorArtifactFormat || '').toLowerCase())
+      // «revisa el documento y dime qué corregir» is answered in the chat.
+      && !isQuestionOrAdviceTurn(userQuery)
+    ) {
+      if (!agentRunnerClaimedTurn) {
+        const finished = await invokeAgentRunner();
+        if (finished) return finished;
+      }
+      let answer = null;
+      try {
+        answer = agentRunnerFailure
+          ? ((await runnerUnconfiguredAnswer(agentRunnerFailure, provider, model, toolContext.prisma || null))
+            || require('./agent-runner').buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail))
+          : null;
+      } catch (_) { answer = null; }
+      answer = answer || GENERATED_DOCUMENT_EDIT_FAILURE_MESSAGE;
+      await writeSse(res, { replace: true, content: answer });
+      logDocRouting('agent_runner_failed', `generated_document_edit_${agentRunnerFailure ? agentRunnerFailure.reason : 'no_source'}`);
+      return finishSourcePreservingPreloop(
+        agentRunnerFailure ? 'agent_runner_failed' : 'source_preserving_document_edit_failed',
+        answer,
+        [],
+      );
+    }
+
     // HARD STOP: the AgentRunner claimed this DOCUMENT turn (create-a-doc or
     // style/color follow-up) but did not deliver a file, and the surgical
     // editor above did not rescue it either. Continuing into the LLM loop
@@ -1558,8 +1877,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       let answer = null;
       try {
         const { isRunnerOnlyDocumentTurn, buildAgentRunnerFailureMessage } = require('./agent-runner');
-        runnerOnly = isRunnerOnlyDocumentTurn(userQuery);
-        answer = buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
+        runnerOnly = isRunnerOnlyDocumentTurn(userQuery, { priorArtifactFormat });
+        // A picked model without a connection: its name and «no configurada».
+        answer = (await runnerUnconfiguredAnswer(agentRunnerFailure, provider, model, toolContext.prisma || null))
+          || buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
       } catch (_) {
         answer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
           + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
@@ -2011,6 +2332,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       ]);
       tools = tools.filter((t) => t && t.name && !blockedOnEdit.has(t.name));
     }
+    // An edit of a Word / Excel / PowerPoint file is delivered as that same
+    // file type. create_artifact (html / code) must never stand in for it —
+    // the incident answer was an .html «preview» plus a python script.
+    // Only a same-file edit: «haz un dashboard html con los datos del excel»,
+    // «pasa el excel a markdown» or «resume el word» ASK for another format.
+    if (
+      (documentEditIntent || documentMergeIntent || documentEditPreloopAttempted || agentRunnerClaimedTurn || designUpgradeTurn)
+      && !wantsNewDeckDeliverable
+      && !softwareBuildTurn
+      && !requestsNonOfficeDeliverable(userQuery)
+    ) {
+      officeEditFormats = officeFormatsNamedIn(userQuery);
+      if (!officeEditFormats.length && prior) {
+        const latestFamily = officeEditFamily(priorArtifactFormat);
+        if (latestFamily) officeEditFormats = [latestFamily];
+      }
+      if (!officeEditFormats.length && attachedFileCount > 0 && Array.isArray(toolContext.fileMetadata)) {
+        officeEditFormats = Array.from(new Set(toolContext.fileMetadata
+          .map((file) => officeEditFamily(artifactFormatOf({ filename: file && file.name })))
+          .filter(Boolean)));
+      }
+      if (officeEditFormats.length && Array.isArray(tools)) {
+        tools = tools.filter((t) => !(t && t.name === 'create_artifact'));
+      }
+    }
     // F2: the AgentRunner claimed this turn and failed, and the surgical
     // editor did not rescue it either — the loop may still serve the EDIT
     // via document_edit, but create_document (a brand-new generic document)
@@ -2157,13 +2503,24 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       } catch (_) { /* turn-policy is best-effort */ }
     }
 
+    // Live progress of the loop (decide steps, tickers, agent_model rows,
+    // the guard step, agent_step frames) only for a client that speaks the
+    // stage-v3 protocol: a stale tab (protocol 1) and the kill switch
+    // (SIRAGPT_TURN_PROGRESS=0) keep the previous timeline unchanged.
+    const __liveProgressOn = Boolean(progress && progress.enabled !== false && progress.protocol === 2);
     // Initial sentinel — gives the UI an immediate step indicator even
-    // before the first model call returns.
+    // before the first model call returns. What it says is real: the model
+    // that plans (display name only) and, once known, its tools.
+    // Display name only ('' when none is known: never a raw id).
+    const __liveModelName = turnProgressLib.displayNameFor(model, provider);
+    const __liveModelLabel = __liveModelName || capitalizeFirst(turnProgressLib.modelLabel(model, provider));
     state.steps.push({
       id: 'agentic-start',
-      label: 'Analizando la pregunta',
+      label: __liveProgressOn ? 'Planificando cómo responder' : 'Analizando la pregunta',
       icon: 'thought',
       status: 'running',
+      startedAt: Date.now(),
+      ...(__liveProgressOn && __liveModelName ? { detail: __liveModelName } : {}),
       toolCalls: [],
     });
     await writeSse(res, { replace: true, content: serializeSentinel(state) });
@@ -2517,6 +2874,166 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       };
     }
 
+    // ── Live progress of the loop ──────────────────────────────────────
+    // Every model call is a visible step («Decidiendo el siguiente paso» ·
+    // «paso 2 de 10 · DeepSeek V4 Pro»), with two honest tickers while the
+    // model is silent (12 s: still reasoning; 30 s: slower than usual + the
+    // step's time limit). Timers are unref'd and cleared on the response,
+    // on abort and when the run ends, whatever happens.
+    const __liveTickers = new Set();
+    let __liveModelHandle = null;
+    let __liveGuardHandle = null;
+    const clearLiveTickers = () => {
+      for (const timer of __liveTickers) { try { clearTimeout(timer); } catch (_) { /* noop */ } }
+      __liveTickers.clear();
+    };
+    const writeLiveSentinel = () => { writeSse(res, { replace: true, content: serializeSentinel(state) }); };
+    const liveStepSynthetic = (step) => Boolean(step && step.status === 'running'
+      && (step.id === 'agentic-start' || /-decide$/.test(String(step.id || ''))));
+    const onLiveAbort = () => {
+      clearLiveTickers();
+      try { if (__liveModelHandle) __liveModelHandle.done(); } catch (_) { /* noop */ }
+    };
+    if (__liveProgressOn && signal && typeof signal.addEventListener === 'function') {
+      try { signal.addEventListener('abort', onLiveAbort, { once: true }); } catch (_) { /* noop */ }
+    }
+    const onLiveModelCall = (info) => {
+      try {
+        clearLiveTickers();
+        const stepNo = (Number(info && info.step) || 0) + 1;
+        const maxStepsNo = Number(info && info.maxSteps) || stepNo;
+        const finalizing = Boolean(info && info.finalize);
+        const label = finalizing
+          ? 'Redactando la respuesta final'
+          : (stepNo === 1 ? 'Planificando cómo responder' : 'Decidiendo el siguiente paso');
+        const parts = [];
+        if (!finalizing) parts.push(`paso ${stepNo} de ${maxStepsNo}`);
+        if (__liveModelName) parts.push(__liveModelName);
+        const toolCount = Number(info && info.toolCount) || 0;
+        if (stepNo === 1 && toolCount > 0) parts.push(`${turnProgressLib.fmtInt(toolCount)} ${toolCount === 1 ? 'herramienta disponible' : 'herramientas disponibles'}`);
+        const detail = truncate(parts.join(' · '), LIVE_DETAIL_MAX);
+        let row = state.steps[state.steps.length - 1];
+        if (liveStepSynthetic(row)) {
+          row.label = label;
+          row.detail = detail;
+          if (!row.startedAt) row.startedAt = Date.now();
+        } else {
+          row = {
+            id: `step-${stepNo}-decide`,
+            label,
+            icon: 'thought',
+            status: 'running',
+            startedAt: Date.now(),
+            detail,
+            toolCalls: [],
+          };
+          state.steps.push(row);
+        }
+        writeLiveSentinel();
+        if (progress && typeof progress.begin === 'function') {
+          if (__liveModelHandle) __liveModelHandle.done();
+          __liveModelHandle = progress.begin('agent_model', label, { tool: 'model', detail });
+        }
+        const limitSecs = Math.round((Number(info && info.stepTimeoutMs) || 0) / 1000);
+        const tick = (ms, text) => {
+          const timer = setTimeout(() => {
+            __liveTickers.delete(timer);
+            if (row.status !== 'running' || (signal && signal.aborted)) return;
+            row.detail = truncate(text, LIVE_DETAIL_MAX);
+            writeLiveSentinel();
+            if (__liveModelHandle) __liveModelHandle.update({ detail: row.detail });
+          }, ms);
+          if (timer && typeof timer.unref === 'function') timer.unref();
+          __liveTickers.add(timer);
+        };
+        // A fact, not a guess: the call is not streamed, so all we know at
+        // 12 s is that the model has not answered yet.
+        tick(LIVE_TICK_REASONING_MS, finalizing
+          ? `${__liveModelLabel} sin respuesta todavía`
+          : `${__liveModelLabel} sin respuesta todavía · paso ${stepNo} de ${maxStepsNo}`);
+        tick(LIVE_TICK_SLOW_MS, limitSecs > 0
+          ? `Tarda más de lo habitual · límite del paso ${limitSecs} s`
+          : 'Tarda más de lo habitual');
+      } catch (_) { /* live progress never breaks the loop */ }
+    };
+    const onLiveModelResponse = (info) => {
+      try {
+        clearLiveTickers();
+        const row = state.steps[state.steps.length - 1];
+        const took = turnProgressLib.fmtMs(Number(info && info.durationMs) || 0);
+        let detail;
+        let failed = false;
+        if (info && info.failed) {
+          failed = true;
+          const secs = Math.round((Number(info.stepTimeoutMs) || 0) / 1000);
+          // The exact cause by category, with the model's display name
+          // («DeepSeek V4 Pro no tiene saldo en su proveedor»).
+          // The model that really ran (react-agent may have failed over):
+          // its own display name, or «El modelo» — never another model's.
+          const sameModel = !info.model || String(info.model).trim().toLowerCase() === String(model || '').trim().toLowerCase();
+          const failedName = sameModel
+            ? __liveModelLabel
+            : (turnProgressLib.displayNameFor(info.model) || 'El modelo');
+          const category = info.timedOut ? 'timeout' : info.category;
+          detail = info.aborted
+            ? 'Detenido'
+            : (category && category !== 'unknown'
+              ? turnProgressLib.modelFailureText(failedName, category, {
+                timeoutMs: info.timedOut && secs > 0 ? secs * 1000 : null,
+                retryAfterSeconds: info.retryAfterSeconds,
+              })
+              : `${capitalizeFirst(failedName)} no pudo responder`);
+        } else {
+          detail = describeLiveDecision(Array.isArray(info && info.toolNames) ? info.toolNames : [], took);
+        }
+        if (liveStepSynthetic(row)) {
+          row.status = failed && !(info && info.aborted) ? 'error' : 'done';
+          row.endedAt = Date.now();
+          row.detail = truncate(detail, LIVE_DETAIL_MAX);
+          writeLiveSentinel();
+        }
+        if (__liveModelHandle) {
+          if (failed && !(info && info.aborted)) __liveModelHandle.fail(null, { detail });
+          else __liveModelHandle.done(null, { detail });
+          __liveModelHandle = null;
+        }
+      } catch (_) { /* live progress never breaks the loop */ }
+    };
+    const onLiveGuard = (info) => {
+      try {
+        const phase = info && info.phase;
+        if (phase === 'start') {
+          state.steps.push({
+            id: `step-${(Number(info.step) || 0) + 1}-verify-${state.steps.length}`,
+            label: 'Verificando que la respuesta cumpla lo pedido',
+            icon: 'thought',
+            status: 'running',
+            startedAt: Date.now(),
+            toolCalls: [],
+          });
+          writeLiveSentinel();
+          if (progress && typeof progress.begin === 'function') {
+            __liveGuardHandle = progress.begin('agent_model', 'Verificando que la respuesta cumpla lo pedido', { tool: 'verify' });
+          }
+          return;
+        }
+        const row = [...state.steps].reverse().find((s) => s && s.status === 'running' && /-verify-\d+$/.test(String(s.id || '')));
+        const label = phase === 'pass'
+          ? 'Verificación superada'
+          : (phase === 'repair' ? `Corrigiendo: ${guardCategoryEs(info && info.category)}` : 'Verificación detenida');
+        if (row) {
+          row.status = 'done';
+          row.endedAt = Date.now();
+          row.label = label;
+          writeLiveSentinel();
+        }
+        if (__liveGuardHandle) {
+          __liveGuardHandle.done(label);
+          __liveGuardHandle = null;
+        }
+      } catch (_) { /* live progress never breaks the loop */ }
+    };
+
     let result;
     try {
       result = await reactAgent.run(openai, {
@@ -2559,6 +3076,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         onCompact: ({ step, removedMessages, chars }) => {
           try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
         },
+        onModelCall: __liveProgressOn ? onLiveModelCall : null,
+        onModelResponse: __liveProgressOn ? onLiveModelResponse : null,
+        onGuard: __liveProgressOn ? onLiveGuard : null,
         onStepStart: async (stepRec) => {
         // Harness first (synchronous prefix): registers the step's planned
         // tool calls and emits typed tool_call_start frames BEFORE the
@@ -2567,7 +3087,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         stepCounter += 1;
         // Mark the previous synthetic step done.
         const last = state.steps[state.steps.length - 1];
-        if (last && last.status === 'running') last.status = 'done';
+        if (last && last.status === 'running') {
+          last.status = 'done';
+          if (!last.endedAt) last.endedAt = Date.now();
+        }
 
         // The model's natural-language reasoning for this step. Surfacing it
         // (instead of only a terse "Pensando" / tool label) is what makes the
@@ -2591,6 +3114,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           actions.forEach((a, idx) => {
             const args = safeArgs(a?.args);
             const label = stageLabelFor(a?.tool, args);
+            const detail = __liveProgressOn ? liveArgsDetail(args, label) : '';
             state.steps.push({
               id: `step-${stepCounter}-${idx}`,
               label,
@@ -2599,10 +3123,21 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               // so the "why" sits next to the "what".
               ...(idx === 0 && reasoning ? { reasoning } : {}),
               status: 'running',
+              startedAt: Date.now(),
+              ...(detail ? { detail } : {}),
               toolCalls: [{ tool: a?.tool || 'unknown' }],
             });
-            // Lightweight stage event for any consumer that listens.
-            writeSse(res, { type: 'stage', label, tool: a?.tool || 'unknown', ...(idx === 0 && reasoning ? { reasoning } : {}) });
+            // Lightweight stage event for any consumer that listens. The
+            // `agent_step` phase keeps it on AgenticSteps / AgentTrace (never
+            // a second timeline); no callId, so the bubble keeps its renderer.
+            writeSse(res, {
+              type: 'stage',
+              label,
+              tool: a?.tool || 'unknown',
+              ...(__liveProgressOn ? { phase: 'agent_step' } : {}),
+              ...(detail ? { detail } : {}),
+              ...(idx === 0 && reasoning ? { reasoning } : {}),
+            });
           });
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
@@ -2624,6 +3159,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             const obs = a?.observation || {};
             const ok = !obs?.error;
             s.status = ok ? 'done' : 'error';
+            s.endedAt = Date.now();
+            const resultDetail = !__liveProgressOn ? ''
+              : (ok ? liveResultDetail(obs) : `Error: ${liveErrorCategory(extractObservationError(obs))}`);
+            if (resultDetail) s.detail = truncate(resultDetail, LIVE_DETAIL_MAX);
             if (ok) {
               s.toolCalls[0].output = { ok };
             } else {
@@ -2672,6 +3211,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         try { await pluginLifecycle.error(agentRunError, { phase: 'run' }); } catch (_) { /* plugin telemetry must not mask the run error */ }
       }
       throw agentRunError;
+    } finally {
+      clearLiveTickers();
+      if (signal && typeof signal.removeEventListener === 'function') {
+        try { signal.removeEventListener('abort', onLiveAbort); } catch (_) { /* noop */ }
+      }
+      try { if (__liveModelHandle) __liveModelHandle.done(); } catch (_) { /* noop */ }
+      try { if (__liveGuardHandle) __liveGuardHandle.done(); } catch (_) { /* noop */ }
+      __liveModelHandle = null;
+      __liveGuardHandle = null;
     }
 
     let deliveryReleaseBlocked = false;
@@ -2707,7 +3255,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // Mark any leftover running steps as done — react-agent guarantees a
     // finalize on the last step, but defensive coding keeps stale running
     // states from leaking into the persisted sentinel.
-    for (const s of state.steps) if (s.status === 'running') s.status = 'done';
+    for (const s of state.steps) {
+      if (s.status !== 'running') continue;
+      s.status = 'done';
+      if (!s.endedAt) s.endedAt = Date.now();
+    }
     state.done = true;
 
     let finalAnswer = (result?.finalAnswer || '').trim()
@@ -2729,6 +3281,33 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         stoppedReason = 'generated_artifact_read_failed';
       }
       finalAnswer = redactGeneratedArtifactText(finalAnswer);
+    }
+    // Office edit turn that ended with substitutes (.html / .py / images)
+    // and no file of the requested type: the answer must not present them as
+    // the edited document. Honest failure, substitute cards dropped from the
+    // persisted turn.
+    if (officeEditFormats.length && !signal?.aborted && Array.isArray(state.artifacts)) {
+      const acceptable = new Set(officeEditFormats.flatMap((format) => (
+        format === 'pptx' ? ['pptx', 'pptm', 'potx'] : format === 'docx' ? ['docx', 'docm', 'dotx'] : ['xlsx', 'xlsm', 'xltx']
+      )));
+      const delivered = state.artifacts.some((artifact) => acceptable.has(artifactFormatOf(artifact)));
+      const substitutes = state.artifacts.filter((artifact) => OFFICE_SUBSTITUTE_FORMATS.has(artifactFormatOf(artifact)));
+      if (!delivered && substitutes.length) {
+        for (const artifact of substitutes) {
+          const index = state.artifacts.indexOf(artifact);
+          if (index >= 0) state.artifacts.splice(index, 1);
+        }
+        finalAnswer = officeEditSubstituteMessage(officeEditFormats);
+        stoppedReason = 'source_preserving_document_edit_failed';
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: 'document_edit',
+            reason: 'office_edit_substitute_artifacts',
+            fatal: true,
+            message: substitutes.map((artifact) => artifact.filename).join(', ').slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
+      }
     }
     try {
       finalAnswer = require('./computer/login-handoff').filterModelPasswordPaste(finalAnswer);
@@ -2837,6 +3416,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       steps: result?.steps || [],
       artifacts: state.artifacts,
       agentRun,
+      // The provider error that ended the loop ({status, code, message,
+      // reason}): the route closes a dry / rejected provider honestly with
+      // the model's name and the cause (agentic-degrade-policy).
+      modelError: result?.modelError || null,
     };
   }
 

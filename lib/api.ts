@@ -41,6 +41,27 @@ import {
   PROVIDER_UNAVAILABLE_MESSAGE,
   shouldRetryGenerateHttp,
 } from "./generate-stream-errors"
+import {
+  GENERATE_ERROR_COPY,
+  GENERATE_FOLLOWER_CONNECT_MS,
+  GENERATE_TOTAL_CONNECT_BUDGET_MS,
+  MAX_RATE_LIMITED_RETRIES,
+  RESTARTING_ACTIVITY,
+  RESTART_MAX_WAIT_MS,
+  RESTART_POLL_INTERVAL_MS,
+  RETRY_AFTER_CAP_MS,
+  TURN_IN_PROGRESS_ACTIVITY,
+  TURN_IN_PROGRESS_MAX_WAIT_MS,
+  classifyGenerateFailure,
+  computeRetryDelayMs,
+  createKeyedSingleFlight,
+  describeGenerateFailure,
+  isHumanErrorCopy,
+  isRetryableGenerateKind,
+  parseRetryAfterMs,
+  type GenerateFailureDecision,
+  type GenerateFailureKind,
+} from "./generate-retry-policy"
 export type MemoryConsolidationReport = {
   id: string
   at: string
@@ -243,6 +264,118 @@ function sanitizeStreamError(raw: string): string {
   }
   return raw
 }
+
+export type GenerateStreamRequest = { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string }
+
+/** Error delivered to generate callers: always carries its policy kind. */
+export type GenerateStreamError = Error & {
+  kind: GenerateFailureKind
+  retryable: boolean
+  retryAfterMs: number | null
+  status?: number
+  code?: string
+  errorData?: unknown
+  /**
+   * The client already painted part of the answer before giving up. Such a
+   * failure is delivered as non-retryable: an automatic replay would reset
+   * the partial answer the user is reading.
+   */
+  contentDelivered?: boolean
+}
+
+function decorateGenerateError(error: Error, decision: GenerateFailureDecision): GenerateStreamError {
+  const target = error as GenerateStreamError
+  target.kind = decision.kind
+  target.retryable = decision.retryable
+  target.retryAfterMs = decision.retryAfterMs
+  if (decision.code && !target.code) target.code = decision.code
+  if (decision.status && !target.status) target.status = decision.status
+  return target
+}
+
+/** A failure of our own making (empty stream, cut stream…) with its kind. */
+function generateError(kind: GenerateFailureKind, message?: string): GenerateStreamError {
+  const userMessage = message || GENERATE_ERROR_COPY[kind]
+  return decorateGenerateError(new Error(userMessage), {
+    kind,
+    retryable: isRetryableGenerateKind(kind),
+    showUpgrade: kind === 'quota',
+    retryAfterMs: null,
+    userMessage,
+    code: null,
+    status: null,
+  })
+}
+
+/**
+ * Give any thrown value its policy kind; a message that is not copy for a
+ * person (raw code, «HTTP 502», English transport text…) becomes Spanish.
+ */
+function withGenerateFailure(error: unknown): GenerateStreamError {
+  const base = error instanceof Error ? error : new Error(String((error as any)?.message || error || ''))
+  if (typeof (base as any).kind === 'string') return base as GenerateStreamError
+  const decision = describeGenerateFailure(error)
+  if (!isHumanErrorCopy(base.message)) base.message = decision.userMessage
+  return decorateGenerateError(base, decision)
+}
+
+/**
+ * Error for a failed request(): a human server `message` (Spanish copy) wins
+ * over the `error` field, which is usually a machine code; the code itself is
+ * always kept on `error.code`.
+ */
+function requestError(status: number, errorData: any): Error {
+  const data = errorData && typeof errorData === 'object' ? errorData : {}
+  const humanMessage = isHumanErrorCopy(data.message) ? String(data.message).trim() : ''
+  const fallback = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : ''
+  const error = new Error(humanMessage || fallback || `HTTP ${status}`);
+  (error as any).status = status;
+  (error as any).statusCode = status;
+  (error as any).errorData = errorData;
+  const code = typeof data.code === 'string' && data.code.trim()
+    ? data.code.trim()
+    : fallback;
+  if (code) (error as any).code = code;
+  return error
+}
+
+/** Timer that ends early (without throwing) when the caller aborts. */
+function waitMs(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted || !(ms > 0)) {
+      resolve()
+      return
+    }
+    const done = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
+
+/** Resolves when `promise` settles (either way) or the caller aborts. */
+function settledOrAborted(promise: Promise<unknown>, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve()
+      return
+    }
+    const done = () => {
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    signal?.addEventListener('abort', done, { once: true })
+    promise.then(done, done)
+  })
+}
+
+// One network loop per generate turn key in this tab: a second caller with
+// the same idempotency key waits for the first to settle, so the browser
+// never has two POSTs for one turn in flight at once.
+const generateTurnFlights = createKeyedSingleFlight<void>()
 
 function getResponseHeader(response: Response | { headers?: { get?: (name: string) => string | null } }, name: string): string | null {
   try {
@@ -835,8 +968,9 @@ type AIStreamOptions = {
   // original → applied when they differ).
   onUsage?: (payload: AIUsagePayload) => void
   // When the model already persisted but this tab painted no tokens
-  // ([DONE] / socket close), recover that row immediately.
-  tryRecoverPersistedTurn?: () => Promise<boolean>
+  // ([DONE] / socket close), recover that row immediately. `attempts` caps
+  // the chat reads of one check (the in-progress / restart waits use 1).
+  tryRecoverPersistedTurn?: (options?: { attempts?: number }) => Promise<boolean>
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1268,10 +1402,7 @@ class ApiClient {
           // Out of retries — fall through to the 4xx error path so
           // the caller sees the structured response body.
           const errorData = await response.json().catch(() => ({ error: 'Rate limited' }));
-          const error = new Error(errorData.error || `HTTP ${response.status}`);
-          (error as any).status = response.status;
-          (error as any).statusCode = response.status;
-          (error as any).errorData = errorData;
+          const error = requestError(response.status, errorData);
           if (!options.suppressFailureLog) {
             this._reportApiFailure({
               endpoint,
@@ -1306,10 +1437,7 @@ class ApiClient {
 
           clearTimeout(timeoutId);
           const errorData = await response.json().catch(() => ({ error: 'Request failed' }));
-          const error = new Error(errorData.error || `HTTP ${response.status}`);
-          (error as any).status = response.status;
-          (error as any).statusCode = response.status;
-          (error as any).errorData = errorData;
+          const error = requestError(response.status, errorData);
           if (!options.suppressFailureLog) {
             this._reportApiFailure({
               endpoint,
@@ -2100,7 +2228,7 @@ class ApiClient {
   // the server cursor when content was already rendered. Mid-stream
   // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string },
+    data: GenerateStreamRequest,
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
@@ -2117,32 +2245,119 @@ class ApiClient {
       model: clampDeepSeekModel(locked.model) || locked.model,
       idempotencyKey: turnKey,
     };
+    // Single flight per turn key in this tab: a second caller with the same
+    // key (a pending replay racing the original send) waits for the first
+    // network loop to settle instead of opening a parallel POST.
+    while (generateTurnFlights.has(turnKey)) {
+      const current = generateTurnFlights.get(turnKey);
+      if (current) await settledOrAborted(current, signal);
+      if (signal?.aborted) { onError(new Error('Request aborted')); return; }
+    }
+    return generateTurnFlights.run(
+      turnKey,
+      () => this.streamGenerateTurn(data, turnKey, onData, onClose, onError, signal, options),
+    );
+  }
+
+  /** True while this tab is already streaming the generate turn `key`. */
+  isGenerateTurnInFlight(key: string | null | undefined): boolean {
+    const normalized = typeof key === 'string' ? key.trim() : '';
+    return Boolean(normalized) && generateTurnFlights.has(normalized);
+  }
+
+  /**
+   * Backend restart (deploy) wait for generate: poll HEAD /api/health/ready
+   * about every 3 s — the first wait honours Retry-After — until it answers,
+   * the budget (≤ RESTART_MAX_WAIT_MS, 120 s) ends or the caller aborts.
+   * 'first' means it was already up at the first poll (not a restart).
+   * /health/ready (not /health/live) because where /api is served by Next,
+   * Next's own /health/live reports the FRONTEND; its /health/ready pings the
+   * backend, and the backend serves /api/health/ready itself too.
+   */
+  private async waitForBackendLive(options: {
+    firstDelayMs?: number | null
+    maxWaitMs: number
+    signal?: AbortSignal
+  }): Promise<'first' | 'ready' | 'timeout' | 'aborted'> {
+    const budgetMs = Math.max(0, Math.min(RESTART_MAX_WAIT_MS, options.maxWaitMs));
+    const deadline = Date.now() + budgetMs;
+    const firstDelay = Number(options.firstDelayMs);
+    // Never poll sooner than 1 s, even with a tiny Retry-After.
+    let delay = Number.isFinite(firstDelay) && firstDelay > 0
+      ? Math.min(RETRY_AFTER_CAP_MS, Math.max(1_000, firstDelay))
+      : RESTART_POLL_INTERVAL_MS;
+    let polls = 0;
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return 'timeout';
+      await waitMs(Math.min(delay, remaining), options.signal);
+      if (options.signal?.aborted) return 'aborted';
+      polls += 1;
+      if (await this.probeBackendLive(options.signal)) return polls === 1 ? 'first' : 'ready';
+      delay = RESTART_POLL_INTERVAL_MS;
+    }
+  }
+
+  private async probeBackendLive(signal?: AbortSignal): Promise<boolean> {
+    try {
+      const response = await withTimeout(
+        (probeSignal) => this.authenticatedFetch(`${this.baseURL}/health/ready`, {
+          method: 'HEAD',
+          cache: 'no-store',
+          signal: probeSignal,
+        }),
+        {
+          ms: 5_000,
+          signal,
+          createError: () => createGenerateStreamStallError('connect'),
+        },
+      );
+      return Boolean(response && response.ok);
+    } catch {
+      return false;
+    }
+  }
+
+  private async streamGenerateTurn(
+    data: GenerateStreamRequest,
+    turnKey: string,
+    onData: (chunk: string) => void,
+    onClose: () => void,
+    onError: (error: Error) => void,
+    signal: AbortSignal | undefined,
+    options: AIStreamOptions,
+  ): Promise<void> {
     const url = `${this.baseURL}/ai/generate`;
     const baseConfig: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(data),
+      // progressProtocol 2: this client renders stage progress / result
+      // frames (stageId, detail, elapsedMs); older clients get begin-only frames.
+      body: JSON.stringify({ ...data, progressProtocol: 2 }),
       ...(signal && { signal }),
     };
 
-    // Robustness contract for /api/ai/generate streaming:
-    //  - Up to 5 reconnect attempts before surfacing an error to the UI
-    //  - Exponential backoff with jitter: ~1s, 2s, 4s, 8s, 16s (cap 20s)
-    //  - Retriable: HTTP 429, HTTP 5xx, transport errors ("Failed to
-    //    fetch", ECONNRESET, ETIMEDOUT, socket dropped), AND
-    //    "no se recibió respuesta" (the model stream ended dry — usually
-    //    a provider-side hiccup that resolves on retry)
-    //  - Honor Retry-After header on 429 if provided
+    // Robustness contract for /api/ai/generate streaming. Every failure is
+    // classified (lib/generate-retry-policy.ts) and its KIND sets the budget:
+    //  - transport (network, stall, connect timeout, 408, other 5xx): up to
+    //    5 attempts with full-jitter backoff
+    //  - rate_limited (429 rate/queue, capacity): at most 4 retries
+    //  - turn_in_progress (409, the turn is still running): spends no
+    //    attempt; polls the persisted reply between tries; 10 min budget
+    //  - restarting (502/504/52x without a JSON code, server_restarting):
+    //    spends no attempt while HEAD /api/health/ready says the backend is
+    //    coming back (an explicit server_restarting drain always waits,
+    //    backing off, without spending one); 120 s budget
+    //  - quota, provider, conflict, invalid: never retried
+    //  - Retry-After / retryAfterSeconds are a floor, never undercut
     //  - Never retry after content without a cursor; cursor retries replay
     //    only the missing tail and therefore do not duplicate rendered text
     //  - Never retry AbortError when our Stop controller aborted
     //  - Safari/Cloudflare AbortError without that signal is a transport cut
     //  - Per-attempt timing is logged so we can audit recovery cost
     const MAX_CONNECT_ATTEMPTS = 5;
-    const BASE_RECONNECT_DELAY_MS = 1000;
-    const MAX_RECONNECT_DELAY_MS = 20000;
     let hasDeliveredAnyContent = false;
     let lastError: any = null;
     // A fresh turn never starts from a stored cursor: resuming the PREVIOUS
@@ -2212,49 +2427,161 @@ class ApiClient {
     const deliverStreamError = (error: Error) => {
       if (terminalErrorDelivered || streamFinished) return;
       terminalErrorDelivered = true;
+      // Every error the caller sees carries its kind / code / status /
+      // retryable, and Spanish copy (a user Stop keeps its abort error).
+      const delivered: Error = signal?.aborted ? error : withGenerateFailure(error);
+      if (!signal?.aborted) {
+        const decorated = delivered as GenerateStreamError;
+        // Gave up after painting content: terminal for the caller too (a
+        // durable replay would wipe the partial answer on screen).
+        if (hasDeliveredAnyContent) {
+          decorated.contentDelivered = true;
+          decorated.retryable = false;
+        }
+        // The 10-min wait for a live turn is never started again by a replay.
+        if (turnInProgressExhausted && decorated.kind === 'turn_in_progress') {
+          decorated.retryable = false;
+        }
+      }
       reportTurn(
-        /No se pudo conectar/i.test(String(error?.message || '')) ? 'connect_failed' : 'stream_error',
-        String(error?.message || 'stream error'),
+        /No se pudo conectar/i.test(String(delivered?.message || '')) ? 'connect_failed' : 'stream_error',
+        String(delivered?.message || 'stream error'),
       );
-      onError(error);
+      onError(delivered);
     };
 
-    const computeBackoff = (attempt: number, retryAfterSeconds?: number) => {
-      if (typeof retryAfterSeconds === 'number' && retryAfterSeconds > 0) {
-        return Math.min(retryAfterSeconds * 1000, MAX_RECONNECT_DELAY_MS);
+    const retryDelay = (attempt: number, retryAfterMs?: number | null) =>
+      computeRetryDelayMs({ attempt, retryAfterMs: retryAfterMs ?? null });
+    const sleep = (ms: number) => waitMs(ms, signal);
+    // One chat read per wait (never a burst of reads every few seconds).
+    const recoverPersistedTurn = async (): Promise<boolean> => {
+      if (hasDeliveredAnyContent || !options.tryRecoverPersistedTurn) return false;
+      try { return await options.tryRecoverPersistedTurn({ attempts: 1 }); } catch { return false; }
+    };
+
+    // Per-kind budgets (see the contract above).
+    let rateLimitedRetries = 0;
+    let turnInProgressSince: number | null = null;
+    let turnInProgressTries = 0;
+    let turnInProgressExhausted = false;
+    let restartingSince: number | null = null;
+    let restartTries = 0;
+    let restartNotified = false;
+    let connectTimedOutLastAttempt = false;
+    let connectSpentMs = 0;
+    let loopGuard = 0;
+
+    // What the attempt loop does after a classified failure: 'spend' retries
+    // using an attempt, 'free' retries without spending one, 'recovered' the
+    // persisted reply was found, 'stop' delivers the error.
+    const planRetry = async (
+      failure: { kind: GenerateFailureKind; retryable: boolean; retryAfterMs: number | null; code?: string | null },
+      attempt: number,
+    ): Promise<'spend' | 'free' | 'recovered' | 'stop'> => {
+      if (signal?.aborted || !failure.retryable) return 'stop';
+      const now = Date.now();
+      if (failure.kind === 'turn_in_progress') {
+        turnInProgressSince ??= now;
+        if (now - turnInProgressSince >= TURN_IN_PROGRESS_MAX_WAIT_MS) {
+          turnInProgressExhausted = true;
+          return 'stop';
+        }
+        turnInProgressTries += 1;
+        if (turnInProgressTries === 1) options.onActivity?.(TURN_IN_PROGRESS_ACTIVITY);
+        // Never a tight re-POST loop: each POST parks a server follower.
+        const floorMs = Math.min(15_000, 2_000 * 2 ** (turnInProgressTries - 1));
+        await sleep(retryDelay(turnInProgressTries, Math.max(failure.retryAfterMs ?? 0, floorMs)));
+        if (signal?.aborted) return 'stop';
+        if (await recoverPersistedTurn()) return 'recovered';
+        return 'free';
       }
-      // 2^(attempt-1) * base + 0..250ms jitter
-      const exp = Math.min(BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt - 1), MAX_RECONNECT_DELAY_MS);
-      const jitter = Math.floor(Math.random() * 250);
-      return Math.min(exp + jitter, MAX_RECONNECT_DELAY_MS);
+      if (failure.kind === 'restarting') {
+        restartingSince ??= now;
+        const remaining = RESTART_MAX_WAIT_MS - (now - restartingSince);
+        if (remaining > 0) {
+          if (!restartNotified) {
+            restartNotified = true;
+            options.onActivity?.(RESTARTING_ACTIVITY);
+          }
+          restartTries += 1;
+          // An explicit `server_restarting` (graceful drain) is authoritative:
+          // the old process still answers health while it drains, so a
+          // healthy first probe proves nothing. Wait at least Retry-After,
+          // backing off 3 → 6 → 12 → 15 s, and retry without spending an
+          // attempt until the restart budget ends.
+          const explicitRestart = String(failure.code || '').toLowerCase() === 'server_restarting';
+          const firstDelayMs = explicitRestart
+            ? Math.max(failure.retryAfterMs ?? 0, Math.min(15_000, RESTART_POLL_INTERVAL_MS * 2 ** (restartTries - 1)))
+            : failure.retryAfterMs;
+          const live = await this.waitForBackendLive({ firstDelayMs, maxWaitMs: remaining, signal });
+          if (live === 'aborted' || signal?.aborted) return 'stop';
+          if (await recoverPersistedTurn()) return 'recovered';
+          // Code-less gateway status: free only when the backend was really
+          // down and came back. Up at the very first poll (not a restart
+          // after all) or still down at the end of the budget: this retry
+          // spends a transport attempt.
+          if (live === 'ready' || (explicitRestart && live === 'first')) return 'free';
+          return attempt < MAX_CONNECT_ATTEMPTS ? 'spend' : 'stop';
+        }
+        // Restart budget exhausted: the transport budget decides.
+      }
+      if (failure.kind === 'rate_limited') {
+        rateLimitedRetries += 1;
+        if (rateLimitedRetries > MAX_RATE_LIMITED_RETRIES) return 'stop';
+      }
+      if (attempt >= MAX_CONNECT_ATTEMPTS) return 'stop';
+      const delay = retryDelay(attempt, failure.retryAfterMs);
+      console.warn(`[ai-stream] ${failure.kind} on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — retrying in ${delay}ms`);
+      await sleep(delay);
+      return signal?.aborted ? 'stop' : 'spend';
     };
 
     for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
       if (signal?.aborted) { onError(new Error('Request aborted')); return; }
+      // Hard stop for free retries (each one already waits ≥ 2 s).
+      if (++loopGuard > 400) break;
+      // Total time waiting for response headers, across attempts.
+      const connectRemainingMs = GENERATE_TOTAL_CONNECT_BUDGET_MS - connectSpentMs;
+      if (connectRemainingMs <= 0) break;
+      // Right after a connect timeout the server may hold this POST as a
+      // silent follower of the live turn: outlive that wait once instead of
+      // stacking one more follower.
+      const connectMs = Math.min(
+        connectTimedOutLastAttempt ? GENERATE_FOLLOWER_CONNECT_MS : GENERATE_STREAM_CONNECT_MS,
+        connectRemainingMs,
+      );
+      connectTimedOutLastAttempt = false;
 
       try {
         const requestHeaders = new Headers(baseConfig.headers);
         // Leftover: fresh POST must not send Last-Event-ID (would resume a prior turn).
         const extraHeaders = attempt === 1 ? freshGenerateHeaders() : fetchResumeHeaders(lastEventId);
         for (const [key, value] of Object.entries(extraHeaders)) requestHeaders.set(key, value);
-        const response = await withTimeout(
-          (connectSignal) => this.authenticatedFetch(url, {
-            ...baseConfig,
-            headers: requestHeaders,
-            signal: connectSignal,
-          }),
-          {
-            ms: GENERATE_STREAM_CONNECT_MS,
-            signal,
-            createError: () => createGenerateStreamStallError("connect"),
-          },
-        );
+        const connectStartedAt = Date.now();
+        let response: Response;
+        try {
+          response = await withTimeout(
+            (connectSignal) => this.authenticatedFetch(url, {
+              ...baseConfig,
+              headers: requestHeaders,
+              signal: connectSignal,
+            }),
+            {
+              ms: connectMs,
+              signal,
+              createError: () => createGenerateStreamStallError("connect"),
+            },
+          );
+        } finally {
+          connectSpentMs += Date.now() - connectStartedAt;
+        }
         if (signal?.aborted) { onError(new Error('Request aborted')); return; }
 
         if (!response.ok) {
           let details: any = {};
           try { details = await response.json(); } catch { }
-          const message = details.message || details.error || `HTTP ${response.status}`;
+          if (!details || typeof details !== 'object') details = {};
+          const message = String(details.message || details.error || '');
 
           try {
             if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
@@ -2264,30 +2591,22 @@ class ApiClient {
             console.warn('Failed to dispatch open-upgrade-modal event', e);
           }
 
-          const err = attachGenerateHttpError(response.status, details);
+          const retryAfterMs = parseRetryAfterMs(getResponseHeader(response, 'retry-after'), details);
+          const err = attachGenerateHttpError(response.status, details, retryAfterMs);
 
-          // Empty-body 503 / connection_unavailable stop Pensando now.
-          // 5xx that is not a dead connection, 429, 408, and an explicit
-          // retryable 409 still use the provider reconnect budget. CSRF
-          // 403 is force-refreshed once in authenticatedFetch and must
-          // not land here as a spent attempt.
+          // Empty-body 503 / connection_unavailable / quota / provider /
+          // conflict stop Pensando now. CSRF 403 is force-refreshed once in
+          // authenticatedFetch and must not land here as a spent attempt.
           const retriable = shouldRetryGenerateHttp(response.status, details, {
             hasDeliveredAnyContent,
             hasResumeCursor: Boolean(lastEventId),
-            attempt,
-            maxAttempts: MAX_CONNECT_ATTEMPTS,
           });
           if (retriable) {
-            // Honor Retry-After header if the server set one (RFC 7231
-            // §7.1.3). Value can be either an integer seconds or an
-            // HTTP-date; we only parse the integer form here, the
-            // server-side rate limiter always emits seconds.
-            const retryAfter = parseInt(getResponseHeader(response, 'retry-after') || '', 10);
-            const delay = computeBackoff(attempt, Number.isFinite(retryAfter) ? retryAfter : undefined);
-            console.warn(`[ai-stream] HTTP ${response.status} on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
-            await new Promise(r => setTimeout(r, delay));
             lastError = err;
-            continue;
+            const next = await planRetry(err, attempt);
+            if (next === 'recovered') { streamFinished = true; onClose(); return; }
+            if (next === 'free') { attempt--; continue; }
+            if (next === 'spend') continue;
           }
           throw err;
         }
@@ -2322,6 +2641,9 @@ class ApiClient {
         // Armed by a contentless [DONE]: break out of the read loop so the
         // outer attempt loop reconnects (mirrors the abrupt-close retry).
         let retryEmptyStream = false;
+        // A retryable SSE error frame before any content: 'spend' / 'free'
+        // re-POSTs via the outer attempt loop (see planRetry).
+        let sseErrorRetry: 'spend' | 'free' | null = null;
         let doneMessageSeen = false;
         let processedChunks = 0;
         const batchProcessingDelay = 20;
@@ -2376,24 +2698,24 @@ class ApiClient {
               return;
             }
             if (!doneMessageSeen && lastEventId && attempt < MAX_CONNECT_ATTEMPTS) {
-              const delay = computeBackoff(attempt);
+              const delay = retryDelay(attempt);
               console.warn(`[ai-stream] stream ended before [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — resuming in ${delay}ms`);
-              await new Promise(r => setTimeout(r, delay));
-              lastError = new Error('Stream ended before completion');
+              await sleep(delay);
+              lastError = generateError('transport', 'El stream terminó antes de completar la respuesta.');
               break;
             }
             if (!doneMessageSeen) {
-              deliverStreamError(new Error('El stream terminó antes de completar la respuesta.'));
+              deliverStreamError(generateError('transport', 'El stream terminó antes de completar la respuesta.'));
               return;
             }
             if (!hasDeliveredAnyContent) {
               // Persist poll already ran. Do not spend the 3–4 min
               // reconnect budget on a contentless [DONE].
               if (emptyAction === "retry" && attempt < MAX_CONNECT_ATTEMPTS && Boolean(lastEventId)) {
-                const delay = computeBackoff(attempt);
+                const delay = retryDelay(attempt);
                 console.warn(`[ai-stream] empty stream on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
-                await new Promise(r => setTimeout(r, delay));
-                lastError = new Error('Empty model stream');
+                await sleep(delay);
+                lastError = generateError('empty');
                 break;
               }
               reportTurn('empty_close', 'El stream cerró sin contenido');
@@ -2487,10 +2809,10 @@ class ApiClient {
               }
               if (attempt < MAX_CONNECT_ATTEMPTS) {
                 try { await reader.cancel(); } catch { /* already closed */ }
-                const delay = computeBackoff(attempt);
+                const delay = retryDelay(attempt);
                 console.warn(`[ai-stream] contentless [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
-                await new Promise(r => setTimeout(r, delay));
-                lastError = new Error('Empty model stream');
+                await sleep(delay);
+                lastError = generateError('empty');
                 retryEmptyStream = true;
                 break;
               }
@@ -2537,9 +2859,12 @@ class ApiClient {
               } else if (jsonData.type === 'computer_login_handoff') {
                 consumeLoginHandoffSse(jsonData)
                 lastProcessTime = Date.now();
-              } else if ((jsonData.type === 'activity' || jsonData.type === 'stage') && (jsonData.text || jsonData.label)) {
+              } else if ((jsonData.type === 'activity' || jsonData.type === 'stage')
+                && (jsonData.text || jsonData.label || (jsonData.type === 'stage' && typeof jsonData.stageId === 'string' && jsonData.stageId))) {
+                // A stage v3 progress / result frame may carry no label: it
+                // still updates or settles its row (the reducer keeps the label).
                 if (options.onActivity) {
-                  options.onActivity(String(jsonData.text || jsonData.label), jsonData);
+                  options.onActivity(String(jsonData.text || jsonData.label || ''), jsonData);
                 }
                 lastProcessTime = Date.now();
               } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {
@@ -2602,7 +2927,34 @@ class ApiClient {
                   // [DONE]/reader close must not turn fail into complete.
                   flushBatch();
                   const userFacing = String(jsonData.message || jsonData.error || '');
-                  deliverStreamError(new Error(sanitizeStreamError(userFacing)));
+                  // The frame's own `status` matters: the token-budget
+                  // preflight sends 402 quota / 413 context overflow here.
+                  const frameStatus = Number(jsonData.status);
+                  const frameDecision = classifyGenerateFailure({
+                    status: Number.isFinite(frameStatus) && frameStatus > 0 ? frameStatus : null,
+                    code: jsonData.code,
+                    error: jsonData.error,
+                    message: sanitizeStreamError(userFacing),
+                    retryable: jsonData.retryable,
+                    retryAfterMs: parseRetryAfterMs(null, jsonData),
+                    upgradeRequired: jsonData.upgradeRequired,
+                  });
+                  const frameError = decorateGenerateError(new Error(frameDecision.userMessage), frameDecision);
+                  // Explicitly retryable (capacity, restart, turn still
+                  // running) and nothing painted yet: re-POST fresh. After
+                  // content it is terminal.
+                  if (jsonData.retryable === true && frameDecision.retryable && !hasDeliveredAnyContent) {
+                    try { await reader.cancel('retry'); } catch { /* already closed */ }
+                    lastError = frameError;
+                    lastEventId = null;
+                    const next = await planRetry(frameDecision, attempt);
+                    if (next === 'recovered') { streamFinished = true; onClose(); return; }
+                    if (next === 'spend' || next === 'free') {
+                      sseErrorRetry = next;
+                      break;
+                    }
+                  }
+                  deliverStreamError(frameError);
                   try { await reader.cancel('stream error'); } catch { /* already closed */ }
                   return;
                 }
@@ -2611,8 +2963,9 @@ class ApiClient {
               console.warn('Failed to parse streaming data:', e);
             }
           }
-          if (retryEmptyStream) break; // reconnect via the outer attempt loop
+          if (retryEmptyStream || sseErrorRetry) break; // reconnect via the outer attempt loop
         }
+        if (sseErrorRetry === 'free') attempt--;
       } catch (error: any) {
         lastError = error;
         clearFlushTimer();
@@ -2629,10 +2982,13 @@ class ApiClient {
         // Safari/Cloudflare also abort the fetch as AbortError without
         // aborting our Stop controller — retry that, don't freeze Pensando.
         const isBrowserAbort = error?.name === 'AbortError';
-        const isNetworkError = isBrowserAbort
+        // An HTTP failure we already classified is never a network error.
+        const isClassifiedHttp = typeof error?.kind === 'string' && typeof error?.status === 'number';
+        const isNetworkError = !isClassifiedHttp && (isBrowserAbort
           || error?.name === 'TypeError'
           || isGenerateStreamStall(error)
-          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || '');
+          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || ''));
+        if (error?.code === 'stream_connect_timeout') connectTimedOutLastAttempt = true;
         const canResume = Boolean(lastEventId);
         // A transport cut with nothing painted usually means the backend
         // already persisted the reply (the run keeps going detached). Ask for
@@ -2652,19 +3008,19 @@ class ApiClient {
         // User Stop (signal.aborted) already returned above. HTTP 503
         // connection_unavailable is handled in the !response.ok path.
         if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
-          const delay = computeBackoff(attempt);
+          const delay = retryDelay(attempt);
           console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — ${canResume ? 'resuming' : 'reconnecting'} in ${delay}ms`);
-          await new Promise(r => setTimeout(r, delay));
+          await sleep(delay);
           continue;
         }
 
         console.error('API stream failed:', error);
         // Convert raw "Failed to fetch" into a human-friendly message.
         if (isNetworkError && !hasDeliveredAnyContent) {
-          deliverStreamError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
+          deliverStreamError(generateError('transport', 'No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
           return;
         }
-        deliverStreamError(error);
+        deliverStreamError(isNetworkError ? generateError('transport', 'La conexión con el modelo se cortó antes de terminar la respuesta. Vuelve a intentarlo.') : error);
         return;
       }
     }
@@ -2683,12 +3039,8 @@ class ApiClient {
           }
         } catch { /* fall through to the error below */ }
       }
-      const msg = lastError?.message || 'Stream failed';
-      const isQuota = /429|too many|rate/i.test(msg);
-      const friendly = isQuota
-        ? 'El servidor está procesando muchas solicitudes. Reintenta en unos segundos.'
-        : `No se pudo completar la respuesta después de ${MAX_CONNECT_ATTEMPTS} intentos. ${msg}`;
-      deliverStreamError(new Error(friendly));
+      // The last failure's kind decides the copy (never a raw «HTTP nnn»).
+      deliverStreamError(withGenerateFailure(lastError));
     }
   }
   async generateImage(

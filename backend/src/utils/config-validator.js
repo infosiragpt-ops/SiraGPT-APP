@@ -79,6 +79,13 @@ const RECOMMENDED_BY_ENV = {
   ],
 };
 
+// A recommended key is also satisfied by an equivalent it falls back to:
+// slack-integration uses SIRAGPT_ENCRYPTION_KEY, then a subkey derived from
+// ENCRYPTION_KEY, so the Slack warning was a false alarm when either is set.
+const RECOMMENDED_ALIASES = {
+  SLACK_ENCRYPTION_KEY: ['SIRAGPT_ENCRYPTION_KEY', 'ENCRYPTION_KEY'],
+};
+
 const LOCALHOST_PATTERNS = [
   /\blocalhost\b/i,
   /\b127\.0\.0\.1\b/,
@@ -121,9 +128,9 @@ function checkRequired(env, envName, errors, databaseUrl, databaseUrlConflict) {
 
 function checkRecommended(env, envName, warnings) {
   const rec = RECOMMENDED_BY_ENV[envName] || [];
+  const isSet = (name) => Boolean(env[name] && String(env[name]).trim() !== '');
   for (const key of rec) {
-    const v = env[key];
-    if (!v || String(v).trim() === '') {
+    if (!isSet(key) && !(RECOMMENDED_ALIASES[key] || []).some(isSet)) {
       warnings.push({
         key,
         envName,

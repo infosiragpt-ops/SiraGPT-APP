@@ -523,6 +523,11 @@ export interface AgentTaskState {
     reasoning?: string
     status: "running" | "done" | "error"
     retryCount?: number
+    /** Server epoch ms the step started / ended (chat sentinel, live progress). */
+    startedAt?: number
+    endedAt?: number
+    /** One-line note: model + step count, what it decided, results / error category (≤200). */
+    detail?: string
     toolCalls: Array<{
       tool: string
       preview?: string

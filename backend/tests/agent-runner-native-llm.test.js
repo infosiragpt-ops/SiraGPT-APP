@@ -10,6 +10,8 @@ const {
   repairToolArgs,
   isTransientLlmError,
   backoffMs,
+  callModelWithRetry,
+  retryAfterMsFromError,
 } = require('../src/services/agent-runner/native-llm');
 
 const loop = require('../src/services/agent-runner/loop');
@@ -63,6 +65,53 @@ describe('native-llm module', () => {
     assert.equal(isTransientLlmError({ status: 400 }), false);
     assert.equal(isTransientLlmError(new Error('socket hang up')), true);
     assert.equal(isTransientLlmError(null), false);
+  });
+
+  test('isTransientLlmError: an empty account or a rejected key is never retried; a quota window is', () => {
+    assert.equal(isTransientLlmError({ status: 429, message: 'You have no credits remaining' }), false);
+    assert.equal(isTransientLlmError({ status: 429, message: 'You exceeded your current quota, please check your plan and billing details.' }), false);
+    assert.equal(isTransientLlmError({ status: 403, message: 'Your team has used all available credits' }), false);
+    assert.equal(isTransientLlmError({ status: 401, message: 'Incorrect API key provided' }), false);
+    assert.equal(isTransientLlmError({ status: 429 }), true, 'a bare rate limit stays transient');
+    assert.equal(isTransientLlmError({ status: 429, message: 'Rate limit reached for requests per min' }), true);
+    assert.equal(isTransientLlmError({ status: 429, message: 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 10. Please retry in 29s.' }), true,
+      'a per-minute quota window reopens by itself');
+  });
+
+  test('callModelWithRetry: shouldRetry narrows retries and Retry-After is honoured', async () => {
+    let calls = 0;
+    await assert.rejects(() => callModelWithRetry(async () => {
+      calls += 1;
+      throw Object.assign(new Error('slow down'), { status: 429 });
+    }, { retryMax: 3, shouldRetry: () => false }));
+    assert.equal(calls, 1, 'shouldRetry=false stops at the first failure');
+
+    calls = 0;
+    const started = Date.now();
+    const out = await callModelWithRetry(async () => {
+      calls += 1;
+      if (calls < 3) throw Object.assign(new Error('slow down'), { status: 429, headers: { 'retry-after-ms': '5' } });
+      return 'ok';
+    }, { retryMax: 3 });
+    assert.equal(out, 'ok');
+    assert.equal(calls, 3);
+    assert.ok(Date.now() - started < 1000, 'the 5 ms hint replaces the 1.5 s rate-limit backoff');
+
+    calls = 0;
+    const hinted = await callModelWithRetry(async () => {
+      calls += 1;
+      if (calls < 2) throw Object.assign(new Error('wrapped'), { status: 429 });
+      return 'ok';
+    }, { retryMax: 2, retryAfterMs: () => 3 });
+    assert.equal(hinted, 'ok', 'a caller hint covers errors that lost their headers');
+  });
+
+  test('retryAfterMsFromError reads retry-after-ms, retry-after seconds and fetch Headers', () => {
+    assert.equal(retryAfterMsFromError({ headers: { 'retry-after-ms': '250' } }), 250);
+    assert.equal(retryAfterMsFromError({ headers: { 'Retry-After': '7' } }), 7000);
+    assert.equal(retryAfterMsFromError({ headers: new Headers({ 'retry-after': '2' }) }), 2000);
+    assert.equal(retryAfterMsFromError({ headers: {} }), null);
+    assert.equal(retryAfterMsFromError({}), null);
   });
 
   test('backoffMs grows exponentially and caps', () => {

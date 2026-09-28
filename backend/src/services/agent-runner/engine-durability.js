@@ -41,6 +41,11 @@ function createMemoryKv() {
 }
 
 function runningNodeTest() {
+  // `node --test file` runs each file in a child whose argv has no --test
+  // flag; Node marks those children with NODE_TEST_CONTEXT instead. Without
+  // this, any runner test that reached the loop opened an ioredis client to
+  // redis://redis:6379 that kept the test process alive forever.
+  if (process.env.NODE_TEST_CONTEXT) return true;
   const args = [...(process.argv || []), ...(process.execArgv || [])];
   return args.some((a) => String(a).includes("--test"));
 }

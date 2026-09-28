@@ -223,6 +223,7 @@ const {
   verifyOAuthState,
 } = require('../services/oauth-state');
 const {
+  googleLoginStateFailure,
   isOAuthStateInfrastructureError,
   sendOAuthStateUnavailable,
 } = require('../services/auth/oauth-state-http');
@@ -472,11 +473,11 @@ router.get('/google', requireGoogleOAuth, async (req, res, next) => {
       state,
     })(req, res, next);
   } catch (error) {
-    console.error('Google OAuth state issuance failed:', error?.code || error?.message);
-    if (isOAuthStateInfrastructureError(error)) {
-      return sendOAuthStateUnavailable(res, { provider: 'google', error });
-    }
-    return res.redirect(getGooglePostCallbackURL('oauth_state_unavailable'));
+    // Top-level browser navigation: always land on the login page (it maps
+    // oauth_state_unavailable), never a raw JSON 503 in the tab.
+    const failure = googleLoginStateFailure(error, { phase: 'issue' });
+    console[failure.level]('Google OAuth state issuance failed:', error?.code || error?.message);
+    return res.redirect(getGooglePostCallbackURL(failure.redirectCode));
   }
 });
 
@@ -491,11 +492,11 @@ router.get('/google/callback',
       });
       return next();
     } catch (error) {
-      console.warn('Google OAuth state validation failed:', error?.code || error?.message);
-      if (isOAuthStateInfrastructureError(error)) {
-        return sendOAuthStateUnavailable(res, { provider: 'google', error });
-      }
-      return res.redirect(getGooglePostCallbackURL('invalid_state'));
+      // An expired/replayed state (slow consent screen, reloaded callback) is
+      // logged at info; the login page shows «La sesión de Google expiró».
+      const failure = googleLoginStateFailure(error);
+      console[failure.level]('Google OAuth state validation failed:', error?.code || error?.message);
+      return res.redirect(getGooglePostCallbackURL(failure.redirectCode));
     }
   },
   // Custom-callback form of passport.authenticate so we can distinguish

@@ -158,8 +158,14 @@ function completionText(completion) {
 
 /**
  * Answer an image turn with a vision model. Returns
- * `{ text, provider, model, attempts, request }` — `text` is '' when no
- * runtime answered (callers then show buildImageVisionUnavailableAnswer).
+ * `{ text, provider, model, attempts, request, pickedOnly, error }` — `text`
+ * is '' when no runtime answered (callers then show
+ * buildImageVisionUnavailableAnswer, or, for `pickedOnly`, the picked model's
+ * exact failure from `error`).
+ *
+ * `pinned`: the user picked the model (owner policy: a picked model is never
+ * switched). When it can see, it is the ONLY runtime tried; a text-only pick
+ * still goes to the vision runtimes (it cannot read pixels at all).
  */
 async function answerImageTurnWithVision({
   prompt = '',
@@ -174,13 +180,18 @@ async function answerImageTurnWithVision({
   maxTokens = 4096,
   signal = null,
   logger = console,
+  pinned = false,
 } = {}) {
   const images = imageAttachments(imageFiles);
-  const result = { text: '', provider: null, model: null, attempts: [], request: null };
+  const result = { text: '', provider: null, model: null, attempts: [], request: null, pickedOnly: false, error: null };
   if (images.length === 0 || typeof getClient !== 'function') return result;
   const content = await buildImageVisionContent({ prompt, imageFiles: images, prepareImage, ocrHint });
   if (!hasImagePart(content)) return result;
-  const runtimes = visionRuntimesForTurn(provider, model, env);
+  let runtimes = visionRuntimesForTurn(provider, model, env);
+  if (pinned && provider && model && modelSupportsVision(provider, model)) {
+    runtimes = runtimes.slice(0, 1);
+    result.pickedOnly = true;
+  }
   for (const runtime of runtimes) {
     if (signal && signal.aborted) break;
     const runtimeModel = normalizeModel(runtime.provider, runtime.model) || runtime.model;
@@ -208,6 +219,7 @@ async function answerImageTurnWithVision({
         return result;
       }
     } catch (err) {
+      result.error = err;
       result.attempts.push({ provider: runtime.provider, model: runtimeModel, ok: false, error: String((err && err.message) || err).slice(0, 200) });
       try { logger && logger.warn && logger.warn(`[image-vision] ${runtime.provider}:${runtimeModel} failed: ${(err && err.message) || err}`); } catch (_) { /* noop */ }
     }

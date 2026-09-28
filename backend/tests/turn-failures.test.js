@@ -515,6 +515,27 @@ describe('tap — what the user actually saw', () => {
     assert.deepEqual(parseDataFrames(': ping\n\n'), []);
   });
 
+  it('records one stage per live-progress row: the begin, settled by its result; never the ticks', () => {
+    const tap = new TurnTap({ route: 'generate' });
+    const base = { type: 'stage', tool: 'rag_retrieve', phase: 'rag', stageId: 'pipe:rag:3' };
+    tap.observeWrite(frame({ ...base, label: 'Buscando los pasajes relevantes', step: 'tool_call', status: 'running' }));
+    for (let i = 0; i < 20; i += 1) {
+      tap.observeWrite(frame({ ...base, label: 'Buscando los pasajes relevantes', step: 'tool_progress', status: 'running', detail: `tick ${i}` }));
+    }
+    tap.observeWrite(frame({ ...base, label: 'Pasajes relevantes encontrados', step: 'tool_result', status: 'done', ok: true, elapsedMs: 1200 }));
+    const web = { type: 'stage', tool: 'web_search', phase: 'web', stageId: 'pipe:web:4' };
+    tap.observeWrite(frame({ ...web, label: 'Buscando en la web', step: 'tool_call', status: 'running' }));
+    tap.observeWrite(frame({ ...web, label: 'La búsqueda en la web no respondió', step: 'tool_result', status: 'error', ok: false }));
+    // A result whose begin was never seen is still recorded, settled.
+    tap.observeWrite(frame({ type: 'stage', tool: 'plan', phase: 'context', stageId: 'pipe:context:5', label: 'Contexto listo', step: 'tool_result', status: 'done', ok: true }));
+    assert.deepEqual(tap.stages.map((s) => [s.label, s.status || null]), [
+      ['Pasajes relevantes encontrados', 'done'],
+      ['La búsqueda en la web no respondió', 'error'],
+      ['Contexto listo', 'done'],
+    ]);
+    assert.ok(tap.lastActivityAt, 'a progress frame still counts as stream activity');
+  });
+
   it('sees frames written through a later raw-write capture (mirror guard)', () => {
     const tap = new TurnTap({ route: 'generate' });
     const res = fakeRes();
