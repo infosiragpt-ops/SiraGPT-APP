@@ -209,7 +209,7 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   'stage = "dependencies"',
   'book = None',
   'try:',
-  '    import numbers, pandas as pd, pyreadstat',
+  '    import numbers, unicodedata, pandas as pd, pyreadstat',
   '    from decimal import Decimal',
   '    from openpyxl import load_workbook',
   '    stage = "artifact_paths"',
@@ -225,15 +225,29 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   '    rows = sheet.iter_rows(values_only=True)',
   '    headers = [str(value) if value is not None else "" for value in next(rows, ())]',
   '    sav_headers = [str(value) for value in frame.columns]',
-  '    same_headers = len(headers) == len(sav_headers) and len(set(headers)) == len(headers) and set(headers) == set(sav_headers)',
-  '    has_respondent_id = bool(sav_headers) and bool(headers) and sav_headers[0].strip().upper() == "ID" and headers[0].strip().upper() == "ID"',
-  '    question_start = 1 if has_respondent_id else 0',
-  '    question_headers = sav_headers[question_start:]',
+  '    def header_key(name):',
+  '        plain = "".join(char for char in unicodedata.normalize("NFKD", str(name).strip().lower()) if not unicodedata.combining(char))',
+  '        return "_".join(plain.replace("-", "_").split())',
+  '    demographic_keys = {"edad", "genero", "nivel_educativo"}',
+  '    def metadata_key(name):',
+  '        key = header_key(name)',
+  '        return key if key == "id" or key in demographic_keys else None',
+  '    sav_metadata_keys = [key for name in sav_headers if (key := metadata_key(name))]',
+  '    excel_metadata_keys = [key for name in headers if (key := metadata_key(name))]',
+  '    same_headers = len(headers) == len(sav_headers) and len(set(headers)) == len(headers) and set(headers) == set(sav_headers) and len(set(sav_metadata_keys)) == len(sav_metadata_keys) and len(set(excel_metadata_keys)) == len(excel_metadata_keys)',
+  '    id_headers = [name for name in sav_headers if metadata_key(name) == "id"]',
+  '    has_respondent_id = same_headers and len(id_headers) == 1',
+  '    question_headers = [name for name in sav_headers if metadata_key(name) is None]',
+  '    demographic_headers = [name for name in sav_headers if metadata_key(name) in demographic_keys]',
   '    differences = 0 if same_headers else None',
+  '    question_differences = 0 if same_headers else None',
+  '    demographic_differences = 0 if same_headers else None',
   '    compared = 0',
+  '    demographic_compared = 0',
   '    respondent_ids_match = True',
   '    seen_respondent_ids = set()',
   '    positions = {name: index for index, name in enumerate(headers)} if same_headers else {}',
+  '    sav_positions = {name: index for index, name in enumerate(sav_headers)} if same_headers else {}',
   '    def normalized_cell(value):',
   '        if pd.isna(value): return ("null", "")',
   '        if isinstance(value, numbers.Number): return ("number", Decimal(str(value)))',
@@ -242,17 +256,24 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   '    for excel_row in rows:',
   '        if same_headers and excel_row_count < len(frame):',
   '            if has_respondent_id:',
-  '                sav_id = normalized_cell(frame.iloc[excel_row_count, 0])',
-  '                excel_id = normalized_cell(excel_row[0])',
+  '                id_header = id_headers[0]',
+  '                sav_id = normalized_cell(frame.iloc[excel_row_count, sav_positions[id_header]])',
+  '                excel_id = normalized_cell(excel_row[positions[id_header]])',
   '                if sav_id[0] == "null" or not str(sav_id[1]).strip() or sav_id != excel_id or sav_id in seen_respondent_ids: respondent_ids_match = False',
   '                seen_respondent_ids.add(sav_id)',
-  '            differences += sum(normalized_cell(frame.iloc[excel_row_count, col]) != normalized_cell(excel_row[positions[name]]) for col, name in enumerate(sav_headers) if col >= question_start)',
+  '            row_question_differences = sum(normalized_cell(frame.iloc[excel_row_count, sav_positions[name]]) != normalized_cell(excel_row[positions[name]]) for name in question_headers)',
+  '            row_demographic_differences = sum(normalized_cell(frame.iloc[excel_row_count, sav_positions[name]]) != normalized_cell(excel_row[positions[name]]) for name in demographic_headers)',
+  '            question_differences += row_question_differences',
+  '            demographic_differences += row_demographic_differences',
+  '            differences += row_question_differences + row_demographic_differences',
   '            compared += len(question_headers)',
+  '            demographic_compared += len(demographic_headers)',
   '        excel_row_count += 1',
   '    comparable = same_headers and excel_row_count == len(frame)',
-  '    if not comparable: differences, compared = None, 0',
+  '    if not comparable: differences, question_differences, demographic_differences, compared, demographic_compared = None, None, None, 0, 0',
   '    labels = metadata.column_labels or []',
-  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "savQuestionColumns": len(question_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "excelQuestionColumns": len(headers) - question_start, "comparedCells": compared, "differentCells": differences, "labelCount": sum(label is not None and bool(str(label).strip()) for label in labels[question_start:]), "headersMatch": same_headers, "matrixComparable": comparable, "hasRespondentId": has_respondent_id, "respondentIdsMatch": respondent_ids_match, "columnsMatchP01P20": question_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
+  '    label_count = sum(index < len(labels) and labels[index] is not None and bool(str(labels[index]).strip()) for index, name in enumerate(sav_headers) if metadata_key(name) is None)',
+  '    print(json.dumps({"savRows": len(frame), "savColumns": len(sav_headers), "savQuestionColumns": len(question_headers), "savDemographicColumns": len(demographic_headers), "excelRows": excel_row_count, "excelColumns": len(headers), "excelQuestionColumns": sum(metadata_key(name) is None for name in headers), "excelDemographicColumns": sum(metadata_key(name) in demographic_keys for name in headers), "comparedCells": compared, "demographicComparedCells": demographic_compared, "differentCells": differences, "differentQuestionCells": question_differences, "differentDemographicCells": demographic_differences, "labelCount": label_count, "headersMatch": same_headers, "matrixComparable": comparable, "hasRespondentId": has_respondent_id, "respondentIdsMatch": respondent_ids_match, "columnsMatchP01P20": question_headers == [f"P{i:02d}" for i in range(1, 21)]}))',
   'except Exception:',
   '    print(json.dumps({"failureStage": stage}))',
   'finally:',
@@ -329,16 +350,22 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, fo
     };
   }
   const questionColumns = Number.isSafeInteger(result.savQuestionColumns) ? result.savQuestionColumns : result.savColumns;
+  const demographicColumns = Number.isSafeInteger(result.savDemographicColumns) ? result.savDemographicColumns : 0;
+  const demographicCells = Number.isSafeInteger(result.demographicComparedCells) ? result.demographicComparedCells : 0;
   if (!Number.isSafeInteger(result.differentCells) || result.differentCells < 0
     || result.comparedCells !== result.savRows * questionColumns
-    || result.differentCells > result.comparedCells) return comparisonFailure('result_format');
+    || demographicCells !== result.savRows * demographicColumns
+    || result.differentCells > result.comparedCells + demographicCells) return comparisonFailure('result_format');
   const columnNote = result.columnsMatchP01P20 === true
     ? 'Las columnas son P01–P20.'
     : 'Las columnas del SAV no son exactamente P01–P20.';
+  const comparisonNote = demographicCells > 0
+    ? `Comparé ${result.comparedCells} respuestas y ${demographicCells} datos demográficos: ${result.differentCells} diferencias en total.`
+    : `Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias en las preguntas.`;
   return {
     ok: true,
     metrics: result,
-    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${result.hasRespondentId === true ? 'La columna ID adicional coincide entre ambos. ' : ''}${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias en las preguntas. El SAV conserva ${result.labelCount} etiquetas de variables.`,
+    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${result.hasRespondentId === true ? 'La columna ID adicional coincide entre ambos. ' : ''}${columnNote} ${comparisonNote} El SAV conserva ${result.labelCount} etiquetas de variables.`,
   };
 }
 

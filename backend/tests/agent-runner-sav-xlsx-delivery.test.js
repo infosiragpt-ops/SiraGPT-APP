@@ -56,6 +56,31 @@ const GENERATE_PAIR_WITH_ID = [
   'book.save(os.path.join(root, "muestra.xlsx"))',
 ].join('\n');
 
+const GENERATE_PAIR_WITH_DEMOGRAPHICS = [
+  'import os, sys, pandas as pd, pyreadstat',
+  'from openpyxl import Workbook',
+  'root, mode = sys.argv[1], sys.argv[2]',
+  'questions = [f"P{i:02d}" for i in range(1, 21)]',
+  'headers = ["ID", "Edad", "Genero", "Nivel_educativo", *questions]',
+  'rows = [[person + 1, 20 + (person % 5), "F" if person % 2 else "M", "Superior", *[1 + ((person + question) % 5) for question in range(20)]] for person in range(20)]',
+  'if mode == "unrecognized-extra":',
+  '    headers.insert(4, "Notas")',
+  '    for row in rows: row.insert(4, "extra")',
+  'labels = [None] * (len(headers) - 20) + [f"Pregunta {i:02d}" for i in range(1, 21)]',
+  'if mode == "missing-label": labels[-1] = None',
+  'pyreadstat.write_sav(pd.DataFrame(rows, columns=headers), os.path.join(root, "muestra.sav"), column_labels=labels)',
+  'book = Workbook()',
+  'sheet = book.active',
+  'excel_headers = [questions[0], "Genero", "ID", "Edad", "Nivel_educativo", *questions[1:]] if mode == "reordered-excel" else headers',
+  'sheet.append(excel_headers)',
+  'for row in rows:',
+  '    data = dict(zip(headers, row))',
+  '    sheet.append([data[name] for name in excel_headers])',
+  'if mode == "different-demographic": sheet.cell(row=2, column=excel_headers.index("Edad") + 1).value = 99',
+  'if mode == "different-question": sheet.cell(row=2, column=excel_headers.index("P01") + 1).value = 99',
+  'book.save(os.path.join(root, "muestra.xlsx"))',
+].join('\n');
+
 function makeSandbox(root) {
   return {
     async putFile(relative, buffer) {
@@ -88,6 +113,38 @@ for (const [mode, expectedOk, expectedReason] of [
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-id-gate-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const generated = spawnSync('python3', ['-c', GENERATE_PAIR_WITH_ID, root, mode], { encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
+    const result = await applySavXlsxDeliveryGate({
+      instruction: PROMPT,
+      outputs: pairOutputs(root),
+      result: { stoppedReason: 'final', finalText: 'Listo.' },
+      sandbox: makeSandbox(root),
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.ok, expectedOk);
+    if (expectedOk) {
+      assert.equal(result.result.savXlsxVerification.comparedCells, 400);
+      assert.equal(result.result.savXlsxVerification.labelCount, 20);
+      assert.equal(result.outputs.filter((output) => output.valid !== false).length, 2);
+    } else {
+      assert.match(result.result.errorMessage, expectedReason);
+      assert.equal(result.outputs.filter((output) => output.valid !== false).length, 0);
+    }
+  });
+}
+
+for (const [mode, expectedOk, expectedReason] of [
+  ['matching', true, null],
+  ['reordered-excel', true, null],
+  ['different-demographic', false, /demogr[aá]fic/i],
+  ['different-question', false, /diferencias/i],
+  ['missing-label', false, /etiquetas/i],
+  ['unrecognized-extra', false, /20 filas.*20 preguntas/],
+]) {
+  test(`AgentRunner SAV/Excel binary gate ${mode} with optional demographics`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-demographics-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const generated = spawnSync('python3', ['-c', GENERATE_PAIR_WITH_DEMOGRAPHICS, root, mode], { encoding: 'utf8' });
     assert.equal(generated.status, 0, generated.stderr);
     const result = await applySavXlsxDeliveryGate({
       instruction: PROMPT,
