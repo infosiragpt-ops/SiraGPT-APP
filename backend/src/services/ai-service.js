@@ -876,9 +876,9 @@ class AIService {
             const MAX_ATTEMPTS_PER_MODEL = 2;
             const FIRST_BYTE_TIMEOUT_MS = 30_000;
             let lastError = null;
-            // Billing failover (Luis: «failover solo ante errores del proveedor»):
-            // when the picked model's provider has no credit, a funded model of
-            // a comparable tier answers and the reply opens with a notice.
+            // Billing status is reflected in the picker. Internal unpinned
+            // requests may recover on another provider, but a selected model
+            // must keep its own API and surface E_PROVIDER on failure.
             const billingFailoverMod = require('./ai/billing-failover');
             const providerOverrides = new Map();
             let billingFailover = null;
@@ -1197,6 +1197,7 @@ class AIService {
                     && billingFailoverMod.enabled() && billingFailoverMod.isBillingError(lastError)
                     && !(signal && signal.aborted)) {
                     billingFailoverMod.markOutOfCredit(currentProvider, lastError);
+                    if (pinnedUser) continue;
                     let candidate = null;
                     try {
                         candidate = await billingFailoverMod.pickFailoverModel({

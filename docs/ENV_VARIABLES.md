@@ -661,17 +661,18 @@ uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error
 
 ## Billing failover and provider keys (optional)
 
-When the provider of the model the user picked has no credit/quota left
+When the provider of a user-selected model has no credit/quota left
 (Anthropic «credit balance is too low», HTTP 402, «Insufficient Balance»,
-OpenAI `insufficient_quota`), the turn is answered by a configured, funded model
-of a comparable tier and the reply opens with a notice. The provider shows as
-«Sin saldo» in the picker until the memo expires or an admin saves another key.
+OpenAI `insufficient_quota`), the turn keeps that model and reports `E_PROVIDER`.
+Internal requests without a pinned model may use a configured, funded model
+of a comparable tier if failover is enabled. The provider shows as «Sin saldo»
+in the picker until the memo expires or an admin saves another key.
 Provider SDK clients follow the key currently in env (Admin → Conexiones swaps
 it at runtime), so no client keeps a stale key.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SIRAGPT_BILLING_FAILOVER` | on | `0` disables the failover (the turn shows the honest error instead) |
+| `SIRAGPT_BILLING_FAILOVER` | on | `0` disables failover for unpinned internal requests; selected models never switch providers |
 | `SIRAGPT_BILLING_FAILOVER_MEMO_MS` | `600000` | How long a provider stays «sin saldo» before it is tried again |
 | `SIRAGPT_BILLING_FAILOVER_ORDER` | `xAI,DeepSeek,Gemini,OpenAI,Anthropic,Meta,Kimi,OpenRouter,Mistral,Groq,Cerebras,Z.ai` | Preference among funded providers (same tier first) |
 | `SIRAGPT_OPENAI_FILES_UPLOAD` | on | `0` skips the optional OpenAI Files upload of documents (it now always runs in the background and is skipped while OpenAI rejects the key) |

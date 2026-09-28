@@ -175,9 +175,10 @@ async function runGenerate({ primaryError, pick, getClient }) {
   const originalPick = billing.pickFailoverModel;
   const frames = [];
   const failovers = [];
+  let pickCalls = 0;
   billing.__resetForTests();
   service.getClient = getClient;
-  billing.pickFailoverModel = async () => pick;
+  billing.pickFailoverModel = async () => { pickCalls++; return pick; };
   const failingClient = {
     chat: { completions: { create: async () => { throw primaryError; } } },
   };
@@ -192,16 +193,16 @@ async function runGenerate({ primaryError, pick, getClient }) {
       skipDoneSentinel: true,
       onModelFailover: (info) => failovers.push(info),
     });
-    return { out, frames: frames.join('\n'), failovers };
+    return { out, frames: frames.join('\n'), failovers, pickCalls };
   } finally {
     service.getClient = originalGetClient;
     billing.pickFailoverModel = originalPick;
   }
 }
 
-test('generateStream: Anthropic «credit balance too low» fails over to a funded model with a visible notice', async () => {
+test('generateStream: a selected Claude model never switches providers on insufficient credits', async () => {
   const seen = [];
-  const { out, frames, failovers } = await runGenerate({
+  const { out, frames, failovers, pickCalls } = await runGenerate({
     primaryError: httpError(400, 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'),
     pick: { provider: 'xAI', model: 'grok-4.7', label: 'Grok 4.7', fromLabel: 'Claude Fable 5.1' },
     getClient: (provider) => {
@@ -210,15 +211,14 @@ test('generateStream: Anthropic «credit balance too low» fails over to a funde
       return { chat: { completions: { create: async () => streamOf('2 + 2 = 4.') } } };
     },
   });
-  assert.deepEqual(seen, ['xAI']);
-  assert.match(out, /^_Claude Fable 5\.1 no está disponible ahora \(el proveedor no tiene saldo\); respondí con Grok 4\.7\._\n\n2 \+ 2 = 4\.$/);
-  assert.match(frames, /"type":"model_failover"/);
-  assert.match(frames, /respondí con Grok 4\.7/);
-  assert.equal(failovers.length, 1);
-  assert.equal(failovers[0].to.model, 'grok-4.7');
-  assert.equal(failovers[0].from.label, 'Claude Fable 5.1');
+  assert.deepEqual(seen, []);
+  assert.equal(pickCalls, 0, 'a selected model must not even search for another provider');
+  assert.match(out, /No cambié de modelo/);
+  assert.match(frames, /"type":"error"/);
+  assert.match(frames, /"code":"E_PROVIDER"/);
+  assert.doesNotMatch(frames, /model_failover|respondí con Grok 4\.7/);
+  assert.equal(failovers.length, 0);
   assert.equal(billing.isOutOfCredit('Anthropic'), true, 'the provider is marked «sin saldo» for the picker');
-  assert.equal(/No cambié de modelo|no pudo completar/i.test(frames), false, 'no error shown when the failover answered');
   billing.__resetForTests();
 });
 

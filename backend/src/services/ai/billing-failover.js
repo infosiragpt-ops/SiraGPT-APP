@@ -1,17 +1,11 @@
 'use strict';
 
 /**
- * billing-failover — when the provider of the model the user PICKED has no
- * credit/quota left, answer with another configured, healthy model of a
- * comparable tier and say so at the top of the reply.
+ * billing-failover — track providers without credit and choose a configured,
+ * healthy replacement only for internal requests without a user-pinned model.
  *
- * Luis's rule (memory feedback-siragpt-picked-model-routing): engines follow
- * the picked model; fail over to another configured provider only on
- * provider-level errors (auth/quota/5xx). A billing error is not transient —
- * retrying the same model can't help — so the turn is answered by a funded
- * provider instead of ending in «El modelo no pudo completar la respuesta».
- * Live failure (2026-09-27 01:30Z / 02:26Z): Claude Fable 5.1 → Anthropic 400
- * «Your credit balance is too low to access the Anthropic API».
+ * A user-selected model keeps its provider and receives E_PROVIDER when that
+ * provider has no credit. The picker still shows «Sin saldo» from the memo.
  *
  * State is per process (production runs one backend instance). A provider
  * marked «sin saldo» is re-probed after the TTL, or immediately when an admin
