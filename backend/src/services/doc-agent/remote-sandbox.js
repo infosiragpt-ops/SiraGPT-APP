@@ -23,7 +23,9 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey 
   if (typeof doFetch !== 'function') throw new Error('createRemoteSandbox: fetch is not available');
 
   let sessionId = null;
+  let creatingSession = null;
   let destroyed = false;
+  let destroying = null;
 
   async function call(method, p, body, { timeoutMs = DEFAULT_TIMEOUT_MS, ignoreParentAbort = false } = {}) {
     if (!ignoreParentAbort) throwIfAborted(signal);
@@ -55,12 +57,27 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey 
   const persistKey = String(workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
 
   async function ensureSession() {
+    if (destroyed) throw new Error('sandbox destroyed');
     if (sessionId) return sessionId;
-    const body = persistKey ? { workspaceKey: persistKey } : {};
-    const r = await call('POST', '/v1/sessions', body, { timeoutMs: 40_000 });
-    sessionId = r.sessionId;
-    if (!sessionId) throw new Error('sandbox service returned no sessionId');
-    return sessionId;
+    // First-use tools can run in parallel. All of them must share the same
+    // POST; otherwise each gets a container and destroy() sees only the last.
+    if (!creatingSession) {
+      creatingSession = (async () => {
+        try {
+          const body = persistKey ? { workspaceKey: persistKey } : {};
+          const r = await call('POST', '/v1/sessions', body, { timeoutMs: 40_000 });
+          if (!r.sessionId) throw new Error('sandbox service returned no sessionId');
+          sessionId = r.sessionId;
+          return sessionId;
+        } finally {
+          // A failed create can be retried on the same live sandbox object.
+          creatingSession = null;
+        }
+      })();
+    }
+    const id = await creatingSession;
+    if (destroyed) throw new Error('sandbox destroyed');
+    return id;
   }
 
   return {
@@ -99,16 +116,24 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey 
       return (Array.isArray(r.outputs) ? r.outputs : []).map((o) => ({ name: o.name, buffer: Buffer.from(String(o.contentBase64 || ''), 'base64') }));
     },
     async destroy() {
-      if (destroyed) return;
+      if (destroying) return destroying;
       destroyed = true;
-      if (sessionId) {
-        try {
-          await call('DELETE', `/v1/sessions/${sessionId}`, undefined, {
-            timeoutMs: 20_000,
-            ignoreParentAbort: true,
-          });
-        } catch (_) {}
-      }
+      destroying = (async () => {
+        // An in-flight POST can succeed after destroy() was requested. Wait
+        // for its ID, then DELETE it using a signal independent of Stop.
+        if (creatingSession) {
+          try { await creatingSession; } catch (_) { /* no ID was issued */ }
+        }
+        if (sessionId) {
+          try {
+            await call('DELETE', `/v1/sessions/${sessionId}`, undefined, {
+              timeoutMs: 20_000,
+              ignoreParentAbort: true,
+            });
+          } catch (_) { /* server TTL is the final cleanup backstop */ }
+        }
+      })();
+      return destroying;
     },
   };
 }

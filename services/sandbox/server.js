@@ -70,6 +70,7 @@ function readJson(req) {
     req.on('data', (c) => { size += c.length; if (size > MAX_BODY_BYTES) { reject(new Error('payload too large')); req.destroy(); return; } chunks.push(c); });
     req.on('end', () => { if (!chunks.length) return resolve({}); try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (e) { reject(e); } });
     req.on('error', reject);
+    req.on('close', () => { if (!req.complete) reject(new Error('request_closed')); });
   });
 }
 
@@ -78,15 +79,28 @@ function touch(entry) { entry.expiresAt = Date.now() + SESSION_TTL_MS; }
 async function destroySession(id) {
   const entry = sessions.get(id);
   if (!entry) return;
-  sessions.delete(id);
-  try { await entry.session.destroy(); } catch (_) {}
+  // Keep the slot occupied until Docker has actually removed the container.
+  // Otherwise a concurrent POST can create another container during rm -f.
+  if (entry.destroying) return entry.destroying;
+  entry.destroying = (async () => {
+    try {
+      await entry.session.destroy();
+      sessions.delete(id);
+    } catch (err) {
+      // Retain the entry for the TTL sweeper to retry; do not claim a freed
+      // slot while a container may still be running.
+      entry.destroying = null;
+      throw err;
+    }
+  })();
+  return entry.destroying;
 }
 
 // TTL garbage collector.
 setInterval(() => {
   const now = Date.now();
   for (const [id, entry] of sessions) {
-    if (entry.expiresAt <= now) destroySession(id);
+    if (entry.expiresAt <= now) destroySession(id).catch(() => {});
   }
 }, 30_000).unref();
 
@@ -96,6 +110,7 @@ setInterval(() => {
  * session; production uses the real ephemeral-container factory.
  */
 function buildServer({ createSession = createDockerSession, isDockerAvailable = dockerAvailable } = {}) {
+  let pendingCreates = 0;
   return http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
@@ -110,6 +125,7 @@ function buildServer({ createSession = createDockerSession, isDockerAvailable = 
         docker: dockerOk,
         image: IMAGE,
         activeSessions: sessions.size,
+        pendingCreates,
         maxConcurrency: MAX_CONCURRENCY,
         limits,
       });
@@ -121,14 +137,34 @@ function buildServer({ createSession = createDockerSession, isDockerAvailable = 
     // POST /v1/sessions  { workspaceKey? } — named volume persists /workspace
     // across sessions so follow-ups reopen the last conversation files.
     if (req.method === 'POST' && url.pathname === '/v1/sessions') {
-      if (sessions.size >= MAX_CONCURRENCY) return send(res, 429, { error: 'at_capacity', maxConcurrency: MAX_CONCURRENCY });
-      if (!(await isDockerAvailable())) return send(res, 503, { error: 'docker_unavailable' });
-      const body = await readJson(req).catch(() => ({}));
-      const workspaceKey = String(body.workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
-      const session = await createSession({ workspaceKey });
-      const id = crypto.randomUUID();
-      sessions.set(id, { session, expiresAt: Date.now() + SESSION_TTL_MS, workspaceKey });
-      return send(res, 201, { sessionId: id, ttlMs: SESSION_TTL_MS, workspaceKey });
+      let clientDisconnected = false;
+      req.socket.once('close', () => { clientDisconnected = true; });
+      res.once('close', () => { if (!res.writableEnded) clientDisconnected = true; });
+      // Reserve synchronously, before either async Docker probe or startup.
+      // sessions.size alone missed in-flight creates and admitted 9 with cap 8.
+      if (sessions.size + pendingCreates >= MAX_CONCURRENCY) {
+        return send(res, 429, { error: 'at_capacity', maxConcurrency: MAX_CONCURRENCY });
+      }
+      pendingCreates += 1;
+      try {
+        if (!(await isDockerAvailable())) return send(res, 503, { error: 'docker_unavailable' });
+        if (clientDisconnected || res.destroyed) return;
+        const body = await readJson(req).catch(() => ({}));
+        if (clientDisconnected || res.destroyed) return;
+        const workspaceKey = String(body.workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
+        const session = await createSession({ workspaceKey });
+        const id = crypto.randomUUID();
+        sessions.set(id, { session, expiresAt: Date.now() + SESSION_TTL_MS, workspaceKey });
+        // A caller can time out while docker run is still completing. It has
+        // no session ID to DELETE, so clean up here instead of waiting for TTL.
+        if (clientDisconnected || res.destroyed) {
+          await destroySession(id);
+          return;
+        }
+        return send(res, 201, { sessionId: id, ttlMs: SESSION_TTL_MS, workspaceKey });
+      } finally {
+        pendingCreates -= 1;
+      }
     }
 
     // /v1/sessions/:id/*
@@ -138,7 +174,7 @@ function buildServer({ createSession = createDockerSession, isDockerAvailable = 
       const action = parts[3];
 
       if (req.method === 'DELETE' && !action) { await destroySession(id); return send(res, 200, { ok: true }); }
-      if (!entry) return send(res, 404, { error: 'session_not_found' });
+      if (!entry || entry.destroying) return send(res, 404, { error: 'session_not_found' });
       touch(entry);
       const s = entry.session;
 
