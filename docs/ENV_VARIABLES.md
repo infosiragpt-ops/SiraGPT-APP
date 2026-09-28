@@ -602,6 +602,30 @@ escenarios contra la ruta real: `node scripts/run-office-evals.js --user <id>
 | `SIRAGPT_AGENT_RUNNER_MAX_TOKENS` | `8192` en turnos de documentos | Salida por llamada al modelo |
 | `SIRAGPT_DOCUMENT_EDITOR_ENGINE` | `office` | Editor del chat (`/api/ai/document-edit`): Excel / PowerPoint / PDF en el loop de oficina del AgentRunner; `legacy` = loop anterior del sandbox |
 | `SIRAGPT_DOCUMENT_EDITOR_VISUAL_VERIFY` | `1` (off en `NODE_ENV=test`) | Verificación visual (sira_office + visión) en el `finish` del docx-engine de Word |
+| `DOC_SANDBOX_QUEUE_WAIT_MS` | `90000` | Espera máxima en cola cuando el servicio de sandbox responde `429 at_capacity` (sondeo cada 2–5 s, checkpoint «Esperando un sandbox libre…»). Agotada la espera el turno falla como `sandbox_capacity` (categoría `capacity`, reintentable, «Cancelado por el sistema» en Admin → Logs). `0` = fallar al primer 429 |
+| `SANDBOX_CREATE_TIMEOUT_MS` | `60000` | Tope por intento de `POST /v1/sessions` (arranque del contenedor). Cada intento tiene su propio presupuesto: la espera en cola no consume el tiempo del comando. `DOC_SANDBOX_CONCURRENCY` es la concurrencia del worker BullMQ del módulo `doc-sandbox` (TS), no la del AgentRunner; el límite real de contenedores vive en `SANDBOX_MAX_CONCURRENCY` del servicio `siragpt-sandbox` |
+
+## Transcripción de audio (escalera)
+
+`backend/src/services/audio-transcriber.js`. Orden por defecto: OpenAI → Groq →
+xAI → (Meta solo opt-in) → Whisper local (`whisper.cpp`, sin clave). Un
+proveedor que rechaza la clave (401/403) o no tiene saldo (402 / 429 de
+facturación) se salta durante `TRANSCRIBE_PROVIDER_COOLDOWN_MS`; la línea final
+del log resume la escalera (`providers tried: openai(429 billing) groq(ok)
+local(model not readable by uid 100 …)`). Al arrancar, el backend registra un
+WARN `[local-whisper] unavailable: <motivo>` si el motor local no puede correr
+(binario, modelo, permisos del modelo, ffmpeg).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TRANSCRIBE_PROVIDERS` | `openai,groq,xai,meta,local` | Orden de la escalera (`voicestudio` opcional; listar `meta` aquí también la habilita) |
+| `GROQ_API_KEY` | — | Activa el peldaño Groq (`/openai/v1/audio/transcriptions`) |
+| `GROQ_TRANSCRIBE_MODEL` | `whisper-large-v3-turbo` | Modelo STT de Groq |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Base OpenAI-compatible de Groq |
+| `TRANSCRIBE_GROQ_DISABLED` | off | `1` desactiva Groq sin quitar la clave |
+| `SIRAGPT_META_TRANSCRIPTION` | off | `1` habilita Meta (su API no tiene STT: respondía 404); sin la bandera se salta y se registra a nivel debug |
+| `TRANSCRIBE_PROVIDER_COOLDOWN_MS` | `1800000` (30 min) | Memoria de clave rechazada / sin saldo por proveedor (reusa `utils/provider-key-health`) |
+| `WHISPER_CPP_BIN` / `WHISPER_CPP_MODEL` | `/usr/local/bin/whisper-cli` / `/usr/local/share/whisper/ggml-base.bin` | Motor local; el modelo debe ser legible por `appuser` (uid 100): la imagen lo deja en `0644` |
 
 ## Chat attachments — any format (optional)
 
@@ -658,6 +682,18 @@ uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error
 | `STALE_RUN_WARN_MINUTES` / `STALE_RUN_CRITICAL_MINUTES` | `15` / `45` | Silence before a non-terminal run alerts (warn / critical) — once per run and severity, persisted in AuditLog (`stale_run_alerted`) |
 | `STALE_RUN_ALERT_COOLDOWN_MINUTES` | `30` | In-memory cooldown between sweeps (first-level cache) |
 | `STALE_RUN_ABANDON_HOURS` | `24` | A live run (agent task `queued`/`running`, codex run `running`/`waiting_approval`) silent this long is closed as «abandonado» (agent task → `failed`; codex plan awaiting approval → `cancelled`; codex run → `error`, reason in `error`), recorded once (`stale_run_abandoned`), never alerted again. Terminal rows (`completed`/`failed`/`cancelled`/`error`/`done`) are never scanned. `0` never closes |
+
+### Cowork runs (`backend/src/services/cowork/control-plane.js`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SIRAGPT_COWORK_STALE_RUN_MS` | `7200000` (2 h) | `queued`/`running`/`paused` sin actualización → `failed` al crear el siguiente run del usuario |
+| `SIRAGPT_COWORK_STALE_HEARTBEAT_MS` | `900000` (15 min) | `running` sin paso ni latido → `failed` (libera el cupo del plan: «Your plan allows 12 concurrent Cowork task(s)») |
+| `SIRAGPT_COWORK_STALE_APPROVAL_MS` | `86400000` (24 h) | `waiting_approval` sin actividad → `failed` |
+| `SIRAGPT_COWORK_HEARTBEAT_MS` | `300000` (5 min) | Latido (`touchRun`) del turno de chat mientras el run está vivo, para que un paso largo no se cierre como abandonado |
+
+El aviso «run bootstrap failed (legacy chat continues)» se registra como WARN
+una vez por minuto (con el recuento del minuto anterior) y el resto a `info`.
 
 ## Billing failover and provider keys (optional)
 

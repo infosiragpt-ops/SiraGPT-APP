@@ -43,6 +43,10 @@ const TOOL_ERROR_CODE_RE = /agent_runner|document|doc_|edit_failed|tool_error|to
 // question, never a platform failure.
 const NON_FAILURE_ERROR_CODE_RE = /^(clarification_required|cancelled|CANCELLED|user_cancelled|aborted_by_user)$/;
 
+// Transient sandbox capacity/timeouts (agent-runner `sandbox_capacity` /
+// `sandbox_timeout`, remote `at_capacity`).
+const CAPACITY_REASON_RE = /sandbox_capacity|sandbox_at_capacity|at_capacity|sandbox_timeout|remote_sandbox_timeout/i;
+
 const INTERNAL_FENCE_RE = /```(?:agent-task-state|agent-state|sira-state)\n[\s\S]*?(?:\n```|$)/g;
 const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 
@@ -249,6 +253,7 @@ function toolCause(notes, errorCode) {
   if (/github/i.test(code)) return 'GitHub: no se pudo abrir el repositorio';
   if (/project_preview/i.test(code)) return 'Vista previa del proyecto: falló';
   if (/document_generation|pipeline/i.test(code)) return 'Generación de documento: falló';
+  if (/sandbox_timeout|remote_sandbox_timeout/i.test(code)) return 'Sandbox: tiempo de espera agotado';
   if (/sandbox/i.test(code)) return 'Sandbox: comando rechazado';
   return code ? `Herramienta: ${code}` : 'Herramienta: falló';
 }
@@ -347,6 +352,20 @@ function classifyTurnOutcome(outcome = {}) {
       ...out('herramienta_fallida', generation.generationCause(d), ['generation_failure', meta && meta.subtype].filter(Boolean)),
       subtype: meta ? meta.subtype : null,
     };
+  }
+
+  // Document sandbox at capacity / too slow (remote 429 at_capacity, queue
+  // wait exhausted, remote_sandbox_timeout): transient infrastructure, filed
+  // as «Cancelado por el sistema» so it groups apart from real tool bugs.
+  const capacityNote = notes.find((n) => n && n.kind === 'tool_failure' && n.data
+    && (n.data.category === 'capacity' || CAPACITY_REASON_RE.test(str(n.data.reason, 80))));
+  const capacityFrame = errorFrames.find((f) => CAPACITY_REASON_RE.test(str(f.code, 80)));
+  if (capacityNote || capacityFrame) {
+    const reason = str((capacityNote && capacityNote.data.reason) || (capacityFrame && capacityFrame.code), 80);
+    const cause = /timeout/i.test(reason)
+      ? 'Sandbox de documentos: tiempo de espera agotado (reintentable)'
+      : 'Sandbox de documentos sin capacidad (reintentable)';
+    return out('cancelado_por_sistema', cause, ['capacity', reason].filter(Boolean));
   }
 
   const toolFatal = notes.find((n) => n && n.kind === 'tool_failure' && n.data && n.data.fatal);

@@ -115,7 +115,7 @@ test('backend Dockerfile can seed ggml-base.bin without HuggingFace', () => {
     interpolateFromStage(dockerfile, 'BUNDLE_WHISPER_MODEL', { BUNDLE_WHISPER_MODEL: '1' }),
     'whisper-seed-1',
   );
-  assert.match(dockerfile, /COPY ggml-base\.bin \/whisper-seed\/ggml-base\.bin/);
+  assert.match(dockerfile, /COPY (?:--chmod=0644 )?ggml-base\.bin \/whisper-seed\/ggml-base\.bin/);
   assert.match(dockerfile, /COPY --from=whisper-seed \/whisper-seed\/ \/tmp\/whisper-seed\//);
 
   const runnerStage = dockerfile.split('FROM node:22-alpine AS runner')[1] || '';

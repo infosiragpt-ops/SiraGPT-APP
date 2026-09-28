@@ -29,6 +29,13 @@ function staleWindowMs(envName, fallbackMs) {
   return Number.isFinite(n) && n >= 60_000 ? n : fallbackMs;
 }
 const STALE_RUN_LAST_EVENT = 'Cerrada automáticamente: la tarea quedó sin actividad (el servidor se reinició o la petición terminó sin cerrarla).';
+// A `running` run whose turn is alive touches `updatedAt` on every step AND
+// through touchRun() heartbeats (agentic-chat-stream, every
+// SIRAGPT_COWORK_HEARTBEAT_MS). Silence for this long while `running` means
+// the request died: prod 2026-09-28 hit «activas=12, límite=12» for 30 s of
+// parallel turns because earlier runs were still counted 2 h later.
+const DEFAULT_STALE_HEARTBEAT_MS = 15 * 60 * 1000;
+const DEFAULT_HEARTBEAT_MS = 5 * 60 * 1000;
 
 class CoworkControlError extends Error {
   constructor(code, message, status = 400, details = null) {
@@ -133,14 +140,40 @@ async function getOwnedRun(prisma, { runId, userId, include = null }) {
   return run;
 }
 
+function heartbeatIntervalMs(env = process.env) {
+  const n = Number(env.SIRAGPT_COWORK_HEARTBEAT_MS);
+  return Number.isFinite(n) && n >= 10_000 ? n : DEFAULT_HEARTBEAT_MS;
+}
+
+/**
+ * Heartbeat: bump `updatedAt` of a live run without changing anything else,
+ * so a long single step (a 20-minute document edit) is not reaped as
+ * abandoned. No-op on terminal runs. Never throws.
+ */
+async function touchRun(prisma, { runId, userId, now = new Date() }) {
+  if (!prisma?.coworkRun || !runId) return 0;
+  try {
+    const r = await prisma.coworkRun.updateMany({
+      where: { id: String(runId), ...(userId ? { userId: String(userId) } : {}), status: { in: ACTIVE_STATUSES } },
+      data: { updatedAt: now },
+    });
+    return r && r.count ? r.count : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
 async function reapStaleRuns(prisma, { userId, now = new Date() }) {
   const activeBefore = new Date(now.getTime() - staleWindowMs('SIRAGPT_COWORK_STALE_RUN_MS', 2 * 60 * 60 * 1000));
   const approvalBefore = new Date(now.getTime() - staleWindowMs('SIRAGPT_COWORK_STALE_APPROVAL_MS', 24 * 60 * 60 * 1000));
+  const heartbeatBefore = new Date(now.getTime() - staleWindowMs('SIRAGPT_COWORK_STALE_HEARTBEAT_MS', DEFAULT_STALE_HEARTBEAT_MS));
   const stale = await prisma.coworkRun.findMany({
     where: {
       userId: String(userId),
       OR: [
         { status: { in: ['queued', 'running', 'paused'] }, updatedAt: { lt: activeBefore } },
+        // running without a heartbeat/step for 15 min: the turn is gone.
+        { status: 'running', updatedAt: { lt: heartbeatBefore } },
         { status: 'waiting_approval', updatedAt: { lt: approvalBefore } },
       ],
     },
@@ -165,6 +198,44 @@ async function reapStaleRuns(prisma, { userId, now = new Date() }) {
     }).catch(() => {});
   }
   return stale;
+}
+
+// «run bootstrap failed (legacy chat continues)» is graceful: the chat goes on
+// without a Cowork run. A burst of parallel turns produced 15 WARNs in 30 s.
+// Keep one WARN per minute (with the count of the previous minute) and log
+// the rest at info.
+const BOOTSTRAP_LOG_WINDOW_MS = 60_000;
+const bootstrapLogState = { windowStartedAt: 0, count: 0, previousCount: 0 };
+
+function resetBootstrapLogState() {
+  bootstrapLogState.windowStartedAt = 0;
+  bootstrapLogState.count = 0;
+  bootstrapLogState.previousCount = 0;
+}
+
+function logBootstrapFailure(error, { now = Date.now(), logger = console } = {}) {
+  let slots = '';
+  try {
+    const d = error && error.details;
+    slots = d && d.concurrency != null ? ` (activas=${d.active}, límite=${d.concurrency}, plan=${d.plan})` : '';
+  } catch (_) { /* noop */ }
+  const message = `${(error && error.message) || String(error)}${slots}`;
+  const state = bootstrapLogState;
+  if (now - state.windowStartedAt >= BOOTSTRAP_LOG_WINDOW_MS) {
+    state.previousCount = state.windowStartedAt ? state.count : 0;
+    state.windowStartedAt = now;
+    state.count = 0;
+  }
+  state.count += 1;
+  const level = state.count === 1 ? 'warn' : 'info';
+  const suffix = state.count === 1
+    ? (state.previousCount > 1 ? ` [${state.previousCount} en el minuto anterior]` : '')
+    : ` [×${state.count} este minuto]`;
+  try {
+    const fn = typeof logger[level] === 'function' ? logger[level] : logger.warn;
+    fn.call(logger, `[cowork] run bootstrap failed (legacy chat continues):${suffix}`, message);
+  } catch (_) { /* noop */ }
+  return { level, count: state.count };
 }
 
 async function createRun(prisma, {
@@ -712,6 +783,11 @@ async function getCostSummary(prisma, { userId, workspaceId = null, days = 30 })
 
 module.exports = {
   reapStaleRuns,
+  touchRun,
+  heartbeatIntervalMs,
+  logBootstrapFailure,
+  resetBootstrapLogState,
+  DEFAULT_STALE_HEARTBEAT_MS,
   STALE_RUN_LAST_EVENT,
   CoworkControlError,
   ACTIVE_STATUSES,

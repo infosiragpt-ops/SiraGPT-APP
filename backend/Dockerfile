@@ -55,7 +55,9 @@ FROM node:22-alpine AS whisper-seed-0
 RUN mkdir -p /whisper-seed
 
 FROM node:22-alpine AS whisper-seed-1
-COPY ggml-base.bin /whisper-seed/ggml-base.bin
+# COPY keeps the source mode: a 0600 seed on the Lenovo produced a model the
+# non-root runtime (appuser, uid 100) could not read. Force world-readable.
+COPY --chmod=0644 ggml-base.bin /whisper-seed/ggml-base.bin
 
 FROM whisper-seed-${BUNDLE_WHISPER_MODEL} AS whisper-seed
 
@@ -113,6 +115,9 @@ RUN addgroup -S appgroup 2>/dev/null || true; \
 # Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load.
 # install-local-whisper.sh builds with -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF
 # -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DBUILD_SHARED_LIBS=OFF.
+# The runtime user is appuser (uid 100), not root: the model must be
+# world-readable (0644) and the CLI world-executable (0755). The chmod runs in
+# the same layer that creates the files, so the image size does not change.
 ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 ENV WHISPER_CPP_BIN=/usr/local/bin/whisper-cli \
     WHISPER_CPP_MODEL=/usr/local/share/whisper/ggml-base.bin \
@@ -127,6 +132,10 @@ RUN sh /tmp/install-local-whisper.sh \
     && rm -rf /tmp/whisper-seed \
     && whisper-cli -h >/dev/null \
     && test -s "${WHISPER_CPP_MODEL}" \
+    && chmod 0755 /usr/local/share/whisper /usr/local/bin/whisper-cli \
+    && chmod 0644 "${WHISPER_CPP_MODEL}" \
+    && [ "$(stat -c '%a' "${WHISPER_CPP_MODEL}")" = "644" ] \
+    && [ "$(stat -c '%a' /usr/local/bin/whisper-cli)" = "755" ] \
     && ffmpeg -hide_banner -loglevel error -nostdin -y \
         -f lavfi -i sine=frequency=440:duration=1 \
         -ar 16000 -ac 1 -c:a pcm_s16le /tmp/whisper-smoke.wav \

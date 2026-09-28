@@ -12,12 +12,55 @@
  */
 
 const DEFAULT_TIMEOUT_MS = 130_000;
+// POST /v1/sessions runs `docker run` on the sandbox host; under load that
+// took longer than the old 40 s and surfaced as `remote_sandbox_timeout`.
+const DEFAULT_CREATE_TIMEOUT_MS = 60_000;
+// The service answers 429 `at_capacity` when its SANDBOX_MAX_CONCURRENCY
+// containers are busy (prod: 8, bursts of 3–4 parallel document turns).
+// Instead of failing the turn instantly we wait in a bounded queue: poll
+// every 2 s, backing off to 5 s, for at most DOC_SANDBOX_QUEUE_WAIT_MS.
+const DEFAULT_QUEUE_WAIT_MS = 90_000;
+const QUEUE_POLL_MIN_MS = 2_000;
+const QUEUE_POLL_MAX_MS = 5_000;
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 
-function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey } = {}) {
+function positiveInt(raw, fallback) {
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function isAtCapacity(err) {
+  return Boolean(err) && Number(err.status) === 429 && /at_capacity/i.test(String(err.message || ''));
+}
+
+/** Terminal, retryable capacity failure — classified as `capacity` upstream. */
+function capacityError(waitedMs, cause) {
+  const err = new Error('El entorno de documentos está ocupado; reintenta en un momento');
+  err.code = 'sandbox_at_capacity';
+  err.category = 'capacity';
+  err.retryable = true;
+  err.status = 429;
+  err.waitedMs = waitedMs;
+  if (cause) err.cause = cause;
+  return err;
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(signal.reason || new Error('aborted')); return; }
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason || new Error('aborted')); };
+    const timer = setTimeout(() => { if (signal) signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey, onWait, env = process.env, sleepImpl, queueWaitMs } = {}) {
   const base = String(baseUrl || process.env.SANDBOX_SERVICE_URL || '').replace(/\/+$/, '');
   const key = apiKey || process.env.SANDBOX_API_KEY || '';
   const doFetch = fetchImpl || globalThis.fetch;
+  const createTimeoutMs = positiveInt(env.SANDBOX_CREATE_TIMEOUT_MS, DEFAULT_CREATE_TIMEOUT_MS) || DEFAULT_CREATE_TIMEOUT_MS;
+  const maxQueueWaitMs = queueWaitMs != null ? Number(queueWaitMs) : positiveInt(env.DOC_SANDBOX_QUEUE_WAIT_MS, DEFAULT_QUEUE_WAIT_MS);
+  const wait = sleepImpl || sleep;
   if (!base) throw new Error('createRemoteSandbox: SANDBOX_SERVICE_URL is required');
   if (!key) throw new Error('createRemoteSandbox: SANDBOX_API_KEY is required');
   if (typeof doFetch !== 'function') throw new Error('createRemoteSandbox: fetch is not available');
@@ -56,6 +99,33 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey 
 
   const persistKey = String(workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
 
+  // Bounded queue in front of the service's capacity limit. Each attempt is
+  // a fresh POST with its own create timeout: the queue wait never eats the
+  // budget of the command that runs once the container exists.
+  async function createSessionWithQueue(body) {
+    const startedAt = Date.now();
+    let attempt = 0;
+    let plannedWaitMs = 0; // sum of sleeps: bounded even under a frozen clock
+    let delay = QUEUE_POLL_MIN_MS;
+    for (;;) {
+      attempt += 1;
+      try {
+        return await call('POST', '/v1/sessions', body, { timeoutMs: createTimeoutMs });
+      } catch (err) {
+        if (!isAtCapacity(err)) throw err;
+        const waitedMs = Math.max(Date.now() - startedAt, plannedWaitMs);
+        if (destroyed || waitedMs + delay > maxQueueWaitMs) throw capacityError(waitedMs, err);
+        if (typeof onWait === 'function') {
+          try { onWait({ attempt, waitedMs, maxWaitMs: maxQueueWaitMs, nextDelayMs: delay }); } catch (_) { /* progress is best-effort */ }
+        }
+        await wait(delay, signal);
+        throwIfAborted(signal);
+        plannedWaitMs += delay;
+        delay = Math.min(QUEUE_POLL_MAX_MS, Math.round(delay * 1.5));
+      }
+    }
+  }
+
   async function ensureSession() {
     if (destroyed) throw new Error('sandbox destroyed');
     if (sessionId) return sessionId;
@@ -65,7 +135,7 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey 
       creatingSession = (async () => {
         try {
           const body = persistKey ? { workspaceKey: persistKey } : {};
-          const r = await call('POST', '/v1/sessions', body, { timeoutMs: 40_000 });
+          const r = await createSessionWithQueue(body);
           if (!r.sessionId) throw new Error('sandbox service returned no sessionId');
           sessionId = r.sessionId;
           return sessionId;
@@ -138,4 +208,4 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey 
   };
 }
 
-module.exports = { createRemoteSandbox };
+module.exports = { createRemoteSandbox, isAtCapacity, DEFAULT_QUEUE_WAIT_MS, DEFAULT_CREATE_TIMEOUT_MS };
