@@ -312,6 +312,54 @@ async function waitForActiveTurn(activeTurn, {
   }
 }
 
+/**
+ * Claim one in-process producer for an explicit turn identity. A timed-out
+ * wait says only that the producer is still running; it is never permission
+ * to evict it. After a failed producer, every follower rechecks the Map
+ * synchronously before claiming the vacant slot.
+ */
+async function claimActiveGenerateTurn({
+  turns,
+  key,
+  requestFingerprint,
+  createTurn,
+  waitForTurn = waitForActiveTurn,
+  onMismatch = () => {},
+} = {}) {
+  if (!turns || typeof turns.get !== 'function' || typeof turns.set !== 'function'
+    || typeof turns.delete !== 'function' || !key || typeof createTurn !== 'function') {
+    throw new TypeError('active turn registry, key and createTurn are required');
+  }
+
+  while (true) {
+    const activeTurn = turns.get(key);
+    if (activeTurn && activeTurn.requestFingerprint !== requestFingerprint) {
+      // A different payload cannot evict a live producer with this key.
+      // Once the prior turn has settled, the browser may reuse a transport
+      // id with a new prompt without replaying the old result.
+      if (!activeTurn.settled) return { outcome: 'conflict' };
+      if (turns.get(key) === activeTurn) turns.delete(key);
+      onMismatch(activeTurn);
+      continue;
+    }
+    if (!activeTurn) {
+      const turn = createTurn(key, requestFingerprint);
+      turns.set(key, turn);
+      return { outcome: 'owner', turn };
+    }
+
+    const waited = await waitForTurn(activeTurn);
+    if (waited.outcome === 'replay' || waited.outcome === 'in_progress') return waited;
+    // Only failed or non-replayable completed work is reclaimable. A second
+    // follower may have claimed the slot while this one was suspended.
+    if (turns.get(key) === activeTurn) turns.delete(key);
+  }
+}
+
+function markActiveGenerateTurnClientDetached(turn) {
+  if (turn && !turn.settled) turn.clientDetached = true;
+}
+
 function createKeyedSerialExecutor() {
   const tails = new Map();
 
@@ -412,6 +460,7 @@ module.exports = {
   buildMessageIdempotencyScopeKey,
   buildMessageRequestFingerprint,
   claimStreamController,
+  claimActiveGenerateTurn,
   createKeyedSerialExecutor,
   createMessageIdempotencyCoordinator,
   findMessagesByTurnIdentity,
@@ -420,6 +469,7 @@ module.exports = {
   getStoredMessageRequestFingerprint,
   hasIdempotencyRequestConflict,
   metadataMatchesTurnIdentity,
+  markActiveGenerateTurnClientDetached,
   normalizeTurnKey,
   resolveTurnIdentity,
   waitForActiveTurn,

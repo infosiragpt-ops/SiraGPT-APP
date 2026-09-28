@@ -53,93 +53,41 @@ test('idempotency payload conflict does not 409 or call respondGenerateTurnError
   );
 });
 
-test('in-memory idempotency mismatch drops the stale Map entry instead of 409', () => {
-  const mismatchIdx = generateIdempotencySource.indexOf(
-    'activeTurn.requestFingerprint !== generateIdempotencyRequestHash',
-  );
-  assert.ok(mismatchIdx >= 0, 'in-memory fingerprint mismatch check must exist');
-  const mismatchBlock = generateIdempotencySource.slice(mismatchIdx, mismatchIdx + 520);
+test('in-memory payload conflict blocks a live owner but permits a settled transport-id reuse', () => {
+  const service = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'chat-turn-idempotency.js'), 'utf8');
+  assert.match(service, /activeTurn\.requestFingerprint !== requestFingerprint[\s\S]*?if \(!activeTurn\.settled\) return \{ outcome: 'conflict' \}/);
+  assert.match(service, /if \(turns\.get\(key\) === activeTurn\) turns\.delete\(key\)/);
+  assert.match(generateIdempotencySource, /activeClaim\.outcome === 'conflict'[\s\S]*?code: 'idempotency_conflict'/);
+  assert.match(generateIdempotencySource, /onMismatch: \(\) => generateLog\.warn\('idempotency\.stale_turn_dropped'/);
+});
 
+test('an active owner cannot be replaced after a follower wait times out', () => {
+  assert.match(generateIdempotencySource, /const activeClaim = await claimActiveGenerateTurn\(\{/);
+  assert.match(generateIdempotencySource, /activeClaim\.outcome === 'replay'[\s\S]*?streamDuplicateTurnReplay/);
   assert.match(
-    mismatchBlock,
-    /generateLog\.warn\(\s*'idempotency\.stale_turn_dropped'/,
-    'mismatch must log the stale-turn drop',
+    generateIdempotencySource,
+    /activeClaim\.outcome === 'in_progress'[\s\S]*?return respondGenerateTurnError\(res, \{[\s\S]*?code: 'turn_in_progress'[\s\S]*?retryable: true/,
   );
-  assert.match(
-    mismatchBlock,
-    /activeGenerateTurns\.delete\(activeGenerateTurnKey\)/,
-    'mismatch must delete the stale Map entry when it still points at that turn',
-  );
-  assert.doesNotMatch(
-    mismatchBlock,
-    /respondGenerateTurnError/,
-    'in-memory mismatch must not call respondGenerateTurnError',
-  );
-  assert.doesNotMatch(
-    mismatchBlock,
-    /IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD/,
-    'in-memory mismatch must not return the reused-key 409',
+  assert.ok(
+    generateIdempotencySource.indexOf("activeClaim.outcome === 'in_progress'")
+      < generateIdempotencySource.indexOf('req._activeGenerateTurn = activeClaim.turn'),
+    'only an actual new owner may run generation',
   );
 });
 
-test('waitForActiveTurn failure does not 409 turn_in_progress — retry claims ownership', () => {
-  const waitIdx = generateIdempotencySource.indexOf('let activeWait = await waitForActiveTurn(activeTurn)');
-  assert.ok(waitIdx >= 0, 'active wait must exist');
-  const waitBlock = generateIdempotencySource.slice(waitIdx, waitIdx + 1900);
-
-  assert.match(
-    waitBlock,
-    /activeWait\.outcome === 'replay'/,
-    'replay outcome must still stream the completed owner',
-  );
-  assert.match(
-    waitBlock,
-    /activeGenerateTurns\.delete\(activeGenerateTurnKey\)/,
-    'non-replay wait must drop the stale Map entry when it still points at that turn',
-  );
-  assert.match(
-    waitBlock,
-    /createActiveGenerateTurn\(\s*activeGenerateTurnKey,\s*generateIdempotencyRequestHash/,
-    'non-replay wait must continue as the new owner',
-  );
-  assert.match(
-    waitBlock,
-    /claimStreamController\([\s\S]*?\{ replaceOwner: true \}/,
-    'new owner must claim the stream controller like the empty-slot branch',
-  );
-  assert.doesNotMatch(
-    waitBlock,
-    /turn_in_progress/,
-    'non-replay wait must not return turn_in_progress',
-  );
-  assert.doesNotMatch(
-    waitBlock,
-    /respondGenerateTurnError/,
-    'non-replay wait must not call respondGenerateTurnError',
-  );
-});
-
-test('aborted or closed request releases an incomplete activeGenerateTurns owner', () => {
+test('socket detachment preserves the background owner until its finally settles', () => {
   assert.match(
     src,
-    /function releaseIncompleteActiveGenerateTurn\(turn, reason\)/,
-    'incomplete-owner release helper must exist',
+    /res\.on\('close',[\s\S]{0,240}clientGone = true;[\s\S]{0,240}source: 'response_close'/,
+    'socket close must mark the client detached',
   );
   assert.match(
     src,
-    /if \(!turn \|\| turn\.settled\) return false;/,
-    'completed owners must stay in the Map for replay',
+    /req\.on\('aborted',[\s\S]{0,240}clientGone = true;[\s\S]{0,240}source: 'request_abort'/,
+    'request abort must mark the client detached',
   );
-  assert.match(
-    src,
-    /generateLog\.info\(\s*'client\.detached',[\s\S]{0,240}source:\s*'response_close'[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
-    'socket close before completion must drop a zombie owner',
-  );
-  assert.match(
-    src,
-    /generateLog\.info\(\s*'client\.detached',[\s\S]{0,240}source:\s*'request_abort'[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
-    'request abort before completion must drop a zombie owner',
-  );
+  assert.doesNotMatch(src, /releaseIncompleteActiveGenerateTurn/);
+  assert.match(src, /if \(req\._activeGenerateTurn\) \{[\s\S]*?req\._activeGenerateTurn\.reject\(new Error\('generate turn ended before persistence'\)\)/);
 });
 
 test('generate finally skips SSE post-hook writes onto a JSON 4xx', () => {
@@ -158,13 +106,9 @@ test('generate finally skips SSE post-hook writes onto a JSON 4xx', () => {
     'post-hook must end the response if it is still open',
   );
   assert.match(hookBlock, /res\.end\(\)/);
-  assert.match(
-    hookBlock,
-    /return;/,
-    'post-hook must return so it never writes SSE onto a JSON error',
-  );
-  assert.ok(
-    hookBlock.indexOf('return;') < hookBlock.indexOf('let __resp'),
-    '4xx guard must run before the SSE replace-frame write',
-  );
+  assert.match(hookBlock, /\}\s*else \{/,
+    'post-hook must skip SSE writes for JSON errors without skipping owner/controller cleanup');
+  assert.doesNotMatch(hookBlock, /return;/);
+  const cleanupIdx = src.indexOf('streamControllers.delete(__streamControllerKey)', hookIdx);
+  assert.ok(cleanupIdx > hookIdx, 'controller cleanup must remain reachable after a 4xx');
 });
