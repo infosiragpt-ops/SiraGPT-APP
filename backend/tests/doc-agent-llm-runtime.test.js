@@ -328,6 +328,45 @@ test('AgentRunner can call tools with the selected native GPT-6 Sol Chat Complet
   assert.equal(sent[0].payload.reasoning_effort, 'none');
 });
 
+test('AgentRunner gives DeepSeek V4 Pro tool calls room without changing the selected model', async () => {
+  const { createRunnerLlmClient } = require('../src/services/agent-runner');
+  const requests = [];
+  const makeClient = (pickedModel) => createRunnerLlmClient({
+    pickedModel,
+    env: { DEEPSEEK_API_KEY: 'local-synthetic-key', XAI_API_KEY: 'other-synthetic-key' },
+    createClient: (candidate) => ({ chat: { completions: { create: async (payload) => {
+      requests.push({ provider: candidate.provider, payload });
+      if (candidate.model === 'deepseek-v4-pro' && payload.tools?.length) {
+        return { choices: [{
+          finish_reason: payload.reasoning_effort === 'none' ? 'tool_calls' : 'length',
+          message: { content: null, tool_calls: [{ id: 'complete_1', type: 'function', function: {
+            name: 'execute_python', arguments: '{"code":"print(1)"}',
+          } }] },
+        }] };
+      }
+      return { choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] };
+    } } } }),
+  });
+  const tools = [{ type: 'function', function: { name: 'execute_python', parameters: { type: 'object', properties: {} } } }];
+  const pro = makeClient('DeepSeek:deepseek-v4-pro');
+  const complete = await callModel({ client: pro, model: 'deepseek-v4-pro', messages: [{ role: 'user', content: 'Crea un SAV y un XLSX.' }], tools, maxTokens: 4096 });
+  assert.equal(complete.choices[0].finish_reason, 'tool_calls');
+  await pro.chat.completions.create({ messages: [], tools: [] });
+  await pro.chat.completions.create({ messages: [], tools, reasoning_effort: 'high' });
+  await makeClient('DeepSeek:deepseek-v4-flash').chat.completions.create({ messages: [], tools });
+  await makeClient('xAI:grok-4.7').chat.completions.create({ messages: [], tools });
+
+  assert.equal(requests[0].provider, 'DeepSeek');
+  assert.equal(requests[0].payload.model, 'deepseek-v4-pro');
+  assert.equal(requests[0].payload.max_tokens, 4096);
+  assert.equal(requests[0].payload.reasoning_effort, 'none');
+  assert.equal(requests[1].payload.reasoning_effort, undefined, 'plain responses keep their existing setting');
+  assert.equal(requests[2].payload.reasoning_effort, 'high', 'explicit effort is preserved');
+  assert.equal(requests[3].payload.reasoning_effort, undefined, 'Flash is unchanged');
+  assert.equal(requests[4].payload.reasoning_effort, undefined, 'other APIs are unchanged');
+  assert.deepEqual(pro.candidates(), [{ provider: 'DeepSeek', model: 'deepseek-v4-pro' }]);
+});
+
 test('GPT-6 tool compatibility does not alter explicit effort, plain chat, or other providers', async () => {
   const seen = [];
   const candidate = (provider, model) => rt.createFailoverClient([{ provider, model }], {
