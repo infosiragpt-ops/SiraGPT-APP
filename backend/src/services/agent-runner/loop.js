@@ -1012,10 +1012,21 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
   return callModelWithRetry(async () => {
     try {
       const out = await create(true);
+      // Some providers return a partial tool_use block when max_tokens is
+      // reached. Its arguments can parse as `{}` but are not a completed call.
+      // Never hand that block to the executor or replay it as a tool turn.
+      const choice = out?.choices?.[0];
+      if (choice?.finish_reason === 'length' && Array.isArray(choice.message?.tool_calls) && choice.message.tool_calls.length > 0) {
+        const error = new Error('A tool call was truncated at the model output limit');
+        error.code = 'E_PROVIDER';
+        error.publicMessage = 'La respuesta del modelo se cortó antes de completar una herramienta. Reintenta con una solicitud más breve o elige otro modelo.';
+        throw error;
+      }
       if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
       return out;
     } catch (err) {
       if (signal && signal.aborted) throw err;
+      if (err?.code === 'E_PROVIDER') throw err;
       // A transcript-shape 400 mentions "tool_calls" but is NOT "this model
       // has no tools": retrying without tools would fail identically.
       if (isToolTranscriptError(err) || !looksLikeToolUnsupportedError(err)) throw err;
@@ -1626,7 +1637,7 @@ async function runAgentLoop({
       });
       if (signal?.aborted) bail(iteration);
       if (err?.code === 'E_PROVIDER') {
-        const message = 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
+        const message = err.publicMessage || 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
         onEvent({ type: 'error', code: 'E_PROVIDER', message, retryable: true, iteration });
         return {
           finalText: '',
