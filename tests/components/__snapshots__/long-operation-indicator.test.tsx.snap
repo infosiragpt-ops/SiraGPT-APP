@@ -13,7 +13,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
     data-loader-src="/loaders/pensando.svg"
     data-pensando-bars="1"
     data-thinking-loader="pensando"
-    style="color: var(--think-accent, #2E7D32);"
+    style="color: var(--think-accent, currentColor);"
   >
     <span
       aria-hidden="true"
@@ -35,7 +35,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
           data-claude-asterisk-weight="fine"
           data-thinking-core="active"
           height="16"
-          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #2E7D32);"
+          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, currentColor);"
           viewBox="0 0 24 24"
           width="16"
         >
@@ -120,7 +120,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
     data-loader-src="/loaders/pensando.svg"
     data-pensando-bars="1"
     data-thinking-loader="pensando"
-    style="color: var(--think-accent, #2E7D32);"
+    style="color: var(--think-accent, currentColor);"
   >
     <span
       aria-hidden="true"
@@ -142,7 +142,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
           data-claude-asterisk-weight="fine"
           data-thinking-core="active"
           height="16"
-          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, #2E7D32);"
+          style="display: inline-block; flex-shrink: 0; color: var(--think-accent, currentColor);"
           viewBox="0 0 24 24"
           width="16"
         >

@@ -526,7 +526,14 @@
     "toolSearching": "Searching for information",
     "toolReading": "Reading a source",
     "toolRunning": "Running code",
-    "toolUsing": "Using {name}"
+    "toolUsing": "Using {name}",
+    "composing": "Writing the answer",
+    "composed": "Answer written",
+    "words": "{count, plural, one {{value} word} other {{value} words}}",
+    "steps": "{count, plural, one {# step} other {# steps}}",
+    "earlierSteps": "{count, plural, one {Show # earlier step} other {Show # earlier steps}}",
+    "showReasoning": "Show reasoning",
+    "hideReasoning": "Hide reasoning"
   },
   "agent": {
     "working": "Working…",
@@ -545,7 +552,9 @@
     "deny": "Deny",
     "permissionDeniedChip": "Denied",
     "permissionError": "Could not send your answer. Please try again.",
-    "traceAria": "Agent activity"
+    "traceAria": "Agent activity",
+    "waitingApproval": "Waiting for your approval",
+    "paused": "Paused"
   },
   "codex": {
     "timeline": {

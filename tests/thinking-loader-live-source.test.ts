@@ -26,7 +26,7 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.match(docs, /retired/)
   })
 
-  it("ships PensandoBars as the ThinkingCore glyph in the clover think accent", () => {
+  it("ships PensandoBars as the ThinkingCore glyph in the monochrome think accent", () => {
     const bars = source("components/pensando-bars.tsx")
     const svg = source("public/loaders/pensando.svg")
     const icon = source("components/icons/thinking-bars-icon.tsx")
@@ -75,14 +75,15 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.match(message, /message\.role === 'ASSISTANT'/)
   })
 
-  it("does not reuse the active step string as the RunTrace header label", () => {
+  it("tells the real current step in the RunTrace header (kit label / phrases only for a bare «Pensando»)", () => {
     const steps = source("components/agentic-steps.tsx")
     const liveStart = steps.indexOf("if (isLiveActivity) {")
     const liveEnd = steps.indexOf("{liveExpanded && (", liveStart)
     const liveBlock = steps.slice(liveStart, liveEnd)
     assert.match(liveBlock, /<ThinkingStatusLoader/)
     assert.match(liveBlock, /state=\{headerState\}/)
-    assert.doesNotMatch(liveBlock, /label=\{headerLabel\}/)
+    assert.match(liveBlock, /label=\{headerLiveLabel\}/)
+    assert.match(liveBlock, /isGenericThinkingLabel\(/)
     assert.match(steps, /headerKitLabel/)
     assert.match(steps, /humanizeToolDetail/)
   })

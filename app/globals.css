@@ -151,12 +151,16 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --code-fg: #e8eef7;
     --content-max: 46rem;
 
-    /* RunTrace / Pensando stepper — running is the clover think accent
-       (brand green), same glyph and colour on every flow. */
+    /* RunTrace / Pensando stepper — monochrome: the ThinkingCore glyph is the
+       foreground (black here, white in dark), labels are a muted neutral grey.
+       The clover green is the brand logo only (--brand). */
     --sira-celeste: #38BDF8;
-    --think-accent: #2E7D32;
+    --think-accent: hsl(var(--foreground));
+    --think-text: #57534E;
+    --think-text-hi: #1C1917;
+    --think-dim: #78716C;
     --step-pending: #8A8580;
-    --step-running: var(--think-accent);
+    --step-running: var(--think-text);
     --step-done: #6B6660;
     --step-failed: #B45353;
 
@@ -256,9 +260,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --content-max: 46rem;
 
     --sira-celeste: #38BDF8;
-    --think-accent: #66BB6A;
+    --think-accent: hsl(var(--foreground));
+    --think-text: #D6D3D1;
+    --think-text-hi: #FAFAF9;
+    --think-dim: #A8A29E;
     --step-pending: #8A8580;
-    --step-running: var(--think-accent);
+    --step-running: var(--think-text);
     --step-done: #A8A29E;
     --step-failed: #F87171;
   }
@@ -950,6 +957,13 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 details[open] > summary .think-chevron,
 .think-row[aria-expanded="true"] .think-chevron {
   transform: rotate(90deg);
+}
+
+/* Thinking surfaces stay monochrome on keyboard focus too: a neutral ring
+   instead of the global --ring (clover green in dark mode). */
+.think-row:focus-visible,
+.claude-thinking-timeline :is(a, button, summary):focus-visible {
+  outline-color: hsl(var(--foreground) / 0.45);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8549,14 +8563,14 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  */
 :root {
   --step-pending: #8A8580;
-  --step-running: var(--think-accent, #2E7D32);
+  --step-running: var(--think-text, #57534E);
   --step-done: #6B6660;
-  --step-failed: #dc2626;
+  --step-failed: #B45353;
 }
 .dark {
   --step-pending: #9ca3af;
-  --step-running: var(--think-accent, #66BB6A);
-  --step-done: #34d399;
+  --step-running: var(--think-text, #D6D3D1);
+  --step-done: #A8A29E;
   --step-failed: #f87171;
 }
 
@@ -8653,22 +8667,22 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .thinking-shimmer-text {
   background-image: linear-gradient(
     100deg,
-    hsl(var(--muted-foreground)) 35%,
-    hsl(var(--foreground)) 50%,
-    hsl(var(--muted-foreground)) 65%
+    var(--think-text) 35%,
+    var(--think-text-hi) 50%,
+    var(--think-text) 65%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: premium-shimmer 1.8s linear infinite;
+  animation: premium-shimmer 2.6s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .thinking-shimmer-text {
     animation: none;
     background-image: none;
-    color: hsl(var(--muted-foreground));
+    color: var(--think-text);
   }
   .celeste-bounce-bars animateTransform {
     display: none;

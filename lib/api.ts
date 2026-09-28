@@ -2123,7 +2123,9 @@ class ApiClient {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(data),
+      // progressProtocol 2: this client renders stage progress / result
+      // frames (stageId, detail, elapsedMs); older clients get begin-only frames.
+      body: JSON.stringify({ ...data, progressProtocol: 2 }),
       ...(signal && { signal }),
     };
 
@@ -2537,9 +2539,12 @@ class ApiClient {
               } else if (jsonData.type === 'computer_login_handoff') {
                 consumeLoginHandoffSse(jsonData)
                 lastProcessTime = Date.now();
-              } else if ((jsonData.type === 'activity' || jsonData.type === 'stage') && (jsonData.text || jsonData.label)) {
+              } else if ((jsonData.type === 'activity' || jsonData.type === 'stage')
+                && (jsonData.text || jsonData.label || (jsonData.type === 'stage' && typeof jsonData.stageId === 'string' && jsonData.stageId))) {
+                // A stage v3 progress / result frame may carry no label: it
+                // still updates or settles its row (the reducer keeps the label).
                 if (options.onActivity) {
-                  options.onActivity(String(jsonData.text || jsonData.label), jsonData);
+                  options.onActivity(String(jsonData.text || jsonData.label || ''), jsonData);
                 }
                 lastProcessTime = Date.now();
               } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {

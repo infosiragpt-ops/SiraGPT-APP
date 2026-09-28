@@ -68,7 +68,7 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.doesNotMatch(css, /claude-asterisk-spin|claude-asterisk-breathe/)
   })
 
-  it("tells the user frequently that it is thinking: rotating phrases + elapsed seconds, throttled for screen readers", () => {
+  it("tells the user frequently that it is thinking: real step labels (phrases only as fallback) + elapsed seconds, throttled for screen readers", () => {
     assert.ok(THINKING_LIVE_PHRASES.length >= 5)
     assert.equal(THINKING_LIVE_PHRASES[0], "Pensando…")
     assert.ok(THINKING_LIVE_PHRASES.includes("Analizando tu solicitud…"))
@@ -95,8 +95,11 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(loader, /THINKING_ANNOUNCE_INTERVAL_MS\)/)
     assert.match(loader, /aria-atomic=\{announce \? true : undefined\}/)
     assert.match(loader, /live && "thinking-live-label"/)
-    assert.match(loader, /aria-hidden=\{live \? true : undefined\}/)
-    assert.match(loader, /\{live \? `· \$\{elapsed\}` : elapsed\}/)
+    // Every in-progress label ticks «· N s» and stays aria-hidden; only the
+    // throttled sr-only copy reaches screen readers.
+    assert.match(loader, /const ticking = !terminal && !hideLabel/)
+    assert.match(loader, /aria-hidden=\{ticking \? true : undefined\}/)
+    assert.match(loader, /`· \$\{elapsed\}`/)
     assert.match(loader, /<span className="sr-only" data-thinking-announce="1">/)
     // «Pensó durante N s» after completion is untouched.
     assert.match(source("lib/run-trace.ts"), /return `Pensó durante \$\{seconds\} s`/)

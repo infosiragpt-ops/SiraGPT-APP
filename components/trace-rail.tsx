@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils"
  * The Claude-style activity rail: a thin vertical line, one small outline
  * icon tile per step (document, terminal, image, search…) and a quiet grey
  * label. Status is carried by the tile, not by coloured text:
- *   running → the small animated asterisk in the think accent
+ *   running → the small animated ThinkingCore in the monochrome think accent
  *   done    → grey outline icon
  *   failed  → the same icon in the muted failure tint
  * Used by the document runner, the agentic loop and the run trace so every
@@ -93,7 +93,7 @@ export function TraceRailRow({ label, status = "done", icon, tool, phase, labelT
         className={cn(
           "relative z-[1] mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] border bg-background",
           failed ? "border-[color-mix(in_srgb,var(--step-failed,#B45353)_45%,transparent)] text-[var(--step-failed,#B45353)]" : "border-border/70 text-muted-foreground",
-          running && "border-[color-mix(in_srgb,var(--think-accent,#2E7D32)_40%,transparent)]",
+          running && "border-[color-mix(in_srgb,var(--think-accent,currentColor)_40%,transparent)]",
         )}
         aria-hidden="true"
       >
@@ -103,7 +103,7 @@ export function TraceRailRow({ label, status = "done", icon, tool, phase, labelT
         <div
           className={cn(
             "text-[12.5px] leading-5",
-            running ? "font-medium text-foreground/85" : "text-muted-foreground",
+            running ? "font-normal text-[var(--think-text)]" : "text-muted-foreground",
             failed && "text-foreground/80",
           )}
         >

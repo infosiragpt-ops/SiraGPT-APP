@@ -6,7 +6,7 @@ import path from "node:path"
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
 describe("Claude-style thinking surface", () => {
-  it("ships one animated ThinkingCore glyph in the clover think accent", () => {
+  it("ships one animated ThinkingCore glyph in the monochrome think accent", () => {
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /export function ClaudeAsterisk/)
     assert.match(asterisk, /data-claude-asterisk=\{active \? "active" : "idle"\}/)
@@ -17,17 +17,19 @@ describe("Claude-style thinking surface", () => {
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /claude-asterisk--active/)
     const loaders = source("lib/thinking-loaders.ts")
-    assert.match(loaders, /export const CLAUDE_THINK_ACCENT = "#2E7D32"/)
+    assert.match(loaders, /export const CLAUDE_THINK_ACCENT = "currentColor"/)
     const bars = source("components/pensando-bars.tsx")
     assert.match(bars, /<ClaudeAsterisk size=\{size\} active/)
     assert.doesNotMatch(bars, /Dotm3x3_15|SIRA_CELESTE/)
   })
 
-  it("uses the think accent for every running step and animates only when motion is allowed", () => {
+  it("uses the muted think text for every running step and animates only when motion is allowed", () => {
     const css = source("app/globals.css")
-    assert.match(css, /--think-accent: #2E7D32;/)
-    assert.match(css, /--step-running: var\(--think-accent\);/)
-    assert.match(css, /--step-running: var\(--think-accent, #2E7D32\);/)
+    assert.match(css, /--think-accent: hsl\(var\(--foreground\)\);/)
+    assert.match(css, /--step-running: var\(--think-text\);/)
+    assert.match(css, /--step-running: var\(--think-text, #57534E\);/)
+    assert.match(css, /--think-dim: #78716C;/)
+    assert.match(css, /--think-dim: #A8A29E;/)
     assert.match(css, /@keyframes thinking-core-orbit/)
     assert.match(css, /@keyframes thinking-core-pulse/)
     assert.match(css, /@keyframes thinking-core-ripple/)
@@ -37,6 +39,29 @@ describe("Claude-style thinking surface", () => {
     const loader = source("components/thinking-status-loader.tsx")
     assert.match(loader, /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
     assert.match(loader, /thinking-shimmer-text/)
+  })
+
+  it("has no green on any thinking surface (glyph, labels, done rows)", () => {
+    for (const rel of [
+      "lib/thinking-loaders.ts",
+      "components/thinking-status-loader.tsx",
+      "components/claude-thinking-timeline.tsx",
+      "components/pensando-bars.tsx",
+      "components/trace-rail.tsx",
+    ]) {
+      assert.doesNotMatch(source(rel), /#2E7D32|#66BB6A|#059669|#34d399/i, rel)
+    }
+    const css = source("app/globals.css")
+    assert.doesNotMatch(css, /--step-done: #34d399/)
+    assert.doesNotMatch(css, /--step-running: var\(--think-accent/)
+    // The shimmer sweeps between the two muted neutral greys.
+    assert.match(css, /var\(--think-text\) 35%,\s*var\(--think-text-hi\) 50%,\s*var\(--think-text\) 65%/)
+    // The brand clover keeps its green.
+    assert.match(css, /--brand: #2E7D32;/)
+    // Terminal check / X are inline currentColor glyphs, not the celeste/red SVG files.
+    const loader = source("components/thinking-status-loader.tsx")
+    assert.match(loader, /function TerminalGlyph/)
+    assert.doesNotMatch(loader, /<img/)
   })
 
   it("collapses to «Pensó durante N s» on every flow", () => {

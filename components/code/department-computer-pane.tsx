@@ -598,7 +598,9 @@ export function DepartmentComputerPane({
 
   return (
     <section
-      className="relative flex h-full min-h-0 w-full flex-col bg-[#1b1b1d] text-zinc-50 outline-none"
+      // Dark island: the thinking glyph follows this pane's light text
+      // instead of the page foreground (near-black in light mode).
+      className="relative flex h-full min-h-0 w-full flex-col bg-[#1b1b1d] text-zinc-50 outline-none [--think-accent:currentColor]"
       data-testid="department-computer-pane"
       data-dept-real-computer="1"
       data-agent-computer-novnc="1"
