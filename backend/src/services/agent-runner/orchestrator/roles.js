@@ -20,6 +20,11 @@ const KNOWN_ROLES = Object.freeze([
 /** Roles whose output is a user-facing deliverable that must be criticised. */
 const HIGH_STAKES_ROLES = new Set(['document_editor', 'coder']);
 
+// Data analysts may create the requested spreadsheet or SAV even though
+// they can also finish with text. Researchers and verifiers do not create the
+// primary document and keep the short model-output budget.
+const CREATION_BUDGET_ROLES = new Set([...HIGH_STAKES_ROLES, 'data_analyst']);
+
 const ROLE_LABELS = Object.freeze({
   document_editor: 'editor de documentos',
   coder: 'programador',
@@ -75,6 +80,7 @@ function roleLabel(role) {
 module.exports = {
   KNOWN_ROLES,
   HIGH_STAKES_ROLES,
+  CREATION_BUDGET_ROLES,
   ROLE_PROMPTS,
   rolePrompt,
   roleLabel,

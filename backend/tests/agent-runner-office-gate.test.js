@@ -435,6 +435,52 @@ test('runner: document turns get 8192 output tokens unless the env pins a value'
   assert.equal(runner.documentTurnMaxTokens(['tesis.docx'], { SIRAGPT_AGENT_RUNNER_MAX_TOKENS: '4096' }), null);
 });
 
+test('runner: new SAV and Excel output gets a focused 4096-token budget', async () => {
+  const limits = [];
+  const client = { chat: { completions: { create: async (payload) => {
+    limits.push(payload.max_tokens);
+    return { choices: [{ message: { content: 'No produje un archivo.' } }] };
+  } } } };
+  for (const { instruction, creationBudgetEligible } of [
+    { instruction: 'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel' },
+    { instruction: 'Resume el método estadístico en dos frases.' },
+    { instruction: 'OBJETIVO GLOBAL DEL USUARIO: dame un documentos de spss y un excel\nTU SUBTAREA (rol: verifier): verifica las cifras.', creationBudgetEligible: false },
+  ]) {
+    await runner.runAgentRunner({
+      files: [], instruction, client, driver: 'local', maxIterations: 1, requireFileOutput: false,
+      creationBudgetEligible,
+    });
+  }
+  assert.deepEqual(limits, [4096, 2048, 2048]);
+  assert.equal(runner.documentTurnMaxTokens([], { SIRAGPT_AGENT_RUNNER_MAX_TOKENS: '1024' }, { creatingNewFile: true }), null);
+});
+
+test('runner: a length-stopped tool call never executes, even when its arguments parse', async () => {
+  let executions = 0;
+  const client = {
+    chat: {
+      completions: {
+        create: async () => ({
+          choices: [{
+            finish_reason: 'length',
+            message: { content: null, tool_calls: [{
+              id: 'cut_1', type: 'function', function: { name: 'execute_python', arguments: '{"code":"print(1)"}' },
+            }] },
+          }],
+        }),
+      },
+    },
+  };
+  const result = await runAgentLoop({
+    client, model: 'test/model', messages: [{ role: 'user', content: 'Crea un Excel' }],
+    tools: [{ type: 'function', function: { name: 'execute_python', parameters: { type: 'object', properties: {} } } }],
+    executors: { execute_python: async () => { executions += 1; return { ok: true }; } },
+    maxIterations: 1, maxTokens: 4096,
+  });
+  assert.equal(result.stoppedReason, 'E_PROVIDER');
+  assert.equal(executions, 0);
+});
+
 test('prompt: office workflow with the engine on; previous rules verbatim with it off', () => {
   const on = buildAgentRunnerPrompt({ fileNames: ['t.docx'], officeEngine: true });
   assert.match(on, /OFFICE FILES \(docx\/xlsx\/pptx\) — MANDATORY WORKFLOW/);

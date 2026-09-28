@@ -75,11 +75,15 @@ function documentTurnWallMs(env = process.env) {
 }
 
 const OFFICE_FILE_RE = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
-// Document turns get room for a batch of edits (a paraphrase must not be cut
-// mid-JSON, hallazgo 7). An explicit SIRAGPT_AGENT_RUNNER_MAX_TOKENS wins.
-function documentTurnMaxTokens(names = [], env = process.env) {
+// Existing Office files need room for batched edits. Creating a new document
+// also needs more than the short chat budget to finish a code-bearing tool
+// call, even when the user did not upload a source file. Keep the creation
+// budget below the 8192 reservation that can be rejected on low balances.
+// An explicit SIRAGPT_AGENT_RUNNER_MAX_TOKENS always wins.
+function documentTurnMaxTokens(names = [], env = process.env, { creatingNewFile = false } = {}) {
   if (String(env.SIRAGPT_AGENT_RUNNER_MAX_TOKENS || '').trim()) return null;
-  return names.some((n) => OFFICE_FILE_RE.test(String(n))) ? 8192 : null;
+  if (names.some((n) => OFFICE_FILE_RE.test(String(n)))) return 8192;
+  return creatingNewFile ? 4096 : null;
 }
 
 const VISION_NOTE_RE = /revisi[oó]n visual|modelo de visi[oó]n|sin visi[oó]n|no hubo revisi[oó]n/i;
@@ -626,6 +630,9 @@ async function runAgentRunner({
   // legitimately finish without a file — skip the no-output retry loop for
   // them. Single-runner document turns keep the default (true).
   requireFileOutput = true,
+  // F4: the global goal is repeated in each node instruction. Only nodes
+  // producing a new document should reserve the larger creation budget.
+  creationBudgetEligible = true,
   // F7 (multimodal) injectable seams — tests / provider routing only.
   openaiClient = null,
   synthesize = null,
@@ -728,11 +735,12 @@ async function runAgentRunner({
     });
     const isCreateRequest = (CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
       || requestsSavExcelDelivery(task);
+    const creatingNewFile = isCreateRequest && !SOURCE_COPY_RE.test(task);
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,
       memoryBlock: f8.memoryBlock,
-      creatingNewFile: isCreateRequest && !SOURCE_COPY_RE.test(task),
+      creatingNewFile,
     });
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
@@ -760,7 +768,9 @@ async function runAgentRunner({
       }),
       ...f8.executors,
     };
-    const loopMaxTokens = documentTurnMaxTokens(names);
+    const loopMaxTokens = documentTurnMaxTokens(names, process.env, {
+      creatingNewFile: creatingNewFile && creationBudgetEligible,
+    });
 
     // Deterministic fast-paths are allowed ONLY for exact edits on an
     // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
