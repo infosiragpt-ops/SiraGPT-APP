@@ -27,7 +27,7 @@ const { isLlmCreditError } = require('../loop');
 const { logProviderFailure } = require('../provider-failure-diagnostics');
 const { resolveTurnFiles, persistOutputs } = require('../artifacts');
 const { createBlackboard } = require('./blackboard');
-const { rolePrompt, roleLabel, HIGH_STAKES_ROLES } = require('./roles');
+const { rolePrompt, roleLabel, HIGH_STAKES_ROLES, CREATION_BUDGET_ROLES } = require('./roles');
 const {
   createBudgetTracker,
   wrapClientWithBudgets,
@@ -385,6 +385,7 @@ async function runOrchestrator({
           // Text-producing specialists may finish without a file; only the
           // deliverable roles keep the runner's no-output retry pressure.
           requireFileOutput: HIGH_STAKES_ROLES.has(node.role),
+          creationBudgetEligible: CREATION_BUDGET_ROLES.has(node.role),
         });
         const validOutputs = (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);
         for (const step of (run.steps || [])) allSteps.push({ node: node.id, role: node.role, ...step });

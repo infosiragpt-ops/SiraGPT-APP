@@ -104,7 +104,7 @@ function roleDispatchClient(scripts, { onCall, defaults = {} } = {}) {
         create: async (req) => {
           const user = String(req?.messages?.[1]?.content || '');
           const role = Object.keys(scripts).find((k) => user.includes(`rol: ${k}`)) || 'default';
-          client.calls.push({ role, messages: req.messages });
+          client.calls.push({ role, messages: req.messages, maxTokens: req.max_tokens });
           if (typeof onCall === 'function') onCall(client.calls.length, role);
           const queue = queues.get(role) || [];
           const turn = queue.length
@@ -335,6 +335,8 @@ test('F4: multi-step goal runs the DAG in topo order, sub-agents ARE AgentRunner
   // Researcher never gets web tools (F6): its role prompt forbids web access.
   const researchCall = client.calls.find((c) => c.role === 'researcher');
   assert.match(String(researchCall.messages[0].content), /NO web access/i);
+  assert.equal(researchCall.maxTokens, 2048, 'a researcher does not reserve the document-creation budget');
+  assert.equal(docCall.maxTokens, 4096, 'the document producer receives the focused creation budget');
 
   // Deliverables: outputs of working nodes; the verifier report stays internal.
   const names = result.outputs.map((o) => o.name).sort();
@@ -349,6 +351,22 @@ test('F4: multi-step goal runs the DAG in topo order, sub-agents ARE AgentRunner
   assert.ok(labels.has('Plan listo'), 'plan ready stage traced');
   assert.ok(labels.has('Delegando a sub-agente'), 'delegation stage traced');
   assert.ok(labels.has('Sub-agente listo'), 'node completion stage traced');
+});
+
+test('F4: a data analyst producing a new spreadsheet receives the creation budget', async () => {
+  const client = roleDispatchClient({ data_analyst: [{ content: 'Datos listos para el Excel.' }] });
+  const result = await runOrchestrator({
+    files: [],
+    instruction: 'analiza los datos y luego crea un Excel con 20 filas',
+    client,
+    plannerFn: async () => ({ nodes: [{
+      id: 'datos', role: 'data_analyst', goal: 'Prepara los datos del Excel',
+      dependsOn: [], budget: budgetOf(2),
+    }] }),
+    driver: 'local',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(client.calls.find((call) => call.role === 'data_analyst')?.maxTokens, 4096);
 });
 
 test('F4: runOrchestratorForChat keeps the chat contract and persists outputs', async () => {
