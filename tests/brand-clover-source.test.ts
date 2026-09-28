@@ -64,9 +64,12 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     assert.match(css, /--accent-violet: 122 39% 49%;/)
     assert.doesNotMatch(css, /--brand: #(7c5cff|5b4dff);/i)
     assert.match(source("lib/thinking-loaders.ts"), /export const CLAUDE_THINK_ACCENT = "#2E7D32"/)
+    // The thinking glyph is the ThinkingCore (not the clover), drawn in the same clover green.
     const asterisk = source("components/claude-asterisk.tsx")
-    assert.match(asterisk, /data-brand="clover"/)
+    assert.match(asterisk, /data-brand="thinking-core"/)
+    assert.doesNotMatch(asterisk, /data-brand="clover"/)
     assert.match(asterisk, /export function ClaudeAsterisk/)
+    assert.match(source("components/brand/thinking-core.tsx"), /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
   })
 
   it("leaves no raster sira-gpt.png logo render under app/ and components/", () => {

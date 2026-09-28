@@ -6,8 +6,43 @@
  */
 
 export const SIRA_CELESTE = "#38BDF8"
-/** Claude-style thinking accent (terracotta): the asterisk glyph + active step colour. */
+/** Thinking accent (clover green): the ThinkingCore glyph + active step colour. */
 export const CLAUDE_THINK_ACCENT = "#2E7D32"
+
+/**
+ * Short Spanish phrases the live «Pensando…» label cycles through while the
+ * model streams reasoning, so the user is told frequently that work is
+ * happening. Rotation never repeats the same phrase twice in a row.
+ */
+export const THINKING_LIVE_PHRASES = [
+  "Pensando…",
+  "Analizando tu solicitud…",
+  "Conectando ideas…",
+  "Estructurando la respuesta…",
+  "Revisando detalles…",
+  "Casi listo…",
+] as const
+
+/** Visual phrase rotation cadence (ms). */
+export const THINKING_PHRASE_INTERVAL_MS = 3500
+/** Screen-reader announcement cadence (ms) — throttled so aria-live is not spammed. */
+export const THINKING_ANNOUNCE_INTERVAL_MS = 10000
+
+/** Next phrase index, never the same as `prev` (deterministic when `rand` is given). */
+export function nextThinkingPhraseIndex(prev: number, rand: () => number = Math.random): number {
+  const n = THINKING_LIVE_PHRASES.length
+  if (n < 2) return 0
+  const offset = 1 + Math.floor(Math.max(0, Math.min(0.999999, rand())) * (n - 1))
+  const safePrev = Number.isInteger(prev) && prev >= 0 && prev < n ? prev : 0
+  return (safePrev + offset) % n
+}
+
+/** «12 s» / «1 min 5 s» — the live elapsed counter next to the thinking label. */
+export function formatThinkingElapsed(sec: number): string {
+  const s = Math.max(0, Math.floor(Number.isFinite(sec) ? sec : 0))
+  if (s < 60) return `${s} s`
+  return `${Math.floor(s / 60)} min ${s % 60} s`
+}
 
 /** Runtime states wired into ThinkingStatusLoader / tool map. */
 export const LOADER_STATES = [

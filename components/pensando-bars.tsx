@@ -12,12 +12,12 @@ export type PensandoBarsProps = {
 }
 
 /**
- * THE only animated in-progress glyph: the Claude asterisk (eight rounded
- * arms, slow rotation + breathing) in the clover think accent #2E7D32
- * (`--think-accent`), the same glyph for chat, agent loop, documents and
- * images. The name is historical (it replaced the celeste 3×3 dot matrix,
- * which replaced the bouncing bars); every caller keeps working unchanged.
- * Honors prefers-reduced-motion (static glyph).
+ * THE only animated in-progress glyph: the ThinkingCore (centre dot, two
+ * counter-rotating orbits, a ripple ring — see components/brand/thinking-core.tsx)
+ * in the clover think accent #2E7D32 (`--think-accent`), the same glyph for
+ * chat, agent loop, documents and images. The name is historical (it replaced
+ * the celeste 3×3 dot matrix, which replaced the bouncing bars); every caller
+ * keeps working unchanged. Honors prefers-reduced-motion (soft opacity pulse only).
  */
 export function PensandoBars({ size = 20, className }: PensandoBarsProps) {
   return (

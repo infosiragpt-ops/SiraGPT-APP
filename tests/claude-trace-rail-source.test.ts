@@ -26,12 +26,13 @@ describe("Claude-style activity rail", () => {
     assert.match(steps, /<TraceRailRow[\s\S]*?status=\{step\.status === "error" \? "failed" : step\.status === "running" \? "running" : "done"\}/)
   })
 
-  it("the clover glyph keeps the Claude weight contract at Claude sizes", () => {
+  it("the ThinkingCore glyph keeps the Claude weight contract at Claude sizes", () => {
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /data-claude-asterisk-weight="fine"/)
-    assert.match(asterisk, /viewBox="0 0 512 512"/)
-    assert.match(asterisk, /const LEAF_PATH =\n\s+"M0 0 C -16 -30, -62 -44, -76 -84/)
-    assert.match(asterisk, /<path d=\{STEM_PATH\} \/>/)
+    const core = source("components/brand/thinking-core.tsx")
+    assert.match(core, /viewBox="0 0 24 24"/)
+    assert.match(core, /strokeWidth="1\.5"/, "orbits stay hairline at 24px")
+    assert.match(core, /<circle className="thinking-core__core" cx="12" cy="12" r="2\.6" fill="currentColor" \/>/)
     const loader = source("components/thinking-status-loader.tsx")
     assert.match(loader, /chip: 22,\n\s+glyph: 16,/)
     const bars = source("components/pensando-bars.tsx")

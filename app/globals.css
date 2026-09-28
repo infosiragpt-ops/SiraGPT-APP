@@ -8560,28 +8560,67 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   --step-failed: #f87171;
 }
 
-/* Claude asterisk — the single "thinking" glyph. Slow rotation + breathing
-   while active; frozen under prefers-reduced-motion. */
-@keyframes claude-asterisk-spin {
+/* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx).
+   The `.claude-asterisk*` class names are historical and shared by every
+   consumer. While active: two orbits counter-rotate at different speeds, the
+   core beats (heartbeat) and one ripple ring expands and fades. Idle is
+   static (no ripple element). Reduced motion keeps only a soft opacity pulse.
+   The outer <g> stays attribute-free; animations target inner classes. */
+@keyframes thinking-core-orbit {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
-@keyframes claude-asterisk-breathe {
-  0%, 100% { transform: scale(0.92); opacity: 0.85; }
-  50% { transform: scale(1.06); opacity: 1; }
+@keyframes thinking-core-orbit-reverse {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
 }
-.claude-asterisk { transform-origin: 50% 50%; }
-.claude-asterisk--active {
-  animation: claude-asterisk-spin 4.5s linear infinite;
+@keyframes thinking-core-pulse {
+  0%, 100% { transform: scale(0.85); opacity: 0.7; }
+  50% { transform: scale(1.1); opacity: 1; }
 }
-.claude-asterisk--active > g {
+@keyframes thinking-core-ripple {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(2.75); opacity: 0; }
+}
+@keyframes thinking-core-soft {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+.claude-asterisk { transform-origin: 50% 50%; overflow: visible; }
+.claude-asterisk .thinking-core__orbit,
+.claude-asterisk .thinking-core__core,
+.claude-asterisk .thinking-core__ripple {
+  transform-box: view-box;
   transform-origin: 50% 50%;
-  transform-box: fill-box;
-  animation: claude-asterisk-breathe 1.6s ease-in-out infinite;
 }
+.claude-asterisk--active .thinking-core__orbit--a {
+  animation: thinking-core-orbit 4s linear infinite;
+}
+.claude-asterisk--active .thinking-core__orbit--b {
+  animation: thinking-core-orbit-reverse 6.5s linear infinite;
+}
+.claude-asterisk--active .thinking-core__core {
+  animation: thinking-core-pulse 1.2s ease-in-out infinite;
+}
+.claude-asterisk--active .thinking-core__ripple {
+  animation: thinking-core-ripple 1.6s ease-out infinite;
+}
+.claude-asterisk--idle .thinking-core__ripple { display: none; }
+
+/* Live «Pensando…» label beats in sync with the core. */
+@keyframes thinking-live-label-pulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+.thinking-live-label { animation: thinking-live-label-pulse 1.2s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
-  .claude-asterisk--active,
-  .claude-asterisk--active > g { animation: none; }
+  .claude-asterisk--active .thinking-core__orbit--a,
+  .claude-asterisk--active .thinking-core__orbit--b,
+  .claude-asterisk--active .thinking-core__ripple,
+  .thinking-live-label { animation: none; }
+  .claude-asterisk--active .thinking-core__ripple { display: none; }
+  .claude-asterisk--active .thinking-core__core { animation: thinking-core-soft 2s ease-in-out infinite; }
 }
 .run-trace-step--pending { color: var(--step-pending); }
 .run-trace-step--running { color: var(--step-running); }
