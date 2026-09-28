@@ -83,9 +83,9 @@ test('in-memory idempotency mismatch drops the stale Map entry instead of 409', 
 });
 
 test('waitForActiveTurn failure does not 409 turn_in_progress — retry claims ownership', () => {
-  const waitIdx = generateIdempotencySource.indexOf('const activeWait = await waitForActiveTurn(activeTurn)');
+  const waitIdx = generateIdempotencySource.indexOf('let activeWait = await waitForActiveTurn(activeTurn)');
   assert.ok(waitIdx >= 0, 'active wait must exist');
-  const waitBlock = generateIdempotencySource.slice(waitIdx, waitIdx + 1400);
+  const waitBlock = generateIdempotencySource.slice(waitIdx, waitIdx + 1900);
 
   assert.match(
     waitBlock,

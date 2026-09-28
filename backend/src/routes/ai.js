@@ -2761,7 +2761,17 @@ router.post(
           activeTurn = null;
         }
         if (activeTurn) {
-          const activeWait = await waitForActiveTurn(activeTurn);
+          let activeWait = await waitForActiveTurn(activeTurn);
+          // Prod 2026-09-28: when the owner failed, every waiting replay
+          // became a new owner (20–30 fresh generates). Followers re-wait on
+          // whoever claimed the key first (≤3 hops): one generate per key.
+          for (let hop = 0; hop < 3 && activeWait.outcome !== 'replay'; hop += 1) {
+            const claimed = activeGenerateTurns.get(activeGenerateTurnKey);
+            if (!claimed || claimed === activeTurn) break;
+            generateLog.info('idempotency.active_turn_followed', { hop: hop + 1 });
+            activeTurn = claimed;
+            activeWait = await waitForActiveTurn(activeTurn);
+          }
           if (activeWait.outcome === 'replay') {
             fullResponseContent = activeWait.turn.assistantMessage.content || '';
             generateLog.info('idempotency.active_turn_replayed', { hasChat: Boolean(chatId) });
@@ -2769,24 +2779,7 @@ router.post(
             return streamDuplicateTurnReplay(res, activeWait.turn, model);
           }
           if (activeWait.error) {
-            // The owner of this idempotency key failed. Parallel replays of
-            // the same request (agents' eval bursts: 20–30 identical turns)
-            // used to each start a fresh generate here; now every follower
-            // gets a retryable 409 (plain JSON, no tracker row — 409 is not
-            // a recordable turn failure) and only a new request becomes the
-            // owner.
             generateLog.warnError('idempotency.active_turn_wait_failed', activeWait.error);
-            if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
-              activeGenerateTurns.delete(activeGenerateTurnKey);
-            }
-            controller.abort();
-            return respondGenerateTurnError(res, {
-              code: 'active_turn_failed',
-              message: 'La generación anterior de este mismo mensaje falló. Reintenta en unos segundos.',
-              retryable: true,
-              retryAfterSeconds: 2,
-              actualModel: model,
-            });
           }
           // start a fresh generate after that stream closed.
           if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
