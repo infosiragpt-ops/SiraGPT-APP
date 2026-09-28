@@ -296,6 +296,57 @@ test('AgentRunner keeps a selected model on its provider when that API returns 4
   assert.deepEqual(calls, ['xAI']);
 });
 
+test('AgentRunner can call tools with the selected native GPT-6 Sol Chat Completions API', async () => {
+  const { createRunnerLlmClient, runnerModelSpec } = require('../src/services/agent-runner');
+  const sent = [];
+  const client = createRunnerLlmClient({
+    pickedModel: runnerModelSpec('OpenAI', 'openai/gpt-6-sol'),
+    env: { OPENAI_API_KEY: 'local-synthetic-key', DEEPSEEK_API_KEY: 'other-synthetic-key' },
+    createClient: (candidate) => ({ chat: { completions: { create: async (payload) => {
+      sent.push({ provider: candidate.provider, payload });
+      // The selected model rejects Chat Completions function calling unless
+      // reasoning_effort is explicitly none. Keep this fake provider strict.
+      if (payload.tools?.length && payload.reasoning_effort !== 'none') {
+        throw httpError(400, 'reasoning_effort must be none');
+      }
+      return { choices: [{ message: { content: 'Voy a generar los archivos.' } }] };
+    } } } }),
+  });
+  const result = await callModel({
+    client,
+    model: 'openai/gpt-6-sol',
+    messages: [{ role: 'user', content: 'Crea un SAV y un XLSX.' }],
+    tools: [{ type: 'function', function: { name: 'execute_python', parameters: { type: 'object', properties: {} } } }],
+    maxTokens: 500,
+  });
+  assert.equal(result.choices[0].message.content, 'Voy a generar los archivos.');
+  assert.deepEqual(client.candidates(), [{ provider: 'OpenAI', model: 'gpt-6-sol' }]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].provider, 'OpenAI');
+  assert.equal(sent[0].payload.model, 'gpt-6-sol');
+  assert.equal(sent[0].payload.max_completion_tokens, 500);
+  assert.equal(sent[0].payload.reasoning_effort, 'none');
+});
+
+test('GPT-6 tool compatibility does not alter explicit effort, plain chat, or other providers', async () => {
+  const seen = [];
+  const candidate = (provider, model) => rt.createFailoverClient([{ provider, model }], {
+    createClient: () => ({ chat: { completions: { create: async (payload) => {
+      seen.push(payload);
+      return { choices: [{ message: { content: 'ok' } }] };
+    } } } }),
+  });
+  const tools = [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: {} } } }];
+  await candidate('OpenAI', 'gpt-6-luna').chat.completions.create({ messages: [], tools });
+  await candidate('OpenAI', 'gpt-6-sol').chat.completions.create({ messages: [], tools, reasoning_effort: 'high' });
+  await candidate('OpenAI', 'gpt-6-sol').chat.completions.create({ messages: [] });
+  await candidate('OpenAI', 'gpt-5.6-sol').chat.completions.create({ messages: [], tools });
+  await candidate('OpenRouter', 'openai/gpt-6-sol').chat.completions.create({ messages: [], tools });
+  assert.equal(seen[0].reasoning_effort, 'none');
+  assert.equal(seen[1].reasoning_effort, 'high');
+  for (const request of seen.slice(2)) assert.equal('reasoning_effort' in request, false);
+});
+
 test('AgentRunner preserves a user abort instead of reporting E_PROVIDER', async () => {
   const { createRunnerLlmClient } = require('../src/services/agent-runner');
   const abort = new Error('cancelled');
