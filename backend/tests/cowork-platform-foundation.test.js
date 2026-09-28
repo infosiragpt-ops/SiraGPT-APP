@@ -828,7 +828,7 @@ describe('cowork stale-run reaping', () => {
     const run = await controlPlane.createRun(buildPrisma(stale, 'FREE').prisma, { userId: 'u1', prompt: 'x' });
     assert.equal(run.id, 'r-new');
 
-    const live = [{ id: 'live-1', userId: 'u1', status: 'running', updatedAt: hoursAgo(0.5), workspaceId: 'w1' }];
+    const live = [{ id: 'live-1', userId: 'u1', status: 'running', updatedAt: hoursAgo(0.1), workspaceId: 'w1' }];
     await assert.rejects(
       controlPlane.createRun(buildPrisma(live, 'FREE').prisma, { userId: 'u1', prompt: 'x' }),
       (error) => error.code === 'cowork_concurrency_limit' && error.details.active === 1 && error.details.concurrency === 1,

@@ -612,6 +612,7 @@ async function createSandbox(opts = {}) {
     return require('./remote-sandbox').createRemoteSandbox({
       signal: opts.signal,
       workspaceKey: persistKey,
+      onWait: opts.onWait,
     });
   }
   if (requested === 'local') {
@@ -633,6 +634,7 @@ async function createSandbox(opts = {}) {
     return require('./remote-sandbox').createRemoteSandbox({
       signal: opts.signal,
       workspaceKey: persistKey,
+      onWait: opts.onWait,
     });
   }
   if (await dockerAvailable(opts.signal)) {

@@ -7,9 +7,18 @@
  * Ladder:
  *   1. OpenAI Whisper — optional faster path when a key is present AND the
  *      request succeeds.
- *   2. Local Whisper (whisper.cpp or faster-whisper) — no API key.
- *   3. Sanitized Spanish placeholder — never includes provider error text
+ *   2. Groq (OpenAI-compatible `/openai/v1/audio/transcriptions`,
+ *      whisper-large-v3-turbo) — GROQ_API_KEY.
+ *   3. xAI Grok STT; Meta only when SIRAGPT_META_TRANSCRIPTION=1 (its API
+ *      has no STT endpoint: prod answered 404 on every audio).
+ *   4. Local Whisper (whisper.cpp or faster-whisper) — no API key.
+ *   5. Sanitized Spanish placeholder — never includes provider error text
  *      or API keys.
+ * A provider that rejects its key (401/403) or has no credits (billing 429 /
+ * 402) is skipped for TRANSCRIBE_PROVIDER_COOLDOWN_MS (30 min) so the next
+ * audio job does not re-hit it. The final log line lists the whole ladder
+ * («providers tried: openai(429 billing) groq(401 key) local(model not
+ * readable …)»).
  *
  * Config:
  *   WHISPER_MODEL = whisper-1 (OpenAI only)
@@ -28,6 +37,7 @@ const { promisify } = require('util');
 const { buildUntrustedChildEnv } = require('../utils/untrusted-child-env');
 const execFileAsync = promisify(execFile);
 const localWhisper = require('./local-whisper-engine');
+const keyHealth = require('../utils/provider-key-health');
 const voiceStudioClient = (options = {}) => options.voiceStudio || require('./ai/voicestudio-client');
 
 const DEFAULT_AUDIO_MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -102,10 +112,16 @@ const SUCCESS_METHODS = new Set(['whisper', 'local-whisper']);
 // (OpenAI-compatible `audio/transcriptions`), then the local whisper.cpp
 // engine which has no size limit. An invalid key on one rung never blocks
 // the next: every rung is tried in order.
-const DEFAULT_PROVIDER_ORDER = ['openai', 'xai', 'meta', 'local'];
+const DEFAULT_PROVIDER_ORDER = ['openai', 'groq', 'xai', 'meta', 'local'];
 const DEFAULT_XAI_STT_MODEL = 'grok-stt';
+const DEFAULT_GROQ_TRANSCRIBE_MODEL = 'whisper-large-v3-turbo';
+const DEFAULT_GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 const DEFAULT_META_TRANSCRIBE_MODEL = 'muse-voice-transcribe-1.0';
 const DEFAULT_META_BASE_URL = 'https://api.meta.ai/v1';
+// A rejected key / empty balance is remembered this long (provider-key-health).
+const DEFAULT_PROVIDER_COOLDOWN_MS = 30 * 60 * 1000;
+const COOLDOWN_NAMESPACE = 'transcribe:';
+const COOLDOWN_PROVIDERS = ['openai', 'groq', 'xai', 'meta'];
 // Cloud providers cap request bodies (25 MB on Whisper). Longer recordings
 // are re-encoded to mono 48 kbps MP3 and cut into 10-minute segments
 // (≈3.6 MB each) that are transcribed in order and stitched back together.
@@ -255,6 +271,47 @@ function isInvalidKeyError(err) {
     || /invalid_api_key|incorrect api key|invalid api key/i.test(message);
 }
 
+/** No credits / unpaid plan: 402, or a 429 whose text talks about quota or billing. */
+function isBillingError(err) {
+  const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
+  const code = String(err?.code || err?.error?.code || '').toLowerCase();
+  const message = String(err?.message || err?.error?.message || '');
+  if (status === 402 || code === 'insufficient_quota' || code === 'billing_hard_limit_reached') return true;
+  return status === 429 && /credit|billing|quota|insufficient|balance|payment|no funds|plan/i.test(message);
+}
+
+function providerCooldownMs(options = {}) {
+  const raw = Number.parseInt(envOf(options).TRANSCRIBE_PROVIDER_COOLDOWN_MS || '', 10);
+  return Number.isFinite(raw) && raw >= 1000 ? raw : DEFAULT_PROVIDER_COOLDOWN_MS;
+}
+
+/** Remember a dead key / empty balance so the next audio job skips the rung. */
+function rememberProviderRejection(provider, err, options = {}) {
+  if (!provider || !provider.key) return;
+  keyHealth.markRejected(`${COOLDOWN_NAMESPACE}${provider.name}`, provider.key, err, {
+    SIRAGPT_KEY_REJECT_MEMO_MS: String(providerCooldownMs(options)),
+  });
+}
+
+function providerInCooldown(provider) {
+  return Boolean(provider && provider.key && keyHealth.isRejected(`${COOLDOWN_NAMESPACE}${provider.name}`, provider.key));
+}
+
+function clearTranscriptionCooldowns() {
+  for (const name of COOLDOWN_PROVIDERS) keyHealth.clear(`${COOLDOWN_NAMESPACE}${name}`);
+}
+
+/** Short ladder token for the summary log line: «openai(429 billing)». */
+function describeProviderError(err) {
+  const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
+  if (isBillingError(err)) return `${status || 402} billing`;
+  if (isInvalidKeyError(err)) return `${status || 401} key`;
+  if (status) return String(status);
+  const code = String(err?.code || '').trim();
+  if (code) return code;
+  return String(err?.message || 'error').replace(/\s+/g, ' ').slice(0, 40);
+}
+
 function sanitizeProviderError(err) {
   const raw = String(err?.message || err || '');
   const redacted = redactString(raw);
@@ -327,6 +384,31 @@ function xaiApiKey(options = {}) {
   return String(envOf(options).XAI_API_KEY || '').trim();
 }
 
+function groqApiKey(options = {}) {
+  return String(envOf(options).GROQ_API_KEY || '').trim();
+}
+
+/**
+ * Meta's API has no speech-to-text endpoint (prod: 404 on every audio), so
+ * the rung is opt-in: SIRAGPT_META_TRANSCRIPTION=1, or an operator listing
+ * it explicitly in TRANSCRIBE_PROVIDERS / options.providers.
+ */
+function metaTranscriptionEnabled(options = {}) {
+  const env = envOf(options);
+  if (String(env.SIRAGPT_META_TRANSCRIPTION || '') === '1') return true;
+  const explicit = options.providers || env.TRANSCRIBE_PROVIDERS;
+  return Boolean(explicit) && providerOrder(options).includes('meta');
+}
+
+let metaSkipLogged = false;
+function logMetaSkipOnce() {
+  if (metaSkipLogged) return;
+  metaSkipLogged = true;
+  try {
+    console.debug('[audio-transcriber] meta transcription skipped: no STT endpoint (set SIRAGPT_META_TRANSCRIPTION=1 to enable)');
+  } catch { /* debug logging is best-effort */ }
+}
+
 /** Cloud providers in ladder order, only those with a usable key. */
 function cloudProviders(options = {}) {
   const env = envOf(options);
@@ -338,9 +420,23 @@ function cloudProviders(options = {}) {
         method: 'whisper',
         model: options.model || env.WHISPER_MODEL || DEFAULT_OPENAI_MODEL,
         verbose: true,
+        key: String(env.OPENAI_API_KEY || '').trim() || 'injected',
         client: () => options.openai || (() => {
           const OpenAI = require('openai');
           return new OpenAI({ apiKey: env.OPENAI_API_KEY });
+        })(),
+      });
+    } else if (name === 'groq' && (options.groqClient || groqApiKey(options)) && String(env.TRANSCRIBE_GROQ_DISABLED || '') !== '1') {
+      // Groq speaks the OpenAI audio surface (verbose_json + segments).
+      out.push({
+        name: 'groq',
+        method: 'whisper',
+        model: env.GROQ_TRANSCRIBE_MODEL || DEFAULT_GROQ_TRANSCRIBE_MODEL,
+        verbose: true,
+        key: groqApiKey(options) || 'injected',
+        client: () => options.groqClient || (() => {
+          const OpenAI = require('openai');
+          return new OpenAI({ apiKey: groqApiKey(options), baseURL: env.GROQ_BASE_URL || DEFAULT_GROQ_BASE_URL });
         })(),
       });
     } else if (name === 'xai' && xaiApiKey(options) && String(env.TRANSCRIBE_XAI_DISABLED || '') !== '1') {
@@ -349,6 +445,7 @@ function cloudProviders(options = {}) {
         method: 'whisper',
         model: env.XAI_STT_MODEL || DEFAULT_XAI_STT_MODEL,
         verbose: false,
+        key: xaiApiKey(options),
         // xAI STT is a multipart POST to /v1/stt, not the OpenAI SDK surface.
         transcribeFile: options.xaiTranscribe || ((filePath, mimeType, fileName, language) => require('./xai-audio').transcribeXaiAudioFile({
           filePath,
@@ -361,11 +458,16 @@ function cloudProviders(options = {}) {
         })),
       });
     } else if (name === 'meta' && metaApiKey(options) && String(env.TRANSCRIBE_META_DISABLED || '') !== '1') {
+      if (!metaTranscriptionEnabled(options)) {
+        logMetaSkipOnce();
+        continue;
+      }
       out.push({
         name: 'meta',
         method: 'whisper',
         model: env.META_TRANSCRIBE_MODEL || DEFAULT_META_TRANSCRIBE_MODEL,
         verbose: false,
+        key: metaApiKey(options),
         client: () => options.metaClient || (() => {
           const OpenAI = require('openai');
           return new OpenAI({ apiKey: metaApiKey(options), baseURL: env.META_BASE_URL || DEFAULT_META_BASE_URL });
@@ -696,9 +798,15 @@ async function transcribeUnqueued(filePath, mimeType, originalName, options = {}
   }
   if (!fileSize) return placeholderResult(fileName, label, normalizedMime, 'file_empty');
 
-  // Cloud ladder (OpenAI → Meta). Files above the provider cap are segmented,
-  // never rejected: a 500 MB lecture video is exactly the use case.
+  // Cloud ladder (OpenAI → Groq → xAI → Meta). Files above the provider cap
+  // are segmented, never rejected: a 500 MB lecture video is exactly the use
+  // case. `tried` feeds the final summary line («providers tried: …»).
+  const tried = [];
   for (const provider of cloudProviders(options)) {
+    if (providerInCooldown(provider)) {
+      tried.push(`${provider.name}(cooldown)`);
+      continue;
+    }
     try {
       const cloud = await transcribeCloud(provider, filePath, normalizedMime, fileName, fileSize, maxBytes, options, language, prompt);
       const text = String(cloud.text || '').trim();
@@ -715,8 +823,13 @@ async function transcribeUnqueued(filePath, mimeType, originalName, options = {}
     } catch (err) {
       if (isAbortError(err, options.signal)) throw err;
       const safe = sanitizeProviderError(err);
+      tried.push(`${provider.name}(${describeProviderError(err)})`);
       if (isInvalidKeyError(err)) {
-        logSafe(`${provider.name} transcription rejected the key (${safe}); trying the next provider`);
+        rememberProviderRejection(provider, err, options);
+        logSafe(`${provider.name} transcription rejected the key (${safe}); skipping it for ${Math.round(providerCooldownMs(options) / 60000)} min; trying the next provider`);
+      } else if (isBillingError(err)) {
+        rememberProviderRejection(provider, err, options);
+        logSafe(`${provider.name} transcription has no credits (${safe}); skipping it for ${Math.round(providerCooldownMs(options) / 60000)} min; trying the next provider`);
       } else {
         logSafe(`${provider.name} transcription failed (${safe}); trying the next provider`);
       }
@@ -741,15 +854,18 @@ async function transcribeUnqueued(filePath, mimeType, originalName, options = {}
             segments: vs.segments,
           });
         }
+        tried.push('voicestudio(no_speech)');
         logSafe('VoiceStudio transcription returned no speech; trying the next provider');
       } catch (err) {
         if (isAbortError(err, options.signal)) throw err;
+        tried.push(`voicestudio(${describeProviderError(err)})`);
         logSafe(`VoiceStudio transcription failed (${sanitizeProviderError(err)}); trying the next provider`);
       }
     }
   }
 
   if (!localEnabled(options)) {
+    logSafe(`transcription unavailable for ${fileName}; providers tried: ${tried.join(' ') || 'none'} local(disabled)`);
     return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
   }
 
@@ -768,7 +884,10 @@ async function transcribeUnqueued(filePath, mimeType, originalName, options = {}
     });
   } catch (err) {
     if (isAbortError(err, options.signal)) throw err;
+    const localReason = String(err?.reason || err?.code || err?.message || 'failed').replace(/\s+/g, ' ').slice(0, 120);
+    tried.push(`local(${localReason})`);
     logSafe(`Local Whisper failed: ${sanitizeProviderError(err)}`);
+    logSafe(`transcription unavailable for ${fileName}; providers tried: ${tried.join(' ')}`);
     return placeholderResult(fileName, label, normalizedMime, err?.code === 'AUDIO_DECODE_FAILED' ? 'audio_decode_failed' : 'local_unavailable');
   }
 }
@@ -830,7 +949,7 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
     normalizeAudioMime(mimeType, originalName), originalName, resolveLanguage(options), options.prompt || envOf(options).WHISPER_PROMPT,
     providerOrder(options), options.model, options.maxFileBytes, options.durationSeconds, options.segmentSeconds,
     options.ffmpegPath, options.ffprobePath, options.whisperBin, options.modelPath, options.pythonPath, options.threads, options.timeoutMs,
-    ...['env', 'openai', 'metaClient', 'localTranscribe', 'xaiTranscribe', 'voiceStudio', 'segmentAudio', 'probeAudioDuration', 'spawnImpl', 'createFile'].map((k) => identity(options[k])),
+    ...['env', 'openai', 'groqClient', 'metaClient', 'localTranscribe', 'xaiTranscribe', 'voiceStudio', 'segmentAudio', 'probeAudioDuration', 'spawnImpl', 'createFile'].map((k) => identity(options[k])),
   ]);
   let entry = inFlight.get(key);
   if (entry?.controller.signal.aborted) entry = null;
@@ -868,7 +987,15 @@ module.exports = {
   formatTimestamp,
   normalizeSegments,
   DEFAULT_META_TRANSCRIBE_MODEL,
+  DEFAULT_GROQ_TRANSCRIBE_MODEL,
+  DEFAULT_GROQ_BASE_URL,
+  DEFAULT_PROVIDER_COOLDOWN_MS,
   DEFAULT_SEGMENT_SECONDS,
+  isBillingError,
+  metaTranscriptionEnabled,
+  providerInCooldown,
+  clearTranscriptionCooldowns,
+  groqApiKey,
   transcribe,
   generatePlaceholder,
   sanitizeProviderError,

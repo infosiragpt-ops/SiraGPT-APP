@@ -201,7 +201,14 @@ async function judgeTurn({ text, history = [], previousAnswer = null, hasImage =
       usage: res.usage,
     };
   } catch (err) {
-    console.warn(`[rlcd/jev-judge] failed: ${err && (err.code || err.message)}`);
+    const code = err && (err.code || err.message);
+    // The judge is advisory: a TypeSafe timeout / network blip only means
+    // «no verdict this turn» (the heuristics decide). Not a system issue.
+    if (/^typesafe_(?:timeout|network|aborted)$/.test(String(code || ''))) {
+      console.info(`[rlcd/jev-judge] sin veredicto (advisory): ${code}`);
+    } else {
+      console.warn(`[rlcd/jev-judge] failed: ${code}`);
+    }
     return null;
   }
 }

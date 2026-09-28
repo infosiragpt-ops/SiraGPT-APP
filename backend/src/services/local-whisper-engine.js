@@ -117,6 +117,70 @@ function firstExistingFile(paths) {
   return null;
 }
 
+function accessible(filePath, mode, accessImpl) {
+  try { (accessImpl || fs.accessSync)(filePath, mode); return true; } catch { return false; }
+}
+
+function currentUid() {
+  try { return typeof process.getuid === 'function' ? process.getuid() : null; } catch { return null; }
+}
+
+/**
+ * Why the local engine can (or cannot) run, without spawning anything.
+ * Prod 2026-09-28: the model file existed but was `-rw------- root` while the
+ * backend runs as uid 100, and the only log line was «local whisper
+ * unavailable». `reason` names the real cause so Admin → Logs shows it.
+ *
+ * @returns {{ ok: boolean, code: string|null, reason: string|null, bin: string|null, model: string|null, ffmpeg: string }}
+ */
+function describeLocalWhisperAvailability(options = {}) {
+  const access = options.accessImpl || null;
+  const uid = currentUid();
+  const who = uid == null ? 'this process' : `uid ${uid}`;
+  const ffmpeg = ffmpegPath(options);
+  const bins = candidateBins(options);
+  const models = candidateModels(options);
+  const binExisting = firstExistingFile(bins);
+  const binUsable = bins.find((p) => typeof p === 'string' && p.includes('/') && fs.existsSync(p) && accessible(p, fs.constants.X_OK, access)) || null;
+  const modelExisting = firstExistingFile(models);
+  const modelUsable = models.find((p) => typeof p === 'string' && p.includes('/') && fs.existsSync(p) && accessible(p, fs.constants.R_OK, access)) || null;
+  const out = { ok: false, code: null, reason: null, bin: binUsable || binExisting, model: modelUsable || modelExisting, ffmpeg };
+  if (!binExisting) {
+    return { ...out, code: 'binary_missing', reason: `whisper-cli binary missing (${bins[0] || 'whisper-cli'})` };
+  }
+  if (!binUsable) {
+    return { ...out, code: 'binary_not_executable', reason: `whisper-cli not executable by ${who} (${binExisting})` };
+  }
+  if (!modelExisting) {
+    return { ...out, code: 'model_missing', reason: `model missing (${models[0] || 'ggml-base.bin'})` };
+  }
+  if (!modelUsable) {
+    return { ...out, code: 'model_not_readable', reason: `model not readable by ${who} (${modelExisting})` };
+  }
+  if (path.isAbsolute(ffmpeg) && !fs.existsSync(ffmpeg)) {
+    return { ...out, code: 'ffmpeg_missing', reason: `ffmpeg missing (${ffmpeg})` };
+  }
+  return { ...out, ok: true };
+}
+
+// The reason is logged once per process: every audio job repeats the same
+// diagnosis and the transcriber already logs the per-job failure line.
+let availabilityLogged = false;
+function logAvailabilityOnce(reason, logImpl) {
+  if (availabilityLogged || !reason) return;
+  availabilityLogged = true;
+  try { (logImpl || console.warn)(`[local-whisper] unavailable: ${reason}`); } catch { /* logging is best-effort */ }
+}
+function resetAvailabilityLog() { availabilityLogged = false; }
+
+function unavailableError(reason, cause) {
+  const err = new Error(`local whisper unavailable: ${reason}`);
+  err.code = 'LOCAL_WHISPER_UNAVAILABLE';
+  err.reason = reason;
+  if (cause) err.cause = cause;
+  return err;
+}
+
 function runProcess(command, args, options = {}) {
   const spawnImpl = options.spawnImpl || spawn;
   const limitMs = timeoutMs(options);
@@ -270,14 +334,14 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
   const bin = options.whisperBin || firstExistingFile(candidateBins(options)) || candidateBins(options)[0];
   const modelPath = firstExistingFile(candidateModels(options));
   if (!bin) {
-    const err = new Error('whisper.cpp binary not found');
-    err.code = 'LOCAL_WHISPER_UNAVAILABLE';
-    throw err;
+    throw unavailableError(`whisper-cli binary missing (${candidateBins(options)[0] || 'whisper-cli'})`);
   }
   if (!modelPath) {
-    const err = new Error('whisper.cpp model not found');
-    err.code = 'LOCAL_WHISPER_UNAVAILABLE';
-    throw err;
+    throw unavailableError(`model missing (${candidateModels(options)[0] || 'ggml-base.bin'})`);
+  }
+  if (!accessible(modelPath, fs.constants.R_OK, options.accessImpl)) {
+    const uid = currentUid();
+    throw unavailableError(`model not readable by ${uid == null ? 'this process' : `uid ${uid}`} (${modelPath})`);
   }
 
   const outBase = path.join(path.dirname(wavPath), 'transcript');
@@ -363,7 +427,12 @@ async function transcribeLocal(filePath, options = {}) {
     try {
       await convertToWav(filePath, wavPath, options);
     } catch (err) {
-      if (err.code === 'LOCAL_WHISPER_ABORTED' || err.code === 'LOCAL_WHISPER_UNAVAILABLE' || err.code === 'LOCAL_WHISPER_TIMEOUT') throw err;
+      if (err.code === 'LOCAL_WHISPER_UNAVAILABLE') {
+        const reason = `ffmpeg missing (${ffmpegPath(options)})`;
+        logAvailabilityOnce(reason, options.logImpl);
+        throw unavailableError(reason, err);
+      }
+      if (err.code === 'LOCAL_WHISPER_ABORTED' || err.code === 'LOCAL_WHISPER_TIMEOUT') throw err;
       throw Object.assign(new Error('Audio could not be decoded'), { code: 'AUDIO_DECODE_FAILED', cause: err });
     }
     try {
@@ -374,9 +443,18 @@ async function transcribeLocal(filePath, options = {}) {
         return await transcribeWithPython(wavPath, options.language, options);
       } catch (pyErr) {
         if (pyErr?.code === 'LOCAL_WHISPER_ABORTED') throw pyErr;
-        const err = new Error('local whisper unavailable');
-        err.code = 'LOCAL_WHISPER_UNAVAILABLE';
-        err.cause = pyErr || cppErr;
+        // Name the real cause (binary / model / permissions) instead of the
+        // bare «local whisper unavailable» that hid an unreadable model file.
+        let reason = cppErr?.reason || null;
+        if (!reason) {
+          const availability = describeLocalWhisperAvailability(options);
+          reason = availability.ok
+            ? `whisper.cpp ${cppErr?.code || 'failed'}${cppErr?.exitCode != null ? ` (exit ${cppErr.exitCode})` : ''}; python fallback ${pyErr?.code || 'failed'}`
+            : availability.reason;
+        }
+        logAvailabilityOnce(reason, options.logImpl);
+        const err = unavailableError(reason, pyErr || cppErr);
+        err.cppError = cppErr;
         throw err;
       }
     }
@@ -387,6 +465,9 @@ async function transcribeLocal(filePath, options = {}) {
 
 module.exports = {
   parseWhisperCppJson,
+  describeLocalWhisperAvailability,
+  logAvailabilityOnce,
+  resetAvailabilityLog,
   defaultThreadCount,
   whisperTimeoutForWav,
   transcribeLocal,

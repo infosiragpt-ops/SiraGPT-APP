@@ -938,7 +938,53 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    * @param {object}  [opts.toolContext]   — per-request context passed to tools.
    * @returns {Promise<{finalAnswer:string, stoppedReason:string, steps:Array}>}
    */
+  /**
+   * Wrapper: whatever path the turn takes (throw, abort, early return), the
+   * Cowork run created for it must not stay `running` and hold one of the
+   * plan's concurrency slots. finishRun is idempotent on terminal rows, so
+   * the normal completion/failure paths inside remain the source of truth.
+   */
   async function runAgenticChat(opts) {
+    const toolContext = (opts && opts.toolContext) || null;
+    let outcome = 'completed';
+    try {
+      return await runAgenticChatInner(opts);
+    } catch (err) {
+      outcome = (opts && opts.signal && opts.signal.aborted) || /cancel|abort/i.test(String((err && (err.code || err.message)) || ''))
+        ? 'cancelled'
+        : 'failed';
+      await closeDanglingCoworkRun(toolContext, outcome, err);
+      throw err;
+    } finally {
+      if (toolContext && toolContext.__coworkHeartbeat) {
+        try { clearInterval(toolContext.__coworkHeartbeat); } catch (_) { /* noop */ }
+        toolContext.__coworkHeartbeat = null;
+      }
+      if (outcome === 'completed') await closeDanglingCoworkRun(toolContext, 'completed', null);
+    }
+  }
+
+  async function closeDanglingCoworkRun(toolContext, status, err) {
+    if (!toolContext || !toolContext.coworkRunId || !toolContext.prisma || !toolContext.userId) return;
+    try {
+      const controlPlane = require('./cowork/control-plane');
+      const run = await controlPlane.getOwnedRun(toolContext.prisma, { runId: toolContext.coworkRunId, userId: toolContext.userId });
+      if (controlPlane.TERMINAL_STATUSES.has(run.status)) return;
+      // A normal return only closes a run the loop left `running`/`queued`;
+      // paused / waiting_approval runs are the user's, not a leak.
+      if (status === 'completed' && run.status !== 'running' && run.status !== 'queued') return;
+      await controlPlane.finishRun(toolContext.prisma, {
+        runId: toolContext.coworkRunId,
+        userId: toolContext.userId,
+        status,
+        lastEvent: err
+          ? String((err && err.message) || err).slice(0, 4000)
+          : 'Turno terminado (cierre de seguridad)',
+      });
+    } catch (_) { /* best-effort: the stale-run reaper is the backstop */ }
+  }
+
+  async function runAgenticChatInner(opts) {
     const {
       openai,
       model,
@@ -1518,6 +1564,21 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         answer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
           + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
       }
+      // A full / slow document sandbox is transient infrastructure, not a
+      // broken tool: the admin tracker files it as «Cancelado por el
+      // sistema» (capacity) so it does not pollute «Herramienta fallida».
+      if (agentRunnerFailure.reason === 'sandbox_capacity' || agentRunnerFailure.reason === 'sandbox_timeout') {
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: 'agent_runner',
+            reason: agentRunnerFailure.reason,
+            category: 'capacity',
+            retryable: true,
+            fatal: true,
+            message: String(agentRunnerFailure.detail || answer).slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
+      }
       if (runnerOnly || agentRunnerFailure.reason === 'E_PROVIDER') {
         await writeSse(res, { replace: true, content: answer });
         logDocRouting('agent_runner_failed', agentRunnerFailure.reason);
@@ -1747,10 +1808,21 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         });
       } catch (coworkError) {
         try {
-          const d = coworkError && coworkError.details;
-          const slots = d && d.concurrency != null ? ` (activas=${d.active}, límite=${d.concurrency}, plan=${d.plan})` : '';
-          console.warn('[cowork] run bootstrap failed (legacy chat continues):', `${coworkError.message}${slots}`);
+          require('./cowork/control-plane').logBootstrapFailure(coworkError);
         } catch (_) { /* noop */ }
+      }
+      if (__coworkRun) {
+        // Heartbeat: a live turn keeps `updatedAt` fresh even during one long
+        // step, so reapStaleRuns (15 min without progress) never closes it.
+        // Cleared in the runAgenticChat wrapper (finally) whatever happens.
+        try {
+          const controlPlane = require('./cowork/control-plane');
+          const heartbeat = setInterval(() => {
+            controlPlane.touchRun(toolContext.prisma, { runId: __coworkRun.id, userId: toolContext.userId }).catch(() => {});
+          }, controlPlane.heartbeatIntervalMs());
+          heartbeat.unref?.();
+          toolContext.__coworkHeartbeat = heartbeat;
+        } catch (_) { /* heartbeat is best-effort */ }
       }
     }
 

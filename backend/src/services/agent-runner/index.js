@@ -692,10 +692,27 @@ async function runAgentRunner({
     const editContext = { files, instruction: task,
       isEdit: files.some((file) => Buffer.isBuffer(file?.buffer))
         && (!CREATE_DOC_RE.test(task) || SOURCE_COPY_RE.test(task)) };
+    // Capacity queue progress (remote driver): one visible checkpoint when
+    // the wait starts and another every ~10 s, so the user sees the turn is
+    // alive instead of an instant «sandbox service 429» failure.
+    let lastWaitEmitAt = 0;
+    const onSandboxWait = (info = {}) => {
+      const now = Date.now();
+      if (info.attempt > 1 && now - lastWaitEmitAt < 10_000) return;
+      lastWaitEmitAt = now;
+      onEvent({
+        type: 'stage',
+        step: 'sandbox_wait',
+        tool: 'agent_runner',
+        label: 'Esperando un sandbox libre…',
+        preview: `${Math.round((info.waitedMs || 0) / 1000)} s de ${Math.round((info.maxWaitMs || 0) / 1000)} s`,
+      });
+    };
     sandbox = await createSandbox({
       driver,
       signal: abortScope.signal,
       persistKey: chatId || null,
+      onWait: onSandboxWait,
     });
     // The remote driver allocates its container on the first I/O. A new-file
     // turn with no source bytes may fail at the model before using any tool;
@@ -1194,10 +1211,23 @@ const AGENT_RUNNER_FAILURE_COPY = {
   verification_failed: 'el agente no pudo verificar que el archivo quedara correcto',
   max_iterations: 'el agente agotó sus pasos sin producir un archivo verificado',
   exception: 'el agente falló con un error inesperado',
+  // Transient infrastructure: the document sandbox was full / slow.
+  sandbox_capacity: 'el entorno de documentos está ocupado; reintenta en un momento',
+  sandbox_timeout: 'el entorno de documentos tardó demasiado en responder; reintenta en un momento',
   // F4 — orchestrator-specific honest failures
   budget_exceeded: 'el agente superó el presupuesto de iteraciones/tokens asignado a la tarea y se detuvo para no seguir consumiendo recursos',
   plan_failed: 'el director del agente no pudo construir un plan válido para la tarea multi-paso',
 };
+
+/** Transient sandbox failures get their own reason instead of `exception`. */
+function sandboxFailureReason(err) {
+  if (!err) return null;
+  if (err.category === 'capacity' || err.code === 'sandbox_at_capacity' || /sandbox service 429|at_capacity/i.test(String(err.message || ''))) {
+    return 'sandbox_capacity';
+  }
+  if (/remote_sandbox_timeout/i.test(String(err.message || err.code || err.reason || ''))) return 'sandbox_timeout';
+  return null;
+}
 
 function buildAgentRunnerFailureMessage(reason, detail) {
   const key = String(reason || 'no_output');
@@ -1259,7 +1289,7 @@ async function executeAgentRunnerTurn(params = {}) {
     } catch (err) {
       // User cancellation is not a runner failure — let the caller unwind.
       if (params.signal?.aborted || err?.name === 'AbortError') throw err;
-      const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception';
+      const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : sandboxFailureReason(err) || 'exception';
       if (reason === 'E_PROVIDER') logProviderFailure(err);
       try { console.warn('[agent-runner] orchestrated turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
       return {
@@ -1310,7 +1340,7 @@ async function executeAgentRunnerTurn(params = {}) {
     if (params.signal?.aborted) throw err;
     // Never throw for real failures: the routes need the reason to show an
     // honest error instead of silently falling back to the generic pipeline.
-    const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : 'exception';
+    const reason = err?.code === 'E_PROVIDER' ? 'E_PROVIDER' : isLlmCreditError(err) ? 'llm_402' : sandboxFailureReason(err) || 'exception';
     if (reason === 'E_PROVIDER') logProviderFailure(err);
     try { console.warn('[agent-runner] turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
     return {
@@ -1321,6 +1351,7 @@ async function executeAgentRunnerTurn(params = {}) {
       steps: [],
       stoppedReason: reason,
       errorMessage: err?.message || String(err),
+      ...(reason === 'sandbox_capacity' || reason === 'sandbox_timeout' ? { category: 'capacity', retryable: true } : {}),
     };
   }
 }
@@ -1461,6 +1492,7 @@ function orchestratorEnabled(env) {
 }
 
 module.exports = {
+  sandboxFailureReason,
   dropIntermediateOutputs,
   archivePreviousOutputs,
   noChangesNeeded,

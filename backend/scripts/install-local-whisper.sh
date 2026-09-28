@@ -254,6 +254,11 @@ if [ "${WHISPER_SKIP_MODEL:-0}" != "1" ]; then
     echo "install-local-whisper: model missing at ${MODEL_DIR}/${MODEL_NAME}" >&2
     exit 1
   fi
+  # cp/wget keep the source or umask mode: a 0600 seed left the model
+  # unreadable for the non-root backend user (appuser, uid 100). The engine
+  # runs as that user, so the model directory and file must be world-readable.
+  chmod 0755 "${MODEL_DIR}" 2>/dev/null || true
+  chmod 0644 "${MODEL_DIR}/${MODEL_NAME}"
 fi
 
 # Fail the image build if the binary cannot start (missing .so is the usual cause).

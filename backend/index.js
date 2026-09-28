@@ -1698,6 +1698,24 @@ async function startServer() {
     // (all no-op when the flag is off). Fire-and-forget recovery never throws;
     // invalid adapter selection is a fail-closed worker-start error.
     try { logCodexConfig(process.env, logger); } catch { /* never blocks boot */ }
+    // Local Whisper self-check: the audio ladder's last rung. Prod 2026-09-28:
+    // the model file was root-only (0600) and every audio ended in «La
+    // transcripción no está disponible» with no log naming the cause. One
+    // WARN per boot with the real reason (binary / model / permissions /
+    // ffmpeg) so it shows up in Admin → Logs after each publish.
+    try {
+      const localWhisper = require('./src/services/local-whisper-engine');
+      const whisperCheck = localWhisper.describeLocalWhisperAvailability();
+      const whisperConfigured = Boolean(process.env.WHISPER_CPP_BIN || process.env.WHISPER_CPP_MODEL)
+        || process.env.NODE_ENV === 'production';
+      if (whisperCheck.ok) {
+        logger.info({ bin: whisperCheck.bin, model: whisperCheck.model }, '[local-whisper] ready');
+      } else if (whisperConfigured) {
+        localWhisper.logAvailabilityOnce(whisperCheck.reason, (line) => logger.warn({ code: whisperCheck.code, bin: whisperCheck.bin, model: whisperCheck.model, uid: typeof process.getuid === 'function' ? process.getuid() : null }, line));
+      } else {
+        logger.info({ code: whisperCheck.code }, `[local-whisper] not installed (${whisperCheck.reason}); cloud transcription only`);
+      }
+    } catch { /* never blocks boot */ }
     // Attribution stack config coherence check (CLAUDE.md mandates running it on
     // boot). Warnings only — never blocks boot.
     try {

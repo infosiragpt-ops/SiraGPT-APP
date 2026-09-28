@@ -142,7 +142,9 @@ function detectKind(text, fallback = 'backend') {
 const CLIENT_GONE_RE = /\bAbortError\b|\bAPIUserAbortError\b|aborted by (?:the )?(?:client|user)|client (?:disconnected|closed|gone)|ERR_STREAM_PREMATURE_CLOSE|ERR_STREAM_WRITE_AFTER_END|write after end|ERR_HTTP_HEADERS_SENT.*client|socket hang up.*client|request (?:was )?aborted|this operation was aborted/i;
 // Our own plumbing, never an issue (prevents capture loops).
 const SELF_RE = /^\s*\[(?:system-errors|turn-failures|audit-log)\]/i;
-const BENIGN_RE = /ExperimentalWarning|DeprecationWarning|PromiseRejectionHandledWarning|punycode|Eviction policy is/i;
+// Advisory judges (RLCD × Jev) that timed out: the turn continued on the
+// heuristics; a burst of these is not a system issue.
+const BENIGN_RE = /ExperimentalWarning|DeprecationWarning|PromiseRejectionHandledWarning|punycode|Eviction policy is|\[rlcd\/jev-judge\][^\n]*typesafe_(?:timeout|network|aborted)/i;
 
 function isNoise({ text = '', status = null, source = 'console' } = {}) {
   const t = String(text || '');

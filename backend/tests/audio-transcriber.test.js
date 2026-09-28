@@ -161,7 +161,7 @@ test('a recording above the cloud cap is segmented, transcribed on Meta and stit
   const filePath = tempAudio(t, 'clase.mp4');
   const requests = [];
   const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase.mp4', {
-    env: { MODEL_API_KEY: 'meta-test-key', WHISPER_LANGUAGE: 'es' },
+    env: { MODEL_API_KEY: 'meta-test-key', SIRAGPT_META_TRANSCRIPTION: '1', WHISPER_LANGUAGE: 'es' },
     maxFileBytes: 4,
     segmentAudio: fakeSegments(t, 3),
     createFile: (buffer, name, mime) => ({ name, mime, bytes: buffer.length }),
@@ -193,7 +193,7 @@ test('when every cloud provider fails, a big file still reaches local whisper (n
   const filePath = tempAudio(t, 'clase.mp4');
   let localCalls = 0;
   const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase.mp4', {
-    env: { MODEL_API_KEY: 'meta-test-key', OPENAI_API_KEY: 'sk-proj-TESTKEY_m1' },
+    env: { MODEL_API_KEY: 'meta-test-key', SIRAGPT_META_TRANSCRIPTION: '1', OPENAI_API_KEY: 'sk-proj-TESTKEY_m1' },
     maxFileBytes: 4,
     segmentAudio: fakeSegments(t, 1),
     createFile: (buffer, name, mime) => ({ name, mime }),
@@ -207,7 +207,7 @@ test('when every cloud provider fails, a big file still reaches local whisper (n
 });
 
 test('TRANSCRIBE_PROVIDERS orders the ladder and can skip the cloud entirely', async (t) => {
-  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'xai', 'meta', 'local']);
+  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'groq', 'xai', 'meta', 'local']);
   assert.deepEqual(audioTranscriber.providerOrder({ env: { TRANSCRIBE_PROVIDERS: 'meta, local' } }), ['meta', 'local']);
   const providers = audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', OPENAI_API_KEY: 'sk-proj-TESTKEY_m2', TRANSCRIBE_PROVIDERS: 'meta,openai,local' } });
   assert.deepEqual(providers.map((p) => p.name), ['meta', 'openai']);
@@ -252,7 +252,7 @@ test('segmented cloud transcription reports progress per segment', async (t) => 
   const filePath = tempAudio(t, 'clase-larga.mp4');
   const events = [];
   const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase-larga.mp4', {
-    env: { MODEL_API_KEY: 'meta-test-key' },
+    env: { MODEL_API_KEY: 'meta-test-key', SIRAGPT_META_TRANSCRIPTION: '1' },
     maxFileBytes: 4,
     segmentAudio: fakeSegments(t, 4),
     createFile: (buffer, name, mime) => ({ name, mime }),
