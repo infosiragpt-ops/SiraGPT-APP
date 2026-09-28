@@ -338,7 +338,7 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, fo
   return {
     ok: true,
     metrics: result,
-    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${result.hasRespondentId === true ? 'La columna ID adicional coincide entre ambos. ' : ''}${columnNote} Comparé ${result.comparedCells} valores de preguntas: ${result.differentCells} diferencias. El SAV conserva ${result.labelCount} etiquetas de variables.`,
+    answer: `Verificación directa de los archivos de este chat (sin llamar al modelo seleccionado): SAV ${result.savRows} × ${result.savColumns}; Excel ${result.excelRows} × ${result.excelColumns}. ${result.hasRespondentId === true ? 'La columna ID adicional coincide entre ambos. ' : ''}${columnNote} Comparé ${result.comparedCells} valores: ${result.differentCells} diferencias en las preguntas. El SAV conserva ${result.labelCount} etiquetas de variables.`,
   };
 }
 

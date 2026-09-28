@@ -163,8 +163,7 @@ test('an explicit SAV/XLSX parity request reads the validated bytes even when th
   assert.equal(modelCalls, 0);
   assert.equal(isHandledAgenticChatResult(result), true, 'the HTTP route must preserve the verified answer');
   assert.match(result.finalAnswer, /20\s*[×x]\s*20/);
-  assert.match(result.finalAnswer, /400/);
-  assert.match(result.finalAnswer, /0 diferencias/);
+  assert.match(result.finalAnswer, /400 valores: 0 diferencias/);
   assert.match(result.finalAnswer, /20 etiquetas/);
   assert.match(result.finalAnswer, /sin llamar al modelo seleccionado/);
   assert.doesNotMatch(result.finalAnswer, new RegExp(`${sav.id}|${xlsx.id}|\/app\/uploads\/agent-artifacts`));
