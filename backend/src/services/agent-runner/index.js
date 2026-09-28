@@ -697,7 +697,12 @@ async function runAgentRunner({
       signal: abortScope.signal,
       persistKey: chatId || null,
     });
-    onEvent({
+    // The remote driver allocates its container on the first I/O. A new-file
+    // turn with no source bytes may fail at the model before using any tool;
+    // keep that turn out of the limited container pool until first use.
+    const hasSourceBytes = files.some((file) => Buffer.isBuffer(file?.buffer));
+    const deferRemotePreparation = sandbox.driver === 'remote' && !hasSourceBytes;
+    const announceSandbox = () => onEvent({
       type: 'sandbox_ready',
       driver: sandbox.driver,
       // F5: never claim isolation that is not there — the local driver
@@ -707,6 +712,7 @@ async function runAgentRunner({
       persistent: Boolean(sandbox.persistent),
       label: 'Preparando entorno',
     });
+    if (!deferRemotePreparation) announceSandbox();
 
     const names = [];
     const priorNames = [];
@@ -723,23 +729,48 @@ async function runAgentRunner({
       names.push(name);
       if (f.isPriorArtifact) priorNames.push(name);
     }
-    await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
-    const previousOutputs = (await archivePreviousOutputs(sandbox)) ? new Map() : await fingerprintOutputs(sandbox);
-    const collectTurnOutputs = async () => dropPreviousTurnOutputs(
-      await collectValidOutputs(sandbox, onEvent, editContext), previousOutputs, onEvent);
-    const officeHelpersPy = loadOfficeHelpersPy();
-    if (officeHelpersPy) {
-      try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
-    }
+    let previousOutputs = new Map();
+    let sandboxPrepared = false;
+    let sandboxPreparing = null;
     // Fail-open: without the engine the agent still edits with execute_python.
     // With the office tools on, a failed install is reported to the admin
     // turn-failure tracker (the user may end up without visual verification).
     const reportOfficeFailure = createOfficeFailureReporter({ userId, chatId });
-    try { await installSiraOfficeEngine(sandbox); } catch (err) {
-      if (officeEngineEnabled()) {
-        reportOfficeFailure({ tool: 'office_engine', code: 'install_failed', error: err && err.message });
+    const prepareSandbox = () => {
+      if (sandboxPrepared) return Promise.resolve();
+      if (!sandboxPreparing) {
+        sandboxPreparing = (async () => {
+          throwIfAborted(abortScope.signal);
+          if (deferRemotePreparation) announceSandbox();
+          await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
+          previousOutputs = (await archivePreviousOutputs(sandbox)) ? new Map() : await fingerprintOutputs(sandbox);
+          const officeHelpersPy = loadOfficeHelpersPy();
+          if (officeHelpersPy) {
+            try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
+          }
+          try { await installSiraOfficeEngine(sandbox); } catch (err) {
+            if (officeEngineEnabled()) {
+              reportOfficeFailure({ tool: 'office_engine', code: 'install_failed', error: err && err.message });
+            }
+          }
+          sandboxPrepared = true;
+        })();
       }
-    }
+      return sandboxPreparing;
+    };
+    if (!deferRemotePreparation) await prepareSandbox();
+    const toolSandbox = deferRemotePreparation ? {
+      ...sandbox,
+      exec: async (...args) => { await prepareSandbox(); return sandbox.exec(...args); },
+      putFile: async (...args) => { await prepareSandbox(); return sandbox.putFile(...args); },
+      readFile: async (...args) => { await prepareSandbox(); return sandbox.readFile(...args); },
+      writeFile: async (...args) => { await prepareSandbox(); return sandbox.writeFile(...args); },
+      listFiles: async (...args) => { await prepareSandbox(); return sandbox.listFiles(...args); },
+      collectOutputs: async (...args) => { await prepareSandbox(); return sandbox.collectOutputs(...args); },
+    } : sandbox;
+    const collectTurnOutputs = async () => sandboxPrepared
+      ? dropPreviousTurnOutputs(await collectValidOutputs(sandbox, onEvent, editContext), previousOutputs, onEvent)
+      : [];
 
     // ── F8 hook: memoria recall (DATA) + tools extra (skills / MCP) ────────
     const f8 = await prepareF8Extras({
@@ -765,7 +796,7 @@ async function runAgentRunner({
     let lastVerify = null;
     const verifies = [];
     const executors = {
-      ...makeToolExecutors(sandbox, {
+      ...makeToolExecutors(toolSandbox, {
         office: {
           onFailure: reportOfficeFailure,
           visionVerifier: buildVisionVerifier({
@@ -897,7 +928,7 @@ async function runAgentRunner({
       const { prepareF7Extras } = require('./multimodal');
       f7 = prepareF7Extras({
         files,
-        sandbox,
+        sandbox: toolSandbox,
         client: llm,
         model: resolvedModel,
         openaiClient,

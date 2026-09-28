@@ -372,6 +372,6 @@ test('turn-failure hook: a turn that ends with its last verify_visual failed is 
 test('runner wiring: executors get the per-turn reporter; failed final verification is reported', () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/services/agent-runner/index.js'), 'utf8');
   assert.match(src, /const reportOfficeFailure = createOfficeFailureReporter\(\{ userId, chatId \}\);/);
-  assert.match(src, /makeToolExecutors\(sandbox, \{\s*office: \{\s*onFailure: reportOfficeFailure,/);
+  assert.match(src, /makeToolExecutors\(toolSandbox, \{\s*office: \{\s*onFailure: reportOfficeFailure,/);
   assert.match(src, /verificationFailureFromSteps\(result && result\.steps\)/);
 });
