@@ -261,6 +261,24 @@ test('pinned-model transparency: cause, provider, display name and wait seconds;
   assert.equal(billing.buildFailureMessage({ reason: null }), null);
 });
 
+test('a reservation larger than the balance is its own cause: annotated and worded, never «reconecta el proveedor»', () => {
+  const err = billing.annotateProviderFailure(
+    httpError(402, 'This request requires more credits, or fewer max_tokens. You requested up to 16384 tokens, but can only afford 5000.'),
+    { provider: 'OpenRouter', model: 'deepseek/deepseek-v4-pro' },
+  );
+  assert.equal(err.siraFailureReason, 'reservation');
+  assert.equal(billing.isOutOfCredit('OpenRouter'), false, 'the account still has credit');
+  const text = billing.buildFailureMessage({ modelLabel: 'DeepSeek V4 Pro', reason: 'reservation' });
+  assert.match(text, /^DeepSeek V4 Pro no pudo responder: su proveedor no tiene saldo suficiente para una respuesta de este tamaño\. No cambié de modelo/);
+  assert.doesNotMatch(text, /OpenRouter|reconecta|Ajustes/);
+  // A near-empty account (can only afford 12) is plain «sin saldo».
+  const dry = billing.annotateProviderFailure(
+    httpError(402, 'This request requires more credits, or fewer max_tokens. You requested up to 16384 tokens, but can only afford 12.'),
+    { provider: 'OpenRouter', model: 'deepseek/deepseek-v4-pro' },
+  );
+  assert.equal(dry.siraFailureReason, 'billing');
+});
+
 function lastResortDeps({ findManyThrows = false, rows = [], rejected = [], notReady = [] } = {}) {
   return {
     prisma: { aiModel: { findMany: async () => { if (findManyThrows) throw new Error('db down'); return rows; } } },

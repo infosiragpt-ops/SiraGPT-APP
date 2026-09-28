@@ -464,3 +464,31 @@ test('tracer span lifecycle is best-effort and never throws', function() {
   }
   assert.equal(threw, false);
 });
+
+test('enrichWithWebSearch reports its outcome: a failed search is not «no results»', async function() {
+  const run = async (freeSearch) => {
+    const outcomes = [];
+    const ctx = await enrichWithWebSearch('noticias de hoy en Lima', {
+      env: {},
+      freeSearch,
+      onOutcome: (o) => outcomes.push(o),
+    });
+    return { ctx, outcomes };
+  };
+  const failed = await run({ search: async () => { throw new Error('ECONNRESET upstream'); } });
+  assert.equal(failed.ctx, null);
+  assert.deepEqual(failed.outcomes, ['failed']);
+  const empty = await run({ search: async () => ({ provider: 'duckduckgo', results: [] }) });
+  assert.equal(empty.ctx, null);
+  assert.deepEqual(empty.outcomes, ['empty']);
+  const ok = await run({ search: async () => ({ provider: 'duckduckgo', results: [{ title: 'Lima hoy', url: 'https://elcomercio.pe/lima', snippet: 'Noticias.' }] }) });
+  assert.ok(ok.ctx && ok.ctx.sources.length === 1);
+  assert.deepEqual(ok.outcomes, ['ok']);
+  // A throwing callback changes nothing.
+  const quiet = await enrichWithWebSearch('noticias de hoy en Lima', {
+    env: {},
+    freeSearch: { search: async () => ({ provider: 'duckduckgo', results: [] }) },
+    onOutcome: () => { throw new Error('boom'); },
+  });
+  assert.equal(quiet, null);
+});

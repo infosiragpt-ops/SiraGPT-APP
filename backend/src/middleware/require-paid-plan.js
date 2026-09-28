@@ -41,6 +41,36 @@ function subscriptionAllowsPaidAccess(user) {
   return Number.isFinite(periodEnd) && periodEnd > Date.now();
 }
 
+// What the feature is, in the user's words, for the Spanish 402 copy.
+const FEATURE_LABELS_ES = Object.freeze({
+  image_generation: 'La generación de imágenes',
+  image_upscale: 'La mejora de resolución de imágenes',
+  image_variation: 'La creación de variaciones de imágenes',
+  music_generation: 'La generación de música',
+  thesis_generation: 'La generación de tesis',
+  video_generation: 'La generación de video',
+  voice_generation: 'La generación de voz',
+});
+const DEFAULT_FEATURE_LABEL_ES = 'Esta función';
+const UPGRADE_URL = '/planes';
+
+function featureLabelEs(feature) {
+  return FEATURE_LABELS_ES[String(feature || '')] || DEFAULT_FEATURE_LABEL_ES;
+}
+
+/**
+ * Spanish copy for the 402 bodies. It keeps «Sube de plan» (the composer's
+ * isMonthlyLimitError matcher lowercases the text and looks for it) and, for
+ * an inactive subscription, says to renew it.
+ */
+function upgradeMessageEs(feature, { inactive = false } = {}) {
+  const label = featureLabelEs(feature);
+  if (inactive) {
+    return `${label} necesita una suscripción activa y la tuya no lo está. Renueva tu suscripción o sube de plan en /planes para continuar.`;
+  }
+  return `${label} está disponible en los planes de pago. Sube de plan en /planes para usarla.`;
+}
+
 function requirePaidPlan(options = {}) {
   const feature = options.feature || 'premium_feature';
   const allowedPlans = new Set(
@@ -58,8 +88,10 @@ function requirePaidPlan(options = {}) {
     }
     if (allowedPlans.has(plan)) {
       if (subscriptionAllowsPaidAccess(req.user)) return next();
+      const inactiveMessage = upgradeMessageEs(feature, { inactive: true });
       return res.status(402).json({
-        error: 'Upgrade required',
+        error: inactiveMessage,
+        message: inactiveMessage,
         code: 'UPGRADE_REQUIRED',
         reason: 'SUBSCRIPTION_INACTIVE',
         feature,
@@ -69,16 +101,20 @@ function requirePaidPlan(options = {}) {
         ) || 'unknown',
         requiredPlans: Array.from(allowedPlans),
         upgradeRequired: true,
+        upgradeUrl: UPGRADE_URL,
       });
     }
 
+    const upgradeMessage = upgradeMessageEs(feature);
     return res.status(402).json({
-      error: 'Upgrade required',
+      error: upgradeMessage,
+      message: upgradeMessage,
       code: 'UPGRADE_REQUIRED',
       feature,
       plan,
       requiredPlans: Array.from(allowedPlans),
       upgradeRequired: true,
+      upgradeUrl: UPGRADE_URL,
     });
   };
 }
@@ -90,3 +126,6 @@ module.exports.normalizeSubscriptionStatus = normalizeSubscriptionStatus;
 module.exports.hasSubscriptionFields = hasSubscriptionFields;
 module.exports.subscriptionAllowsPaidAccess = subscriptionAllowsPaidAccess;
 module.exports.DEFAULT_PAID_PLANS = DEFAULT_PAID_PLANS;
+module.exports.FEATURE_LABELS_ES = FEATURE_LABELS_ES;
+module.exports.UPGRADE_URL = UPGRADE_URL;
+module.exports.upgradeMessageEs = upgradeMessageEs;

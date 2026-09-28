@@ -298,6 +298,143 @@ function truncate(s, n) {
   return str.length <= n ? str : str.slice(0, n - 1) + '…';
 }
 
+// ── Live progress of the agentic loop (sentinel steps + agent_model rows) ──
+const turnProgressLib = require('./turn-progress');
+const LIVE_DETAIL_MAX = 200;
+const LIVE_TICK_REASONING_MS = 12000;
+const LIVE_TICK_SLOW_MS = 30000;
+
+function capitalizeFirst(text) {
+  const s = String(text || '');
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+// What the model decided to do next, in plain Spanish («buscar en la web y
+// leer 2 páginas»). Unknown tools are counted, never named by their id.
+const LIVE_DECISION_VERBS = {
+  web_search: ['buscar en la web', (n) => `hacer ${n} búsquedas en la web`],
+  deep_search: ['investigar a fondo en la web', (n) => `hacer ${n} investigaciones en la web`],
+  scientific_search: ['buscar artículos científicos', (n) => `hacer ${n} búsquedas científicas`],
+  read_url: ['leer una página', (n) => `leer ${n} páginas`],
+  web_fetch: ['leer una página', (n) => `leer ${n} páginas`],
+  web_extract: ['extraer una página', (n) => `extraer ${n} páginas`],
+  rag_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
+  docintel_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
+  docintel_analyze: ['analizar tus documentos', () => 'analizar tus documentos'],
+  memory_recall: ['consultar tu memoria', () => 'consultar tu memoria'],
+  memory_search: ['consultar tu memoria', () => 'consultar tu memoria'],
+  python_exec: ['ejecutar Python', (n) => `ejecutar Python ${n} veces`],
+  create_document: ['crear un archivo', (n) => `crear ${n} archivos`],
+  document_edit: ['editar tu documento', () => 'editar tu documento'],
+  verify_artifact: ['verificar el archivo', (n) => `verificar ${n} archivos`],
+  generate_image: ['generar una imagen', (n) => `generar ${n} imágenes`],
+  create_chart: ['crear una gráfica', (n) => `crear ${n} gráficas`],
+  update_plan: ['actualizar el plan', () => 'actualizar el plan'],
+  finalize: ['responder', () => 'responder'],
+};
+
+function joinSpanish(parts) {
+  if (parts.length <= 1) return parts[0] || '';
+  return `${parts.slice(0, -1).join(', ')} y ${parts[parts.length - 1]}`;
+}
+
+function describeLiveDecision(toolNames, took) {
+  const counts = new Map();
+  for (const name of toolNames || []) {
+    if (!name) continue;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  if (counts.size === 0) return took ? `Respondió en ${took}` : 'Respondió';
+  if (counts.size === 1 && counts.has('finalize')) return took ? `Listo en ${took}` : 'Listo';
+  const phrases = [];
+  let others = 0;
+  for (const [name, n] of counts) {
+    const verbs = LIVE_DECISION_VERBS[name];
+    if (!verbs) { others += n; continue; }
+    const phrase = n > 1 ? verbs[1](n) : verbs[0];
+    if (!phrases.includes(phrase)) phrases.push(phrase);
+  }
+  if (others) phrases.push(others === 1 ? 'usar otra herramienta' : `usar ${others} herramientas más`);
+  const what = joinSpanish(phrases.slice(0, 4));
+  return took ? `Decidió en ${took}: ${what}` : `Decidió: ${what}`;
+}
+
+function liveSearchQuery(value) {
+  try {
+    // The query the search really runs: URLs reduced to their origin.
+    return require('../orchestration/gateway-adapter').sanitizeWebSearchQuery(value);
+  } catch (_) {
+    return String(value || '').replace(/https?:\/\/\S+/gi, '[URL]');
+  }
+}
+
+// The one argument that says what a tool call is about, when its label does
+// not already show it (a web domain, a path, a file name…). Never code or
+// secrets: a URL is reduced to its domain (a signed URL, `?token=` or an
+// OAuth `?code=&state=` callback never reaches the timeline) and a query is
+// sanitized and capped at 60 chars.
+function liveArgsDetail(args, label) {
+  if (!args || typeof args !== 'object') return '';
+  const shown = String(label || '');
+  for (const key of ['url', 'path', 'filename', 'query', 'title']) {
+    const value = args[key];
+    if (typeof value !== 'string' || !value.trim()) continue;
+    let text;
+    if (key === 'url') text = prettyDomain(value.trim());
+    else if (key === 'query') text = truncate(liveSearchQuery(value).replace(/\s+/g, ' ').trim(), 60);
+    else text = truncate(value.replace(/\s+/g, ' ').trim(), 120);
+    if (!text) return '';
+    if (shown.includes(text.replace(/…$/, ''))) return '';
+    return text;
+  }
+  return '';
+}
+
+function domainCount(list) {
+  const domains = new Set();
+  for (const item of list) {
+    const url = item && (item.url || item.link || item.href);
+    if (typeof url !== 'string') continue;
+    try { domains.add(new URL(url).hostname.replace(/^www\./, '')); } catch (_) { /* not a URL */ }
+  }
+  return domains.size;
+}
+
+// A short fact about what a tool returned («12 resultados · 3 dominios»).
+function liveResultDetail(obs) {
+  if (!obs || typeof obs !== 'object') return '';
+  const results = Array.isArray(obs.results) ? obs.results
+    : (Array.isArray(obs.sources) ? obs.sources : (Array.isArray(obs.hits) ? obs.hits : null));
+  if (results) {
+    const n = results.length;
+    if (!n) return 'Sin resultados';
+    const d = domainCount(results);
+    return `${turnProgressLib.fmtInt(n)} ${n === 1 ? 'resultado' : 'resultados'}${d > 1 ? ` · ${d} dominios` : ''}`;
+  }
+  return '';
+}
+
+// A failed tool, by category — the full cause stays in the step reasoning.
+function liveErrorCategory(text) {
+  const t = String(text || '');
+  if (/time ?out|timed out|tiempo agotado|ETIMEDOUT/i.test(t)) return 'tiempo agotado';
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|permission|permiso|denied|denegad/i.test(t)) return 'sin permiso';
+  if (/\b404\b|not found|no encontr/i.test(t)) return 'no encontrado';
+  if (/ECONN|ENOTFOUND|network|fetch failed|socket hang up|conexi[oó]n/i.test(t)) return 'conexión fallida';
+  if (/budget|l[ií]mite|limit|exhausted|agotad/i.test(t)) return 'límite alcanzado';
+  return 'falló la ejecución';
+}
+
+function guardCategoryEs(category) {
+  switch (String(category || '')) {
+    case 'missing_tools': return 'faltan pasos requeridos';
+    case 'E_VERIFICATION_REJECTED': return 'la respuesta no cumplía lo pedido';
+    case 'E_VERIFICATION_TIMEOUT': return 'la verificación tardó demasiado';
+    case 'E_CANCELLED': return 'verificación cancelada';
+    default: return 'la verificación pidió ajustes';
+  }
+}
+
 function prettyDomain(url) {
   if (!url) return '';
   try { return new URL(String(url)).hostname.replace(/^www\./, ''); }
@@ -719,6 +856,23 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
  * @param {{ stoppedReason?: string, finalAnswer?: string } | null} result
  * @returns {boolean}
  */
+/**
+ * The AgentRunner's preflight E_PROVIDER for a picked model whose provider
+ * has no connection: «No pude generar el documento. <modelo> no pudo
+ * responder: su conexión no está configurada. …» (owner policy: the model by
+ * its display name and the exact cause). null for any other failure.
+ */
+async function runnerUnconfiguredAnswer(failure, provider, model, prisma = null) {
+  if (!failure || failure.reason !== 'E_PROVIDER') return null;
+  try {
+    const runner = require('./agent-runner');
+    if (typeof runner.runnerUnconfiguredFailureMessage !== 'function') return null;
+    return (await runner.runnerUnconfiguredFailureMessage(runner.runnerModelSpec(provider, model), { prisma })) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function isHandledAgenticChatResult(result) {
   if (!result || typeof result !== 'object') return false;
   const reason = String(result.stoppedReason || '').trim();
@@ -1100,6 +1254,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // RLHF phase-2 few-shot block (already retrieved by /generate). Empty
       // string when steering missed or was skipped. Fail-open: never required.
       preferenceBlock = '',
+      // Live progress of the turn (services/turn-progress, owned by the
+      // route): the loop's model calls become `agent_model` rows. Optional.
+      progress = null,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -1693,7 +1850,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       let answer = null;
       try {
         answer = agentRunnerFailure
-          ? require('./agent-runner').buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail)
+          ? ((await runnerUnconfiguredAnswer(agentRunnerFailure, provider, model, toolContext.prisma || null))
+            || require('./agent-runner').buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail))
           : null;
       } catch (_) { answer = null; }
       answer = answer || GENERATED_DOCUMENT_EDIT_FAILURE_MESSAGE;
@@ -1720,7 +1878,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       try {
         const { isRunnerOnlyDocumentTurn, buildAgentRunnerFailureMessage } = require('./agent-runner');
         runnerOnly = isRunnerOnlyDocumentTurn(userQuery, { priorArtifactFormat });
-        answer = buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
+        // A picked model without a connection: its name and «no configurada».
+        answer = (await runnerUnconfiguredAnswer(agentRunnerFailure, provider, model, toolContext.prisma || null))
+          || buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
       } catch (_) {
         answer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
           + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
@@ -2343,13 +2503,24 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       } catch (_) { /* turn-policy is best-effort */ }
     }
 
+    // Live progress of the loop (decide steps, tickers, agent_model rows,
+    // the guard step, agent_step frames) only for a client that speaks the
+    // stage-v3 protocol: a stale tab (protocol 1) and the kill switch
+    // (SIRAGPT_TURN_PROGRESS=0) keep the previous timeline unchanged.
+    const __liveProgressOn = Boolean(progress && progress.enabled !== false && progress.protocol === 2);
     // Initial sentinel — gives the UI an immediate step indicator even
-    // before the first model call returns.
+    // before the first model call returns. What it says is real: the model
+    // that plans (display name only) and, once known, its tools.
+    // Display name only ('' when none is known: never a raw id).
+    const __liveModelName = turnProgressLib.displayNameFor(model, provider);
+    const __liveModelLabel = __liveModelName || capitalizeFirst(turnProgressLib.modelLabel(model, provider));
     state.steps.push({
       id: 'agentic-start',
-      label: 'Analizando la pregunta',
+      label: __liveProgressOn ? 'Planificando cómo responder' : 'Analizando la pregunta',
       icon: 'thought',
       status: 'running',
+      startedAt: Date.now(),
+      ...(__liveProgressOn && __liveModelName ? { detail: __liveModelName } : {}),
       toolCalls: [],
     });
     await writeSse(res, { replace: true, content: serializeSentinel(state) });
@@ -2703,6 +2874,166 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       };
     }
 
+    // ── Live progress of the loop ──────────────────────────────────────
+    // Every model call is a visible step («Decidiendo el siguiente paso» ·
+    // «paso 2 de 10 · DeepSeek V4 Pro»), with two honest tickers while the
+    // model is silent (12 s: still reasoning; 30 s: slower than usual + the
+    // step's time limit). Timers are unref'd and cleared on the response,
+    // on abort and when the run ends, whatever happens.
+    const __liveTickers = new Set();
+    let __liveModelHandle = null;
+    let __liveGuardHandle = null;
+    const clearLiveTickers = () => {
+      for (const timer of __liveTickers) { try { clearTimeout(timer); } catch (_) { /* noop */ } }
+      __liveTickers.clear();
+    };
+    const writeLiveSentinel = () => { writeSse(res, { replace: true, content: serializeSentinel(state) }); };
+    const liveStepSynthetic = (step) => Boolean(step && step.status === 'running'
+      && (step.id === 'agentic-start' || /-decide$/.test(String(step.id || ''))));
+    const onLiveAbort = () => {
+      clearLiveTickers();
+      try { if (__liveModelHandle) __liveModelHandle.done(); } catch (_) { /* noop */ }
+    };
+    if (__liveProgressOn && signal && typeof signal.addEventListener === 'function') {
+      try { signal.addEventListener('abort', onLiveAbort, { once: true }); } catch (_) { /* noop */ }
+    }
+    const onLiveModelCall = (info) => {
+      try {
+        clearLiveTickers();
+        const stepNo = (Number(info && info.step) || 0) + 1;
+        const maxStepsNo = Number(info && info.maxSteps) || stepNo;
+        const finalizing = Boolean(info && info.finalize);
+        const label = finalizing
+          ? 'Redactando la respuesta final'
+          : (stepNo === 1 ? 'Planificando cómo responder' : 'Decidiendo el siguiente paso');
+        const parts = [];
+        if (!finalizing) parts.push(`paso ${stepNo} de ${maxStepsNo}`);
+        if (__liveModelName) parts.push(__liveModelName);
+        const toolCount = Number(info && info.toolCount) || 0;
+        if (stepNo === 1 && toolCount > 0) parts.push(`${turnProgressLib.fmtInt(toolCount)} ${toolCount === 1 ? 'herramienta disponible' : 'herramientas disponibles'}`);
+        const detail = truncate(parts.join(' · '), LIVE_DETAIL_MAX);
+        let row = state.steps[state.steps.length - 1];
+        if (liveStepSynthetic(row)) {
+          row.label = label;
+          row.detail = detail;
+          if (!row.startedAt) row.startedAt = Date.now();
+        } else {
+          row = {
+            id: `step-${stepNo}-decide`,
+            label,
+            icon: 'thought',
+            status: 'running',
+            startedAt: Date.now(),
+            detail,
+            toolCalls: [],
+          };
+          state.steps.push(row);
+        }
+        writeLiveSentinel();
+        if (progress && typeof progress.begin === 'function') {
+          if (__liveModelHandle) __liveModelHandle.done();
+          __liveModelHandle = progress.begin('agent_model', label, { tool: 'model', detail });
+        }
+        const limitSecs = Math.round((Number(info && info.stepTimeoutMs) || 0) / 1000);
+        const tick = (ms, text) => {
+          const timer = setTimeout(() => {
+            __liveTickers.delete(timer);
+            if (row.status !== 'running' || (signal && signal.aborted)) return;
+            row.detail = truncate(text, LIVE_DETAIL_MAX);
+            writeLiveSentinel();
+            if (__liveModelHandle) __liveModelHandle.update({ detail: row.detail });
+          }, ms);
+          if (timer && typeof timer.unref === 'function') timer.unref();
+          __liveTickers.add(timer);
+        };
+        // A fact, not a guess: the call is not streamed, so all we know at
+        // 12 s is that the model has not answered yet.
+        tick(LIVE_TICK_REASONING_MS, finalizing
+          ? `${__liveModelLabel} sin respuesta todavía`
+          : `${__liveModelLabel} sin respuesta todavía · paso ${stepNo} de ${maxStepsNo}`);
+        tick(LIVE_TICK_SLOW_MS, limitSecs > 0
+          ? `Tarda más de lo habitual · límite del paso ${limitSecs} s`
+          : 'Tarda más de lo habitual');
+      } catch (_) { /* live progress never breaks the loop */ }
+    };
+    const onLiveModelResponse = (info) => {
+      try {
+        clearLiveTickers();
+        const row = state.steps[state.steps.length - 1];
+        const took = turnProgressLib.fmtMs(Number(info && info.durationMs) || 0);
+        let detail;
+        let failed = false;
+        if (info && info.failed) {
+          failed = true;
+          const secs = Math.round((Number(info.stepTimeoutMs) || 0) / 1000);
+          // The exact cause by category, with the model's display name
+          // («DeepSeek V4 Pro no tiene saldo en su proveedor»).
+          // The model that really ran (react-agent may have failed over):
+          // its own display name, or «El modelo» — never another model's.
+          const sameModel = !info.model || String(info.model).trim().toLowerCase() === String(model || '').trim().toLowerCase();
+          const failedName = sameModel
+            ? __liveModelLabel
+            : (turnProgressLib.displayNameFor(info.model) || 'El modelo');
+          const category = info.timedOut ? 'timeout' : info.category;
+          detail = info.aborted
+            ? 'Detenido'
+            : (category && category !== 'unknown'
+              ? turnProgressLib.modelFailureText(failedName, category, {
+                timeoutMs: info.timedOut && secs > 0 ? secs * 1000 : null,
+                retryAfterSeconds: info.retryAfterSeconds,
+              })
+              : `${capitalizeFirst(failedName)} no pudo responder`);
+        } else {
+          detail = describeLiveDecision(Array.isArray(info && info.toolNames) ? info.toolNames : [], took);
+        }
+        if (liveStepSynthetic(row)) {
+          row.status = failed && !(info && info.aborted) ? 'error' : 'done';
+          row.endedAt = Date.now();
+          row.detail = truncate(detail, LIVE_DETAIL_MAX);
+          writeLiveSentinel();
+        }
+        if (__liveModelHandle) {
+          if (failed && !(info && info.aborted)) __liveModelHandle.fail(null, { detail });
+          else __liveModelHandle.done(null, { detail });
+          __liveModelHandle = null;
+        }
+      } catch (_) { /* live progress never breaks the loop */ }
+    };
+    const onLiveGuard = (info) => {
+      try {
+        const phase = info && info.phase;
+        if (phase === 'start') {
+          state.steps.push({
+            id: `step-${(Number(info.step) || 0) + 1}-verify-${state.steps.length}`,
+            label: 'Verificando que la respuesta cumpla lo pedido',
+            icon: 'thought',
+            status: 'running',
+            startedAt: Date.now(),
+            toolCalls: [],
+          });
+          writeLiveSentinel();
+          if (progress && typeof progress.begin === 'function') {
+            __liveGuardHandle = progress.begin('agent_model', 'Verificando que la respuesta cumpla lo pedido', { tool: 'verify' });
+          }
+          return;
+        }
+        const row = [...state.steps].reverse().find((s) => s && s.status === 'running' && /-verify-\d+$/.test(String(s.id || '')));
+        const label = phase === 'pass'
+          ? 'Verificación superada'
+          : (phase === 'repair' ? `Corrigiendo: ${guardCategoryEs(info && info.category)}` : 'Verificación detenida');
+        if (row) {
+          row.status = 'done';
+          row.endedAt = Date.now();
+          row.label = label;
+          writeLiveSentinel();
+        }
+        if (__liveGuardHandle) {
+          __liveGuardHandle.done(label);
+          __liveGuardHandle = null;
+        }
+      } catch (_) { /* live progress never breaks the loop */ }
+    };
+
     let result;
     try {
       result = await reactAgent.run(openai, {
@@ -2745,6 +3076,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         onCompact: ({ step, removedMessages, chars }) => {
           try { console.log(`[agentic-chat] trace compacted at step ${step}: -${removedMessages} msgs, ${chars} chars`); } catch (_) {}
         },
+        onModelCall: __liveProgressOn ? onLiveModelCall : null,
+        onModelResponse: __liveProgressOn ? onLiveModelResponse : null,
+        onGuard: __liveProgressOn ? onLiveGuard : null,
         onStepStart: async (stepRec) => {
         // Harness first (synchronous prefix): registers the step's planned
         // tool calls and emits typed tool_call_start frames BEFORE the
@@ -2753,7 +3087,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         stepCounter += 1;
         // Mark the previous synthetic step done.
         const last = state.steps[state.steps.length - 1];
-        if (last && last.status === 'running') last.status = 'done';
+        if (last && last.status === 'running') {
+          last.status = 'done';
+          if (!last.endedAt) last.endedAt = Date.now();
+        }
 
         // The model's natural-language reasoning for this step. Surfacing it
         // (instead of only a terse "Pensando" / tool label) is what makes the
@@ -2777,6 +3114,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           actions.forEach((a, idx) => {
             const args = safeArgs(a?.args);
             const label = stageLabelFor(a?.tool, args);
+            const detail = __liveProgressOn ? liveArgsDetail(args, label) : '';
             state.steps.push({
               id: `step-${stepCounter}-${idx}`,
               label,
@@ -2785,10 +3123,21 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               // so the "why" sits next to the "what".
               ...(idx === 0 && reasoning ? { reasoning } : {}),
               status: 'running',
+              startedAt: Date.now(),
+              ...(detail ? { detail } : {}),
               toolCalls: [{ tool: a?.tool || 'unknown' }],
             });
-            // Lightweight stage event for any consumer that listens.
-            writeSse(res, { type: 'stage', label, tool: a?.tool || 'unknown', ...(idx === 0 && reasoning ? { reasoning } : {}) });
+            // Lightweight stage event for any consumer that listens. The
+            // `agent_step` phase keeps it on AgenticSteps / AgentTrace (never
+            // a second timeline); no callId, so the bubble keeps its renderer.
+            writeSse(res, {
+              type: 'stage',
+              label,
+              tool: a?.tool || 'unknown',
+              ...(__liveProgressOn ? { phase: 'agent_step' } : {}),
+              ...(detail ? { detail } : {}),
+              ...(idx === 0 && reasoning ? { reasoning } : {}),
+            });
           });
         }
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
@@ -2810,6 +3159,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             const obs = a?.observation || {};
             const ok = !obs?.error;
             s.status = ok ? 'done' : 'error';
+            s.endedAt = Date.now();
+            const resultDetail = !__liveProgressOn ? ''
+              : (ok ? liveResultDetail(obs) : `Error: ${liveErrorCategory(extractObservationError(obs))}`);
+            if (resultDetail) s.detail = truncate(resultDetail, LIVE_DETAIL_MAX);
             if (ok) {
               s.toolCalls[0].output = { ok };
             } else {
@@ -2858,6 +3211,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         try { await pluginLifecycle.error(agentRunError, { phase: 'run' }); } catch (_) { /* plugin telemetry must not mask the run error */ }
       }
       throw agentRunError;
+    } finally {
+      clearLiveTickers();
+      if (signal && typeof signal.removeEventListener === 'function') {
+        try { signal.removeEventListener('abort', onLiveAbort); } catch (_) { /* noop */ }
+      }
+      try { if (__liveModelHandle) __liveModelHandle.done(); } catch (_) { /* noop */ }
+      try { if (__liveGuardHandle) __liveGuardHandle.done(); } catch (_) { /* noop */ }
+      __liveModelHandle = null;
+      __liveGuardHandle = null;
     }
 
     let deliveryReleaseBlocked = false;
@@ -2893,7 +3255,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // Mark any leftover running steps as done — react-agent guarantees a
     // finalize on the last step, but defensive coding keeps stale running
     // states from leaking into the persisted sentinel.
-    for (const s of state.steps) if (s.status === 'running') s.status = 'done';
+    for (const s of state.steps) {
+      if (s.status !== 'running') continue;
+      s.status = 'done';
+      if (!s.endedAt) s.endedAt = Date.now();
+    }
     state.done = true;
 
     let finalAnswer = (result?.finalAnswer || '').trim()
@@ -3050,6 +3416,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       steps: result?.steps || [],
       artifacts: state.artifacts,
       agentRun,
+      // The provider error that ended the loop ({status, code, message,
+      // reason}): the route closes a dry / rejected provider honestly with
+      // the model's name and the cause (agentic-degrade-policy).
+      modelError: result?.modelError || null,
     };
   }
 

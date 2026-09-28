@@ -169,3 +169,33 @@ test('requirePaidPlan: fails closed when a subscription exists without a known s
   assert.equal(ctx.res.jsonBody.subscriptionStatus, 'unknown');
 });
 
+
+test('requirePaidPlan: the 402 copy is Spanish, keeps the codes and points to /planes', () => {
+  const ctx = makeReqRes({ user: { id: 'u1', plan: 'FREE' } });
+  requirePaidPlan({ feature: 'image_generation' })(ctx.req, ctx.res, ctx.next);
+  const body = ctx.res.jsonBody;
+  assert.equal(ctx.res.statusCode, 402);
+  assert.equal(body.code, 'UPGRADE_REQUIRED');
+  assert.deepEqual(body.requiredPlans, DEFAULT_PAID_PLANS);
+  assert.equal(body.upgradeRequired, true);
+  assert.equal(body.upgradeUrl, '/planes');
+  // The composer's matcher lowercases the text and looks for «sube de plan».
+  assert.match(body.error, /sube de plan/i);
+  assert.equal(body.message, body.error);
+  assert.match(body.error, /imágenes/);
+});
+
+test('requirePaidPlan: an inactive subscription is told to renew', () => {
+  const ctx = makeReqRes({
+    user: { id: 'u2', plan: 'PRO', stripeSubscriptionId: 'sub_x', subscriptionStatus: 'past_due' },
+  });
+  requirePaidPlan({ feature: 'video_generation' })(ctx.req, ctx.res, ctx.next);
+  const body = ctx.res.jsonBody;
+  assert.equal(ctx.res.statusCode, 402);
+  assert.equal(body.code, 'UPGRADE_REQUIRED');
+  assert.equal(body.reason, 'SUBSCRIPTION_INACTIVE');
+  assert.match(body.error, /renueva/i);
+  assert.match(body.error, /sube de plan/i);
+  assert.match(body.error, /video/);
+  assert.equal(body.upgradeUrl, '/planes');
+});

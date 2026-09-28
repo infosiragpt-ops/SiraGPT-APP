@@ -73,6 +73,8 @@ async function resumeCheckpointedTasks({
         files: snapshot.fileIds || [],
         chatId: snapshot.chatId || null,
         model: snapshot.model || 'gpt-4o',
+        // A picked model stays picked across a server restart.
+        modelPinned: snapshot.modelPinned === true,
         maxSteps: snapshot.maxSteps || 60,
         maxRuntimeMs: snapshot.maxRuntimeMs || 2 * 60 * 60 * 1000,
         documentPolicy: snapshot.documentPolicy || null,

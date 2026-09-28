@@ -123,6 +123,60 @@ test('buildRuntimeContext indexes docs and builds a cited evidence block', async
   assert.equal(rag.calls.retrieve[0].opts.useGraph, true);
 });
 
+test('buildRuntimeContext reports real progress (index → retrieve with counts), and nothing when it does not run', async () => {
+  const events = [];
+  const rag = fakeRag();
+  await runtime.buildRuntimeContext({
+    rag,
+    userId: 'u1',
+    chatId: 'chat1',
+    prompt: 'Resume el documento adjunto con citas.',
+    processedFiles: [
+      { id: 'doc1', originalName: 'Doc One', mimeType: 'application/pdf', extractedText: 'Alpha evidence '.repeat(80) },
+    ],
+    onProgress: (ev) => events.push(ev),
+  });
+  const types = events.map((e) => e.type);
+  assert.deepEqual(types.filter((t) => t !== 'graph_start' && t !== 'graph_query'), ['index_start', 'index_done', 'retrieve_start', 'retrieve_done']);
+  assert.deepEqual(events[0], { type: 'index_start', files: 1, file: 'Doc One' });
+  assert.equal(events.find((e) => e.type === 'index_done').chunksAdded, 1);
+  const done = events.find((e) => e.type === 'retrieve_done');
+  assert.equal(done.hits, 1);
+  assert.equal(done.docs, 1);
+  // Structured facts only: never the document text.
+  assert.doesNotMatch(JSON.stringify(events), /Alpha evidence/);
+
+  // Already indexed: no «Indexando», still the real retrieval.
+  const again = [];
+  await runtime.buildRuntimeContext({
+    rag,
+    userId: 'u1',
+    chatId: 'chat1',
+    prompt: 'Resume el documento adjunto con citas.',
+    processedFiles: [
+      { id: 'doc1', originalName: 'Doc One', mimeType: 'application/pdf', extractedText: 'Alpha evidence '.repeat(80) },
+    ],
+    onProgress: (ev) => again.push(ev),
+  });
+  assert.equal(again.some((e) => e.type === 'index_start'), false);
+  assert.ok(again.some((e) => e.type === 'retrieve_start'));
+
+  // A turn that needs no retrieval emits nothing; a throwing sink changes nothing.
+  const none = [];
+  const out = await runtime.buildRuntimeContext({
+    rag: fakeRag(),
+    userId: 'u1',
+    chatId: 'chat1',
+    prompt: 'Hola, escribe una frase creativa.',
+    processedFiles: [
+      { id: 'doc1', originalName: 'Doc One', mimeType: 'application/pdf', extractedText: 'Small but valid text '.repeat(10) },
+    ],
+    onProgress: (ev) => { none.push(ev); throw new Error('sink'); },
+  });
+  assert.equal(out.active, false);
+  assert.deepEqual(none, []);
+});
+
 test('buildRuntimeContext stays inactive for prompts unrelated to files when docs are small', async () => {
   const rag = fakeRag();
   const out = await runtime.buildRuntimeContext({

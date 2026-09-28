@@ -383,16 +383,24 @@ async function enrichWithWebSearch(prompt, opts = {}) {
   const dedicated = mode === 'dedicated';
   const directUrlGrounding = opts.directUrlGrounding === true;
   const directUrls = directUrlGrounding ? extractHttpUrls(prompt) : [];
+  // Optional `opts.onOutcome('ok' | 'empty' | 'failed')`: this function
+  // degrades to null on provider errors, so a caller that tells the user what
+  // happened (the chat's live progress) needs to know a failure from a search
+  // that found nothing. Advisory: a throwing callback changes nothing.
+  const outcome = (value) => {
+    if (typeof opts.onOutcome !== 'function') return;
+    try { opts.onOutcome(value); } catch (_) { /* advisory */ }
+  };
   if (!webSearchPlanned(prompt, opts)) return null;
 
   if (directUrlGrounding) {
     const githubContext = await buildGitHubRepositoryContext(prompt, opts);
-    if (githubContext) return githubContext;
+    if (githubContext) { outcome('ok'); return githubContext; }
   }
 
   if (directUrlGrounding && directUrls.length > 0) {
     const directContext = await buildDirectUrlContext(prompt, opts);
-    if (directContext) return directContext;
+    if (directContext) { outcome('ok'); return directContext; }
     // If a page rejects extraction (blocked host, unsupported content,
     // timeout), continue through search instead of dropping all grounding.
   }
@@ -420,7 +428,11 @@ async function enrichWithWebSearch(prompt, opts = {}) {
       includeScientific: opts.includeScientific,
     });
 
-    if (!results?.results?.length) return null;
+    if (!results?.results?.length) {
+      const failed = Number(results?.responded || 0) === 0 && Array.isArray(results?.errors) && results.errors.length > 0;
+      outcome(failed ? 'failed' : 'empty');
+      return null;
+    }
 
     const sliced = results.results.slice(0, sliceCount);
     const tally = { verified: 0, unverified: 0, inferred: 0 };
@@ -462,6 +474,7 @@ async function enrichWithWebSearch(prompt, opts = {}) {
       `Resumen de fuentes — verificadas: ${tally.verified || 0}, sin verificar: ${tally.unverified || 0}, ` +
       `inferidas: ${tally.inferred || 0}.`;
 
+    outcome('ok');
     return {
       source: results.provider,
       query: searchQuery.slice(0, 200),
@@ -482,6 +495,7 @@ async function enrichWithWebSearch(prompt, opts = {}) {
     // without web context), but log the outage so it's observable — a silent
     // provider failure otherwise drops grounding on every turn with no trace.
     try { console.warn('[web-search] enrichment failed (continuing without):', err && err.message ? err.message : err); } catch (_) { /* never let logging throw */ }
+    outcome('failed');
     return null;
   }
 }
@@ -590,6 +604,9 @@ module.exports = {
   getTracer,
   embedTexts,
   resetOrchestrationCache,
+  // The query a web search really runs (URLs reduced to their origin) — the
+  // live-progress label shows this, never the raw prompt with private URLs.
+  sanitizeWebSearchQuery,
   toOpenAIResponseFormat,
   webSearchPlanned,
 };

@@ -148,3 +148,63 @@ test('frontend remappers only collapse true connection_unavailable, not timeout 
   assert.equal(PROVIDER_UNAVAILABLE_MESSAGE.includes('conexión no disponible'), false);
   assert.equal(PROVIDER_UNAVAILABLE_MESSAGE.includes('/conexiones'), false);
 });
+
+// ── Owner policy: transparent «sin saldo» (never the provider's text) ──
+
+test('an empty account maps to E_PROVIDER with the «sin saldo» copy, not the raw provider text', () => {
+  const { PROVIDER_NO_CREDIT_MESSAGE } = require('../src/services/ai/generate-sse-close');
+  const billing = require('../src/services/ai/billing-failover');
+  assert.equal(PROVIDER_NO_CREDIT_MESSAGE, billing.buildFailureMessage({ reason: 'billing' }));
+  const cases = [
+    { status: 402, message: 'Insufficient credits. Add more using https://openrouter.ai/settings/credits' },
+    { message: 'Your credit balance is too low to access the Anthropic API.' },
+    { status: 403, message: 'You have used all available credits for this team. sk-live-xyz' },
+    { status: 402, message: 'Insufficient Balance' },
+  ];
+  for (const err of cases) {
+    const out = classifyGenerateError(err);
+    assert.equal(out.code, 'E_PROVIDER', JSON.stringify(err));
+    assert.equal(out.message, PROVIDER_NO_CREDIT_MESSAGE);
+    assert.match(out.message, /saldo/);
+    assert.match(out.message, /No cambié de modelo/);
+    assert.doesNotMatch(out.message, /openrouter|sk-|credit balance|Insufficient/i);
+  }
+});
+
+test('a rate limit or a per-minute quota window is never «sin saldo»', () => {
+  const { PROVIDER_NO_CREDIT_MESSAGE } = require('../src/services/ai/generate-sse-close');
+  const rate = classifyGenerateError({ status: 429, message: 'Rate limit reached for requests' });
+  assert.notEqual(rate.message, PROVIDER_NO_CREDIT_MESSAGE);
+  assert.doesNotMatch(rate.message, /saldo/);
+
+  const gemini = classifyGenerateError({
+    status: 429,
+    message: 'You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric generate_content_free_tier_requests. Please retry in 29.3s.',
+  });
+  assert.doesNotMatch(gemini.message, /saldo/);
+});
+
+test('an annotated error gets the 100% transparent copy (model + cause), code unchanged', () => {
+  const err = Object.assign(new Error('429 quota'), {
+    status: 429,
+    siraFailureReason: 'rate_limit',
+    siraRetryAfterSeconds: 29,
+    siraModelLabel: 'Gemini 2.5 Flash',
+  });
+  const out = classifyGenerateError(err);
+  assert.equal(out.code, 'E_PROVIDER');
+  assert.equal(
+    out.message,
+    'Gemini 2.5 Flash no pudo responder: su proveedor alcanzó el límite de solicitudes por minuto. Espera 29 s y vuelve a intentarlo. No cambié de modelo.',
+  );
+
+  // Gemini's per-minute text also matches the billing wording: the annotated
+  // cause wins over the «sin saldo» mapping.
+  const window = Object.assign(new Error('You exceeded your current quota'), { status: 429, siraFailureReason: 'rate_limit' });
+  assert.match(classifyGenerateError(window).message, /límite de solicitudes por minuto/);
+
+  const timeout = Object.assign(new Error('First-byte timeout after 45000ms'), { siraFailureReason: 'unavailable', siraModelLabel: 'Grok 4.7' });
+  const t = classifyGenerateError(timeout);
+  assert.equal(t.code, 'E_TIMEOUT');
+  assert.match(t.message, /^Grok 4\.7 no pudo responder: su proveedor no está respondiendo ahora\./);
+});

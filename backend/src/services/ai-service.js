@@ -238,6 +238,29 @@ function isTransientProviderError(err) {
     return classifyProviderError(err).retryable === true;
 }
 
+// Live progress (services/turn-progress): when the timeline says a model
+// has not answered yet, while it still may.
+const WAITING_NOTICE_MS = [8000, 20000];
+
+// Category of a failed model attempt for the live timeline — the cause the
+// user is told (sin saldo, clave rechazada, límite por minuto, no responde…),
+// never the provider's own error text. Shared with the agentic loop.
+const {
+    failureCategoryOf: progressFailureCategory,
+    retryAfterSecondsOf,
+    effectiveThinkingLevel,
+} = require('./turn-progress');
+
+/** quality-guard verdict reason → the category the timeline explains. */
+function qualityReasonCategory(reason) {
+    const r = String(reason || '');
+    if (/^too-short/.test(r)) return 'too_short';
+    if (/^refusal/.test(r)) return 'refusal';
+    if (r === 'empty' || r === 'punctuation-only') return 'empty';
+    if (/thin$/.test(r)) return 'thin';
+    return null;
+}
+
 function currentThinkingLevel() {
     return process.env.SIRA_THINKING_LEVEL || process.env.DEEPSEEK_V4_THINKING || 'high';
 }
@@ -261,6 +284,33 @@ function normalizeTemperature(value, fallback = 0.55) {
  * and no content has been streamed yet. Uses the resolved response
  * language so the user isn't suddenly spoken to in English mid-chat.
  */
+/**
+ * generateStream's `modelLabel`: a display name, or a getter returning one (or
+ * a Promise of one). The getter is only called on failure and waited for at
+ * most MODEL_LABEL_WAIT_MS. Never throws; '' when unknown.
+ */
+const MODEL_LABEL_WAIT_MS = 400;
+async function resolveModelLabelOption(option) {
+    try {
+        const value = typeof option === 'function' ? option() : option;
+        if (value && typeof value.then === 'function') {
+            let timer = null;
+            const settled = await Promise.race([
+                Promise.resolve(value).catch(() => ''),
+                new Promise((resolve) => {
+                    timer = setTimeout(() => resolve(''), MODEL_LABEL_WAIT_MS);
+                    if (timer && typeof timer.unref === 'function') timer.unref();
+                }),
+            ]);
+            if (timer) clearTimeout(timer);
+            return String(settled || '').trim();
+        }
+        return String(value || '').trim();
+    } catch {
+        return '';
+    }
+}
+
 function getFallbackMessage(language) {
     // Phrasing from the siraGPT brain spec — kept identical to what the
     // product promises, translated per language-policy resolution. No
@@ -647,12 +697,17 @@ class AIService {
             prepareImage: (p, mime) => this.prepareImageForVision(p, mime),
             getClient: (p) => this.getClient(p),
             normalizeModel: (p, m) => normalizeModelForProvider(p, m),
+            // A picked vision model is the only runtime (owner policy).
+            pinned: opts.pinned === true,
         });
         if (result.text) {
             console.log(`[image-vision] answered with ${result.provider}:${result.model}`);
         } else if (result.attempts.length) {
             console.warn(`[image-vision] no vision runtime answered (${result.attempts.length} attempt(s))`);
         }
+        // `detailed`: the whole outcome (the picked model's error included)
+        // for callers that report its exact cause.
+        if (opts.detailed === true) return { ...result, provider: result.provider || provider, model: result.model || model };
         return result.text || '';
     }
 
@@ -689,7 +744,11 @@ class AIService {
         return out.text;
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null, onModelFailover = null, modelLabel = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null, onModelFailover = null, modelLabel = null, onProgress = null }) {
+        // Live progress (services/turn-progress modelSink): structured events
+        // only — the Spanish labels are built by the sink. Synchronous, never
+        // awaited, and a throwing sink never touches the stream.
+        const progress = (ev) => { try { if (typeof onProgress === 'function') onProgress(ev); } catch (_) { /* advisory */ } };
         // The route hands us a client for the provider it resolved. When an
         // image turn has to leave a text-only model, `provider` changes below;
         // that client must then NOT be reused (live 2026-09-02: Meta's client
@@ -743,6 +802,8 @@ class AIService {
         }
         let fullResponseContent = '';
         let hasStreamedAnyContent = false;
+        // The model the last attempt ran on (live progress «failed» row).
+        let lastAttemptModel = model;
         const normalizedTemperature = normalizeTemperature(temperature);
 
         // Heartbeat: SSE comment line sent every 15s so intermediaries
@@ -769,6 +830,9 @@ class AIService {
         // in the gap. Best-effort: silent fallback on any failure keeps
         // us on the original breadcrumb.
         if (fit.droppedCount > 0 && Array.isArray(fit.droppedMessages) && fit.droppedMessages.length > 0) {
+            progress({ type: 'summarize_history', messages: fit.droppedMessages.length });
+            let summaryApplied = false;
+            let summaryReason = null;
             try {
                 const summaryResult = await attachConversationSummary({
                     messages: workingMessages,
@@ -777,13 +841,16 @@ class AIService {
                     language,
                     anthropicClient: getAnthropicSummarizerClient(),
                 });
+                summaryReason = summaryResult.reason || null;
                 if (summaryResult.applied) {
+                    summaryApplied = true;
                     workingMessages = summaryResult.messages;
                     console.log(`📚 conversation summary: applied reason=${summaryResult.reason} dropped=${fit.droppedCount}`);
                 } else if (summaryResult.reason && summaryResult.reason !== 'no_breadcrumb' && summaryResult.reason !== 'no_dropped') {
                     console.log(`📚 conversation summary: skipped reason=${summaryResult.reason}`);
                 }
-            } catch (_summarizerErr) { /* keep the original breadcrumb */ }
+            } catch (_summarizerErr) { summaryReason = 'summarizer_error'; /* keep the original breadcrumb */ }
+            progress({ type: 'summarize_done', applied: summaryApplied, reason: summaryReason });
         }
 
         // Anthropic prompt-cache hook. When the caller supplied
@@ -817,6 +884,11 @@ class AIService {
 
                 if (imageFiles.length > 0) {
                     console.log(`📸 Processing ${imageFiles.length} image(s) for vision API`);
+                    progress({
+                        type: 'vision_prep',
+                        files: imageFiles.length,
+                        name: imageFiles[0] ? (imageFiles[0].originalName || imageFiles[0].name || '') : '',
+                    });
 
                     const lastMessage = workingMessages[workingMessages.length - 1];
                     const textContent = typeof lastMessage.content === 'string'
@@ -849,24 +921,41 @@ class AIService {
                     ];
 
                     // Add all images to the content
+                    let failedImageName = '';
                     for (const imageFile of imageFiles) {
                         const imageContent = await this.prepareImageForVision(imageFile.path, imageAttachmentVision.imageMimeFor(imageFile));
                         if (imageContent) {
                             contentArray.push(imageContent);
                             console.log(`✅ Added image to vision API: ${imageFile.name}`);
-                        } else if (res && typeof res === 'object') {
-                            // The turn-outcome guard in the generate route reads
-                            // this to explain an empty turn as a lost attachment.
-                            res.locals = res.locals || {};
-                            res.locals.imageLoadFailures = (res.locals.imageLoadFailures || 0) + 1;
+                        } else {
+                            if (!failedImageName) failedImageName = imageFile.originalName || imageFile.name || '';
+                            if (res && typeof res === 'object') {
+                                // The turn-outcome guard in the generate route reads
+                                // this to explain an empty turn as a lost attachment.
+                                res.locals = res.locals || {};
+                                res.locals.imageLoadFailures = (res.locals.imageLoadFailures || 0) + 1;
+                            }
                         }
                     }
+                    // Live progress: what really reaches the model — the timeline
+                    // never says «Imagen lista» for an image that failed to load
+                    // or was removed because no runtime can see it.
+                    const loadedImages = contentArray.filter((part) => part.type === 'image_url').length;
+                    const visionReady = (stripped) => progress({
+                        type: 'vision_ready',
+                        model,
+                        requested: imageFiles.length,
+                        loaded: loadedImages,
+                        stripped,
+                        failedName: failedImageName,
+                    });
 
                     if (contentArray.some(part => part.type === 'image_url')) {
                         const visionRuntime = selectVisionRuntime(provider, model);
                         if (shouldAttachVisionContent(provider, model, visionRuntime)) {
                             if (visionRuntime.switched) {
                                 console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
+                                progress({ type: 'vision_switch', from: model, to: visionRuntime.model });
                                 provider = visionRuntime.provider;
                                 model = visionRuntime.model;
                                 visionSwitched = true;
@@ -883,7 +972,9 @@ class AIService {
                                     .filter((m) => m && m !== model);
                             }
                             lastMessage.content = contentArray;
+                            visionReady(0);
                         } else {
+                            visionReady(loadedImages);
                             const imageCount = contentArray.filter(p => p.type === 'image_url').length;
                             const imageNames = imageFiles.map(f => f.name || f.originalName || 'imagen').join(', ');
                             console.warn(`[vision] No vision-capable model available for ${provider}:${model} — stripping ${imageCount} image(s) from message`);
@@ -893,6 +984,7 @@ class AIService {
                         }
                     } else {
                         lastMessage.content = contentArray;
+                        visionReady(0);
                     }
                 }
             }
@@ -952,6 +1044,9 @@ class AIService {
             // firstFailure is the picked model's own (rung 0) failure.
             let lastFailure = null;
             let firstFailure = null;
+            // Live progress: why the previous rung failed (for the failover
+            // row) and which model the last attempt ran on.
+            let lastFailCategory = null;
             // Causes that are about the provider, not the image: a picked
             // model failing for one of them keeps its provider, the other
             // vision runtimes are not walked.
@@ -1033,8 +1128,23 @@ class AIService {
                     toolChoice: isTrivial ? 'none' : toolChoice,
                 });
                 const payload = providerPayload.payload;
+                // The reasoning level this rung really sends (live progress):
+                // disabled, the user's explicit level when a knob carries it,
+                // else nothing is claimed.
+                const sentThinking = effectiveThinkingLevel(payload, {
+                    level: turnThinkingLevel,
+                    disabled: thinkingDisabled,
+                    explicit: Boolean(thinkingLevelExplicit) && !thinkingDisabled
+                        && String(turnThinkingLevel) === String(thinkingLevel),
+                });
 
                 if (hasStreamedAnyContent) break;
+
+                // The previous rung could not answer and this one takes over:
+                // the timeline closes its row with the cause and opens the next.
+                if (m > 0) {
+                    progress({ type: 'failover', from: modelChain[m - 1], to: currentModel, reason: lastFailCategory || 'unavailable' });
+                }
 
                 // A rung already memoised as unfunded (no credit, or a 401
                 // key) is not called again: straight to the next candidate.
@@ -1044,11 +1154,23 @@ class AIService {
                 if (skipUnfunded) {
                     lastError = billingFailoverMod.unfundedMemoError(currentProvider);
                     lastFailure = { provider: currentProvider, model: currentModel, timedOut: false };
+                    lastFailCategory = billingFailoverMod.unfundedReason(currentProvider) || 'billing';
+                    lastAttemptModel = currentModel;
                     console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} omitido (sin saldo o clave rechazada, memo activo)`);
                 }
 
                 for (let attempt = 1; !skipUnfunded && attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
                     if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+                    lastAttemptModel = currentModel;
+                    progress({
+                        type: 'attempt_start',
+                        model: currentModel,
+                        attempt,
+                        maxAttempts: MAX_ATTEMPTS_PER_MODEL,
+                        slot: m + 1,
+                        slots: modelChain.length,
+                        thinking: sentThinking,
+                    });
 
                     // Per-attempt controller: composes the client signal with a
                     // 30s first-byte timer. If the provider hasn't emitted a
@@ -1063,6 +1185,40 @@ class AIService {
                     const firstByteTimer = setTimeout(() => {
                         if (!firstByteSeen) { timedOut = true; attemptCtrl.abort(new Error(`First-byte timeout after ${FIRST_BYTE_TIMEOUT_MS}ms`)); }
                     }, FIRST_BYTE_TIMEOUT_MS);
+                    // Silence before the first byte is told with facts: at 8 s
+                    // and 20 s the timeline says the model has not answered
+                    // yet and when the automatic retry happens. unref'd, and
+                    // cleared on the first byte / abort / attempt end.
+                    const attemptStartedAt = Date.now();
+                    const waitTimers = WAITING_NOTICE_MS
+                        .filter((ms) => ms < FIRST_BYTE_TIMEOUT_MS)
+                        .map((ms) => {
+                            const timer = setTimeout(() => {
+                                if (firstByteSeen || attemptCtrl.signal.aborted) return;
+                                progress({
+                                    type: 'waiting',
+                                    model: currentModel,
+                                    attempt,
+                                    maxAttempts: MAX_ATTEMPTS_PER_MODEL,
+                                    waitedMs: ms,
+                                    timeoutMs: FIRST_BYTE_TIMEOUT_MS,
+                                    willRetry: attempt < MAX_ATTEMPTS_PER_MODEL || m < modelChain.length - 1,
+                                    // What happens at the limit: the same model
+                                    // again, or the next one of the chain.
+                                    retrySameModel: attempt < MAX_ATTEMPTS_PER_MODEL,
+                                    nextModel: attempt >= MAX_ATTEMPTS_PER_MODEL && m < modelChain.length - 1
+                                        ? modelChain[m + 1]
+                                        : null,
+                                });
+                            }, ms);
+                            if (timer && typeof timer.unref === 'function') timer.unref();
+                            return timer;
+                        });
+                    const clearWaitTimers = () => { for (const timer of waitTimers) clearTimeout(timer); };
+                    const noteFirstByte = (kind) => {
+                        clearWaitTimers();
+                        progress({ type: 'first_byte', model: currentModel, kind, ms: Date.now() - attemptStartedAt });
+                    };
 
                     try {
                         const attemptClient = resolveAttemptClient(currentProvider, currentModel);
@@ -1157,6 +1313,7 @@ class AIService {
                             if (reasoningChunk && !firstByteSeen) {
                                 firstByteSeen = true;
                                 clearTimeout(firstByteTimer);
+                                noteFirstByte('reasoning');
                             }
                             // Claude-style thinking trace: forward the reasoning
                             // delta as a typed frame. The payload key is
@@ -1191,7 +1348,7 @@ class AIService {
                                 }
                             }
                             if (contentChunk) {
-                                if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); }
+                                if (!firstByteSeen) { firstByteSeen = true; clearTimeout(firstByteTimer); noteFirstByte('content'); }
                                 // First visible token closes the thinking phase.
                                 await emitReasoningDone();
                                 if (billingFailover && billingFailover.noticePending && billingFailover.to.model === currentModel) {
@@ -1249,6 +1406,7 @@ class AIService {
                             const verdict = evaluateResponse({ response: fullResponseContent, userPrompt });
                             if (verdict.weak) {
                                 console.warn(`🧪 quality-guard flagged: ${verdict.reason} — running corrective pass`);
+                                progress({ type: 'quality_pass', reason: qualityReasonCategory(verdict.reason) });
                                 const corrected = await this._runCorrectivePass({
                                     provider: currentProvider,
                                     model: currentRuntimeModel,
@@ -1261,7 +1419,8 @@ class AIService {
                                 const cleanCorrected = (corrected || '').trim();
                                 const correctedVerdict = evaluateResponse({ response: cleanCorrected, userPrompt });
                                 const longEnoughToReplace = cleanCorrected.length >= Math.max(40, Math.floor(fullResponseContent.trim().length * 0.8));
-                                if (cleanCorrected && !correctedVerdict.weak && longEnoughToReplace) {
+                                const qualityReplaced = Boolean(cleanCorrected && !correctedVerdict.weak && longEnoughToReplace);
+                                if (qualityReplaced) {
                                     const replacement = billingFailover && billingFailover.to.model === currentModel
                                         && !cleanCorrected.startsWith(billingFailover.noticeText.trim())
                                         ? `${billingFailover.noticeText}${cleanCorrected}`
@@ -1269,6 +1428,7 @@ class AIService {
                                     res.write(`data: ${JSON.stringify({ replace: true, content: replacement })}\n\n`);
                                     fullResponseContent = replacement;
                                 }
+                                progress({ type: 'quality_done', replaced: qualityReplaced });
                             }
                         }
 
@@ -1295,6 +1455,8 @@ class AIService {
                         // shorted. Don't waste retries here — fall straight to
                         // the next model in the chain.
                         if (err instanceof CircuitBreakerError) {
+                            lastFailCategory = 'breaker';
+                            progress({ type: 'attempt_failed', model: currentModel, attempt, maxAttempts: MAX_ATTEMPTS_PER_MODEL, category: 'breaker', willRetry: false });
                             console.warn(`⚡ ${currentProvider}:${currentModel} breaker OPEN (next probe at ${err.nextAttemptAt.toISOString()}) — skipping to fallback`);
                             break;
                         }
@@ -1303,6 +1465,17 @@ class AIService {
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
                         const classified = classifyProviderError(err);
                         const reason = isOurTimeout ? 'first-byte timeout' : (classified.error_class || err.status || err.code || err.name || 'unknown');
+                        lastFailCategory = progressFailureCategory(err, { timedOut: isOurTimeout, classified });
+                        progress({
+                            type: 'attempt_failed',
+                            model: currentModel,
+                            attempt,
+                            maxAttempts: MAX_ATTEMPTS_PER_MODEL,
+                            category: lastFailCategory,
+                            willRetry: retryable && !isLastAttemptForModel,
+                            timeoutMs: isOurTimeout ? FIRST_BYTE_TIMEOUT_MS : null,
+                            retryAfterSeconds: retryAfterSecondsOf(err),
+                        });
                         console.warn(`⚠️ ${currentProvider}:${currentRuntimeModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
                         noteTurnContext('provider_attempt_failed', {
                             provider: currentProvider,
@@ -1320,6 +1493,7 @@ class AIService {
                         await new Promise(r => setTimeout(r, backoff));
                     } finally {
                         clearTimeout(firstByteTimer);
+                        clearWaitTimers();
                         if (signal) signal.removeEventListener('abort', onParentAbort);
                     }
                 }
@@ -1454,6 +1628,14 @@ class AIService {
                 return fullResponseContent;
             }
             console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
+            if (!hasStreamedAnyContent) {
+                progress({
+                    type: 'failed',
+                    model: lastAttemptModel,
+                    category: apiError?.siraFailureReason || progressFailureCategory(apiError, { timedOut: false }),
+                    retryAfterSeconds: apiError?.siraRetryAfterSeconds ?? null,
+                });
+            }
 
             // RLHF implicit signal: the caller (generate route) feeds this
             // failure into routing-feedback + sira_rlhf_* telemetry. Advisory,
@@ -1511,9 +1693,15 @@ class AIService {
                 // segundos). The code stays the classified one (E_PROVIDER).
                 // The picker's display name wins, except when a text-only
                 // pick was routed to a vision runtime (that runtime failed).
+                // `modelLabel` may be a getter (string | Promise<string>) so
+                // the caller's display-name lookup stays off the first-byte
+                // path: it is only awaited here, on failure, and bounded.
+                const pickedLabel = !mini && apiError?.siraFailureReason && !visionSwitched
+                    ? await resolveModelLabelOption(modelLabel)
+                    : '';
                 const transparent = !mini && apiError?.siraFailureReason
                     ? require('./ai/billing-failover').buildFailureMessage({
-                        modelLabel: (!visionSwitched && String(modelLabel || '').trim()) || apiError.siraModelLabel || '',
+                        modelLabel: pickedLabel || apiError.siraModelLabel || '',
                         reason: apiError.siraFailureReason,
                         retryAfterSeconds: apiError.siraRetryAfterSeconds,
                     })

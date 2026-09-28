@@ -322,6 +322,27 @@ test('artifact thumb saver: owner-scoped, NOT tied to the chat, images only', ()
   assert.equal(createArtifactThumbSaver({ userId: null }), null, 'no user → no saver');
 });
 
+test('activity trace: live-progress rows keep stageId / phase / elapsedMs; tool_progress ticks are never persisted', () => {
+  let clock = 1000;
+  const collector = createActivityTraceCollector({ now: () => clock });
+  const base = { type: 'stage', tool: 'read_file', phase: 'attachments', stageId: 'pipe:attachments:1' };
+  collector.push({ ...base, label: 'Leyendo «contrato.pdf»', step: 'tool_call', status: 'running' });
+  clock = 1400;
+  collector.push({ ...base, label: 'Extrayendo el texto de «contrato.pdf»', step: 'tool_progress', status: 'running', detail: '12.340 palabras' });
+  clock = 2800;
+  collector.push({ ...base, label: 'Archivo listo', step: 'tool_result', status: 'done', ok: true, detail: '1 documento · 12.340 palabras', elapsedMs: 1800 });
+  const meta = collector.toMetadata();
+  assert.equal(meta.activityTrace.length, 2);
+  const [begin, result] = meta.activityTrace;
+  assert.deepEqual(begin, { at: 0, step: 'tool_call', tool: 'read_file', label: 'Leyendo «contrato.pdf»', status: 'running', stageId: 'pipe:attachments:1', phase: 'attachments' });
+  assert.equal(result.stageId, 'pipe:attachments:1');
+  assert.equal(result.phase, 'attachments');
+  assert.equal(result.elapsedMs, 1800);
+  assert.equal(result.ok, true);
+  assert.equal(result.detail, '1 documento · 12.340 palabras');
+  assert.equal(result.at, 1800);
+});
+
 /* ── wiring (source contracts) ───────────────────────────────────────────── */
 
 test('wiring: the chat streams + collects runner stages and persists them with the assistant row', () => {
@@ -337,7 +358,9 @@ test('wiring: the chat streams + collects runner stages and persists them with t
 
   const ai = read('src/routes/ai.js');
   assert.match(ai, /req\._agentActivityTrace = agenticResult\.agentActivityTrace \|\| null;/);
-  assert.equal((ai.match(/activityTrace: req\._agentActivityTrace \|\| null/g) || []).length, 2, 'both generate save paths');
+  // AgentRunner trace first; a plain / agentic-chat turn persists its live
+  // pipeline timeline (services/turn-progress) instead.
+  assert.equal((ai.match(/activityTrace: req\._agentActivityTrace \|\| req\._turnProgress\?\.toMetadata\(\{ durationMs: __firstByteAt \? __firstByteAt - __generateStartedAt : null \}\) \|\| null/g) || []).length, 2, 'both generate save paths');
   assert.match(ai, /rlhfFeedback = null, activityTrace = null \} = \{\}\) \{/);
   assert.match(ai, /activityTrace && typeof activityTrace === 'object' && !agentRun\s*\?\s*\{ agentMetadata: activityTrace \}/);
   assert.match(ai, /_attempt \+ 1, \{ observabilityLog: persistenceLog, activityTrace \}\)/);

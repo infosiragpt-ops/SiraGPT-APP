@@ -187,6 +187,35 @@ test('picked model with a rejected key (401): key-health «auth», no failover, 
   assert.equal(frame.message, `Claude Fable 5.1 no pudo responder: su proveedor rechazó la clave de conexión. ${TAIL}`);
 });
 
+test('modelLabel as a getter: called only on failure (never on the first-byte path), bounded when slow', async () => {
+  process.env.ANTHROPIC_API_KEY = 'an-test-key';
+  let calls = 0;
+  const r = await runGenerate({
+    primaryError: httpError(402, 'Insufficient credits'),
+    modelLabel: () => { calls++; return Promise.resolve('Claude Fable 5.1'); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(r.out, `Claude Fable 5.1 no pudo responder: su proveedor no tiene saldo ahora. ${TAIL}`);
+
+  let okCalls = 0;
+  const ok = await runGenerate({
+    primaryCreate: async () => streamOf('4'),
+    modelLabel: () => { okCalls++; return 'Claude Fable 5.1'; },
+  });
+  assert.match(ok.out, /4/);
+  assert.equal(okCalls, 0, 'a turn that answers never resolves the label');
+
+  // A lookup that never settles cannot hold the error: generic subject.
+  billing.__resetForTests();
+  const started = Date.now();
+  const slow = await runGenerate({
+    primaryError: httpError(402, 'Insufficient credits'),
+    modelLabel: () => new Promise(() => {}),
+  });
+  assert.ok(Date.now() - started < 3000);
+  assert.equal(slow.out, `El modelo elegido no pudo responder: su proveedor no tiene saldo ahora. ${TAIL}`);
+});
+
 test('picked model already memoised «sin saldo» is still called (never skipped or swapped); its answer clears the memo', async () => {
   process.env.ANTHROPIC_API_KEY = 'an-test-key';
   billing.markOutOfCredit('Anthropic', httpError(402, 'Insufficient credits'));

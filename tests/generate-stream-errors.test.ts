@@ -114,6 +114,54 @@ describe("generate HTTP errors stop thinking", () => {
     )
   })
 
+  it("never retries the user's plan quota or an explicit retryable:false", () => {
+    assert.equal(shouldRetryGenerateHttp(429, { error: "quota_exceeded" }, { attempt: 1, maxAttempts: 5 }), false)
+    assert.equal(shouldRetryGenerateHttp(429, { code: "quota_exceeded", error: "quota_exceeded" }, { attempt: 1, maxAttempts: 5 }), false)
+    assert.equal(shouldRetryGenerateHttp(429, { error: "rate_limited", retryable: false }, { attempt: 1, maxAttempts: 5 }), false)
+    assert.equal(shouldRetryGenerateHttp(429, { error: "rate_limited", retryable: true }, { attempt: 1, maxAttempts: 5 }), true)
+    const err = attachGenerateHttpError(429, { error: "quota_exceeded" })
+    assert.equal(err.kind, "quota")
+    assert.equal(err.retryable, false)
+    assert.doesNotMatch(err.message, /quota_exceeded|Monthly API limit/i)
+  })
+
+  it("reads 502/504/522 with an empty body as a SiraGPT update, never a bare HTTP code", () => {
+    for (const status of [502, 504, 522]) {
+      const text = friendlyGenerateHttpError(status, {})
+      assert.doesNotMatch(text, /^HTTP \d+$/)
+      assert.match(text, /actualiz/i)
+      assert.equal(shouldRetryGenerateHttp(status, {}, { attempt: 1, maxAttempts: 5 }), true)
+      assert.equal(attachGenerateHttpError(status, {}).kind, "restarting")
+    }
+    assert.doesNotMatch(friendlyGenerateHttpError(500, {}), /HTTP \d{3}/)
+    assert.doesNotMatch(friendlyGenerateHttpError(418, {}), /HTTP \d{3}/)
+  })
+
+  it("retries a 503 server_restarting with a message", () => {
+    const details = {
+      code: "server_restarting",
+      retryable: true,
+      message: "SiraGPT se está reiniciando. Reintenta en unos segundos.",
+    }
+    assert.equal(isGenerateHttpTerminal(503, details), false)
+    assert.equal(shouldRetryGenerateHttp(503, details, { attempt: 1, maxAttempts: 5 }), true)
+    assert.equal(attachGenerateHttpError(503, details).kind, "restarting")
+  })
+
+  it("turns raw codes into Spanish while error.code keeps the token", () => {
+    const conflict = attachGenerateHttpError(409, {
+      error: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD",
+      code: "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD",
+      retryable: false,
+    })
+    assert.equal(conflict.code, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD")
+    assert.doesNotMatch(conflict.message, /IDEMPOTENCY_KEY/)
+    const credits = attachGenerateHttpError(402, { error: "insufficient credits" })
+    assert.equal(credits.code, "insufficient credits")
+    assert.equal(credits.kind, "quota")
+    assert.doesNotMatch(credits.message, /insufficient credits/i)
+  })
+
   it("keeps cookie/CSRF reconnect and cursor resume in the generate client", () => {
     const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
     assert.match(

@@ -38,8 +38,81 @@ const PROVIDER_FAIL_MESSAGE =
   'El modelo no pudo completar la respuesta. Reintenta o elige otro modelo. No cambié de modelo.';
 const SANDBOX_FAIL_MESSAGE =
   'El workspace aislado rechazó esa ruta o comando. Indica owner/repo otra vez o pide un archivo concreto.';
+// A provider without credit, when the error carries no annotated model name.
+// Same copy as billing-failover.buildFailureMessage({ reason: 'billing' }).
+const PROVIDER_NO_CREDIT_MESSAGE =
+  'El modelo elegido no pudo responder: su proveedor no tiene saldo ahora. No cambié de modelo; elige otro en el selector o inténtalo más tarde.';
+// An agentic turn that ran out of time (step timeout past the plain-fallback
+// budget, runtime budget exhausted). Never blames GitHub.
+const AGENTIC_TIMEOUT_MESSAGE =
+  'La respuesta tardó más de lo previsto y no pude terminarla. No cambié de modelo; reintenta o elige un modelo más rápido.';
 
+let _billingFailover;
+function billingFailover() {
+  if (_billingFailover !== undefined) return _billingFailover;
+  try {
+    _billingFailover = require('./billing-failover');
+  } catch {
+    _billingFailover = null;
+  }
+  return _billingFailover;
+}
+
+/**
+ * 'billing' when the error is an empty account (never a per-minute quota
+ * window, a reservation larger than the balance or an auth rejection), else
+ * null. Advisory: any failure → null.
+ */
+function billingCauseOf(err) {
+  const bf = billingFailover();
+  if (!bf || !err || typeof err !== 'object') return null;
+  try {
+    return bf.failureCauseFor(err) === 'billing' ? 'billing' : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The transparent copy for an error annotated by
+ * billing-failover.annotateProviderFailure: which model, which cause. null
+ * when the error carries no cause (or the cause has no copy).
+ */
+function transparentFailureMessage(err) {
+  if (!err || typeof err !== 'object' || !err.siraFailureReason) return null;
+  const bf = billingFailover();
+  if (!bf || typeof bf.buildFailureMessage !== 'function') return null;
+  try {
+    return bf.buildFailureMessage({
+      modelLabel: err.siraModelLabel || '',
+      reason: err.siraFailureReason,
+      retryAfterSeconds: err.siraRetryAfterSeconds,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Public code + Spanish message for a failed /api/ai/generate turn. An error
+ * annotated with its cause (siraFailureReason) gets the 100% transparent copy
+ * (model + sin saldo / clave rechazada / no responde / límite por minuto);
+ * an unannotated «no credit» error gets the «sin saldo» copy. The code stays
+ * the classified one (E_PROVIDER for billing). Never the provider's raw text.
+ */
 function classifyGenerateError(err) {
+  const base = classifyGenerateErrorCore(err);
+  const transparent = transparentFailureMessage(err);
+  if (transparent && base.code !== 'E_GITHUB_CONNECT' && base.code !== 'E_SANDBOX') {
+    return {
+      code: base.code === 'connection_unavailable' ? 'E_PROVIDER' : base.code,
+      message: transparent,
+    };
+  }
+  return base;
+}
+
+function classifyGenerateErrorCore(err) {
   const code = String((err && (err.code || err.error || err.stoppedReason || err.name)) || '').trim();
   const raw = String((err && (err.message || err.error || err.code || err.name)) || '').trim();
   const blob = `${code} ${raw}`;
@@ -52,6 +125,16 @@ function classifyGenerateError(err) {
     || (/\/conexiones/i.test(raw) && /github/i.test(raw))
   ) {
     return { code: 'E_GITHUB_CONNECT', message: githubConnectMessage() };
+  }
+  // «Sin saldo» before the vendor-leak check: an OpenRouter/DeepSeek credit
+  // error names the vendor, but the user must read the real cause (in our
+  // words, never the provider's text). Our own missing-connection codes keep
+  // their copy.
+  if (
+    !/^(provider_unavailable|PROVIDER_CONNECTION_UNAVAILABLE|connection_unavailable)$/i.test(code)
+    && billingCauseOf(err) === 'billing'
+  ) {
+    return { code: 'E_PROVIDER', message: PROVIDER_NO_CREDIT_MESSAGE };
   }
   if (VENDOR_LEAK_RE.test(raw)) {
     return { code: 'provider_unavailable', message: PROVIDER_UNAVAILABLE_MESSAGE };
@@ -122,6 +205,9 @@ function writeGenerateSseError(res, {
   message,
   code = 'connection_unavailable',
   recovered = false,
+  retryable = undefined,
+  retryAfterSeconds = undefined,
+  failureReason = undefined,
 } = {}) {
   const text = String(message || CONNECTION_UNAVAILABLE_MESSAGE).trim() || CONNECTION_UNAVAILABLE_MESSAGE;
   const payload = {
@@ -131,6 +217,13 @@ function writeGenerateSseError(res, {
     message: text,
     recovered: recovered === true,
   };
+  // Optional, only when the caller knows them: `retryable:false` when a
+  // retry cannot help (no balance, rejected key…), the per-minute wait the
+  // copy announced, and the cause (never the provider's text).
+  if (typeof retryable === 'boolean') payload.retryable = retryable;
+  const wait = Number(retryAfterSeconds);
+  if (Number.isFinite(wait) && wait > 0) payload.retryAfterSeconds = Math.ceil(wait);
+  if (typeof failureReason === 'string' && failureReason) payload.failureReason = failureReason;
   rawWrite(res, `data: ${JSON.stringify(payload)}\n\n`);
   if (!recovered) {
     rawWrite(res, `data: ${JSON.stringify({ type: 'text_delta', content: text })}\n\n`);
@@ -164,6 +257,8 @@ module.exports = {
   STREAM_TIMEOUT_MESSAGE,
   PROVIDER_FAIL_MESSAGE,
   SANDBOX_FAIL_MESSAGE,
+  PROVIDER_NO_CREDIT_MESSAGE,
+  AGENTIC_TIMEOUT_MESSAGE,
   classifyGenerateError,
   publicGenerateErrorMessage,
   isProviderClientError,

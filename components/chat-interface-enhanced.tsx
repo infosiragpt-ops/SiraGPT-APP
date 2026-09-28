@@ -191,6 +191,7 @@ import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-r
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldQueueAttachmentAgentTask, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
+import { describeGenerateFailure, friendlyGenerateError } from "@/lib/generate-retry-policy"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -7071,7 +7072,7 @@ But first, you need to connect your Spotify account securely using the button be
               return {
                 ...msg,
                 content: "Tu plan necesita una mejora para continuar usando Spotify.",
-                error: "Monthly API limit exceeded"
+                error: "Tu plan necesita una mejora para continuar usando Spotify."
               };
             }
             return msg;
@@ -11356,8 +11357,9 @@ REWRITTEN TEXT:`;
         isErrorDataMonthlyLimit: errorData && isMonthlyLimitError(errorData.error || '')
       });
 
-      // Check for monthly API limit exceeded error - handle specific API format
-      if (status === 429 ||
+      // Plan quota / credits only (402, quota_exceeded, monthly limit). A
+      // bare 429 is a rate limit or a busy queue: explained, never sold.
+      if (describeGenerateFailure(err).kind === 'quota' ||
         isMonthlyLimitError(message) ||
         (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
@@ -11379,7 +11381,8 @@ REWRITTEN TEXT:`;
           role: 'ASSISTANT' as const,
           content: `Tu plan necesita una mejora para continuar.${usageInfo} Elige el plan Pro o escríbenos por WhatsApp para un plan a medida.`,
           timestamp: new Date().toISOString(),
-          error: 'Plan upgrade required',
+          // ErrorMessage renders `error` (not `content`): Spanish too.
+          error: `Tu plan necesita una mejora para continuar.${usageInfo} Elige el plan Pro o escríbenos por WhatsApp para un plan a medida.`,
         };
 
         setCurrentChat(prevChat => {
@@ -11392,8 +11395,10 @@ REWRITTEN TEXT:`;
         return;
       }
 
-      // For other errors, show generic error message
-      toast.error(err?.message || 'An error occurred. Please try again.');
+      // For other errors, show the Spanish copy for its kind (a human
+      // server message, e.g. a provider failure, stays verbatim).
+      const failureText = friendlyGenerateError(err) || 'Ocurrió un error. Vuelve a intentarlo.';
+      toast.error(failureText);
 
       // Add error message to chat
       const errorMessage = {
@@ -11402,7 +11407,7 @@ REWRITTEN TEXT:`;
         role: 'ASSISTANT' as const,
         content: '',
         timestamp: new Date().toISOString(),
-        error: err.message || 'An error occurred. Please try again.',
+        error: failureText,
       };
 
       setCurrentChat(prevChat => {
@@ -11499,11 +11504,10 @@ But first, you need to connect your Gmail account securely using the button belo
     } catch (error: any) {
       console.error('Gmail error:', error);
       const errorMessage = error.message || 'Gmail request failed. Please try again.';
-      const status = error?.status || error?.statusCode;
       const errorData = error?.errorData;
 
-      // Check for monthly API limit exceeded error
-      if (status === 429 ||
+      // Plan quota / credits only — never a bare 429 rate limit.
+      if (describeGenerateFailure(error).kind === 'quota' ||
         isMonthlyLimitError(errorMessage) ||
         (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
@@ -11520,7 +11524,7 @@ But first, you need to connect your Gmail account securely using the button belo
               return {
                 ...msg,
                 content: "Tu plan necesita una mejora para continuar usando Gmail.",
-                error: "Monthly API limit exceeded"
+                error: "Tu plan necesita una mejora para continuar usando Gmail."
               };
             }
             return msg;
@@ -11635,7 +11639,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               return {
                 ...msg,
                 content: "Tu plan necesita una mejora para continuar usando Google Services.",
-                error: "Monthly API limit exceeded"
+                error: "Tu plan necesita una mejora para continuar usando Google Services."
               };
             }
             return msg;
@@ -11818,10 +11822,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return;
       }
 
-      const errorMessage = error.message || 'Image generation failed. Please try again.';
       const status = error?.status || error?.statusCode;
       const errorData = error?.errorData;
       const errorCode = error?.code || errorData?.code;
+      // One classification: only the user's own plan quota / credits opens
+      // the upgrade prompt; everything else is explained in Spanish (a
+      // provider's own message, e.g. «… no tiene saldo ahora», verbatim).
+      const imageFailure = describeGenerateFailure(error);
+      const errorMessage = friendlyGenerateError(error) || 'No se pudo generar la imagen. Inténtalo de nuevo.';
 
       if (status === 403 && errorCode === 'image_model_inactive') {
         const inactiveMessage = 'El modelo seleccionado ya no está activo. Elige otro modelo en Imágenes y vuelve a enviar.';
@@ -11845,12 +11853,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       console.error('Image generation failed:', error)
 
-      // Check for monthly API limit exceeded error
-      if (status === 429 ||
-        isMonthlyLimitError(errorMessage) ||
-        (errorData && isMonthlyLimitError(errorData.error || ''))) {
+      // Plan quota / credits (402, quota_exceeded, monthly limit) only —
+      // never a bare 429 rate limit.
+      if (imageFailure.kind === 'quota') {
 
-        // Show upgrade modal for API limit errors
+        // Show upgrade modal for plan quota errors
         setSubscribeOpen(true);
         toast.error('Tu plan necesita una mejora para continuar.');
 
@@ -11861,7 +11868,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               return {
                 ...msg,
                 content: 'Tu plan necesita una mejora para continuar generando imágenes.',
-                error: 'Monthly API limit exceeded'
+                error: 'Tu plan necesita una mejora para continuar generando imágenes.'
               };
             }
             return msg;
@@ -11983,13 +11990,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.success('Video generation started! This may take 2-5 minutes.')
     } catch (error: any) {
       console.error('Video generation failed:', error)
-      const errorMessage = error.message || 'Video generation failed. Please try again.';
-      const status = error?.status || error?.statusCode;
+      const errorMessage = friendlyGenerateError(error) || 'No se pudo generar el video. Inténtalo de nuevo.';
       const errorData = error?.errorData;
 
-      // Check for monthly API limit exceeded error
-      if (status === 429 ||
-        isMonthlyLimitError(errorMessage) ||
+      // Plan quota / credits only — never a bare 429 rate limit.
+      if (describeGenerateFailure(error).kind === 'quota' ||
+        isMonthlyLimitError(String(error?.message || '')) ||
         (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
         // Show upgrade modal for API limit errors

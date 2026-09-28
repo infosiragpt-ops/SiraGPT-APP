@@ -105,6 +105,7 @@ function relStages(stages, startedAt) {
   return (Array.isArray(stages) ? stages : []).slice(-15).map((s) => ({
     label: s.label,
     ...(s.tool ? { tool: s.tool } : {}),
+    ...(s.status ? { status: s.status } : {}),
     atMs: Math.max(0, Number(s.at || 0) - Number(startedAt || 0)),
   }));
 }

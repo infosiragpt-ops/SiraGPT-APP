@@ -209,11 +209,32 @@ function hasUsableExtract(text) {
   return messageAttachments.hasUsefulExtractedText(text) && !looksLikeUnsupportedExtractionPlaceholder(text);
 }
 
+// Bounded, non-allocating word count (a 1 MB extract must not block the
+// event loop on the request path): exact up to a cap, extrapolated beyond.
+function wordCount(text) {
+  try { return require('./turn-progress').countWordsBounded(text); } catch (_) { return { words: 0, approx: false }; }
+}
+
+/**
+ * `opts.onProgress(event)` (live progress of the chat turn, optional and
+ * synchronous): `{ type: 'extract_wait' | 'extract_start', file }` when a
+ * turn really waits for / runs a text extraction, `{ type: 'extract_done',
+ * file, words, approx }` when it produced text. `file` is the user's own file name.
+ */
 async function refreshProcessedFileExtracts(prisma, processedFiles = [], opts = {}) {
   if (!Array.isArray(processedFiles) || processedFiles.length === 0) return processedFiles;
   const fileProcessor = opts.fileProcessor || require('./fileProcessor');
   const extractionSingleflight = require('./file-extraction-singleflight');
   const waitMs = extractionSingleflight.requestWaitMs(opts.waitMs);
+  const progress = (ev) => {
+    if (typeof opts.onProgress !== 'function') return;
+    try { opts.onProgress(ev); } catch (_) { /* progress is advisory */ }
+  };
+  // Counted only when someone listens.
+  const progressExtracted = (file, text) => {
+    if (typeof opts.onProgress !== 'function') return;
+    progress({ type: 'extract_done', file, ...wordCount(text) });
+  };
   return Promise.all(processedFiles.map(async (file) => {
     if (!file) return file;
     if (hasUsableExtract(file.extractedText)) return file;
@@ -221,18 +242,22 @@ async function refreshProcessedFileExtracts(prisma, processedFiles = [], opts = 
     // hint. Re-running OCR + the vision-doc parser here blocked the turn for
     // ~77 s on a small PNG and raced the R2 offload (prod 2026-09-26).
     if (isImageAttachment(file)) return file;
+    const fileName = String(file.originalName || file.name || '').slice(0, 120);
     // The upload pipeline is still extracting this file: never start a second
     // extraction of the same bytes — wait (bounded) for its result instead.
     const pipeline = await extractionSingleflight.pipelineStatus(prisma, file.id);
     if (pipeline.inProgress) {
+      progress({ type: 'extract_wait', file: fileName });
       const text = await extractionSingleflight.awaitPipelineText(prisma, file.id, {
         waitMs, isUseful: hasUsableExtract, ...(opts.sleep ? { sleep: opts.sleep } : {}),
       });
+      if (text) progressExtracted(fileName, text);
       return text ? { ...file, extractedText: text } : file;
     }
     if (hasUsableExtract(pipeline.text)) return { ...file, extractedText: pipeline.text };
     if (!file?.path || !fs.existsSync(file.path)) return file;
     try {
+      progress({ type: 'extract_start', file: fileName });
       const result = await extractionSingleflight.runExtractionOnce(file.id, () => fileProcessor.processFile({
         path: file.path,
         mimetype: file.mimeType,
@@ -241,6 +266,7 @@ async function refreshProcessedFileExtracts(prisma, processedFiles = [], opts = 
       }));
       const extractedText = String(result?.extractedText || '').trim();
       if (!messageAttachments.hasUsefulExtractedText(extractedText)) return file;
+      progressExtracted(fileName, extractedText);
       if (file.id && prisma?.file?.update) {
         await prisma.file.update({
           where: { id: file.id },

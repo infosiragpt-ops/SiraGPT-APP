@@ -449,6 +449,97 @@ async function requireImageLeaseOwnership(req) {
   return ownership;
 }
 
+// What the user reads for a failed image job (persisted as errorMessage and
+// served by GET /jobs/:id / history): the cause in Spanish, never the
+// provider's raw text (which can carry request ids, account hints or keys).
+// The raw reason goes only to logImageJobOutcome. The picked image model is
+// never switched (owner policy), and the copy says so.
+const IMAGE_JOB_ERROR_COPY = Object.freeze({
+  moderated: 'La imagen fue bloqueada por la política de contenido.',
+  billing: 'El proveedor del modelo de imágenes elegido no tiene saldo ahora. No se te cobró y no cambié de modelo; elige otro modelo o inténtalo más tarde.',
+  auth: 'El proveedor del modelo de imágenes elegido rechazó la clave de conexión. No se te cobró y no cambié de modelo; elige otro modelo o inténtalo más tarde.',
+  forbidden: 'El proveedor del modelo de imágenes elegido no permite usar este modelo ahora. No se te cobró y no cambié de modelo; elige otro modelo o inténtalo más tarde.',
+  rate_limit: 'El proveedor del modelo de imágenes elegido alcanzó su límite de solicitudes por minuto. No se te cobró; espera un momento y vuelve a intentarlo.',
+  unavailable: 'El proveedor del modelo de imágenes elegido no está respondiendo ahora. No se te cobró; inténtalo de nuevo en unos minutos.',
+  unconfigured: 'El modelo de imágenes elegido no tiene su conexión configurada. No se te cobró; elige otro modelo.',
+  generic: 'No se pudo generar la imagen. No se te cobró; inténtalo de nuevo.',
+});
+
+function reasonAsError(reason) {
+  const text = String(reason || '');
+  if (!text) return null;
+  const err = new Error(text);
+  const status = /^\s*([45]\d{2})\b/.exec(text);
+  if (status) err.status = Number(status[1]);
+  return err;
+}
+
+function imageFailureCause(reason) {
+  const err = reasonAsError(reason);
+  if (!err) return null;
+  try {
+    return require('../services/ai/billing-failover').failureCauseFor(err);
+  } catch (_) {
+    return null;
+  }
+}
+
+function imageRetryAfterSeconds(reason) {
+  const err = reasonAsError(reason);
+  if (!err) return null;
+  try {
+    const ms = require('../services/ai/billing-failover').retryAfterMs(err);
+    return Number.isFinite(ms) && ms > 0 ? Math.max(1, Math.ceil(ms / 1000)) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * The job's Spanish copy for a failure: which image model (its display name
+ * when known, never a raw id) and which cause (sin saldo / clave rechazada /
+ * no permite el modelo / límite por minuto con segundos / no responde / no
+ * configurado). Without a label it is exactly IMAGE_JOB_ERROR_COPY.
+ */
+function publicImageJobError(code, reason, { modelLabel = '' } = {}) {
+  if (String(code || '').toUpperCase() === 'MODERATED') return IMAGE_JOB_ERROR_COPY.moderated;
+  const cause = imageFailureCause(reason);
+  let key = 'generic';
+  if (cause === 'billing' || cause === 'unfunded_memo') key = 'billing';
+  else if (cause === 'auth') key = 'auth';
+  else if (cause === 'forbidden') key = 'forbidden';
+  else if (cause === 'rate_limit') key = 'rate_limit';
+  else if (cause === 'unavailable' || cause === 'breaker') key = 'unavailable';
+  else if (cause === 'unconfigured') key = 'unconfigured';
+  let copy = IMAGE_JOB_ERROR_COPY[key];
+  if (key === 'rate_limit') {
+    const secs = imageRetryAfterSeconds(reason);
+    if (secs) copy = copy.replace('espera un momento y vuelve a intentarlo.', `espera ${secs} s y vuelve a intentarlo.`);
+  }
+  const label = String(modelLabel || '').trim();
+  if (label && key !== 'generic') {
+    copy = copy
+      .replace('El proveedor del modelo de imágenes elegido', `El proveedor de ${label}`)
+      .replace('El modelo de imágenes elegido', label);
+  } else if (label) {
+    copy = `${label} no pudo generar la imagen. No se te cobró; inténtalo de nuevo.`;
+  }
+  return copy;
+}
+
+/** The image model's display name for the job copy ('' when unknown). */
+async function imageJobModelLabel(spec) {
+  try {
+    return await require('../services/ai/picked-model-label').resolvePickedModelLabel({
+      model: spec && spec.model,
+      provider: spec && spec.provider,
+      prisma,
+    });
+  } catch (_) {
+    return '';
+  }
+}
+
 function logImageJobOutcome(spec, outcome, startedAt) {
   try {
     require('../services/observability/generation-outcome').logGenerationOutcome({
@@ -483,7 +574,12 @@ async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
       const status = result.code === 'MODERATED' ? 'MODERATED' : 'FAILED';
       const row = await prisma.generatedImage.update({
         where: { id: dbRow.id },
-        data: { status, errorMessage: result.reason || result.code },
+        data: {
+          status,
+          errorMessage: publicImageJobError(result.code, result.reason, {
+            modelLabel: status === 'MODERATED' ? '' : await imageJobModelLabel(spec),
+          }),
+        },
       });
       await strictRefundImageCharge(req, `provider:${result.code}`);
       return { row, refunded: true, providerResult: result };
@@ -506,17 +602,20 @@ async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
     if (err?.code === 'REFUND_PENDING') throw err;
     logImageJobOutcome(spec, { ok: false, code: err?.code || 'PROVIDER_ERROR', reason: err && err.message }, generationStartedAt);
     await requireImageLeaseOwnership(req);
+    const publicError = publicImageJobError(err && err.code, err && err.message, {
+      modelLabel: await imageJobModelLabel(spec),
+    });
     let row;
     try {
       row = await prisma.generatedImage.update({
         where: { id: dbRow.id },
-        data: { status: 'FAILED', errorMessage: err && err.message },
+        data: { status: 'FAILED', errorMessage: publicError },
       });
     } catch {
       row = {
         ...dbRow,
         status: 'FAILED',
-        errorMessage: err && err.message,
+        errorMessage: publicError,
       };
     }
     await strictRefundImageCharge(req, 'provider_throw');
@@ -832,3 +931,5 @@ module.exports.serializeImage = serializeImage;
 module.exports.imageCost = imageCost;
 module.exports.imageProviderSpec = imageProviderSpec;
 module.exports.runGenerationAndPersist = runGenerationAndPersist;
+module.exports.publicImageJobError = publicImageJobError;
+module.exports.IMAGE_JOB_ERROR_COPY = IMAGE_JOB_ERROR_COPY;

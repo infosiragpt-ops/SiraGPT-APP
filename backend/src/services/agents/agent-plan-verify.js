@@ -295,8 +295,14 @@ function createAnswerVerifier({ openai, model, userQuery }) {
   let attempts = 0;
   let reviewStarted = false;
   const reviews = new Map();
-  return async ({ answer, steps, ctx }) => {
+  return async ({ answer, steps, ctx, onCheckStart }) => {
     const signal = ctx?.signal;
+    // Live progress: the caller shows «Verificando…» only once a review
+    // really runs — never for the short-circuits below.
+    const announceCheck = () => {
+      if (typeof onCheckStart !== 'function') return;
+      try { onCheckStart(); } catch (_) { /* advisory */ }
+    };
     if (signal?.aborted) return verificationFailure('E_CANCELLED');
     if (!verifyEnabled()) return { ok: true };
     const draft = String(answer || '');
@@ -323,9 +329,13 @@ function createAnswerVerifier({ openai, model, userQuery }) {
     } catch (_) {
       return verificationFailure('E_VERIFICATION_EVIDENCE');
     }
-    if (reviews.has(input.key)) return awaitCachedReview(reviews.get(input.key), signal);
+    if (reviews.has(input.key)) {
+      announceCheck();
+      return awaitCachedReview(reviews.get(input.key), signal);
+    }
     if (attempts >= VERIFY_MAX_CALLS) return verificationFailure('E_VERIFICATION_BUDGET');
     attempts += 1;
+    announceCheck();
     const review = requestReview({ openai, model, query, draft, evidence: input.evidence, signal }).then(Object.freeze);
     reviews.set(input.key, review);
     return awaitCachedReview(review, signal);

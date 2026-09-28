@@ -973,6 +973,12 @@ async function run(openai, opts) {
     onStepStart = () => {},
     onStepDone = () => {},
     onStep = () => {},
+    // Live progress (chat timeline): fired around every model call and the
+    // finalize-guard judge. Optional, synchronous, never awaited; a hook that
+    // throws never changes the run.
+    onModelCall = null,
+    onModelResponse = null,
+    onGuard = null,
     ctx = {},
     model = 'gpt-4o',
     extraSystem = '',
@@ -1004,6 +1010,48 @@ async function run(openai, opts) {
 
   if (!query) throw new Error('react-agent: query is required');
   if (!Array.isArray(tools)) throw new Error('react-agent: tools must be an array');
+
+  const fireHook = (fn, payload) => {
+    if (typeof fn !== 'function') return;
+    try {
+      const out = fn(payload);
+      if (out && typeof out.catch === 'function') out.catch(() => {});
+    } catch { /* progress hooks are advisory */ }
+  };
+  const guardCategory = (guard) => {
+    if (guard && guard.code) return String(guard.code).slice(0, 60);
+    if (guard && Array.isArray(guard.missingTools) && guard.missingTools.length) return 'missing_tools';
+    return 'rejected';
+  };
+  // The finalize guard with its live-progress row. The row is announced only
+  // when something is really checked: a guard calls `onCheckStart` right
+  // before a real review (the answer verifier's judge call), and a guard that
+  // rejects is announced with its repair. A guard that passes without
+  // checking anything (verification off, a short draft, fail-open Q&A)
+  // leaves no «Verificación superada» row.
+  const runFinalizeGuard = async (step, payload) => {
+    let announced = false;
+    const announce = () => {
+      if (announced) return;
+      announced = true;
+      fireHook(onGuard, { phase: 'start', step });
+    };
+    let guard;
+    try {
+      guard = await finalizeGuard({ ...payload, onCheckStart: announce });
+    } catch (err) {
+      guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
+    }
+    if (ctx?.signal?.aborted) {
+      if (announced) fireHook(onGuard, { phase: 'aborted', step });
+    } else if (guard?.ok === true) {
+      if (announced) fireHook(onGuard, { phase: 'pass', step });
+    } else {
+      announce();
+      fireHook(onGuard, { phase: 'repair', step, category: guardCategory(guard) });
+    }
+    return guard;
+  };
 
   attachToolFailureCircuit(ctx);
 
@@ -1449,6 +1497,16 @@ async function run(openai, opts) {
         thinkingLevelExplicit,
       }) || {};
     } catch (_) { effortFields = {}; }
+    const finalizeStep = Boolean(toolChoice && typeof toolChoice === 'object'
+      && toolChoice.function && toolChoice.function.name === 'finalize');
+    fireHook(onModelCall, {
+      step,
+      maxSteps,
+      finalize: finalizeStep,
+      model: activeModel,
+      toolCount: prompted ? registry.length : toolsSchema.length,
+      stepTimeoutMs,
+    });
     try {
       if (prompted) {
         // Provider-safe payload: no tools/tool_choice params, no role:'tool'
@@ -1476,6 +1534,33 @@ async function run(openai, opts) {
       }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
+      const userAborted = Boolean(ctx?.signal && ctx.signal.aborted);
+      if (typeof onModelResponse === 'function') {
+        // The exact cause, by category (sin saldo, clave rechazada, límite
+        // por minuto…) — never the provider's own error text.
+        let category = null;
+        let retryAfterSeconds = null;
+        if (!userAborted) {
+          try {
+            const tp = require('./turn-progress');
+            category = tp.failureCategoryOf(err, { timedOut });
+            retryAfterSeconds = timedOut ? null : tp.retryAfterSecondsOf(err);
+          } catch { category = null; }
+        }
+        fireHook(onModelResponse, {
+          step,
+          durationMs: Date.now() - modelTelemetryStepStart,
+          toolNames: [],
+          finalize: finalizeStep,
+          failed: true,
+          timedOut,
+          aborted: userAborted,
+          stepTimeoutMs,
+          category,
+          retryAfterSeconds,
+          model: activeModel,
+        });
+      }
       stoppedReason = timedOut
         ? `model_error: step_timeout_${stepTimeoutMs}ms`
         : `model_error: ${err.message}`;
@@ -1512,6 +1597,19 @@ async function run(openai, opts) {
     const choice = resp.choices?.[0];
     const msg = choice?.message;
     if (!msg) {
+      fireHook(onModelResponse, {
+        step,
+        durationMs: Date.now() - modelTelemetryStepStart,
+        toolNames: [],
+        finalize: finalizeStep,
+        failed: true,
+        timedOut: false,
+        aborted: false,
+        stepTimeoutMs,
+        category: 'empty',
+        retryAfterSeconds: null,
+        model: activeModel,
+      });
       try {
         require('../codex/model-telemetry').recordLlmTurn({
           model: activeModel,
@@ -1574,6 +1672,19 @@ async function run(openai, opts) {
       }
     }
 
+    {
+      const respondedTools = Array.isArray(msg.tool_calls)
+        ? msg.tool_calls.map((call) => call && call.function && call.function.name).filter(Boolean)
+        : [];
+      fireHook(onModelResponse, {
+        step,
+        durationMs: Date.now() - modelTelemetryStepStart,
+        toolNames: respondedTools.slice(0, 12),
+        finalize: finalizeStep || respondedTools.includes('finalize'),
+        failed: false,
+      });
+    }
+
     // Validate the complete control envelope before any handler can execute.
     // Provider/native duplicate IDs must not overwrite the parallel result Map
     // or associate one tool's observation with another tool's arguments.
@@ -1601,19 +1712,14 @@ async function run(openai, opts) {
       // feed a repair instruction back into the loop instead.
       const plainStepRecord = { step, thought, actions: [], usage };
       if (typeof finalizeGuard === 'function') {
-        let guard;
-        try {
-          guard = await finalizeGuard({
-            answer: thought || '',
-            confidence: null,
-            steps: steps.concat([plainStepRecord]),
-            currentStep: plainStepRecord,
-            unavailableTools: Array.from(exhaustedTools),
-            ctx,
-          });
-        } catch (err) {
-          guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
-        }
+        const guard = await runFinalizeGuard(step, {
+          answer: thought || '',
+          confidence: null,
+          steps: steps.concat([plainStepRecord]),
+          currentStep: plainStepRecord,
+          unavailableTools: Array.from(exhaustedTools),
+          ctx,
+        });
         if (ctx?.signal?.aborted) {
           stoppedReason = 'aborted';
           steps.push(plainStepRecord);
@@ -1915,19 +2021,14 @@ async function run(openai, opts) {
       if (toolName === 'finalize' && !toolFailed && typeof finalizeGuard === 'function') {
         const proposedAction = { tool: toolName, args: call.function?.arguments || '', observation };
         const proposedSteps = steps.concat([{ ...stepRecord, actions: stepRecord.actions.concat([proposedAction]) }]);
-        let guard;
-        try {
-          guard = await finalizeGuard({
-            answer: dispatch.result?.answer || '',
-            confidence: dispatch.result?.confidence || null,
-            steps: proposedSteps,
-            currentStep: stepRecord,
-            unavailableTools: Array.from(exhaustedTools),
-            ctx,
-          });
-        } catch (err) {
-          guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
-        }
+        const guard = await runFinalizeGuard(step, {
+          answer: dispatch.result?.answer || '',
+          confidence: dispatch.result?.confidence || null,
+          steps: proposedSteps,
+          currentStep: stepRecord,
+          unavailableTools: Array.from(exhaustedTools),
+          ctx,
+        });
         if (ctx?.signal?.aborted) {
           stoppedReason = 'aborted';
           observation = { error: 'verification_cancelled' };

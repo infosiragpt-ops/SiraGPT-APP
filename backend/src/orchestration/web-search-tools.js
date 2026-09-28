@@ -140,30 +140,34 @@ async function perplexitySearch(query, { maxResults = 5, locale, freshness, fetc
 
 async function searchFreshContext(query, opts = {}) {
   const errors = [];
+  // Configured providers that answered (even with no results): with none and
+  // errors recorded, the search FAILED rather than found nothing.
+  let responded = 0;
+  const answered = (out) => { if (out && out.configured !== false) responded += 1; return out; };
 
   // Perplexity Search leads when configured: single-call, agent-grade latency.
   try {
-    const pplx = await perplexitySearch(query, opts);
+    const pplx = answered(await perplexitySearch(query, opts));
     if (pplx.results?.length) return pplx;
   } catch (err) { errors.push({ provider: 'perplexity', message: err.message }); }
 
   try {
-    const primary = await tavilySearch(query, opts);
+    const primary = answered(await tavilySearch(query, opts));
     if (primary.results?.length) return primary;
   } catch (err) { errors.push({ provider: 'tavily', message: err.message }); }
 
   try {
-    const exa = await exaSearch(query, opts);
+    const exa = answered(await exaSearch(query, opts));
     if (exa.results?.length) return { ...exa, errors: exa.errors || errors };
   } catch (err) { errors.push({ provider: 'exa', message: err.message }); }
 
   try {
-    const firecrawl = await firecrawlSearch(query, opts);
+    const firecrawl = answered(await firecrawlSearch(query, opts));
     if (firecrawl.results?.length) return { ...firecrawl, errors };
   } catch (err) { errors.push({ provider: 'firecrawl', message: err.message }); }
 
   try {
-    const searxng = await searxngSearch(query, opts);
+    const searxng = answered(await searxngSearch(query, opts));
     if (searxng.results?.length) return { ...searxng, errors };
   } catch (err) { errors.push({ provider: 'searxng', message: err.message }); }
 
@@ -178,11 +182,12 @@ async function searchFreshContext(query, opts = {}) {
         freeSearch: opts.freeSearch,
         includeScientific: opts.includeScientific,
       });
+      answered(free);
       if (free.results?.length) return { ...free, errors };
     } catch (err) { errors.push({ provider: 'free', message: err.message }); }
   }
 
-  return { provider: 'none', configured: false, results: [], errors };
+  return { provider: 'none', configured: false, results: [], errors, responded };
 }
 
 function listWebSearchProviders(env = process.env) {

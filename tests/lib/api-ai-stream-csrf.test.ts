@@ -185,7 +185,13 @@ describe('generateAIStream cookie session CSRF transport', () => {
 
     expect(chunks.join('')).toBe('tail before failure')
     expect(onError).toHaveBeenCalledOnce()
-    expect(onError.mock.calls[0][0].message).toContain('upstream failed')
+    const delivered = onError.mock.calls[0][0]
+    // English server text never reaches the user: the kind's Spanish copy.
+    expect(delivered.message).not.toContain('upstream failed')
+    expect(delivered.kind).toBe('provider')
+    // Part of the answer was painted: terminal, never replayed.
+    expect(delivered.contentDelivered).toBe(true)
+    expect(delivered.retryable).toBe(false)
     expect(onClose).not.toHaveBeenCalled()
   })
 
@@ -279,6 +285,39 @@ describe('generateAIStream cookie session CSRF transport', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('waits on turn_in_progress without spending the transport budget', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-turn-budget')
+    const inProgress = () => jsonError(409, {
+      error: 'turn_in_progress',
+      code: 'turn_in_progress',
+      retryable: true,
+    })
+    // 6 × turn_in_progress (more than the 5 transport attempts), then 4 ×
+    // 500 (transport) and the reply: only the 500s spend attempts.
+    mockFetch
+      .mockResolvedValueOnce(inProgress())
+      .mockResolvedValueOnce(inProgress())
+      .mockResolvedValueOnce(inProgress())
+      .mockResolvedValueOnce(inProgress())
+      .mockResolvedValueOnce(inProgress())
+      .mockResolvedValueOnce(inProgress())
+      .mockResolvedValueOnce(jsonError(500, { error: 'provider unavailable 1' }))
+      .mockResolvedValueOnce(jsonError(500, { error: 'provider unavailable 2' }))
+      .mockResolvedValueOnce(jsonError(500, { error: 'provider unavailable 3' }))
+      .mockResolvedValueOnce(jsonError(500, { error: 'provider unavailable 4' }))
+      .mockResolvedValueOnce(sseResponse('after the owner finished'))
+
+    const streamPromise = runStream()
+    await vi.runAllTimersAsync()
+    const { chunks, onClose, onError } = await streamPromise
+
+    expect(mockFetch).toHaveBeenCalledTimes(11)
+    expect(chunks).toEqual(['after the owner finished'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
   it('does not retry a payload-mismatch 409', async () => {
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-turn-conflict')
     mockFetch.mockResolvedValueOnce(jsonError(409, {
@@ -293,7 +332,15 @@ describe('generateAIStream cookie session CSRF transport', () => {
     expect(chunks).toEqual([])
     expect(onClose).not.toHaveBeenCalled()
     expect(onError).toHaveBeenCalledOnce()
-    expect(onError.mock.calls[0][0].message).toContain('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD')
+    const delivered = onError.mock.calls[0][0]
+    // The machine code stays structured; the person reads Spanish copy.
+    expect(delivered.code).toBe('IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD')
+    expect(delivered.kind).toBe('conflict')
+    expect(delivered.retryable).toBe(false)
+    expect(delivered.message).not.toContain('IDEMPOTENCY_KEY')
+    // Nothing is processing: the user is told to send it again, not to wait.
+    expect(delivered.message).not.toMatch(/procesando|espera/i)
+    expect(delivered.message).toMatch(/de nuevo/i)
   })
 
   it('force-refreshes csrf_invalid once without consuming the provider retry budget', async () => {

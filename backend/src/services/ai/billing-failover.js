@@ -598,7 +598,9 @@ function publicModelLabel(model, provider = '') {
 function annotateProviderFailure(err, { provider = '', model = '', reason = null, env = process.env } = {}) {
   if (!err || typeof err !== 'object') return err;
   try {
-    let cause = reason || failureCauseFor(err);
+    // A reservation larger than the balance (OpenRouter «can only afford N»,
+    // N ≥ 1024) is not an empty account, but it is the exact cause.
+    let cause = reason || failureCauseFor(err) || (isReservationSizeError(err) ? 'reservation' : null);
     let memoWait = null;
     if (cause === 'breaker' && provider) {
       // A breaker opened while the provider kept answering «no credit» / a
@@ -646,6 +648,8 @@ function buildFailureMessage({ modelLabel = '', reason = null, retryAfterSeconds
       return `${label} no pudo responder: su proveedor no permite usar este modelo ahora. ${tail}`;
     case 'unconfigured':
       return `${label} no pudo responder: su conexión no está configurada. ${tail}`;
+    case 'reservation':
+      return `${label} no pudo responder: su proveedor no tiene saldo suficiente para una respuesta de este tamaño. No cambié de modelo; pide algo más breve, elige otro en el selector o inténtalo más tarde.`;
     case 'rate_limit': {
       const secs = Number(retryAfterSeconds);
       const wait = Number.isFinite(secs) && secs > 0

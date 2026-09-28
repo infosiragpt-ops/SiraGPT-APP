@@ -623,6 +623,63 @@ function runnerProviderError(err) {
   return failure;
 }
 
+/**
+ * Display name for the runner's model in the honest failure copy: the
+ * picker's catalog name for a "Provider:model" spec or a bare id, '' when
+ * none is known (the loop then says «el modelo seleccionado»). Never a raw id.
+ */
+function runnerModelLabel(spec) {
+  const raw = String(spec || '').trim();
+  if (!raw) return null;
+  const colon = raw.indexOf(':');
+  const provider = colon > 0 ? raw.slice(0, colon) : '';
+  const model = colon > 0 ? raw.slice(colon + 1) : raw;
+  try {
+    const label = require('../turn-progress').displayNameFor(model, provider === 'Unresolved' ? '' : provider);
+    return label || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * The picked model's provider has no usable key for the runner (the
+ * preflight E_PROVIDER): «No pude generar el documento. <modelo> no pudo
+ * responder: su conexión no está configurada. …» — the model by its display
+ * name and the exact cause (owner policy). null for any other failure, or
+ * when a key exists (the loop's own copy then says what happened).
+ */
+async function runnerUnconfiguredFailureMessage(pickedModel, { env = process.env, prisma = null } = {}) {
+  const spec = String(pickedModel || '').trim();
+  if (!spec) return null;
+  try {
+    const selected = parseModelSpec(spec);
+    const provider = selected && selected.provider;
+    if (!provider) return null;
+    const runtime = require('../doc-agent/llm-runtime');
+    const keys = provider === 'Anthropic'
+      ? ['ANTHROPIC_API_KEY', 'SIRA_ANTHROPIC_API_KEY']
+      : ((runtime.LADDER || []).find((rung) => rung.provider === provider) || {}).keys;
+    // A provider the runner does not know is not «unconfigured».
+    if (!Array.isArray(keys) || keys.length === 0) return null;
+    if (keyFor({ keys }, env)) return null;
+    // The picker's name: the catalog without a DB read, else the admin row
+    // the picker lists (bounded read). Never a raw id.
+    let modelLabel = runnerModelLabel(spec) || '';
+    if (!modelLabel) {
+      try {
+        modelLabel = await require('../ai/picked-model-label').resolvePickedModelLabel({
+          model: selected.model, provider, prisma,
+        });
+      } catch (_) { modelLabel = ''; }
+    }
+    const message = require('../ai/billing-failover').buildFailureMessage({ modelLabel, reason: 'unconfigured' });
+    return message ? `No pude generar el documento. ${message}` : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function resolveRunnerLlmCandidate({ pickedModel = null, env = process.env } = {}) {
   const requested = pickedModel || explicitRunnerModel(env);
   if (!requested) {
@@ -1273,6 +1330,7 @@ async function runAgentRunner({
     let result = await runAgentLoop({
       client: llm,
       model: resolvedModel,
+      modelLabel: runnerModelLabel(pickedModel || resolvedModel),
       messages,
       tools: loopTools,
       executors: loopExecutors,
@@ -1317,6 +1375,7 @@ async function runAgentRunner({
       result = await runAgentLoop({
         client: llm,
         model: resolvedModel,
+        modelLabel: runnerModelLabel(pickedModel || resolvedModel),
         messages,
         tools: loopTools,
         executors: loopExecutors,
@@ -1532,9 +1591,24 @@ function sandboxFailureReason(err) {
   return null;
 }
 
+/**
+ * The loop's transparent provider copy (which model, which cause: sin saldo,
+ * clave rechazada, no responde, límite por minuto…) when `detail` is that
+ * Spanish copy — never a raw provider text, URL or key.
+ */
+function publicRunnerProviderDetail(detail) {
+  const text = String(detail || '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 400) return null;
+  if (/https?:|\bsk-|Bearer\s|openrouter|api[_ ]?key\b/i.test(text)) return null;
+  if (!/[áéíóúñ¿¡]/i.test(text)) return null;
+  return text;
+}
+
 function buildAgentRunnerFailureMessage(reason, detail) {
   const key = String(reason || 'no_output');
-  if (key === 'E_PROVIDER') return `E_PROVIDER: No pude generar el documento. ${RUNNER_PROVIDER_MESSAGE}`;
+  // The code stays structured (stoppedReason / reason); the visible text is
+  // the loop's exact cause, without an «E_PROVIDER:» prefix.
+  if (key === 'E_PROVIDER') return `No pude generar el documento. ${publicRunnerProviderDetail(detail) || RUNNER_PROVIDER_MESSAGE}`;
   const why = AGENT_RUNNER_FAILURE_COPY[key] || `el agente no pudo completar la tarea (${key})`;
   const extra = detail ? ` Detalle técnico: ${String(detail).slice(0, 300)}` : '';
   return `No pude generar el documento: ${why}. `
@@ -1722,14 +1796,19 @@ async function runAgentRunnerForDocRoute({
       if (stage) onEventSafe(onStage, stage);
     },
   });
-  const failure = (reason, detail) => ({
+  const failure = (reason, detail, message = null) => ({
     agentRunnerClaimed: true,
     failed: true,
     reason: String(reason || 'no_output'),
-    message: buildAgentRunnerFailureMessage(reason, detail),
+    message: message || buildAgentRunnerFailureMessage(reason, detail),
   });
   if (!ran || !ran.ok || !Array.isArray(ran.artifacts) || !ran.artifacts.length) {
-    return failure(ran?.stoppedReason || 'no_output', ran?.errorMessage || null);
+    const reason = ran?.stoppedReason || 'no_output';
+    // A picked model without a connection is named with the exact cause.
+    const unconfigured = String(reason) === 'E_PROVIDER'
+      ? await runnerUnconfiguredFailureMessage(pickedModel, { prisma })
+      : null;
+    return failure(reason, ran?.errorMessage || null, unconfigured);
   }
   const artifact = ran.artifacts.find((a) => a && a.downloadUrl) || ran.artifacts[0];
   if (!artifact || !artifact.downloadUrl) {
@@ -1831,6 +1910,8 @@ module.exports = {
   prepareF8Extras,
   executeAgentRunnerTurn,
   buildAgentRunnerFailureMessage,
+  runnerModelLabel,
+  runnerUnconfiguredFailureMessage,
   canCallLlm,
   defaultModel,
   loadOfficeHelpersPy,

@@ -1583,6 +1583,57 @@ function recordAgentRunFailure(provider, result) {
   }
 }
 
+/**
+ * The transparent Spanish copy for a picked model whose provider failed
+ * (billing-failover.buildFailureMessage): the model's picker display name and
+ * the exact cause. null when the cause is unknown (the caller keeps its copy).
+ */
+function pinnedModelFailureMessage(profile, result) {
+  const detail = agentRunModelError(result);
+  if (!detail) return null;
+  try {
+    const billing = require('../ai/billing-failover');
+    const err = Object.assign(new Error(String(detail.message || '')), {
+      ...(detail.status ? { status: Number(detail.status) } : {}),
+      ...(detail.code ? { code: String(detail.code) } : {}),
+    });
+    let reason = billing.failureCauseFor(err);
+    if (!reason && typeof detail.reason === 'string' && detail.reason) {
+      reason = detail.reason === 'unfunded_memo' ? 'billing' : detail.reason;
+    }
+    if (!reason) return null;
+    let retryAfterSeconds = null;
+    if (reason === 'rate_limit') {
+      const ms = billing.retryAfterMs(err);
+      if (Number.isFinite(ms) && ms > 0) retryAfterSeconds = Math.max(1, Math.ceil(ms / 1000));
+    }
+    return billing.buildFailureMessage({ modelLabel: pinnedModelLabel(profile), reason, retryAfterSeconds });
+  } catch (_) {
+    return null;
+  }
+}
+
+/** The picked model's display name ('' when unknown; never a raw id). */
+function pinnedModelLabel(profile) {
+  const provider = profile?.detected?.provider || '';
+  let modelLabel = '';
+  try { modelLabel = require('../turn-progress').displayNameFor(profile?.displayModel, provider) || ''; } catch (_) { modelLabel = ''; }
+  if (!modelLabel) {
+    try { modelLabel = require('../ai/billing-failover').publicModelLabel(profile?.displayModel, provider) || ''; } catch (_) { modelLabel = ''; }
+  }
+  return modelLabel;
+}
+
+/**
+ * The picked model failed for a cause we cannot name (a 400, a dropped
+ * connection…): still name the model and say it was not switched, instead
+ * of react-agent's generic «…vuelve a intentarlo» apology.
+ */
+function pinnedModelGenericFailureMessage(profile) {
+  const label = pinnedModelLabel(profile) || 'El modelo elegido';
+  return `${label} no pudo responder. No cambié de modelo; elige otro en el selector o inténtalo más tarde.`;
+}
+
 function resolveAgentModelFailoverRuntime(profile, env = process.env) {
   return resolveAgentModelFailoverRuntimes(profile, env)[0] || null;
 }
@@ -1716,6 +1767,31 @@ function resolveAgentToolScopes(user = {}) {
   return Array.from(scopes);
 }
 
+// Generated files the AgentRunner edits in place (follow-up of the chat's
+// latest artifact). An html page, a script or an image keeps the loop.
+const RUNNER_EDIT_TARGET_FORMATS = new Set(['pptx', 'pptm', 'potx', 'docx', 'docm', 'dotx', 'xlsx', 'xlsm', 'xltx', 'pdf']);
+const RECENT_ARTIFACT_EDIT_FAILURE_MESSAGE = 'No pude editar el último archivo de este chat. '
+  + 'No generé un documento nuevo en su lugar para no perder tu archivo. '
+  + 'Indica qué cambio aplicar (por ejemplo, la lámina, sección o texto exacto) y lo reintento sobre el mismo archivo.';
+
+/**
+ * An edit of the chat's latest file (not a request for a NEW document): an
+ * edit request whose intent the quick editor could not plan, a follow-up
+ * edit («agrégale una lámina a la misma ppt») or a design upgrade.
+ */
+function isRecentArtifactEditTurn(text, fileIds = [], priorArtifactFormat = null) {
+  const t = String(text || '');
+  if (!t.trim()) return false;
+  try {
+    if (isSourcePreservingEditRequest(t, fileIds)) return true;
+    const agentRunner = require('../agent-runner');
+    if (agentRunner.isFollowupDocumentEdit(t)) return true;
+    return agentRunner.isDesignUpgradeRequest(t, { officeTarget: agentRunner.officeFamily(priorArtifactFormat) });
+  } catch (_) {
+    return false;
+  }
+}
+
 function shouldRunSourcePreservingEdit({
   request = '',
   fileIds = [],
@@ -1799,6 +1875,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     preferRecentArtifact = false,
     chatId = null,
     model = 'gpt-4o',
+    // Set by the /agentes task routes when the user picked the model in the
+    // composer. A picked model is never switched (owner policy): when its
+    // provider fails, the task ends with the exact cause. Internal callers
+    // (telegram, batch, codex-runs) leave it unset and keep the ladder.
+    modelPinned = false,
     maxSteps = 100,
     maxRuntimeMs = 2 * 60 * 60 * 1000,
     folderCode = null,
@@ -2081,6 +2162,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     traceId: traceId || existing?.traceId || null,
     documentPolicy,
     status: 'running',
+    modelPinned: modelPinned === true,
   });
   task.runtimeModel = runtimeModelProfile.runtimeModel;
 
@@ -2651,13 +2733,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     if (imageOnlyAttachmentTurn && !imageDeliverableRequested) {
       emit({ type: 'step_start', id: 's1', label: 'Analizando imagen', icon: 'file-text' });
       let visionAnswer = '';
+      // A picked vision model is the only runtime (owner policy); when it
+      // fails, the user reads which model and which cause.
+      let pickedVisionFailure = null;
       try {
         const aiService = require('../ai-service');
         const ocrHint = imageOnlyAttachmentRows
           .map((row) => String(row.extractedText || '').trim())
           .filter((text) => text && !/^(no text found in image|no text detected|no content available|binary file|file content could not be extracted)/i.test(text))
           .join('\n');
-        visionAnswer = String(await aiService.answerImagesWithVision(
+        const vision = await aiService.answerImagesWithVision(
           imageOnlyAttachmentRows,
           displayGoal || goal,
           {
@@ -2665,8 +2750,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             model: runtimeModelProfile.displayModel || model || '',
             ocrHint,
             signal: controller.signal,
+            pinned: modelPinned === true && runtimeModelProfile.remapped !== true,
+            detailed: true,
           },
-        ) || '').trim();
+        );
+        visionAnswer = String((vision && typeof vision === 'object' ? vision.text : vision) || '').trim();
+        if (!visionAnswer && vision && typeof vision === 'object' && vision.pickedOnly) {
+          const err = vision.error || null;
+          const failed = err
+            ? {
+              stoppedReason: `model_error: ${String(err.message || '')}`,
+              modelError: {
+                status: Number(err.status || err.statusCode || (err.response && err.response.status)) || null,
+                code: err.code != null ? String(err.code) : null,
+                message: String(err.message || '').slice(0, 200),
+              },
+            }
+            : null;
+          if (failed) recordAgentRunFailure(vision.provider || runtimeModelProfile.detected?.provider || '', failed);
+          pickedVisionFailure = (failed && pinnedModelFailureMessage(runtimeModelProfile, failed))
+            || pinnedModelGenericFailureMessage(runtimeModelProfile);
+        }
       } catch (visionErr) {
         throwIfAborted(controller.signal);
         console.warn('[agent-task] image vision answer failed:', visionErr?.message || visionErr);
@@ -2683,7 +2787,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       };
       task.documentPolicy = documentPolicy;
       return await finishDeterministicTask({
-        finalMarkdown: visionAnswer || imageAttachmentVision.buildImageVisionUnavailableAnswer(),
+        finalMarkdown: visionAnswer || pickedVisionFailure || imageAttachmentVision.buildImageVisionUnavailableAnswer(),
         stoppedReason: visionAnswer ? 'image_vision_answer' : 'image_vision_unavailable',
         steps: 1,
         artifactsList: [],
@@ -2753,109 +2857,102 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     let agentRunnerFailure = null;
     let agentRunnerRunnerOnly = false;
     let agentRunnerClaimedTurn = false;
-    if (
-      agentTaskAgentRunnerEnabled()
+    // The chat's latest generated file (P1-4 follow-up edits) and its format:
+    // an Office/PDF artifact is edited by the AgentRunner, never regenerated.
+    let agentRunnerPriorArtifacts = false;
+    let agentRunnerPriorFormat = null;
+    const agentRunnerPreloopAllowed = agentTaskAgentRunnerEnabled()
       && !plainTranscriptionRequest
       && !deterministicVancouverRequest
-      && !deterministicAttachmentAnswer
-    ) {
+      && !deterministicAttachmentAnswer;
+    const agentRunnerText = String(displayGoal || goal || '');
+    // One AgentRunner turn: the finished task when it delivered a verified
+    // file, else null with `agentRunnerFailure` set (never throws, except on
+    // a user abort). Used by the preloop claim and by the follow-up edit of
+    // the chat's latest file (preferRecentArtifact) below.
+    const invokeAgentRunnerTurn = async () => {
+      agentRunnerClaimedTurn = true;
+      const runnerText = agentRunnerText;
       try {
         const agentRunner = require('../agent-runner');
-        const runnerText = String(displayGoal || goal || '');
-        let priorArtifacts = false;
-        if (prisma && chatId) {
-          try {
-            priorArtifacts = await agentRunner.hasConversationArtifacts(prisma, {
-              userId: user.id,
-              chatId,
-            });
-          } catch (_) { priorArtifacts = false; }
-        }
-        if (agentRunner.shouldRunAgentRunner({
+        stepIdCounter += 1;
+        currentStepId = `s${stepIdCounter}`;
+        emit({ type: 'step_start', id: currentStepId, label: 'Agente de documentos trabajando', icon: 'python' });
+        const seenRunnerArtifactIds = new Set();
+        const ran = await agentRunner.executeAgentRunnerTurn({
+          prisma,
+          userId: user.id,
+          chatId,
           fileIds: files,
-          hasPriorArtifacts: priorArtifacts,
-          text: runnerText,
-        })) {
-          agentRunnerClaimedTurn = true;
-          agentRunnerRunnerOnly = agentRunner.isRunnerOnlyDocumentTurn(runnerText);
-          stepIdCounter += 1;
-          currentStepId = `s${stepIdCounter}`;
-          emit({ type: 'step_start', id: currentStepId, label: 'Agente de documentos trabajando', icon: 'python' });
-          const seenRunnerArtifactIds = new Set();
-          const ran = await agentRunner.executeAgentRunnerTurn({
-            prisma,
-            userId: user.id,
-            chatId,
-            fileIds: files,
-            instruction: runnerText,
-            // Engines follow the model picked in the composer (the ladder
-            // only takes over on provider errors).
-            pickedModel: agentRunner.runnerModelSpec(
-              runtimeModelProfile.detected && runtimeModelProfile.detected.provider,
-              runtimeModelProfile.runtimeModel,
-            ),
-            signal: controller.signal,
-            onEvent: (ev) => {
-              if (!ev) return;
-              try {
-                if (ev.type === 'file_artifact' && ev.artifact) {
-                  seenRunnerArtifactIds.add(String(ev.artifact.id || ev.artifact.downloadUrl));
-                  upsertArtifactForDelivery(artifacts, ev.artifact);
-                  emit({ type: 'file_artifact', artifact: ev.artifact });
-                  void persistence.persistGeneratedArtifact({
-                    artifact: ev.artifact,
-                    task,
-                    validation: ev.artifact.validation || null,
-                  });
-                  return;
-                }
-                if (ev.type === 'tool_call') {
-                  emit({
-                    type: 'tool_call',
-                    stepId: currentStepId,
-                    tool: ev.tool || 'agent_runner',
-                    preview: String(ev.preview || ev.label || '').slice(0, 400),
-                  });
-                } else if (ev.type === 'tool_result') {
-                  emit({
-                    type: 'tool_output',
-                    stepId: currentStepId,
-                    tool: ev.tool || 'agent_runner',
-                    ok: ev.ok !== false,
-                    preview: String(ev.preview || '').slice(0, 400),
-                  });
-                }
-              } catch (_) { /* event fan-out must never break the run */ }
-            },
-          });
-          if (ran && ran.ok && Array.isArray(ran.artifacts) && ran.artifacts.length) {
-            // persistOutputs already emitted file_artifact for each output;
-            // merge defensively so the delivery list never misses one.
-            for (const artifact of ran.artifacts) {
-              if (!artifact || !artifact.downloadUrl) continue;
-              upsertArtifactForDelivery(artifacts, artifact);
-              if (!seenRunnerArtifactIds.has(String(artifact.id || artifact.downloadUrl))) {
-                emit({ type: 'file_artifact', artifact });
+          instruction: runnerText,
+          // Engines follow the model picked in the composer (the ladder
+          // only takes over on provider errors).
+          pickedModel: agentRunner.runnerModelSpec(
+            runtimeModelProfile.detected && runtimeModelProfile.detected.provider,
+            runtimeModelProfile.runtimeModel,
+          ),
+          signal: controller.signal,
+          onEvent: (ev) => {
+            if (!ev) return;
+            try {
+              if (ev.type === 'file_artifact' && ev.artifact) {
+                seenRunnerArtifactIds.add(String(ev.artifact.id || ev.artifact.downloadUrl));
+                upsertArtifactForDelivery(artifacts, ev.artifact);
+                emit({ type: 'file_artifact', artifact: ev.artifact });
+                void persistence.persistGeneratedArtifact({
+                  artifact: ev.artifact,
+                  task,
+                  validation: ev.artifact.validation || null,
+                });
+                return;
               }
+              if (ev.type === 'tool_call') {
+                emit({
+                  type: 'tool_call',
+                  stepId: currentStepId,
+                  tool: ev.tool || 'agent_runner',
+                  preview: String(ev.preview || ev.label || '').slice(0, 400),
+                });
+              } else if (ev.type === 'tool_result') {
+                emit({
+                  type: 'tool_output',
+                  stepId: currentStepId,
+                  tool: ev.tool || 'agent_runner',
+                  ok: ev.ok !== false,
+                  preview: String(ev.preview || '').slice(0, 400),
+                });
+              }
+            } catch (_) { /* event fan-out must never break the run */ }
+          },
+        });
+        if (ran && ran.ok && Array.isArray(ran.artifacts) && ran.artifacts.length) {
+          // persistOutputs already emitted file_artifact for each output;
+          // merge defensively so the delivery list never misses one.
+          for (const artifact of ran.artifacts) {
+            if (!artifact || !artifact.downloadUrl) continue;
+            upsertArtifactForDelivery(artifacts, artifact);
+            if (!seenRunnerArtifactIds.has(String(artifact.id || artifact.downloadUrl))) {
+              emit({ type: 'file_artifact', artifact });
             }
-            emit({ type: 'step_done', id: currentStepId, ok: true });
-            currentStepId = null;
-            logDocRouting('agent_runner');
-            return await finishDeterministicTask({
-              finalMarkdown: ran.summary,
-              stoppedReason: 'agent_runner',
-              steps: stepIdCounter,
-              artifactsList: artifacts,
-              metadata: { servedBy: 'agent_runner' },
-            });
           }
-          emit({ type: 'step_done', id: currentStepId, ok: false });
+          emit({ type: 'step_done', id: currentStepId, ok: true });
           currentStepId = null;
-          agentRunnerFailure = {
-            reason: ran?.stoppedReason || 'no_output',
-            detail: ran?.errorMessage || null,
-          };
+          logDocRouting('agent_runner');
+          return await finishDeterministicTask({
+            finalMarkdown: ran.summary,
+            stoppedReason: 'agent_runner',
+            steps: stepIdCounter,
+            artifactsList: artifacts,
+            metadata: { servedBy: 'agent_runner' },
+          });
         }
+        emit({ type: 'step_done', id: currentStepId, ok: false });
+        currentStepId = null;
+        agentRunnerFailure = {
+          reason: ran?.stoppedReason || 'no_output',
+          detail: ran?.errorMessage || null,
+        };
+        return null;
       } catch (agentRunnerErr) {
         if (controller.signal.aborted || externalSignal?.aborted) throw agentRunnerErr;
         console.warn('[agent-task-runner] agent-runner preloop failed:', agentRunnerErr?.message || agentRunnerErr);
@@ -2863,12 +2960,46 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           emit({ type: 'step_done', id: currentStepId, ok: false });
           currentStepId = null;
         }
-        if (agentRunnerClaimedTurn) {
-          agentRunnerFailure = {
-            reason: 'exception',
-            detail: agentRunnerErr?.message || String(agentRunnerErr),
-          };
+        agentRunnerFailure = {
+          reason: 'exception',
+          detail: agentRunnerErr?.message || String(agentRunnerErr),
+        };
+        return null;
+      }
+    };
+    if (agentRunnerPreloopAllowed) {
+      try {
+        const agentRunner = require('../agent-runner');
+        if (prisma && chatId) {
+          try {
+            agentRunnerPriorArtifacts = await agentRunner.hasConversationArtifacts(prisma, {
+              userId: user.id,
+              chatId,
+            });
+            if (agentRunnerPriorArtifacts) {
+              agentRunnerPriorFormat = await agentRunner.getConversationArtifactFormat(prisma, {
+                userId: user.id,
+                chatId,
+                instruction: agentRunnerText,
+              });
+            }
+          } catch (_) { /* routing falls back to what was read */ }
         }
+        if (agentRunner.shouldRunAgentRunner({
+          fileIds: files,
+          hasPriorArtifacts: agentRunnerPriorArtifacts,
+          priorArtifactFormat: agentRunnerPriorFormat,
+          text: agentRunnerText,
+        })) {
+          agentRunnerRunnerOnly = agentRunner.isRunnerOnlyDocumentTurn(agentRunnerText, {
+            priorArtifactFormat: agentRunnerPriorFormat,
+          });
+          const finished = await invokeAgentRunnerTurn();
+          if (finished) return finished;
+        }
+      } catch (agentRunnerErr) {
+        if (controller.signal.aborted || externalSignal?.aborted) throw agentRunnerErr;
+        console.warn('[agent-task-runner] agent-runner preloop failed:', agentRunnerErr?.message || agentRunnerErr);
       }
     }
 
@@ -2905,6 +3036,48 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           llm: documentEditLlm,
           onEvent: (stage) => { try { emit({ type: 'checkpoint', label: stage.label, status: 'running', payload: stage.detail ? { detail: stage.detail } : {} }); } catch (_) { /* relay */ } },
         });
+        if (preserved === null && preferRecentArtifact && agentRunnerPreloopAllowed
+          && agentRunnerPriorArtifacts
+          && RUNNER_EDIT_TARGET_FORMATS.has(String(agentRunnerPriorFormat || '').toLowerCase())
+          && isRecentArtifactEditTurn(agentRunnerText, files, agentRunnerPriorFormat)) {
+          // P1-4: the UI asked to edit the chat's latest file, but the quick
+          // editor found no base or could not plan the edit. The AgentRunner
+          // loads that artifact (R2 included) and edits it; a fresh document
+          // in its place would silently drop the user's file.
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+          if (!agentRunnerClaimedTurn) {
+            let finished = null;
+            try {
+              finished = await invokeAgentRunnerTurn();
+            } catch (abortErr) {
+              // Only a user abort escapes invokeAgentRunnerTurn: let it
+              // cancel the task instead of being reported as a failed edit.
+              if (abortErr && typeof abortErr === 'object') abortErr.__agentRunnerAbort = true;
+              throw abortErr;
+            }
+            if (finished) return finished;
+          }
+          let honestAnswer = null;
+          try {
+            honestAnswer = agentRunnerFailure
+              ? require('../agent-runner').buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail)
+              : null;
+          } catch (_) { honestAnswer = null; }
+          honestAnswer = honestAnswer || RECENT_ARTIFACT_EDIT_FAILURE_MESSAGE;
+          logDocRouting('agent_runner_failed', `recent_artifact_edit_${agentRunnerFailure ? agentRunnerFailure.reason : 'no_source'}`);
+          return await finishDeterministicTask({
+            finalMarkdown: honestAnswer,
+            stoppedReason: 'agent_runner_failed',
+            steps: stepIdCounter,
+            artifactsList: [],
+            metadata: {
+              servedBy: 'agent_runner',
+              agentRunnerFailure: agentRunnerFailure ? agentRunnerFailure.reason : 'no_source',
+              recentArtifactEdit: true,
+            },
+          });
+        }
         if (preserved === null) {
           // No había archivo adjunto ni artefacto previo que conservar: la
           // petición es en realidad un documento NUEVO. Señalamos el caso con
@@ -3013,6 +3186,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
       } catch (err) {
+        if (err && err.__agentRunnerAbort) throw err;
         if (err && err.__fallthroughFreshDocument) {
           // Sin archivo base que conservar: cerramos el paso de edición y
           // dejamos que el flujo genere un documento nuevo más abajo en lugar
@@ -3800,7 +3974,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // so the picker, the chat and the next task skip it.
       recordAgentRunFailure(runtimeTransport, result);
     }
-    if (modelFailed && agentModelFailoverEnabled()) {
+    // A model the user picked (and that the runner really runs, not a
+    // remapped stand-in) keeps its provider: no ladder, honest cause below.
+    const pickedModelKept = modelPinned === true && runtimeModelProfile.remapped !== true;
+    if (modelFailed && agentModelFailoverEnabled() && !pickedModelKept) {
       const failoverRuntimes = resolveAgentModelFailoverRuntimes(runtimeModelProfile);
       let previousRung = `${runtimeTransport}:${runtimeModelProfile.runtimeModel}`;
       for (const failoverRuntime of failoverRuntimes) {
@@ -3839,7 +4016,25 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     let finalMarkdown = result.finalAnswer || '';
     let stoppedReason = result.stoppedReason;
-    const attachmentFinalNeedsRecovery = Array.isArray(files) && files.length > 0 && (
+    // The picked model itself failed and was kept: its honest copy is the
+    // answer. No attachment-recovery pass may answer with another model
+    // (the copy's «vuelve a intentarlo» would otherwise read as a «missing
+    // attachment» answer and trigger it).
+    const pickedModelFailed = modelFailed && pickedModelKept && isUnrecoveredModelFailure(result.stoppedReason);
+    if (pickedModelFailed) {
+      // Which model, which cause (sin saldo / clave rechazada / no responde /
+      // límite por minuto…), instead of react-agent's generic apology; an
+      // unknown cause still names the model and says it was not switched.
+      finalMarkdown = pinnedModelFailureMessage(runtimeModelProfile, result)
+        || pinnedModelGenericFailureMessage(runtimeModelProfile);
+      emit({
+        type: 'checkpoint',
+        label: 'El modelo elegido no pudo responder',
+        status: 'warning',
+        payload: { reason: result.stoppedReason, modelKept: true },
+      });
+    }
+    const attachmentFinalNeedsRecovery = !pickedModelFailed && Array.isArray(files) && files.length > 0 && (
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
@@ -4364,6 +4559,9 @@ module.exports = {
   agentModelFailoverEnabled,
   resolveAgentModelFailoverRuntime,
   resolveAgentModelFailoverRuntimes,
+  pinnedModelFailureMessage,
+  pinnedModelGenericFailureMessage,
+  isRecentArtifactEditTurn,
   agentRunModelError,
   agentRuntimeTransport,
   isUnrecoveredModelFailure,

@@ -28,6 +28,10 @@ describe("chat stream error preservation contract", () => {
       "the error callback must retain pending storage for retry")
     assert.doesNotMatch(errorBlock, /bg\.complete\(/,
       "the error callback must not mark the background stream done")
+    assert.match(errorBlock, /markTurnTerminal\(activeChat\.id, turnIdempotencyKey, pendingOwnerId, failure\.kind\)/,
+      "a non-retryable failure keeps the draft for a manual retry only")
+    assert.match(errorBlock, /if \(failure\.retryable && !\(error as any\)\?\.contentDelivered\) \{/,
+      "only retryable kinds with nothing painted yet stay automatic")
 
     assert.match(
       source,

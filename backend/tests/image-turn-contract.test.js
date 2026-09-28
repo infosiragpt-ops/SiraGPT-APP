@@ -119,6 +119,31 @@ describe('refreshProcessedFileExtracts (turn path)', () => {
     }
   });
 
+  test('live progress: waiting for the pipeline is reported with the file name and the words it produced', async () => {
+    const processor = fakeProcessor();
+    const events = [];
+    const tmp = path.join(os.tmpdir(), `turn-progress-${Date.now()}.pdf`);
+    fs.writeFileSync(tmp, 'pdf');
+    const rows = { 'doc-9': { processingStage: 'extracting', extractedText: null } };
+    const pipeline = singleflight.runExtractionOnce('doc-9', () => new Promise((resolve) => setTimeout(() => {
+      rows['doc-9'] = { processingStage: 'ready', extractedText: USEFUL_TEXT };
+      resolve({ extractedText: USEFUL_TEXT });
+    }, 40)));
+    try {
+      const out = await recovery.refreshProcessedFileExtracts(fakePrisma(rows), [
+        { id: 'doc-9', originalName: 'contrato.pdf', mimeType: 'application/pdf', path: tmp, extractedText: '' },
+      ], { fileProcessor: processor, waitMs: 5000, onProgress: (ev) => { events.push(ev); throw new Error('sink'); } });
+      await pipeline;
+      assert.equal(out[0].extractedText, USEFUL_TEXT, 'a throwing sink changes nothing');
+      assert.deepEqual(events.map((e) => e.type), ['extract_wait', 'extract_done']);
+      assert.equal(events[0].file, 'contrato.pdf');
+      assert.equal(events[1].words, USEFUL_TEXT.trim().split(/\s+/).length);
+      assert.doesNotMatch(JSON.stringify(events), /Contenido extraído/);
+    } finally {
+      fs.unlinkSync(tmp);
+    }
+  });
+
   test('the wait for the pipeline is bounded', async () => {
     const processor = fakeProcessor();
     const rows = { 'doc-2': { processingStage: 'extracting', extractedText: null } };
