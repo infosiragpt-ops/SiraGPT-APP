@@ -219,7 +219,7 @@ function raceWithTimeout(promise, ms) {
  *   durationMs: number,
  * }>}
  */
-async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileIds, fallback, timeoutMs }) {
+async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileIds, fallback, timeoutMs, env = process.env, deps = {} }) {
   const t0 = Date.now();
   const effTimeoutMs = resolverTimeoutMs(timeoutMs);
   const hint = Array.isArray(fileIds) && fileIds.length > 0
@@ -233,36 +233,31 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
   // against the DeepSeek base URL fails fast with HTTP 400 ("the
   // supported API model names are deepseek-v4-pro or deepseek-v4-flash").
   //
-  // Strategy, in priority order:
+  // Strategy, in priority order (see pickResolverRuntime):
   //   1. If the caller's client looks like DeepSeek's baseURL, remap
   //      the model to deepseek-v4-flash (cheap, structured-outputs
   //      compatible, same JSON-schema mode).
-  //   2. If we have OPENAI_API_KEY in the environment AND the caller's
-  //      client is NOT OpenAI-native, build a lightweight OpenAI
-  //      client just for the contract resolver and use gpt-4o-mini.
-  //      This decouples the resolver from whatever provider the chat
-  //      flow happens to be routing through.
-  //   3. Otherwise honor whatever (client, model) the caller passed.
+  //   2. Caller's client is OpenAI-native AND OpenAI's key is healthy →
+  //      honor (client, model).
+  //   3. Otherwise walk the runtime ladder (OpenAI → DeepSeek → Cerebras →
+  //      Gemini) and build a side-channel client on the first provider
+  //      whose key is configured and not rejected/unfunded
+  //      (provider-key-health + billing-failover memos). Prod 2026-09-28:
+  //      every request spent a 429 «You have no credits remaining» on the
+  //      dead OpenAI key before falling back to the heuristic.
+  //   4. Nothing healthy → skip the LLM entirely (heuristic fallback).
   let effectiveOpenai = openai;
   let effectiveModel = model;
+  let effectiveProvider = null;
+  let effectiveKey = '';
   try {
-    const baseURL = openai?.baseURL || openai?.client?.baseURL || openai?._options?.baseURL || '';
-    const isDeepseek = /(^|\.)deepseek\.com/i.test(String(baseURL));
-    const isOpenAINative = !baseURL || /(^|\.)openai\.com/i.test(String(baseURL));
-    if (isDeepseek) {
-      // Remap to a DeepSeek model the API will accept.
-      effectiveModel = /pro/i.test(String(model)) ? 'deepseek-v4-pro' : 'deepseek-v4-flash';
-    } else if (!isOpenAINative && process.env.OPENAI_API_KEY) {
-      // Try to spin up a side-channel OpenAI client. If `openai`
-      // package isn't installed (unlikely — it's used elsewhere) or
-      // construction fails, fall back to the caller's client.
-      try {
-        const OpenAI = require('openai');
-        effectiveOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-        effectiveModel = model || 'gpt-4o-mini';
-      } catch (_e) {
-        // Keep caller's client + model — last resort.
-      }
+    const picked = pickResolverRuntime({ openai, model, env, deps });
+    effectiveOpenai = picked.client;
+    effectiveModel = picked.model;
+    effectiveProvider = picked.provider;
+    effectiveKey = picked.key;
+    if (picked.skipped) {
+      logResolverFailureOnce(`skip:${picked.skipped}`, `[task-contract-resolver] LLM resolve skipped: ${picked.skipped}; using the heuristic contract`);
     }
   } catch (_e) {
     // Defensive: never abort the resolver because of introspection.
@@ -309,15 +304,166 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
         };
       }
     } catch (err) {
-      // Log once per failure so we can tell structured-output drift
-      // apart from network flakes, but don't throw — fall back.
-      console.warn("[task-contract-resolver] LLM resolve failed:", err?.message || err);
+      // Memoise a dead/unfunded key so the next request skips this
+      // provider without a round-trip, then log — once per reason per
+      // 10 min, not per request — and fall back.
+      noteResolverProviderFailure({ provider: effectiveProvider, key: effectiveKey, err, env, deps });
+      const status = Number(err?.status || err?.statusCode) || null;
+      logResolverFailureOnce(
+        `fail:${effectiveProvider || 'client'}:${status || 'err'}:${String(err?.message || err).slice(0, 80)}`,
+        `[task-contract-resolver] LLM resolve failed${effectiveProvider ? ` (${effectiveProvider}:${effectiveModel})` : ''}: ${err?.message || err}`,
+      );
     }
   }
 
   const contract = fallback ? fallback({ goal, fileIds }) : makeEmptyContract(goal);
   return { contract, source: "fallback", durationMs: Date.now() - t0 };
 }
+
+// ── Runtime ladder (key health aware) ────────────────────────────────────
+
+const RESOLVER_LOG_DEBOUNCE_MS = 10 * 60 * 1000;
+const resolverLogMemo = new Map(); // reason → last logged at
+
+function logResolverFailureOnce(reason, line, now = Date.now()) {
+  const last = resolverLogMemo.has(reason) ? resolverLogMemo.get(reason) : null;
+  if (last !== null && now - last < RESOLVER_LOG_DEBOUNCE_MS) {
+    try { console.debug(line); } catch (_) { /* ignore */ }
+    return false;
+  }
+  resolverLogMemo.set(reason, now);
+  console.warn(line);
+  return true;
+}
+
+function resolverRuntimeLadder(env = process.env) {
+  return [
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: null },
+    { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
+    {
+      provider: 'Cerebras',
+      apiKeyEnv: 'CEREBRAS_API_KEY',
+      baseURL: env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
+      model: env.AGENT_TASK_CEREBRAS_MODEL || env.FREE_IA_MODEL_ID || 'gpt-oss-120b',
+    },
+    {
+      provider: 'Gemini',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      model: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+    },
+  ];
+}
+
+function resolverDeps(deps = {}) {
+  return {
+    keyHealth: deps.keyHealth || require('../../utils/provider-key-health'),
+    billing: deps.billing || require('../ai/billing-failover'),
+    createClient: deps.createClient || defaultCreateClient,
+  };
+}
+
+function defaultCreateClient(target, env) {
+  const OpenAI = require('openai');
+  const opts = { apiKey: env[target.apiKeyEnv] };
+  if (target.baseURL) opts.baseURL = target.baseURL;
+  const timeoutMs = Number.parseInt(env.AGENT_TASK_LLM_TIMEOUT_MS || '', 10);
+  opts.timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
+  opts.maxRetries = 1;
+  const client = new OpenAI(opts);
+  if (target.provider === 'OpenAI') {
+    try { return require('../ai/openai-sampling-params').wrapOpenAIChatClient(client); } catch (_) { return client; }
+  }
+  return client;
+}
+
+// Placeholder keys (CI dummies, templates) never build a side channel — the
+// same rule as embedding-provider, so offline suites stay offline.
+const PLACEHOLDER_KEY_RE = /dummy|not-used|ci-dummy|test-key|^your_|^sk-xxx|^changeme$/i;
+
+/** Why the provider must be skipped right now, or null when usable. */
+function providerBlockedReason(target, env, { keyHealth, billing }) {
+  const key = String(env[target.apiKeyEnv] || '').trim();
+  if (!key || PLACEHOLDER_KEY_RE.test(key)) return 'no_key';
+  try {
+    if (keyHealth.isRejected(target.provider, key)) {
+      const reason = typeof keyHealth.rejectionReason === 'function' ? keyHealth.rejectionReason(target.provider, key) : null;
+      return reason === 'billing' ? 'unfunded' : 'key_rejected';
+    }
+  } catch (_) { /* advisory */ }
+  try {
+    if (billing.isOutOfCredit(target.provider, env)) return 'unfunded';
+  } catch (_) { /* advisory */ }
+  return null;
+}
+
+function pickResolverRuntime({ openai, model, env = process.env, deps = {} } = {}) {
+  const d = resolverDeps(deps);
+  const baseURL = openai?.baseURL || openai?.client?.baseURL || openai?._options?.baseURL || '';
+  const isDeepseek = /(^|\.)deepseek\.com/i.test(String(baseURL));
+  const isOpenAINative = Boolean(openai) && (!baseURL || /(^|\.)openai\.com/i.test(String(baseURL)));
+  const ladder = resolverRuntimeLadder(env);
+  const openaiTarget = ladder[0];
+
+  if (openai && isDeepseek) {
+    return {
+      client: openai,
+      model: /pro/i.test(String(model)) ? 'deepseek-v4-pro' : 'deepseek-v4-flash',
+      provider: 'DeepSeek',
+      key: String(env.DEEPSEEK_API_KEY || '').trim(),
+      skipped: null,
+    };
+  }
+
+  const openaiBlocked = providerBlockedReason(openaiTarget, env, d);
+  if (isOpenAINative && (!openaiBlocked || openaiBlocked === 'no_key')) {
+    // The caller's own OpenAI client (its key may not be in env — e.g. a
+    // per-user key); honor it unless OpenAI is known to be dead/unfunded.
+    return { client: openai, model, provider: 'OpenAI', key: String(env.OPENAI_API_KEY || '').trim(), skipped: null };
+  }
+
+  const blocked = [];
+  for (const target of ladder) {
+    const why = providerBlockedReason(target, env, d);
+    if (why) { if (why !== 'no_key') blocked.push(`${target.provider}:${why}`); continue; }
+    let client = null;
+    try { client = d.createClient(target, env); } catch (_) { client = null; }
+    if (!client) continue;
+    return {
+      client,
+      model: target.provider === 'OpenAI' ? (model || 'gpt-4o-mini') : target.model,
+      provider: target.provider,
+      key: String(env[target.apiKeyEnv] || '').trim(),
+      skipped: null,
+    };
+  }
+
+  if (openai && !isOpenAINative) {
+    // Unknown caller client (OpenRouter, custom…) and no side channel: keep
+    // the legacy behaviour and try it as-is.
+    return { client: openai, model, provider: null, key: '', skipped: null };
+  }
+  return {
+    client: null,
+    model,
+    provider: null,
+    key: '',
+    skipped: blocked.length ? `no funded provider (${blocked.join(', ')})` : 'no provider configured',
+  };
+}
+
+function noteResolverProviderFailure({ provider, key, err, env = process.env, deps = {} }) {
+  if (!provider || !err) return;
+  const d = resolverDeps(deps);
+  try {
+    if (d.billing.isBillingError(err)) { d.billing.markOutOfCredit(provider, err, env); return; }
+  } catch (_) { /* advisory */ }
+  try {
+    if (key && d.keyHealth.isInvalidKeyError(err)) d.keyHealth.markRejected(provider, key, err, env);
+  } catch (_) { /* advisory */ }
+}
+
+function __resetResolverForTests() { resolverLogMemo.clear(); }
 
 /**
  * OpenAI's json_schema mode is stricter than general ajv — every
@@ -395,6 +541,11 @@ function validateContract(contract) {
 
 module.exports = {
   resolveTaskContract,
+  pickResolverRuntime,
+  resolverRuntimeLadder,
+  logResolverFailureOnce,
+  RESOLVER_LOG_DEBOUNCE_MS,
+  __resetResolverForTests,
   validateContract,
   makeEmptyContract,
   toStrictOpenAISchema,

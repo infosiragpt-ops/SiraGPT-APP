@@ -86,6 +86,7 @@ const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
+const { wrapOpenAIChatClient } = require('../services/ai/openai-sampling-params');
 const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
 const conversationCompactor = require('../services/conversation-compactor');
@@ -454,9 +455,11 @@ function createProviderClient(provider, opts = {}) {
 
   // Custom / Ollama / HuggingFace already handled at the top via
   // createCustomProviderClient — never fall through to OpenAI.
-  return new OpenAI({
+  // First-party OpenAI: reasoning-class models reject temperature/top_p, so
+  // the client strips them up front and retries once on «Unsupported value».
+  return wrapOpenAIChatClient(new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
-  });
+  }));
 }
 
 /**
@@ -2766,7 +2769,24 @@ router.post(
             return streamDuplicateTurnReplay(res, activeWait.turn, model);
           }
           if (activeWait.error) {
+            // The owner of this idempotency key failed. Parallel replays of
+            // the same request (agents' eval bursts: 20–30 identical turns)
+            // used to each start a fresh generate here; now every follower
+            // gets a retryable 409 (plain JSON, no tracker row — 409 is not
+            // a recordable turn failure) and only a new request becomes the
+            // owner.
             generateLog.warnError('idempotency.active_turn_wait_failed', activeWait.error);
+            if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
+              activeGenerateTurns.delete(activeGenerateTurnKey);
+            }
+            controller.abort();
+            return respondGenerateTurnError(res, {
+              code: 'active_turn_failed',
+              message: 'La generación anterior de este mismo mensaje falló. Reintenta en unos segundos.',
+              retryable: true,
+              retryAfterSeconds: 2,
+              actualModel: model,
+            });
           }
           // start a fresh generate after that stream closed.
           if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {

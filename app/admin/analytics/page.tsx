@@ -21,6 +21,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { apiClient } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context-integrated"
 import { toast } from "sonner"
 
 const COLORS = ["#0f172a", "#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed"]
@@ -154,6 +155,10 @@ export default function AnalyticsPage() {
   const [analytics, setAnalytics] = useState<AnalyticsState | null>(null)
   const [timeRange, setTimeRange] = useState("7d")
   const [loading, setLoading] = useState(false)
+  const { user } = useAuth()
+  // GET /api/admin/stats/product-quality is super-admin only (admin-route-policy);
+  // an admin session must not spend a 403 on it every visit.
+  const canReadProductQuality = Boolean(user?.isSuperAdmin)
 
   const loadAnalytics = async () => {
     setLoading(true)
@@ -163,7 +168,7 @@ export default function AnalyticsPage() {
         apiClient.getAnalytics(),
         apiClient.getAdminUserStats(range),
         apiClient.getAdminUsageStats(range),
-        apiClient.getAdminProductQualityStats(range),
+        canReadProductQuality ? apiClient.getAdminProductQualityStats(range) : Promise.resolve(null),
       ])
 
       if (summaryResult.status !== "fulfilled") throw summaryResult.reason
@@ -173,7 +178,7 @@ export default function AnalyticsPage() {
         userStats: userStatsResult.status === "fulfilled" ? (userStatsResult.value as UserStatsPayload) : null,
         usageStats: usageStatsResult.status === "fulfilled" ? (usageStatsResult.value as UsageStatsPayload) : null,
         productQuality: productQualityResult.status === "fulfilled"
-          ? (productQualityResult.value as ProductQualityPayload)
+          ? ((productQualityResult.value as ProductQualityPayload | null) ?? null)
           : null,
       })
     } catch (error: any) {
@@ -187,7 +192,7 @@ export default function AnalyticsPage() {
   useEffect(() => {
     loadAnalytics()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeRange])
+  }, [timeRange, canReadProductQuality])
 
   const userGrowth = useMemo(() => {
     return (analytics?.userStats?.signupTrend || []).map((row) => ({
