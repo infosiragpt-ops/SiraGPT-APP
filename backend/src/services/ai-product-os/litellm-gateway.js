@@ -1,6 +1,7 @@
 "use strict";
 
 const { resolveAnthropicEffortControls } = require("../providers/anthropic-effort");
+const { stripUnsupportedSampling } = require("../ai/openai-sampling-params");
 
 /**
  * litellm-gateway — internal LiteLLM-inspired model gateway.
@@ -356,12 +357,14 @@ function buildProviderChatPayload({
 }
 
 function stripUnsupportedSamplingFields(payload, runtime) {
-  // GPT-6 Sol's first-party API accepts only its default temperature. Chat
-  // supplies 0.55 by default, including its non-streaming corrective pass.
-  // Omitting the field keeps the selected model and lets the API use its
-  // default rather than failing the entire turn with a 400.
-  if (runtime.provider === "openai" && runtime.model_id === "gpt-6-sol") {
-    delete payload.temperature;
+  // Reasoning-class OpenAI models (gpt-6*, gpt-5*, o1/o3/o4) accept only
+  // their default temperature/top_p and no penalties. Chat supplies 0.55 by
+  // default, including its non-streaming corrective pass. Omitting the
+  // fields keeps the selected model and lets the API use its defaults rather
+  // than failing the entire turn with a 400 — the memo of models that
+  // rejected a knob at runtime is honoured too (services/ai/openai-sampling-params).
+  if (runtime.provider === "openai") {
+    stripUnsupportedSampling(runtime.model_id, payload);
   }
   return payload;
 }

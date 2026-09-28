@@ -12,7 +12,9 @@
  * saves a different key (fingerprint mismatch).
  */
 
-const { fingerprint } = require('../../utils/provider-key-health');
+const keyHealth = require('../../utils/provider-key-health');
+
+const { fingerprint } = keyHealth;
 
 const DEFAULT_MEMO_MS = 10 * 60 * 1000;
 const outOfCredit = new Map(); // provider (lowercase) → { at, keyFp, ttlMs, status, reason }
@@ -32,8 +34,11 @@ const PROVIDER_KEY_ENVS = Object.freeze({
   'z.ai': ['ZAI_API_KEY'],
 });
 
-// Default preference among funded providers when several can answer.
-const DEFAULT_ORDER = ['xAI', 'DeepSeek', 'Gemini', 'OpenAI', 'Anthropic', 'Meta', 'Kimi', 'OpenRouter', 'Mistral', 'Groq', 'Cerebras', 'Z.ai'];
+// Default preference among funded providers when several can answer. The
+// cheap, prepaid-free rungs go first (prod 2026-09-28: OpenAI, Anthropic and
+// xAI ran out of credit the same night; DeepSeek/Cerebras/Gemini kept
+// answering).
+const DEFAULT_ORDER = ['DeepSeek', 'Cerebras', 'Gemini', 'Groq', 'Mistral', 'OpenRouter', 'xAI', 'OpenAI', 'Anthropic', 'Meta', 'Kimi', 'Z.ai'];
 
 // Never a failover target: decision model, local Mini, custom endpoints.
 const NON_CHAT_PROVIDER_RE = /^(typesafe|custom|sira|ollama|huggingface)$/i;
@@ -86,20 +91,26 @@ function isBillingError(err) {
   const text = errorText(err);
   if (/rate[_ ]?limit(?!.*quota)|too many requests/i.test(text) && !/quota|credit|balance/i.test(text)) return false;
   if (status === 402) return true;
-  return /credit balance is too low|credit_balance|insufficient[_ ]?(balance|credits?|funds|quota)|payment required|billing verification failed|exceeded your current quota|out of credits|no credits? (left|remaining)|purchase credits/i.test(text);
+  return /credit balance is too low|credit_balance|insufficient[_ ]?(balance|credits?|funds|quota)|payment required|billing verification failed|exceeded your current quota|out of credits?|no credits? (left|remaining)|purchase credits|used all (?:of )?(?:your |the )?(?:available )?credits|spending (?:limit|cap)|billing (?:hard )?limit|(?:top up|recharge|add) (?:your )?(?:credits|balance)|quota exceeded|plan quota|monthly (?:api |plan |)?(?:limit|quota) exceeded/i.test(text);
 }
 
 function markOutOfCredit(provider, err = null, env = process.env) {
   const name = normProvider(provider);
   if (!name) return;
   const status = Number((err && (err.status || err.statusCode)) || 0) || null;
+  const key = currentKeyFor(provider, env);
   outOfCredit.set(name, {
     at: Date.now(),
-    keyFp: fingerprint(currentKeyFor(provider, env)),
+    keyFp: fingerprint(key),
     ttlMs: memoMs(env),
     status,
     reason: String((err && err.message) || '').slice(0, 160),
   });
+  // Every ladder that consults provider-key-health (agent runner failover,
+  // embeddings, vision, contract resolver) skips the unfunded key too.
+  if (key) {
+    try { keyHealth.markRejected(name, key, err, env, { reason: 'billing', ttlMs: memoMs(env) }); } catch (_) { /* advisory */ }
+  }
   // The picker lists «Sin saldo» from this memo; drop the cached list.
   try { require('../../middleware/response-cache').invalidate({ namespace: 'ai-models' }); } catch (_) { /* optional */ }
 }
@@ -116,6 +127,16 @@ function isOutOfCredit(provider, env = process.env) {
 function clear(provider = null) {
   if (provider == null) { outOfCredit.clear(); return; }
   outOfCredit.delete(normProvider(provider));
+}
+
+/**
+ * True when the provider cannot answer for billing reasons right now: its
+ * own memo, or a key-health rejection (auth or billing) of the current key.
+ */
+function isUnfunded(provider, env = process.env, health = keyHealth) {
+  if (isOutOfCredit(provider, env)) return true;
+  const key = currentKeyFor(provider, env);
+  return Boolean(key) && Boolean(health && typeof health.isRejected === 'function' && health.isRejected(normProvider(provider), key));
 }
 
 function snapshot() {
@@ -166,6 +187,9 @@ async function pickFailoverModel({
   fromProvider,
   fromModel,
   needsVision = false,
+  // Providers already tried in this turn (a fallback that turned out to be
+  // unfunded too). Always skipped, even before their memo lands.
+  excludeProviders = [],
   prisma = null,
   env = process.env,
   deps = {},
@@ -192,6 +216,7 @@ async function pickFailoverModel({
   }
   const curated = catalog.curateVisibleTextModels(rows, env);
   const fromName = normProvider(fromProvider);
+  const excluded = new Set([fromName, ...(Array.isArray(excludeProviders) ? excludeProviders : [])].map(normProvider).filter(Boolean));
   const fromRow = rows.find((r) => r && r.name === fromModel) || null;
   const wantTier = tierOf(`${fromModel || ''} ${fromRow ? fromRow.displayName || '' : ''}`);
   const order = providerOrder(env);
@@ -202,7 +227,7 @@ async function pickFailoverModel({
     let provider = row.provider;
     try { provider = inference.resolveGenerateProvider(row.provider, row.name) || row.provider; } catch (_) { /* keep */ }
     const pName = normProvider(provider);
-    if (!pName || pName === fromName) return;
+    if (!pName || excluded.has(pName)) return;
     if (NON_CHAT_PROVIDER_RE.test(pName)) return;
     if (typeof inference.providerConnectionReady === 'function' && !inference.providerConnectionReady(provider, env)) return;
     if (isOutOfCredit(provider, env)) return;
@@ -240,13 +265,14 @@ function buildNotice({ fromLabel, toLabel }) {
   return `${from} no está disponible ahora (el proveedor no tiene saldo); respondí con ${to}.`;
 }
 
-function __resetForTests() { outOfCredit.clear(); }
+function __resetForTests() { outOfCredit.clear(); try { keyHealth.clear(); } catch (_) { /* optional */ } }
 
 module.exports = {
   enabled,
   isBillingError,
   markOutOfCredit,
   isOutOfCredit,
+  isUnfunded,
   clear,
   snapshot,
   tierOf,

@@ -79,10 +79,18 @@ function fakeDeps({ outOfCredit = [], notReady = [], rejected = [], vision = {} 
 test('pickFailoverModel: comparable tier from the picker list, funded and configured, never the same provider', async () => {
   billing.__resetForTests();
   const pick = await billing.pickFailoverModel({ fromProvider: 'Anthropic', fromModel: 'claude-fable-5-1', env: {}, deps: fakeDeps() });
-  assert.equal(pick.provider, 'xAI');
-  assert.equal(pick.model, 'grok-4.7');
-  assert.equal(pick.label, 'Grok 4.7');
+  // Ladder since 2026-09-28: DeepSeek → Cerebras → Gemini → Groq → Mistral →
+  // OpenRouter → xAI … (the prepaid providers ran dry together in prod).
+  assert.equal(pick.provider, 'DeepSeek');
+  assert.equal(pick.model, 'deepseek-v4-pro');
+  assert.equal(pick.label, 'DeepSeek V4 Pro');
   assert.equal(pick.fromLabel, 'Claude Fable 5.1');
+  const legacyOrder = await billing.pickFailoverModel({
+    fromProvider: 'Anthropic', fromModel: 'claude-fable-5-1', env: { SIRAGPT_BILLING_FAILOVER_ORDER: 'xAI,DeepSeek' }, deps: fakeDeps(),
+  });
+  assert.equal(legacyOrder.provider, 'xAI', 'SIRAGPT_BILLING_FAILOVER_ORDER still overrides');
+  assert.equal(legacyOrder.model, 'grok-4.7');
+  assert.equal(legacyOrder.label, 'Grok 4.7');
 
   // Fast tier asks for a fast model first.
   const fast = await billing.pickFailoverModel({ fromProvider: 'Gemini', fromModel: 'gemini-3.8-flash', env: {}, deps: fakeDeps() });

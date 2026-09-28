@@ -1033,7 +1033,36 @@ function usesNativeOpenAiCompletionTokens(model, client) {
   return /^(?:gpt-|o[1-9])/i.test(String(model || ''));
 }
 
-async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken }) {
+function describeRepairKinds(kinds) {
+  const entries = Object.entries(kinds || {}).filter(([, n]) => n > 0);
+  return entries.length ? entries.map(([k, n]) => `${k}×${n}`).join(', ') : '';
+}
+
+/**
+ * Log a transcript repair: WARN the first time per turn (with the fix kinds),
+ * debug afterwards. The same orphan results survive every iteration of a
+ * task, so without `repairLog` (one object per runAgentLoop call) the WARN
+ * repeated 10+ times per request (prod req cccc319b, 2026-09-28).
+ */
+function logTranscriptRepair(normalized, repairLog) {
+  if (!normalized || !(normalized.repaired > 0)) return;
+  const kinds = describeRepairKinds(normalized.kinds);
+  const line = `[agent-runner] tool transcript repaired (${normalized.repaired} fix${normalized.repaired === 1 ? '' : 'es'}${kinds ? `: ${kinds}` : ''}) before the LLM call`;
+  try {
+    if (repairLog && typeof repairLog === 'object') {
+      if (repairLog.warned) {
+        repairLog.count = (repairLog.count || 0) + 1;
+        console.debug(`${line} (repeat ${repairLog.count})`);
+        return;
+      }
+      repairLog.warned = true;
+      repairLog.count = 1;
+    }
+    console.warn(line);
+  } catch (_) { /* ignore */ }
+}
+
+async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken, repairLog = null }) {
   const tokenLimit = maxTokens || resolveAgentRunnerMaxTokens();
   // The request payload is a structurally valid copy of the transcript: the
   // compaction / pruning hooks may leave orphan tool results or unanswered
@@ -1041,9 +1070,7 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
   // Gemini, xAI) reject with a 400. The runner's own `messages` state is
   // never mutated here.
   const normalized = normalizeToolTranscript(messages);
-  if (normalized.repaired > 0) {
-    try { console.warn(`[agent-runner] tool transcript repaired (${normalized.repaired} fix${normalized.repaired === 1 ? '' : 'es'}) before the LLM call`); } catch (_) { /* ignore */ }
-  }
+  logTranscriptRepair(normalized, repairLog);
   const create = (withTools) => client.chat.completions.create({
     model,
     messages: normalized.messages,
@@ -1124,6 +1151,8 @@ async function runAgentLoop({
     ? (args) => adapter.enforceTotalTurnWall120s({ ...(args || {}), wallMs: wallMsOverride })
     : adapter.enforceTotalTurnWall120s);
   const thumbsEnabled = thumbs == null ? agentThumbsEnabled() : Boolean(thumbs);
+  // One transcript-repair log state per turn: WARN once, then debug.
+  const transcriptRepairLog = { warned: false, count: 0 };
   // Pinned for compaction (hallazgo 6): the user's literal request + the last
   // document map. Captured once; restored verbatim after every compaction.
   const pinnedContext = {
@@ -1633,6 +1662,7 @@ async function runAgentLoop({
         tools,
         signal,
         maxTokens,
+        repairLog: transcriptRepairLog,
         onFirstToken: () => {
           if (modelTtfbMs === null) modelTtfbMs = Date.now() - modelTurnStart;
           firstByteAt = Date.now();

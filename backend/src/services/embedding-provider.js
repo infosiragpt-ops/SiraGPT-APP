@@ -38,6 +38,11 @@ const PLACEHOLDER_KEY_RE = /dummy|not-used|ci-dummy|test-key|^your_|^sk-xxx|^cha
 const PLACEHOLDER_EXEMPT = new Set(['openai']);
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_ORDER = ['openai', 'gemini', 'voyage', 'jina', 'mistral'];
+// A provider that answered «no credits / quota exceeded» (402, 429 with a
+// billing message) is skipped without a network call for this long. Prod
+// 2026-09-28: every boot warm-up and every RAG call spent a 429 on OpenAI
+// before Gemini served.
+const DEFAULT_BILLING_COOLDOWN_MS = 30 * 60 * 1000;
 
 const PROVIDERS = Object.freeze({
   openai: {
@@ -80,6 +85,7 @@ const PROVIDERS = Object.freeze({
 // Sticky space per target dimension: { space, provider, model, since }.
 const activeSpace = new Map();
 const failures = new Map(); // provider → { count, lastAt, lastMessage }
+const billingCooldown = new Map(); // provider → { until, status, message }
 const stats = { requests: 0, vectors: 0, errors: 0, byProvider: Object.create(null) };
 
 function keyFor(name, env = process.env) {
@@ -90,6 +96,40 @@ function keyFor(name, env = process.env) {
     if (v && (PLACEHOLDER_EXEMPT.has(name) || !PLACEHOLDER_KEY_RE.test(v))) return v;
   }
   return '';
+}
+
+function billingCooldownMs(env = process.env) {
+  const n = Number(env.SIRAGPT_EMBED_BILLING_COOLDOWN_MS);
+  return Number.isFinite(n) && n >= 1000 ? n : DEFAULT_BILLING_COOLDOWN_MS;
+}
+
+/** True for «the account has no credit/quota» answers — never auth or rate limits. */
+function isBillingRejection(err) {
+  if (!err) return false;
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status) || 0);
+  if (status === 402) return true;
+  try {
+    if (require('./ai/billing-failover').isBillingError(err)) return true;
+  } catch (_) { /* optional */ }
+  const text = String(err.message || (err.error && err.error.message) || '');
+  return status === 429 && /credit|quota|billing|balance/i.test(text) && !/rate ?limit/i.test(text);
+}
+
+function billingCoolingDown(name, now = Date.now()) {
+  const entry = billingCooldown.get(name);
+  if (!entry) return false;
+  if (now >= entry.until) { billingCooldown.delete(name); return false; }
+  return true;
+}
+
+function markBillingCooldown(name, err, env = process.env, now = Date.now()) {
+  const ms = billingCooldownMs(env);
+  billingCooldown.set(name, {
+    until: now + ms,
+    status: Number((err && (err.status || err.statusCode)) || 0) || null,
+    message: String((err && err.message) || '').slice(0, 160),
+  });
+  return ms;
 }
 
 function providerOrder(env = process.env) {
@@ -111,7 +151,8 @@ function candidates(targetDim, env = process.env) {
     const key = keyFor(name, env);
     if (!key) continue;
     const model = spec.model(env);
-    out.push({ name, model, key, rejected: keyHealth.isRejected(name, key), space: spaceId(name, model, targetDim) });
+    const cooling = billingCoolingDown(name);
+    out.push({ name, model, key, rejected: keyHealth.isRejected(name, key) || cooling, cooling, space: spaceId(name, model, targetDim) });
   }
   return out;
 }
@@ -310,10 +351,14 @@ async function embed(texts, { targetDim = 1536, space = null, sticky = true, env
     ordered = space ? exact : [...exact, ...list.filter((c) => c.space !== wantSpace)];
   }
   const usable = ordered.filter((c) => !c.rejected);
+  const cooling = ordered.filter((c) => c.cooling).map((c) => c.name);
+  if (cooling.length) {
+    try { console.debug(`[embedding-provider] skipping ${cooling.join(', ')} (billing cooldown, no network call)`); } catch (_) { /* ignore */ }
+  }
   if (!usable.length) {
     stats.errors += 1;
     throw new EmbeddingUnavailableError(
-      `no embedding provider available for ${targetDim} dims (${list.length ? list.map((c) => `${c.name}${c.rejected ? ':key-rejected' : ''}`).join(', ') : 'no keys configured'})`,
+      `no embedding provider available for ${targetDim} dims (${list.length ? list.map((c) => `${c.name}${c.cooling ? ':billing-cooldown' : (c.rejected ? ':key-rejected' : '')}`).join(', ') : 'no keys configured'})`,
       { targetDim, tried: list.map((c) => c.name) },
     );
   }
@@ -362,6 +407,11 @@ async function embed(texts, { targetDim = 1536, space = null, sticky = true, env
         bump(c.name, 'rejected');
         metric('siragpt_embedding_requests_total', { provider: c.name, outcome: 'key_rejected' });
         console.warn(`[embedding-provider] ${c.name} rejected the API key (${err.status || ''}); memoised, trying the next provider`);
+      } else if (isBillingRejection(err)) {
+        const ms = markBillingCooldown(c.name, err, env);
+        bump(c.name, 'billing');
+        metric('siragpt_embedding_requests_total', { provider: c.name, outcome: 'billing' });
+        console.warn(`[embedding-provider] ${c.name} has no credit (${err.status || ''} ${String(err.message || '').slice(0, 100)}); skipped for ${Math.round(ms / 60000)} min, trying the next provider`);
       } else {
         failures.set(c.name, { count: ((failures.get(c.name) || {}).count || 0) + 1, lastAt: Date.now(), lastMessage: String(err.message || '').slice(0, 160) });
         metric('siragpt_embedding_requests_total', { provider: c.name, outcome: 'error' });
@@ -397,9 +447,11 @@ function status(env = process.env) {
   const out = { providers: {}, spaces: {}, cache: { size: cache.size, ...cacheStats }, stats, rejected: keyHealth.snapshot() };
   for (const name of providerOrder(env)) {
     const key = keyFor(name, env);
+    const cooling = billingCoolingDown(name);
     out.providers[name] = {
       configured: Boolean(key),
-      rejected: key ? keyHealth.isRejected(name, key) : false,
+      rejected: key ? (keyHealth.isRejected(name, key) || cooling) : false,
+      billingCooldownUntil: cooling ? new Date(billingCooldown.get(name).until).toISOString() : null,
       model: PROVIDERS[name].model(env),
       dims: PROVIDERS[name].dims,
       failures: failures.get(name) || null,
@@ -412,7 +464,7 @@ function status(env = process.env) {
 }
 
 function resetForTests() {
-  activeSpace.clear(); failures.clear(); cache.clear(); openaiClients.clear();
+  activeSpace.clear(); failures.clear(); billingCooldown.clear(); cache.clear(); openaiClients.clear();
   cacheStats.hits = 0; cacheStats.misses = 0;
   stats.requests = 0; stats.vectors = 0; stats.errors = 0; stats.byProvider = Object.create(null);
   keyHealth.clear();
@@ -421,6 +473,9 @@ function resetForTests() {
 module.exports = {
   PROVIDERS,
   DEFAULT_ORDER,
+  DEFAULT_BILLING_COOLDOWN_MS,
+  isBillingRejection,
+  billingCoolingDown,
   EmbeddingUnavailableError,
   embed,
   candidates,
