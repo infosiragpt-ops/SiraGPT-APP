@@ -153,8 +153,8 @@ function normalizeAnthropicModelId(model) {
 }
 
 function mapStopReason(reason, hasToolCalls) {
-  if (hasToolCalls || reason === 'tool_use') return 'tool_calls';
   if (reason === 'max_tokens') return 'length';
+  if (hasToolCalls || reason === 'tool_use') return 'tool_calls';
   if (reason === 'end_turn' || reason === 'stop_sequence' || reason === 'pause_turn') return 'stop';
   return reason || 'stop';
 }

@@ -97,6 +97,15 @@ test('maps native tool_use blocks and token usage to OpenAI completion shape', (
   assert.deepEqual(out.usage, { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 });
 });
 
+test('max_tokens takes precedence over partial native tool_use blocks', () => {
+  const out = toOpenAICompletion({
+    id: 'partial_tool', model: 'claude-fable-5-1', stop_reason: 'max_tokens', usage: {},
+    content: [{ type: 'tool_use', id: 'toolu_partial', name: 'execute_python', input: {} }],
+  }, 'claude-fable-5-1');
+  assert.equal(out.choices[0].finish_reason, 'length');
+  assert.equal(out.choices[0].message.tool_calls[0].function.arguments, '{}');
+});
+
 test('adapter calls Anthropic with native forced tool choice and preserves abort signal', async () => {
   let capturedRequest = null;
   let capturedOptions = null;

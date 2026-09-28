@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createAnthropicStreamingClient } = require('../src/services/ai/first-party-chat-clients');
+const { runAgentLoop } = require('../src/services/agent-runner/loop');
 const { resolveProviderEffortFields } = require('../src/services/ai-product-os/litellm-gateway');
 const reactAgent = require('../src/services/react-agent');
 
@@ -90,6 +91,38 @@ test('tools → tool_use → tool_calls → tool_result → final answer round-t
   assert.equal(second.choices[0].finish_reason, 'stop');
   assert.match(second.choices[0].message.content, /sbs\.gob\.pe/);
   assert.equal(Object.keys(msg).includes('_anthropicContent'), false, 'native blocks stay off the serialized message');
+});
+
+test('AgentRunner never executes a Claude tool_use cut off by max_tokens', async () => {
+  const { sdk, requests } = mockSdk([{
+    id: 'partial_tool', model: 'claude-fable-5-1', stop_reason: 'max_tokens', usage: {},
+    content: [{ type: 'tool_use', id: 'toolu_partial', name: 'execute_python', input: {} }],
+  }]);
+  const client = createAnthropicStreamingClient({ apiKey: 'test-key', sdkClient: sdk });
+  const events = [];
+  let executions = 0;
+  const result = await runAgentLoop({
+    client,
+    model: 'claude-fable-5-1',
+    messages: [{ role: 'user', content: 'Crea dos archivos de prueba.' }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'execute_python',
+        description: 'Run code',
+        parameters: { type: 'object', properties: { code: { type: 'string' } }, required: ['code'] },
+      },
+    }],
+    executors: { execute_python: async () => { executions += 1; return 'unexpected'; } },
+    maxIterations: 2,
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(result.stoppedReason, 'E_PROVIDER');
+  assert.equal(executions, 0);
+  assert.equal(requests.length, 1, 'partial tool input is never replayed as a completed turn');
+  assert.ok(events.some((event) => event.type === 'error' && event.code === 'E_PROVIDER'));
+  assert.ok(!events.some((event) => event.type === 'tool_call'));
 });
 
 test('forced tool_choice becomes auto + a persistent instruction on Fable 5.1', async () => {
