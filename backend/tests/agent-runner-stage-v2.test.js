@@ -363,7 +363,7 @@ test('wiring: the chat streams + collects runner stages and persists them with t
   assert.equal((ai.match(/activityTrace: req\._agentActivityTrace \|\| req\._turnProgress\?\.toMetadata\(\{ durationMs: __firstByteAt \? __firstByteAt - __generateStartedAt : null \}\) \|\| null/g) || []).length, 2, 'both generate save paths');
   assert.match(ai, /rlhfFeedback = null, activityTrace = null \} = \{\}\) \{/);
   assert.match(ai, /activityTrace && typeof activityTrace === 'object' && !agentRun\s*\?\s*\{ agentMetadata: activityTrace \}/);
-  assert.match(ai, /_attempt \+ 1, \{ observabilityLog: persistenceLog, activityTrace \}\)/);
+  assert.match(ai, /_attempt \+ 1, \{ observabilityLog: persistenceLog, activityTrace, skipUsageMetering \}\)/);
 
   const index = read('src/services/agent-runner/index.js');
   assert.match(index, /thumbs: agentThumbsEnabled\(\),/);
