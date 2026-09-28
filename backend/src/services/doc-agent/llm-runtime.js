@@ -182,6 +182,15 @@ function defaultCreateClient(candidate, { anthropicSdkClient = null } = {}) {
 function payloadForCandidate(payload, candidate) {
   const provider = String(candidate.wireProvider || candidate.provider || '').toLowerCase();
   const request = { ...payload, model: candidate.model, ...(candidate.extra || {}) };
+  // GPT-6 Sol/Luna accept Chat Completions function calls only at effort
+  // "none". The document runner uses this API for its tool loop; preserve an
+  // explicitly requested effort instead of silently replacing it.
+  if (provider === 'openai'
+    && /^gpt-6-(?:sol|luna)(?:-|$)/i.test(String(candidate.model || ''))
+    && Array.isArray(request.tools) && request.tools.length > 0
+    && !Object.prototype.hasOwnProperty.call(request, 'reasoning_effort')) {
+    request.reasoning_effort = 'none';
+  }
   if (Array.isArray(request.messages)) {
     request.messages = request.messages.map((message) => {
       if (!message || message.role !== 'assistant') return message;
