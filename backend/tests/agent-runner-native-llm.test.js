@@ -183,6 +183,139 @@ describe('native-llm module', () => {
     assert.equal(seen.length, 2);
   });
 
+  test('Gemini 3 replays its thought signature with the tool call on the next turn', async () => {
+    const messages = [{ role: 'user', content: 'lee un archivo' }];
+    const seen = [];
+    const signature = 'synthetic-gemini-signature';
+    const client = { chat: { completions: { create: async (payload) => {
+      seen.push(payload);
+      if (seen.length === 1) {
+        return { choices: [{ message: {
+          content: '',
+          tool_calls: [{
+            id: 'read-1',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{ "path": "a.txt" }' },
+            args: { path: 'a.txt' },
+            arguments: { path: 'a.txt' },
+            extra_content: { google: { thought_signature: signature, debug: 'omit' }, debug: 'omit' },
+          }],
+        } }] };
+      }
+      const replayedCall = payload.messages[1].tool_calls[0];
+      assert.deepEqual(replayedCall.extra_content, { google: { thought_signature: signature } });
+      assert.equal(replayedCall.function.arguments, '{ "path": "a.txt" }', 'the signed call is replayed exactly as received');
+      assert.deepEqual(Object.keys(replayedCall).sort(), ['extra_content', 'function', 'id', 'type']);
+      assert.deepEqual(Object.keys(replayedCall.function).sort(), ['arguments', 'name']);
+      assert.equal(payload.messages[2].role, 'tool');
+      assert.equal(payload.messages[2].tool_call_id, 'read-1');
+      return { choices: [{ message: { content: 'Leí el archivo.' } }] };
+    } } } };
+    const result = await loop.runAgentLoop({
+      client,
+      model: 'gemini-3.8-flash',
+      messages,
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }],
+      executors: { read_file: async () => 'contenido' },
+      maxIterations: 2,
+    });
+    assert.equal(result.finalText, 'Leí el archivo.');
+    assert.equal(seen.length, 2);
+  });
+
+  test('Gemini parallel tool calls keep the signature on the first call only', async () => {
+    const seen = [];
+    const client = { chat: { completions: { create: async (payload) => {
+      seen.push(payload);
+      if (seen.length === 1) return { choices: [{ message: { content: '', tool_calls: [
+        { id: 'first', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' }, extra_content: { google: { thought_signature: 'parallel-signature' } } },
+        { id: 'second', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.txt"}' } },
+      ] } }] };
+      assert.deepEqual(payload.messages[1].tool_calls.map((call) => call.extra_content?.google?.thought_signature), ['parallel-signature', undefined]);
+      assert.deepEqual(payload.messages.slice(2).map((message) => message.tool_call_id), ['first', 'second']);
+      return { choices: [{ message: { content: 'Dos lecturas.' } }] };
+    } } } };
+    const result = await loop.runAgentLoop({
+      client,
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'lee dos archivos' }],
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }],
+      executors: { read_file: async ({ path }) => path },
+      maxIterations: 2,
+    });
+    assert.equal(result.finalText, 'Dos lecturas.');
+    assert.equal(seen.length, 2);
+  });
+
+  test('a dropped signed call stops visibly before executing a tool', async () => {
+    let modelCalls = 0;
+    let toolCalls = 0;
+    const events = [];
+    const client = { chat: { completions: { create: async () => {
+      modelCalls += 1;
+      return { choices: [{ message: { content: '', tool_calls: [{
+        id: 'bad-signed-call',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path":' },
+        extra_content: { google: { thought_signature: 'signed-invalid-json' } },
+      }] } }] };
+    } } } };
+    const result = await loop.runAgentLoop({
+      client,
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'lee un archivo' }],
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }],
+      executors: { read_file: async () => { toolCalls += 1; return 'content'; } },
+      onEvent: (event) => events.push(event),
+      maxIterations: 2,
+    });
+    assert.equal(result.stoppedReason, 'E_PROVIDER');
+    assert.match(result.errorMessage, /firma/);
+    assert.equal(events.find((event) => event.type === 'error')?.code, 'E_PROVIDER');
+    assert.equal(modelCalls, 1);
+    assert.equal(toolCalls, 0);
+  });
+
+  test('a renamed signed call stops visibly before executing a tool', async () => {
+    let executed = false;
+    const events = [];
+    const client = { chat: { completions: { create: async () => ({ choices: [{ message: {
+      content: '',
+      tool_calls: [{ id: 'signed-alias', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd"}' }, extra_content: { google: { thought_signature: 'signed-alias' } } }],
+    } }] }) } } };
+    const result = await loop.runAgentLoop({
+      client,
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'ejecuta' }],
+      tools: [{ type: 'function', function: { name: 'execute_bash', parameters: { type: 'object' } } }],
+      executors: { execute_bash: async () => { executed = true; return 'ok'; } },
+      onEvent: (event) => events.push(event),
+      maxIterations: 2,
+    });
+    assert.equal(result.stoppedReason, 'E_PROVIDER');
+    assert.match(result.errorMessage, /firma/);
+    assert.equal(events.find((event) => event.type === 'error')?.code, 'E_PROVIDER');
+    assert.equal(executed, false);
+  });
+
+  test('Gemini thought-signature validation errors do not retry without tools', async () => {
+    let calls = 0;
+    const client = { chat: { completions: { create: async () => {
+      calls += 1;
+      const error = new Error('Function call in content block is missing a thought_signature');
+      error.status = 400;
+      throw error;
+    } } } };
+    await assert.rejects(() => loop.callModel({
+      client,
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'lee un archivo' }],
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }],
+      maxTokens: 64,
+    }), /thought_signature/);
+    assert.equal(calls, 1);
+  });
+
   test('native GPT 6 uses max_completion_tokens; DeepSeek and OpenRouter keep max_tokens', async () => {
     const calls = [];
     const client = { chat: { completions: { create: async (payload) => {

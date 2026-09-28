@@ -1,5 +1,6 @@
 'use strict';
 
+const { isDeepStrictEqual } = require('node:util');
 const { throwIfAborted } = require('../../utils/abort-signals');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
 const { normalizeToolTranscript, isToolTranscriptError } = require('./tool-transcript');
@@ -959,20 +960,50 @@ function asNativeCalls(calls, iteration) {
 }
 
 function assistantTranscriptMessage(msg, toolCalls) {
+  const signedOriginals = new Map();
+  for (const original of Array.isArray(msg.tool_calls) ? msg.tool_calls : []) {
+    if (typeof original?.extra_content?.google?.thought_signature === 'string'
+      && original.extra_content.google.thought_signature
+      && !signedOriginals.has(original.id)) {
+      signedOriginals.set(original.id, original);
+    }
+  }
   const message = {
     role: 'assistant',
     content: msg.content || (toolCalls ? null : ''),
     // Repair hooks attach internal `args`/`arguments` fields to each call for
     // execution. OpenAI-compatible providers only accept the wire schema on
     // the next model turn, so keep those fields out of the transcript.
-    ...(toolCalls ? { tool_calls: toolCalls.map((call) => ({
-      id: call.id,
-      type: call.type || 'function',
-      function: {
-        name: call.function?.name,
-        arguments: call.function?.arguments,
-      },
-    })) } : {}),
+    ...(toolCalls ? { tool_calls: toolCalls.map((call) => {
+      const original = signedOriginals.get(call.id);
+      let wireFunction = { name: call.function?.name, arguments: call.function?.arguments };
+      if (original) {
+        let sameArguments = false;
+        try {
+          sameArguments = original.function?.name === wireFunction.name
+            && isDeepStrictEqual(JSON.parse(original.function.arguments), JSON.parse(wireFunction.arguments));
+        } catch (_) { /* malformed signed calls cannot be replayed safely */ }
+        if (!sameArguments) {
+          const error = new Error('Signed tool call changed during repair');
+          error.code = 'E_PROVIDER';
+          error.publicMessage = 'El modelo envió una llamada de herramienta incompatible con su firma. Reintenta con el mismo modelo.';
+          throw error;
+        }
+        // The signature belongs to the original function-call part. Repairs
+        // may normalize JSON for execution, but replay must be byte-for-byte.
+        wireFunction = { name: original.function.name, arguments: original.function.arguments };
+      }
+      const signature = original?.extra_content?.google?.thought_signature
+        || call.extra_content?.google?.thought_signature;
+      return {
+        id: call.id,
+        type: call.type || 'function',
+        function: wireFunction,
+        ...(typeof signature === 'string' && signature
+          ? { extra_content: { google: { thought_signature: signature } } }
+          : {}),
+      };
+    }) } : {}),
   };
   // DeepSeek thinking mode requires the exact reasoning returned by the
   // provider on every assistant turn when tools are present in later calls.
@@ -1039,7 +1070,9 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
       if (err?.code === 'E_PROVIDER') throw err;
       // A transcript-shape 400 mentions "tool_calls" but is NOT "this model
       // has no tools": retrying without tools would fail identically.
-      if (isToolTranscriptError(err) || !looksLikeToolUnsupportedError(err)) throw err;
+      if (isToolTranscriptError(err)
+        || /\bthought_signature\b/i.test(String(err?.message || ''))
+        || !looksLikeToolUnsupportedError(err)) throw err;
       const out = await create(false);
       if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
       return out;
@@ -2110,6 +2143,25 @@ async function runAgentLoop({
       }
     } catch (_) { /* 3H67 tool-name list fail-open */ }
 
+    const signedCalls = (Array.isArray(msg.tool_calls) ? msg.tool_calls : []).filter(
+      (call) => typeof call?.extra_content?.google?.thought_signature === 'string'
+        && call.extra_content.google.thought_signature,
+    );
+    if (signedCalls.some((original) => !toolCalls.some((call) => call.id === original.id
+      && call.extra_content?.google?.thought_signature === original.extra_content.google.thought_signature))) {
+      const publicMessage = 'El modelo envió una llamada de herramienta incompatible con su firma. Reintenta con el mismo modelo.';
+      onEvent({ type: 'error', code: 'E_PROVIDER', message: publicMessage, iteration });
+      return {
+        finalText: '',
+        iterations: iteration,
+        steps,
+        stoppedReason: 'E_PROVIDER',
+        verificationAttempts,
+        errorCode: 'E_PROVIDER',
+        errorMessage: publicMessage,
+      };
+    }
+
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
       // "provider accepted the request but produced nothing" stall. Count it;
@@ -2212,7 +2264,22 @@ async function runAgentLoop({
       });
     }
 
-    messages.push(assistantTranscriptMessage(msg, toolCalls));
+    try {
+      messages.push(assistantTranscriptMessage(msg, toolCalls));
+    } catch (err) {
+      if (err?.code !== 'E_PROVIDER') throw err;
+      const publicMessage = err.publicMessage || 'El modelo no pudo continuar con la herramienta. Reintenta.';
+      onEvent({ type: 'error', code: 'E_PROVIDER', message: publicMessage, iteration });
+      return {
+        finalText: '',
+        iterations: iteration,
+        steps,
+        stoppedReason: 'E_PROVIDER',
+        verificationAttempts,
+        errorCode: 'E_PROVIDER',
+        errorMessage: publicMessage,
+      };
+    }
 
     try {
       const adIso = loadEngineAdapter();
