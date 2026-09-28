@@ -386,6 +386,17 @@ describe('chat turn idempotency', () => {
     }
   });
 
+  it('ignores the progressProtocol capability flag when fingerprinting a retried turn', () => {
+    const body = { chatId: 'chat-1', prompt: 'hola', model: 'requested-model', idempotencyKey: 'turn-1' };
+    const base = buildAiGenerateRequestFingerprint({ requestBody: body });
+    for (const progressProtocol of [1, 2, undefined]) {
+      assert.equal(
+        buildAiGenerateRequestFingerprint({ requestBody: { ...body, progressProtocol } }),
+        base,
+      );
+    }
+  });
+
   it('keeps a timed-out active follower non-owner and preserves normal replay', async () => {
     let resolveOwner;
     let ownerInvocations = 0;

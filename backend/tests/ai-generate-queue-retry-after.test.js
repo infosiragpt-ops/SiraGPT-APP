@@ -102,7 +102,10 @@ test('webdev: a picked model that fails is reported (the buffered error frame), 
   const repairAt = block.indexOf('if (!webdevProviderFailed) {');
   assert.ok(failAt > 0 && repairAt > failAt, 'the failure is handled before any repair / template fallback');
   assert.match(block.slice(failAt, repairAt), /closeGenerateSseWithError\(res, \{/);
-  assert.match(block, /const tokens = webdevProviderFailed \? 0 :/);
+  // A failed webdev turn is persisted as the honest reply but never metered
+  // (the quota counts ApiUsage rows, which saveChatAndTrackUsage now skips).
+  assert.match(block, /skipUsageMetering: webdevProviderFailed/);
+  assert.doesNotMatch(block, /const tokens = webdevProviderFailed \? 0/);
 });
 
 test('onProviderFailure records the transparent cause (reason, provider, wait)', () => {

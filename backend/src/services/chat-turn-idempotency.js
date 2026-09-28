@@ -202,6 +202,9 @@ function buildAiGenerateRequestFingerprint({ requestBody } = {}) {
   // particular, an idempotency-key retry may legitimately use a fresh stream.
   delete payload.idempotencyKey;
   delete payload.streamId;
+  // Client capability for the live-progress frames; it changes how the turn is
+  // rendered, never what work it does.
+  delete payload.progressProtocol;
   payload.files = payload.files ?? null;
 
   return crypto.createHash('sha256').update(stableStringify(payload)).digest('hex');

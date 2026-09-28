@@ -543,6 +543,18 @@ test('recovered MODERATED and FAILED images never rerun provider and are refunde
   assert.equal(refundCalls.length, 2);
 });
 
+// While the refund is unconfirmed the row must never tell the user they were
+// not charged — that claim is written only after the refund succeeds.
+function assertNeverClaimsNoCharge() {
+  const persisted = imageUpdateHistory.map((entry) => entry.data.errorMessage).filter(Boolean);
+  assert.ok(persisted.length > 0, 'the failure cause is persisted');
+  assert.ok(
+    persisted.every((text) => !/No se te cobró/.test(text)),
+    `an unconfirmed refund must not claim «No se te cobró»: ${persisted.join(' | ')}`,
+  );
+  assert.match(persisted[persisted.length - 1], /reembolso/);
+}
+
 test('provider failure with a failed strict refund becomes refund_pending and retryable', async () => {
   providerOutcome = {
     ok: false,
@@ -565,6 +577,7 @@ test('provider failure with a failed strict refund becomes refund_pending and re
     statusCode: 503,
     state: 'refund_pending',
   }]);
+  assertNeverClaimsNoCharge();
 });
 
 test('provider throw with a failed strict refund never reports refunded', async () => {
@@ -584,6 +597,7 @@ test('provider throw with a failed strict refund never reports refunded', async 
     statusCode: 503,
     state: 'refund_pending',
   }]);
+  assertNeverClaimsNoCharge();
 });
 
 test('READY image stays successful and charged when cached response is oversized', async () => {
@@ -872,6 +886,35 @@ test('a failed job serialises a Spanish errorMessage, never the provider\'s raw 
   const persisted = imageUpdateHistory.map((entry) => entry.data.errorMessage).filter(Boolean);
   assert.ok(persisted.length > 0);
   assert.ok(persisted.every((text) => !/sk-|quota/i.test(text)), 'the raw reason is never persisted');
+  // The cause is written first without the «No se te cobró» claim; the claim
+  // lands only once the refund is confirmed.
+  assert.equal(refundCalls.length, 1);
+  assert.equal(persisted.length, 2);
+  assert.doesNotMatch(persisted[0], /No se te cobró/);
+  assert.match(persisted[0], /saldo/);
+  assert.equal(persisted[1], images.IMAGE_JOB_ERROR_COPY.billing);
+});
+
+test('pendingRefundImageJobError keeps the cause and drops the not-charged claim (moderation untouched)', () => {
+  const { pendingRefundImageJobError, publicImageJobError, IMAGE_JOB_ERROR_COPY } = images;
+  assert.equal(pendingRefundImageJobError(IMAGE_JOB_ERROR_COPY.moderated), IMAGE_JOB_ERROR_COPY.moderated);
+  assert.equal(
+    pendingRefundImageJobError(IMAGE_JOB_ERROR_COPY.billing),
+    'El proveedor del modelo de imágenes elegido no tiene saldo ahora. No cambié de modelo; elige otro modelo o inténtalo más tarde. Estamos confirmando el reembolso.',
+  );
+  assert.equal(
+    pendingRefundImageJobError(publicImageJobError('PROVIDER_ERROR', '429 Rate limit reached for images per minute. Please try again in 20s.', { modelLabel: 'GPT Image 2' })),
+    'El proveedor de GPT Image 2 alcanzó su límite de solicitudes por minuto. Espera 20 s y vuelve a intentarlo. Estamos confirmando el reembolso.',
+  );
+  assert.equal(
+    pendingRefundImageJobError(publicImageJobError('PROVIDER_ERROR', 'provider crashed', { modelLabel: 'GPT Image 2' })),
+    'GPT Image 2 no pudo generar la imagen. Inténtalo de nuevo. Estamos confirmando el reembolso.',
+  );
+  for (const text of Object.values(IMAGE_JOB_ERROR_COPY)) {
+    const pending = pendingRefundImageJobError(text);
+    assert.doesNotMatch(pending, /No se te cobró/, pending);
+    assert.ok(pending.length > 20);
+  }
 });
 
 test('publicImageJobError: moderation, causes and a generic copy — never raw text', () => {

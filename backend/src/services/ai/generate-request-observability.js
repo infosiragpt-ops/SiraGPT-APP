@@ -257,6 +257,7 @@ const ALLOWED_EVENTS = new Set([
   'public_web.usage_record_failed',
   'queue.rejected',
   'quota.attachment_exempt',
+  'quota.metering_skipped',
   'rag.operational_unavailable',
   'rag.rerank_failed',
   'rag.reranked',

@@ -527,6 +527,21 @@ function publicImageJobError(code, reason, { modelLabel = '' } = {}) {
   return copy;
 }
 
+/**
+ * The same cause copy without the "No se te cobró" claim, for the moment the
+ * job row is written but the refund is not confirmed yet: the row must never
+ * say the user was not charged before the refund actually succeeded (a failed
+ * strict refund ends as refund_pending and keeps this text).
+ */
+function pendingRefundImageJobError(copy) {
+  const text = String(copy || '');
+  if (!/No se te cobró/.test(text)) return text;
+  const withoutClaim = text
+    .replace('No se te cobró y no cambié de modelo;', 'No cambié de modelo;')
+    .replace(/No se te cobró; (\p{L})/u, (_m, letter) => letter.toUpperCase());
+  return `${withoutClaim} Estamos confirmando el reembolso.`;
+}
+
 /** The image model's display name for the job copy ('' when unknown). */
 async function imageJobModelLabel(spec) {
   try {
@@ -557,6 +572,20 @@ function logImageJobOutcome(spec, outcome, startedAt) {
   } catch (_) { /* logging never affects the job */ }
 }
 
+// Once the refund is confirmed the row may say the user was not charged.
+// Best-effort: the row already carries the honest pending text if this fails.
+async function settleImageJobError(row, settledError, pendingError) {
+  if (settledError === pendingError) return row;
+  try {
+    return await prisma.generatedImage.update({
+      where: { id: row.id },
+      data: { errorMessage: settledError },
+    });
+  } catch {
+    return { ...row, errorMessage: settledError };
+  }
+}
+
 async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
   // Mark RUNNING, hit provider, then fence all provider-result persistence.
   const generationStartedAt = Date.now();
@@ -572,16 +601,16 @@ async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
     await requireImageLeaseOwnership(req);
     if (!result.ok) {
       const status = result.code === 'MODERATED' ? 'MODERATED' : 'FAILED';
-      const row = await prisma.generatedImage.update({
+      const settledError = publicImageJobError(result.code, result.reason, {
+        modelLabel: status === 'MODERATED' ? '' : await imageJobModelLabel(spec),
+      });
+      const pendingError = pendingRefundImageJobError(settledError);
+      let row = await prisma.generatedImage.update({
         where: { id: dbRow.id },
-        data: {
-          status,
-          errorMessage: publicImageJobError(result.code, result.reason, {
-            modelLabel: status === 'MODERATED' ? '' : await imageJobModelLabel(spec),
-          }),
-        },
+        data: { status, errorMessage: pendingError },
       });
       await strictRefundImageCharge(req, `provider:${result.code}`);
+      row = await settleImageJobError(row, settledError, pendingError);
       return { row, refunded: true, providerResult: result };
     }
     const assetUrls = await persistAssetsToR2(dbRow.userId, result.assets || []);
@@ -602,23 +631,25 @@ async function runGenerationAndPersist(req, dbRow, spec, { signal } = {}) {
     if (err?.code === 'REFUND_PENDING') throw err;
     logImageJobOutcome(spec, { ok: false, code: err?.code || 'PROVIDER_ERROR', reason: err && err.message }, generationStartedAt);
     await requireImageLeaseOwnership(req);
-    const publicError = publicImageJobError(err && err.code, err && err.message, {
+    const settledError = publicImageJobError(err && err.code, err && err.message, {
       modelLabel: await imageJobModelLabel(spec),
     });
+    const pendingError = pendingRefundImageJobError(settledError);
     let row;
     try {
       row = await prisma.generatedImage.update({
         where: { id: dbRow.id },
-        data: { status: 'FAILED', errorMessage: publicError },
+        data: { status: 'FAILED', errorMessage: pendingError },
       });
     } catch {
       row = {
         ...dbRow,
         status: 'FAILED',
-        errorMessage: publicError,
+        errorMessage: pendingError,
       };
     }
     await strictRefundImageCharge(req, 'provider_throw');
+    row = await settleImageJobError(row, settledError, pendingError);
     return { row, refunded: true, providerResult: { ok: false, code: 'PROVIDER_ERROR', reason: err.message } };
   }
 }
@@ -933,3 +964,4 @@ module.exports.imageProviderSpec = imageProviderSpec;
 module.exports.runGenerationAndPersist = runGenerationAndPersist;
 module.exports.publicImageJobError = publicImageJobError;
 module.exports.IMAGE_JOB_ERROR_COPY = IMAGE_JOB_ERROR_COPY;
+module.exports.pendingRefundImageJobError = pendingRefundImageJobError;

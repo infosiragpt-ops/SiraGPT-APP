@@ -1755,7 +1755,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null, activityTrace = null } = {}) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, rlhfFeedback = null, activityTrace = null, skipUsageMetering = false } = {}) {
   const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
     ? observabilityLog
     : generatePersistenceLog;
@@ -2014,7 +2014,11 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       const isFreeAttachmentTurn = userPlan === 'FREE'
         && Array.isArray(processedFiles)
         && processedFiles.length > 0;
-      if (isFreeAttachmentTurn) {
+      if (skipUsageMetering) {
+        // A turn the provider never answered (the reply is only the honest
+        // failure notice) must not consume the user's quota or token meter.
+        persistenceLog.info('quota.metering_skipped', { reasonCode: 'model_error' });
+      } else if (isFreeAttachmentTurn) {
         persistenceLog.info('quota.attachment_exempt', {
           attachmentCount: processedFiles.length,
         });
@@ -2047,7 +2051,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           maxAttempts: 3,
         });
         setTimeout(() => {
-          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog, activityTrace })
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog, activityTrace, skipUsageMetering })
             .catch((retryErr) => persistenceLog.error('persistence.retry_crashed', retryErr, {
               attempt: _attempt + 2,
               maxAttempts: 3,
@@ -14100,12 +14104,16 @@ Every element should feel intentionally designed, polished, and premium. The use
         clearInterval(keepAlive);
       }
 
-      // A provider failure is persisted as the honest reply, never billed.
-      const tokens = webdevProviderFailed ? 0 : fullResponseContent.length + displayPrompt.length;
+      const tokens = fullResponseContent.length + displayPrompt.length;
 
-      // Save chat and track usage in background
+      // Save chat and track usage in background. A provider failure is
+      // persisted as the honest reply but never metered.
       if (fullResponseContent.trim()) {
-        await saveChatAndTrackUsage(userId, chatId, displayPrompt, fullResponseContent, tokens, model, processedFiles);
+        await saveChatAndTrackUsage(
+          userId, chatId, displayPrompt, fullResponseContent, tokens, model, processedFiles,
+          [], false, null, null, null, null, 0,
+          { skipUsageMetering: webdevProviderFailed },
+        );
       }
 
     } catch (error) {
