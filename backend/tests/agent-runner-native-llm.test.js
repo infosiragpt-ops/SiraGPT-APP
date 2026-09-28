@@ -162,6 +162,13 @@ describe('native-llm module', () => {
         } }] };
       }
       assert.equal(payload.messages[1].reasoning_content, 'razonamiento devuelto por el proveedor');
+      const replayedCall = payload.messages[1].tool_calls[0];
+      assert.deepEqual(Object.keys(replayedCall).sort(), ['function', 'id', 'type'], 'provider transcript must not contain internal tool-call fields');
+      assert.deepEqual(Object.keys(replayedCall.function).sort(), ['arguments', 'name']);
+      assert.equal(replayedCall.id, 'read-1');
+      assert.equal(replayedCall.function.arguments, '{"path":"a.txt"}');
+      assert.equal(payload.messages[2].role, 'tool');
+      assert.equal(payload.messages[2].tool_call_id, 'read-1');
       return { choices: [{ message: { content: 'Leí el archivo.' } }] };
     } } } };
     const result = await loop.runAgentLoop({

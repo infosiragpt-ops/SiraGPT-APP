@@ -962,7 +962,17 @@ function assistantTranscriptMessage(msg, toolCalls) {
   const message = {
     role: 'assistant',
     content: msg.content || (toolCalls ? null : ''),
-    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    // Repair hooks attach internal `args`/`arguments` fields to each call for
+    // execution. OpenAI-compatible providers only accept the wire schema on
+    // the next model turn, so keep those fields out of the transcript.
+    ...(toolCalls ? { tool_calls: toolCalls.map((call) => ({
+      id: call.id,
+      type: call.type || 'function',
+      function: {
+        name: call.function?.name,
+        arguments: call.function?.arguments,
+      },
+    })) } : {}),
   };
   // DeepSeek thinking mode requires the exact reasoning returned by the
   // provider on every assistant turn when tools are present in later calls.
