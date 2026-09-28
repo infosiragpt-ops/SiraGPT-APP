@@ -287,8 +287,11 @@ async function extractTermsLLM(openai, userMessage, assistantMessage) {
       ],
     });
     const raw = resp?.choices?.[0]?.message?.content || '{}';
-    const obj = JSON.parse(raw);
-    const arr = Array.isArray(obj?.terms) ? obj.terms : [];
+    // Same tolerant parser as long-term memory (<think> prefix, fences,
+    // prose around the JSON, trailing commas) — a bare JSON.parse lost them.
+    // eslint-disable-next-line global-require
+    const obj = require('./long-term-memory').parseModelJson(raw);
+    const arr = Array.isArray(obj) ? obj : (Array.isArray(obj?.terms) ? obj.terms : []);
     return arr
       .filter((e) => e && typeof e.term === 'string' && typeof e.definition === 'string')
       .slice(0, MAX_TERMS_PER_TURN)

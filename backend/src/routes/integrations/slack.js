@@ -69,6 +69,9 @@ router.post('/connect', authenticateToken, async (req, res) => {
     }
     return res.status(201).json({ slack: serialize(row) });
   } catch (err) {
+    if (err && err.code === slack.SLACK_ENCRYPTION_UNCONFIGURED) {
+      return res.status(503).json({ error: err.code, code: err.code, message: err.message });
+    }
     console.error('[integrations/slack] connect failed:', err.message);
     return res.status(500).json({ error: 'failed to connect Slack' });
   }
@@ -79,7 +82,12 @@ router.post('/test', authenticateToken, async (req, res) => {
     const existing = await prisma.slackIntegration.findFirst({ where: { userId: req.user.id } });
     if (!existing) return res.status(404).json({ error: 'no Slack integration configured' });
     const decrypted = slack.decryptToken(existing.webhookUrl);
-    if (!decrypted) return res.status(500).json({ error: 'failed to decrypt stored webhook' });
+    if (!decrypted) {
+      // Saved under a key this process no longer has: ask for the webhook
+      // again (409) instead of a raw 500.
+      const failure = slack.webhookDecryptFailure();
+      return res.status(failure.status).json(failure.body);
+    }
     const out = await slack.sendEventNotification({
       webhookUrl: decrypted,
       event: 'integrations.slack.test',

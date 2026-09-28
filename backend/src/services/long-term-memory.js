@@ -30,6 +30,7 @@
 const rag = require('./rag-service');
 const { mmrRerank } = require('./mmr');
 const userMemoryStore = require('./user-memory-store');
+const { repairJson } = require('./ai-product-os/json-repair');
 
 const COLLECTION_PREFIX = 'facts:';
 const DEFAULT_RECALL_K = 5;
@@ -336,23 +337,48 @@ function buildTurnTranscript(userMessage, assistantMessage) {
   return `user: ${u}\n\nassistant: ${a}`;
 }
 
+// Reasoning models can prepend their thinking inline even when asked for JSON.
+const THINK_BLOCK_RE = /<(think|thinking|reasoning)>[\s\S]*?(?:<\/\1>|$)/gi;
+
 /**
- * Invoke the extraction LLM and parse its JSON response. Returns an
- * array of `{ fact, category, confidence }` — empty when the model
- * returned nothing usable.
+ * Parse a JSON answer from a memory model (facts, lexicon terms): strips
+ * inline <think> blocks, then JSON.parse, then ai-product-os/json-repair
+ * (a fence anywhere, prose before/after, trailing commas, truncated closers).
+ * Returns the parsed value, or null when nothing parses.
  */
-/**
- * Parse the extraction model's JSON. `max_tokens` can cut the answer mid-array
- * («Unexpected end of JSON input», prod 2026-09-27): every complete fact
- * object is salvaged instead of discarding the whole turn. Code fences are
- * tolerated. Returns null when nothing parseable is left.
- */
-function parseExtractionPayload(raw) {
-  const text = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+function parseModelJson(raw) {
+  const text = String(raw || '').replace(THINK_BLOCK_RE, '').trim();
   if (!text) return null;
   try {
     return JSON.parse(text);
-  } catch (_) { /* fall through to salvage */ }
+  } catch (_) { /* fall through to repair */ }
+  const repaired = repairJson(text);
+  return repaired.ok ? repaired.value : null;
+}
+
+/** Shape the parsed answer as { facts: [...] } — models also send a bare array or one fact. */
+function normaliseExtractionShape(parsed) {
+  if (Array.isArray(parsed)) return { facts: parsed };
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (typeof parsed.fact === 'string') return { facts: [parsed] };
+  if (parsed.facts && typeof parsed.facts === 'object' && !Array.isArray(parsed.facts)) {
+    return { ...parsed, facts: [parsed.facts] };
+  }
+  return parsed;
+}
+
+/**
+ * Parse the extraction model's JSON. `max_tokens` can cut the answer mid-array
+ * («Unexpected end of JSON input», prod 2026-09-27): every complete fact
+ * object is salvaged instead of discarding the whole turn. Fences, prose
+ * around the JSON, <think> prefixes and trailing commas are tolerated.
+ * Returns null when nothing parseable is left.
+ */
+function parseExtractionPayload(raw) {
+  const text = String(raw || '').replace(THINK_BLOCK_RE, '').trim();
+  if (!text) return null;
+  const parsed = parseModelJson(text);
+  if (parsed !== null && typeof parsed === 'object') return normaliseExtractionShape(parsed);
   const facts = [];
   for (const match of text.matchAll(/\{[^{}]*"fact"\s*:\s*"(?:[^"\\]|\\.)*"[^{}]*\}/g)) {
     try { facts.push(JSON.parse(match[0])); } catch (_) { /* broken tail item */ }
@@ -360,6 +386,28 @@ function parseExtractionPayload(raw) {
   return facts.length ? { facts, salvaged: true } : null;
 }
 
+// One warn per window: an extraction model that keeps answering broken JSON
+// must not flood «Errores del sistema» on every turn.
+const PARSE_WARN_INTERVAL_MS = 5 * 60 * 1000;
+const parseWarnState = { lastAt: 0, suppressed: 0 };
+
+function warnUnparseableExtraction(finishReason) {
+  const now = Date.now();
+  if (parseWarnState.lastAt && now - parseWarnState.lastAt < PARSE_WARN_INTERVAL_MS) {
+    parseWarnState.suppressed += 1;
+    return;
+  }
+  const suppressed = parseWarnState.suppressed;
+  parseWarnState.lastAt = now;
+  parseWarnState.suppressed = 0;
+  console.warn(`[long-term-memory] extraction returned no parseable JSON (finish_reason=${finishReason || 'unknown'}${suppressed ? `, ${suppressed} more since last warning` : ''})`);
+}
+
+/**
+ * Invoke the extraction LLM and parse its JSON response. Returns an
+ * array of `{ fact, category, confidence }` — empty when the model
+ * returned nothing usable.
+ */
 async function extractFacts(openai, userMessage, assistantMessage) {
   if (!openai) return [];
   const transcript = buildTurnTranscript(userMessage, assistantMessage);
@@ -369,17 +417,25 @@ async function extractFacts(openai, userMessage, assistantMessage) {
     const resp = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature: 0.1,
-      max_tokens: 600,
+      max_tokens: 1200,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
         { role: 'user',   content: transcript },
       ],
     });
-    const raw = resp.choices?.[0]?.message?.content || '{}';
+    const choice = resp?.choices?.[0] || {};
+    const raw = choice.message?.content || '{}';
     const parsed = parseExtractionPayload(raw);
     if (!parsed) {
-      console.warn('[long-term-memory] extraction returned no parseable JSON');
+      const visible = String(raw).replace(THINK_BLOCK_RE, '');
+      // No '{' / '[' at all: the model answered «no facts» in prose — nothing lost.
+      if (!/[{[]/.test(visible)) return [];
+      if (choice.finish_reason === 'length') {
+        console.info('[long-term-memory] extraction truncated by max_tokens before the first complete fact');
+      } else {
+        warnUnparseableExtraction(choice.finish_reason);
+      }
       return [];
     }
     if (!Array.isArray(parsed.facts)) return [];
@@ -538,6 +594,7 @@ async function memoryStats(userId) {
 
 module.exports = {
   parseExtractionPayload, // exported for tests
+  parseModelJson,        // shared with personal-lexicon (same memory model)
   extractFacts,          // exported for tests (pure async fn, no side effects)
   extractFactsAsync,     // fire-and-forget
   recallFacts,

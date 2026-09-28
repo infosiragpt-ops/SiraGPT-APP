@@ -295,11 +295,25 @@ class AIService {
         // the SDK clears this timer once headers arrive, so it never truncates
         // a long healthy stream — it is a strict backstop on the happy path.
         const baseOpts = { fetch: sharedFetch, timeout: OPENAI_HTTP_TIMEOUT_MS };
+        // A third-party branch without its key must NOT build a client: the
+        // OpenAI SDK would fall back to OPENAI_API_KEY and send it to that
+        // host. Same 503 «Conexión no disponible» as the Meta branch.
+        const requireKey = (label, ...names) => {
+            for (const name of names) {
+                const value = String(process.env[name] || '').trim();
+                if (value) return value;
+            }
+            const err = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
+            err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
+            err.status = 503;
+            err.provider = label;
+            throw err;
+        };
 
         if (provider === "Gemini") {
             return new OpenAI({
                 ...baseOpts,
-                apiKey: process.env.GEMINI_API_KEY,
+                apiKey: requireKey('Gemini', 'GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'),
                 baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
             });
         }
@@ -307,7 +321,7 @@ class AIService {
         if (provider === "OpenRouter") {
             return new OpenAI({
                 ...baseOpts,
-                apiKey: process.env.OPENROUTER_API_KEY,
+                apiKey: requireKey('OpenRouter', 'OPENROUTER_API_KEY'),
                 baseURL: "https://openrouter.ai/api/v1",
                 defaultHeaders: {
                     'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -321,11 +335,46 @@ class AIService {
             // its OpenRouter slug (`deepseek/deepseek-v4-pro`), which the
             // direct API rejects with 400.
             const { withDeepSeekDirectModelIds } = require('./ai/deepseek-billing-failover');
+            const deepseekKey = requireKey('DeepSeek', 'DEEPSEEK_API_KEY');
             return withDeepSeekDirectModelIds(new OpenAI({
                 ...baseOpts,
-                apiKey: process.env.DEEPSEEK_API_KEY,
+                apiKey: deepseekKey,
                 baseURL: "https://api.deepseek.com",
             }));
+        }
+
+        // Failover rungs (billing-failover DEFAULT_ORDER): each on its own
+        // host — without a branch they went to api.openai.com.
+        if (/^cerebras$/i.test(String(provider || ''))) {
+            return new OpenAI({
+                ...baseOpts,
+                apiKey: requireKey('Cerebras', 'CEREBRAS_API_KEY'),
+                baseURL: process.env.CEREBRAS_BASE_URL || "https://api.cerebras.ai/v1",
+            });
+        }
+
+        if (/^groq$/i.test(String(provider || ''))) {
+            return new OpenAI({
+                ...baseOpts,
+                apiKey: requireKey('Groq', 'GROQ_API_KEY'),
+                baseURL: process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1",
+            });
+        }
+
+        if (/^mistral$/i.test(String(provider || ''))) {
+            return new OpenAI({
+                ...baseOpts,
+                apiKey: requireKey('Mistral', 'MISTRAL_API_KEY'),
+                baseURL: process.env.MISTRAL_BASE_URL || "https://api.mistral.ai/v1",
+            });
+        }
+
+        if (/^(z\.ai|zai)$/i.test(String(provider || ''))) {
+            return new OpenAI({
+                ...baseOpts,
+                apiKey: requireKey('Z.ai', 'ZAI_API_KEY'),
+                baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
+            });
         }
 
         if (isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim())) {
@@ -640,13 +689,16 @@ class AIService {
         return out.text;
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null, onModelFailover = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, thinkingLevelExplicit = false, trivialTurn = null, toolChoice = undefined, tools = undefined, onProviderFailure = null, onModelFailover = null, modelLabel = null }) {
         // The route hands us a client for the provider it resolved. When an
         // image turn has to leave a text-only model, `provider` changes below;
         // that client must then NOT be reused (live 2026-09-02: Meta's client
         // was asked for an OpenAI model → 404). Remember what it was built for.
         const requestedProvider = provider;
         let visionFallbackModels = [];
+        // A text-only pick routed to a vision runtime: the model that runs
+        // (and fails) is not the one the user picked.
+        let visionSwitched = false;
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -817,6 +869,7 @@ class AIService {
                                 console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
                                 provider = visionRuntime.provider;
                                 model = visionRuntime.model;
+                                visionSwitched = true;
                                 visionFallbackModels = (visionRuntime.fallbacks || []).map((c) => c.model);
                             } else {
                                 console.log(`[vision] Using selected vision-capable runtime: ${provider}:${model}`);
@@ -849,6 +902,10 @@ class AIService {
             // A user-selected catalog model (Mini / Gemini / Claude / GPT /
             // Kimi / Sira pair) never walks to another vendor.
             const pinnedUser = isPinnedUserGenerate(provider, model);
+            // Only internal requests without a picked model may move to
+            // another provider. A picked model keeps its provider and the
+            // user is told exactly why it could not answer.
+            const failoverAllowed = !pinnedUser && !isPinnedLocalGenerate(provider, model);
             // A vision turn that left the selected (text-only) model may still
             // hit a dead runtime (invalid key, retired model id): walk the
             // remaining vision-capable runtimes before giving up.
@@ -862,6 +919,16 @@ class AIService {
                 }
                 if (customConnection && customConnection.url && isPinnedLocalGenerate(currentProvider, currentModel)) {
                     return createCustomProviderClient(customConnection);
+                }
+                if (currentProvider === 'DeepSeek') {
+                    // Failover rung on DeepSeek: same second transport as the
+                    // route client when the direct account is dry.
+                    const { providerConnectionReady } = require('./ai/provider-inference');
+                    if (providerConnectionReady('OpenRouter')) {
+                        return require('./ai/deepseek-billing-failover').wrapDeepSeekClient(this.getClient('DeepSeek'), {
+                            fallbackClientFactory: () => this.getClient('OpenRouter'),
+                        });
+                    }
                 }
                 return this.getClient(currentProvider);
             };
@@ -880,9 +947,19 @@ class AIService {
             const MAX_ATTEMPTS_PER_MODEL = 2;
             const FIRST_BYTE_TIMEOUT_MS = 30_000;
             let lastError = null;
-            // Billing status is reflected in the picker. Internal unpinned
-            // requests may recover on another provider, but a selected model
-            // must keep its own API and surface E_PROVIDER on failure.
+            // Rung that produced lastError (a vision fallback may differ from
+            // the picked model) and whether it was our first-byte timeout;
+            // firstFailure is the picked model's own (rung 0) failure.
+            let lastFailure = null;
+            let firstFailure = null;
+            // Causes that are about the provider, not the image: a picked
+            // model failing for one of them keeps its provider, the other
+            // vision runtimes are not walked.
+            const PROVIDER_LEVEL_CAUSES = new Set(['billing', 'auth', 'forbidden', 'breaker', 'rate_limit', 'unavailable', 'unconfigured']);
+            // Every failure feeds the «sin saldo» / rejected-key memo that
+            // the picker reads. Internal unpinned requests may recover on
+            // another provider; a selected model keeps its own API and
+            // surfaces E_PROVIDER annotated with the cause.
             const billingFailoverMod = require('./ai/billing-failover');
             const providerOverrides = new Map();
             let billingFailover = null;
@@ -959,7 +1036,18 @@ class AIService {
 
                 if (hasStreamedAnyContent) break;
 
-                for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
+                // A rung already memoised as unfunded (no credit, or a 401
+                // key) is not called again: straight to the next candidate.
+                // The memo is not refreshed on a skip.
+                const skipUnfunded = failoverAllowed && billingFailoverMod.enabled()
+                    && Boolean(billingFailoverMod.unfundedReason(currentProvider));
+                if (skipUnfunded) {
+                    lastError = billingFailoverMod.unfundedMemoError(currentProvider);
+                    lastFailure = { provider: currentProvider, model: currentModel, timedOut: false };
+                    console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} omitido (sin saldo o clave rechazada, memo activo)`);
+                }
+
+                for (let attempt = 1; !skipUnfunded && attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
                     if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
 
                     // Per-attempt controller: composes the client signal with a
@@ -987,6 +1075,23 @@ class AIService {
                             failureThreshold: 5,
                             resetTimeoutMs: 60_000,
                         });
+                        // A caller-side 4xx (bad request, no credit, rejected
+                        // key, per-minute limit) proves the provider answered:
+                        // it never trips the breaker, or the user would read
+                        // «no está respondiendo» instead of the real cause.
+                        // No credit counts as answered at any status. The
+                        // user's Stop is neutral. Our own first-byte timeout,
+                        // 408s, 5xx and network faults still count.
+                        const breakerOpts = {
+                            isFailure: (e) => {
+                                if (timedOut) return true;
+                                if (!e) return true;
+                                if (e.name === 'AbortError' || (signal && signal.aborted)) return 'ignore';
+                                const status = Number(e.status || e.statusCode || (e.response && e.response.status)) || 0;
+                                if (status >= 400 && status < 500 && status !== 408) return false;
+                                return billingFailoverMod.failoverReasonFor(e) !== 'billing';
+                            },
+                        };
                         const stream = await breaker.execute(async () => {
                             try {
                                 return await attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
@@ -1014,7 +1119,7 @@ class AIService {
                                 delete payload.reasoning_effort;
                                 return attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
                             }
-                        });
+                        }, breakerOpts);
 
                         // Per-attempt reasoning state. A retry/fallback restarts
                         // the trace, so the accumulators reset with each attempt
@@ -1094,7 +1199,7 @@ class AIService {
                                     fullResponseContent += billingFailover.noticeText;
                                     await writeWithBackpressure(res, `data: ${JSON.stringify({
                                         type: 'model_failover',
-                                        reason: 'billing',
+                                        reason: billingFailover.reason || 'billing',
                                         from: billingFailover.from.label,
                                         to: billingFailover.to.label,
                                         notice: billingFailover.notice,
@@ -1128,6 +1233,9 @@ class AIService {
                         }
 
                         console.log(`✅ Response on ${currentProvider}:${currentRuntimeModel} attempt ${attempt} (${fullResponseContent.length} chars)`);
+                        // It answered: a «sin saldo» / per-minute memo of this
+                        // provider is stale (top-up, window passed).
+                        billingFailoverMod.noteProviderAnswered(currentProvider);
 
                         // Quality guard — rule #10 of the spec. Runs once,
                         // after a successful primary stream. If the reply
@@ -1172,6 +1280,8 @@ class AIService {
                         // the external client abort (terminal) — both show
                         // up as AbortError from the SDK.
                         const isOurTimeout = timedOut || err.code === 'TIMEOUT';
+                        lastFailure = { provider: currentProvider, model: currentModel, timedOut: isOurTimeout, error: err };
+                        if (m === 0) firstFailure = lastFailure;
                         const isClientCancel = !isOurTimeout && signal?.aborted && !isProviderClientError(err);
                         if (isClientCancel) throw err;
                         // Empty-completion reset (above) already cleared
@@ -1214,12 +1324,20 @@ class AIService {
                     }
                 }
 
-                if (!hasStreamedAnyContent && billingFailoverHops < MAX_BILLING_FAILOVER_HOPS && m === modelChain.length - 1
-                    && billingFailoverMod.enabled() && billingFailoverMod.isBillingError(lastError)
-                    && !(signal && signal.aborted)) {
-                    billingFailoverMod.markOutOfCredit(currentProvider, lastError);
+                const failoverReason = billingFailoverMod.failoverReasonFor(lastError);
+                const failoverEligible = Boolean(failoverReason) && !hasStreamedAnyContent
+                    && billingFailoverMod.enabled() && !(signal && signal.aborted);
+                // Every failing rung feeds the memo (billing → «sin saldo»,
+                // 401 → rejected key), not only the last one of the chain.
+                if (failoverEligible && failoverReason !== 'unfunded_memo') billingFailoverMod.recordProviderFailure(currentProvider, lastError, failoverReason);
+                if (failoverEligible && billingFailoverHops < MAX_BILLING_FAILOVER_HOPS && m === modelChain.length - 1) {
                     billingFailoverTried.add(currentProvider);
-                    if (pinnedUser) continue;
+                    if (!failoverAllowed) continue;
+                    // The notice names the real cause; a memo skip carries
+                    // the reason it was memoised for.
+                    const noticeReason = failoverReason === 'unfunded_memo'
+                        ? (billingFailoverMod.unfundedReason(currentProvider) || 'billing')
+                        : failoverReason;
                     let candidate = null;
                     try {
                         candidate = await billingFailoverMod.pickFailoverModel({
@@ -1233,23 +1351,24 @@ class AIService {
                     }
                     if (candidate) {
                         billingFailoverHops += 1;
-                        const notice = billingFailoverMod.buildNotice({ fromLabel: candidate.fromLabel, toLabel: candidate.label });
+                        const notice = billingFailoverMod.buildNotice({ fromLabel: candidate.fromLabel, toLabel: candidate.label, reason: noticeReason });
                         billingFailover = {
                             from: billingFailover
                                 ? { ...billingFailover.from }
                                 : { provider: currentProvider, model: currentModel, label: candidate.fromLabel },
                             to: { provider: candidate.provider, model: candidate.model, label: candidate.label },
+                            reason: noticeReason,
                             notice,
                             noticeText: `_${notice}_\n\n`,
                             noticePending: true,
                         };
                         providerOverrides.set(candidate.model, candidate.provider);
                         modelChain.push(candidate.model);
-                        console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} sin saldo (${Number(lastError?.status || lastError?.statusCode) || 'billing'}) → ${candidate.provider}:${candidate.model}${billingFailoverHops > 1 ? ` (salto ${billingFailoverHops}/${MAX_BILLING_FAILOVER_HOPS})` : ''}`);
+                        console.warn(`[billing-failover] ${currentProvider}:${currentRuntimeModel} ${noticeReason} (${failoverReason === 'unfunded_memo' ? 'memo' : (Number(lastError?.status || lastError?.statusCode) || failoverReason)}) → ${candidate.provider}:${candidate.model}${billingFailoverHops > 1 ? ` (salto ${billingFailoverHops}/${MAX_BILLING_FAILOVER_HOPS})` : ''}`);
                         if (typeof onModelFailover === 'function') {
                             try {
                                 onModelFailover({
-                                    reason: 'billing',
+                                    reason: noticeReason,
                                     from: { ...billingFailover.from },
                                     to: { ...billingFailover.to },
                                     notice,
@@ -1257,7 +1376,7 @@ class AIService {
                             } catch (_) { /* advisory */ }
                         }
                         noteTurnContext('model_failover', {
-                            reason: 'billing',
+                            reason: noticeReason,
                             fromProvider: currentProvider,
                             fromModel: currentRuntimeModel,
                             fromLabel: candidate.fromLabel,
@@ -1267,7 +1386,58 @@ class AIService {
                             status: Number(lastError && (lastError.status || lastError.statusCode)) || null,
                             message: String((lastError && lastError.message) || '').slice(0, 200),
                         });
+                    } else {
+                        // Nothing funded and healthy to answer: an honest
+                        // Spanish error instead of the raw provider text.
+                        noteTurnContext('model_failover_exhausted', {
+                            reason: noticeReason,
+                            fromProvider: currentProvider,
+                            fromModel: currentRuntimeModel,
+                            tried: [...billingFailoverTried].slice(0, 6),
+                            status: Number(lastError && (lastError.status || lastError.statusCode)) || null,
+                            message: String((lastError && lastError.message) || '').slice(0, 200),
+                        });
+                        const exhaustedMessage = noticeReason === 'billing'
+                            ? 'Ningún modelo con saldo pudo responder ahora. Inténtalo de nuevo en unos minutos.'
+                            : 'Ningún modelo disponible pudo responder ahora. Inténtalo de nuevo en unos minutos.';
+                        lastError = Object.assign(new Error(exhaustedMessage), {
+                            code: 'E_PROVIDER',
+                            status: 503,
+                            cause: lastError,
+                        });
                     }
+                }
+
+                // Pinned image turn on a vision-capable pick: the remaining
+                // vision runtimes are only for image-specific rejections (a
+                // 400 on the image payload, an empty answer). No credit, a
+                // rejected key, a down provider or a per-minute limit keep
+                // the picked model: the user is told why instead.
+                if (m === 0 && !failoverAllowed && !visionSwitched && modelChain.length > 1 && firstFailure
+                    && !hasStreamedAnyContent && !(signal && signal.aborted)) {
+                    const pickedCause = firstFailure.timedOut ? 'unavailable' : billingFailoverMod.failureCauseFor(firstFailure.error);
+                    if (PROVIDER_LEVEL_CAUSES.has(pickedCause)) {
+                        console.warn(`[vision] ${currentProvider}:${currentRuntimeModel} no pudo responder (${pickedCause}); no se prueban otros modelos de visión`);
+                        break;
+                    }
+                }
+            }
+
+            // A picked model that could not answer: carry the cause (no
+            // credit, key rejected, provider down, per-minute limit + wait)
+            // so the closing error tells the user exactly what happened. The
+            // cause is the picked model's own failure, never a vision
+            // fallback's (a switched text-only pick reports the runtime that
+            // ran).
+            if (!failoverAllowed && lastError) {
+                const failure = !visionSwitched && firstFailure ? firstFailure : lastFailure;
+                if (failure) {
+                    if (failure.error) lastError = failure.error;
+                    billingFailoverMod.annotateProviderFailure(lastError, {
+                        provider: failure.provider,
+                        model: failure.model,
+                        reason: failure.timedOut ? 'unavailable' : null,
+                    });
                 }
             }
 
@@ -1288,6 +1458,11 @@ class AIService {
             // RLHF implicit signal: the caller (generate route) feeds this
             // failure into routing-feedback + sira_rlhf_* telemetry. Advisory,
             // never throws, never changes what the user sees.
+            const failureCause = {
+                failureReason: apiError?.siraFailureReason || null,
+                failureProvider: apiError?.siraProvider || null,
+                retryAfterSeconds: apiError?.siraRetryAfterSeconds ?? null,
+            };
             const reportProviderFailure = (code) => {
                 noteTurnContext('provider_failure', {
                     code,
@@ -1297,6 +1472,7 @@ class AIService {
                     reason: String(apiError?.code || apiError?.status || apiError?.name || 'error').slice(0, 48),
                     message: String(apiError?.message || '').slice(0, 200),
                     partial: hasStreamedAnyContent === true,
+                    failureReason: failureCause.failureReason,
                 });
                 if (typeof onProviderFailure !== 'function') return;
                 try {
@@ -1308,6 +1484,7 @@ class AIService {
                         message: String(apiError?.message || '').slice(0, 200),
                         partial: hasStreamedAnyContent === true,
                         streamedChars: String(fullResponseContent || '').length,
+                        ...failureCause,
                     });
                 } catch { /* advisory */ }
             };
@@ -1329,9 +1506,21 @@ class AIService {
             if (isPinnedUserGenerate(provider, model) || providerHttpError) {
                 const mini = isPinnedLocalGenerate(provider, model);
                 const classified = classifyGenerateError(apiError);
+                // 100% transparent: which model and which cause (sin saldo,
+                // clave rechazada, proveedor no responde, límite por minuto +
+                // segundos). The code stays the classified one (E_PROVIDER).
+                // The picker's display name wins, except when a text-only
+                // pick was routed to a vision runtime (that runtime failed).
+                const transparent = !mini && apiError?.siraFailureReason
+                    ? require('./ai/billing-failover').buildFailureMessage({
+                        modelLabel: (!visionSwitched && String(modelLabel || '').trim()) || apiError.siraModelLabel || '',
+                        reason: apiError.siraFailureReason,
+                        retryAfterSeconds: apiError.siraRetryAfterSeconds,
+                    })
+                    : null;
                 const message = mini
                     ? SIRA_MINI_UNAVAILABLE_MESSAGE
-                    : classified.message;
+                    : (transparent || classified.message);
                 const error = mini ? 'sira_mini_unavailable' : classified.code;
                 reportProviderFailure(error);
                 closeGenerateSseWithError(res, { message, code: error, recovered: false });

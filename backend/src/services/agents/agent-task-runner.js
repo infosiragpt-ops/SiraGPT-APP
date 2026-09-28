@@ -1491,8 +1491,22 @@ function agentModelFailoverEnabled(env = process.env) {
  * su key exista. Devuelve todos los proveedores alternativos configurados
  * en orden de preferencia para poder continuar si el primero también falla.
  */
+/**
+ * Provider that really served the run (resolveAgentRuntimeClient): a model
+ * the runner could not detect (Claude, Sira Mini) or a Grok without an xAI
+ * key runs on DeepSeek / OpenRouter. The memo and the failover exclusion
+ * follow this transport, not the picker's provider.
+ */
+function agentRuntimeTransport(profile) {
+  const runtime = String(profile?.runtimeProvider || '').trim();
+  if (runtime && !/^(selected-|openai-fallback$|unconfigured$)/i.test(runtime)) return runtime;
+  return String(profile?.detected?.provider || 'OpenAI');
+}
+
 function resolveAgentModelFailoverRuntimes(profile, env = process.env) {
-  const failedProvider = String(profile?.detected?.provider || 'OpenAI');
+  // Neither the selected provider nor the transport that just failed is its
+  // own fallback.
+  const failedProviders = new Set([profile?.detected?.provider, agentRuntimeTransport(profile)].filter(Boolean).map(String));
   const fallbackModel = String(
     env.AGENT_TASK_OPENAI_MODEL || env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
   ).trim() || 'gpt-4o-mini';
@@ -1514,17 +1528,59 @@ function resolveAgentModelFailoverRuntimes(profile, env = process.env) {
   ];
   const runtimes = [];
   const keyHealth = require('../../utils/provider-key-health');
-  for (const target of candidates) {
-    if (target.provider === failedProvider) continue;
+  const billing = require('../ai/billing-failover');
+  // Same preference as the chat failover ladder (DeepSeek → Cerebras →
+  // Gemini → … → OpenAI; SIRAGPT_BILLING_FAILOVER_ORDER overrides). Unknown
+  // providers go last, ties keep the list order.
+  const order = billing.providerOrder(env);
+  const rankOf = (provider) => {
+    const i = order.indexOf(billing.normProvider(provider));
+    return i === -1 ? order.length : i;
+  };
+  const ordered = candidates
+    .map((target, index) => ({ target, index }))
+    .sort((a, b) => rankOf(a.target.provider) - rankOf(b.target.provider) || a.index - b.index)
+    .map(({ target }) => target);
+  for (const target of ordered) {
+    if (failedProviders.has(target.provider)) continue;
     if (!env[target.apiKeyEnv]) continue;
     // A key the provider already rejected (401/403, memoised 5 min) is not a
     // fallback: prod 2026-09-27 «grok-4.7 → Cerebras → OpenAI:gpt-4o-mini»
     // spent a round-trip on the dead OpenAI key at every failover.
     if (keyHealth.isRejected(target.provider, env[target.apiKeyEnv])) continue;
+    // Nor is a provider memoised «sin saldo» by the chat or another task.
+    if (billing.isOutOfCredit(target.provider, env)) continue;
     const client = buildOpenAICompatibleClient(target, env);
     if (client) runtimes.push({ client, model: target.model, provider: target.provider, apiKeyEnv: target.apiKeyEnv });
   }
   return runtimes;
+}
+
+/**
+ * Provider error that stopped a react-agent run: its `modelError`, or parsed
+ * from `stoppedReason` («model_error: 402 Insufficient credits»). null when
+ * the run did not stop on a model error.
+ */
+function agentRunModelError(result) {
+  if (!result) return null;
+  if (result.modelError && typeof result.modelError === 'object') return result.modelError;
+  const reason = String(result.stoppedReason || '');
+  if (!reason.startsWith('model_error')) return null;
+  const message = reason.replace(/^model_error:?\s*/, '').trim();
+  if (!message) return null;
+  const status = /^(\d{3})\b/.exec(message);
+  return { status: status ? Number(status[1]) : null, message: message.slice(0, 200) };
+}
+
+/** Feed the «sin saldo» / rejected-key memo from a failed agent run. Never throws. */
+function recordAgentRunFailure(provider, result) {
+  const detail = agentRunModelError(result);
+  if (!provider || !detail) return null;
+  try {
+    return require('../ai/billing-failover').recordProviderFailure(provider, detail);
+  } catch (_) {
+    return null;
+  }
 }
 
 function resolveAgentModelFailoverRuntime(profile, env = process.env) {
@@ -3719,6 +3775,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     })();
     emit({ type: 'step_start', id: preLoopStepId, label: preLoopLabel, icon: 'brain' });
 
+    // The runner knows the real transport of each runtime (an `openai/*`
+    // slug runs on OpenRouter, an undetected Claude on DeepSeek), so it
+    // feeds the provider memo itself.
+    reactRunArgs.recordProviderFailures = false;
+    const runtimeTransport = agentRuntimeTransport(runtimeModelProfile);
     let result = await reactAgent.run(openai, reactRunArgs);
 
     if (preLoopStepId && currentStepId === preLoopStepId) {
@@ -3734,13 +3795,22 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     // morir con él. Recorremos los runtimes de proveedores distintos hasta
     // obtener una respuesta válida o agotar las alternativas configuradas.
     const modelFailed = isUnrecoveredModelFailure(result.stoppedReason);
+    if (modelFailed) {
+      // Remember a dry account / rejected key of the runtime that really ran
+      // so the picker, the chat and the next task skip it.
+      recordAgentRunFailure(runtimeTransport, result);
+    }
     if (modelFailed && agentModelFailoverEnabled()) {
       const failoverRuntimes = resolveAgentModelFailoverRuntimes(runtimeModelProfile);
+      let previousRung = `${runtimeTransport}:${runtimeModelProfile.runtimeModel}`;
       for (const failoverRuntime of failoverRuntimes) {
-        console.warn(`[agent-task] model failover: ${runtimeModelProfile.runtimeModel} → ${failoverRuntime.provider}:${failoverRuntime.model} (task ${taskId})`);
+        console.warn(`[agent-task] model failover: ${previousRung} → ${failoverRuntime.provider}:${failoverRuntime.model} (task ${taskId})`);
+        // Display name only, never a raw model id.
+        let fallbackLabel = '';
+        try { fallbackLabel = require('../ai/billing-failover').publicModelLabel(failoverRuntime.model, failoverRuntime.provider); } catch (_) { fallbackLabel = ''; }
         emit({
           type: 'checkpoint',
-          label: `Modelo de respaldo activado: ${failoverRuntime.model}`,
+          label: fallbackLabel ? `Modelo de respaldo activado: ${fallbackLabel}` : 'Modelo de respaldo activado',
           status: 'warning',
           payload: { from: runtimeModelProfile.runtimeModel, to: failoverRuntime.model, reason: result.stoppedReason },
         });
@@ -3760,14 +3830,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           resumeCheckpoint: failoverResume,
         });
         if (!isUnrecoveredModelFailure(result.stoppedReason)) break;
-        // Remember an auth rejection so the next failover skips this runtime.
-        try {
-          const keyHealth = require('../../utils/provider-key-health');
-          const detail = result.error || result.errorMessage || result.lastError || null;
-          if (failoverRuntime.apiKeyEnv && keyHealth.isInvalidKeyError(detail)) {
-            keyHealth.markRejected(failoverRuntime.provider, process.env[failoverRuntime.apiKeyEnv], detail);
-          }
-        } catch (_) { /* memo is best effort */ }
+        // Remember a dry account / rejected key so the next failover (and
+        // the chat) skips this runtime.
+        recordAgentRunFailure(failoverRuntime.provider, result);
+        previousRung = `${failoverRuntime.provider}:${failoverRuntime.model}`;
       }
     }
 
@@ -4298,6 +4364,8 @@ module.exports = {
   agentModelFailoverEnabled,
   resolveAgentModelFailoverRuntime,
   resolveAgentModelFailoverRuntimes,
+  agentRunModelError,
+  agentRuntimeTransport,
   isUnrecoveredModelFailure,
   upsertArtifactForDelivery,
   parseSpreadsheetCitationRows,

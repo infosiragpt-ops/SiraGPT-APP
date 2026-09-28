@@ -25,6 +25,24 @@ test('selected-model failure diagnostics distinguish upstream, preflight, and si
   });
 });
 
+test('diagnostics: out_of_credit for a memoised empty account; budget and reasoning only when present', () => {
+  assert.deepEqual(providerFailureDiagnostic({
+    failureOrigin: 'upstream', failureTransport: 'direct', failureProvider: 'OpenAI', status: 429, failureUnfunded: true,
+  }, 1), {
+    origin: 'upstream', transport: 'direct', provider: 'OpenAI',
+    category: 'out_of_credit', status: 429, iteration: 1,
+  });
+  assert.deepEqual(providerFailureDiagnostic({
+    failureOrigin: 'tool_call_truncated', failureProvider: 'DeepSeek', budget: 4096, reasoningTokens: 3100,
+  }, 2), {
+    origin: 'tool_call_truncated', transport: 'unknown', provider: 'DeepSeek',
+    category: 'truncated', status: null, iteration: 2, budget: 4096, reasoningTokens: 3100,
+  });
+  const bounded = providerFailureDiagnostic({ failureOrigin: 'tool_call_truncated', budget: 'lots', reasoningTokens: -1 }, 1);
+  assert.equal('budget' in bounded, false);
+  assert.equal('reasoningTokens' in bounded, false);
+});
+
 test('selected-model failure logs contain no raw provider body, prompt, or signature', () => {
   const lines = [];
   const originalWarn = console.warn;

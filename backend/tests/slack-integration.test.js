@@ -60,3 +60,93 @@ describe('slack-integration · sendEventNotification', () => {
     assert.ok(Array.isArray(parsed.blocks));
   });
 });
+
+// Prod 2026-09-28: with no SLACK_/SIRAGPT_ENCRYPTION_KEY the key was random
+// per process, so every deploy made the saved webhooks undecryptable.
+describe('slack-integration · key source survives restarts', () => {
+  const KEY_ENV = ['SLACK_ENCRYPTION_KEY', 'SIRAGPT_ENCRYPTION_KEY', 'ENCRYPTION_KEY', 'NODE_ENV'];
+  const modulePath = require.resolve('../src/services/slack-integration');
+  const PLAIN = 'https://hooks.slack.com/services/T1/B2/restart';
+
+  function withEnv(overrides, fn) {
+    const saved = {};
+    for (const name of KEY_ENV) saved[name] = process.env[name];
+    for (const name of KEY_ENV) delete process.env[name];
+    for (const [name, value] of Object.entries(overrides)) process.env[name] = value;
+    try {
+      return fn();
+    } finally {
+      for (const name of KEY_ENV) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+      delete require.cache[modulePath];
+    }
+  }
+
+  // A "restart": a fresh module instance with an empty key cache.
+  function freshModule() {
+    delete require.cache[modulePath];
+    return require(modulePath);
+  }
+
+  test('with only ENCRYPTION_KEY, ciphertext decrypts after a restart', () => {
+    withEnv({ ENCRYPTION_KEY: 'a'.repeat(64), NODE_ENV: 'production' }, () => {
+      const cipher = freshModule().encryptToken(PLAIN);
+      assert.equal(freshModule().decryptToken(cipher), PLAIN);
+    });
+  });
+
+  test('the ENCRYPTION_KEY subkey is not the raw master key (HKDF, no key reuse)', () => {
+    withEnv({ ENCRYPTION_KEY: 'b'.repeat(64) }, () => {
+      const cipher = freshModule().encryptToken(PLAIN);
+      withEnv({ SLACK_ENCRYPTION_KEY: 'b'.repeat(64) }, () => {
+        assert.equal(freshModule().decryptToken(cipher), null);
+      });
+    });
+  });
+
+  test('SLACK_ENCRYPTION_KEY wins over SIRAGPT_ENCRYPTION_KEY, which wins over ENCRYPTION_KEY', () => {
+    let slackCipher;
+    withEnv({ SLACK_ENCRYPTION_KEY: 'c'.repeat(64), SIRAGPT_ENCRYPTION_KEY: 'd'.repeat(64), ENCRYPTION_KEY: 'e'.repeat(64) }, () => {
+      slackCipher = freshModule().encryptToken(PLAIN);
+    });
+    withEnv({ SLACK_ENCRYPTION_KEY: 'c'.repeat(64) }, () => {
+      assert.equal(freshModule().decryptToken(slackCipher), PLAIN);
+    });
+
+    let siragptCipher;
+    withEnv({ SIRAGPT_ENCRYPTION_KEY: 'd'.repeat(64), ENCRYPTION_KEY: 'e'.repeat(64) }, () => {
+      siragptCipher = freshModule().encryptToken(PLAIN);
+    });
+    withEnv({ SIRAGPT_ENCRYPTION_KEY: 'd'.repeat(64) }, () => {
+      assert.equal(freshModule().decryptToken(siragptCipher), PLAIN);
+    });
+  });
+
+  test('production with no key throws slack_encryption_unconfigured (never a per-process key)', () => {
+    withEnv({ NODE_ENV: 'production' }, () => {
+      const slackModule = freshModule();
+      assert.throws(() => slackModule.encryptToken(PLAIN), (err) => {
+        assert.equal(err.code, 'slack_encryption_unconfigured');
+        assert.equal(err.status, 503);
+        assert.match(err.message, /clave de cifrado/);
+        return true;
+      });
+      const failure = slackModule.webhookDecryptFailure();
+      assert.equal(failure.status, 503);
+      assert.equal(failure.body.code, 'slack_encryption_unconfigured');
+    });
+  });
+
+  test('outside production with no key a per-process key still round-trips', () => {
+    withEnv({ NODE_ENV: 'test' }, () => {
+      const slackModule = freshModule();
+      assert.equal(slackModule.decryptToken(slackModule.encryptToken(PLAIN)), PLAIN);
+      const failure = slackModule.webhookDecryptFailure();
+      assert.equal(failure.status, 409);
+      assert.equal(failure.body.code, 'slack_reconnect_required');
+      assert.match(failure.body.message, /vuelve a pegar el webhook/);
+    });
+  });
+});

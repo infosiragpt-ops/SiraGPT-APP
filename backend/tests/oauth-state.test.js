@@ -209,6 +209,55 @@ describe('verifyOAuthState', () => {
     );
   });
 
+  // A slow consent screen or a reloaded callback URL: the same error object
+  // (message still 'jwt expired') now carries a code so routes can log it at
+  // info and send the user back to login instead of warning.
+  it('tags an expired state with code OAUTH_STATE_EXPIRED and keeps the jwt message', async () => {
+    const { OAUTH_STATE_EXPIRED } = require('../src/services/auth/oauth-state-store');
+    assert.equal(OAUTH_STATE_EXPIRED, 'OAUTH_STATE_EXPIRED');
+    const expired = jwt.sign(
+      {
+        typ: 'oauth_state',
+        userId: 'u-1',
+        service: 'gmail',
+        redirectUri: REDIRECT_URI,
+        jti: 'expired-coded',
+      },
+      'unit-test-jwt-secret',
+      { expiresIn: '-1s' },
+    );
+    await assert.rejects(
+      verifyOAuthState(expired, { service: 'gmail', redirectUri: REDIRECT_URI }, ENV()),
+      (error) => {
+        assert.equal(error.code, 'OAUTH_STATE_EXPIRED');
+        assert.match(error.message, /jwt expired/);
+        assert.equal(error.name, 'TokenExpiredError');
+        return true;
+      },
+    );
+  });
+
+  it('tags a state signed with another secret as OAUTH_STATE_INVALID', async () => {
+    const forged = jwt.sign(
+      {
+        typ: 'oauth_state',
+        userId: 'u-1',
+        service: 'gmail',
+        redirectUri: REDIRECT_URI,
+        jti: 'bad-signature',
+      },
+      'some-other-secret',
+    );
+    await assert.rejects(
+      verifyOAuthState(forged, { service: 'gmail', redirectUri: REDIRECT_URI }, ENV()),
+      (error) => {
+        assert.equal(error.code, 'OAUTH_STATE_INVALID');
+        assert.match(error.message, /invalid signature/);
+        return true;
+      },
+    );
+  });
+
   it('throws when userId missing in the JWT payload', async () => {
     const malformed = jwt.sign(
       {

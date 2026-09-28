@@ -79,6 +79,52 @@ function defaultSubscribeCancel(connection, jobId, onCancel) {
   return () => { try { sub.disconnect(); } catch (_) { /* ignore */ } };
 }
 
+/**
+ * Stable reason for a failed job, so the waiting side keeps the cause
+ * (provider, credit, sandbox) instead of a bare message.
+ */
+function jobFailureReason(err) {
+  const code = String((err && err.code) || '');
+  const message = String((err && err.message) || err || '');
+  if (code === 'E_PROVIDER') return 'E_PROVIDER';
+  if (code === 'E_QUOTA') return 'E_QUOTA';
+  if (/at_capacity|sandbox_capacity/i.test(message)) return 'sandbox_capacity';
+  if (code === 'OPERATION_TIMEOUT' || /remote_sandbox_timeout|sandbox_timeout/i.test(message)) return 'sandbox_timeout';
+  // Credit wording only: a bare «402» in a message can be a row or a line.
+  const status = Number((err && (err.status || err.statusCode)) || 0);
+  if (status === 402 || /402 Payment Required|can only afford|insufficient (?:credits?|balance)/i.test(message)) return 'llm_402';
+  return 'exception';
+}
+
+// BullMQ emits 'error' on the worker for Redis faults; without a listener
+// Node treats it as unhandled. Transient Redis hiccups log once a minute.
+function attachWorkerErrorListener(worker) {
+  if (!worker || typeof worker.on !== 'function') return;
+  let isTransient = () => false;
+  try { ({ isTransientRedisError: isTransient } = require('../agents/redis-resilience')); } catch (_) { /* classify nothing as transient */ }
+  let lastTransientWarnAt = 0;
+  worker.on('error', (err) => {
+    try {
+      if (isTransient(err)) {
+        const now = Date.now();
+        if (now - lastTransientWarnAt < 60_000) return;
+        lastTransientWarnAt = now;
+        console.warn('[agent-runner] worker transient Redis error:', String((err && err.message) || err).slice(0, 200));
+        return;
+      }
+      console.error('[agent-runner] worker error:', String((err && err.message) || err).slice(0, 300));
+    } catch (_) { /* logging never throws */ }
+  });
+}
+
+// Close the worker in the graceful shutdown (named in PRODUCTION_SHUTDOWN_ORDER).
+function registerWorkerShutdown(worker) {
+  if (!worker || typeof worker.close !== 'function' || isLikelyTestProcess()) return;
+  try {
+    require('../../utils/shutdown').register('agent_runner_worker_close', () => worker.close(), 5000);
+  } catch (_) { /* already shutting down or registry unavailable */ }
+}
+
 async function enqueueAgentRunnerJob(data, { QueueImpl, connection, queueName = QUEUE_NAME } = {}) {
   if (!QueueImpl) {
     const { Queue } = require('bullmq');
@@ -157,7 +203,13 @@ function startAgentRunnerWorker({
         await emit({ type: 'job_cancelled', label: 'Cancelado', message: 'cancelled_by_user' });
         throw Object.assign(new Error('agent_runner_job_cancelled'), { name: 'AbortError' });
       }
-      await emit({ type: 'job_error', message: err?.message || String(err), label: 'Error' });
+      await emit({
+        type: 'job_error',
+        message: err?.message || String(err),
+        code: err?.code ? String(err.code) : null,
+        reason: jobFailureReason(err),
+        label: 'Error',
+      });
       throw err;
     } finally {
       try { unsubscribeCancel(); } catch (_) { /* ignore */ }
@@ -167,6 +219,8 @@ function startAgentRunnerWorker({
     concurrency: Math.max(1, Number(process.env.AGENT_RUNNER_CONCURRENCY) || 2),
     skipVersionCheck: true,
   });
+  attachWorkerErrorListener(worker);
+  registerWorkerShutdown(worker);
   return worker;
 }
 
@@ -246,4 +300,5 @@ module.exports = {
   enqueueAgentRunnerJob,
   startAgentRunnerWorker,
   waitForAgentRunnerJob,
+  jobFailureReason,
 };

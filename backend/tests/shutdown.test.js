@@ -759,3 +759,78 @@ describe('start-all parent shutdown', () => {
     }
   });
 });
+
+// Prod 2026-09-28: six registered hooks were missing from the production
+// order, so they sorted last — after prisma_disconnect/redis_disconnect and
+// with whatever was left of the 30s deadline (orphaned doc sandboxes, lost
+// RLCD ledger flushes on every deploy).
+describe('shutdown — every registered production hook is ordered', () => {
+  const HOOK_SOURCES = [
+    '../index.js',
+    '../src/services/rlcd/persistence.js',
+    '../src/services/agent-runner/queue.js',
+  ];
+
+  function registeredHookNames() {
+    const names = new Set();
+    for (const rel of HOOK_SOURCES) {
+      const file = path.resolve(__dirname, rel);
+      if (!fs.existsSync(file)) continue;
+      const source = fs.readFileSync(file, 'utf8');
+      // Single-line register('name', …) and the multi-line
+      // register(\n  'name',\n  …) form used in index.js.
+      for (const match of source.matchAll(/\bregister\(\s*['"]([a-z0-9_]+)['"]/g)) names.add(match[1]);
+    }
+    return names;
+  }
+
+  test('the scan finds the known multi-line and self-registered hooks', () => {
+    const names = registeredHookNames();
+    for (const known of ['scheduler_stop', 'rbac_permission_cache_close', 'auth_revocation_bus_close', 'rlcd_ledger_flush', 'doc_sandbox_close']) {
+      assert.ok(names.has(known), `${known} must be detected by the register( scan`);
+    }
+  });
+
+  test("every register('<name>' is in PRODUCTION_SHUTDOWN_ORDER", () => {
+    const order = new Set(shutdownReg.PRODUCTION_SHUTDOWN_ORDER);
+    const missing = [...registeredHookNames()].filter((name) => !order.has(name));
+    assert.deepEqual(missing, [], `unordered shutdown hooks would run after prisma/redis: ${missing.join(', ')}`);
+  });
+
+  test('ledger flush and sandbox close run before prisma_disconnect', () => {
+    const order = shutdownReg.PRODUCTION_SHUTDOWN_ORDER;
+    const prisma = order.indexOf('prisma_disconnect');
+    for (const name of ['rlcd_ledger_flush', 'doc_sandbox_close']) {
+      assert.ok(order.indexOf(name) >= 0, `${name} must be ordered`);
+      assert.ok(order.indexOf(name) < prisma, `${name} must run before prisma_disconnect`);
+    }
+    // The 25s sandbox budget must not starve the telemetry flush.
+    assert.ok(order.indexOf('observability_flush') < order.indexOf('doc_sandbox_close'));
+  });
+
+  test('Redis-backed caches and buses close before redis_disconnect', () => {
+    const order = shutdownReg.PRODUCTION_SHUTDOWN_ORDER;
+    const redis = order.indexOf('redis_disconnect');
+    for (const name of ['rbac_permission_cache_close', 'auth_revocation_bus_close']) {
+      assert.ok(order.indexOf(name) >= 0, `${name} must be ordered`);
+      assert.ok(order.indexOf(name) < redis, `${name} must run before redis_disconnect`);
+    }
+    assert.equal(order[order.length - 1], 'redis_disconnect');
+  });
+
+  test('scheduler_stop stays first and producers stop before the HTTP drain', () => {
+    const order = shutdownReg.PRODUCTION_SHUTDOWN_ORDER;
+    assert.equal(order[0], 'scheduler_stop');
+    const http = order.indexOf('http_server_close');
+    for (const name of ['codex_proactive_stop', 'social_publication_worker_stop']) {
+      assert.ok(order.indexOf(name) > 0 && order.indexOf(name) < http, `${name} must stop before http_server_close`);
+    }
+    assert.ok(order.indexOf('agent_runner_worker_close') > order.indexOf('bullmq_workers_close'));
+    assert.ok(order.indexOf('agent_runner_worker_close') < order.indexOf('prisma_disconnect'));
+  });
+
+  test('configure accepts the production order (unique, non-empty names)', () => {
+    assert.doesNotThrow(() => shutdownReg.configure({ executionOrder: shutdownReg.PRODUCTION_SHUTDOWN_ORDER }));
+    assert.equal(new Set(shutdownReg.PRODUCTION_SHUTDOWN_ORDER).size, shutdownReg.PRODUCTION_SHUTDOWN_ORDER.length);
+  });
+});

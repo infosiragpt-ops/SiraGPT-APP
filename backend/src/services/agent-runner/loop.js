@@ -3,7 +3,7 @@
 const { isDeepStrictEqual } = require('node:util');
 const { throwIfAborted } = require('../../utils/abort-signals');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
-const { normalizeToolTranscript, isToolTranscriptError } = require('./tool-transcript');
+const { normalizeToolTranscript, sealToolTranscriptInPlace, isToolTranscriptError } = require('./tool-transcript');
 const {
   MAX_VERIFICATION_RETRIES,
   needsVerification,
@@ -785,6 +785,9 @@ function compactMessagesInPlace(messages, opts = {}) {
   messages.length = 0;
   for (const m of next) messages.push(m);
   restorePinnedMessages(messages, opts.pinned);
+  // Persist the pairing repair here, where compaction changed the array,
+  // instead of re-repairing a request copy on every later iteration.
+  sealToolTranscriptInPlace(messages);
   return true;
 }
 
@@ -1062,6 +1065,93 @@ function logTranscriptRepair(normalized, repairLog) {
   } catch (_) { /* ignore */ }
 }
 
+// ── Truncated tool calls ─────────────────────────────────────────────
+// Some providers return a partial tool_use block when max_tokens is reached.
+// Its arguments can parse as `{}` but are not a completed call: it is never
+// executed or replayed. The loop recovers instead of failing the turn: one
+// retry with a larger output budget, then one retry at the original budget
+// asking the model to split the work, then E_PROVIDER. At most three model
+// calls per truncation. The larger budget is bounded by the model's output
+// ceiling: an Office turn already asks 8192, which is the ceiling of most
+// catalog models, so there only the split request runs.
+const TRUNCATION_MAX_TOKENS_DEFAULT = 16_384;
+const TRUNCATED_TOOL_CALL_MESSAGE = 'La respuesta del modelo se cortó antes de completar una herramienta. Reintenta con una solicitud más breve o elige otro modelo.';
+
+function isTruncatedToolCall(out) {
+  const choice = out?.choices?.[0];
+  return choice?.finish_reason === 'length' && Array.isArray(choice.message?.tool_calls) && choice.message.tool_calls.length > 0;
+}
+
+/** min(2× budget, the model's output ceiling, SIRAGPT_AGENT_RUNNER_TRUNCATION_MAX_TOKENS). */
+function truncationCeiling(model, tokenLimit, env = process.env) {
+  const raw = Number(env.SIRAGPT_AGENT_RUNNER_TRUNCATION_MAX_TOKENS);
+  const envCap = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : TRUNCATION_MAX_TOKENS_DEFAULT;
+  let modelCap = envCap;
+  try {
+    const caps = require('../agent-harness/model-capabilities').resolveModelCapabilities(model);
+    if (Number.isFinite(caps?.maxOutputTokens) && caps.maxOutputTokens > 0) modelCap = caps.maxOutputTokens;
+  } catch (_) { /* the env cap alone bounds the escalation */ }
+  return Math.max(0, Math.min(2 * tokenLimit, modelCap, envCap));
+}
+
+function truncationSplitNudge(out) {
+  const name = out?.choices?.[0]?.message?.tool_calls?.[0]?.function?.name;
+  const tool = typeof name === 'string' && /^[\w.-]{1,64}$/.test(name) ? name : 'la herramienta';
+  return {
+    role: 'user',
+    content: `Tu llamada anterior a ${tool} se cortó por el límite de salida. Divide el trabajo: escribe el script por partes con write_file (≤150 líneas por parte) y ejecútalo después; no repitas el contenido completo en un solo argumento.`,
+  };
+}
+
+function truncatedToolCallError(client, budget, out) {
+  const error = new Error('A tool call was truncated at the model output limit');
+  error.code = 'E_PROVIDER';
+  error.failureOrigin = 'tool_call_truncated';
+  error.publicMessage = TRUNCATED_TOOL_CALL_MESSAGE;
+  let provider = null;
+  try { provider = client?.describe?.().provider || null; } catch (_) { /* injected clients may not describe themselves */ }
+  if (provider) error.failureProvider = provider;
+  error.budget = budget;
+  const reasoning = Number(out?.usage?.completion_tokens_details?.reasoning_tokens);
+  if (Number.isFinite(reasoning) && reasoning >= 0) error.reasoningTokens = reasoning;
+  return error;
+}
+
+function isAbortLikeError(err, signal) {
+  if (signal?.aborted) return true;
+  const name = String(err?.name || '');
+  return name === 'AbortError' || name === 'APIUserAbortError' || err?.code === 'ABORT_ERR' || err?.aborted === true;
+}
+
+// ── Provider failures (the selected model keeps its provider) ────────
+// The runner client wraps provider errors in a generic E_PROVIDER; the
+// failover client underneath keeps a content-free summary of the real cause
+// (llm-runtime `describe().lastFailure`).
+function lastProviderFailure(client) {
+  try {
+    const described = client?.describe?.();
+    return described && described.lastFailure ? described.lastFailure : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isProviderOutOfCredit(provider) {
+  if (!provider) return false;
+  try { return Boolean(require('../ai/billing-failover').isOutOfCredit(provider)); } catch (_) { return false; }
+}
+
+// Causes no retry of the same request can fix: an empty account, credit
+// too short for this reply, a rejected key, a key without access.
+const PERMANENT_FAILURE_CAUSES = new Set(['billing', 'reservation', 'auth', 'forbidden']);
+
+/** An empty account or a rejected key: no retry of the same call can succeed. */
+function providerCannotAnswer(err, client) {
+  const last = lastProviderFailure(client);
+  if (last) return last.cause === 'billing' || last.cause === 'reservation' || last.cause === 'auth';
+  return isProviderOutOfCredit(err?.failureProvider);
+}
+
 async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken, repairLog = null }) {
   const tokenLimit = maxTokens || resolveAgentRunnerMaxTokens();
   // The request payload is a structurally valid copy of the transcript: the
@@ -1071,28 +1161,40 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
   // never mutated here.
   const normalized = normalizeToolTranscript(messages);
   logTranscriptRepair(normalized, repairLog);
-  const create = (withTools) => client.chat.completions.create({
+  // `extraMessages` ride on this request only, never on the runner's state.
+  const create = (withTools, { tokenLimit: limit = tokenLimit, extraMessages = null } = {}) => client.chat.completions.create({
     model,
-    messages: normalized.messages,
+    messages: extraMessages && extraMessages.length ? [...normalized.messages, ...extraMessages] : normalized.messages,
     ...(withTools ? { tools, tool_choice: 'auto' } : {}),
     ...(usesNativeOpenAiCompletionTokens(model, client)
-      ? { max_completion_tokens: tokenLimit }
-      : { max_tokens: tokenLimit }),
+      ? { max_completion_tokens: limit }
+      : { max_tokens: limit }),
   }, signal ? { signal } : undefined);
+  const recoverTruncatedToolCall = async (first) => {
+    let last = first;
+    let budget = tokenLimit;
+    const ceiling = truncationCeiling(model, tokenLimit);
+    if (ceiling > tokenLimit) {
+      try {
+        const escalated = await create(true, { tokenLimit: ceiling });
+        if (!isTruncatedToolCall(escalated)) return escalated;
+        last = escalated;
+        budget = ceiling;
+      } catch (err) {
+        if (isAbortLikeError(err, signal)) throw err;
+        // A larger reservation can be refused (402 "can only afford", 400
+        // limit too high): a reservation-size problem, not an empty account.
+        // Continue with the split request at the original budget.
+      }
+    }
+    const split = await create(true, { extraMessages: [truncationSplitNudge(last)] });
+    if (!isTruncatedToolCall(split)) return split;
+    throw truncatedToolCallError(client, budget, split);
+  };
   return callModelWithRetry(async () => {
     try {
-      const out = await create(true);
-      // Some providers return a partial tool_use block when max_tokens is
-      // reached. Its arguments can parse as `{}` but are not a completed call.
-      // Never hand that block to the executor or replay it as a tool turn.
-      const choice = out?.choices?.[0];
-      if (choice?.finish_reason === 'length' && Array.isArray(choice.message?.tool_calls) && choice.message.tool_calls.length > 0) {
-        const error = new Error('A tool call was truncated at the model output limit');
-        error.code = 'E_PROVIDER';
-        error.failureOrigin = 'tool_call_truncated';
-        error.publicMessage = 'La respuesta del modelo se cortó antes de completar una herramienta. Reintenta con una solicitud más breve o elige otro modelo.';
-        throw error;
-      }
+      let out = await create(true);
+      if (isTruncatedToolCall(out)) out = await recoverTruncatedToolCall(out);
       if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
       return out;
     } catch (err) {
@@ -1110,15 +1212,135 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
   }, {
     signal,
     retryMax: LLM_RETRY_MAX,
+    // A provider memoised as unfunded (or whose key was rejected) answers
+    // the same way on every retry: fail once, with the real cause.
+    shouldRetry: (err) => isTransientLlmError(err) && !providerCannotAnswer(err, client),
+    retryAfterMs: () => {
+      const last = lastProviderFailure(client);
+      return last && Number.isFinite(last.retryAfterMs) ? last.retryAfterMs : null;
+    },
   });
 }
+
+const PROVIDER_UNAVAILABLE_MESSAGE = 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
+
+/** Display name for the user (never a raw model id): a caller label or a known DeepSeek tier. */
+function publicModelLabel(model, modelLabel) {
+  if (typeof modelLabel === 'string' && modelLabel.trim()) return modelLabel.trim().slice(0, 80);
+  const id = String(model || '').toLowerCase();
+  if (!/deepseek/.test(id)) return null;
+  try {
+    const names = require('../ai/custom-provider-client');
+    if (/v4[-_\s]?flash/.test(id)) return names.DEEPSEEK_FLASH_DISPLAY_NAME;
+    if (/v4[-_\s]?pro/.test(id)) return names.DEEPSEEK_PRO_DISPLAY_NAME;
+  } catch (_) { /* no label */ }
+  return null;
+}
+
+function providerFailureCause(err, client) {
+  const last = lastProviderFailure(client);
+  if (last && last.cause && last.cause !== 'other') return { cause: last.cause, retryAfterMs: last.retryAfterMs };
+  const status = Number(err?.status) || null;
+  if (isProviderOutOfCredit(err?.failureProvider || last?.provider)) return { cause: 'billing' };
+  // A client without describe(): the error itself still says «no credit»
+  // (including a 429 that is not a per-minute window).
+  let classified = null;
+  try { classified = require('../doc-agent/llm-runtime').classifyProviderFailure(err); } catch (_) { classified = null; }
+  if (classified === 'billing' || classified === 'reservation') return { cause: classified };
+  if (status === 402) return { cause: 'billing' };
+  if (status === 401) return { cause: 'auth' };
+  if (status === 403) return { cause: 'forbidden' };
+  if (status === 429) return { cause: 'rate_limit' };
+  if (status !== null && (status >= 500 || status === 408)) return { cause: 'unavailable' };
+  return { cause: null };
+}
+
+// DeepSeek V4 Flash is suggested as a funded alternative only when it is
+// one: never after a DeepSeek model failed (Pro and Flash share the account)
+// nor while DeepSeek itself is memoised unfunded.
+function suggestsDeepSeekFlash({ model, label, provider }) {
+  if ([model, label, provider].some((value) => /deepseek/i.test(String(value || '')))) return false;
+  try { return !require('../ai/billing-failover').isUnfunded('DeepSeek'); } catch (_) { return true; }
+}
+
+function describeProviderFailureForUser(err, { client, model, modelLabel } = {}) {
+  if (err?.publicMessage) return { message: err.publicMessage, cause: null };
+  const label = publicModelLabel(model, modelLabel);
+  const selected = `del modelo seleccionado${label ? ` (${label})` : ''}`;
+  const { cause, retryAfterMs } = providerFailureCause(err, client);
+  const reply = (message) => ({ message, cause });
+  if (cause === 'billing') {
+    if (err && typeof err === 'object') err.failureUnfunded = true;
+    const provider = lastProviderFailure(client)?.provider || err?.failureProvider;
+    const example = suggestsDeepSeekFlash({ model, label, provider }) ? ' (por ejemplo DeepSeek V4 Flash)' : '';
+    return reply(`El proveedor ${selected} no tiene saldo en este momento. No cambié de modelo: elige otro${example} o vuelve a intentarlo más tarde.`);
+  }
+  if (cause === 'reservation') {
+    return reply(`El proveedor ${selected} no tiene saldo suficiente para una respuesta de este tamaño. No cambié de modelo: pide algo más breve, elige otro o vuelve a intentarlo más tarde.`);
+  }
+  if (cause === 'auth') {
+    return reply(`El proveedor ${selected} rechazó la clave de acceso configurada. No cambié de modelo: elige otro o pide que revisen la conexión de ese proveedor.`);
+  }
+  if (cause === 'forbidden') {
+    return reply(`El proveedor ${selected} no permite usarlo con la clave configurada. No cambié de modelo: elige otro o pide que revisen la conexión de ese proveedor.`);
+  }
+  if (cause === 'rate_limit') {
+    const seconds = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? Math.max(1, Math.ceil(retryAfterMs / 1000)) : null;
+    const wait = seconds ? `Espera ${seconds} ${seconds === 1 ? 'segundo' : 'segundos'}` : 'Espera unos segundos';
+    return reply(`El proveedor ${selected} alcanzó su límite de solicitudes por minuto. ${wait} y vuelve a intentarlo, o elige otro modelo.`);
+  }
+  if (cause === 'unavailable') {
+    return reply(`El proveedor ${selected} no está respondiendo en este momento. No cambié de modelo: vuelve a intentarlo en unos minutos o elige otro.`);
+  }
+  return reply(PROVIDER_UNAVAILABLE_MESSAGE);
+}
+
+/**
+ * Spanish copy for a selected-model failure that names the cause: no credit,
+ * credit too short for this reply, rejected key, provider not responding,
+ * per-minute limit (with the wait). The selected model is never swapped for
+ * another one; the user decides. Marks `err.failureUnfunded` (empty account
+ * only) so the diagnostic says out_of_credit.
+ */
+function providerFailurePublicMessage(err, opts = {}) {
+  return describeProviderFailureForUser(err, opts).message;
+}
+
+// ── Exec tools and sandbox transport timeouts ────────────────────────
+// A remote execute_python/bash that timed out may still be running: a blind
+// retry doubles its side effects and can burn 3 × 130 s. Read/list tools
+// keep their retries.
+const EXEC_TOOL_RE = /^(execute_python|execute_bash|bash)$/;
+const SANDBOX_EXEC_TIMEOUT_OBSERVATION = 'ERROR: el entorno de documentos no respondió a tiempo; el comando puede no haberse completado.';
+
+function isSandboxTransportTimeout(err) {
+  if (!err) return false;
+  return String(err.code || '') === 'OPERATION_TIMEOUT'
+    || /remote_sandbox_timeout|sandbox_timeout/i.test(String(err.message || err));
+}
+
+const TURN_STOPPED_RESULT = 'no se ejecutó: el turno se detuvo antes de esta herramienta';
 
 /**
  * Generic LLM → tool_call → tool_result → LLM loop.
  * Native OpenRouter/OpenAI function calling first; ReAct text fallback when
  * the model (or the provider) cannot emit tool_calls.
+ *
+ * Every exit leaves `messages` well formed: a call the turn never answered
+ * gets a synthetic result, so a caller that re-runs the loop on the same
+ * array (output retries, orchestrator) does not re-repair it every call.
  */
-async function runAgentLoop({
+async function runAgentLoop(params = {}) {
+  try {
+    return await runAgentLoopInner(params);
+  } finally {
+    try {
+      sealToolTranscriptInPlace(params && params.messages, { missingResultText: TURN_STOPPED_RESULT });
+    } catch (_) { /* sealing is best-effort */ }
+  }
+}
+
+async function runAgentLoopInner({
   client,
   model,
   messages,
@@ -1144,6 +1366,8 @@ async function runAgentLoop({
   // (render, changed zones, vision review, one correction) pass a longer one:
   // a verified tracked-changes edit was cut at 130 s and never answered.
   turnWallMs = null,
+  // User-facing model name for provider-failure copy (never a raw id).
+  modelLabel = null,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
   const wallMsOverride = Number(turnWallMs) > 0 ? Number(turnWallMs) : null;
@@ -1591,6 +1815,7 @@ async function runAgentLoop({
         if (Array.isArray(next) && next.length) {
           messages.length = 0;
           for (const m of next) messages.push(m);
+          sealToolTranscriptInPlace(messages);
         }
       }
     } catch (_) { /* 3H60 fail-open */ }
@@ -1713,9 +1938,10 @@ async function runAgentLoop({
       });
       if (signal?.aborted) bail(iteration);
       if (err?.code === 'E_PROVIDER') {
+        const { message, cause } = describeProviderFailureForUser(err, { client, model, modelLabel });
         logProviderFailure(err, iteration);
-        const message = err.publicMessage || 'El modelo seleccionado no está disponible. Reintenta o elige otro modelo.';
-        onEvent({ type: 'error', code: 'E_PROVIDER', message, retryable: true, iteration });
+        // Resending to an empty account or with a rejected key cannot work.
+        onEvent({ type: 'error', code: 'E_PROVIDER', message, retryable: !PERMANENT_FAILURE_CAUSES.has(cause), iteration });
         return {
           finalText: '',
           iterations: iteration,
@@ -2714,6 +2940,7 @@ async function runAgentLoop({
           }
         }
         if (result === undefined) {
+          const execTool = EXEC_TOOL_RE.test(String(name || '')) || EXEC_TOOL_RE.test(String(mapped || ''));
           const runExecutor = async () => {
             bail(iteration);
             // The per-call signal lets an in-flight execute_python/bash sandbox
@@ -2725,6 +2952,7 @@ async function runAgentLoop({
                 {
                   maxAttempts: 3,
                   isRetryable: (err) => {
+                    if (execTool && isSandboxTransportTimeout(err)) return false;
                     try {
                       const w65r = loadEngine3h65();
                       if (w65r && typeof w65r.applyDeepSeekCreditGuardsClosed === 'function') {
@@ -2753,6 +2981,7 @@ async function runAgentLoop({
               }
               if (signal?.aborted) bail(iteration);
               const err = (retried && retried.error) || new Error('tool_retry_exhausted');
+              if (execTool && isSandboxTransportTimeout(err)) return SANDBOX_EXEC_TIMEOUT_OBSERVATION;
               const transient = typeof adapter.isRetryableToolFailure === 'function'
                 && adapter.isRetryableToolFailure(err);
               if (transient) {
@@ -2769,6 +2998,7 @@ async function runAgentLoop({
               return await executor(execArgs, { signal });
             } catch (execErr) {
               if (signal?.aborted) bail(iteration);
+              if (execTool && isSandboxTransportTimeout(execErr)) return SANDBOX_EXEC_TIMEOUT_OBSERVATION;
               let retried = false;
               try {
                 const w60 = loadEngine3h60();
@@ -3219,4 +3449,5 @@ module.exports = {
   stealStaleFence,
   classifyLoopError,
   compactMessagesInPlace,
+  providerFailurePublicMessage,
 };

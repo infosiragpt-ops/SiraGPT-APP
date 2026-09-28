@@ -2,10 +2,23 @@
 
 // Document agent LLM runtime: provider ladder + per-call failover. Offline.
 
-const { test, describe } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const rt = require('../src/services/doc-agent/llm-runtime');
+const billing = require('../src/services/ai/billing-failover');
+const keyHealth = require('../src/utils/provider-key-health');
+
+// Provider failures now feed the process-wide funding memo (billing-failover
+// + provider-key-health): isolate every test from the previous one.
+beforeEach(() => {
+  billing.__resetForTests();
+  keyHealth.clear();
+});
+afterEach(() => {
+  billing.__resetForTests();
+  keyHealth.clear();
+});
 const { runDocAgentLoop } = require('../src/services/doc-agent/loop');
 const { callModel, runAgentLoop } = require('../src/services/agent-runner/loop');
 

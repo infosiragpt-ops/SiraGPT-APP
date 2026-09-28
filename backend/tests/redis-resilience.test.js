@@ -95,6 +95,44 @@ test('installProcessGuards is idempotent — repeated calls add no extra unhandl
   assert.equal(process.listenerCount('unhandledRejection'), after1, 'must not register duplicate handlers');
 });
 
+// Prod 2026-09-28: inside the API process index.js already owns the
+// unhandledRejection handler; a second one logged each real rejection twice,
+// the copy misattributed to [agent-task-worker].
+function withIsolatedRejectionListeners(fn) {
+  const modulePath = require.resolve('../src/services/agents/redis-resilience');
+  const saved = process.rawListeners('unhandledRejection');
+  process.removeAllListeners('unhandledRejection');
+  delete require.cache[modulePath];
+  try {
+    return fn(require(modulePath));
+  } finally {
+    process.removeAllListeners('unhandledRejection');
+    for (const listener of saved) process.on('unhandledRejection', listener);
+    delete require.cache[modulePath];
+  }
+}
+
+test('installProcessGuards adds no listener when the process already owns one', () => {
+  withIsolatedRejectionListeners((fresh) => {
+    const owner = () => {};
+    process.on('unhandledRejection', owner);
+    fresh.installProcessGuards({ logger: { warn() {}, error() {} } });
+    assert.equal(process.listenerCount('unhandledRejection'), 1, 'must not add a second handler');
+    assert.deepEqual(process.listeners('unhandledRejection'), [owner]);
+    fresh.installProcessGuards();
+    assert.equal(process.listenerCount('unhandledRejection'), 1, 'idempotency still holds');
+  });
+});
+
+test('installProcessGuards still guards a standalone worker process with no handler', () => {
+  withIsolatedRejectionListeners((fresh) => {
+    fresh.installProcessGuards({ logger: { warn() {}, error() {} } });
+    assert.equal(process.listenerCount('unhandledRejection'), 1);
+    fresh.installProcessGuards();
+    assert.equal(process.listenerCount('unhandledRejection'), 1, 'idempotent');
+  });
+});
+
 test('a swallow listener stops an EventEmitter "error" from throwing (the missing-worker-listener leak)', () => {
   const bare = new EventEmitter();
   // Without a listener, emitting 'error' throws synchronously — exactly how a

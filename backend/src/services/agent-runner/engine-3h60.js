@@ -22,6 +22,7 @@
  */
 
 const crypto = require('crypto');
+const { toolCallGroups } = require('./tool-transcript');
 
 const WAVE = '3H60';
 const BACKOFF_BASE_MS = 100;
@@ -394,24 +395,68 @@ function compactFaithfulDroppedSummary(original, compacted) {
   return { messages: out, summary, dropped: dropped.length, code: 'compact_faithful' };
 }
 
+// Best overlap of a tool-call unit: the assistant text, the called function
+// names/arguments and every tool result. An assistant tool_calls message has
+// null content, so scoring it alone always pruned it and orphaned its results.
+function toolUnitScore(query, unit) {
+  let best = 0;
+  for (const m of unit) {
+    if (!m) continue;
+    best = Math.max(best, jaccard(query, messageText(m)));
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      const calls = m.tool_calls
+        .map((c) => `${(c && c.function && c.function.name) || ''} ${(c && c.function && c.function.arguments) || ''}`)
+        .join(' ');
+      best = Math.max(best, jaccard(query, calls));
+    }
+  }
+  return best;
+}
+
 function pruneMessagesByQueryOverlap(messages, query, opts = {}) {
   const list = Array.isArray(messages) ? messages : [];
   const q = String(query || '');
   const min = Number(opts.minOverlap);
   const threshold = Number.isFinite(min) ? min : OVERLAP_MIN;
   const keepLast = Math.max(1, Number(opts.keepLast) || KEEP_LAST_DEFAULT);
+  const groups = toolCallGroups(list);
+  const groupAt = new Map(groups.map((g) => [g.start, g]));
+  // The protected tail never starts inside a tool-call unit.
+  let keepFrom = list.length - keepLast;
+  for (const g of groups) {
+    if (keepFrom > g.start && keepFrom <= g.end) keepFrom = g.start;
+  }
+  const keepAlways = (m) => !m || m.role === 'system' || m.pin === true;
   const kept = [];
   const pruned = [];
-  list.forEach((m, idx) => {
-    const fromEnd = list.length - idx;
-    if (!m || m.role === 'system' || m.pin === true || fromEnd <= keepLast) {
+  for (let idx = 0; idx < list.length; idx += 1) {
+    const m = list[idx];
+    if (idx >= keepFrom) {
       kept.push(m);
-      return;
+      continue;
+    }
+    const group = groupAt.get(idx);
+    if (group) {
+      // Keep or prune the call and its results as one unit.
+      const unit = list.slice(group.start, group.end + 1);
+      const keepUnit = unit.some((u) => u && u.pin === true) || toolUnitScore(q, unit) >= threshold;
+      for (const u of unit) {
+        if (keepUnit || keepAlways(u)) kept.push(u);
+        else pruned.push(u);
+      }
+      idx = group.end;
+      continue;
+    }
+    // A tool message outside any unit is already unpaired: never prune it
+    // alone (the transcript sealer turns it into readable user text).
+    if (keepAlways(m) || m.role === 'tool') {
+      kept.push(m);
+      continue;
     }
     const score = jaccard(q, messageText(m));
     if (score >= threshold) kept.push(m);
     else pruned.push(m);
-  });
+  }
   return {
     messages: kept,
     pruned: pruned.length,

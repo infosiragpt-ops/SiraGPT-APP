@@ -11,36 +11,85 @@
  *   sendEventNotification({ webhookUrl, event, … })   → Promise<{ ok, status }>
  *   sendRawMessage(webhookUrl, body)                  → Promise<{ ok, status }>
  *   encryptToken(plain) / decryptToken(cipher)        → string (AES-256-GCM)
+ *   webhookDecryptFailure()                           → { status, body } (409/503)
  *
- * Encryption: SLACK_ENCRYPTION_KEY env var supplies a 32-byte key (hex
- * or base64). Falls back to a per-process random key in dev so unit
- * tests stay deterministic via decrypt-after-encrypt round trips.
+ * Encryption key, first match wins:
+ *   1. SLACK_ENCRYPTION_KEY (32 bytes, hex or base64)
+ *   2. SIRAGPT_ENCRYPTION_KEY (existing ciphertext stays readable)
+ *   3. HKDF-SHA256 subkey of the mandatory ENCRYPTION_KEY (info
+ *      'siragpt/slack-webhook/v1'): stable across restarts, no key reuse
+ *   4. a per-process random key — only outside production (unit tests
+ *      round-trip within one process).
+ * A per-process key in production made every saved webhook undecryptable
+ * after the next deploy (one restart per merge), so production with no key
+ * throws slack_encryption_unconfigured instead.
  */
 
 const crypto = require('crypto');
 
 const ENC_ALGO = 'aes-256-gcm';
+const SLACK_KEY_HKDF_INFO = 'siragpt/slack-webhook/v1';
+const SLACK_ENCRYPTION_UNCONFIGURED = 'slack_encryption_unconfigured';
+const SLACK_RECONNECT_REQUIRED = 'slack_reconnect_required';
 let cachedKey = null;
+
+function keyFromSecret(raw) {
+  let buf = null;
+  try { buf = Buffer.from(raw, 'hex'); } catch { buf = null; }
+  if (!buf || buf.length !== 32) {
+    try { buf = Buffer.from(raw, 'base64'); } catch { buf = null; }
+  }
+  if (buf && buf.length === 32) return buf;
+  // Last resort: derive a key from the string
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
+function slackEncryptionUnconfiguredError() {
+  const err = new Error('Slack no está disponible: falta la clave de cifrado del servidor. Avisa al administrador.');
+  err.code = SLACK_ENCRYPTION_UNCONFIGURED;
+  err.status = 503;
+  return err;
+}
 
 function getKey() {
   if (cachedKey) return cachedKey;
   const raw = process.env.SLACK_ENCRYPTION_KEY || process.env.SIRAGPT_ENCRYPTION_KEY || '';
   if (raw) {
-    let buf = null;
-    try { buf = Buffer.from(raw, 'hex'); } catch { buf = null; }
-    if (!buf || buf.length !== 32) {
-      try { buf = Buffer.from(raw, 'base64'); } catch { buf = null; }
-    }
-    if (buf && buf.length === 32) {
-      cachedKey = buf;
-      return cachedKey;
-    }
-    // Last resort: derive a key from the string
-    cachedKey = crypto.createHash('sha256').update(raw).digest();
+    cachedKey = keyFromSecret(raw);
     return cachedKey;
   }
+  const master = String(process.env.ENCRYPTION_KEY || '').trim();
+  if (master) {
+    const ikm = /^[0-9a-f]{64}$/i.test(master) ? Buffer.from(master, 'hex') : Buffer.from(master, 'utf8');
+    cachedKey = Buffer.from(crypto.hkdfSync('sha256', ikm, Buffer.alloc(0), SLACK_KEY_HKDF_INFO, 32));
+    return cachedKey;
+  }
+  if (process.env.NODE_ENV === 'production') throw slackEncryptionUnconfiguredError();
   cachedKey = crypto.randomBytes(32);
   return cachedKey;
+}
+
+/**
+ * HTTP answer for a stored webhook that no longer decrypts: 409 «vuelve a
+ * pegar el webhook» (it was saved under a key this process no longer has),
+ * or a 503 when the server has no encryption key at all. Never a raw 500.
+ */
+function webhookDecryptFailure() {
+  try {
+    getKey();
+  } catch (err) {
+    if (err && err.code === SLACK_ENCRYPTION_UNCONFIGURED) {
+      return { status: 503, body: { error: SLACK_ENCRYPTION_UNCONFIGURED, code: SLACK_ENCRYPTION_UNCONFIGURED, message: err.message } };
+    }
+  }
+  return {
+    status: 409,
+    body: {
+      error: SLACK_RECONNECT_REQUIRED,
+      code: SLACK_RECONNECT_REQUIRED,
+      message: 'La conexión con Slack caducó; vuelve a pegar el webhook.',
+    },
+  };
 }
 
 function encryptToken(plain) {
@@ -131,4 +180,7 @@ module.exports = {
   sendRawMessage,
   encryptToken,
   decryptToken,
+  webhookDecryptFailure,
+  SLACK_ENCRYPTION_UNCONFIGURED,
+  SLACK_RECONNECT_REQUIRED,
 };

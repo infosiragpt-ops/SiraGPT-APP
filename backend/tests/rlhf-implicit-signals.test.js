@@ -121,7 +121,9 @@ test('a throwing onProviderFailure never changes the user-facing outcome', async
       skipDoneSentinel: true,
       onProviderFailure: () => { throw new Error('telemetry down'); },
     });
-    assert.equal(out, PROVIDER_FAIL_MESSAGE);
+    // A pinned model whose provider answers 5xx: the transparent cause, the
+    // same copy the user gets without telemetry.
+    assert.equal(out, 'El modelo elegido no pudo responder: su proveedor no está respondiendo ahora. No cambié de modelo; elige otro en el selector o inténtalo más tarde.');
   } finally {
     if (prevKey === undefined) delete process.env.XAI_API_KEY;
     else process.env.XAI_API_KEY = prevKey;

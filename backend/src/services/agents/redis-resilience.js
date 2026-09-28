@@ -107,10 +107,15 @@ function attachRedisListeners(connection, { label = 'redis', logger = console } 
 // BullMQ's internal Redis calls (e.g. Job.updateProgress when Redis
 // is mid-failover). We swallow only those — anything else is logged
 // loudly because it likely indicates a real bug.
+// Only when the process has no unhandledRejection handler yet: inside the
+// API process index.js already owns one (and swallows transient Redis
+// errors), and a second listener logged every real rejection twice, the
+// copy misattributed to [agent-task-worker]. Standalone workers still get it.
 let processGuardsInstalled = false;
 function installProcessGuards({ logger = console } = {}) {
   if (processGuardsInstalled) return;
   processGuardsInstalled = true;
+  if (process.listenerCount('unhandledRejection') > 0) return;
   // Throttle the swallow log: when Upstash hits its daily quota
   // BullMQ retries fire many rejections per second; logging every
   // one of them buries the rest of the boot output. One line per

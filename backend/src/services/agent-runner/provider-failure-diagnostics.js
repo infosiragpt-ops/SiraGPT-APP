@@ -22,6 +22,7 @@ function providerFailureDiagnostic(error, iteration) {
   let category = 'unknown';
   if (origin.startsWith('signed_call_')) category = 'transcript';
   else if (origin === 'tool_call_truncated') category = 'truncated';
+  else if (error?.failureUnfunded === true) category = 'out_of_credit';
   else if (origin === 'preflight') category = 'candidate_unavailable';
   else if (status === 402) category = 'payment_required';
   else if (status === 429) category = 'quota_or_rate_limit';
@@ -30,7 +31,14 @@ function providerFailureDiagnostic(error, iteration) {
   else if (status !== null && status >= 500) category = 'provider_error';
   const step = Number.isInteger(iteration) && iteration >= 0 && iteration <= 1000
     ? iteration : null;
-  return { origin, transport, provider, category, status, iteration: step };
+  // Output budget of a truncated call and the part the model spent thinking:
+  // bounded numbers, present only when the error carries them.
+  const extra = {};
+  const budget = Number(error?.budget);
+  if (Number.isInteger(budget) && budget > 0 && budget <= 1_000_000) extra.budget = budget;
+  const reasoningTokens = Number(error?.reasoningTokens);
+  if (Number.isInteger(reasoningTokens) && reasoningTokens >= 0 && reasoningTokens <= 1_000_000) extra.reasoningTokens = reasoningTokens;
+  return { origin, transport, provider, category, status, iteration: step, ...extra };
 }
 
 function logProviderFailure(error, iteration) {

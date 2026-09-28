@@ -593,6 +593,12 @@ test('production shutdown hooks execute in explicit dependency-safe order', asyn
   const result = await shutdownRegistry.shutdown('production-order-test');
 
   assert.deepEqual(executed, expected);
-  assert.deepEqual(shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER, expected);
+  // The production order also lists self-registered hooks (rlcd, agent-runner
+  // worker, sandbox, RBAC/revocation buses — see shutdown.test.js); these
+  // hooks keep this relative order within it.
+  assert.deepEqual(
+    shutdownRegistry.PRODUCTION_SHUTDOWN_ORDER.filter((name) => registrationOrder.includes(name)),
+    expected,
+  );
   assert.equal(result.ok, true);
 });

@@ -1,5 +1,7 @@
 'use strict';
 
+const { isExpectedOAuthStateError } = require('./auth/oauth-state-http');
+
 /**
  * Known Google OAuth error codes that should be surfaced verbatim to
  * the popup layer instead of being collapsed into a generic
@@ -139,9 +141,11 @@ class ProviderOAuthService {
         redirectUri: this._redirectUri(),
       }));
     } catch (stateError) {
-      this.logger.warn?.(
-        `[oauth/${this.provider.service}] state validation failed: ${stateError.message}`
-      );
+      const message = `[oauth/${this.provider.service}] state validation failed: ${stateError?.code || stateError?.message}`;
+      // An expired or already-used state (slow consent, reopened popup) is
+      // expected user behaviour: info, not a warning for the error panel.
+      if (isExpectedOAuthStateError(stateError)) (this.logger.info || this.logger.log)?.call(this.logger, message);
+      else this.logger.warn?.(message);
       if (stateError?.code === 'OAUTH_STATE_STORE_UNAVAILABLE') {
         return {
           ok: false,

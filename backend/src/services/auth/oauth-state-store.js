@@ -13,6 +13,8 @@ const OAUTH_STATE_STORE_UNAVAILABLE = 'OAUTH_STATE_STORE_UNAVAILABLE';
 const OAUTH_STATE_STORE_CAPACITY = 'OAUTH_STATE_STORE_CAPACITY';
 const OAUTH_STATE_REPLAYED_OR_EXPIRED = 'OAUTH_STATE_REPLAYED_OR_EXPIRED';
 const OAUTH_STATE_BINDING_INVALID = 'OAUTH_STATE_BINDING_INVALID';
+const OAUTH_STATE_EXPIRED = 'OAUTH_STATE_EXPIRED';
+const OAUTH_STATE_INVALID = 'OAUTH_STATE_INVALID';
 const OAUTH_STATE_TYPE = 'oauth_state';
 
 const DEFAULT_MAX_ENTRIES = 10_000;
@@ -547,7 +549,16 @@ function createOAuthStateCodec({
       ? null
       : requiredText(expected.userId, 'userId');
 
-    const decoded = jwt.verify(String(rawState), secret());
+    let decoded;
+    try {
+      decoded = jwt.verify(String(rawState), secret());
+    } catch (error) {
+      // Same error object (message stays 'jwt expired' / 'invalid signature'),
+      // plus a code so callers can tell a slow consent screen from tampering.
+      if (error instanceof jwt.TokenExpiredError) error.code = OAUTH_STATE_EXPIRED;
+      else if (error instanceof jwt.JsonWebTokenError) error.code = OAUTH_STATE_INVALID;
+      throw error;
+    }
     if (
       !decoded
       || decoded.typ !== OAUTH_STATE_TYPE
@@ -556,7 +567,7 @@ function createOAuthStateCodec({
       || !decoded.service
       || !decoded.redirectUri
     ) {
-      throw stateError('OAUTH_STATE_INVALID');
+      throw stateError(OAUTH_STATE_INVALID);
     }
 
     const storedRaw = await store.consume(decoded.jti);
@@ -602,6 +613,8 @@ function createOAuthStateCodec({
 
 module.exports = {
   OAUTH_STATE_BINDING_INVALID,
+  OAUTH_STATE_EXPIRED,
+  OAUTH_STATE_INVALID,
   OAUTH_STATE_REPLAYED_OR_EXPIRED,
   OAUTH_STATE_STORE_CAPACITY,
   OAUTH_STATE_STORE_UNAVAILABLE,

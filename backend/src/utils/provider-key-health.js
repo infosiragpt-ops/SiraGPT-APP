@@ -70,6 +70,16 @@ function rejectionReason(provider, key) {
   return entry ? entry.reason || 'auth' : null;
 }
 
+/**
+ * HTTP status recorded with the current rejection, or null. Lets a caller tell
+ * a real 401 apart from a generic 403 memoised by Files/embeddings.
+ */
+function rejectionStatus(provider, key) {
+  if (!isRejected(provider, key)) return null;
+  const entry = rejected.get(String(provider || '').toLowerCase());
+  return entry ? entry.status || null : null;
+}
+
 /** True when the SAME key was rejected recently. A new key re-arms the provider. */
 function isRejected(provider, key) {
   const entry = rejected.get(String(provider || '').toLowerCase());
@@ -92,4 +102,4 @@ function snapshot() {
   return out;
 }
 
-module.exports = { isInvalidKeyError, markRejected, isRejected, rejectionReason, clear, snapshot, fingerprint, DEFAULT_TTL_MS };
+module.exports = { isInvalidKeyError, markRejected, isRejected, rejectionReason, rejectionStatus, clear, snapshot, fingerprint, DEFAULT_TTL_MS };

@@ -317,11 +317,13 @@ test('resolveAgentModelFailoverRuntimes skips providers whose key was rejected',
   const env = { CEREBRAS_API_KEY: 'c-key', OPENAI_API_KEY: 'dead-key', GEMINI_API_KEY: 'g-key', DEEPSEEK_API_KEY: 'd-key' };
   keyHealth.clear();
   try {
+    // Same ladder as the chat failover since 2026-09-28: DeepSeek first,
+    // OpenAI (prepaid, dry that night) after the free-standing rungs.
     const before = resolveAgentModelFailoverRuntimes({ detected: { provider: 'xAI' } }, env).map((r) => r.provider);
-    assert.deepEqual(before, ['Cerebras', 'OpenAI', 'Gemini', 'DeepSeek']);
+    assert.deepEqual(before, ['DeepSeek', 'Cerebras', 'Gemini', 'OpenAI']);
     keyHealth.markRejected('OpenAI', 'dead-key', Object.assign(new Error('401 Incorrect API key provided'), { status: 401 }));
     const after = resolveAgentModelFailoverRuntimes({ detected: { provider: 'xAI' } }, env);
-    assert.deepEqual(after.map((r) => r.provider), ['Cerebras', 'Gemini', 'DeepSeek']);
+    assert.deepEqual(after.map((r) => r.provider), ['DeepSeek', 'Cerebras', 'Gemini']);
     assert.ok(after.every((r) => r.apiKeyEnv), 'runtimes carry the env name so a later rejection can be memoised');
     // A rotated key re-arms the provider.
     const rotated = resolveAgentModelFailoverRuntimes({ detected: { provider: 'xAI' } }, { ...env, OPENAI_API_KEY: 'fresh-key' });

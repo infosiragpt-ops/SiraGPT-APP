@@ -13,6 +13,14 @@ function sanitizeHeader(value, max = 200) {
     .slice(0, max);
 }
 
+// Sender display name for every outgoing mail (SMTP_FROM_NAME, default
+// SiraGPT — some templates still said «OpenWebUI»). Quotes are dropped so the
+// name cannot break out of the quoted display-name.
+function fromHeader() {
+  const name = sanitizeHeader(process.env.SMTP_FROM_NAME || 'SiraGPT', 80).replace(/["\\]/g, '') || 'SiraGPT';
+  return `"${name}" <${process.env.SMTP_USER}>`;
+}
+
 // Lazy PII-mask require — keeps module load light, defers the cost
 // until we actually log a body preview.
 let _piiMask = null;
@@ -146,14 +154,14 @@ class EmailService {
           </div>
           
           <div style="background: #34495e; color: white; padding: 15px; text-align: center; font-size: 12px;">
-            <p>This is an automated message from OpenWebUI. If you no longer wish to receive these notifications, 
+            <p>This is an automated message from SiraGPT. If you no longer wish to receive these notifications,
             <a href="${process.env.FRONTEND_URL}/profile" style="color: #2E7D32;">manage your preferences</a>.</p>
           </div>
         </div>
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent
@@ -214,7 +222,7 @@ class EmailService {
       `;
 
       const delivery = await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent
@@ -277,7 +285,7 @@ class EmailService {
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent
@@ -333,7 +341,7 @@ class EmailService {
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent
@@ -392,7 +400,7 @@ class EmailService {
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: email,
         subject,
         html: htmlContent
@@ -444,7 +452,7 @@ class EmailService {
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: email,
         subject,
         html: htmlContent
@@ -503,7 +511,7 @@ class EmailService {
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: email,
         subject,
         html: htmlContent
@@ -548,7 +556,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -592,7 +600,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -678,7 +686,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: invitee.email,
         subject,
         html: htmlContent,
@@ -725,7 +733,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -774,7 +782,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -824,7 +832,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -885,7 +893,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -948,7 +956,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -1010,7 +1018,7 @@ class EmailService {
       `;
 
       await this.transporter.sendMail({
-        from: `"OpenWebUI" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: email,
         subject,
         html: htmlContent
@@ -1067,7 +1075,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -1118,7 +1126,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,
@@ -1192,7 +1200,7 @@ class EmailService {
       `;
 
       await this._send({
-        from: `"SiraGPT" <${process.env.SMTP_USER}>`,
+        from: fromHeader(),
         to: user.email,
         subject,
         html: htmlContent,

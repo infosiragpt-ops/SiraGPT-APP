@@ -458,15 +458,15 @@ test('agent model failover walks configured providers and detects unrecovered mo
   assert.equal(picked.model, 'gpt-4o-mini');
   assert.ok(picked.client);
 
-  // El runner conserva una cadena completa: Cerebras primero y después
-  // OpenAI, Gemini y DeepSeek si cada proveedor anterior falla.
+  // El runner conserva una cadena completa en el orden del failover del
+  // chat: DeepSeek, Cerebras, Gemini y OpenAI si cada proveedor anterior falla.
   const chain = resolveAgentModelFailoverRuntimes(profile, {
     CEREBRAS_API_KEY: 'cerebras-key',
     OPENAI_API_KEY: 'openai-key',
     GEMINI_API_KEY: 'gemini-key',
     DEEPSEEK_API_KEY: 'deepseek-key',
   });
-  assert.deepEqual(chain.map(({ provider }) => provider), ['Cerebras', 'OpenAI', 'Gemini', 'DeepSeek']);
+  assert.deepEqual(chain.map(({ provider }) => provider), ['DeepSeek', 'Cerebras', 'Gemini', 'OpenAI']);
 
   // El proveedor que falló se excluye aunque tenga key.
   const openaiFailed = resolveAgentModelFailoverRuntime(
@@ -518,7 +518,7 @@ test('upsertArtifactForDelivery preserves batch outputs and replaces source revi
   assert.deepEqual(artifacts.map(({ filename }) => filename), ['Informe final.docx', 'Informe validado.docx']);
 });
 
-test('runAgentTaskJob continues to Gemini when Cerebras and OpenAI also fail', async () => {
+test('runAgentTaskJob continues to OpenAI when Cerebras and Gemini also fail', async () => {
   const restoreEnv = rememberEnv([
     'OPENROUTER_API_KEY',
     'CEREBRAS_API_KEY',
@@ -585,7 +585,7 @@ test('runAgentTaskJob continues to Gemini when Cerebras and OpenAI also fail', a
 
     const snapshot = taskStore.getTaskSnapshotForUser('task-model-failover-chain-1', 'user-model-failover-chain-1');
     assert.equal(result.status, 'completed');
-    assert.deepEqual(models, ['openai/gpt-5.5', 'gpt-oss-120b', 'gpt-4o-mini', 'gemini-2.5-flash']);
+    assert.deepEqual(models, ['openai/gpt-5.5', 'gpt-oss-120b', 'gemini-2.5-flash', 'gpt-4o-mini']);
     assert.match(snapshot.streamState.finalText, /proveedor alternativo/);
     assert.equal(snapshot.streamState.stoppedReason, 'completed');
   } finally {
@@ -596,6 +596,8 @@ test('runAgentTaskJob continues to Gemini when Cerebras and OpenAI also fail', a
     taskContractResolver.resolveTaskContract = originalResolveTaskContract;
     fs.rmSync(storeDir, { recursive: true, force: true });
     clearAgentModules();
+    // The failed runs fed the process-wide «sin saldo» memo.
+    require('../src/services/ai/billing-failover').__resetForTests();
     restoreEnv();
   }
 });
@@ -676,6 +678,7 @@ test('runAgentTaskJob never turns an unrecovered model error into a Word artifac
     taskContractResolver.resolveTaskContract = originalResolveTaskContract;
     fs.rmSync(storeDir, { recursive: true, force: true });
     clearAgentModules();
+    require('../src/services/ai/billing-failover').__resetForTests();
     restoreEnv();
   }
 });

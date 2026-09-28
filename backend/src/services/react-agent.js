@@ -958,6 +958,10 @@ function sanitizeFinalAnswerDiagnostics(answer) {
  *   prompt, the trace is converted to a provider-safe transcript (no `tools`,
  *   no `tool_choice`, no role:'tool'), and fenced ```tool_call JSON blocks are
  *   parsed back into OpenAI-shaped tool_calls. See agents/prompted-tool-calling.
+ * @param {boolean} [opts.recordProviderFailures=true] — feed a failed model
+ *   call into the «sin saldo» / rejected-key memo (ai/billing-failover). A
+ *   caller that knows the real transport better than ctx.provider / the model
+ *   id (agent-task-runner) passes false and records it itself.
  */
 async function run(openai, opts) {
   const {
@@ -995,6 +999,7 @@ async function run(openai, opts) {
     // mapping as the plain stream.
     thinkingLevel = null,
     thinkingLevelExplicit = false,
+    recordProviderFailures = true,
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -1005,6 +1010,9 @@ async function run(openai, opts) {
   let activeOpenai = openai;
   let activeModel = model;
   let activeProvider = ctx?.provider || null;
+  // Provider error that stopped the loop (status/code/short message), so the
+  // caller can tell «sin saldo» from a timeout without parsing stoppedReason.
+  let lastModelError = null;
 
   // `finalize` is always present. Even if a caller forgets to include
   // it in their toolset, the agent still has a way to terminate
@@ -1471,6 +1479,17 @@ async function run(openai, opts) {
       stoppedReason = timedOut
         ? `model_error: step_timeout_${stepTimeoutMs}ms`
         : `model_error: ${err.message}`;
+      if (!timedOut && !(ctx?.signal && ctx.signal.aborted)) {
+        lastModelError = err;
+        // A dry account or rejected key is remembered for the picker and
+        // every failover ladder; a step timeout or a user Stop is not.
+        if (recordProviderFailures !== false) {
+          try {
+            const memoProvider = activeProvider || require('./ai/provider-inference').inferProviderFromModelId(activeModel);
+            require('./ai/billing-failover').recordProviderFailure(memoProvider, err);
+          } catch { /* advisory */ }
+        }
+      }
       try {
         require('../codex/model-telemetry').recordLlmTurn({
           model: activeModel,
@@ -2031,7 +2050,19 @@ async function run(openai, opts) {
 
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
-  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft };
+  let modelError = null;
+  if (lastModelError) {
+    let reason = null;
+    try { reason = require('./ai/billing-failover').failoverReasonFor(lastModelError); } catch { reason = null; }
+    modelError = {
+      status: Number(lastModelError.status || lastModelError.statusCode || (lastModelError.response && lastModelError.response.status)) || null,
+      code: lastModelError.code != null ? String(lastModelError.code).slice(0, 60) : null,
+      message: String(lastModelError.message || '').slice(0, 200),
+      reason,
+    };
+  }
+
+  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft, modelError };
 }
 
 module.exports = {

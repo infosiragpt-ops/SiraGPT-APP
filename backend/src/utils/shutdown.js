@@ -32,8 +32,16 @@
 
 const DEFAULT_STEP_TIMEOUT_MS = 5000;
 const TOTAL_SHUTDOWN_DEADLINE_MS = 30_000;
+// Every hook registered in production must be listed: unknown names sort
+// last, i.e. AFTER prisma/redis are gone and with whatever budget is left
+// (tests/shutdown.test.js pins that every register('<name>' is ordered).
+// doc_sandbox_close (25s budget) runs after observability_flush so a slow
+// sandbox teardown cannot starve the telemetry flush; rlcd_ledger_flush and
+// the sandbox close still come before prisma_disconnect.
 const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
   'scheduler_stop',
+  'codex_proactive_stop',
+  'social_publication_worker_stop',
   'stripe_webhook_recovery_stop',
   'database_pool_autoscaler_stop',
   'system_cron_stop',
@@ -44,10 +52,15 @@ const PRODUCTION_SHUTDOWN_ORDER = Object.freeze([
   'drain_inflight_requests',
   'write_behind_cache_flush',
   'bullmq_workers_close',
+  'agent_runner_worker_close',
   'queue_health_probe_close',
+  'rlcd_ledger_flush',
   'observability_flush',
+  'doc_sandbox_close',
   'prisma_disconnect',
   'auth_security_runtime_close',
+  'rbac_permission_cache_close',
+  'auth_revocation_bus_close',
   'redis_disconnect',
 ]);
 
