@@ -218,13 +218,14 @@ const {
   MESSAGE_IDEMPOTENCY_HASH_FIELD,
   buildActiveGenerateTurnKey,
   buildAiGenerateRequestFingerprint,
+  claimActiveGenerateTurn,
   claimStreamController,
   findMessagesByTurnIdentity,
   findMatchingTurnPair,
   hasIdempotencyRequestConflict,
   metadataMatchesTurnIdentity,
+  markActiveGenerateTurnClientDetached,
   resolveTurnIdentity,
-  waitForActiveTurn,
 } = require('../services/chat-turn-idempotency');
 const openclawCapabilityKernel = require('../services/openclaw-capability-kernel');
 const router = express.Router();
@@ -1537,23 +1538,7 @@ function createActiveGenerateTurn(key, requestFingerprint) {
     };
   });
   turn.promise.catch(() => {});
-  activeGenerateTurns.set(key, turn);
   return turn;
-}
-
-// Safari/Cloudflare can abort the first POST before this request becomes a
-// completed owner. Drop the in-memory entry so a same-streamId retry is not
-// blocked by a zombie owner. Do not touch a settled turn — those stay for
-// the 120 s replay window.
-function releaseIncompleteActiveGenerateTurn(turn, reason) {
-  if (!turn || turn.settled) return false;
-  if (activeGenerateTurns.get(turn.key) === turn) {
-    activeGenerateTurns.delete(turn.key);
-  }
-  if (!turn.settled && typeof turn.reject === 'function') {
-    turn.reject(new Error(reason || 'generate turn owner disconnected before completion'));
-  }
-  return true;
 }
 
 function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
@@ -2410,20 +2395,14 @@ router.post(
     res.on('close', () => {
       if (!res.writableEnded) {
         clientGone = true;
+        markActiveGenerateTurnClientDetached(req._activeGenerateTurn);
         generateLog.info('client.detached', { source: 'response_close', hasChat: Boolean(req.body.chatId) });
-        releaseIncompleteActiveGenerateTurn(
-          req._activeGenerateTurn,
-          'generate turn owner socket closed before completion',
-        );
       }
     });
     req.on('aborted', () => {
       clientGone = true;
+      markActiveGenerateTurnClientDetached(req._activeGenerateTurn);
       generateLog.info('client.detached', { source: 'request_abort', hasChat: Boolean(req.body.chatId) });
-      releaseIncompleteActiveGenerateTurn(
-        req._activeGenerateTurn,
-        'generate turn owner aborted before completion',
-      );
     });
     let __lastClientAt = Date.now();
     let __pendingSseEvent = null;
@@ -2806,69 +2785,46 @@ router.post(
         streamId,
       });
       if (!__hasResumeRequest && canPersist && activeGenerateTurnKey) {
-        let activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
-        if (activeTurn && activeTurn.requestFingerprint !== generateIdempotencyRequestHash) {
-          // Safari/Cloudflare can retry the same streamId with a new prompt.
-          // A 409 here used to mix JSON onto the next generate finally SSE write.
-          generateLog.warn('idempotency.stale_turn_dropped', { hasChat: Boolean(chatId) });
-          if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
-            activeGenerateTurns.delete(activeGenerateTurnKey);
-          }
-          activeTurn = null;
+        const activeClaim = await claimActiveGenerateTurn({
+          turns: activeGenerateTurns,
+          key: activeGenerateTurnKey,
+          requestFingerprint: generateIdempotencyRequestHash,
+          createTurn: createActiveGenerateTurn,
+          onMismatch: () => generateLog.warn('idempotency.stale_turn_dropped', { hasChat: Boolean(chatId) }),
+        });
+        if (activeClaim.outcome === 'replay') {
+          fullResponseContent = activeClaim.turn.assistantMessage.content || '';
+          generateLog.info('idempotency.active_turn_replayed', { hasChat: Boolean(chatId) });
+          if (__turnTap) __turnTap.set({ replay: true });
+          return streamDuplicateTurnReplay(res, activeClaim.turn, model);
         }
-        if (activeTurn) {
-          let activeWait = await waitForActiveTurn(activeTurn);
-          // Prod 2026-09-28: when the owner failed, every waiting replay
-          // became a new owner (20–30 fresh generates). Followers re-wait on
-          // whoever claimed the key first (≤3 hops): one generate per key.
-          for (let hop = 0; hop < 3 && activeWait.outcome !== 'replay'; hop += 1) {
-            const claimed = activeGenerateTurns.get(activeGenerateTurnKey);
-            if (!claimed || claimed === activeTurn) break;
-            generateLog.info('idempotency.active_turn_followed', { hop: hop + 1 });
-            activeTurn = claimed;
-            activeWait = await waitForActiveTurn(activeTurn);
-          }
-          if (activeWait.outcome === 'replay') {
-            fullResponseContent = activeWait.turn.assistantMessage.content || '';
-            generateLog.info('idempotency.active_turn_replayed', { hasChat: Boolean(chatId) });
-            if (__turnTap) __turnTap.set({ replay: true });
-            return streamDuplicateTurnReplay(res, activeWait.turn, model);
-          }
-          if (activeWait.error) {
-            generateLog.warnError('idempotency.active_turn_wait_failed', activeWait.error);
-          }
-          // start a fresh generate after that stream closed.
-          if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
-            activeGenerateTurns.delete(activeGenerateTurnKey);
-          }
-          req._activeGenerateTurn = createActiveGenerateTurn(
-            activeGenerateTurnKey,
-            generateIdempotencyRequestHash,
+        if (activeClaim.outcome === 'in_progress') {
+          generateLog.info('idempotency.active_turn_still_running', { hasChat: Boolean(chatId) });
+          return respondGenerateTurnError(res, {
+            code: 'turn_in_progress',
+            message: 'La solicitud anterior sigue en curso. Reconectando…',
+            retryable: true,
+            retryAfterSeconds: 1,
+          });
+        }
+        if (activeClaim.outcome === 'conflict') {
+          generateLog.warn('idempotency.active_turn_payload_conflict', { hasChat: Boolean(chatId) });
+          return respondGenerateTurnError(res, {
+            code: 'idempotency_conflict',
+            message: 'Esta solicitud usa el identificador de otra tarea que sigue en curso. Envía el mensaje de nuevo.',
+            retryable: false,
+          });
+        }
+        req._activeGenerateTurn = activeClaim.turn;
+        // Only the newly claimed producer can retarget Stop. A follower
+        // waiting on another producer must leave its controller alone.
+        if (__streamControllerKey && !__ownsStreamController) {
+          __ownsStreamController = claimStreamController(
+            streamControllers,
+            __streamControllerKey,
+            controller,
+            { replaceOwner: true },
           );
-          if (__streamControllerKey && !__ownsStreamController) {
-            __ownsStreamController = claimStreamController(
-              streamControllers,
-              __streamControllerKey,
-              controller,
-              { replaceOwner: true },
-            );
-          }
-        } else {
-          req._activeGenerateTurn = createActiveGenerateTurn(
-            activeGenerateTurnKey,
-            generateIdempotencyRequestHash,
-          );
-          // This request became the real owner after a prior owner's replay
-          // entry disappeared. Retarget Stop only now; followers that merely
-          // wait above must never replace the original controller.
-          if (__streamControllerKey && !__ownsStreamController) {
-            __ownsStreamController = claimStreamController(
-              streamControllers,
-              __streamControllerKey,
-              controller,
-              { replaceOwner: true },
-            );
-          }
         }
       }
 
@@ -10021,17 +9977,17 @@ router.post(
               if (!res.writableEnded) {
                 try { res.end(); } catch (_) { /* already closing */ }
               }
-              return;
-            }
-            let __resp = '';
-            try { __resp = typeof fullResponseContent === 'string' ? fullResponseContent : ''; } catch (_) { __resp = ''; }
-            req._filterCtx.response = __resp;
-            const __before = __resp;
-            await agentFilters.runPost(req._filterCtx);
-            req._filterCtx._postRan = true;
-            const __after = typeof req._filterCtx.response === 'string' ? req._filterCtx.response : __before;
-            if (__after !== __before && !res.writableEnded) {
-              try { res.write(`data: ${JSON.stringify({ replace: true, content: __after })}\n\n`); } catch (_) {}
+            } else {
+              let __resp = '';
+              try { __resp = typeof fullResponseContent === 'string' ? fullResponseContent : ''; } catch (_) { __resp = ''; }
+              req._filterCtx.response = __resp;
+              const __before = __resp;
+              await agentFilters.runPost(req._filterCtx);
+              req._filterCtx._postRan = true;
+              const __after = typeof req._filterCtx.response === 'string' ? req._filterCtx.response : __before;
+              if (__after !== __before && !res.writableEnded) {
+                try { res.write(`data: ${JSON.stringify({ replace: true, content: __after })}\n\n`); } catch (_) {}
+              }
             }
           }
         } catch (filtErr) {

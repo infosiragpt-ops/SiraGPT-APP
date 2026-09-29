@@ -209,6 +209,8 @@ const ALLOWED_EVENTS = new Set([
   'history.image_processing_failed',
   'history.load_failed',
   'idempotency.active_turn_replayed',
+  'idempotency.active_turn_still_running',
+  'idempotency.active_turn_payload_conflict',
   'idempotency.active_turn_wait_failed',
   'idempotency.active_turn_followed',
   'idempotency.completed_turn_check_failed',

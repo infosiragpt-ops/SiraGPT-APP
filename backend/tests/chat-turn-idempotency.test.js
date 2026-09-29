@@ -640,19 +640,16 @@ describe('chat turn idempotency', () => {
     const lookupSource = aiSource.slice(lookupStart, lookupEnd);
 
     assert.ok(activeStart >= 0 && activeEnd > activeStart);
-    assert.match(activeSource, /activeTurn\.requestFingerprint !== generateIdempotencyRequestHash/);
-    assert.match(activeSource, /(?:const|let) activeWait = await waitForActiveTurn\(activeTurn\)/);
+    assert.match(activeSource, /requestFingerprint: generateIdempotencyRequestHash/);
+    assert.match(activeSource, /const activeClaim = await claimActiveGenerateTurn\(\{/);
     assert.match(
       activeSource,
-      /activeWait\.outcome === 'replay'[\s\S]*?streamDuplicateTurnReplay/,
+      /activeClaim\.outcome === 'replay'[\s\S]*?streamDuplicateTurnReplay/,
     );
-    assert.doesNotMatch(
-      activeSource,
-      /code: 'turn_in_progress'/,
-    );
+    assert.match(activeSource, /activeClaim\.outcome === 'in_progress'[\s\S]*?code: 'turn_in_progress'/);
     assert.match(
       activeSource,
-      /createActiveGenerateTurn\([\s\S]*?activeGenerateTurnKey,[\s\S]*?generateIdempotencyRequestHash/,
+      /createTurn: createActiveGenerateTurn/,
     );
     assert.match(
       activeSource,
@@ -675,10 +672,7 @@ describe('chat turn idempotency', () => {
       activeSource,
       /generateLog\.warn\(\s*'idempotency\.stale_turn_dropped'/,
     );
-    assert.match(
-      activeSource,
-      /activeGenerateTurns\.delete\(activeGenerateTurnKey\)/,
-    );
+    assert.match(activeSource, /onMismatch: \(\) => generateLog\.warn\('idempotency\.stale_turn_dropped'/);
     assert.match(lookupSource, /findMessagesByTurnIdentity\(\{[\s\S]*?roles: \['USER', 'ASSISTANT'\]/);
     assert.doesNotMatch(lookupSource, /timestamp:\s*\{\s*gte:|take:\s*80/);
   });

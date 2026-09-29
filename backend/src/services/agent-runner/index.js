@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createSandbox } = require('../doc-agent/sandbox');
+const { createDocumentTurnQueue } = require('./document-turn-queue');
 const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
 const { parseModelSpec, keyFor, resolveDocAgentCandidates, createFailoverClient, defaultCreateClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
@@ -1609,6 +1610,7 @@ function buildAgentRunnerFailureMessage(reason, detail) {
   // The code stays structured (stoppedReason / reason); the visible text is
   // the loop's exact cause, without an «E_PROVIDER:» prefix.
   if (key === 'E_PROVIDER') return `No pude generar el documento. ${publicRunnerProviderDetail(detail) || RUNNER_PROVIDER_MESSAGE}`;
+  if (key === 'E_QUOTA') return `E_QUOTA: ${detail || 'Este chat tiene demasiadas ediciones pendientes. Espera a que terminen y vuelve a intentarlo.'}`;
   const why = AGENT_RUNNER_FAILURE_COPY[key] || `el agente no pudo completar la tarea (${key})`;
   const extra = detail ? ` Detalle técnico: ${String(detail).slice(0, 300)}` : '';
   return `No pude generar el documento: ${why}. `
@@ -1620,7 +1622,28 @@ function buildAgentRunnerFailureMessage(reason, detail) {
  * Chat/queue entry that prefers a BullMQ job + Redis SSE fan-out and
  * falls back to the in-process loop when Redis is down or we are in tests.
  */
-async function executeAgentRunnerTurn(params = {}) {
+const documentTurnQueue = createDocumentTurnQueue();
+
+function executeAgentRunnerTurn(params = {}) {
+  return documentTurnQueue.run({
+    userId: params.userId,
+    chatId: params.chatId,
+    signal: params.signal,
+  }, () => executeAgentRunnerTurnUnlocked(params)).catch((error) => {
+    if (error?.code !== 'E_QUOTA' || error?.reason !== 'document_turn_queue_full') throw error;
+    return {
+      ok: false,
+      skipped: false,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: 'E_QUOTA',
+      errorMessage: error.message,
+    };
+  });
+}
+
+async function executeAgentRunnerTurnUnlocked(params = {}) {
   const instruction = String(params.instruction || '');
   // Without an LLM only the PAINT fast-path can deliver: a color plus a style
   // edit ("ponlas rosadas") or an attached/prior pptx to repaint. Creating a

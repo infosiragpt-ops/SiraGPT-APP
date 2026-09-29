@@ -1900,7 +1900,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           });
         } catch (_) { /* advisory */ }
       }
-      if (runnerOnly || agentRunnerFailure.reason === 'E_PROVIDER') {
+      if (runnerOnly || agentRunnerFailure.reason === 'E_PROVIDER' || agentRunnerFailure.reason === 'E_QUOTA') {
         await writeSse(res, { replace: true, content: answer });
         logDocRouting('agent_runner_failed', agentRunnerFailure.reason);
         return finishSourcePreservingPreloop('agent_runner_failed', answer, []);

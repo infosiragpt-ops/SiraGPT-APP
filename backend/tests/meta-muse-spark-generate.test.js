@@ -203,7 +203,7 @@ test('SSE error helper writes a complete body even when write/end wrappers no-op
   assert.equal(res._siraGenerateSseClosed, true);
 });
 
-test('duplicate retry while a turn is active replays or starts fresh — does not 502', async () => {
+test('duplicate retry while a turn is active remains non-owner until completion', async () => {
   const pending = {
     settled: false,
     promise: new Promise(() => {}),
@@ -230,7 +230,7 @@ test('duplicate retry while a turn is active replays or starts fresh — does no
 
   const aiRoute = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
   assert.match(aiRoute, /Never skip end\(\) just because the client dropped/);
-  assert.match(aiRoute, /start a fresh generate after that stream closed/);
+  assert.match(aiRoute, /activeClaim\.outcome === 'in_progress'[\s\S]*?return respondGenerateTurnError/);
   assert.match(aiRoute, /closeGenerateSseWithError/);
   assert.doesNotMatch(aiRoute, /if \(clientGone \|\| res\.destroyed \|\| res\.writableEnded\) return res;/);
 });
