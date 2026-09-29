@@ -557,12 +557,17 @@ for (const viewport of [
 
     await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
     await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
+    // Only development chrome: Next's badge overlaps the mobile + button.
+    await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" })
 
     await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).press("Enter")
 
     const toolsMenu = page.getByRole("menu", { name: "Adjuntar archivos y herramientas" })
     for (const label of ["Subir documento", "Imágenes", "Voz", "Video", "Música", "Memoria"]) {
       await expect(toolsMenu.getByText(label, { exact: true })).toBeVisible()
+      // Visibility alone accepts content clipped by a scroll container. All
+      // actions fit at these viewport sizes without silently hiding the last.
+      await expect(toolsMenu.getByRole("menuitem", { name: new RegExp(`^${label} `) })).toBeInViewport({ ratio: 1 })
     }
     for (const retiredLabel of [
       "Trabajo",
@@ -573,5 +578,34 @@ for (const viewport of [
     ]) {
       await expect(toolsMenu.getByText(retiredLabel, { exact: true })).toHaveCount(0)
     }
+
+    await toolsMenu.getByRole("menuitem", { name: /^Memoria / }).click({ timeout: 5_000 })
+    await expect(page.getByRole("heading", { name: "Memoria persistente", exact: true })).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("heading", { name: "Memoria persistente", exact: true })).toBeHidden()
+    await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).click({ timeout: 5_000 })
+    await expect(toolsMenu).toBeVisible()
   })
 }
+
+test("plus menu keeps Memoria reachable in a short mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 480 })
+  await mockChatApi(page, { hasConversation: false })
+  await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  const trigger = page.getByRole("button", { name: "Adjuntar archivos y herramientas" })
+  await expect(trigger).toBeVisible({ timeout: 120_000 })
+  await trigger.press("Enter")
+
+  const menu = page.getByRole("menu", { name: "Adjuntar archivos y herramientas" })
+  const bounds = await menu.boundingBox()
+  expect(bounds).not.toBeNull()
+  expect(bounds!.y).toBeGreaterThanOrEqual(0)
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(480)
+
+  await menu.press("End")
+  const memory = menu.getByRole("menuitem", { name: /^Memoria / })
+  await expect(memory).toBeFocused()
+  await expect(memory).toBeInViewport({ ratio: 1 })
+  await memory.press("Enter")
+  await expect(page.getByRole("heading", { name: "Memoria persistente", exact: true })).toBeVisible()
+})

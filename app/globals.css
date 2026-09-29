@@ -1092,7 +1092,9 @@ details[open] > summary .think-chevron,
 
 .chat-tools-menu {
   width: min(calc(100vw - 1rem), 14.5rem);
-  max-height: min(calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - 1.25rem), 22rem);
+  /* Use the space Radix measured beside the trigger. A fixed cap hid the
+     last tools even on tall screens; short viewports still scroll. */
+  max-height: var(--radix-dropdown-menu-content-available-height, calc(100dvh - 1.5rem));
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
@@ -3324,7 +3326,6 @@ details[open] > summary .think-chevron,
 @media (min-width: 768px) {
   .chat-tools-menu {
     width: 14.25rem;
-    max-height: min(calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - 1.5rem), 21.5rem);
     overflow-x: hidden !important;
     overflow-y: auto !important;
   }
@@ -3365,13 +3366,6 @@ details[open] > summary .think-chevron,
 
   .chat-tools-menu {
     width: min(calc(100vw - 1.25rem), 16.25rem);
-    max-height: max(
-      14rem,
-      min(
-        calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - var(--chat-mobile-bottom-clearance, 14px) - 1.5rem),
-        22rem
-      )
-    );
   }
 
   .chat-tools-menu .liquid-menu-item {
