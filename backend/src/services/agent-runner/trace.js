@@ -87,6 +87,7 @@ const THUMB_DATA_URL_RE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=
 // Credentials that may appear in code/commands the model writes. The detail
 // is shown to the user and persisted: never echo a secret.
 const SECRET_PATTERNS = [
+  [/-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*/g, '[secreto]'],
   [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, '[secreto]'],
   [/\bxai-[A-Za-z0-9_-]{8,}/gi, '[secreto]'],
   [/\bAIza[0-9A-Za-z_-]{20,}/g, '[secreto]'],
@@ -251,7 +252,7 @@ function toStageEvent(ev) {
   if (ev.iteration != null) base.iteration = ev.iteration;
   if (ev.attempt != null) base.attempt = ev.attempt;
   if (ev.ok !== undefined) base.ok = ev.ok;
-  if (ev.preview != null) base.preview = ev.preview;
+  if (ev.preview != null) base.preview = redactSecrets(ev.preview);
   applyStageV2(base, ev, type);
 
   switch (type) {
@@ -297,7 +298,7 @@ function toStageEvent(ev) {
       return {
         ...base,
         label: ev.label || STAGE_LABELS.error,
-        preview: base.preview != null ? base.preview : (ev.message || undefined),
+        preview: base.preview != null ? base.preview : (ev.message ? redactSecrets(ev.message) : undefined),
       };
     default:
       // Unknown events only render when they already carry a label.

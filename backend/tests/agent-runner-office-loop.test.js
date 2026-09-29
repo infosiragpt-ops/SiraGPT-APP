@@ -287,6 +287,11 @@ test('loop: a distinct second Excel repair can pass the next visual check', asyn
   let verifies = 0;
   const repairs = [];
   const events = [];
+  const snapshots = [
+    { [outputPath]: '100 1' }, { [outputPath]: '120 2' },
+    { [outputPath]: '120 2' }, { [outputPath]: '130 3' },
+  ];
+  let snapshot = 0;
   const result = await runAgentLoop({
     client, model: 'x', messages: [{ role: 'user', content: 'corrige la legibilidad del Excel' }],
     tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
@@ -299,6 +304,7 @@ test('loop: a distinct second Excel repair can pass the next visual check', asyn
       },
       async execute_python(args) { repairs.push(args.code); return 'ok\n[exit 0]'; },
       async inspect_document() { return '{"sheets":[{"name":"Datos","range":"A1:W21"}]}'; },
+      [office.OUTPUTS_SNAPSHOT]: async () => snapshots[Math.min(snapshot++, snapshots.length - 1)],
     },
     maxIterations: 10,
     onEvent: (event) => events.push(event),
@@ -306,7 +312,35 @@ test('loop: a distinct second Excel repair can pass the next visual check', asyn
   assert.equal(result.stoppedReason, 'final');
   assert.deepEqual(repairs, ['set_column_widths(20)', 'set_column_widths(32)']);
   assert.equal(verifies, 3);
+  assert.equal(result.steps.filter((step) => step.tool === 'execute_python').every((step) => step.mutated === true), true);
   assert.equal(events.some((event) => event.code === 'loop_oscillation_cut'), false);
+});
+
+test('loop: changed Python code and description cannot excuse a read-only visual repair cycle', async () => {
+  const outputPath = 'outputs/encuesta_20x20.xlsx';
+  const verifyArgs = { after: outputPath, checklist: ['Los encabezados son legibles'] };
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'inspect_widths()', description: 'Leyendo anchos' } }] },
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'inspect_cells()', description: 'Leyendo celdas' } }] },
+    { content: 'Listo.' },
+  ]);
+  const repairs = [];
+  const sameOutput = { [outputPath]: '100 1' };
+  const result = await runAgentLoop({
+    client, model: 'x', messages: [{ role: 'user', content: 'corrige la legibilidad del Excel' }],
+    tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+    executors: {
+      async verify_visual() { return 'ERROR: verificación fallida: encabezados cortados'; },
+      async execute_python(args) { repairs.push(args.code); return 'ok\n[exit 0]'; },
+      [office.OUTPUTS_SNAPSHOT]: async () => sameOutput,
+    },
+    maxIterations: 8,
+  });
+  assert.equal(result.stoppedReason, 'loop_oscillation_cut');
+  assert.deepEqual(repairs, ['inspect_widths()'], 'the next read-only call is cut before execution');
+  assert.equal(result.steps.find((step) => step.tool === 'execute_python')?.mutated, false);
 });
 
 test('loop: two failed visual checks still cut a repeated repair cycle', async () => {

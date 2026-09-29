@@ -2145,7 +2145,7 @@ async function runAgentLoopInner({
         }
         toolCalls = next60;
         if (typeof w60.cutOscillatingToolPair === 'function') {
-          const osc = w60.cutOscillatingToolPair(loopFingerprints);
+          const osc = w60.cutOscillatingToolPair(loopFingerprints, { steps });
           if (osc && osc.cut) {
             const classified = typeof w60.classifyEngine3h60Error === 'function'
               ? w60.classifyEngine3h60Error({ code: osc.code })
