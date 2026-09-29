@@ -1491,6 +1491,8 @@ async function runAgentRunnerForChat({
   driver,
   maxIterations,
   saveArtifact,
+  // Agent Skills picked in the composer («+ → Skills») — names only.
+  skills = [],
 } = {}) {
   const requestedPair = requestsSavExcelDelivery(instruction);
   const pendingPairCompletionEvents = [];
@@ -1535,6 +1537,8 @@ async function runAgentRunnerForChat({
     // F8: prisma feeds the per-user MCP loader (mcp_servers rows); the
     // injectables default to the real stores when absent.
     prisma,
+    // Picked skills ride the runner's system prompt for this turn.
+    systemAppend: require('../chat-skills').selectedSkillsSuffix({ userId, names: skills }),
   });
   // A structurally readable OOXML file is not a verified deliverable when the
   // loop exhausted or could not run its verification gate. Never publish a
@@ -1757,6 +1761,7 @@ async function executeAgentRunnerTurnUnlocked(params = {}) {
         fileIds: params.fileIds,
         model: params.model,
         pickedModel: params.pickedModel || null,
+        skills: Array.isArray(params.skills) ? params.skills : [],
       }, { connection: params.queueConnection || connection });
       onEventSafe(params.onEvent, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner', jobId });
       return await waitForAgentRunnerJob({
@@ -1827,6 +1832,8 @@ async function runAgentRunnerForDocRoute({
   driver,
   maxIterations,
   onStage = () => {},
+  // Agent Skills picked in the composer («+ → Skills») — names only.
+  skills = [],
 } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return null;
@@ -1851,6 +1858,7 @@ async function runAgentRunnerForDocRoute({
     signal,
     driver,
     maxIterations,
+    skills,
     onEvent: (ev) => {
       // F3: one canonical stage shape for every runner step (tool_call /
       // tool_result / retry / thought / cancelled), Spanish label + tool name.

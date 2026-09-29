@@ -1254,6 +1254,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // RLHF phase-2 few-shot block (already retrieved by /generate). Empty
       // string when steering missed or was skipped. Fail-open: never required.
       preferenceBlock = '',
+      // Agent Skills the user activated in the composer («+ → Skills»),
+      // already rendered by chat-skills.buildSelectedSkillsBlock. Optional.
+      selectedSkillsBlock = '',
       // Live progress of the turn (services/turn-progress, owned by the
       // route): the loop's model calls become `agent_model` rows. Optional.
       progress = null,
@@ -2547,8 +2550,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
+    // Agent Skills: explicit ones ride the prompt; the rest load on demand
+    // through `use_skill` (harness tool) — progressive disclosure, like Claude.
+    let skillsPolicyLine = '';
+    try {
+      if (require('./agent-harness/run-agent-turn').harnessEnabled()) {
+        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill guardada en la Biblioteca del usuario, carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno.';
+      }
+    } catch (_) { skillsPolicyLine = ''; }
     const extraSystem = codingWorkspace
-      ? [require('./codex/chat-coding-workspace').WORKSPACE_POLICY, preferenceBlock || '', historyForPrompt].join('\n')
+      ? [require('./codex/chat-coding-workspace').WORKSPACE_POLICY, selectedSkillsBlock || '', preferenceBlock || '', historyForPrompt].join('\n')
       : [
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
@@ -2620,6 +2631,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       attachedDocuments
         ? `\n=== DOCUMENTOS ADJUNTOS POR EL USUARIO (texto ya extraído) ===\nAnaliza este contenido DIRECTAMENTE para responder. NUNCA digas que no tienes acceso al documento ni que el usuario debe reenviarlo: el texto está aquí. Si necesitas más detalle del que aparece (el contenido puede venir recortado), usa \`rag_retrieve\` o \`docintel_*\` sobre estos mismos archivos.\n${attachedDocuments}\n=== FIN DOCUMENTOS ADJUNTOS ===`
         : '',
+      skillsPolicyLine,
+      selectedSkillsBlock || '',
       preferenceBlock || '',
       historyForPrompt,
     ].filter(Boolean).join('\n');

@@ -1383,6 +1383,24 @@ dirige el tier del turno.
   mapeo de familias, escalación/veto/advisory/guardas/no-op ante judgement
   deforme). Registrado en `backend/package.json`.
 
+## Skills en el compositor (claude.ai style) — added 2026-09-29
+
+Pedido de Luis: «+ → Skills» justo bajo «Subir documento» y sin «Modo de voz» en ese menú.
+- **Catálogo** (`backend/src/services/chat-skills.js`): skills integradas de documentos
+  (`services/sandbox/skills/*.md` → Word/docx, PowerPoint/pptx, Excel/xlsx, PDF, CSV) + las
+  del usuario en su Biblioteca (`skills-persist`, SKILL.md por usuario). Una del usuario nunca
+  sombrea una integrada. `GET /api/skills` (catálogo sin cuerpos) y `GET /api/skills/:name`.
+- **Explícita**: la skill elegida viaja como `skills: [name]` (máx. 3) en `/api/ai/generate`,
+  `/api/doc/generate` (→ agent-runner `systemAppend`, también por la cola) y `/api/agent/task`
+  (→ runner). El cuerpo entra como bloque `selected-skills` (nunca podado por el kernel, tier 0
+  del allocator; tope 8k/skill, 16k total). Las chips se limpian al enviar.
+- **Automática**: herramienta de harness `use_skill` (catálogo sin nombre, cuerpo con nombre)
+  + línea de política en el prompt del loop agéntico — progressive disclosure como Claude.
+- **UI**: `components/chat/skills-menu.tsx` (submenú desktop / panel móvil, buscador >6),
+  `components/chat/skill-chips.tsx`, `lib/chat/use-composer-skills.ts` (carga perezosa).
+- **Tests**: `backend/tests/chat-skills.test.js`, `tests/lib/composer-skills.test.ts`,
+  `tests/chat-skills-composer-source.test.ts`, `e2e/chat-skills-menu.spec.ts` (menú, chat, doc).
+
 ## Imágenes con el modelo elegido (added 2026-09-29)
 
 Pedido de Luis: un turno con imagen usa SOLO el modelo que el usuario eligió.

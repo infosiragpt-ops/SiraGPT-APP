@@ -484,6 +484,7 @@ const githubRoutes = require('./src/routes/github');
 const workspaceRunner = require('./src/services/github/workspace-runner.service');
 const hostingRoutes = require('./src/routes/hosting');
 const xSearchRoutes = require('./src/routes/x-search');
+const chatSkillsRoutes = require('./src/routes/chat-skills');
 const accountingRoutes = require('./src/routes/accounting');
 const linkPreviewRoutes = require('./src/routes/link-preview');
 const adminSecurityRoutes = require('./src/routes/admin/security');
@@ -1364,6 +1365,8 @@ app.use('/api/github-search', githubSearchRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/hosting', hostingRoutes);
 app.use('/api/x-search', xSearchRoutes);
+// Agent Skills catalog for the composer «+ → Skills» (built-in + Biblioteca).
+app.use('/api/skills', chatSkillsRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/link-preview', linkPreviewRoutes);
 app.use('/api/doc-agent', docAgentRoutes);

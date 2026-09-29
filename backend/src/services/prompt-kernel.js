@@ -53,6 +53,8 @@ const ALWAYS_KEEP = new Set([
   'response-posture',
   // Document RLCD confidence/defer contract — only present when the flag is on.
   'document-rlcd',
+  // Agent Skills the user activated for this turn («+ → Skills»).
+  'selected-skills',
   // Rolling context summary of the folded older turns — the thread's memory.
   'context-summary',
 ]);

@@ -9,7 +9,7 @@
  * toolset. The harness then:
  *
  *   1. registers the harness-native tools (web_fetch, run_javascript,
- *      create_artifact — plus web_search when the toolset lacks one),
+ *      create_artifact, use_skill — plus web_search when the toolset lacks one),
  *   2. discovers the user's external MCP servers and merges their tools
  *      (namespaced mcp__<server>__<tool>, permission tier 'confirm'),
  *   3. wraps EVERY tool's execute with the typed SSE event stream
@@ -43,7 +43,8 @@ function buildHarnessTools(existingNames, opts = {}) {
   const { buildWebSearchTool } = require('./tools/web-search-tool');
   const { buildReadDeploymentLogsTool } = require('./tools/read-deployment-logs-tool');
   const { buildApplyDeploymentFixTool } = require('./tools/apply-deployment-fix-tool');
-  for (const build of [buildWebFetchTool, buildRunJavascriptTool, buildCreateArtifactTool, buildWebSearchTool, buildReadDeploymentLogsTool, buildApplyDeploymentFixTool]) {
+  const { buildUseSkillTool } = require('./tools/use-skill-tool');
+  for (const build of [buildWebFetchTool, buildRunJavascriptTool, buildCreateArtifactTool, buildWebSearchTool, buildReadDeploymentLogsTool, buildApplyDeploymentFixTool, buildUseSkillTool]) {
     try {
       const def = build();
       if (!existingNames.has(def.name)) defs.push(def);

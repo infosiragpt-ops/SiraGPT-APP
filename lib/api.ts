@@ -265,7 +265,10 @@ function sanitizeStreamError(raw: string): string {
   return raw
 }
 
-export type GenerateStreamRequest = { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string }
+/** One Agent Skill as listed by GET /api/skills (bodies load server-side). */
+export type ChatSkillSummary = { name: string; title: string; description: string; source: 'builtin' | 'biblioteca' }
+
+export type GenerateStreamRequest = { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; skills?: string[] }
 
 /** Error delivered to generate callers: always carries its policy kind. */
 export type GenerateStreamError = Error & {
@@ -2184,6 +2187,11 @@ class ApiClient {
   // Registered servers join every agent turn as mcp__<server>__<tool> with
   // the 'confirm' permission tier. Auth headers are encrypted server-side
   // and NEVER returned by the API (the list only carries `hasHeaders`).
+
+  /** Agent Skills catalog for the composer «+ → Skills» (built-in + Biblioteca). */
+  async listChatSkills(): Promise<{ ok: boolean; skills: ChatSkillSummary[] }> {
+    return this.request('/skills', { method: 'GET', suppressFailureLog: true });
+  }
 
   async listMcpServers(): Promise<{ servers: McpServerInfo[] }> {
     return this.request('/agent/mcp-servers', { method: 'GET' });
@@ -4941,6 +4949,8 @@ class ApiClient {
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];
       lastArtifactId?: string;
+      /** Agent Skills picked in the composer («+ → Skills»). */
+      skills?: string[];
       outline?: string[];
       researchSources?: Array<{
         title?: string | null;

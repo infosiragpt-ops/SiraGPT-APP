@@ -116,6 +116,8 @@ export interface AgentTaskRunArgs {
   model?: string
   maxSteps?: number
   maxRuntimeMs?: number
+  /** Agent Skills picked in the composer («+ → Skills») for this task. */
+  skills?: string[]
   signal?: AbortSignal
   /**
    * Abort the SSE stream when the server goes silent for this many
