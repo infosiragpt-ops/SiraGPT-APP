@@ -93,6 +93,18 @@ const FAMILY_RULES = Object.freeze([
     },
   },
   {
+    // GPT-6 Sol/Luna: multimodal (image_url parts) with a long context.
+    // Tool transport and reasoning stay at the conservative defaults — their
+    // Chat Completions function calls only work at effort "none", which the
+    // callers that need tools set explicitly (doc-agent llm-runtime).
+    family: 'openai-gpt6',
+    match: /(?:^|\/)(?:openai\/)?gpt-6(?:$|[-_.])/,
+    caps: {
+      contextWindow: 200_000,
+      supportsImages: true,
+    },
+  },
+  {
     family: 'openai-gpt4',
     match: /(?:^|\/)(?:openai\/)?(?:gpt-4(?:o|\.1)?|chatgpt-4o|gpt-3\.5-turbo-(?:1106|0125))/,
     caps: {

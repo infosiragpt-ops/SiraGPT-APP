@@ -28,7 +28,8 @@ function modelSupportsVision(provider, model) {
   if (/(^|\/)(moondream|llava|bakllava|minicpm-v)/i.test(normalizedModel)) return true;
   if (normalizedProvider === 'gemini' || normalizedProvider === 'google') return /^gemini/.test(normalizedModel);
   if (normalizedProvider === 'openai') {
-    return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/i.test(normalizedModel);
+    // GPT-5.x and GPT-6 (Sol/Luna) are multimodal: they read image_url parts.
+    return /(gpt-4o|gpt-4\.1|gpt-[5-9]|o3|o4|vision)/i.test(normalizedModel);
   }
   // Meta Model API: Muse Spark is multimodal (images, video, PDFs); Llama 4 too.
   if (normalizedProvider === 'meta' || normalizedProvider === 'llama') {
@@ -39,7 +40,7 @@ function modelSupportsVision(provider, model) {
     return /grok-(4|5)/.test(normalizedModel);
   }
   if (normalizedProvider === 'openrouter') {
-    return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral|grok-4|muse-spark|llama-4)/i.test(normalizedModel);
+    return /(gpt-4o|gpt-4\.1|gpt-[5-9]|gemini|claude|qwen.*vl|vision|llava|pixtral|grok-4|muse-spark|llama-4)/i.test(normalizedModel);
   }
   return false;
 }
