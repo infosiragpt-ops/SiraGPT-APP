@@ -344,6 +344,14 @@ function outputPath(value) {
   return String(value || '').trim().replace(/\\/g, '/').replace(/^\/workspace\//, '').replace(/^\.\//, '');
 }
 
+// Compare Python source, not the user-visible description. Preserve interior
+// whitespace and literal contents: both can change Python or document content.
+function pythonRepairCode(entry) {
+  const parsed = parseLooseObject(callArgsOf(entry));
+  if (!parsed.parsed || typeof parsed.value.code !== 'string') return '';
+  return parsed.value.code.replace(/\r\n?/g, '\n').trim();
+}
+
 /** A visual-repair cycle advances only when the completed Python call changed its verified Office file. */
 function officeRepairChangedOutput(recent, steps) {
   const names = recent.map(fingerprintName);
@@ -355,6 +363,8 @@ function officeRepairChangedOutput(recent, steps) {
   });
   const target = targets[0];
   if (!target.startsWith('outputs/') || !OFFICE_OUTPUT_RE.test(target) || targets.some((path) => path !== target)) return false;
+  const repairCodes = recent.filter((entry) => fingerprintName(entry) === 'execute_python').map(pythonRepairCode);
+  if (repairCodes.length !== 2 || !repairCodes[0] || !repairCodes[1] || repairCodes[0] === repairCodes[1]) return false;
 
   // The final call has not run yet. Match the preceding calls to completed
   // steps so an unrelated earlier write cannot authorize this repair cycle.

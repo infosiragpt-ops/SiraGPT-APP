@@ -343,28 +343,36 @@ test('loop: changed Python code and description cannot excuse a read-only visual
   assert.equal(result.steps.find((step) => step.tool === 'execute_python')?.mutated, false);
 });
 
-test('loop: two failed visual checks still cut a repeated repair cycle', async () => {
-  const verifyArgs = { after: 'outputs/encuesta_20x20.xlsx', checklist: ['Encabezados completos'] };
-  const repairArgs = { code: 'adjust_column_widths()' };
+test('loop: two failed visual checks cut an identical resave even when output metadata changed', async () => {
+  const outputPath = 'outputs/encuesta_20x20.xlsx';
+  const verifyArgs = { after: outputPath, checklist: ['Encabezados completos'] };
+  const repairArgs = { code: 'adjust_column_widths()', description: 'Guardando la hoja' };
+  const repeatedArgs = { code: 'adjust_column_widths()', description: 'Otro intento' };
   const client = scriptedClient([
     { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
     { toolCalls: [{ name: 'execute_python', args: repairArgs }] },
     { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
-    { toolCalls: [{ name: 'execute_python', args: repairArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: repeatedArgs }] },
     { content: 'Listo.' },
   ]);
   const events = [];
+  const repairs = [];
+  const snapshots = [{ [outputPath]: '100 1' }, { [outputPath]: '120 2' }];
+  let snapshot = 0;
   const result = await runAgentLoop({
     client, model: 'x', messages: [{ role: 'user', content: 'corrige el Excel' }],
     tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
     executors: {
       async verify_visual() { return 'ERROR: verificación fallida: encabezados ilegibles'; },
-      async execute_python() { return 'ok\n[exit 0]'; },
+      async execute_python(args) { repairs.push(args.code); return 'ok\n[exit 0]'; },
+      [office.OUTPUTS_SNAPSHOT]: async () => snapshots[Math.min(snapshot++, snapshots.length - 1)],
     },
     maxIterations: 8,
     onEvent: (event) => events.push(event),
   });
   assert.equal(result.stoppedReason, 'loop_oscillation_cut');
+  assert.deepEqual(repairs, [repairArgs.code]);
+  assert.equal(result.steps.find((step) => step.tool === 'execute_python')?.mutated, true);
   assert.equal(events.some((event) => event.type === 'final'), false);
 });
 

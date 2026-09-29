@@ -106,6 +106,24 @@ test('3H60-C-001 Office repair may change its Python arguments before the next v
   assert.equal(w.cutOscillatingToolPair([
     verify(), firstRepair, verify(), firstRepair,
   ], { steps: readOnly }).cut, true, 'the same ineffective Office repair must still be cut');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), call('execute_python', {
+      code: 'set_column_widths(20)', description: 'Intento diferente',
+    }),
+  ], { steps: changedOutput }).cut, true,
+  're-saving the same source must still cut despite a new description and output fingerprint');
+  const earlierScope = call('execute_python', { code: 'if needs_fix:\n    set_column_widths(20)\nsave()' });
+  const changedScope = call('execute_python', { code: 'if needs_fix:\n    set_column_widths(20)\n    save()' });
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), earlierScope, verify(), changedScope,
+  ], { steps: changedOutput }).cut, false,
+  'changing Python indentation can change behavior and must allow a measured repair');
+  const originalText = call('execute_python', { code: "text = '''A\nB'''\nsave(text)" });
+  const revisedText = call('execute_python', { code: "text = '''A\n\nB'''\nsave(text)" });
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), originalText, verify(), revisedText,
+  ], { steps: changedOutput }).cut, false,
+  'a blank line inside document text is a real source change');
 });
 
 test('3H60-D-001 faithful compact + prune + last user + memory recover', () => {

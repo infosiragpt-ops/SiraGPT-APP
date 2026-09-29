@@ -113,7 +113,7 @@ function labelForToolCall(tool) {
 /** One line, no control characters, capped. */
 function cleanPhrase(value, max = MAX_DESCRIPTION_CHARS) {
   if (typeof value !== 'string') return '';
-  return value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+  return redactSecrets(value).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 function redactSecrets(text) {
@@ -243,6 +243,7 @@ function toStageEvent(ev) {
   if (!ev || typeof ev !== 'object') return null;
   const type = String(ev.type || '');
   if (!type || NON_STAGE_TYPES.has(type)) return null;
+  const label = typeof ev.label === 'string' ? redactSecrets(ev.label) : ev.label;
 
   const base = {
     type: 'stage',
@@ -257,52 +258,52 @@ function toStageEvent(ev) {
 
   switch (type) {
     case 'stage':
-      return { ...base, label: ev.label || STAGE_LABELS.working };
+      return { ...base, label: label || STAGE_LABELS.working };
     case 'iteration_start':
     case 'thought':
-      return { ...base, label: ev.label || STAGE_LABELS.thinking };
+      return { ...base, label: label || STAGE_LABELS.thinking };
     case 'sandbox_ready':
-      return { ...base, label: ev.label || STAGE_LABELS.preparing };
+      return { ...base, label: label || STAGE_LABELS.preparing };
     case 'tool_call':
-      return { ...base, label: base.description || ev.label || labelForToolCall(ev.tool) };
+      return { ...base, label: base.description || label || labelForToolCall(ev.tool) };
     case 'tool_result':
       return {
         ...base,
-        label: base.description || ev.label || (ev.ok === false ? STAGE_LABELS.retrying : STAGE_LABELS.verifying),
+        label: base.description || label || (ev.ok === false ? STAGE_LABELS.retrying : STAGE_LABELS.verifying),
       };
     case 'retry':
-      return { ...base, label: ev.label || STAGE_LABELS.retrying };
+      return { ...base, label: label || STAGE_LABELS.retrying };
     case 'final':
     case 'outputs':
-      return { ...base, label: ev.label || STAGE_LABELS.done };
+      return { ...base, label: label || STAGE_LABELS.done };
     case 'cancelled':
     case 'job_cancelled':
-      return { ...base, label: ev.label || STAGE_LABELS.cancelled };
+      return { ...base, label: label || STAGE_LABELS.cancelled };
     // F4 — orchestrator events (planner + sub-agent delegation).
     case 'orchestrator_start':
     case 'plan_start':
-      return { ...base, label: ev.label || STAGE_LABELS.planning };
+      return { ...base, label: label || STAGE_LABELS.planning };
     case 'plan_ready':
-      return { ...base, label: ev.label || STAGE_LABELS.planReady };
+      return { ...base, label: label || STAGE_LABELS.planReady };
     case 'node_start':
-      return { ...base, label: ev.label || STAGE_LABELS.delegating };
+      return { ...base, label: label || STAGE_LABELS.delegating };
     case 'node_done':
-      return { ...base, label: ev.label || STAGE_LABELS.subagentDone };
+      return { ...base, label: label || STAGE_LABELS.subagentDone };
     case 'replanning':
-      return { ...base, label: ev.label || STAGE_LABELS.replanning };
+      return { ...base, label: label || STAGE_LABELS.replanning };
     case 'budget_exceeded':
-      return { ...base, label: ev.label || STAGE_LABELS.budgetExceeded };
+      return { ...base, label: label || STAGE_LABELS.budgetExceeded };
     case 'steered':
-      return { ...base, label: ev.label || STAGE_LABELS.steered };
+      return { ...base, label: label || STAGE_LABELS.steered };
     case 'error':
       return {
         ...base,
-        label: ev.label || STAGE_LABELS.error,
+        label: label || STAGE_LABELS.error,
         preview: base.preview != null ? base.preview : (ev.message ? redactSecrets(ev.message) : undefined),
       };
     default:
       // Unknown events only render when they already carry a label.
-      return ev.label ? { ...base, label: ev.label } : null;
+      return label ? { ...base, label } : null;
   }
 }
 

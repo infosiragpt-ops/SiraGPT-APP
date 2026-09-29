@@ -115,6 +115,22 @@ test('stage v2: preview redacts synthetic credentials before reaching SSE and pe
   assert.ok(!error.preview.includes('abc.def.ghi'), 'fallback error preview is also public');
 });
 
+test('stage v2: model description and explicit label cannot expose synthetic credentials', () => {
+  const described = toStageEvent({
+    type: 'tool_result', tool: 'verify_visual', callId: 'c_description', ok: false,
+    description: 'Comparando sk-FakeDescription123456',
+    label: 'Revisión Bearer abc.def.ghi',
+    preview: 'ERROR: verificación fallida',
+  });
+  assert.match(described.description, /Comparando \[secreto\]/);
+  assert.equal(described.label, described.description, 'model description wins as the visible label');
+  assert.ok(!JSON.stringify(described).includes('sk-FakeDescription123456'));
+
+  const explicit = toStageEvent({ type: 'stage', label: 'Preparando AKIAABCDEFGHIJKLMNOP' });
+  assert.match(explicit.label, /Preparando \[secreto\]/);
+  assert.ok(!JSON.stringify(explicit).includes('AKIAABCDEFGHIJKLMNOP'));
+});
+
 test('stage v2: a failed result is status error; thinking events are kind thinking; legacy events keep the v1 shape', () => {
   const failed = toStageEvent({ type: 'tool_result', tool: 'office_edit', ok: false, callId: 'c9', preview: 'ERROR: find no encontrado' });
   assert.equal(failed.status, 'error');
