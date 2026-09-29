@@ -9482,3 +9482,10 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
     border-color: hsl(var(--border));
   }
 }
+
+/* Model/vendor marks in the picker follow the black & white system too
+   (same specificity as the per-brand overrides above, declared later). */
+.model-logo-chip[data-model-brand] :is(img, svg),
+.model-logo-chip.chat-model-icon :is(img, svg) {
+  filter: grayscale(1) !important;
+}
