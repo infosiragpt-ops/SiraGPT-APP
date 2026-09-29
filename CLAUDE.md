@@ -1414,6 +1414,8 @@ selección/copia de registros consistente en los cuatro tabs de Admin → Logs.
   tocaron colores de contenido o funcionales: plantillas HTML generadas
   (message-component), celdas de Excel, gráficos de datos, logos de terceros
   (Google, fal), ni el icono PWA/manifest/emails/documentos (siguen trébol).
+- **Excepción:** los logos de modelos del selector (`.model-logo-chip[data-model-brand]`)
+  conservan sus colores de marca (pedido de Luis, 2026-09-29); sin filtro de grises.
 - `lib/settings-context.tsx` ya no inyecta `--primary` inline (pisaba `.dark` y
   pintaba botones casi negros sobre el lienzo negro); el selector «Color de
   acento» se quitó de Ajustes.

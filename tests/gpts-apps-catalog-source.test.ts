@@ -5,10 +5,12 @@ import path from "node:path"
 
 const catalogPath = path.join(process.cwd(), "lib", "gpts-apps-catalog.ts")
 const pagePath = path.join(process.cwd(), "app", "gpts", "page.tsx")
+const conexionesPath = path.join(process.cwd(), "app", "conexiones", "page.tsx")
 const sectionPath = path.join(process.cwd(), "components", "gpts", "gpts-apps-section.tsx")
 
 const catalog = fs.readFileSync(catalogPath, "utf8")
 const page = fs.readFileSync(pagePath, "utf8")
+const conexiones = fs.readFileSync(conexionesPath, "utf8")
 const section = fs.readFileSync(sectionPath, "utf8")
 
 describe("GPTs Apps catalog", () => {
@@ -32,10 +34,14 @@ describe("GPTs Apps catalog", () => {
     assert.doesNotMatch(catalog, /google\.com\/s2\/favicons\?sz=128/)
   })
 
-  it("renders Apps at the foot of /gpts with a connect action", () => {
-    assert.match(page, /from "@\/components\/gpts\/gpts-apps-section"/)
-    assert.match(page, /<GptsAppsSection searchQuery=\{debouncedSearchQuery\} \/>/)
-    assert.match(page, /placeholder="Buscar GPT y Apps"/)
+  it("keeps the Apps catalog out of /gpts (Apps has its own page)", () => {
+    assert.doesNotMatch(page, /gpts-apps-section|GptsAppsSection/)
+    assert.match(page, /placeholder="Buscar GPT"/)
+    assert.doesNotMatch(page, /Buscar GPT y Apps/)
+    assert.match(conexiones, /<GptsAppsSection /)
+  })
+
+  it("renders the Apps catalog with a connect action", () => {
     assert.match(section, /data-testid="gpts-apps-section"/)
     assert.match(section, />Apps</)
     assert.match(section, /CONNECT_COPY|connectButtonLabel/)
