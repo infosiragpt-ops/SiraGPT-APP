@@ -228,7 +228,7 @@ const SAV_XLSX_COMPARISON_SOURCE = [
   '    def header_key(name):',
   '        plain = "".join(char for char in unicodedata.normalize("NFKD", str(name).strip().lower()) if not unicodedata.combining(char))',
   '        return "_".join(plain.replace("-", "_").split())',
-  '    demographic_keys = {"edad", "genero", "nivel_educativo"}',
+  '    demographic_keys = {"edad", "genero", "nivel_educativo", "sexo"}',
   '    def metadata_key(name):',
   '        key = header_key(name)',
   '        return key if key == "id" or key in demographic_keys else None',
