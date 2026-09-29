@@ -1395,6 +1395,10 @@ Pedido de Luis: un turno con imagen usa SOLO el modelo que el usuario eligió.
   runtimes de visión, ni siquiera ante un rechazo del formato de imagen; el turno
   termina con su error transparente. Solo un modelo elegido que NO ve imágenes
   (p. ej. DeepSeek V4) usa un runtime de visión para leerlas.
+- Modelo elegido sin visión + imagen: los runtimes de visión con memo «sin saldo»/clave
+  rechazada se saltan (antes se re-llamaban en cada turno, ~40 s de fallos); el log y el
+  reporte nombran el proveedor que falló de verdad (`siraProvider`/`siraModel`), y el
+  cierre dice «No pude leer la imagen…» en vez de culpar al modelo elegido.
 - Tests: `ai-service-provider-failure` (GPT-6 Sol lee la imagen sin cambio de
   modelo; rechazo de imagen no llama a otro runtime), `ai-service-vision-runtime`,
   `agent-harness-core`.

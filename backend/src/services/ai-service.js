@@ -133,6 +133,26 @@ function isPinnedLocalGenerate(provider, model) {
     return isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim()) || isSiraMiniAlias(model);
 }
 
+const VISION_READER_CAUSES = Object.freeze({
+    billing: 'no tienen saldo ahora',
+    auth: 'tienen la clave rechazada',
+    forbidden: 'rechazaron la solicitud',
+    rate_limit: 'alcanzaron su límite de solicitudes por minuto',
+    unavailable: 'no responden ahora',
+    breaker: 'no responden ahora',
+    unconfigured: 'no están configurados',
+});
+
+/**
+ * Closing message when a text-only pick sent its image to the vision
+ * runtimes and none could read it. The picked model was never called.
+ */
+function buildVisionReaderFailureMessage(reason) {
+    const cause = VISION_READER_CAUSES[String(reason || '')] || 'no pudieron analizarla ahora';
+    return `No pude leer la imagen: el modelo que elegiste no ve imágenes y los modelos de visión disponibles ${cause}. `
+        + 'Elige un modelo que vea imágenes o escribe aquí el contenido de la imagen y lo resuelvo.';
+}
+
 function isPinnedUserGenerate(provider, model) {
     if (isPinnedLocalGenerate(provider, model)) return true;
     // Any explicit picker model is user-pinned — never silent-swap vendors.
@@ -1149,7 +1169,10 @@ class AIService {
                 // A rung already memoised as unfunded (no credit, or a 401
                 // key) is not called again: straight to the next candidate.
                 // The memo is not refreshed on a skip.
-                const skipUnfunded = failoverAllowed && billingFailoverMod.enabled()
+                // Vision runtimes reading an image for a text-only pick are not
+                // the user's model either: a dead account among them is skipped
+                // too (it used to be re-called every turn, ~40 s of failures).
+                const skipUnfunded = (failoverAllowed || visionSwitched) && billingFailoverMod.enabled()
                     && Boolean(billingFailoverMod.unfundedReason(currentProvider));
                 if (skipUnfunded) {
                     lastError = billingFailoverMod.unfundedMemoError(currentProvider);
@@ -1613,7 +1636,13 @@ class AIService {
                 noteTurnContext('provider_aborted', { provider, model, streamedChars: String(fullResponseContent || '').length });
                 return fullResponseContent;
             }
-            console.error(`❌ Error from ${provider} API:`, apiError.message || apiError);
+            // The provider that actually failed (the last vision runtime of a
+            // switched image turn, not the first one) names the log and the
+            // failure report: «Error from Gemini API: … platform.openai.com»
+            // sent the admin to the wrong account.
+            const failedProvider = (apiError && apiError.siraProvider) || provider;
+            const failedModel = (apiError && apiError.siraModel) || model;
+            console.error(`❌ Error from ${failedProvider} API:`, apiError.message || apiError);
             if (!hasStreamedAnyContent) {
                 progress({
                     type: 'failed',
@@ -1634,8 +1663,8 @@ class AIService {
             const reportProviderFailure = (code) => {
                 noteTurnContext('provider_failure', {
                     code,
-                    provider,
-                    model,
+                    provider: failedProvider,
+                    model: failedModel,
                     status: Number(apiError && (apiError.status || apiError.statusCode)) || null,
                     reason: String(apiError?.code || apiError?.status || apiError?.name || 'error').slice(0, 48),
                     message: String(apiError?.message || '').slice(0, 200),
@@ -1646,8 +1675,8 @@ class AIService {
                 try {
                     onProviderFailure({
                         code,
-                        provider,
-                        model,
+                        provider: failedProvider,
+                        model: failedModel,
                         reason: String(apiError?.code || apiError?.status || apiError?.name || 'error').slice(0, 48),
                         message: String(apiError?.message || '').slice(0, 200),
                         partial: hasStreamedAnyContent === true,
@@ -1692,9 +1721,15 @@ class AIService {
                         retryAfterSeconds: apiError.siraRetryAfterSeconds,
                     })
                     : null;
+                // A text-only pick whose image went to the vision runtimes: the
+                // picked model was never called, so «el modelo elegido no pudo
+                // responder» would blame it. Say that the image could not be read.
+                const visionReaderMessage = !mini && visionSwitched
+                    ? buildVisionReaderFailureMessage(apiError?.siraFailureReason)
+                    : null;
                 const message = mini
                     ? SIRA_MINI_UNAVAILABLE_MESSAGE
-                    : (transparent || classified.message);
+                    : (visionReaderMessage || transparent || classified.message);
                 const error = mini ? 'sira_mini_unavailable' : classified.code;
                 reportProviderFailure(error);
                 closeGenerateSseWithError(res, { message, code: error, recovered: false });
@@ -2296,6 +2331,7 @@ You are a professional developer; I will give you a scenario, you understand tha
 
 const service = new AIService();
 service.__test = {
+    buildVisionReaderFailureMessage,
     modelSupportsVision,
     selectVisionRuntime,
     shouldAttachVisionContent,

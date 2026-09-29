@@ -176,3 +176,31 @@ test('resolver: durationMs is recorded for observability', async () => {
   assert.equal(typeof out.durationMs, 'number');
   assert.ok(out.durationMs >= 0);
 });
+
+// Prod 2026-09-29: DeepSeek answered «400 This response_format type is
+// unavailable now» to strict json_schema — every resolve fell back to the
+// heuristic. DeepSeek gets JSON mode; any provider that rejects the format
+// is retried once in JSON mode.
+test('resolver: DeepSeek is asked for JSON mode, never strict json_schema', async () => {
+  const formats = [];
+  const ds = {
+    baseURL: 'https://api.deepseek.com',
+    chat: { completions: { create: async (opts) => { formats.push(opts.response_format); return { choices: [{ message: { content: '{}' } }] }; } } },
+  };
+  await resolveTaskContract({ goal: 'resumen', openai: ds, model: 'gpt-4o-mini', fallback: ({ goal }) => ({ goal }) });
+  assert.equal(formats.length, 1);
+  assert.deepEqual(formats[0], { type: 'json_object' });
+});
+
+test('resolver: a 400 on the response_format is retried once in JSON mode', async () => {
+  const {
+    resolverResponseFormat,
+    isResponseFormatRejection,
+  } = require('../src/services/agents/task-contract-resolver');
+  assert.equal(resolverResponseFormat('OpenAI').type, 'json_schema');
+  assert.equal(resolverResponseFormat('DeepSeek').type, 'json_object');
+  const rejection = Object.assign(new Error('400 This response_format type is unavailable now'), { status: 400 });
+  assert.equal(isResponseFormatRejection(rejection), true);
+  assert.equal(isResponseFormatRejection(Object.assign(new Error('400 bad prompt'), { status: 400 })), false);
+  assert.equal(isResponseFormatRejection(Object.assign(new Error('response_format'), { status: 429 })), false);
+});

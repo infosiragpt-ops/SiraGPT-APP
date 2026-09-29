@@ -415,6 +415,49 @@ test('pinned image turn on GPT-6 Sol: the picked model reads the image itself (n
   assert.match(r.out, /Everest Cargo/);
 });
 
+test('text-only pick + image: a vision runtime memoised without credit is skipped, and the close names the image, not the picked model', async () => {
+  process.env.GEMINI_API_KEY = 'g-test-key';
+  process.env.MODEL_API_KEY = 'meta-test-key';
+  process.env.XAI_API_KEY = 'xai-test-key';
+  billing.markOutOfCredit('Meta', httpError(402, 'Billing verification failed. Please check your payment method.'));
+  const seen = [];
+  const r = await runGenerate({
+    provider: 'DeepSeek',
+    model: 'deepseek-v4-flash',
+    modelLabel: 'DeepSeek V4 Flash',
+    files: IMAGE_FILES,
+    primaryError: httpError(500, 'the text-only pick is never called with pixels'),
+    getClient: (p) => {
+      seen.push(p);
+      return {
+        chat: {
+          completions: {
+            create: async () => {
+              if (p === 'Gemini') throw httpError(429, 'You have no credits remaining.');
+              throw httpError(403, 'Your team has either used all available credits or reached its monthly spending limit.');
+            },
+          },
+        },
+      };
+    },
+  });
+  assert.equal(r.primaryCalls, 0, 'DeepSeek never receives the image');
+  assert.ok(!seen.includes('Meta'), `Meta (memoised «sin saldo») must not be called again: ${seen.join(',')}`);
+  assert.ok(seen.includes('Gemini') && seen.includes('xAI'));
+  const frame = errorFrame(r.frames);
+  assert.ok(frame);
+  assert.match(frame.message, /^No pude leer la imagen: el modelo que elegiste no ve imágenes/);
+  assert.doesNotMatch(frame.message, /El modelo elegido no pudo responder/);
+  assert.equal(r.failures[0].provider, 'xAI', 'the failure names the runtime that failed last, not the first one');
+});
+
+test('buildVisionReaderFailureMessage names the cause in Spanish and falls back to a neutral phrase', () => {
+  const { buildVisionReaderFailureMessage } = require('../src/services/ai-service').__test;
+  assert.match(buildVisionReaderFailureMessage('billing'), /no tienen saldo ahora\./);
+  assert.match(buildVisionReaderFailureMessage('unavailable'), /no responden ahora\./);
+  assert.match(buildVisionReaderFailureMessage(null), /no pudieron analizarla ahora\./);
+});
+
 // ── Internal requests without a picked model (dormant path for the chat) ──
 
 test('internal request (no picked model) with nothing funded: honest Spanish error, no raw provider text', async () => {

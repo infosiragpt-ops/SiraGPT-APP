@@ -592,7 +592,7 @@ function publicModelLabel(model, provider = '') {
 /**
  * Attach the transparent cause to the error a pinned model's turn ends with
  * (the thrown code stays E_PROVIDER at the SSE close): siraFailureReason,
- * siraProvider, siraModelLabel (only a real display name) and
+ * siraProvider, siraModel, siraModelLabel (only a real display name) and
  * siraRetryAfterSeconds. Never throws; returns the error.
  */
 function annotateProviderFailure(err, { provider = '', model = '', reason = null, env = process.env } = {}) {
@@ -616,6 +616,7 @@ function annotateProviderFailure(err, { provider = '', model = '', reason = null
     }
     if (cause && !err.siraFailureReason) err.siraFailureReason = cause;
     if (provider && !err.siraProvider) err.siraProvider = String(provider);
+    if (model && !err.siraModel) err.siraModel = String(model);
     const label = publicModelLabel(model, provider);
     if (label && !err.siraModelLabel) err.siraModelLabel = label;
     if (err.siraFailureReason === 'rate_limit' && err.siraRetryAfterSeconds == null) {

@@ -266,7 +266,7 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
   // Try LLM with Structured Outputs first.
   if (effectiveOpenai && typeof effectiveOpenai.chat?.completions?.create === "function" && typeof goal === "string" && goal.trim().length > 0) {
     try {
-      const resp = await raceWithTimeout(effectiveOpenai.chat.completions.create({
+      const request = (responseFormat) => raceWithTimeout(effectiveOpenai.chat.completions.create({
         model: effectiveModel,
         temperature: 0,
         max_tokens: 1400,
@@ -275,19 +275,23 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
           ...fewShotMessages(),
           { role: "user", content: goal + hint },
         ],
-        // OpenAI Structured Outputs. When the model supports strict
-        // json_schema this returns a parse-guaranteed object; we still
-        // run ajv because defense-in-depth is cheap and catches drift
-        // on providers/models that ignore `strict`.
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "TaskContract",
-            strict: true,
-            schema: toStrictOpenAISchema(taskContractSchema),
-          },
-        },
+        response_format: responseFormat,
       }), effTimeoutMs);
+      // OpenAI Structured Outputs (strict json_schema) where the provider
+      // takes it; DeepSeek only takes JSON mode (prod 2026-09-29: «400 This
+      // response_format type is unavailable now»). Either way ajv validates
+      // below, so JSON mode loses no safety.
+      const format = resolverResponseFormat(effectiveProvider);
+      let resp;
+      try {
+        resp = await request(format);
+      } catch (err) {
+        if (format.type !== "json_object" && isResponseFormatRejection(err)) {
+          resp = await request(JSON_OBJECT_FORMAT);
+        } else {
+          throw err;
+        }
+      }
       const raw = resp?.choices?.[0]?.message?.content;
       const parsed = safeParseJson(raw);
       if (parsed) {
@@ -318,6 +322,28 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
 
   const contract = fallback ? fallback({ goal, fileIds }) : makeEmptyContract(goal);
   return { contract, source: "fallback", durationMs: Date.now() - t0 };
+}
+
+// ── Response format per provider ─────────────────────────────────────────
+
+const JSON_OBJECT_FORMAT = Object.freeze({ type: "json_object" });
+
+function resolverResponseFormat(provider) {
+  if (String(provider || "").toLowerCase() === "deepseek") return JSON_OBJECT_FORMAT;
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: "TaskContract",
+      strict: true,
+      schema: toStrictOpenAISchema(taskContractSchema),
+    },
+  };
+}
+
+/** A 400 that rejects the response_format itself (not the prompt). */
+function isResponseFormatRejection(err) {
+  const status = Number(err?.status || err?.statusCode) || null;
+  return status === 400 && /response_format|json_schema|structured output/i.test(String(err?.message || ""));
 }
 
 // ── Runtime ladder (key health aware) ────────────────────────────────────
@@ -549,6 +575,8 @@ module.exports = {
   validateContract,
   makeEmptyContract,
   toStrictOpenAISchema,
+  resolverResponseFormat,
+  isResponseFormatRejection,
   FEW_SHOT_EXAMPLES,
   RESOLVER_SYSTEM_PROMPT,
 };
