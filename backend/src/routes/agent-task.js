@@ -531,6 +531,9 @@ router.get('/artifacts', authenticateToken, async (req, res) => {
 // offloaded — a missing VM file is not a 409. 409 is reserved for
 // conversion failures (soffice down / format) so the viewer can fall
 // back to the legacy client renderer. Download stays untouched.
+router.get('/artifact/:id/preview.data', authenticateToken,
+  require('../services/document-pipeline/preview-data-handlers').createArtifactDataPreviewHandler({ artifactDir: ARTIFACT_DIR }));
+
 router.get('/artifact/:id/preview.pdf', authenticateToken, async (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });

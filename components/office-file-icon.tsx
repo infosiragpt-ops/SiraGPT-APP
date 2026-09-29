@@ -3,7 +3,7 @@
 import * as React from "react"
 
 /**
- * Office / PDF file-type glyphs in the Microsoft 365 2026 style: a layered
+ * Office / PDF file-type glyphs and an original SPSS file badge: a layered
  * document with rounded corners and depth, brand gradient content ribbons
  * and the letter badge anchored bottom-left. One vector source for every
  * surface (composer chips, message chips, document cards, Documents page,
@@ -70,10 +70,21 @@ export function OfficeFileIcon({ kind, size = 32, className, title }: OfficeFile
       {/* page */}
       <rect x="8.5" y="1.5" width="21" height="27" rx="3.5" fill={`url(#${page})`} />
       <path d="M23.5 1.5v4.5a2 2 0 0 0 2 2h4" fill="none" stroke={p.ribbonTo} strokeOpacity="0.45" strokeWidth="1" />
-      {/* content ribbons */}
-      <rect x="12" y="10" width="14.5" height="3.6" rx="1.8" fill={`url(#${ribbon})`} />
-      <rect x="12" y="16" width="14.5" height="3.6" rx="1.8" fill={`url(#${ribbon})`} opacity="0.85" />
-      <rect x="12" y="22" width="9.5" height="3.6" rx="1.8" fill={`url(#${ribbon})`} opacity="0.7" />
+      {/* SPSS uses a statistical chart; the other file types use text ribbons. */}
+      {kind === "spss" ? (
+        <g aria-hidden="true">
+          <path d="M19 10v14h8" fill="none" stroke={p.badgeFrom} strokeOpacity="0.4" strokeWidth="1" />
+          <rect x="20" y="18" width="1.8" height="5" rx="0.5" fill={`url(#${ribbon})`} />
+          <rect x="22.6" y="14" width="1.8" height="9" rx="0.5" fill={`url(#${ribbon})`} />
+          <rect x="25.2" y="11" width="1.8" height="12" rx="0.5" fill={`url(#${ribbon})`} />
+        </g>
+      ) : (
+        <>
+          <rect x="12" y="10" width="14.5" height="3.6" rx="1.8" fill={`url(#${ribbon})`} />
+          <rect x="12" y="16" width="14.5" height="3.6" rx="1.8" fill={`url(#${ribbon})`} opacity="0.85" />
+          <rect x="12" y="22" width="9.5" height="3.6" rx="1.8" fill={`url(#${ribbon})`} opacity="0.7" />
+        </>
+      )}
       {/* badge shadow + badge */}
       <rect x="2.6" y="12.6" width="16" height="16" rx="3.6" fill={p.badgeFrom} opacity="0.22" />
       <rect x="1.5" y="11.5" width="16" height="16" rx="3.6" fill={`url(#${badge})`} />
@@ -86,7 +97,7 @@ export function OfficeFileIcon({ kind, size = 32, className, title }: OfficeFile
         fontWeight={700}
         fontSize={p.letterSize}
         fill="#fff"
-        letterSpacing={kind === "pdf" ? -0.2 : 0}
+        letterSpacing={kind === "pdf" || kind === "spss" ? -0.2 : 0}
       >
         {p.letter}
       </text>

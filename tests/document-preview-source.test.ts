@@ -82,13 +82,17 @@ test("office previews wait on the server object instead of painting local File p
   )
 })
 
-test("spreadsheets use the same LibreOffice PDF path as Word and decks", () => {
+test("spreadsheets open as the original workbook grid in both preview surfaces", () => {
   const source = viewerSource()
   assert.match(
     source,
-    /case "xlsx":\s+return \(\s+<ServerConvertedPdfRenderer/,
-    "xlsx must go through soffice/calc_pdf_Export so sheet layout is not a squashed HTML table",
+    /case "xlsx":\s+return <XlsxRenderer/,
+    "xlsx must expose all sheet columns as cells instead of splitting them over printed pages",
   )
+  const generated = readFileSync(generatedPreviewSourcePath, "utf8")
+  assert.match(generated, /pdfEndpoint && format !== "xlsx" && format !== "csv"/)
+  assert.match(generated, /state\.kind === "spreadsheet" && <SpreadsheetPreview/)
+  assert.match(source, /return <SpreadsheetPreview buffer=\{buffer\}/)
 })
 
 test("generated document preview stays on the loading gate until the object is ready", () => {

@@ -1655,6 +1655,9 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 // the documentRenderer service (LibreOffice or Gotenberg) and the
 // resulting PDF is cached on disk by file id, so a second request is a
 // pure file read. Auth-protected; returns the PDF inline.
+router.get('/:id/preview.data', authenticateToken,
+  require('../services/document-pipeline/preview-data-handlers').createFileDataPreviewHandler({ prisma, objectStorage }));
+
 router.get('/:id/render', authenticateToken, async (req, res) => {
   try {
     const target = (req.query.target || 'pdf').toString().toLowerCase();

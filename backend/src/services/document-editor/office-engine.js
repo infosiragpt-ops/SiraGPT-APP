@@ -124,6 +124,14 @@ async function runOfficeEditorEngine({
     systemAppend: rules,
   });
   const verified = lastVerificationPassed(result && result.steps);
+  // AgentRunner's exact PPTX edit is complete only with its explicit surgical
+  // proof and nonempty output bytes. Translate that proved completion to the
+  // editor's legacy "final" contract; a declined or unproved shortcut remains
+  // incomplete and cannot be published by the batch coordinator.
+  const surgicalComplete = result && result.stoppedReason === 'surgical_edit'
+    && Array.isArray(result.outputs) && result.outputs.length > 0
+    && result.outputs.every((out) => out.valid === true && out.validation?.passed === true
+      && Buffer.isBuffer(out.buffer) && out.buffer.length > 0);
   const outputs = (Array.isArray(result && result.outputs) ? result.outputs : []).map((out) => ({
     name: out.name,
     buffer: out.buffer,
@@ -138,7 +146,7 @@ async function runOfficeEditorEngine({
     finalText: result && result.finalText,
     outputs,
     steps: (result && result.steps) || [],
-    stoppedReason: result && result.stoppedReason,
+    stoppedReason: surgicalComplete ? 'final' : result && result.stoppedReason,
     iterations: result && result.iterations,
     verified,
     // Everything asked was already in the file: the model's answer says so.
