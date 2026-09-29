@@ -62,14 +62,14 @@ interface VoiceItem {
 
 // Per-voice multi-colour palettes for the animated liquid orbs (ElevenLabs-style).
 const ORB_PALETTES: [string, string, string][] = [
-  ["#a78bfa", "#f0abfc", "#fb923c"],
-  ["#fb7185", "#fda4af", "#93c5fd"],
-  ["#86efac", "#5eead4", "#fcd34d"],
-  ["#f9a8d4", "#c4b5fd", "#fbcfe8"],
-  ["#7dd3fc", "#818cf8", "#f0abfc"],
-  ["#fdba74", "#f472b6", "#a78bfa"],
-  ["#67e8f9", "#60a5fa", "#f472b6"],
-  ["#bef264", "#34d399", "#fbbf24"],
+  ["#999999", "#c0c0c0", "#a2a2a2"],
+  ["#fb7185", "#fda4af", "#bebebe"],
+  ["#d4d4d4", "#cbcbcb", "#d2d2d2"],
+  ["#bcbcbc", "#bdbdbd", "#dadada"],
+  ["#c4c4c4", "#919191", "#c0c0c0"],
+  ["#c3c3c3", "#939393", "#999999"],
+  ["#cecece", "#9c9c9c", "#939393"],
+  ["#dddddd", "#adadad", "#c1c1c1"],
 ]
 
 function orbPalette(seed: string): [string, string, string] {

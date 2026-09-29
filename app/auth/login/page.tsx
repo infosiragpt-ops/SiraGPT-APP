@@ -226,7 +226,7 @@ function LoginPageContent() {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(55% 45% at 12% 12%, rgba(46,125,50,0.30), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(46,125,50,0.16), transparent 70%)",
+              "radial-gradient(55% 45% at 12% 12%, rgba(255,255,255,0.10), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(255,255,255,0.05), transparent 70%)",
           }}
         />
 
@@ -453,57 +453,57 @@ function LoginPageContent() {
       </main>
       <style jsx global>{`
         .auth-red-brandmark {
-          background: rgba(46, 125, 50, 0.16);
-          box-shadow: 0 18px 55px rgba(46, 125, 50, 0.16);
+          background: rgba(10, 10, 10, 0.16);
+          box-shadow: 0 18px 55px rgba(10, 10, 10, 0.16);
         }
 
         .auth-red-check {
-          background: rgba(46, 125, 50, 0.20);
-          box-shadow: 0 0 0 1px rgba(46, 125, 50, 0.28) inset;
+          background: rgba(10, 10, 10, 0.20);
+          box-shadow: 0 0 0 1px rgba(10, 10, 10, 0.28) inset;
         }
 
         .auth-red-card {
-          box-shadow: 0 24px 64px -16px rgba(46, 125, 50, 0.16), 0 18px 54px -32px rgba(0, 0, 0, 0.32);
+          box-shadow: 0 24px 64px -16px rgba(10, 10, 10, 0.16), 0 18px 54px -32px rgba(0, 0, 0, 0.32);
         }
 
         .auth-red-logo {
-          border-color: rgba(46, 125, 50, 0.22);
-          box-shadow: 0 12px 32px rgba(46, 125, 50, 0.08);
+          border-color: rgba(10, 10, 10, 0.22);
+          box-shadow: 0 12px 32px rgba(10, 10, 10, 0.08);
         }
 
         .auth-red-back:hover,
         .auth-red-link:hover {
-          color: #2E7D32;
+          color: #0A0A0A;
         }
 
         .auth-red-back:hover,
         .auth-red-outline:hover {
-          border-color: rgba(46, 125, 50, 0.42);
+          border-color: rgba(10, 10, 10, 0.42);
         }
 
         .auth-red-link:hover {
-          text-decoration-color: #2E7D32;
+          text-decoration-color: #0A0A0A;
         }
 
         .auth-red-focus:focus-visible {
-          border-color: #2E7D32 !important;
-          box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.12) !important;
+          border-color: #0A0A0A !important;
+          box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.12) !important;
         }
 
         .auth-red-submit {
-          background: #2E7D32 !important;
-          box-shadow: 0 16px 32px rgba(46, 125, 50, 0.20);
+          background: #0A0A0A !important;
+          box-shadow: 0 16px 32px rgba(10, 10, 10, 0.20);
         }
 
         .auth-red-submit:hover {
-          background: #1B5E20 !important;
+          background: #262626 !important;
         }
 
         .auth-red-submit:focus-visible,
         .auth-red-outline:focus-visible,
         .auth-red-back:focus-visible,
         .auth-red-link:focus-visible {
-          outline: 2px solid #2E7D32;
+          outline: 2px solid #0A0A0A;
           outline-offset: 3px;
         }
       `}</style>

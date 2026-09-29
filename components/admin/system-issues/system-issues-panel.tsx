@@ -20,6 +20,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { apiClient } from "@/lib/api"
 import { useTurnFailureAlerts } from "@/lib/admin/turn-failure-alerts"
 import type { AdminSystemIssueStats, SystemIssueItem } from "@/lib/admin/system-issues-types"
+import { hasTextSelection, type CopyRecord } from "@/lib/admin/log-copy"
+import { useLogSelection } from "@/lib/admin/use-log-selection"
+import { HeaderCheckbox, LogSelectionBar, RowCheckbox } from "@/components/admin/log-selection-bar"
 import { cn } from "@/lib/utils"
 import { formatRelative } from "../turn-failures/turn-failure-labels"
 import { IssueSparkline } from "./issue-sparkline"
@@ -41,6 +44,32 @@ const SORT_LABELS: Record<string, string> = {
   recientes: "Más recientes",
   frecuentes: "Más frecuentes 24 h",
   usuarios: "Más usuarios",
+}
+
+const ISSUE_NOUN = { one: "error", many: "errores" }
+const issueId = (it: SystemIssueItem) => it.id
+function issueToRecord(it: SystemIssueItem): CopyRecord {
+  return {
+    id: it.id,
+    at: it.lastSeen,
+    headline: it.title,
+    fields: [
+      ["Nivel", levelLabel(it.level)],
+      ["Tipo", kindLabel(it.kind, it.kindLabel)],
+      ["Estado", issueStatusLabel(it.status)],
+      ["Origen", it.culprit],
+      ["Eventos", it.count],
+      ["Eventos 24 h", it.events24h],
+      ["Usuarios", it.usersCount],
+      ["Regresión", it.regression ? "sí" : null],
+      ["Pico", it.spike ? `sí (${it.lastHour} en la última hora, media ${it.hourlyAvg}/h)` : null],
+      ["Primera vez", it.firstSeen],
+      ["Entorno", it.environment],
+      ["Versión", it.lastCommit],
+      ["Huella", it.fingerprint],
+    ],
+    raw: it,
+  }
 }
 
 type Filters = { status: string; kind: string; q: string; sort: string }
@@ -142,6 +171,14 @@ export function SystemIssuesPanel() {
     void load(true)
   }
 
+  const selection = useLogSelection({
+    rows: items,
+    getId: issueId,
+    toRecord: issueToRecord,
+    noun: ISSUE_NOUN,
+    filePrefix: "errores-del-sistema",
+  })
+
   return (
     <div className="space-y-4" data-testid="system-issues-panel">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-background px-4 py-3">
@@ -241,7 +278,30 @@ export function SystemIssuesPanel() {
         </div>
       </div>
 
+      <LogSelectionBar
+        count={selection.count}
+        noun={ISSUE_NOUN}
+        format={selection.format}
+        onFormatChange={selection.setFormat}
+        onCopy={() => void selection.copySelected()}
+        onExport={() => selection.exportSelected()}
+        onClear={selection.clear}
+        testIdPrefix="system-issues"
+      />
+
       <div className="rounded-lg border border-border/70 bg-background">
+        {items.length > 0 && (
+          <div className="flex items-center gap-3 border-b border-border/60 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <HeaderCheckbox
+              allSelected={selection.allSelected}
+              someSelected={selection.someSelected}
+              onToggle={selection.toggleAll}
+              label="Seleccionar todos los errores de la página"
+              testId="system-issues-select-all"
+            />
+            <span>{selection.count ? `${selection.count} de ${items.length}` : "Seleccionar para copiar"}</span>
+          </div>
+        )}
         {error ? (
           <div className="px-4 py-6 text-center text-sm text-destructive">{error}</div>
         ) : items.length === 0 && !loading ? (
@@ -253,11 +313,20 @@ export function SystemIssuesPanel() {
         ) : (
           <ul className="divide-y divide-border/60">
             {items.map((it) => (
-              <li key={it.id}>
-                <button
-                  type="button"
-                  onClick={() => setOpenId(it.id)}
-                  className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
+              <li key={it.id} className={cn("flex items-start", selection.isSelected(it.id) && "bg-foreground/[0.05]")}>
+                <RowCheckbox
+                  checked={selection.isSelected(it.id)}
+                  onToggle={(range) => selection.toggle(it.id, range)}
+                  label={`Seleccionar el error ${it.title}`}
+                  testId="system-issue-select"
+                  className="py-3.5 pl-4"
+                />
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => { if (!hasTextSelection()) setOpenId(it.id) }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenId(it.id) } }}
+                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/40"
                   data-testid="system-issue-row"
                 >
                   <span className={cn("mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide", levelClass(it.level))}>{levelLabel(it.level)}</span>
@@ -287,7 +356,7 @@ export function SystemIssuesPanel() {
                     <span className="block text-sm font-semibold tabular-nums">{formatCount(it.usersCount)}</span>
                     <span className="block text-[10px] text-muted-foreground">usuarios</span>
                   </span>
-                </button>
+                </div>
               </li>
             ))}
           </ul>

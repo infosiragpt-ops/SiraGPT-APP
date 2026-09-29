@@ -159,4 +159,35 @@ describe("TurnFailuresPanel", () => {
     render(<TurnFailuresPanel />)
     expect(await screen.findByTestId("turn-failures-empty")).toBeTruthy()
   })
+
+  // Luis (2026-09-29): pick exactly the failures to copy, in the chosen format.
+  it("selects failures without opening the detail and copies only those; Ctrl+C and the format picker work", async () => {
+    const second = { ...failure, id: "al_2", cause: "DeepSeek 500", prompt: "otra pregunta", category: "error_visible", categoryLabel: "Error visible" }
+    api.getAdminTurnFailures.mockResolvedValue({ items: [failure, second], total: 2, page: 1, limit: 25 })
+    api.getAdminTurnFailureStats.mockResolvedValue(stats)
+    const writeText = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true })
+    render(<TurnFailuresPanel />)
+    await screen.findAllByTestId("turn-failure-row")
+    expect(screen.queryByTestId("turn-failures-selection")).toBeNull()
+    const boxes = screen.getAllByTestId("turn-failure-select")
+    fireEvent.click(boxes[1])
+    expect(screen.queryByTestId("turn-failure-detail")).toBeNull()
+    expect(screen.getByTestId("turn-failures-selection").textContent).toMatch(/1 fallo seleccionado/)
+
+    fireEvent.click(screen.getByTestId("turn-failures-copy-selected"))
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    const text = writeText.mock.calls[0][0] as string
+    expect(text).toMatch(/Error visible: DeepSeek 500/)
+    expect(text).toMatch(/Pregunta: otra pregunta/)
+    expect(text).not.toMatch(/resolver este problema/)
+
+    fireEvent.keyDown(document, { key: "c", ctrlKey: true })
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByTestId("turn-failures-select-all"))
+    expect(screen.getByTestId("turn-failures-selection").textContent).toMatch(/2 fallos seleccionados/)
+    fireEvent.keyDown(document, { key: "Escape" })
+    expect(screen.queryByTestId("turn-failures-selection")).toBeNull()
+  })
 })

@@ -120,7 +120,7 @@ export default function DesignCanvasPage() {
           </button>
           <div className="h-4 w-px bg-border" />
           <div className="flex items-center gap-1.5">
-            <Palette className="h-3.5 w-3.5 text-[#C05621]" />
+            <Palette className="h-3.5 w-3.5 text-[#696969]" />
             <span className="text-xs font-medium">{design.name}</span>
           </div>
         </div>

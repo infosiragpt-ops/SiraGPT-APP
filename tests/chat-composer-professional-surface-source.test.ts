@@ -26,7 +26,7 @@ describe("professional chat composer surface source contract", () => {
   it("uses one neutral solid surface without stacked rings or glass", () => {
     assert.match(
       globals,
-      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(220 10% 89% \/ 0\.96\)/,
+      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(0 0% 89% \/ 0\.96\)/,
       "the light composer should use a crisp neutral one-pixel outline"
     )
     assert.match(
@@ -37,7 +37,7 @@ describe("professional chat composer surface source contract", () => {
     const surfaceRule = globals.match(/\.composer-surface\s*\{([^}]*)\}/)?.[1]
     assert.ok(surfaceRule, "the composer surface rule should exist")
     assert.match(surfaceRule, /background-color: hsl\(0 0% 100%\);/)
-    assert.match(surfaceRule, /0 8px 24px -20px hsl\(220 24% 14% \/ 0\.24\)/)
+    assert.match(surfaceRule, /0 8px 24px -20px hsl\(0 0% 14% \/ 0\.24\)/)
     assert.doesNotMatch(
       surfaceRule,
       /linear-gradient|backdrop-filter|inset/,
@@ -52,7 +52,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(220 10% 80% \/ 0\.12\)/,
+      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(0 0% 80% \/ 0\.12\)/,
       "focused text should strengthen the complete neutral contour"
     )
     assert.match(
@@ -119,7 +119,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-input-row \.composer-model-inline \.chat-model-trigger:hover,[\s\S]{0,180}background-color: hsl\(220 10% 94% \/ 0\.82\);/,
+      /\.composer-input-row \.composer-model-inline \.chat-model-trigger:hover,[\s\S]{0,180}background-color: hsl\(0 0% 94% \/ 0\.82\);/,
       "the inline model selector should reveal a quiet hover state"
     )
     assert.doesNotMatch(
@@ -361,13 +361,13 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-stop-button::before\s*\{[\s\S]{0,260}background: #fee2e2;/,
-      "the accessible stop target should contain the reference's pale-red visual disc",
+      /\.composer-stop-button::before\s*\{[\s\S]{0,260}background: #e8e8e8;/,
+      "the accessible stop target should contain a neutral visual disc (black & white interface)",
     )
     assert.match(
       globals,
-      /\.composer-stop-button \.composer-stop-icon\s*\{[\s\S]{0,120}background-color: #dc2626 !important;/,
-      "the stop glyph should remain solid red",
+      /\.composer-stop-button \.composer-stop-icon\s*\{[\s\S]{0,120}background-color: hsl\(var\(--foreground\)\) !important;/,
+      "the stop glyph is solid ink (black & white interface)",
     )
     assert.match(
       globals,
@@ -376,12 +376,12 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-fast-toggle\.is-on svg\s*\{\s*color: #e2766f;/,
-      "an active fast mode lights the bolt with the restrained warm accent",
+      /\.composer-fast-toggle\.is-on svg\s*\{\s*color: hsl\(var\(--foreground\)\);/,
+      "an active fast mode lights the bolt in ink (black & white interface)",
     )
     assert.match(
       globals,
-      /\.composer-dictation-button:not\(\[aria-pressed="true"\]\)\s*\{\s*color: hsl\(220 8% 64%\) !important;/,
+      /\.composer-dictation-button:not\(\[aria-pressed="true"\]\)\s*\{\s*color: hsl\(0 0% 64%\) !important;/,
       "the idle microphone should stay visually quiet",
     )
   })

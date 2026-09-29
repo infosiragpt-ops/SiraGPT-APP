@@ -27,7 +27,7 @@ export function BottomGlowBar() {
           className="absolute bottom-0 left-0 right-0 h-20"
           style={{
             background:
-              "linear-gradient(180deg, transparent 0%, rgba(236,72,153,0.18) 60%, rgba(168,85,247,0.28) 85%, rgba(99,102,241,0.32) 100%)",
+              "linear-gradient(180deg, transparent 0%, rgba(113,113,113,0.18) 60%, rgba(114,114,114,0.28) 85%, rgba(111,111,111,0.32) 100%)",
             filter: "blur(22px)",
             animation: "glow-hue 4s linear infinite",
           }}
@@ -39,7 +39,7 @@ export function BottomGlowBar() {
           className="absolute bottom-0 left-0 right-0 h-[6px]"
           style={{
             background:
-              "linear-gradient(90deg, rgba(236,72,153,0.9), rgba(168,85,247,0.95), rgba(99,102,241,0.9), rgba(236,72,153,0.9))",
+              "linear-gradient(90deg, rgba(113,113,113,0.9), rgba(114,114,114,0.95), rgba(111,111,111,0.9), rgba(113,113,113,0.9))",
             backgroundSize: "300% 100%",
             animation:
               "glow-slide 4s linear infinite, glow-hue 4s linear infinite",
@@ -53,7 +53,7 @@ export function BottomGlowBar() {
           className="absolute bottom-0 left-0 right-0 h-[2px]"
           style={{
             background:
-              "linear-gradient(90deg, #ec4899, #d946ef, #a855f7, #8b5cf6, #6366f1, #a855f7, #ec4899)",
+              "linear-gradient(90deg, #717171, #717171, #727272, #717171, #6f6f6f, #727272, #717171)",
             backgroundSize: "300% 100%",
             animation: "glow-slide 3.5s linear infinite",
           }}
@@ -77,7 +77,7 @@ export function BottomGlowBar() {
           className="absolute bottom-0 h-[2px] w-28"
           style={{
             background:
-              "linear-gradient(90deg, transparent, rgba(236,72,153,0.9), transparent)",
+              "linear-gradient(90deg, transparent, rgba(113,113,113,0.9), transparent)",
             filter: "blur(4px)",
             animation: "comet-sweep-rev 6.5s linear infinite",
           }}

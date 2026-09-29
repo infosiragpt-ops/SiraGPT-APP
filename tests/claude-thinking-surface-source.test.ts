@@ -28,8 +28,8 @@ describe("Claude-style thinking surface", () => {
     assert.match(css, /--think-accent: hsl\(var\(--foreground\)\);/)
     assert.match(css, /--step-running: var\(--think-text\);/)
     assert.match(css, /--step-running: var\(--think-text, #57534E\);/)
-    assert.match(css, /--think-dim: #78716C;/)
-    assert.match(css, /--think-dim: #A8A29E;/)
+    assert.match(css, /--think-dim: #737373;/)
+    assert.match(css, /--think-dim: #A3A3A3;/)
     assert.match(css, /@keyframes thinking-core-orbit/)
     assert.match(css, /@keyframes thinking-core-pulse/)
     assert.match(css, /@keyframes thinking-core-ripple/)
@@ -56,8 +56,8 @@ describe("Claude-style thinking surface", () => {
     assert.doesNotMatch(css, /--step-running: var\(--think-accent/)
     // The shimmer sweeps between the two muted neutral greys.
     assert.match(css, /var\(--think-text\) 35%,\s*var\(--think-text-hi\) 50%,\s*var\(--think-text\) 65%/)
-    // The brand clover keeps its green.
-    assert.match(css, /--brand: #2E7D32;/)
+    // The in-app brand ink is monochrome (black & white interface).
+    assert.match(css, /--brand: #0A0A0A;/)
     // Terminal check / X are inline currentColor glyphs, not the celeste/red SVG files.
     const loader = source("components/thinking-status-loader.tsx")
     assert.match(loader, /function TerminalGlyph/)

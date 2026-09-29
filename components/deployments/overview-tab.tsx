@@ -202,7 +202,7 @@ export function OverviewTab({
           {isPausedOrSuspended ? (
             <Button
               size="sm"
-              className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#0f6ecb] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#1679dc] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
+              className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#616161] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#6b6b6b] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
               onClick={() => void resume()}
               disabled={resuming}
             >
@@ -212,7 +212,7 @@ export function OverviewTab({
           ) : (
             <Button
               size="sm"
-              className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#0f6ecb] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#1679dc] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
+              className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#616161] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#6b6b6b] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
               onClick={() => void publish()}
               disabled={publishing}
             >
@@ -231,7 +231,7 @@ export function OverviewTab({
           </Button>
         </div>
 
-        <StatusDot status={deployment.status} className="absolute left-[1px] top-[112px] h-2 w-2 bg-[#2d9cff]" />
+        <StatusDot status={deployment.status} className="absolute left-[1px] top-[112px] h-2 w-2 bg-[#8c8c8c]" />
 
         <section className="rounded-[6px] bg-[#242424] px-4 pb-4 pt-4 text-[14px] text-white">
           <h3 className="mb-3 text-[16px] font-semibold leading-none text-white">Production</h3>
@@ -258,7 +258,7 @@ export function OverviewTab({
 
             <FieldRow label="SEO Rating">
               <span className="inline-flex items-center gap-2">
-                <span className="rounded-full bg-[#2f7d4a] px-[10px] py-[5px] text-[11px] font-semibold leading-none text-white">
+                <span className="rounded-full bg-[#696969] px-[10px] py-[5px] text-[11px] font-semibold leading-none text-white">
                   HEALTHY
                 </span>
                 <button
@@ -295,7 +295,7 @@ export function OverviewTab({
                   <button
                     type="button"
                     onClick={() => openCreatedApp(deployment.projectId)}
-                    className="mt-0.5 inline-flex h-7 items-center gap-1.5 rounded-[6px] border-0 bg-[#0f6ecb] px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#1679dc]"
+                    className="mt-0.5 inline-flex h-7 items-center gap-1.5 rounded-[6px] border-0 bg-[#616161] px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#6b6b6b]"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                     Abrir app
@@ -308,7 +308,7 @@ export function OverviewTab({
                 >
                   <ShoppingCart className="h-3.5 w-3.5" />
                   Buy a new domain
-                  <span className="rounded-[4px] bg-[#17385d] px-1.5 py-0.5 text-[10px] font-semibold text-[#4aa3ff]">Beta</span>
+                  <span className="rounded-[4px] bg-[#343434] px-1.5 py-0.5 text-[10px] font-semibold text-[#979797]">Beta</span>
                 </button>
               </div>
             </FieldRow>
@@ -327,7 +327,7 @@ export function OverviewTab({
 
             <FieldRow label="Database">
               <span className="inline-flex flex-wrap items-center gap-1.5 text-white">
-                <Database className={cn("h-4 w-4", deployment.databaseConnected ? "text-[#39b66a]" : "text-[#a7a7a7]")} />
+                <Database className={cn("h-4 w-4", deployment.databaseConnected ? "text-[#969696]" : "text-[#a7a7a7]")} />
                 {deployment.databaseConnected ? "Production database connected" : "Not connected"}
                 <ManageLink onClick={() => onNavigate("manage")} />
               </span>
@@ -357,7 +357,7 @@ export function OverviewTab({
               />
               <Button
                 size="sm"
-                className="h-8 gap-1.5 rounded-[6px] bg-[#0f7bea] px-3 text-[13px] text-white hover:bg-[#1688ff]"
+                className="h-8 gap-1.5 rounded-[6px] bg-[#6c6c6c] px-3 text-[13px] text-white hover:bg-[#787878]"
                 onClick={() => copyValue("referral", `https://replit.com/refer/${deployment.name || "siragpt"}`)}
               >
                 {copiedKey === "referral" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -376,11 +376,11 @@ export function OverviewTab({
                   aria-hidden
                   className={cn(
                     "absolute -left-[20px] top-2 h-1.5 w-1.5 rounded-full",
-                    version.isLive ? "bg-[#2d9cff]" : "bg-[#247a3c]",
+                    version.isLive ? "bg-[#8c8c8c]" : "bg-[#636363]",
                   )}
                 />
                 <span className="w-[76px] shrink-0 font-mono text-[13px] text-[#d7d7d7]">{version.shortHash.slice(0, 8)}</span>
-                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#1688dc] text-[10px] font-semibold text-white">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#767676] text-[10px] font-semibold text-white">
                   v
                 </span>
                 <span className="min-w-0 truncate">
@@ -481,7 +481,7 @@ function DomainLine({
         className="text-[#c9c9c9] transition-colors hover:text-white"
         aria-label="Copy domain"
       >
-        {copiedKey === copyKey ? <Check className="h-4 w-4 text-[#8ce99a]" /> : <Copy className="h-4 w-4" />}
+        {copiedKey === copyKey ? <Check className="h-4 w-4 text-[#d0d0d0]" /> : <Copy className="h-4 w-4" />}
       </button>
       <button type="button" className="text-[#c9c9c9] transition-colors hover:text-white" aria-label="QR" title="QR">
         <QrCode className="h-4 w-4" />
@@ -492,7 +492,7 @@ function DomainLine({
 
 function ManageLink({ onClick }: { onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} className="text-[13px] font-medium text-[#1f8fff] transition-opacity hover:opacity-80">
+    <button type="button" onClick={onClick} className="text-[13px] font-medium text-[#7f7f7f] transition-opacity hover:opacity-80">
       Manage
     </button>
   )

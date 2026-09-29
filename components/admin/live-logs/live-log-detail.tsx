@@ -19,6 +19,7 @@ import {
 } from "@/lib/admin/live-logs-service"
 import { cn } from "@/lib/utils"
 import { formatLogTime, levelBadgeClass, levelLabel } from "./live-log-format"
+import { copyText as writeClipboard } from "@/lib/admin/log-copy"
 
 type Props = {
   line: LiveLogLine | null
@@ -28,7 +29,7 @@ type Props = {
 
 async function copyText(text: string, okMessage: string) {
   try {
-    await navigator.clipboard.writeText(text)
+    if (!(await writeClipboard(text))) throw new Error("copy_failed")
     toast.success(okMessage)
   } catch {
     toast.error("No se pudo copiar")

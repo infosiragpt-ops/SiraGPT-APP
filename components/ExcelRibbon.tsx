@@ -2310,8 +2310,8 @@ export function ExcelRibbon({ spreadsheetRef, onWorkbookChange }: ExcelRibbonPro
                     onClick={() => setShowColorsDropdown(!showColorsDropdown)}
                   >
                     <div className="w-4 h-4 grid grid-cols-2 gap-0 border border-gray-300">
-                      <div className="bg-[#5B9BD5]"></div><div className="bg-[#ED7D31]"></div>
-                      <div className="bg-[#A5A5A5]"></div><div className="bg-[#FFC000]"></div>
+                      <div className="bg-[#929292]"></div><div className="bg-[#8f8f8f]"></div>
+                      <div className="bg-[#A5A5A5]"></div><div className="bg-[#c0c0c0]"></div>
                     </div>
                     <span className="excel-ribbon-label">Colors</span>
                     <ChevronDown className="w-2 h-2 ml-1" />
@@ -2621,7 +2621,7 @@ export function ExcelRibbon({ spreadsheetRef, onWorkbookChange }: ExcelRibbonPro
           {/* Functions Group */}
           <RibbonGroup title="Functions">
             <button className="excel-ribbon-button-large group" onClick={handleInsertFunctionDialog}>
-              <span className="text-3xl italic font-serif text-[#2b579a] mb-1">fx</span>
+              <span className="text-3xl italic font-serif text-[#525252] mb-1">fx</span>
               <span className="excel-ribbon-label">Insert<br />Function</span>
             </button>
           </RibbonGroup>

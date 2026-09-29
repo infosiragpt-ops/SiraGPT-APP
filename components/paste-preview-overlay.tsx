@@ -144,7 +144,7 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
           "mx-auto max-w-2xl overflow-hidden rounded-2xl",
           "border border-border/60",
           "bg-background/98 backdrop-blur-xl",
-          "shadow-[0_8px_32px_-8px_rgba(15,23,42,0.18),0_2px_8px_-2px_rgba(15,23,42,0.08)]",
+          "shadow-[0_8px_32px_-8px_rgba(23,23,23,0.18),0_2px_8px_-2px_rgba(23,23,23,0.08)]",
           "dark:shadow-[0_12px_40px_-12px_rgba(0,0,0,0.55),0_4px_12px_-4px_rgba(0,0,0,0.3)]",
         )}
       >

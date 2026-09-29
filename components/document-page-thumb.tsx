@@ -68,7 +68,7 @@ function PageShell({
   return (
     <div
       className={cn(
-        "relative h-full w-full overflow-hidden rounded-[0.65rem] border border-black/10 bg-gradient-to-b shadow-[0_8px_24px_rgba(15,23,42,0.12)] dark:border-white/10",
+        "relative h-full w-full overflow-hidden rounded-[0.65rem] border border-black/10 bg-gradient-to-b shadow-[0_8px_24px_rgba(23,23,23,0.12)] dark:border-white/10",
         accent,
         className,
       )}
@@ -79,7 +79,7 @@ function PageShell({
         // anchored bottom-left like Claude's file chips so the page preview
         // still reads as a page but the app is recognisable at a glance.
         <span
-          className="pointer-events-none absolute bottom-1.5 left-1.5 z-10 inline-flex items-center justify-center rounded-md bg-white/95 p-[3px] shadow-[0_2px_6px_rgba(15,23,42,0.25)] ring-1 ring-black/5 dark:bg-zinc-900/95 dark:ring-white/10"
+          className="pointer-events-none absolute bottom-1.5 left-1.5 z-10 inline-flex items-center justify-center rounded-md bg-white/95 p-[3px] shadow-[0_2px_6px_rgba(23,23,23,0.25)] ring-1 ring-black/5 dark:bg-zinc-900/95 dark:ring-white/10"
           data-office-badge={office}
         >
           <OfficeFileIcon kind={office} size={22} title={KIND_LABEL[kind]} />

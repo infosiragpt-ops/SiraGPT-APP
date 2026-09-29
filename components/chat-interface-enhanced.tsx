@@ -1923,14 +1923,14 @@ const getFileIcon = (file: any) => {
     case 'avi':
     case 'mov':
     case 'wmv':
-      return wrapIconInSmallSquare(<Video className="h-5 w-5 text-white" />, "#9333ea"); // purple
+      return wrapIconInSmallSquare(<Video className="h-5 w-5 text-white" />, "#555555"); // purple
     case 'mp3':
     case 'wav':
-      return wrapIconInSmallSquare(<Music className="h-5 w-5 text-white" />, "#db2777"); // pink
+      return wrapIconInSmallSquare(<Music className="h-5 w-5 text-white" />, "#535353"); // pink
     case 'zip':
     case 'rar':
     case '7z':
-      return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#eab308"); // yellow
+      return wrapIconInSmallSquare(<FileIcon className="h-5 w-5 text-white" />, "#b2b2b2"); // yellow
     default:
       // Every other format gets its family color (archives yellow, email
       // sky, code slate, CAD/3D teal, design rose…) so a chip reads at a glance.
@@ -1938,11 +1938,11 @@ const getFileIcon = (file: any) => {
   }
 };
 const ATTACHMENT_FAMILY_COLORS: Partial<Record<AttachmentFamily, string>> = {
-  pdf: "#dc2626", word: "#2563eb", spreadsheet: "#16a34a", presentation: "#ea580c",
-  text: "#6b7280", code: "#475569", data: "#0891b2", image: "#7c3aed", audio: "#db2777",
-  video: "#9333ea", archive: "#eab308", ebook: "#b45309", email: "#0284c7", calendar: "#0d9488",
-  contact: "#0d9488", subtitle: "#6b7280", cad: "#0f766e", model3d: "#0f766e", design: "#e11d48",
-  font: "#57534e", database: "#4f46e5", executable: "#334155", "disk-image": "#334155",
+  pdf: "#4d4d4d", word: "#606060", spreadsheet: "#7f7f7f", presentation: "#727272",
+  text: "#6b7280", code: "#535353", data: "#767676", image: "#555555", audio: "#535353",
+  video: "#555555", archive: "#b2b2b2", ebook: "#626262", email: "#6d6d6d", calendar: "#767676",
+  contact: "#767676", subtitle: "#6b7280", cad: "#606060", model3d: "#606060", design: "#4a4a4a",
+  font: "#57534e", database: "#535353", executable: "#3f3f3f", "disk-image": "#3f3f3f",
 };
 
 // Human-readable byte size for attachment chips ("1,5 MB").
@@ -2144,7 +2144,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                       ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
                       : isAudio
                         ? "min-w-[14.5rem] max-w-[22rem] overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
-                    : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+                    : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(23,23,23,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 !isCompactDocument && canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -3166,7 +3166,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(23,23,23,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
@@ -3328,7 +3328,7 @@ const ActiveToolsDisplay = ({
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
             aria-label="Abrir catálogo de voces"
-            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(23,23,23,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
           >
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
@@ -3344,7 +3344,7 @@ const ActiveToolsDisplay = ({
                 onClick={() => onOpenVoiceStudio("voices")}
                 title="Elegir o clonar una voz"
                 aria-label={`Voz de Sira Voz: ${selectedSiraVoiceName || "predeterminada"}. Elegir o clonar una voz`}
-                className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(23,23,23,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
               >
                 <Mic className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
                 <span className="relative z-10 max-w-[110px] truncate">{selectedSiraVoiceName || "Voz de Sira"}</span>
@@ -3355,7 +3355,7 @@ const ActiveToolsDisplay = ({
                 onClick={() => onOpenVoiceStudio("dub")}
                 title="Estudio de voz: clonar, doblar vídeos, transcribir y crear audiolibros (gratis, 100 % local)"
                 aria-label="Abrir el estudio de voz"
-                className="group/voice-studio relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-950 bg-zinc-950 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-white shadow-[0_10px_24px_-20px_rgba(15,23,42,0.6)] transition-all duration-200 hover:bg-zinc-800 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+                className="group/voice-studio relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-950 bg-zinc-950 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-white shadow-[0_10px_24px_-20px_rgba(23,23,23,0.6)] transition-all duration-200 hover:bg-zinc-800 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
               >
                 <Clapperboard className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
                 <span className="relative z-10 hidden sm:inline">Estudio de voz</span>
@@ -3369,7 +3369,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/voice-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/voice-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(23,23,23,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Voz: ${selectedVoiceModel}, ${selectedVoiceLanguage}, ${selectedVoiceAccent}, ${selectedVoiceStability}%`}
                 aria-label={`Configurar voz. Actual ${selectedVoiceModel}, ${selectedVoiceLanguage}, estabilidad ${selectedVoiceStability} por ciento`}
               >
@@ -3383,9 +3383,9 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(23,23,23,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(23,23,23,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 py-1">
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
@@ -3513,7 +3513,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/music-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/music-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(23,23,23,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Música: ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicMood}, ${selectedMusicDuration}s`}
                 aria-label={`Configurar música. Actual ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicDuration} segundos`}
               >
@@ -3527,9 +3527,9 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(23,23,23,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(23,23,23,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 p-1.5">
                 <div className="px-2 pb-2 pt-1.5">
                   <div className="flex items-center justify-between gap-3">
@@ -4791,7 +4791,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             overlayClassName={gptDialog === "rate" ? "bg-black/60 backdrop-blur-sm" : undefined}
             className={cn(
               gptDialog === "rate"
-                ? "max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[460px] gap-0 overflow-hidden rounded-[20px] border border-border/70 bg-background/95 p-0 shadow-[0_24px_80px_rgba(15,23,42,0.28)] backdrop-blur-xl sm:rounded-[20px]"
+                ? "max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-[460px] gap-0 overflow-hidden rounded-[20px] border border-border/70 bg-background/95 p-0 shadow-[0_24px_80px_rgba(23,23,23,0.28)] backdrop-blur-xl sm:rounded-[20px]"
                 : "max-w-md rounded-3xl",
             )}
             onOpenAutoFocus={(event) => {
@@ -4888,7 +4888,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                                 "hover:-translate-y-0.5 hover:scale-105 active:translate-y-0 active:scale-100",
                                 isPreviewed
-                                  ? "border-amber-300 bg-amber-50 text-amber-500 shadow-[0_10px_24px_rgba(245,158,11,0.18)] dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300"
+                                  ? "border-amber-300 bg-amber-50 text-amber-500 shadow-[0_10px_24px_rgba(166,166,166,0.18)] dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300"
                                   : "border-zinc-200 bg-white text-zinc-400 hover:border-amber-200 hover:bg-amber-50/70 hover:text-amber-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-500 dark:hover:border-amber-400/35 dark:hover:bg-amber-400/10 dark:hover:text-amber-300",
                                 isSelected && "ring-1 ring-amber-300/60 dark:ring-amber-400/35",
                               )}
@@ -4897,7 +4897,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 aria-hidden="true"
                                 className={cn(
                                   "h-6 w-6 transition-all duration-200 sm:h-7 sm:w-7",
-                                  isPreviewed && "fill-current drop-shadow-[0_2px_6px_rgba(245,158,11,0.25)]",
+                                  isPreviewed && "fill-current drop-shadow-[0_2px_6px_rgba(166,166,166,0.25)]",
                                 )}
                               />
                             </button>
@@ -14611,7 +14611,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
                             "border bg-background/95 backdrop-blur-md",
                             "text-[12.5px] font-medium",
-                            "shadow-[0_4px_14px_-4px_rgba(15,23,42,0.18),0_1px_2px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",
+                            "shadow-[0_4px_14px_-4px_rgba(23,23,23,0.18),0_1px_2px_rgba(23,23,23,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",
                             "transition-all duration-fast ease-smooth",
                             "hover:-translate-y-[1px]",
                             "active:translate-y-0 active:scale-[0.97]",

@@ -301,22 +301,22 @@ function formatSize(n: number | null | undefined) {
 const VIEWER_INLINE_TOOLBAR_MIN_WIDTH = 720
 
 const liquidViewerHeaderClass =
-  "border-b border-white/55 bg-white/78 shadow-[0_18px_54px_rgba(15,23,42,0.08),inset_0_-1px_0_rgba(255,255,255,0.82)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/62 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_54px_rgba(0,0,0,0.28),inset_0_-1px_0_rgba(255,255,255,0.06)]"
+  "border-b border-white/55 bg-white/78 shadow-[0_18px_54px_rgba(23,23,23,0.08),inset_0_-1px_0_rgba(255,255,255,0.82)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/62 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_54px_rgba(0,0,0,0.28),inset_0_-1px_0_rgba(255,255,255,0.06)]"
 
 const liquidFileBadgeClass =
-  "grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/65 bg-white/72 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.88),0_12px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200"
+  "grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/65 bg-white/72 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.88),0_12px_28px_rgba(23,23,23,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200"
 
 const liquidMetaPillClass =
   "inline-flex h-5 items-center rounded-full border border-white/58 bg-white/56 px-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-zinc-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-xl dark:border-white/10 dark:bg-white/8 dark:text-zinc-400"
 
 const liquidIconButtonClass =
-  "inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/55 bg-white/56 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.78),0_10px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white/78 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_32px_rgba(15,23,42,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
+  "inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/55 bg-white/56 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.78),0_10px_24px_rgba(23,23,23,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white/78 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_32px_rgba(23,23,23,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
 
 const liquidGhostButtonClass =
-  "h-8 w-8 rounded-full border border-white/50 bg-white/54 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_20px_rgba(15,23,42,0.07)] backdrop-blur-xl hover:bg-white/78 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
+  "h-8 w-8 rounded-full border border-white/50 bg-white/54 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_20px_rgba(23,23,23,0.07)] backdrop-blur-xl hover:bg-white/78 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
 
 const liquidControlShellClass =
-  "rounded-[999px] border border-white/70 bg-white/72 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_20px_54px_rgba(15,23,42,0.18)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/64 dark:shadow-[0_20px_54px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.08)]"
+  "rounded-[999px] border border-white/70 bg-white/72 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_20px_54px_rgba(23,23,23,0.18)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/64 dark:shadow-[0_20px_54px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.08)]"
 
 const liquidMetricPillClass =
   "flex h-8 min-w-[4.75rem] items-center justify-center rounded-full border border-white/58 bg-white/62 px-3 text-[11px] font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
@@ -1204,7 +1204,7 @@ function LoadingState({ label, progress }: { label?: string; progress?: number }
     <div className="relative h-full w-full" role="status" aria-live="polite" aria-label={caption}>
       {skeleton}
       <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
-        <div className="flex max-w-full items-center gap-2 rounded-full border border-white/60 bg-white/80 px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-[0_10px_24px_rgba(15,23,42,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100">
+        <div className="flex max-w-full items-center gap-2 rounded-full border border-white/60 bg-white/80 px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-[0_10px_24px_rgba(23,23,23,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100">
           <ThinkingIndicator size="sm" />
           <span className="truncate">{caption}</span>
           {pct != null && (
@@ -1248,7 +1248,7 @@ function ErrorState({ error, hint }: { error: string; hint?: string }) {
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.72),transparent_38%),linear-gradient(180deg,rgba(250,250,250,0.92),rgba(244,244,245,0.82))] p-8 text-center dark:bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.08),transparent_38%),linear-gradient(180deg,rgba(24,24,27,0.94),rgba(9,9,11,0.9))]">
-      <div className="rounded-full border border-white/65 bg-white/68 p-3 text-amber-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_18px_42px_rgba(15,23,42,0.10)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/10 dark:text-amber-300 dark:shadow-[0_18px_42px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]">
+      <div className="rounded-full border border-white/65 bg-white/68 p-3 text-amber-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_18px_42px_rgba(23,23,23,0.10)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/10 dark:text-amber-300 dark:shadow-[0_18px_42px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]">
         <Icon className="h-7 w-7 text-amber-600 dark:text-amber-400" />
       </div>
       <div>
@@ -1262,7 +1262,7 @@ function ErrorState({ error, hint }: { error: string; hint?: string }) {
             variant="outline"
             size="sm"
             onClick={handleDownload}
-            className="rounded-full border-white/65 bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_12px_26px_rgba(15,23,42,0.08)] backdrop-blur-xl hover:bg-white/90 dark:border-white/10 dark:bg-white/10 dark:hover:bg-white/16"
+            className="rounded-full border-white/65 bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_12px_26px_rgba(23,23,23,0.08)] backdrop-blur-xl hover:bg-white/90 dark:border-white/10 dark:bg-white/10 dark:hover:bg-white/16"
           >
             <Download className="mr-1.5 h-3.5 w-3.5" />
             Descargar archivo original
@@ -1272,7 +1272,7 @@ function ErrorState({ error, hint }: { error: string; hint?: string }) {
           <Button
             size="sm"
             onClick={onRetry}
-            className="rounded-full shadow-[0_12px_28px_rgba(15,23,42,0.16)]"
+            className="rounded-full shadow-[0_12px_28px_rgba(23,23,23,0.16)]"
           >
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             Reintentar

@@ -171,8 +171,8 @@ export function AgentComputerShell({
       >
         <span className="flex shrink-0 items-center gap-1.5" aria-hidden>
           <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-          <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-          <span className="h-3 w-3 rounded-full bg-[#28c840]" />
+          <span className="h-3 w-3 rounded-full bg-[#c0c0c0]" />
+          <span className="h-3 w-3 rounded-full bg-[#9c9c9c]" />
         </span>
         <span className="ml-1 hidden items-center gap-1 sm:flex" aria-hidden>
           <RefreshCw className={cn("h-3.5 w-3.5 text-zinc-400", isStarting && "animate-spin")} />

@@ -156,7 +156,7 @@ export function PublishPipeline({
           {isFailed ? (
             <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
           ) : (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#0b84ef]" />
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#727272]" />
           )}
           <div className="min-w-0">
             <p className="font-semibold">{isFailed ? "Publishing failed" : "Publishing"}</p>
@@ -170,7 +170,7 @@ export function PublishPipeline({
             <button
               type="button"
               onClick={askAgent}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#d8b4b4] bg-white px-2.5 text-[12px] font-semibold text-rose-700 shadow-none transition-colors hover:bg-rose-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#bcbcbc] bg-white px-2.5 text-[12px] font-semibold text-rose-700 shadow-none transition-colors hover:bg-rose-50"
             >
               <MessageSquare className="h-3.5 w-3.5" />
               ASK AGENTE
@@ -206,7 +206,7 @@ export function PublishPipeline({
                 "flex h-7 min-w-0 items-center justify-center gap-1 border-r border-background/70 px-2 text-center text-[12px] font-medium last:border-r-0",
                 state === "done" && "bg-emerald-600 text-white",
                 state === "failed" && "bg-rose-600 text-white",
-                state === "running" && "bg-[#0b84ef] text-white",
+                state === "running" && "bg-[#727272] text-white",
                 state === "pending" && "bg-[#d7d4ca] text-[#817b71]",
               )}
             >

@@ -294,7 +294,7 @@ function ArtifactPanelMounted({
               code={code}
               language={lang === "mermaid" ? "mermaid" : "html"}
               wrapLongLines
-              className="min-h-full bg-[#0f172a]"
+              className="min-h-full bg-[#171717]"
               codeClassName="[&_pre]:min-h-full [&_pre]:p-5"
             />
           </div>

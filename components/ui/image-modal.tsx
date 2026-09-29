@@ -104,7 +104,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
   const [imageError, setImageError] = React.useState(false)
   const [recording, setRecording] = React.useState(false)
   const [comments, setComments] = React.useState<Record<string, ImageViewerComment[]>>({})
-  const [annotationColor, setAnnotationColor] = React.useState("#f97316")
+  const [annotationColor, setAnnotationColor] = React.useState("#898989")
   const dialogRef = React.useRef<HTMLDivElement>(null)
   const closeRef = React.useRef<HTMLButtonElement>(null)
   const deleteRef = React.useRef<HTMLDivElement>(null)
@@ -395,7 +395,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
         </div>
         {modeHint && <p className="max-w-2xl px-2 text-center text-xs text-zinc-500" role="status">{modeHint}</p>}
         {mode === "annotate" && <div className="flex items-center gap-2" aria-label="Opciones de anotación">
-          {["#f97316", "#ef4444", "#38bdf8", "#18181b"].map(color => <button key={color} type="button" aria-label={`Color ${color}`} aria-pressed={annotationColor === color} className={cn("h-7 w-7 rounded-full border-2 border-white ring-1 ring-zinc-200", annotationColor === color && "ring-2 ring-zinc-700")} style={{ backgroundColor: color }} onClick={() => setAnnotationColor(color)} />)}
+          {["#898989", "#ef4444", "#a5a5a5", "#18181b"].map(color => <button key={color} type="button" aria-label={`Color ${color}`} aria-pressed={annotationColor === color} className={cn("h-7 w-7 rounded-full border-2 border-white ring-1 ring-zinc-200", annotationColor === color && "ring-2 ring-zinc-700")} style={{ backgroundColor: color }} onClick={() => setAnnotationColor(color)} />)}
           <button type="button" className={iconButton} disabled={!draft.strokes.length || busy} aria-label="Deshacer último trazo" onClick={() => updateDraft(previous => ({ ...previous, strokes: previous.strokes.slice(0, -1) }))}><Undo2 className="h-4 w-4" /></button>
         </div>}
         {mode === "resize" && <div className="flex max-w-3xl flex-wrap items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white p-2 text-xs">
@@ -414,7 +414,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
             <img ref={imageRef} key={asset.url} src={asset.url} alt={asset.name} draggable={false} data-testid="image-viewer-image" data-scale={scale} style={{ width: imageReady ? displayedWidth : undefined, height: imageReady ? displayedHeight : undefined, maxWidth: imageReady ? "none" : "100%", maxHeight: imageReady ? "none" : "100%", imageRendering: "auto" }} className="block select-none object-contain" onLoad={event => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width > 0 && height > 0) { setNaturalSize({ width, height }); setDimensions({ width, height }) } }} onError={() => setImageError(true)} />
             <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${Math.max(1, naturalSize.width)} ${Math.max(1, naturalSize.height)}`} preserveAspectRatio="none">
               {draft.strokes.map((stroke, i) => <polyline key={i} points={stroke.points.map(point => `${point.x * naturalSize.width / 100},${point.y * naturalSize.height / 100}`).join(" ")} fill="none" stroke={stroke.color} strokeWidth={Math.max(1, stroke.width * naturalSize.width / 100)} strokeLinecap="round" strokeLinejoin="round" />)}
-              {mode === "erase" && draft.selection && <rect data-testid="image-viewer-selection" x={draft.selection.x * naturalSize.width / 100} y={draft.selection.y * naturalSize.height / 100} width={draft.selection.width * naturalSize.width / 100} height={draft.selection.height * naturalSize.height / 100} fill="rgba(56,189,248,0.18)" stroke="#0284c7" strokeWidth="2" strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />}
+              {mode === "erase" && draft.selection && <rect data-testid="image-viewer-selection" x={draft.selection.x * naturalSize.width / 100} y={draft.selection.y * naturalSize.height / 100} width={draft.selection.width * naturalSize.width / 100} height={draft.selection.height * naturalSize.height / 100} fill="rgba(165,165,165,0.18)" stroke="#6d6d6d" strokeWidth="2" strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />}
             </svg>
             {savedComments.map((comment, i) => <button key={comment.id} type="button" title={comment.text} aria-label={`Comentario ${i + 1}: ${comment.text}`} className="absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-xs text-white shadow" style={{ left: `${comment.x}%`, top: `${comment.y}%` }} onPointerDown={event => event.stopPropagation()} onClick={() => setFeedback({ text: comment.text })}>{i + 1}</button>)}
             {mode === "comment" && draft.commentPoint && <span className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-sky-500 shadow" style={{ left: `${draft.commentPoint.x}%`, top: `${draft.commentPoint.y}%` }} />}

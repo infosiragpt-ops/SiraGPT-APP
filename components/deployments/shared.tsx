@@ -164,12 +164,12 @@ export function WarningBanner({ children, className }: { children: React.ReactNo
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 rounded-md border border-[#d8c47a] bg-[#f5edca] px-4 py-2",
+        "flex items-start gap-2.5 rounded-md border border-[#c3c3c3] bg-[#ececec] px-4 py-2",
         className,
       )}
     >
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-      <p className="min-w-0 flex-1 text-[12px] leading-5 text-[#5d4b12]">{children}</p>
+      <p className="min-w-0 flex-1 text-[12px] leading-5 text-[#4b4b4b]">{children}</p>
     </div>
   )
 }

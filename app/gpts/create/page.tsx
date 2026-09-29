@@ -46,7 +46,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { GptActionsEditor, type GptAction } from "@/components/gpts/gpt-actions-editor"
 
 const liquidPanel =
-  "relative overflow-hidden rounded-[24px] border border-white/60 bg-white/75 shadow-[0_18px_50px_-28px_rgba(15,23,42,0.35),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/55 dark:shadow-[0_18px_60px_-30px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
+  "relative overflow-hidden rounded-[24px] border border-white/60 bg-white/75 shadow-[0_18px_50px_-28px_rgba(23,23,23,0.35),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/55 dark:shadow-[0_18px_60px_-30px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
 
 const liquidField =
   "rounded-2xl border-white/65 bg-white/78 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl placeholder:text-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-950/10 dark:border-white/10 dark:bg-white/[0.055] dark:placeholder:text-zinc-500 dark:focus-visible:ring-white/15"
@@ -1139,7 +1139,7 @@ export default function CreateGPTPage() {
 
       {/* Preview Dialog */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-        <DialogContent className="mx-auto max-w-2xl rounded-[28px] border-white/60 bg-white/82 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.55)] backdrop-blur-2xl sm:p-6 dark:border-white/10 dark:bg-zinc-950/82">
+        <DialogContent className="mx-auto max-w-2xl rounded-[28px] border-white/60 bg-white/82 p-4 shadow-[0_24px_70px_-36px_rgba(23,23,23,0.55)] backdrop-blur-2xl sm:p-6 dark:border-white/10 dark:bg-zinc-950/82">
           <DialogHeader className="pb-4">
             <DialogTitle className="text-lg sm:text-xl">Vista previa</DialogTitle>
             <DialogDescription className="text-sm">

@@ -182,7 +182,7 @@ const LG_SEP = "my-1 bg-border/60"
 const CHAT_ACTION_MENU = cn(
   "relative isolate w-[214px] overflow-hidden rounded-[18px] p-1.5",
   "border border-white/65 bg-white/72 text-zinc-800",
-  "shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_50px_rgba(15,23,42,0.16)]",
+  "shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_50px_rgba(23,23,23,0.16)]",
   "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
   "dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100",
   "dark:shadow-[0_20px_54px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]",
@@ -190,7 +190,7 @@ const CHAT_ACTION_MENU = cn(
 const CHAT_ACTION_ITEM = cn(
   "h-8 cursor-pointer rounded-[10px] px-2 text-[13px] font-medium leading-none",
   "text-zinc-700 transition-all duration-150",
-  "focus:bg-white/72 focus:text-zinc-950 focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.76),0_8px_18px_rgba(15,23,42,0.08)]",
+  "focus:bg-white/72 focus:text-zinc-950 focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.76),0_8px_18px_rgba(23,23,23,0.08)]",
   "data-[highlighted]:bg-white/72 data-[highlighted]:text-zinc-950",
   "dark:text-zinc-300 dark:focus:bg-white/12 dark:focus:text-white dark:data-[highlighted]:bg-white/12 dark:data-[highlighted]:text-white",
 )
@@ -198,7 +198,7 @@ const CHAT_ACTION_ICON = "mr-2 h-3.5 w-3.5 shrink-0 stroke-[1.9]"
 const CHAT_ACTION_SEP = "mx-1 my-1 bg-zinc-950/[0.08] dark:bg-white/10"
 const CHAT_ACTION_SUBMENU = cn(
   "w-[196px] rounded-[16px] border border-white/65 bg-white/72 p-1.5",
-  "shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_16px_42px_rgba(15,23,42,0.14)]",
+  "shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_16px_42px_rgba(23,23,23,0.14)]",
   "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
   "dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_46px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.08)]",
 )
@@ -275,7 +275,7 @@ const FOLDER_ADD_ICON = cn(
   "rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
 )
 const FILTER_POPOVER =
-  "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(15,23,42,0.14)]"
+  "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(23,23,23,0.14)]"
 const FILTER_ROW =
   "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-zinc-800 transition-colors hover:bg-zinc-100"
 const FILTER_OPTION =

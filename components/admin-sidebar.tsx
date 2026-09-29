@@ -110,7 +110,7 @@ export function AdminSidebar() {
       >
         <div className={cn("flex items-center justify-between gap-2", !expanded && "hidden")}>
           <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-red-600">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
               <Shield className="h-3.5 w-3.5 text-white" strokeWidth={1.75} />
             </div>
             <div className="flex min-w-0 flex-col leading-tight">
@@ -125,7 +125,7 @@ export function AdminSidebar() {
         <div className={cn("relative", expanded && "hidden")}>
           <button
             type="button"
-            className="group flex h-8 w-8 items-center justify-center rounded-md bg-red-600"
+            className="group flex h-8 w-8 items-center justify-center rounded-md bg-foreground text-background"
             onClick={toggleSidebar}
             aria-label="Expandir menú"
           >

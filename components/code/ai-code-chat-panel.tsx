@@ -4862,7 +4862,7 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
       data-testid={bardNav ? "dept-chat-bard" : undefined}
     >
       {codeDraggingFiles ? (
-        <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
+        <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#767676]/60 bg-background/80 text-center text-sm font-medium text-[#5e5e5e] shadow-2xl shadow-[#767676]/10 backdrop-blur-sm dark:text-[#a6a6a6]">
           Suelta archivos para adjuntarlos al agente de APPS
         </div>
       ) : null}
@@ -5221,7 +5221,7 @@ function CodeAttachmentTray({
               </span>
               {file.status === "uploading" ? (
                 <span className="mt-1 block h-1 overflow-hidden rounded-full bg-muted">
-                  <span className="block h-full rounded-full bg-[#0f87ff]" style={{ width: `${pct}%` }} />
+                  <span className="block h-full rounded-full bg-[#767676]" style={{ width: `${pct}%` }} />
                 </span>
               ) : null}
             </span>
@@ -5307,7 +5307,7 @@ function EmptyChat({
           <button
             key={suggestion.id}
             type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#767676]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
             onClick={() => requestCodeAgentInstruction(suggestion.prompt, { mode: "app" })}
             data-testid={`code-dept-suggestion-${suggestion.id}`}
             aria-label={suggestion.label}
@@ -5338,7 +5338,7 @@ function EmptyChat({
           <button
             key={starter.id}
             type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#767676]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
             onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
             data-testid={`code-agent-starter-${starter.id}`}
             aria-label={starter.title}

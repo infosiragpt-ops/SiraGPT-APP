@@ -46,9 +46,9 @@ const GeminiVisual = () => (
     <defs>
       <linearGradient id="geminiGradCycle" x1="0" y1="0" x2="1" y2="1">
         <stop offset="0%" stopColor="#ef4444" />
-        <stop offset="33%" stopColor="#facc15" />
-        <stop offset="66%" stopColor="#22c55e" />
-        <stop offset="100%" stopColor="#3b82f6" />
+        <stop offset="33%" stopColor="#c9c9c9" />
+        <stop offset="66%" stopColor="#9b9b9b" />
+        <stop offset="100%" stopColor="#7b7b7b" />
       </linearGradient>
     </defs>
     <motion.path
@@ -90,7 +90,7 @@ const KimiVisual = () => (
     <circle cx="50" cy="50" r="48" fill="#0a0a0a" />
     <text x="30" y="72" fill="#fff" fontFamily="Inter, Arial Black, sans-serif" fontSize="58" fontWeight="900">K</text>
     <motion.circle
-      cx="72" cy="30" r="7" fill="#3b82f6"
+      cx="72" cy="30" r="7" fill="#7b7b7b"
       initial={{ scale: 0 }}
       animate={{ scale: [0, 1.3, 1] }}
       transition={{ duration: 0.6, delay: 0.4, ease: "easeOut" }}
@@ -123,7 +123,7 @@ const ImagesVisual = () => {
   return (
     <div
       className="relative h-[360px] w-[360px] overflow-hidden rounded-2xl md:h-[400px] md:w-[400px]"
-      style={{ boxShadow: "0 20px 50px -14px rgba(46,125,50,0.35), 0 0 0 1px rgba(15,23,42,0.06)" }}
+      style={{ boxShadow: "0 20px 50px -14px rgba(10, 10, 10,0.35), 0 0 0 1px rgba(23,23,23,0.06)" }}
     >
       <AnimatePresence mode="wait">
         <motion.img
@@ -171,7 +171,7 @@ const VideoVisual = () => (
     animate={{ opacity: 1, scale: 1 }}
     transition={{ duration: 0.5, ease: "easeOut" }}
     className="relative aspect-video w-[380px] overflow-hidden rounded-2xl md:w-[440px]"
-    style={{ boxShadow: "0 24px 60px -16px rgba(220,38,38,0.35), 0 0 0 1px rgba(15,23,42,0.06)" }}
+    style={{ boxShadow: "0 24px 60px -16px rgba(220,38,38,0.35), 0 0 0 1px rgba(23,23,23,0.06)" }}
   >
     <img src={SHOWCASE_VIDEO_POSTER} alt="" className="absolute inset-0 h-full w-full object-cover" />
     <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-black/20" />
@@ -187,7 +187,7 @@ const VideoVisual = () => (
         transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
         style={{ boxShadow: "0 10px 30px -8px rgba(0,0,0,0.5)" }}
       >
-        <div className="ml-1 h-0 w-0" style={{ borderTop: "9px solid transparent", borderBottom: "9px solid transparent", borderLeft: "14px solid #0f172a" }} />
+        <div className="ml-1 h-0 w-0" style={{ borderTop: "9px solid transparent", borderBottom: "9px solid transparent", borderLeft: "14px solid #171717" }} />
       </motion.div>
     </motion.div>
     <div className="absolute bottom-3 left-3 right-3 flex items-center gap-2">
@@ -236,11 +236,11 @@ const ExcelVisual = () => {
       className="w-[460px] overflow-hidden rounded-xl bg-white md:w-[540px]"
       style={{
         boxShadow:
-          "0 30px 70px -18px rgba(16,124,65,0.4), 0 0 0 1px rgba(15,23,42,0.06), inset 0 1px 0 rgba(255,255,255,1)",
+          "0 30px 70px -18px rgba(97,97,97,0.4), 0 0 0 1px rgba(23,23,23,0.06), inset 0 1px 0 rgba(255,255,255,1)",
       }}
     >
       {/* Title bar */}
-      <div className="flex h-10 items-center justify-between bg-[#107c41] px-3 text-white">
+      <div className="flex h-10 items-center justify-between bg-[#616161] px-3 text-white">
         <div className="flex items-center gap-2">
           <div className="flex h-6 w-6 items-center justify-center rounded bg-white/20 text-[13px] font-black">
             X
@@ -303,7 +303,7 @@ const ExcelVisual = () => {
                 animate={{
                   opacity: visible ? 1 : 0.15,
                   backgroundColor: isActive
-                    ? "#dcfce7"
+                    ? "#f4f4f4"
                     : isHeader
                     ? "#f0fdf4"
                     : isTotalCol
@@ -313,15 +313,15 @@ const ExcelVisual = () => {
                 transition={{ duration: 0.25 }}
                 className={`relative flex h-9 items-center border-r border-b border-gray-200 px-2 text-[12px] ${
                   isHeader
-                    ? "font-semibold text-[#065f46]"
+                    ? "font-semibold text-[#4a4a4a]"
                     : isTotalCol
-                    ? "font-semibold text-[#065f46]"
+                    ? "font-semibold text-[#4a4a4a]"
                     : "text-slate-700"
                 }`}
                 style={
                   isActive
                     ? {
-                        boxShadow: "inset 0 0 0 2px #10a37f",
+                        boxShadow: "inset 0 0 0 2px #818181",
                       }
                     : undefined
                 }
@@ -329,7 +329,7 @@ const ExcelVisual = () => {
                 <span>{visible ? cell : ""}</span>
                 {isActive && (
                   <motion.span
-                    className="ml-0.5 inline-block h-3 w-[1.5px] bg-[#10a37f]"
+                    className="ml-0.5 inline-block h-3 w-[1.5px] bg-[#818181]"
                     animate={{ opacity: [1, 0, 1] }}
                     transition={{ duration: 0.8, repeat: Infinity }}
                   />
@@ -344,7 +344,7 @@ const ExcelVisual = () => {
       <div className="flex items-center justify-between bg-gray-50 px-3 py-1.5 text-[10px] text-slate-600">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#107c41]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-[#616161]" />
             Hoja1
           </span>
           <span className="text-slate-400">Lista</span>
@@ -368,11 +368,11 @@ const WordVisual = () => (
     className="w-[460px] overflow-hidden rounded-xl bg-white md:w-[520px]"
     style={{
       boxShadow:
-        "0 30px 70px -18px rgba(24,90,189,0.4), 0 0 0 1px rgba(15,23,42,0.06), inset 0 1px 0 rgba(255,255,255,1)",
+        "0 30px 70px -18px rgba(83,83,83,0.4), 0 0 0 1px rgba(23,23,23,0.06), inset 0 1px 0 rgba(255,255,255,1)",
     }}
   >
     {/* Title bar */}
-    <div className="flex h-10 items-center justify-between bg-[#185abd] px-3 text-white">
+    <div className="flex h-10 items-center justify-between bg-[#535353] px-3 text-white">
       <div className="flex items-center gap-2">
         <div className="flex h-6 w-6 items-center justify-center rounded bg-white/20 text-[13px] font-black">W</div>
         <span className="text-[12px] font-semibold tracking-wide">Word · Propuesta.docx</span>
@@ -401,7 +401,7 @@ const WordVisual = () => (
       <div
         className="relative mx-auto overflow-hidden bg-white px-8 py-6"
         style={{
-          boxShadow: "0 4px 16px -4px rgba(15,23,42,0.15), 0 0 0 1px rgba(15,23,42,0.04)",
+          boxShadow: "0 4px 16px -4px rgba(23,23,23,0.15), 0 0 0 1px rgba(23,23,23,0.04)",
         }}
       >
         {/* Page margin guides (subtle) */}
@@ -412,7 +412,7 @@ const WordVisual = () => (
           initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1, duration: 0.4 }}
-          className="mb-1 text-[15px] font-bold text-[#185abd]"
+          className="mb-1 text-[15px] font-bold text-[#535353]"
         >
           Propuesta Comercial 2026
         </motion.h2>
@@ -458,7 +458,7 @@ const WordVisual = () => (
               transition={{ delay: 0.8 + i * 0.1, duration: 0.35 }}
               className="flex items-center gap-2"
             >
-              <span className="h-1 w-1 rounded-full bg-[#185abd]" />
+              <span className="h-1 w-1 rounded-full bg-[#535353]" />
               <div
                 className="h-[6px] rounded-sm bg-slate-300"
                 style={{ width: `${[80, 62, 74][i]}%` }}
@@ -476,7 +476,7 @@ const WordVisual = () => (
         >
           <div className="grid grid-cols-3 bg-[#eef4fc]">
             {["Plan", "Usuarios", "Precio"].map((h) => (
-              <div key={h} className="border-r border-slate-200 px-2 py-1 text-[9px] font-bold text-[#185abd] last:border-r-0">{h}</div>
+              <div key={h} className="border-r border-slate-200 px-2 py-1 text-[9px] font-bold text-[#535353] last:border-r-0">{h}</div>
             ))}
           </div>
           {[
@@ -495,7 +495,7 @@ const WordVisual = () => (
     </div>
 
     {/* Status bar */}
-    <div className="flex items-center justify-between bg-[#185abd] px-3 py-1 text-[9px] text-white/90">
+    <div className="flex items-center justify-between bg-[#535353] px-3 py-1 text-[9px] text-white/90">
       <div className="flex gap-3">
         <span>Página 1 de 1</span>
         <span>342 palabras</span>
@@ -517,7 +517,7 @@ const PPTVisual = () => {
       className="w-[460px] overflow-hidden rounded-xl bg-white md:w-[540px]"
       style={{
         boxShadow:
-          "0 30px 70px -18px rgba(196,62,28,0.4), 0 0 0 1px rgba(15,23,42,0.06), inset 0 1px 0 rgba(255,255,255,1)",
+          "0 30px 70px -18px rgba(196,62,28,0.4), 0 0 0 1px rgba(23,23,23,0.06), inset 0 1px 0 rgba(255,255,255,1)",
       }}
     >
       {/* Title bar */}
@@ -560,7 +560,7 @@ const PPTVisual = () => {
                 style={{
                   background:
                     i === 0
-                      ? "linear-gradient(135deg, #c43e1c, #f97316)"
+                      ? "linear-gradient(135deg, #c43e1c, #898989)"
                       : "#ffffff",
                 }}
               >
@@ -583,7 +583,7 @@ const PPTVisual = () => {
           className="relative flex flex-1 aspect-[16/10] flex-col overflow-hidden rounded-lg"
           style={{
             background:
-              "linear-gradient(135deg, #c43e1c 0%, #dc2626 50%, #f97316 100%)",
+              "linear-gradient(135deg, #c43e1c 0%, #dc2626 50%, #898989 100%)",
             boxShadow: "0 10px 30px -8px rgba(196,62,28,0.4)",
           }}
         >
@@ -669,7 +669,7 @@ const WebsVisual = () => (
     animate={{ opacity: 1, y: 0 }}
     transition={{ duration: 0.5 }}
     className="w-[380px] overflow-hidden rounded-xl bg-white md:w-[440px]"
-    style={{ boxShadow: "0 20px 50px -14px rgba(14,165,233,0.35), 0 0 0 1px rgba(15,23,42,0.06)" }}
+    style={{ boxShadow: "0 20px 50px -14px rgba(138,138,138,0.35), 0 0 0 1px rgba(23,23,23,0.06)" }}
   >
     {/* Chrome */}
     <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
@@ -705,8 +705,8 @@ const WebsVisual = () => (
 // GitHub + MCP — octocat mark connected to Sira core via animated link
 const GitHubMCPVisual = ({ color }: { color: string }) => (
   <div
-    className="relative flex h-[360px] w-[400px] items-center justify-center overflow-hidden rounded-3xl border border-slate-200/60 bg-gradient-to-b from-white/80 to-white/40 p-8 shadow-[0_24px_60px_-20px_rgba(46,125,50,0.35)] dark:border-white/10 dark:from-white/[0.07] dark:to-white/[0.02] dark:shadow-[0_28px_70px_-24px_rgba(46,125,50,0.45)] md:h-[400px] md:w-[460px]"
-    style={{ boxShadow: "0 24px 60px -20px rgba(46,125,50,0.28), 0 0 0 1px rgba(255,255,255,0.06) inset" }}
+    className="relative flex h-[360px] w-[400px] items-center justify-center overflow-hidden rounded-3xl border border-slate-200/60 bg-gradient-to-b from-white/80 to-white/40 p-8 shadow-[0_24px_60px_-20px_rgba(10, 10, 10,0.35)] dark:border-white/10 dark:from-white/[0.07] dark:to-white/[0.02] dark:shadow-[0_28px_70px_-24px_rgba(10, 10, 10,0.45)] md:h-[400px] md:w-[460px]"
+    style={{ boxShadow: "0 24px 60px -20px rgba(10, 10, 10,0.28), 0 0 0 1px rgba(255,255,255,0.06) inset" }}
   >
     <div
       aria-hidden
@@ -716,7 +716,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
     <div
       aria-hidden
       className="pointer-events-none absolute -right-12 top-1/3 h-36 w-36 rounded-full opacity-60 blur-3xl dark:opacity-80"
-      style={{ background: "radial-gradient(circle, rgba(46,125,50,0.45) 0%, transparent 70%)" }}
+      style={{ background: "radial-gradient(circle, rgba(10, 10, 10,0.45) 0%, transparent 70%)" }}
     />
 
     {/* Connection line with glow + traveling dot */}
@@ -724,7 +724,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
       <defs>
         <linearGradient id="mcpLinkGrad" x1="0%" y1="0%" x2="100%" y2="0%">
           <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-          <stop offset="50%" stopColor="#818cf8" stopOpacity="1" />
+          <stop offset="50%" stopColor="#919191" stopOpacity="1" />
           <stop offset="100%" stopColor={color} stopOpacity="0.5" />
         </linearGradient>
       </defs>
@@ -749,12 +749,12 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
       />
       <motion.circle
         r="6"
-        fill="#e0e7ff"
+        fill="#e7e7e7"
         initial={{ offsetDistance: "0%" }}
         animate={{ offsetDistance: "100%" }}
         transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut", delay: 0.9 }}
         style={{
-          filter: "drop-shadow(0 0 6px rgba(129,140,248,0.9))",
+          filter: "drop-shadow(0 0 6px rgba(145,145,145,0.9))",
           offsetPath: `path("M 100 190 Q 220 140 340 190")`,
         } as CSSProperties}
       />
@@ -769,7 +769,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
         default: { duration: 0.5 },
       }}
       className="absolute left-6 top-1/2 z-[1] -translate-y-1/2 flex h-[5.5rem] w-[5.5rem] items-center justify-center rounded-2xl bg-white ring-1 ring-slate-200/80 dark:bg-zinc-900 dark:ring-white/15"
-      style={{ boxShadow: "0 16px 40px -12px rgba(15,23,42,0.35), 0 0 0 1px rgba(15,23,42,0.04)" }}
+      style={{ boxShadow: "0 16px 40px -12px rgba(23,23,23,0.35), 0 0 0 1px rgba(23,23,23,0.04)" }}
     >
       <svg viewBox="0 0 24 24" className="h-14 w-14 text-slate-900 dark:text-white" aria-hidden>
         <path
@@ -802,8 +802,8 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
       }}
       className="absolute right-6 top-1/2 z-[1] -translate-y-1/2 flex h-[5.5rem] w-[5.5rem] items-center justify-center rounded-full"
       style={{
-        background: `radial-gradient(circle at 30% 25%, ${color} 0%, #2E7D32 42%, #1B5E20 100%)`,
-        boxShadow: `0 18px 44px -12px rgba(27,94,32,0.55), 0 0 0 2px rgba(255,255,255,0.22) inset, 0 0 40px -8px ${color}66`,
+        background: `radial-gradient(circle at 30% 25%, ${color} 0%, #0A0A0A 42%, #262626 100%)`,
+        boxShadow: `0 18px 44px -12px rgba(10, 10, 10,0.55), 0 0 0 2px rgba(255,255,255,0.22) inset, 0 0 40px -8px ${color}66`,
       }}
     >
       <motion.span
@@ -830,19 +830,19 @@ type Brand = {
 
 const BRANDS: Brand[] = [
   { id: "claude",   accent: "#d97757", tagline: "ACCEDE A CLAUDE MAX",       Visual: ClaudeVisual },
-  { id: "chatgpt",  accent: "#10a37f", tagline: "CHATEA CON CHATGPT PRO",    Visual: ChatGPTVisual },
+  { id: "chatgpt",  accent: "#818181", tagline: "CHATEA CON CHATGPT PRO",    Visual: ChatGPTVisual },
   { id: "gemini",   accent: "#4285f4", tagline: "POTENCIA CON GEMINI 2.5",   Visual: GeminiVisual },
-  { id: "grok",     accent: "#0f172a", tagline: "EXPLORA CON GROK 4",        Visual: GrokVisual },
-  { id: "kimi",     accent: "#3b82f6", tagline: "USA KIMI K2.6",             Visual: KimiVisual },
-  { id: "images",   accent: "#6366f1", tagline: "GENERA IMÁGENES IA",        Visual: ImagesVisual },
+  { id: "grok",     accent: "#171717", tagline: "EXPLORA CON GROK 4",        Visual: GrokVisual },
+  { id: "kimi",     accent: "#7b7b7b", tagline: "USA KIMI K2.6",             Visual: KimiVisual },
+  { id: "images",   accent: "#6f6f6f", tagline: "GENERA IMÁGENES IA",        Visual: ImagesVisual },
   { id: "video",    accent: "#dc2626", tagline: "CREA VIDEOS 4K",            Visual: VideoVisual },
-  { id: "excel",    accent: "#107c41", tagline: "CREA EXCEL PROFESIONAL",    Visual: ExcelVisual },
-  { id: "word",     accent: "#185abd", tagline: "CREA WORD PROFESIONAL",     Visual: WordVisual },
+  { id: "excel",    accent: "#616161", tagline: "CREA EXCEL PROFESIONAL",    Visual: ExcelVisual },
+  { id: "word",     accent: "#535353", tagline: "CREA WORD PROFESIONAL",     Visual: WordVisual },
   { id: "ppt",      accent: "#c43e1c", tagline: "CREA PPT PROFESIONAL",      Visual: PPTVisual },
-  { id: "webs",     accent: "#0ea5e9", tagline: "CREA WEBS PROFESIONALES",   Visual: WebsVisual },
+  { id: "webs",     accent: "#8a8a8a", tagline: "CREA WEBS PROFESIONALES",   Visual: WebsVisual },
   {
     id: "github",
-    accent: "#a5b4fc",
+    accent: "#b6b6b6",
     tagline: "CONECTA MCP CON GITHUB",
     subtitle: "Herramientas y repositorios enlazados de forma segura a tu flujo en Sira.",
     Visual: GitHubMCPVisual,
@@ -853,13 +853,13 @@ const BRANDS: Brand[] = [
 
 const LoaderBars = ({ color: _color }: { color: string }) => (
   <svg version="1.1" id="L9" viewBox="10 40 45 50" xmlns="http://www.w3.org/2000/svg" className="h-8 w-14" aria-label="Pensando">
-    <rect x="20" y="50" width="4" height="10" fill="#38BDF8">
+    <rect x="20" y="50" width="4" height="10" fill="#a5a5a5">
       <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0" dur="0.6s" repeatCount="indefinite" />
     </rect>
-    <rect x="30" y="50" width="4" height="10" fill="#38BDF8">
+    <rect x="30" y="50" width="4" height="10" fill="#a5a5a5">
       <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite" />
     </rect>
-    <rect x="40" y="50" width="4" height="10" fill="#38BDF8">
+    <rect x="40" y="50" width="4" height="10" fill="#a5a5a5">
       <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite" />
     </rect>
   </svg>
@@ -961,7 +961,7 @@ function BrandCard({ brand, onDone }: { brand: Brand; onDone: () => void }) {
                 duration: phase === "display" ? 0.85 : 0.35,
                 ease: [0.22, 1, 0.36, 1],
               }}
-              className="rounded-lg border border-slate-200/80 bg-white/85 px-2 py-1 text-[14px] font-semibold uppercase tracking-[0.18em] shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-black/40 dark:shadow-[0_8px_30px_-12px_rgba(0,0,0,0.5)] md:text-[21px] md:px-3 md:py-1.5 md:tracking-[0.22em]"
+              className="rounded-lg border border-slate-200/80 bg-white/85 px-2 py-1 text-[14px] font-semibold uppercase tracking-[0.18em] shadow-[0_8px_30px_-12px_rgba(23,23,23,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-black/40 dark:shadow-[0_8px_30px_-12px_rgba(0,0,0,0.5)] md:text-[21px] md:px-3 md:py-1.5 md:tracking-[0.22em]"
             >
               <span className="dark:hidden" style={{ color: accent }}>
                 {typed}

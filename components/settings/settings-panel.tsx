@@ -512,15 +512,6 @@ const THEME_PREVIEWS = [
   { value: 'system',   label: 'Sistema',    icon: Monitor,  bg: 'bg-gradient-to-br from-white to-zinc-900', ring: 'ring-zinc-400', dot: 'bg-zinc-500' },
 ] as const
 
-const ACCENT_SWATCHES = [
-  { value: 'default', label: 'Default',color: '#18181b' },
-  { value: 'blue',    label: 'Blue',   color: '#2563eb' },
-  { value: 'green',   label: 'Green',  color: '#16a34a' },
-  { value: 'purple',  label: 'Purple', color: '#9333ea' },
-  { value: 'orange',  label: 'Orange', color: '#f97316' },
-  { value: 'red',     label: 'Red',    color: '#dc2626' },
-] as const
-
 const FONT_SIZE_PREVIEWS = [
   { value: 'small',  label: 'Pequeña',  size: 'text-sm',  letter: 'text-base' },
   { value: 'medium', label: 'Mediana', size: 'text-base', letter: 'text-lg' },
@@ -656,34 +647,6 @@ function GeneralSection() {
                     <Icon className="h-3.5 w-3.5" />
                     {label}
                   </div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Accent — 6 circular swatches */}
-        <div className="p-5">
-          <div className="mb-3">
-            <div className="text-sm font-medium">Color de acento</div>
-            <div className="text-xs text-muted-foreground">Color primario usado en botones y acentos</div>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {ACCENT_SWATCHES.map((a) => {
-              const active = settings.accent === a.value
-              return (
-                <button
-                  key={a.value}
-                  onClick={() => update({ accent: a.value as any })}
-                  title={a.label}
-                  aria-label={a.label}
-                  className={cn(
-                    "relative h-10 w-10 rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background",
-                    active && "ring-2 ring-offset-2 ring-offset-background ring-foreground",
-                  )}
-                  style={{ backgroundColor: a.color }}
-                >
-                  {active && <Check className="h-4 w-4 text-white absolute inset-0 m-auto drop-shadow" />}
                 </button>
               )
             })}

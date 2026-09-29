@@ -178,7 +178,7 @@ function CodexCheckpointPublishingPanel({ projectId }: { projectId: string }) {
         <h2 className="text-[13px] font-semibold">Producción</h2>
         <button
           type="button"
-          className="h-8 rounded bg-[#1677d2] px-3 disabled:opacity-50"
+          className="h-8 rounded bg-[#696969] px-3 disabled:opacity-50"
           disabled={busy}
           onClick={() => void update(() => codexApi.publishProject(projectId))}
         >
@@ -187,7 +187,7 @@ function CodexCheckpointPublishingPanel({ projectId }: { projectId: string }) {
       </header>
 
       {publication.url ? (
-        <a href={publication.url} target="_blank" rel="noreferrer" className="mb-4 block truncate text-[#78b7ff] hover:underline">{publication.url}</a>
+        <a href={publication.url} target="_blank" rel="noreferrer" className="mb-4 block truncate text-[#afafaf] hover:underline">{publication.url}</a>
       ) : <p className="mb-4 text-[#999]">Sin publicar</p>}
 
       <label className="block text-[#999]">
@@ -461,7 +461,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
             className={cn(
               "flex h-[46px] items-center gap-2 border-b-2 px-4 text-[14px] font-medium transition-colors",
               tab === t.id
-                ? "border-[#0f7bea] bg-[#17345a] text-white"
+                ? "border-[#6c6c6c] bg-[#313131] text-white"
                 : "border-transparent text-[#dcdcdc] hover:bg-[#262626] hover:text-white",
             )}
           >
@@ -478,7 +478,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
           {/* Action bar */}
           <div className="mb-3 flex flex-wrap gap-2">
             <Button
-              className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#0f6ecb] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#1679dc] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
+              className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#616161] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#6b6b6b] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
               disabled={deploying}
               aria-label="Publicar la app"
               onClick={deploy}
@@ -487,7 +487,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
               {deploying ? "Publicando…" : "Publicar"}
             </Button>
             {deploying && (
-              <Button variant="outline" className="h-8 border-[#4a2b2b] bg-[#2a2020] text-red-300 hover:bg-[#352323] hover:text-red-200" onClick={cancelDeploy}>
+              <Button variant="outline" className="h-8 border-[#323232] bg-[#2a2020] text-red-300 hover:bg-[#352323] hover:text-red-200" onClick={cancelDeploy}>
                 <Power className="mr-1.5 h-4 w-4" /> Cancelar
               </Button>
             )}
@@ -501,7 +501,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
           </div>
 
           {/* Production card */}
-          <StatusDot status={liveStatus} className="absolute left-[1px] top-[112px] h-2 w-2 bg-[#2d9cff]" />
+          <StatusDot status={liveStatus} className="absolute left-[1px] top-[112px] h-2 w-2 bg-[#8c8c8c]" />
           <div className="overflow-hidden rounded-[6px] border-0 bg-[#242424] text-white">
             <div className="flex items-center justify-between px-4 pb-3 pt-4">
               <span className="text-[16px] font-semibold leading-none">Production</span>
@@ -532,7 +532,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
               </Row>
               <Row label="SEO Rating">
                 <span className="inline-flex items-center gap-2">
-                  <span className="rounded-full bg-[#2f7d4a] px-[10px] py-[5px] text-[11px] font-semibold leading-none text-white">
+                  <span className="rounded-full bg-[#696969] px-[10px] py-[5px] text-[11px] font-semibold leading-none text-white">
                     HEALTHY
                   </span>
                   <button
@@ -575,7 +575,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
                     >
                       <Plus className="h-3.5 w-3.5" />
                       Buy a new domain
-                      <span className="rounded-[4px] bg-[#17385d] px-1.5 py-0.5 text-[10px] font-semibold text-[#4aa3ff]">Beta</span>
+                      <span className="rounded-[4px] bg-[#343434] px-1.5 py-0.5 text-[10px] font-semibold text-[#979797]">Beta</span>
                     </button>
                   </div>
                 ) : (
@@ -627,7 +627,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
                 />
                 <Button
                   size="sm"
-                  className="h-8 gap-1.5 rounded-[6px] bg-[#0f7bea] px-3 text-[13px] text-white hover:bg-[#1688ff]"
+                  className="h-8 gap-1.5 rounded-[6px] bg-[#6c6c6c] px-3 text-[13px] text-white hover:bg-[#787878]"
                   onClick={() => copy("https://replit.com/refer/infosiragpt")}
                 >
                   <Copy className="h-4 w-4" />
@@ -646,17 +646,17 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
                     <span
                       className={cn(
                         "absolute -left-[21px] top-2 h-2.5 w-2.5 rounded-full ring-2 ring-[#1f1f1f]",
-                        d.status === "success" ? "bg-[#247a3c]" : d.status === "error" ? "bg-red-500" : "bg-[#2d9cff]",
+                        d.status === "success" ? "bg-[#636363]" : d.status === "error" ? "bg-red-500" : "bg-[#8c8c8c]",
                       )}
                     />
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[14px] text-[#d7d7d7]">
                       <code className="w-[76px] rounded-none bg-transparent px-0 py-0 font-mono text-[13px] text-[#d7d7d7]">{d.id.slice(0, 8)}</code>
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#1688dc] text-[10px] font-semibold text-white">v</span>
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-[#767676] text-[10px] font-semibold text-white">v</span>
                       <span className="text-[#d7d7d7]">kk published</span>
                       <span className="text-[#d7d7d7]">{d.status}</span>
                       <span className="text-xs text-muted-foreground">· {relativeTime(d.createdAt)}</span>
                       {d.url && (
-                        <a href={d.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-[#1f8fff] hover:underline">
+                        <a href={d.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-xs text-[#7f7f7f] hover:underline">
                           <ExternalLink className="h-3 w-3" /> abrir
                         </a>
                       )}
@@ -1030,10 +1030,10 @@ function ReplitLogsTab({ lines, deploying, url, status }: { lines: string[]; dep
             <Sparkles className="h-3.5 w-3.5" /> Arreglar con IA
           </Button>
         )}
-        {deploying ? <Loader2 className="h-4 w-4 animate-spin text-[#2d9cff]" /> : null}
+        {deploying ? <Loader2 className="h-4 w-4 animate-spin text-[#8c8c8c]" /> : null}
       </div>
       {status === "success" && url ? (
-        <a href={url} target="_blank" rel="noreferrer" className="mx-3 mt-2 inline-flex items-center gap-1 text-xs text-[#1f8fff] hover:underline">
+        <a href={url} target="_blank" rel="noreferrer" className="mx-3 mt-2 inline-flex items-center gap-1 text-xs text-[#7f7f7f] hover:underline">
           <ExternalLink className="h-3.5 w-3.5" /> {url}
         </a>
       ) : null}
@@ -1080,7 +1080,7 @@ function ReplitLogsTab({ lines, deploying, url, status }: { lines: string[]; dep
           <button type="button" className="hover:text-white" onClick={() => setColors((v) => !v)}>Colors</button>
         </div>
         <span className="inline-flex items-center gap-2">
-          <span className={cn("h-2 w-2 rounded-full", deploying ? "bg-[#d6a944]" : "bg-[#37c96b]")} />
+          <span className={cn("h-2 w-2 rounded-full", deploying ? "bg-[#ababab]" : "bg-[#a3a3a3]")} />
           {deploying ? "Building" : "Live"}
         </span>
       </div>
@@ -1440,7 +1440,7 @@ function SecretsSection({ connectionId, projectId }: { connectionId: string; pro
                     {addReveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
                 </div>
-                <Button size="sm" className="h-8 shrink-0 bg-[#0f6ecb] text-white hover:bg-[#1679dc]" onClick={commitAdd} disabled={!addKey.trim() || !addVal}>Guardar</Button>
+                <Button size="sm" className="h-8 shrink-0 bg-[#616161] text-white hover:bg-[#6b6b6b]" onClick={commitAdd} disabled={!addKey.trim() || !addVal}>Guardar</Button>
                 <Button size="sm" variant="ghost" className="h-8 shrink-0 text-[#9c9c9c] hover:bg-[#303030] hover:text-white" onClick={() => { setShowAdd(false); setAddKey(""); setAddVal("") }}>✕</Button>
               </div>
             </div>
@@ -1492,7 +1492,7 @@ function SecretsSection({ connectionId, projectId }: { connectionId: string; pro
                           spellCheck={false}
                         />
                         <div className="flex items-center gap-1">
-                          <Button size="sm" className="h-7 bg-[#0f6ecb] px-2 text-xs text-white hover:bg-[#1679dc]" onClick={commitEdit}>OK</Button>
+                          <Button size="sm" className="h-7 bg-[#616161] px-2 text-xs text-white hover:bg-[#6b6b6b]" onClick={commitEdit}>OK</Button>
                           <Button size="sm" variant="ghost" className="h-7 px-2 text-[#9c9c9c] hover:bg-[#303030] hover:text-white" onClick={() => setEditId(null)}>✕</Button>
                         </div>
                       </>
@@ -1554,12 +1554,12 @@ function SecretsSection({ connectionId, projectId }: { connectionId: string; pro
             <Button size="sm" variant="outline" className="border-[#4a4a4a] bg-[#242424] text-white hover:bg-[#303030] hover:text-white" onClick={() => setShowAdd((s) => !s)}>
               <Plus className="mr-1 h-3.5 w-3.5" /> Agregar
             </Button>
-            <Button size="sm" variant="outline" className="border-[#4a4a4a] bg-[#242424] text-[#d8c7ff] hover:bg-[#303030] hover:text-white" onClick={() => setShowBulk((s) => !s)}>
+            <Button size="sm" variant="outline" className="border-[#4a4a4a] bg-[#242424] text-[#cfcfcf] hover:bg-[#303030] hover:text-white" onClick={() => setShowBulk((s) => !s)}>
               <Sparkles className="mr-1 h-3.5 w-3.5" /> Pegar .env
             </Button>
             <Button
               size="sm"
-              className="ml-auto gap-1.5 bg-[#0f6ecb] text-white hover:bg-[#1679dc]"
+              className="ml-auto gap-1.5 bg-[#616161] text-white hover:bg-[#6b6b6b]"
               disabled={syncing || secrets.length === 0}
               onClick={syncToDeploy}
             >
@@ -1581,7 +1581,7 @@ function SecretsSection({ connectionId, projectId }: { connectionId: string; pro
                   className="w-full resize-none rounded-[6px] border border-[#4a4a4a] bg-[#1f1f1f] px-2 py-1.5 font-mono text-xs leading-5 text-white placeholder:text-[#8d8d8d]"
               />
               <div className="flex items-center gap-2">
-                <Button size="sm" className="bg-[#0f6ecb] text-white hover:bg-[#1679dc]" onClick={importEnv} disabled={!bulk.trim()}>Importar</Button>
+                <Button size="sm" className="bg-[#616161] text-white hover:bg-[#6b6b6b]" onClick={importEnv} disabled={!bulk.trim()}>Importar</Button>
                 <span className="text-xs text-[#9c9c9c]">
                   Lee cada <code className="rounded bg-[#303030] px-1 text-[#f3f3f3]">KEY=VALUE</code> e ignora comentarios. Sincroniza con el deploy después.
                 </span>

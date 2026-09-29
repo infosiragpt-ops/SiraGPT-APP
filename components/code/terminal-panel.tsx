@@ -480,7 +480,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
                   inputRef.current?.focus()
                 }
               }}
-              className="h-6 w-36 rounded border border-[#d5d5d5] bg-white px-2 font-mono text-[12px] text-[#151515] outline-none focus:border-[#9aa8bd]"
+              className="h-6 w-36 rounded border border-[#d5d5d5] bg-white px-2 font-mono text-[12px] text-[#151515] outline-none focus:border-[#a7a7a7]"
               style={{
                 backgroundColor: "#ffffff",
                 borderColor: "#d5d5d5",
@@ -547,7 +547,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
                 "whitespace-pre-wrap rounded-sm text-[#151515]",
                 line.kind === "err" && "text-[#c92a2a]",
                 line.kind === "info" && "text-[#6b7280]",
-                matchesSearch && "bg-[#fff3b0]",
+                matchesSearch && "bg-[#f1f1f1]",
               )}
               style={{
                 backgroundColor: matchesSearch ? "#fff3b0" : "transparent",

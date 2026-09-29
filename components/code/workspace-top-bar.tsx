@@ -150,7 +150,7 @@ export function WorkspaceTopBar({
       {showUpgrade ? (
         <button
           type="button"
-          className="flex h-7 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] active:bg-[#0a68c6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+          className="flex h-7 shrink-0 items-center gap-0.5 rounded-md bg-[#767676] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#656565] active:bg-[#5b5b5b] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#767676]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
           title="Ver planes y precios"
           aria-label="Ver planes y precios"
           aria-haspopup="dialog"
