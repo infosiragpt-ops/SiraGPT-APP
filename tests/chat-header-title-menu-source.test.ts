@@ -16,6 +16,18 @@ describe("/agentes header · chat title menu (claude.ai style)", () => {
     assert.match(menu, /NEW_CHAT_TITLE = "Nuevo chat"/)
   })
 
+  it("puts a claude.ai-style laptop before the title that opens this chat's computer", () => {
+    const badge = source("components/chat/chat-computer-badge.tsx")
+    assert.match(chatInterface, /import \{ ChatComputerBadge \} from "@\/components\/chat\/chat-computer-badge"/)
+    assert.match(chatInterface, /<ChatComputerBadge working=\{isStopButtonVisible\}[^>]*onOpen=\{toggleComputerPanel\} \/>\s*<ChatTitleMenu/)
+    assert.match(chatInterface, /const toggleComputerPanel = React\.useCallback\(\(\) => \{[\s\S]{0,160}openComputerPanel\(\)/)
+    assert.match(badge, /<Laptop /)
+    assert.match(badge, /data-testid="chat-computer-badge"/)
+    assert.match(badge, /aria-pressed=\{active\}/)
+    assert.match(badge, /animate-ping[^"]*motion-reduce:animate-none/)
+    assert.match(badge, /Computadora de este chat/)
+  })
+
   it("offers Fijar · Cambiar nombre · Compartir chat · Eliminar with P/R/D hints", () => {
     assert.match(menu, /\{isPinned \? "Desfijar" : "Fijar"\}/)
     assert.match(menu, /Cambiar nombre/)
