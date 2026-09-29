@@ -81,6 +81,23 @@ const GENERATE_PAIR_WITH_DEMOGRAPHICS = [
   'book.save(os.path.join(root, "muestra.xlsx"))',
 ].join('\n');
 
+const GENERATE_PAIR_WITH_SEXO = [
+  'import os, sys, pandas as pd, pyreadstat',
+  'from openpyxl import Workbook',
+  'root, different_sexo = sys.argv[1], sys.argv[2] == "1"',
+  'questions = [f"Experiencia_servicio_{i:02d}" for i in range(1, 21)]',
+  'headers = ["ID", "Sexo", *questions]',
+  'rows = [[person + 1, "F" if person % 2 else "M", *[1 + ((person + question) % 5) for question in range(20)]] for person in range(20)]',
+  'labels = [None, None, *[f"Pregunta sobre experiencia de servicio {i:02d}" for i in range(1, 21)]]',
+  'pyreadstat.write_sav(pd.DataFrame(rows, columns=headers), os.path.join(root, "muestra.sav"), column_labels=labels)',
+  'book = Workbook()',
+  'sheet = book.active',
+  'sheet.append(headers)',
+  'for row in rows: sheet.append(row)',
+  'if different_sexo: sheet["B2"] = "F" if rows[0][1] == "M" else "M"',
+  'book.save(os.path.join(root, "muestra.xlsx"))',
+].join('\n');
+
 function makeSandbox(root) {
   return {
     async putFile(relative, buffer) {
@@ -123,6 +140,36 @@ for (const [mode, expectedOk, expectedReason] of [
     assert.equal(result.active, true);
     assert.equal(result.ok, expectedOk);
     if (expectedOk) {
+      assert.equal(result.result.savXlsxVerification.comparedCells, 400);
+      assert.equal(result.result.savXlsxVerification.labelCount, 20);
+      assert.equal(result.outputs.filter((output) => output.valid !== false).length, 2);
+    } else {
+      assert.match(result.result.errorMessage, expectedReason);
+      assert.equal(result.outputs.filter((output) => output.valid !== false).length, 0);
+    }
+  });
+}
+
+for (const [name, differentSexo, expectedOk, expectedReason] of [
+  ['matching', false, true, null],
+  ['different Sexo', true, false, /demogr[aá]fic/i],
+]) {
+  test(`AgentRunner SAV/Excel binary gate ${name} with ID and Sexo metadata`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-sexo-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const generated = spawnSync('python3', ['-c', GENERATE_PAIR_WITH_SEXO, root, differentSexo ? '1' : '0'], { encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
+    const result = await applySavXlsxDeliveryGate({
+      instruction: PROMPT,
+      outputs: pairOutputs(root),
+      result: { stoppedReason: 'final', finalText: 'Listo.' },
+      sandbox: makeSandbox(root),
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.ok, expectedOk);
+    if (expectedOk) {
+      assert.equal(result.result.savXlsxVerification.rows, 20);
+      assert.equal(result.result.savXlsxVerification.columns, 20);
       assert.equal(result.result.savXlsxVerification.comparedCells, 400);
       assert.equal(result.result.savXlsxVerification.labelCount, 20);
       assert.equal(result.outputs.filter((output) => output.valid !== false).length, 2);
