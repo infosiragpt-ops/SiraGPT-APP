@@ -29,6 +29,7 @@ const BACKOFF_BASE_MS = 100;
 const BACKOFF_MAX_MS = 3_200;
 const BACKOFF_MAX_ATTEMPTS = 4;
 const OSCILLATION_MIN = 4;
+const OFFICE_OUTPUT_RE = /\.(?:docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
 const SUBAGENT_STEP_FLOOR = 1;
 const SUBAGENT_STEP_CAP = 12;
 const COMPACT_SUMMARY_MAX = 720;
@@ -339,6 +340,46 @@ function fingerprintName(entry) {
   return callNameOf(entry) || String(entry.tool || '');
 }
 
+function outputPath(value) {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/^\/workspace\//, '').replace(/^\.\//, '');
+}
+
+// Compare Python source, not the user-visible description. Preserve interior
+// whitespace and literal contents: both can change Python or document content.
+function pythonRepairCode(entry) {
+  const parsed = parseLooseObject(callArgsOf(entry));
+  if (!parsed.parsed || typeof parsed.value.code !== 'string') return '';
+  return parsed.value.code.replace(/\r\n?/g, '\n').trim();
+}
+
+/** A visual-repair cycle advances only when the completed Python call changed its verified Office file. */
+function officeRepairChangedOutput(recent, steps) {
+  const names = recent.map(fingerprintName);
+  if (!names.includes('verify_visual') || !names.includes('execute_python')) return false;
+  const verifyCalls = recent.filter((entry) => fingerprintName(entry) === 'verify_visual');
+  const targets = verifyCalls.map((entry) => {
+    const args = parseLooseObject(callArgsOf(entry));
+    return args.parsed ? outputPath(args.value.after) : '';
+  });
+  const target = targets[0];
+  if (!target.startsWith('outputs/') || !OFFICE_OUTPUT_RE.test(target) || targets.some((path) => path !== target)) return false;
+  const repairCodes = recent.filter((entry) => fingerprintName(entry) === 'execute_python').map(pythonRepairCode);
+  if (repairCodes.length !== 2 || !repairCodes[0] || !repairCodes[1] || repairCodes[0] === repairCodes[1]) return false;
+
+  // The final call has not run yet. Match the preceding calls to completed
+  // steps so an unrelated earlier write cannot authorize this repair cycle.
+  const expected = names.slice(0, -1);
+  const completed = (Array.isArray(steps) ? steps : []).slice(-expected.length);
+  if (completed.length !== expected.length || completed.some((step, i) => step.tool !== expected[i])) return false;
+  const lastVerify = completed.filter((step) => step.tool === 'verify_visual').at(-1);
+  const lastRepair = completed.filter((step) => step.tool === 'execute_python').at(-1);
+  return lastVerify?.ok === false
+    && lastRepair?.ok === true
+    && lastRepair.mutated === true
+    && Array.isArray(lastRepair.changedOutputs)
+    && lastRepair.changedOutputs.some((path) => outputPath(path) === target);
+}
+
 /**
  * Cut A-B-A-B oscillation (two distinct tools alternating ≥ 4 steps).
  */
@@ -346,7 +387,8 @@ function cutOscillatingToolPair(history, opts = {}) {
   const list = Array.isArray(history) ? history : [];
   const min = Math.max(4, Number(opts.min) || OSCILLATION_MIN);
   if (list.length < min) return { cut: false, pair: null, code: null };
-  const names = list.slice(-min).map(fingerprintName);
+  const recent = list.slice(-min);
+  const names = recent.map(fingerprintName);
   if (names.some((n) => !n)) return { cut: false, pair: null, code: null };
   const a = names[0];
   const b = names[1];
@@ -354,6 +396,10 @@ function cutOscillatingToolPair(history, opts = {}) {
   for (let i = 0; i < names.length; i += 1) {
     if (names[i] !== (i % 2 === 0 ? a : b)) return { cut: false, pair: [a, b], code: null };
   }
+  // Tool arguments or descriptions changing is not evidence of progress.
+  // Only a measured Office-output mutation lets a failed visual check receive
+  // another repair/verification; ordinary A-B-A-B cycles still cut.
+  if (officeRepairChangedOutput(recent, opts.steps)) return { cut: false, pair: [a, b], code: null };
   return { cut: true, pair: [a, b], count: names.length, code: 'loop_oscillation_cut' };
 }
 

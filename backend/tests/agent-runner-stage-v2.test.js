@@ -100,6 +100,37 @@ test('stage v2: the SPEC contract for a verify_visual result (kind check, status
   assert.equal(ev.preview, 'Verificación: tesis-editado.docx vs tesis.docx …');
 });
 
+test('stage v2: preview redacts synthetic credentials before reaching SSE and persisted trace', () => {
+  const raw = 'ERROR: verificación fallida — sk-FakeSecret123456 Bearer abc.def.ghi AKIAABCDEFGHIJKLMNOP -----BEGIN PRIVATE KEY-----FAKEKEY';
+  const ev = toStageEvent({
+    type: 'tool_result', tool: 'verify_visual', callId: 'c_secret', ok: false, preview: raw,
+  });
+  assert.match(ev.preview, /^ERROR: verificación fallida/);
+  assert.match(ev.preview, /\[secreto\]/);
+  for (const secret of ['sk-FakeSecret123456', 'abc.def.ghi', 'AKIAABCDEFGHIJKLMNOP', 'FAKEKEY']) {
+    assert.ok(!ev.preview.includes(secret), `stage.preview must redact ${secret}`);
+    assert.ok(!ev.detail.includes(secret), `stage.detail must redact ${secret}`);
+  }
+  const error = toStageEvent({ type: 'error', message: 'Bearer abc.def.ghi' });
+  assert.ok(!error.preview.includes('abc.def.ghi'), 'fallback error preview is also public');
+});
+
+test('stage v2: model description and explicit label cannot expose synthetic credentials', () => {
+  const described = toStageEvent({
+    type: 'tool_result', tool: 'verify_visual', callId: 'c_description', ok: false,
+    description: 'Comparando sk-FakeDescription123456',
+    label: 'Revisión Bearer abc.def.ghi',
+    preview: 'ERROR: verificación fallida',
+  });
+  assert.match(described.description, /Comparando \[secreto\]/);
+  assert.equal(described.label, described.description, 'model description wins as the visible label');
+  assert.ok(!JSON.stringify(described).includes('sk-FakeDescription123456'));
+
+  const explicit = toStageEvent({ type: 'stage', label: 'Preparando AKIAABCDEFGHIJKLMNOP' });
+  assert.match(explicit.label, /Preparando \[secreto\]/);
+  assert.ok(!JSON.stringify(explicit).includes('AKIAABCDEFGHIJKLMNOP'));
+});
+
 test('stage v2: a failed result is status error; thinking events are kind thinking; legacy events keep the v1 shape', () => {
   const failed = toStageEvent({ type: 'tool_result', tool: 'office_edit', ok: false, callId: 'c9', preview: 'ERROR: find no encontrado' });
   assert.equal(failed.status, 'error');

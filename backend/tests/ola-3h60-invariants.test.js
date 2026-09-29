@@ -70,6 +70,62 @@ test('3H60-C-001 oscillation cut + inherited subagent steps', () => {
   assert.equal(gone.code, 'subagent_parent_budget');
 });
 
+test('3H60-C-001 Office repair may change its Python arguments before the next visual check', () => {
+  const call = (name, args) => ({ function: { name, arguments: JSON.stringify(args) } });
+  const verify = () => call('verify_visual', {
+    after: 'outputs/encuesta.xlsx', checklist: ['Los encabezados son legibles'],
+  });
+  const firstRepair = call('execute_python', { code: 'set_column_widths(20)', description: 'Ajustando columnas' });
+  const differentRepair = call('execute_python', { code: 'set_column_widths(32)', description: 'Corrigiendo títulos' });
+  const changedOutput = [
+    { tool: 'verify_visual', ok: false },
+    { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/encuesta.xlsx'] },
+    { tool: 'verify_visual', ok: false },
+  ];
+  const readOnly = [
+    { tool: 'verify_visual', ok: false },
+    { tool: 'execute_python', ok: true, mutated: false, changedOutputs: [] },
+    { tool: 'verify_visual', ok: false },
+  ];
+
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), differentRepair,
+  ], { steps: changedOutput }).cut, false, 'a measured Office mutation permits another repair attempt');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), differentRepair,
+  ], { steps: readOnly }).cut, true, 'different code and description cannot excuse a read-only loop');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), differentRepair,
+  ], { steps: [changedOutput[0], {
+    tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/otro.xlsx'],
+  }, changedOutput[2]] }).cut, true, 'changing a different workbook cannot excuse this cycle');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), differentRepair,
+  ], { steps: [...changedOutput.slice(0, 2), { tool: 'inspect_document', ok: true }, changedOutput[2]] }).cut,
+  true, 'an unrelated completed call cannot supply mutation evidence for the alternating calls');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), firstRepair,
+  ], { steps: readOnly }).cut, true, 'the same ineffective Office repair must still be cut');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), call('execute_python', {
+      code: 'set_column_widths(20)', description: 'Intento diferente',
+    }),
+  ], { steps: changedOutput }).cut, true,
+  're-saving the same source must still cut despite a new description and output fingerprint');
+  const earlierScope = call('execute_python', { code: 'if needs_fix:\n    set_column_widths(20)\nsave()' });
+  const changedScope = call('execute_python', { code: 'if needs_fix:\n    set_column_widths(20)\n    save()' });
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), earlierScope, verify(), changedScope,
+  ], { steps: changedOutput }).cut, false,
+  'changing Python indentation can change behavior and must allow a measured repair');
+  const originalText = call('execute_python', { code: "text = '''A\nB'''\nsave(text)" });
+  const revisedText = call('execute_python', { code: "text = '''A\n\nB'''\nsave(text)" });
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), originalText, verify(), revisedText,
+  ], { steps: changedOutput }).cut, false,
+  'a blank line inside document text is a real source change');
+});
+
 test('3H60-D-001 faithful compact + prune + last user + memory recover', () => {
   const original = [
     { role: 'system', content: 'rules' },
