@@ -4,8 +4,8 @@ import { collectDocumentEditReferences, documentEditReference, snapshotDocumentE
   parseDocumentJobPointer, parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
 import { historyDocumentAttachments, mentionsDocumentTarget, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
 import { createPersistedComposerQueueItem } from "../lib/chat/composer-queue"
-import { aiService, shouldRouteTextPromptThroughAgenticRuntime, shouldUseExistingDocumentFileContext } from "../lib/ai-service"
-import { isGeneratedArtifactReadRequest } from "../lib/generated-artifact-read-intent"
+import { aiService, classifyIntentFastPath, shouldRouteTextPromptThroughAgenticRuntime, shouldUseExistingDocumentFileContext } from "../lib/ai-service"
+import { isGeneratedArtifactReadRequest, isGeneratedSavXlsxEditRequest } from "../lib/generated-artifact-read-intent"
 import readbackCases from "./fixtures/generated-sav-xlsx-readback.json"
 
 test("read-only follow-ups on a generated SAV/XLSX pair never enter either document editor or generator", async () => {
@@ -31,6 +31,43 @@ test("SAV/XLSX readback corpus rejects new outputs, edits and unrelated formats"
   for (const prompt of [...readbackCases.newOutputOrEdit, ...readbackCases.unrelated]) {
     assert.equal(isGeneratedArtifactReadRequest(prompt), false, prompt)
   }
+})
+
+test("an explicit edit of the last delivered SAV/XLSX pair reaches the agent instead of the legacy document guard", async () => {
+  const prompt = "En los dos archivos que acabas de entregar, cambia únicamente la respuesta P01 del participante con ID=1 de 4 a 5. Devuelve nuevos archivos .sav y .xlsx conservando los 20 participantes, las 20 preguntas, las etiquetas y las otras 399 respuestas. Reabre ambos archivos y comprueba que las 400 respuestas coincidan y que el único cambio frente a los originales sea esa celda."
+  assert.equal(isGeneratedSavXlsxEditRequest(prompt), true)
+  assert.equal(isGeneratedArtifactReadRequest(prompt), false)
+  assert.equal(resolveDocumentSandboxAdmission(prompt, {
+    historyAttachments: [{ id: "older-upload", name: "encuesta_20x20.xlsx" }],
+  }).route, null, "the verified single-file editor must not take a paired SAV/XLSX edit")
+  assert.equal(classifyIntentFastPath(prompt), "agent_task")
+  assert.equal(await aiService.classifyIntent(prompt), "agent_task")
+  assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, []), true)
+  assert.equal(isGeneratedSavXlsxEditRequest("Cambia P01 en el SAV y Excel que acabas de entregar; conserva las demás respuestas"), true)
+})
+
+test("generated-pair edit routing requires an explicit previous delivery and both formats", () => {
+  for (const prompt of [
+    ...readbackCases.readOnlySavXlsx,
+    "Cambia P01 en encuesta_20x20.sav y encuesta_20x20.xlsx que voy a subir después",
+    "Cambia P01 en el Excel que acabas de entregar",
+    "Cambia P01 en el SAV que acabas de entregar",
+    "En el Word y Excel que acabas de entregar cambia el título",
+    "Crea un SAV y un Excel nuevos con 20 participantes",
+  ]) {
+    assert.equal(isGeneratedSavXlsxEditRequest(prompt), false, prompt)
+  }
+})
+
+test("editing an attached SAV/XLSX pair does not silently drop the SAV into the single-file editor", () => {
+  const prompt = "En los dos archivos adjuntos, cambia P01 del participante ID=1 de 4 a 5 y devuélveme ambos .sav y .xlsx editados"
+  const attachments = [
+    { id: "uploaded-sav", name: "encuesta_20x20.sav" },
+    { id: "uploaded-xlsx", name: "encuesta_20x20.xlsx" },
+  ]
+  assert.equal(resolveDocumentSandboxAdmission(prompt, { attachments }).route, null)
+  assert.equal(classifyIntentFastPath(prompt), "agent_task")
+  assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, attachments), true)
 })
 
 // HTTP protocol fixtures test the client only. These are not editor, independent

@@ -3,7 +3,7 @@
 const FORMAT_SPECS = [
   { format: 'docx', label: 'Word', pattern: /\b(docx|word)\b/i },
   { format: 'xlsx', label: 'Excel', pattern: /\b(xlsx|excel|hoja\s+de\s+c[aá]lculo)\b/i },
-  { format: 'sav', label: 'SPSS (.sav)', pattern: /(?:\bspss\b|\.sav\b)/i },
+  { format: 'sav', label: 'SPSS (.sav)', pattern: /\b(?:spss|sav)\b/i },
   { format: 'pptx', label: 'PowerPoint', pattern: /\b(pptx?|power\s*point|diapositivas?|slides?)\b/i },
   { format: 'pdf', label: 'PDF', pattern: /\bpdf\b/i },
   { format: 'csv', label: 'CSV', pattern: /\bcsv\b/i },
@@ -67,7 +67,9 @@ function buildArtifactDeliveryContract(prompt, policy = {}) {
   // lone Excel pass as the complete result of this specific request.
   const explicitSpssExcel = FORMAT_SPECS.find((spec) => spec.format === 'sav').pattern.test(text)
     && FORMAT_SPECS.find((spec) => spec.format === 'xlsx').pattern.test(text);
-  if ((!policy.multipleArtifacts && !explicitSpssExcel) || !DELIVERABLE_ACTION.test(text) || !DELIVERABLE_NOUN.test(text)) {
+  const pairEdit = explicitSpssExcel && require('./generated-artifact-followup').isSavXlsxPairEditRequest(text);
+  if ((!policy.multipleArtifacts && !explicitSpssExcel) || (!DELIVERABLE_ACTION.test(text) && !pairEdit)
+    || !DELIVERABLE_NOUN.test(text)) {
     return { active: false, expectedCount: 0, requested: [], maxArtifacts: policy.maxArtifactsPerTurn || 6 };
   }
 

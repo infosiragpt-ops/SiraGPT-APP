@@ -3003,6 +3003,25 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
     }
 
+    // A same-delivery SAV+XLSX edit is atomic. If the AgentRunner could not
+    // load and validate both prior binaries, the single-file surgical editor
+    // must never "rescue" it using only the newest workbook.
+    if (require('./generated-artifact-followup').isSavXlsxPairEditRequest(agentRunnerText)) {
+      const providerFailure = agentRunnerFailure?.reason === 'E_PROVIDER';
+      const finalMarkdown = providerFailure
+        ? require('../agent-runner').buildAgentRunnerFailureMessage('E_PROVIDER', agentRunnerFailure.detail)
+        : 'No pude completar la edición verificada del SAV y el Excel de la última entrega. No edité ni entregué un archivo parcial. Vuelve a adjuntar ambos originales si no están disponibles en este chat.';
+      logDocRouting('agent_runner_failed', `generated_sav_xlsx_edit_${agentRunnerFailure?.reason || 'not_claimed'}`);
+      return await finishDeterministicTask({
+        finalMarkdown,
+        stoppedReason: 'agent_runner_failed',
+        steps: stepIdCounter,
+        artifactsList: [],
+        metadata: { servedBy: 'agent_runner_failed', generatedPairEdit: true,
+          agentRunnerFailureReason: agentRunnerFailure?.reason || 'not_claimed' },
+      });
+    }
+
     // Editing the user's existing file is not the same as auto-generating a
     // new document. Prompts such as "devuélveme el mismo Word; no crees uno
     // nuevo" intentionally set autoGenerate=false, but must still enter this

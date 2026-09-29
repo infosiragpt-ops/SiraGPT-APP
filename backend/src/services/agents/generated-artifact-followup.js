@@ -38,6 +38,23 @@ function isReadOnlyGeneratedArtifactFollowup(goal) {
       || (FORMAT_REFERENCE_RE.test(text) && PRIOR_REFERENCE_RE.test(text)));
 }
 
+/** An explicit edit of the SAV+XLSX pair, never a readback. */
+function isSavXlsxPairEditRequest(goal) {
+  const text = normalized(goal);
+  if (!text || text.length > 4000 || isReadOnlyGeneratedArtifactFollowup(goal)) return false;
+  if (!/\b(?:sav|spss)\b|\.sav\b/.test(text) || !/\b(?:xlsx|excel)\b|\.xlsx\b/.test(text)) return false;
+  if (requestedFormats(goal).size !== 2) return false;
+  const requestedChanges = text.replace(GENERATED_REFERENCES_RE, '').replace(NEGATED_CHANGE_RE, '');
+  return CHANGE_VERB_RE.test(requestedChanges);
+}
+
+/** An explicit edit of both files from the last delivery, never a readback. */
+function isGeneratedSavXlsxEditFollowup(goal) {
+  const text = normalized(goal);
+  return isSavXlsxPairEditRequest(goal)
+    && (GENERATED_REFERENCE_RE.test(text) || PRIOR_REFERENCE_RE.test(text));
+}
+
 function requestedFormats(goal) {
   const text = normalized(goal);
   const formats = new Set();
@@ -55,6 +72,7 @@ async function resolveReadOnlyGeneratedArtifactFollowup(prisma, {
   chatId,
   providedFileIds = [],
   goal = '',
+  artifactDir = ARTIFACT_DIR,
 } = {}) {
   if (!userId || !chatId || !prisma?.generatedArtifact?.findMany) return [];
   if (Array.isArray(providedFileIds) && providedFileIds.some(Boolean)) return [];
@@ -71,7 +89,7 @@ async function resolveReadOnlyGeneratedArtifactFollowup(prisma, {
   for (const row of rows) {
     const id = String(row?.id || '');
     if (!/^[a-f0-9]{16}$/.test(id)) continue;
-    const metadata = readArtifactMetadata(id, ARTIFACT_DIR);
+    const metadata = readArtifactMetadata(id, artifactDir);
     if (String(metadata?.ownerUserId || '') !== String(userId)
       || String(metadata?.chatId || '') !== String(chatId)
       || metadata?.validation?.passed !== true) continue;
@@ -108,8 +126,9 @@ async function resolveReadOnlyGeneratedArtifactFollowup(prisma, {
 // replaced by an older task artifact. The card is only a pointer: every byte
 // source is independently checked against owner/chat and validation metadata.
 async function resolveChatGeneratedArtifactFollowup(prisma, options = {}) {
-  const { userId, chatId, providedFileIds = [], goal = '' } = options;
-  if (!userId || !chatId || !isReadOnlyGeneratedArtifactFollowup(goal)
+  const { userId, chatId, providedFileIds = [], goal = '', artifactDir = ARTIFACT_DIR } = options;
+  const editPair = options.allowGeneratedPairEdit === true && isGeneratedSavXlsxEditFollowup(goal);
+  if (!userId || !chatId || (!isReadOnlyGeneratedArtifactFollowup(goal) && !editPair)
     || (Array.isArray(providedFileIds) && providedFileIds.some(Boolean))) return [];
   if (prisma?.chat?.findFirst && prisma?.message?.findMany) {
     const ownedChat = await prisma.chat.findFirst({
@@ -137,7 +156,7 @@ async function resolveChatGeneratedArtifactFollowup(prisma, options = {}) {
         const id = String(card?.id || '');
         if (!/^[a-f0-9]{16}$/.test(id) || seen.has(id)) return false;
         seen.add(id);
-        const metadata = readArtifactMetadata(id, ARTIFACT_DIR);
+        const metadata = readArtifactMetadata(id, artifactDir);
         if (String(metadata?.ownerUserId || '') !== String(userId)
           || String(metadata?.chatId || '') !== String(chatId)
           || metadata?.validation?.passed !== true) return false;
@@ -154,7 +173,43 @@ async function resolveChatGeneratedArtifactFollowup(prisma, options = {}) {
       }));
     }
   }
-  return resolveReadOnlyGeneratedArtifactFollowup(prisma, options);
+  return editPair
+    ? resolveGeneratedPairFromRows(prisma, { userId, chatId, artifactDir })
+    : resolveReadOnlyGeneratedArtifactFollowup(prisma, options);
+}
+
+// Older generated rows may have taskId:null: persistOutputs writes the row
+// before the task callback runs. Never guess that two near timestamps belong
+// together. The assistant delivery fence above is authoritative; this DB
+// fallback is safe only when both rows share an explicit task/message id.
+async function resolveGeneratedPairFromRows(prisma, { userId, chatId, artifactDir = ARTIFACT_DIR } = {}) {
+  if (!prisma?.generatedArtifact?.findMany) return [];
+  const rows = await prisma.generatedArtifact.findMany({
+    where: { userId, chatId },
+    select: { id: true, filename: true, format: true, taskId: true, messageId: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+    take: RECENT_CANDIDATE_LIMIT,
+  }).catch(() => []);
+  const latest = rows[0];
+  if (!latest?.taskId && !latest?.messageId) return [];
+  const delivery = latest.taskId
+    ? rows.filter((row) => row.taskId === latest.taskId)
+    : rows.filter((row) => row.messageId === latest.messageId);
+  const refs = [];
+  for (const row of delivery) {
+    const id = String(row?.id || '');
+    if (!/^[a-f0-9]{16}$/.test(id)) continue;
+    const metadata = readArtifactMetadata(id, artifactDir);
+    if (String(metadata?.ownerUserId || '') !== String(userId)
+      || String(metadata?.chatId || '') !== String(chatId)
+      || metadata?.validation?.passed !== true) continue;
+    const filename = String(metadata.filename || '');
+    const format = path.extname(filename).slice(1).toLowerCase();
+    if (filename !== String(row.filename || '') || format !== String(metadata.format || '').toLowerCase()
+      || format !== String(row.format || '').toLowerCase()) continue;
+    if (format === 'sav' || format === 'xlsx') refs.push({ id, filename, format });
+  }
+  return refs.slice(0, MAX_RECENT_ARTIFACTS);
 }
 
 function buildGeneratedArtifactReadContext(refs = [], goal = '') {
@@ -372,6 +427,8 @@ async function compareGeneratedSavXlsx({ refs, goal, userId, chatId, onEvent, fo
 module.exports = {
   SAV_XLSX_COMPARISON_SOURCE,
   isReadOnlyGeneratedArtifactFollowup,
+  isSavXlsxPairEditRequest,
+  isGeneratedSavXlsxEditFollowup,
   resolveReadOnlyGeneratedArtifactFollowup,
   resolveChatGeneratedArtifactFollowup,
   buildGeneratedArtifactReadContext,

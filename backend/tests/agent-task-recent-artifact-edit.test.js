@@ -241,6 +241,41 @@ test('a runner already tried by the preloop is not re-run; the task still never 
   });
 });
 
+test('failed SAV and Excel follow-up cannot fall through to a single-file quick editor', async () => {
+  const goal = 'En SAV y Excel que acabas de entregar, cambia P01 del ID=1 de 4 a 5 y conserva las otras respuestas.';
+  let runnerCalls = 0;
+  let quickEditCalls = 0;
+  await withRecentArtifactEnv({
+    label: 'sav-xlsx-atomic',
+    quickEdit: async () => { quickEditCalls += 1; throw new Error('single-file editor must not run'); },
+    reactRun: async () => ({ finalAnswer: 'no debería correr', steps: [], stoppedReason: 'completed' }),
+    runnerOverrides: {
+      hasConversationArtifacts: async () => true,
+      getConversationArtifactFormat: async () => 'xlsx',
+      shouldRunAgentRunner: () => true,
+      isRunnerOnlyDocumentTurn: () => false,
+      executeAgentRunnerTurn: async () => {
+        runnerCalls += 1;
+        return { ok: false, skipped: false, summary: '', artifacts: [], steps: [],
+          stoppedReason: 'exception', errorMessage: 'the last delivery lacks the SAV' };
+      },
+    },
+  }, async ({ runAgentTaskJob, taskStore, counters }) => {
+    const taskId = 'task-p14-sav-xlsx-atomic';
+    const result = await runAgentTaskJob({ ...payload(taskId), goal, displayGoal: goal,
+      documentPolicy: { mode: 'doc_required', format: 'xlsx', autoGenerate: true } });
+    const snapshot = taskStore.getTaskSnapshotForUser(taskId, `user-${taskId}`);
+    assert.equal(runnerCalls, 1);
+    assert.equal(quickEditCalls, 0);
+    assert.equal(result.status, 'failed');
+    assert.equal(result.artifacts, 0);
+    assert.equal(snapshot.streamState.stoppedReason, 'agent_runner_failed');
+    assert.match(snapshot.streamState.finalText, /No edité ni entregué un archivo parcial/);
+    assert.equal(counters.genericPipeline, 0);
+    assert.equal(counters.react, 0);
+  });
+});
+
 test('a prior html page is not an Office edit target: the existing fresh-document path is kept', async () => {
   let runnerCalls = 0;
   await withRecentArtifactEnv({

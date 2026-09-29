@@ -33,6 +33,23 @@ describe('multi-artifact delivery contract', () => {
     assert.match(onlyExcel.message, /SPSS/);
   });
 
+  test('editing SAV and Excel requires two verified outputs without a new-delivery verb', () => {
+    const contract = contractService.buildArtifactDeliveryContract(
+      'Modifica P01 en los archivos SAV y Excel anteriores y guarda ambos.',
+      { multipleArtifacts: false, maxArtifactsPerTurn: 6 },
+    );
+    assert.equal(contract.active, true);
+    assert.equal(contract.expectedCount, 2);
+    assert.deepEqual(contract.requested.map((item) => item.format), ['xlsx', 'sav']);
+
+    const onlyExcel = contractService.validateArtifactDelivery(contract, {
+      artifacts: [{ id: 'excel-edited', filename: 'editado.xlsx', format: 'xlsx', downloadUrl: '/excel-edited' }],
+      steps: [verifiedStep('excel-edited')],
+    });
+    assert.equal(onlyExcel.ok, false);
+    assert.match(onlyExcel.message, /SPSS/);
+  });
+
   test('a 20-person, 20-question SAV and Excel delivery rejects undersized or divergent matrices', async () => {
     const contract = contractService.buildArtifactDeliveryContract(
       'dame un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
