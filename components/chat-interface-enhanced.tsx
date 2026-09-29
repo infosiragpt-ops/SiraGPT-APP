@@ -89,6 +89,7 @@ import { ComposerCharCounter } from "@/components/composer-char-counter"
 import { Input } from "@/components/ui/input"
 import { useChat, useModelsAndFiles } from "@/lib/chat-context-integrated"
 import { ChatTitleMenu } from "@/components/chat/chat-title-menu"
+import { ChatComputerBadge } from "@/components/chat/chat-computer-badge"
 import { useAuth } from "@/lib/auth-context-integrated"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
@@ -12769,6 +12770,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
     }
   }, [closeArtifactPanel, createNewChat]);
+  // Header laptop (next to the chat title): toggles this chat's computer.
+  const toggleComputerPanel = React.useCallback(() => {
+    if (computerPanelOpen && !computerBrowserMode) setComputerPanelOpen(false);
+    else openComputerPanel();
+  }, [computerBrowserMode, computerPanelOpen, openComputerPanel]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -14212,8 +14218,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <SidebarOvalIcon className="h-[18px] w-[18px]" />
                   </button>
                 ) : null}
-                {/* Claude-style chat title: the name itself opens the chat
-                    menu (fijar · renombrar · compartir · eliminar). */}
+                {/* Claude-style: laptop = this chat's computer, then the title menu. */}
+                <ChatComputerBadge working={isStopButtonVisible} active={computerPanelOpen && !computerBrowserMode} onOpen={toggleComputerPanel} />
                 <ChatTitleMenu
                   chat={currentChat?.id ? { id: currentChat.id, title: currentChat.title, isPinned: (currentChat as any).isPinned } : null}
                   onShare={currentChat?.messages?.length ? () => { void handleCompleteShare() } : undefined}
