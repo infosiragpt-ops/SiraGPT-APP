@@ -22,10 +22,11 @@ import {
 } from "@/lib/authenticated-fetch"
 import { toast } from "sonner"
 import DOMPurify from "dompurify"
-import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
+
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { CONVERSION_LOADING_LABEL, PREVIEW_LOADING_LABEL, fetchWithTransientRetry, resolvePreviewGate } from "@/lib/document-preview-gate"
+import { statisticalPreviewPath, readStatisticalPreviewResponse } from "@/lib/tabular-preview"
 import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 
 // Keep the full document viewer (pdf.js, DOCX/XLSX/PPTX renderers, etc.) out
@@ -33,6 +34,16 @@ import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 // generated Office preview has actually been converted to PDF.
 const PdfRenderer = dynamic(
   () => import("@/components/viewers/UnifiedDocumentViewer").then(module => module.PdfRenderer),
+  { ssr: false, loading: () => null },
+)
+
+const SpreadsheetPreview = dynamic(
+  () => import("@/components/viewers/spreadsheet-preview").then(module => module.SpreadsheetPreview),
+  { ssr: false, loading: () => null },
+)
+
+const StatisticalDataPreview = dynamic(
+  () => import("@/components/viewers/statistical-preview").then(module => module.StatisticalDataPreview),
   { ssr: false, loading: () => null },
 )
 
@@ -70,8 +81,8 @@ export type DocumentPreviewTarget =
       fileId?: string
       artifactId?: string
       // Explicit high-fidelity preview endpoint (server-side soffice→PDF). When
-      // set, the viewer renders THIS as a real PDF (pages/zoom, Excel looks like
-      // Excel) before any client-side fallback. Used for message-attached
+      // set, the viewer renders THIS as a real PDF for Word/presentations.
+      // Spreadsheets open as cells. Used for message-attached
       // generated documents whose bytes live at a /uploads path (no artifact id).
       previewPdfUrl?: string
       // Composer/upload gate. When false (or status is still `uploading`),
@@ -87,7 +98,7 @@ interface DocumentPreviewProps {
   onClose: () => void
 }
 
-type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "html" | "text" | "unknown"
+type PreviewFormat = "pdf" | "docx" | "doc" | "xlsx" | "csv" | "svg" | "pptx" | "html" | "sav" | "zsav" | "por" | "text" | "unknown"
 
 type State =
   | { kind: "loading"; message?: string }
@@ -95,6 +106,8 @@ type State =
   | { kind: "pdfBlob"; url: string }
   | { kind: "svg" }
   | { kind: "docxNative"; buffer: ArrayBuffer }
+  | { kind: "spreadsheet"; buffer: ArrayBuffer }
+  | { kind: "statistical" }
   | { kind: "html"; html: string; warnings: string[] }
   | { kind: "iframeHtml"; html: string }
   | { kind: "text"; text: string; truncated: boolean }
@@ -132,6 +145,9 @@ const FORMAT_EXTENSION: Record<PreviewFormat, string> = {
   pptx: "pptx",
   html: "html",
   text: "txt",
+  sav: "sav",
+  zsav: "zsav",
+  por: "por",
   unknown: "bin",
 }
 
@@ -139,7 +155,7 @@ const FORMAT_EXTENSION: Record<PreviewFormat, string> = {
 // code-style viewer with line numbers instead of the "no soportado" dead end.
 const TEXT_PREVIEW_EXTENSIONS = [
   "txt", "text", "md", "markdown", "log", "json", "jsonl", "ndjson", "srt", "vtt",
-  "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "xml", "tsv",
+  "sps", "tex", "r", "rmd", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "xml", "tsv",
   "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "java", "kt",
   "c", "h", "cpp", "hpp", "cs", "php", "swift", "sh", "bash", "zsh", "sql", "css", "scss",
 ]
@@ -151,6 +167,8 @@ function inferFormat(url: string): PreviewFormat {
   const dataMatch = /^data:([^;,]+)/i.exec(url)
   if (dataMatch) {
     const mime = dataMatch[1].toLowerCase()
+    if (mime.includes("spss-sav") || mime.includes("x-sav")) return "sav"
+    if (mime.includes("spss-por")) return "por"
     if (mime.includes("pdf")) return "pdf"
     if (mime.includes("wordprocessingml.document")) return "docx"
     if (mime.includes("msword")) return "doc"
@@ -164,6 +182,9 @@ function inferFormat(url: string): PreviewFormat {
   }
 
   const clean = url.toLowerCase().split("?")[0].split("#")[0]
+  if (clean.endsWith(".sav")) return "sav"
+  if (clean.endsWith(".zsav")) return "zsav"
+  if (clean.endsWith(".por")) return "por"
   if (clean.endsWith(".pdf")) return "pdf"
   if (clean.endsWith(".docx")) return "docx"
   if (clean.endsWith(".doc")) return "doc"
@@ -344,26 +365,6 @@ function parseCsv(text: string, maxRows = 80) {
   return rows
 }
 
-async function renderXlsx(buffer: ArrayBuffer) {
-  const workbook = await readXlsxWorkbook(buffer)
-  const maxSheets = 4
-  const maxRows = 80
-  const sections = workbook.worksheets.slice(0, maxSheets).map((worksheet: any) => {
-    const rows: string[][] = []
-    worksheet.eachRow({ includeEmpty: false }, (row: any) => {
-      if (rows.length < maxRows + 1) rows.push(xlsxRowToValues(row))
-    })
-    return tableHtml(rows.slice(0, maxRows), {
-      title: worksheet.name,
-      truncated: worksheet.actualRowCount > maxRows ? `${worksheet.actualRowCount - maxRows} filas más. Descarga el archivo para verlo completo.` : undefined,
-    })
-  })
-  if (workbook.worksheets.length > maxSheets) {
-    sections.push(`<p class="sgpt-muted">Se muestran ${maxSheets} de ${workbook.worksheets.length} hojas.</p>`)
-  }
-  return previewShell(`<div class="sgpt-preview">${sections.join("")}</div>`)
-}
-
 async function renderPptx(buffer: ArrayBuffer) {
   const mod = await import("jszip")
   const JSZip = mod.default || mod
@@ -489,7 +490,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     // degraded HTML version (which also avoids the fragile iframe path).
     const nameSource = typeof url !== "string" ? (url.filename || url.downloadUrl || "") : ""
     const fromName = nameSource ? inferFormat(nameSource) : "unknown"
-    if (fromName === "docx" || fromName === "doc") {
+    if (["docx", "doc", "xlsx", "sav", "zsav", "por"].includes(fromName)) {
       const realBytesUrl = typeof url !== "string" ? (url.downloadUrl || "") : previewUrl
       if (realBytesUrl && !realBytesUrl.startsWith("data:")) return fromName
     }
@@ -501,6 +502,16 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     if (typeof url !== "string" && url.filename) return url.filename
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
+  const statisticalPath = React.useMemo(() => statisticalPreviewPath({
+    artifactId: typeof url === "string" ? null : url.artifactId,
+    fileId: typeof url === "string" ? null : url.fileId,
+    url: downloadUrl,
+  }), [url, downloadUrl])
+  const loadStatisticalPage = React.useCallback(async (offset: number) => {
+    if (!statisticalPath) throw new Error("El archivo todavía no tiene una copia disponible. Vuelve a abrirlo tras cargarlo.")
+    const response = await fetchPreviewAsset(`${statisticalPath}?limit=100&offset=${offset}`)
+    return readStatisticalPreviewResponse(response)
+  }, [statisticalPath])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
   const canUsePreviewControls = ["svg", "docxNative", "html", "iframeHtml", "text"].includes(state.kind)
   const pdfPreviewAttachment = React.useMemo<AttachmentLike | null>(() => (
@@ -842,6 +853,11 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       return
     }
 
+    if (["sav", "zsav", "por"].includes(format)) {
+      setState({ kind: "statistical" })
+      return
+    }
+
     if (format === "svg") {
       setState({ kind: "svg" })
       return
@@ -904,7 +920,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         // real .docx bytes live at downloadUrl. Always fetch the actual
         // document bytes so the native renderer gets a valid DOCX.
         const assetUrl =
-          (format === "docx" || format === "doc") && previewUrl.startsWith("data:")
+          ["docx", "doc", "xlsx"].includes(format) && previewUrl.startsWith("data:")
             ? downloadUrl
             : previewUrl
 
@@ -914,7 +930,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         // explicit previewPdfUrl (message-attached generated docs) wins over
         // the inferred agent-artifact endpoint.
         const pdfEndpoint = explicitPdfUrl || derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(assetUrl)
-        if (pdfEndpoint) {
+        if (pdfEndpoint && format !== "xlsx" && format !== "csv") {
           setState({ kind: "loading", message: CONVERSION_LOADING_LABEL })
           try {
             const pdfResp = await fetchPreviewAsset(pdfEndpoint)
@@ -951,9 +967,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         if (cancelled) return
 
         if (format === "xlsx") {
-          const html = await renderXlsx(buffer)
-          if (cancelled) return
-          setState({ kind: "html", html: sanitizeClientPreviewHtml(html), warnings: [] })
+          setState({ kind: "spreadsheet", buffer })
           return
         }
 
@@ -1180,7 +1194,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         ref={scrollRef}
         className={cn(
           "scroll-contain min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]",
-          pdfPreviewAttachment ? "overflow-hidden" : "overflow-auto",
+          pdfPreviewAttachment || state.kind === "spreadsheet" || state.kind === "statistical" ? "overflow-hidden" : "overflow-auto",
         )}
       >
         {state.kind === "loading" && (
@@ -1207,6 +1221,9 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             <PdfRenderer a={pdfPreviewAttachment} toolbarContainer={toolbarContainer} compactToolbar={inlineToolbar} />
           </div>
         )}
+
+        {state.kind === "spreadsheet" && <SpreadsheetPreview buffer={state.buffer} />}
+        {state.kind === "statistical" && <StatisticalDataPreview loadPage={loadStatisticalPage} />}
 
         {state.kind === "svg" && (
           <div className="flex min-h-full items-center justify-center p-6" style={previewZoomStyle}>

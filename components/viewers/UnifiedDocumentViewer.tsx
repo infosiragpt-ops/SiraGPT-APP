@@ -38,6 +38,8 @@
 
 import * as React from "react"
 import { createPortal } from "react-dom"
+import { DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
+import { statisticalPreviewPath, readStatisticalPreviewResponse } from "@/lib/tabular-preview"
 import { Button } from "@/components/ui/button"
 import {
   Download,
@@ -75,7 +77,14 @@ const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
   { ssr: false, loading: () => <div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" /> }
 )
-import { readXlsxWorkbook, xlsxCellToText } from "@/lib/xlsx-client"
+const StatisticalDataPreview = dynamic(
+  () => import("@/components/viewers/statistical-preview").then(module => module.StatisticalDataPreview),
+  { ssr: false },
+)
+const SpreadsheetPreview = dynamic(
+  () => import("@/components/viewers/spreadsheet-preview").then(module => module.SpreadsheetPreview),
+  { ssr: false },
+)
 // mammoth is imported dynamically inside DocxRenderer's fallback path
 // (~250 KB module, only loaded when docx-preview fails). Static import
 // would force every viewer instance to ship the bytes even for non-DOCX
@@ -149,7 +158,7 @@ if (typeof window !== "undefined") {
 type Kind =
   | "image" | "pdf" | "docx" | "doc" | "xlsx" | "csv" | "pptx"
   | "md" | "html" | "xml" | "json" | "text" | "code"
-  | "audio" | "video"
+  | "audio" | "video" | "spss"
   | "unknown"
 
 const CODE_EXTENSIONS: Record<string, string> = {
@@ -167,6 +176,7 @@ function detectKind(file: AttachmentLike): Kind {
   if (mt.startsWith("image/") || /^(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|svg)$/.test(ext)) return "image"
   if (mt.startsWith("video/") || /^(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv|3gp)$/.test(ext)) return "video"
   if (mt.startsWith("audio/") || /^(mp3|wav|m4a|aac|ogg|oga|flac|opus|wma|aiff?)$/.test(ext)) return "audio"
+  if (/^(sav|zsav|por)$/.test(ext) || /spss-(sav|por)|x-sav/.test(mt)) return "spss"
   if (mt === "application/pdf" || ext === "pdf") return "pdf"
   // Legacy binary .doc → "doc" (needs server-side conversion); modern
   // .docx (OOXML) → "docx" (handled client-side by docx-preview).
@@ -180,7 +190,7 @@ function detectKind(file: AttachmentLike): Kind {
   if (mt === "application/xml" || mt === "text/xml" || ext === "xml") return "xml"
   if (mt === "application/json" || ext === "json") return "json"
   if (CODE_EXTENSIONS[ext]) return "code"
-  if (mt.startsWith("text/") || ["txt", "log", "env", "conf"].includes(ext)) return "text"
+  if (mt.startsWith("text/") || ["txt", "log", "env", "conf", "sps", "tex", "r", "rmd"].includes(ext)) return "text"
   return "unknown"
 }
 
@@ -486,7 +496,7 @@ export default function UnifiedDocumentViewer({
         )}>
           <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-white/80 dark:bg-white/10" aria-hidden="true" />
           <div className={liquidFileBadgeClass}>
-            <Icon className="h-[18px] w-[18px]" />
+            {kind === "spss" ? <DocumentArtifactIcon format="sav" /> : <Icon className="h-[18px] w-[18px]" />}
           </div>
           <div className="min-w-0 flex-1">
             <h2 id="unified-document-viewer-title" className="truncate text-[14.5px] font-semibold leading-5 text-zinc-950 dark:text-zinc-50">
@@ -631,12 +641,8 @@ function RendererDispatch({
     case "audio":    return <AudioRenderer a={attachment} />
     case "pdf":      return <PdfRenderer a={attachment} />
     case "csv":      return <CsvRenderer a={attachment} />
-    case "xlsx":     return (
-      <ServerConvertedPdfRenderer
-        a={attachment}
-        fallback={<XlsxRenderer a={attachment} />}
-      />
-    )
+    case "xlsx":     return <XlsxRenderer a={attachment} />
+    case "spss":     return <SpssRenderer a={attachment} />
     // PPTX (and legacy .ppt): try server-rendered PDF first for layout
     // fidelity; if unavailable, fall back to the JSZip text+image
     // extraction we already have for OOXML .pptx.
@@ -2037,121 +2043,28 @@ function CsvRenderer({ a }: { a: AttachmentLike }) {
  * capped grid so malicious or accidental giant workbooks cannot lock up
  * the browser while still giving users a useful inspection surface.
  */
-function XlsxRenderer({ a }: { a: AttachmentLike }) {
-  const [wb, setWb] = React.useState<any | null>(null)
-  const [active, setActive] = React.useState<string | null>(null)
-  const [err, setErr] = React.useState<string | null>(null)
-
-  React.useEffect(() => {
-    ;(async () => {
-      try {
-        const buf = await readAsArrayBuffer(a)
-        const parsed = await readXlsxWorkbook(cloneArrayBuffer(buf))
-        setWb(parsed)
-        setActive(parsed.worksheets[0]?.name || null)
-      } catch (e: any) {
-        setErr(e?.message || "Error")
-      }
-    })()
-  }, [a])
-
-  if (err) return <ErrorState error={err} />
-  if (!wb || !active) return <LoadingState label="Leyendo hoja de cálculo…" />
-
-  const sheet = wb.worksheets.find((worksheet: any) => worksheet.name === active) || wb.worksheets[0]
-  if (!sheet) return <ErrorState error="El workbook no contiene hojas visibles." />
-  const maxRows = 500
-  const maxColumns = 80
-  const rowNumbers: number[] = []
-  const rowLimit = Math.min(maxRows, Math.max(0, Number(sheet.actualRowCount || sheet.rowCount || 0)))
-  for (let rowNumber = 1; rowNumber <= rowLimit; rowNumber += 1) {
-    const row = sheet.getRow(rowNumber)
-    const values = Array.isArray(row?.values) ? row.values.slice(1, maxColumns + 1) : []
-    if (values.some((value: any) => String(xlsxCellToText(value)).trim())) rowNumbers.push(rowNumber)
-  }
-  const columnCount = Math.min(maxColumns, Math.max(1, Number(sheet.actualColumnCount || sheet.columnCount || 1)))
-  const colIdx = Array.from({ length: columnCount }, (_, index) => index + 1)
-  const truncatedRows = Number(sheet.actualRowCount || 0) > maxRows
-  const truncatedColumns = Number(sheet.actualColumnCount || 0) > maxColumns
-
-  return (
-    <div className="flex h-full flex-col">
-      {/* Sheet tabs */}
-      <div className="flex gap-1 overflow-x-auto border-b border-border/40 px-2 py-1.5">
-        {wb.worksheets.map((worksheet: any) => (
-          <button
-            key={worksheet.name}
-            onClick={() => setActive(worksheet.name)}
-            className={cn(
-              "rounded-md px-2.5 py-1 text-[11.5px] font-medium whitespace-nowrap transition-colors",
-              worksheet.name === active ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted",
-            )}
-          >
-            {worksheet.name}
-          </button>
-        ))}
-      </div>
-      {(truncatedRows || truncatedColumns) && (
-        <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
-          Vista acotada: se muestran hasta {maxRows} filas y {maxColumns} columnas para proteger el navegador.
-        </div>
-      )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <table className="min-w-full border-collapse text-[12px]" style={{ fontVariantNumeric: "tabular-nums" }}>
-          <thead className="sticky top-0 z-20 bg-muted/80 backdrop-blur">
-            <tr>
-              <th className="sticky left-0 z-30 border-b border-r border-border/60 bg-muted/80 px-2 py-1 text-[10px] font-semibold text-muted-foreground w-10">#</th>
-              {colIdx.map(c => (
-                <th
-                  key={c}
-                  className="border-b border-r border-border/40 px-3 py-1 text-left font-semibold text-[10px] uppercase tracking-wide text-muted-foreground"
-                  style={sheet.getColumn(c)?.width ? { minWidth: Math.max(sheet.getColumn(c).width * 7, 72) } : undefined}
-                >
-                  {columnLabel(c)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rowNumbers.map(r => (
-              <tr key={r} className="odd:bg-background even:bg-muted/10">
-                <td className="sticky left-0 z-10 border-b border-r border-border/30 bg-inherit px-2 py-1 text-[10px] text-muted-foreground text-right">{r}</td>
-                {colIdx.map(c => {
-                  const cell = sheet.getRow(r).getCell(c)
-                  const value = cell?.value
-                  const display = xlsxCellToText(value)
-                  const isNumber = typeof value === "number"
-                  return (
-                    <td
-                      key={c}
-                      className={cn(
-                        "border-b border-r border-border/20 px-3 py-1 align-top",
-                        isNumber && "text-right",
-                      )}
-                      title={value != null ? `Valor bruto: ${display}` : undefined}
-                    >
-                      {display}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
+function SpssRenderer({ a }: { a: AttachmentLike }) {
+  const endpoint = statisticalPreviewPath({ artifactId: a.artifactId, fileId: a.id, url: a.url })
+  const loadPage = React.useCallback(async (offset: number) => {
+    if (!endpoint) throw new Error("El archivo todavía no tiene una copia disponible. Vuelve a abrirlo tras cargarlo.")
+    const response = await fetchAssetBytes(`${endpoint}?limit=100&offset=${offset}`)
+    return readStatisticalPreviewResponse(response)
+  }, [endpoint])
+  return <StatisticalDataPreview loadPage={loadPage} />
 }
 
-function columnLabel(index: number) {
-  let n = index
-  let label = ""
-  while (n > 0) {
-    const rem = (n - 1) % 26
-    label = String.fromCharCode(65 + rem) + label
-    n = Math.floor((n - 1) / 26)
-  }
-  return label
+function XlsxRenderer({ a }: { a: AttachmentLike }) {
+  const [buffer, setBuffer] = React.useState<ArrayBuffer | null>(null)
+  const [err, setErr] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    let cancelled = false
+    setBuffer(null); setErr(null)
+    void readAsArrayBuffer(a).then((value) => { if (!cancelled) setBuffer(cloneArrayBuffer(value)) }).catch((error: unknown) => { if (!cancelled) setErr(error instanceof Error ? error.message : "No se pudo leer el libro.") })
+    return () => { cancelled = true }
+  }, [a])
+  if (err) return <ErrorState error={err} />
+  if (!buffer) return <LoadingState label="Leyendo hoja de cálculo…" />
+  return <SpreadsheetPreview buffer={buffer} />
 }
 
 // ─── PPTX (client-side text + image extraction via JSZip) ────────────

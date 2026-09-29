@@ -1,10 +1,10 @@
 /**
- * Office / PDF file-type detection (pure, no JSX) shared by the vector icon
+ * Office / PDF / statistical file-type detection (pure, no JSX) shared by the vector icon
  * component and by tests. Palettes live here too so the glyph and any
  * non-React consumer (e.g. e-mail templates) agree on brand colours.
  */
 
-export type OfficeKind = "word" | "excel" | "powerpoint" | "pdf"
+export type OfficeKind = "word" | "excel" | "powerpoint" | "pdf" | "spss"
 
 type Palette = {
   label: string
@@ -47,6 +47,13 @@ export const PALETTES: Record<OfficeKind, Palette> = {
     pageFrom: "#FFF5F4", pageTo: "#FBD8D5",
     letter: "PDF", letterSize: 5.6,
   },
+  spss: {
+    label: "SPSS",
+    badgeFrom: "#174C91", badgeTo: "#287DD1",
+    ribbonFrom: "#3B8EDE", ribbonTo: "#68B8E9",
+    pageFrom: "#F1F8FF", pageTo: "#D3E7F8",
+    letter: "SPSS", letterSize: 4.9,
+  },
 }
 
 const EXTENSION_KIND: Record<string, OfficeKind> = {
@@ -54,6 +61,7 @@ const EXTENSION_KIND: Record<string, OfficeKind> = {
   xls: "excel", xlsx: "excel", xlsm: "excel", csv: "excel", ods: "excel", tsv: "excel",
   ppt: "powerpoint", pptx: "powerpoint", pps: "powerpoint", ppsx: "powerpoint", odp: "powerpoint",
   pdf: "pdf",
+  sav: "spss", zsav: "spss", por: "spss", sps: "spss",
 }
 
 const MIME_KIND: Array<[RegExp, OfficeKind]> = [
@@ -61,6 +69,7 @@ const MIME_KIND: Array<[RegExp, OfficeKind]> = [
   [/spreadsheetml|ms-excel|opendocument\.spreadsheet|text\/csv|tab-separated/i, "excel"],
   [/presentationml|ms-powerpoint|opendocument\.presentation/i, "powerpoint"],
   [/application\/pdf/i, "pdf"],
+  [/^application\/(?:x-)?spss(?:-(?:sav|zsav|por|portable|syntax))?(?:\s*;|$)/i, "spss"],
 ]
 
 /** File-type from a name/extension/format token ("informe.docx", "xlsx", "PDF"). */
