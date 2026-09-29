@@ -12,6 +12,7 @@ process.env.AGENT_ARTIFACT_DIR = artifactDir;
 
 const objectStorage = require('../src/services/object-storage');
 const { saveArtifact, INTERNAL } = require('../src/services/agents/task-tools');
+const { saveReadableArtifact, readPairSource } = require('./helpers/readable-sav-xlsx-fixtures');
 const { resolveChatGeneratedArtifactFollowup, compareGeneratedSavXlsx } = require('../src/services/agents/generated-artifact-followup');
 const { runAgenticChat, isHandledAgenticChatResult } = require('../src/services/agentic-chat-stream');
 const PRODUCTION_GOAL = 'Sin crear ni modificar archivos: abre los dos archivos que acabas de entregar con pyreadstat.read_sav y openpyxl. Informa las dimensiones de la matriz P01–P20, cuántos de los 400 valores difieren y si el SAV conserva 20 etiquetas de variables. Si no puedes acceder a uno, dilo explícitamente; no deduzcas el resultado de tu respuesta anterior.';
@@ -37,18 +38,15 @@ function chatPrisma(userId, chatId, messages) {
   };
 }
 
-function artifactPair() {
-  const base = { ownerUserId: 'owner', chatId: 'chat-a', validation: { passed: true } };
-  const sav = saveArtifact({ ...base, filename: 'datos.sav', base64: Buffer.from('400 equal values').toString('base64') });
-  const xlsx = saveArtifact({ ...base, filename: 'datos.xlsx', base64: Buffer.from('400 equal values').toString('base64') });
-  return [sav, xlsx];
+async function artifactPair() {
+  return [await saveReadableArtifact('datos.sav'), await saveReadableArtifact('datos.xlsx')];
 }
 
 test('normal chat recovers only the last validated SAV/XLSX delivery for its owner', async () => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const invalid = saveArtifact({ filename: 'invalid.xlsx', base64: Buffer.from('bad').toString('base64'), ownerUserId: 'owner', chatId: 'chat-a', validation: { passed: false } });
-  const foreign = saveArtifact({ filename: 'foreign.sav', base64: Buffer.from('bad').toString('base64'), ownerUserId: 'other', chatId: 'chat-a', validation: { passed: true } });
-  const wrongChat = saveArtifact({ filename: 'wrong.xlsx', base64: Buffer.from('bad').toString('base64'), ownerUserId: 'owner', chatId: 'chat-b', validation: { passed: true } });
+  const foreign = await saveReadableArtifact('foreign.sav', { userId: 'other' });
+  const wrongChat = await saveReadableArtifact('wrong.xlsx', { chatId: 'chat-b' });
   const message = deliveredMessage('delivery', [sav, xlsx, invalid, foreign, wrongChat]);
   const prisma = chatPrisma('owner', 'chat-a', [deliveredMessage('later-text', []), message]);
   const goal = PRODUCTION_GOAL;
@@ -64,7 +62,7 @@ test('normal chat recovers only the last validated SAV/XLSX delivery for its own
 });
 
 test('normal chat follow-up forces byte reading via selected model and R2, without exposing internal ids', async (t) => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const bytes = new Map([[sav.id, fs.readFileSync(sav.path)], [xlsx.id, fs.readFileSync(xlsx.path)]]);
   const originalToLocalTemp = objectStorage.toLocalTemp;
   t.after(() => { objectStorage.toLocalTemp = originalToLocalTemp; });
@@ -94,7 +92,7 @@ test('normal chat follow-up forces byte reading via selected model and R2, witho
     choices.push(args.tool_choice);
     modelPrompts.push(JSON.stringify(args.messages));
     calls += 1;
-    if (calls === 1) return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'read-pair', type: 'function', function: { name: 'python_exec', arguments: JSON.stringify({ source: 'from pathlib import Path\nitems = list(ARTIFACT_FILES.values())\nassert len(items) == 2\nvalues = [Path(item["path"]).read_bytes() for item in items]\nprint("400/400=" + str(values[0] == values[1]).lower())' }) } }] } }] };
+    if (calls === 1) return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'read-pair', type: 'function', function: { name: 'python_exec', arguments: JSON.stringify({ source: readPairSource('400/400') }) } }] } }] };
     return { choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'finish', type: 'function', function: { name: 'finalize', arguments: JSON.stringify({ answer: `Comprobé 400/400 valores; coinciden. ${sav.id}`, confidence: 'high' }) } }] } }] };
   } } } };
   const result = await runAgenticChat({
@@ -121,7 +119,7 @@ test('normal chat follow-up forces byte reading via selected model and R2, witho
 });
 
 test('an explicit SAV/XLSX parity request reads the validated bytes even when the selected model is unavailable', async (t) => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const taskTools = require('../src/services/agents/task-tools');
   const originalExecute = taskTools.INTERNAL.pythonExec.execute;
   t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
@@ -171,7 +169,7 @@ test('an explicit SAV/XLSX parity request reads the validated bytes even when th
 });
 
 test('the same binary comparison is available to the creation finalization gate', async (t) => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const taskTools = require('../src/services/agents/task-tools');
   const originalExecute = taskTools.INTERNAL.pythonExec.execute;
   t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
@@ -198,7 +196,7 @@ test('the same binary comparison is available to the creation finalization gate'
 });
 
 test('deterministic SAV/XLSX comparison reports a read error instead of inventing parity', async (t) => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const taskTools = require('../src/services/agents/task-tools');
   const originalExecute = taskTools.INTERNAL.pythonExec.execute;
   t.after(() => { taskTools.INTERNAL.pythonExec.execute = originalExecute; });
@@ -226,7 +224,7 @@ test('deterministic SAV/XLSX comparison reports a read error instead of inventin
 });
 
 test('normal chat never claims equality when the byte-reading tool is unavailable', async () => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const response = new PassThrough();
   response.on('data', () => {});
   response.flushHeaders = () => {};
@@ -251,7 +249,7 @@ test('normal chat never claims equality when the byte-reading tool is unavailabl
 });
 
 test('normal chat does not borrow an older SAV when the latest delivery contains only XLSX', async () => {
-  const [sav, xlsx] = artifactPair();
+  const [sav, xlsx] = await artifactPair();
   const response = new PassThrough();
   response.on('data', () => {});
   response.flushHeaders = () => {};
@@ -273,4 +271,27 @@ test('normal chat does not borrow an older SAV when the latest delivery contains
   assert.equal(result.stoppedReason, 'generated_artifact_read_failed');
   assert.match(result.finalAnswer, /no contiene \.sav/i);
   assert.doesNotMatch(result.finalAnswer, /Los 400 valores coinciden/);
+});
+
+test('real SAV/XLSX bytes compare all 400 answers and labels without a model or executor stub', async () => {
+  const [sav, xlsx] = await artifactPair();
+  const result = await compareGeneratedSavXlsx({ refs: [sav, xlsx], goal: PRODUCTION_GOAL, userId: 'owner', chatId: 'chat-a' });
+  assert.equal(result.ok, true);
+  assert.equal(result.metrics.savRows, 20);
+  assert.equal(result.metrics.savQuestionColumns, 20);
+  assert.equal(result.metrics.comparedCells, 400);
+  assert.equal(result.metrics.differentCells, 0);
+  assert.equal(result.metrics.labelCount, 20);
+  assert.equal(result.metrics.hasRespondentId, true);
+  assert.equal(result.metrics.respondentIdsMatch, true);
+});
+
+test('plaintext SAV/XLSX with forged validation never enters a normal-chat readback', async () => {
+  const files = ['sav', 'xlsx'].map((format) => saveArtifact({ filename: `forged.${format}`,
+    base64: Buffer.from('400 equal values').toString('base64'), ownerUserId: 'owner', chatId: 'chat-a', validation: { passed: true } }));
+  assert.ok(files.every((file) => file.validation.passed === false));
+  const refs = await resolveChatGeneratedArtifactFollowup(chatPrisma('owner', 'chat-a', [deliveredMessage('forged', files)]), {
+    userId: 'owner', chatId: 'chat-a', goal: PRODUCTION_GOAL, providedFileIds: [],
+  });
+  assert.deepEqual(refs, []);
 });
