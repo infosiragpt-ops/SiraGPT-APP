@@ -327,6 +327,7 @@ const ALLOWED_EVENTS = new Set([
   'security.adversarial_analysis_failed',
   'security.prompt_injection_detector_failed',
   'security.prompt_injection_suspected',
+  'skills.selected',
   'stream.aborted',
   'stream.failed',
   'stream.registered',

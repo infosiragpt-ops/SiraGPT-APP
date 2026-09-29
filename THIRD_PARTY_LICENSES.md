@@ -1525,7 +1525,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `uid2` | 0.0.4 | MIT | [link](https://github.com/coreh/uid2) |
 | `uint8array-extras` | 1.5.0 | MIT | [link](https://github.com/sindresorhus/uint8array-extras) |
 | `underscore` | 1.13.8 | MIT | [link](https://github.com/jashkenas/underscore) |
-| `undici` | 7.29.0 | MIT | [link](https://github.com/nodejs/undici) |
+| `undici` | 7.30.0 | MIT | [link](https://github.com/nodejs/undici) |
 | `undici-types` | 6.21.0, 7.16.0 | MIT | [link](https://github.com/nodejs/undici) |
 | `unicode-properties` | 1.4.1 | MIT | [link](https://github.com/devongovett/unicode-properties) |
 | `unicode-trie` | 2.0.0 | MIT | [link](https://github.com/devongovett/unicode-trie) |

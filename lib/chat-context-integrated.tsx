@@ -824,6 +824,8 @@ interface AddMessageOptions {
   /** «Búsqueda web» chip on a non-academic ask: the turn searches the web
       before answering, whatever the wording. */
   webSearchMode?: 'dedicated'
+  /** Agent Skills picked in the composer («+ → Skills») for this turn. */
+  skills?: string[]
 }
 interface ChatContextType {
   chats: Chat[]
@@ -833,7 +835,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     content?: string,
     files?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated' }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated'; skills?: string[] }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
@@ -1428,6 +1430,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }
               : {}),
             ...(options?.webSearchMode === 'dedicated' ? { webSearchMode: 'dedicated' } : {}),
+            ...(Array.isArray(options?.skills) && options.skills.length
+              ? { skills: options.skills.slice(0, 3) }
+              : {}),
           };
       const pendingMessage = options?.reusePending
         ? null
@@ -1750,7 +1755,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             });
             throwIfTurnCancelled();
             await apiClient.generateDocStream(
-              docRequest,
+              Array.isArray(options?.skills) && options.skills.length
+                ? { ...docRequest, skills: options.skills.slice(0, 3) }
+                : docRequest,
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -2767,7 +2774,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated' }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated'; skills?: string[] }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !isAuthenticated || !chatModel) return;
@@ -2905,7 +2912,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               break;
             default:
-              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality, webSearchMode: options?.webSearchMode });
+              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality, webSearchMode: options?.webSearchMode, skills: options?.skills });
               break;
           }
         } catch (error) {

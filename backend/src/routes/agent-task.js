@@ -1892,7 +1892,7 @@ router.post(
           agentGoal
         ) + (req.body.generatedArtifactRefs?.length
           ? `\n\n${buildGeneratedArtifactReadContext(req.body.generatedArtifactRefs, agentGoal)}`
-          : ''),
+          : '') + require('../services/chat-skills').selectedSkillsSuffix({ userId: req.user?.id, names: req.body.skills }),
         ctx: toolCtx,
         finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
           finalizeProfile,
@@ -2315,6 +2315,9 @@ async function handleQueuedTaskRequest(req, res) {
     openclawRuntimeProfile,
     folderCode: cycleFolderCode,
     cycle: cycleMeta,
+    // Agent Skills picked in the composer («+ → Skills»): names only; the
+    // runner resolves the bodies for the task's system prompt.
+    skills: require('../services/chat-skills').normalizeSelectedSkillNames(req.body.skills),
   };
 
   let job;
@@ -2618,6 +2621,9 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     openclawRuntimeProfile,
     folderCode: cycleFolderCode,
     cycle: cycleMeta,
+    // Agent Skills picked in the composer («+ → Skills»): names only; the
+    // runner resolves the bodies for the task's system prompt.
+    skills: require('../services/chat-skills').normalizeSelectedSkillNames(req.body.skills),
   };
 
   Promise.resolve().then(async () => {

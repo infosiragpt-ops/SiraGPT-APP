@@ -46,6 +46,9 @@ const TIER_BY_KIND = Object.freeze({
   // Rolling context summary (conversation-compactor): dropping it forgets
   // the whole older half of the thread.
   'context-summary': 0,
+  // Agent Skills the user activated for this turn: an explicit instruction,
+  // already capped by chat-skills (16k chars), so it is never trimmed.
+  'selected-skills': 0,
 
   // Demoted from tier-0 → tier-1 so the allocator actually has a lever when the
   // protected blocks alone blow the budget (was producing ~40k-token prompts

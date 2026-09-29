@@ -2266,6 +2266,9 @@ router.post(
     // Live progress capability (lib/api.ts sends 2): begin / progress /
     // result stage frames paired by stageId. Absent → legacy begin-only.
     body('progressProtocol').optional().isInt({ min: 1, max: 9 }),
+    // Agent Skills picked in the composer («+ → Skills»): up to 3 names.
+    body('skills').optional().isArray({ max: 3 }),
+    body('skills.*').optional().isString().isLength({ min: 1, max: 64 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -6821,7 +6824,23 @@ router.post(
         }
       } catch (_rlcdPrepErr) { /* fail-open: no RLCD prompt */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock + rlcdPromptBlock };
+      // Agent Skills the user activated in the composer («+ → Skills»): their
+      // bodies ride this turn as a load-bearing block (never pruned).
+      let selectedSkillsBlock = '';
+      try {
+        const __skillNames = require('../services/chat-skills').normalizeSelectedSkillNames(req.body && req.body.skills);
+        if (__skillNames.length) {
+          const __chatSkills = require('../services/chat-skills');
+          const __resolved = __chatSkills.resolveSelectedSkills({ userId: req.user && req.user.id, names: __skillNames });
+          selectedSkillsBlock = __chatSkills.buildSelectedSkillsBlock(__resolved.skills);
+          generateLog.info('skills.selected', {
+            sourceCount: __resolved.skills.length,
+            unsupportedCount: __resolved.missing.length,
+          });
+        }
+      } catch (_skillsErr) { selectedSkillsBlock = ''; }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + selectedSkillsBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock + rlcdPromptBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -6857,6 +6876,7 @@ router.post(
         { kind: 'cowork', text: coworkBlock, cacheable: false },
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
         { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
+        { kind: 'selected-skills', text: selectedSkillsBlock, cacheable: false },
         { kind: 'reasoning-effort', text: reasoningEffortBlock, cacheable: false },
         { kind: 'constraints', text: constraintBlock, cacheable: false },
         { kind: 'response-posture', text: postureDirectiveBlock, cacheable: false },
@@ -8144,6 +8164,7 @@ router.post(
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   preferenceBlock: feedbackBlock || '',
+                  selectedSkillsBlock,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
                   customGptSkillPlan: {
                     selectedSkillIds: Array.isArray(semanticIntentAnalysis?.skill_plan?.selected_skills)

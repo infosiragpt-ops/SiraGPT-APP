@@ -90,6 +90,9 @@ import { Input } from "@/components/ui/input"
 import { useChat, useModelsAndFiles } from "@/lib/chat-context-integrated"
 import { ChatTitleMenu } from "@/components/chat/chat-title-menu"
 import { ChatComputerBadge } from "@/components/chat/chat-computer-badge"
+import { SkillsMenu } from "@/components/chat/skills-menu"
+import { SkillChips } from "@/components/chat/skill-chips"
+import { useComposerSkills, type ComposerSkills } from "@/lib/chat/use-composer-skills"
 import { useAuth } from "@/lib/auth-context-integrated"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
@@ -1227,7 +1230,7 @@ const ActionsDropdown = ({
   setIsExcelConnectorActive,
   setShowAudioPanel,
   setAudioTab,
-  openVoicePanel,
+  composerSkills,
   handleAndUploadFiles,
   isUploading,
   isWebSearching,
@@ -1641,6 +1644,8 @@ const ActionsDropdown = ({
             data-accepts-any-format="true"
             onChange={handleFilesSelected}
           />
+          {/* Agent Skills (claude.ai style): right under «Subir documento». */}
+          {composerSkills ? <SkillsMenu skills={composerSkills} /> : null}
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -1662,27 +1667,6 @@ const ActionsDropdown = ({
               {isWebSearchActive && (
                 <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
               )}
-            </div>
-          </DropdownMenuItem>
-          {/* Voice mode. This used to be reachable only by pressing the
-              composer's primary button while it was empty, where it rendered as
-              a waveform icon sitting right next to the dictation mic — two
-              adjacent speech affordances with no way to tell them apart. The
-              primary button is now always Send, so voice mode lives here. */}
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onClick={() => openVoicePanel?.()}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
-                <AudioLines className="h-4 w-4 text-violet-600 dark:text-violet-400" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">Modo de voz</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  Habla en lugar de escribir
-                </div>
-              </div>
             </div>
           </DropdownMenuItem>
           <DropdownMenuItem
@@ -2570,6 +2554,7 @@ const ActiveToolsDisplay = ({
   chatType,
   setChatType,
   onVideoGenerationClose,
+  composerSkills = null,
 
   handleComputerUseToggle,
   handleGmailToggle,
@@ -2663,6 +2648,8 @@ const ActiveToolsDisplay = ({
   chatType: string;
   setChatType: (type: any) => void;
   onVideoGenerationClose?: () => void;
+  /** Agent Skills picked for the next message («+ → Skills»). */
+  composerSkills?: ComposerSkills | null;
 
   handleComputerUseToggle: () => void;
   handleGmailToggle: () => void;
@@ -2987,7 +2974,8 @@ const ActiveToolsDisplay = ({
     );
   };
 
-  if (!hasConnectors && !hasOtherTools && !hasThesis) return null;
+  const hasSkills = Boolean(composerSkills && composerSkills.selected.length > 0);
+  if (!hasConnectors && !hasOtherTools && !hasThesis && !hasSkills) return null;
 
   const renderAppSwitchItems = () => (
     <>
@@ -3073,6 +3061,7 @@ const ActiveToolsDisplay = ({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
+      <SkillChips skills={composerSkills} />
       {activeConnectors.map((c) => (
         <span
           key={c.id}
@@ -6073,6 +6062,8 @@ function ChatInterfaceContent() {
 
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
+  // Agent Skills picked in «+ → Skills» — they ride the next message only.
+  const composerSkills = useComposerSkills();
   const [sendingChatId, setSendingChatId] = React.useState<string | null>(null);
   // Synchronous gate for duplicate submit events. React state updates land
   // after the current event turn, so rapid Enter keydown/keypress pairs or
@@ -11212,11 +11203,15 @@ REWRITTEN TEXT:`;
         const pins = appPins.pinnedAppIds
         const imageSettings = selectedImageModel ? { imageModel: selectedImageModel, imageProvider: providerForSelectedImageModel(selectedImageModel), imageQuality: selectedImageQuality } : {}
         const webSearchSettings = isWebSearchActive ? { webSearchMode: 'dedicated' as const } : {}
+        // Picked skills ride this message only, then the chips clear (claude.ai).
+        const skillSettings = composerSkills.selectedNames.length ? { skills: composerSkills.selectedNames } : {}
+        if (composerSkills.selectedNames.length) composerSkills.clear()
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, {
             initialIntent: pipelineIntent,
             ...imageSettings,
             ...webSearchSettings,
+            ...skillSettings,
             idempotencyKey,
             pinnedAppIds: pins,
           });
@@ -11224,6 +11219,7 @@ REWRITTEN TEXT:`;
           await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
             ...imageSettings,
             ...webSearchSettings,
+            ...skillSettings,
             idempotencyKey,
             mentionedApps: mentionPayload.mentionedApps,
             codingWorkspace,
@@ -12506,6 +12502,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
+    || composerSkills.selected.length > 0
   );
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
   const shouldInlineActiveTools = isMediaToolActive || isWebSearchActive;
@@ -12594,6 +12591,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setSelectedProvider: setSelectedProivder,
     chatType, setChatType,
     onVideoGenerationClose: () => { autoVideoActivationRef.current = false; },
+    composerSkills,
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,
@@ -12882,21 +12880,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     };
   }, [currentChat?.id, openComputerPanel, computerPanelOpen, injectHandoffChat]);
 
-  const openGrokVoicePanel = React.useCallback(() => {
-    setCoworkPanelOpen(false);
-    setComputerPanelOpen(false);
-    setSplitViewContent(null);
-    setDocumentPreviewUrl(null);
-    setComposerPreviewIndex(null);
-    setSidePreviewAttachment(null);
-    setSidePreviewSiblings([]);
-    setActiveSearchActivityId(null);
-    setIsWordConnectorActive(false);
-    setIsExcelConnectorActive(false);
-    setShowAudioPanel(true);
-    setAudioTab('stt');
-  }, []);
-
   // Shared props bundle for <ActionsDropdown /> (the "+" tools button).
   // It renders in two spots: inline with the textarea while NO tool is
   // active, and as a compact chip in the bottom tools row once any tool
@@ -12920,7 +12903,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isWordConnectorActive, setIsWordConnectorActive,
     isExcelConnectorActive, setIsExcelConnectorActive,
     setShowAudioPanel,
-    openVoicePanel: openGrokVoicePanel,
+    composerSkills,
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,
@@ -13873,6 +13856,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
+    // Skills picked in «+ → Skills» ride this task only (claude.ai).
+    const turnSkills = composerSkills.selectedNames;
+    if (turnSkills.length) composerSkills.clear();
 
     // «Abre tu computadora y …» — show the live screen without asking for a
     // second click: the right-hand computer panel opens with the run.
@@ -14040,6 +14026,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           model: selectedModel,
           maxSteps: 80,
           maxRuntimeMs: 2 * 60 * 60 * 1000,
+          ...(turnSkills.length ? { skills: turnSkills } : {}),
           signal: controller.signal,
         })) {
           const taskIdFromEvent = (evt as any).taskId;

@@ -1872,6 +1872,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     systemContract,
     files = [],
     fileMetadata = [],
+    // Agent Skills picked in the composer («+ → Skills») — names only.
+    skills = [],
     preferRecentArtifact = false,
     chatId = null,
     model = 'gpt-4o',
@@ -3913,7 +3915,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         openclawRuntimeProfile
       ) + (generatedArtifactRefs.length
         ? `\n\n${buildGeneratedArtifactReadContext(generatedArtifactRefs, displayGoal || goal)}`
-        : ''),
+        : '') + require('../chat-skills').selectedSkillsSuffix({ userId: user && user.id, names: skills }),
       ctx: toolCtx,
       finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
         finalizeProfile,

@@ -298,6 +298,9 @@ router.post(
     body('researchSources.*.abstract').optional({ nullable: true }).isString().isLength({ max: 6000 }),
     body('researchSources.*.doi').optional({ nullable: true }).isString().isLength({ max: 220 }),
     body('idempotencyKey').optional().isString().trim().isLength({ min: 1, max: 200 }),
+    // Agent Skills picked in the composer («+ → Skills»): up to 3 names.
+    body('skills').optional().isArray({ max: 3 }),
+    body('skills.*').optional().isString().isLength({ min: 1, max: 64 }),
   ],
   prepareDocumentReplay,
   documentPlanQuota,
@@ -408,6 +411,7 @@ router.post(
           prompt,
           fileIds: requestedFileIds,
           model: req.body.model,
+          skills: require('../services/chat-skills').normalizeSelectedSkillNames(req.body.skills),
           // Engines follow the model picked in the composer.
           pickedModel: require('../services/agent-runner')
             .runnerModelSpec(resolveGenerateProvider(req.body.provider, req.body.model), req.body.model),

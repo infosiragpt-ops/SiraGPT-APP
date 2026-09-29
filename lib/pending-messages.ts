@@ -89,6 +89,8 @@ export interface PendingAIRequestEnvelope {
   mentionedApps?: string[]
   /** Persistent app pins — replayed on every turn of the conversation. */
   pinnedAppIds?: string[]
+  /** Agent Skills picked in the composer («+ → Skills») for this turn. */
+  skills?: string[]
 }
 
 export interface PendingGeneratePayload extends PendingAIRequestEnvelope {

@@ -18,6 +18,6 @@ describe("«Búsqueda web» chip routing", () => {
     assert.match(chatInterface, /const webSearchSettings = isWebSearchActive \? \{ webSearchMode: 'dedicated' as const \} : \{\}/)
     assert.equal((chatInterface.match(/\.\.\.webSearchSettings,/g) || []).length, 2, "a new chat and a follow-up both carry it")
     assert.match(chatContext, /\.\.\.\(options\?\.webSearchMode === 'dedicated' \? \{ webSearchMode: 'dedicated' \} : \{\}\),/)
-    assert.match(chatContext, /imageQuality: options\?\.imageQuality, webSearchMode: options\?\.webSearchMode \}\);/)
+    assert.match(chatContext, /imageQuality: options\?\.imageQuality, webSearchMode: options\?\.webSearchMode(?:, skills: options\?\.skills)? \}\);/)
   })
 })
