@@ -111,13 +111,13 @@ const ZOOM_PRESETS = [0.25, 0.5, 0.75, 0.9, 1, 1.25, 1.5, 2] as const
 const INLINE_TOOLBAR_MIN_WIDTH = 720
 
 const previewHeaderClass =
-  "border-b border-white/45 bg-white/72 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-black/25"
+  "border-b border-white/45 bg-white/72 shadow-[0_18px_50px_rgba(23,23,23,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-black/25"
 
 const previewIconButtonClass =
-  "h-9 w-9 rounded-full border border-white/60 bg-white/68 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:bg-white/88 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_30px_rgba(15,23,42,0.12)] dark:border-white/10 dark:bg-white/10 dark:text-zinc-200 dark:hover:bg-white/16"
+  "h-9 w-9 rounded-full border border-white/60 bg-white/68 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_24px_rgba(23,23,23,0.08)] backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:bg-white/88 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_30px_rgba(23,23,23,0.12)] dark:border-white/10 dark:bg-white/10 dark:text-zinc-200 dark:hover:bg-white/16"
 
 const previewControlShellClass =
-  "rounded-full border border-white/65 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_18px_44px_rgba(15,23,42,0.16)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/56 dark:border-white/10 dark:bg-zinc-950/62 dark:shadow-black/30"
+  "rounded-full border border-white/65 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_18px_44px_rgba(23,23,23,0.16)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/56 dark:border-white/10 dark:bg-zinc-950/62 dark:shadow-black/30"
 
 const previewMetricClass =
   "inline-flex h-8 min-w-[4.6rem] items-center justify-center gap-1 rounded-full border border-white/60 bg-white/68 px-3 py-1.5 text-center text-xs font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
@@ -274,8 +274,8 @@ function previewShell(innerHtml: string) {
   return `
     <style>
       .sgpt-preview { color:#111827; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .sgpt-preview .sgpt-sheet { margin:0 auto 24px; max-width:1100px; overflow:auto; border:1px solid #e5e7eb; border-radius:16px; background:white; box-shadow:0 20px 50px rgba(15,23,42,.06); }
-      .sgpt-preview .sgpt-tab { display:inline-flex; margin:12px 12px 0; border-radius:999px; background:#eef2ff; color:#3730a3; padding:6px 12px; font-size:12px; font-weight:700; }
+      .sgpt-preview .sgpt-sheet { margin:0 auto 24px; max-width:1100px; overflow:auto; border:1px solid #e5e7eb; border-radius:16px; background:white; box-shadow:0 20px 50px rgba(23,23,23,.06); }
+      .sgpt-preview .sgpt-tab { display:inline-flex; margin:12px 12px 0; border-radius:999px; background:#eef2ff; color:#3a3a3a; padding:6px 12px; font-size:12px; font-weight:700; }
       .sgpt-preview table { width:100%; border-collapse:collapse; margin-top:12px; font-size:12px; }
       .sgpt-preview th { background:#111827; color:#fff; font-weight:700; text-align:left; padding:9px 10px; white-space:nowrap; }
       .sgpt-preview td { border-top:1px solid #eef2f7; padding:8px 10px; max-width:320px; overflow:hidden; text-overflow:ellipsis; vertical-align:top; }
@@ -415,10 +415,10 @@ async function renderPptx(buffer: ArrayBuffer) {
   return previewShell(`
     <style>
       .sgpt-deck { max-width:980px; margin:0 auto; }
-      .sgpt-slide { min-height:420px; margin:0 auto 24px; border:1px solid #e5e7eb; border-radius:24px; background:#fff; padding:42px 48px; box-shadow:0 24px 70px rgba(15,23,42,.08); }
-      .sgpt-slide-kicker { color:#ea580c; font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:800; margin-bottom:18px; }
+      .sgpt-slide { min-height:420px; margin:0 auto 24px; border:1px solid #e5e7eb; border-radius:24px; background:#fff; padding:42px 48px; box-shadow:0 24px 70px rgba(23,23,23,.08); }
+      .sgpt-slide-kicker { color:#727272; font-size:12px; letter-spacing:.14em; text-transform:uppercase; font-weight:800; margin-bottom:18px; }
       .sgpt-slide h2 { color:#111827; font-size:34px; line-height:1.12; margin:0 0 24px; letter-spacing:0; }
-      .sgpt-slide ul { margin:0; padding-left:22px; color:#334155; font-size:19px; line-height:1.55; }
+      .sgpt-slide ul { margin:0; padding-left:22px; color:#3f3f3f; font-size:19px; line-height:1.55; }
       .sgpt-slide li { margin:0 0 10px; }
     </style>
     <div class="sgpt-preview sgpt-deck">${body}</div>

@@ -3888,10 +3888,10 @@ function ViewBody({ children }: { children: React.ReactNode }) {
 }
 
 const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; className: string }> = {
-  facebook: { mark: "f", className: "bg-[#1877f2] text-white" },
+  facebook: { mark: "f", className: "bg-[#6c6c6c] text-white" },
   instagram: { mark: "ig", className: "bg-[#E4405F] text-white" },
-  linkedin: { mark: "in", className: "bg-[#0a66c2] text-white" },
-  whatsapp: { mark: "wa", className: "bg-[#25D366] text-white" },
+  linkedin: { mark: "in", className: "bg-[#595959] text-white" },
+  whatsapp: { mark: "wa", className: "bg-[#a6a6a6] text-white" },
   x: { mark: "X", className: "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950" },
   youtube: { mark: "yt", className: "bg-[#ff0000] text-white" },
 }
@@ -6836,8 +6836,8 @@ function FilesView({
         <div className="flex h-12 items-center gap-3 border-b border-zinc-300/70 bg-[#ededeb]/95 px-3 text-zinc-900 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/95 dark:text-zinc-50">
           <div className="flex shrink-0 items-center gap-2" aria-hidden="true">
             <span className="h-3 w-3 rounded-full bg-[#ff5f57] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
-            <span className="h-3 w-3 rounded-full bg-[#febc2e] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
-            <span className="h-3 w-3 rounded-full bg-[#28c840] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
+            <span className="h-3 w-3 rounded-full bg-[#c0c0c0] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
+            <span className="h-3 w-3 rounded-full bg-[#9c9c9c] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)]" />
           </div>
           <div className="hidden h-8 items-center gap-1 rounded-lg border border-zinc-300/70 bg-white/70 p-1 sm:flex dark:border-white/10 dark:bg-white/10" role="group" aria-label="Modo de vista">
             <button
@@ -6898,7 +6898,7 @@ function FilesView({
                   )}
                   aria-pressed={filter === value}
                 >
-                  <Icon className={cn("h-4 w-4 shrink-0", value === "files" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-400")} />
+                  <Icon className={cn("h-4 w-4 shrink-0", value === "files" ? "text-[#737373]" : "text-zinc-500 dark:text-zinc-400")} />
                   <span className="min-w-0 flex-1 truncate">{label}</span>
                   <span className="shrink-0 rounded-full bg-zinc-200/75 px-1.5 py-0.5 text-[10px] tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{count}</span>
                 </button>
@@ -7052,15 +7052,15 @@ function FilesView({
                           type="button"
                           onClick={() => openExplorerFolder(entry)}
                           onDoubleClick={() => openExplorerFolder(entry)}
-                          className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] dark:hover:bg-white/8"
+                          className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#737373] dark:hover:bg-white/8"
                           title={entry.name}
                           data-testid="company-dept-folder"
                           data-department-id={folderDeptId ? undefined : entry.id}
                           data-folder-name={entry.name}
                         >
                           <span className="relative flex h-[62px] w-[72px] shrink-0 items-end">
-                            <span className="absolute left-2 top-2 h-4 w-8 rounded-t-md bg-[#74c7ff]" />
-                            <span className="relative h-12 w-[72px] rounded-[10px] bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-[0_10px_22px_-16px_rgba(15,23,42,0.65)] transition-transform group-hover/file:-translate-y-0.5" />
+                            <span className="absolute left-2 top-2 h-4 w-8 rounded-t-md bg-[#b9b9b9]" />
+                            <span className="relative h-12 w-[72px] rounded-[10px] bg-gradient-to-b from-[#b4b4b4] to-[#737373] shadow-[0_10px_22px_-16px_rgba(15,23,42,0.65)] transition-transform group-hover/file:-translate-y-0.5" />
                           </span>
                           <span className="mt-2 line-clamp-2 max-w-[108px] rounded-md px-1.5 py-0.5 text-[12px] font-medium leading-4 text-zinc-800 dark:text-zinc-100">
                             {entry.name}
@@ -7080,7 +7080,7 @@ function FilesView({
                         type="button"
                         onClick={() => setSelectedId(artifact.id)}
                         onDoubleClick={() => downloadArtifact(artifact)}
-                        className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] dark:hover:bg-white/8"
+                        className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#737373] dark:hover:bg-white/8"
                         title={artifact.path}
                       >
                         <span className={cn(
@@ -7088,11 +7088,11 @@ function FilesView({
                           artifact.kind === "report" ? "border-sky-200" : "border-zinc-200",
                         )}>
                           <span className="absolute right-0 top-0 h-4 w-4 rounded-bl-md border-b border-l border-zinc-200 bg-zinc-100 dark:border-white/10 dark:bg-zinc-800" />
-                          <Icon className={cn("h-7 w-7", artifact.kind === "report" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-300")} />
+                          <Icon className={cn("h-7 w-7", artifact.kind === "report" ? "text-[#737373]" : "text-zinc-500 dark:text-zinc-300")} />
                         </span>
                         <span className={cn(
                           "mt-2 line-clamp-2 max-w-[108px] rounded-md px-1.5 py-0.5 text-[12px] font-medium leading-4",
-                          active ? "bg-[#0a84ff] text-white" : "text-zinc-800 dark:text-zinc-100",
+                          active ? "bg-[#737373] text-white" : "text-zinc-800 dark:text-zinc-100",
                         )}>
                           {artifact.name}
                         </span>
@@ -7118,8 +7118,8 @@ function FilesView({
                         >
                           <span className="flex min-w-0 items-center gap-2">
                             <span className="relative flex h-5 w-6 shrink-0 items-end">
-                              <span className="absolute left-0.5 top-0.5 h-1.5 w-3 rounded-t-sm bg-[#74c7ff]" />
-                              <span className="relative h-3.5 w-6 rounded-[4px] bg-gradient-to-b from-[#62c5ff] to-[#0a84ff]" />
+                              <span className="absolute left-0.5 top-0.5 h-1.5 w-3 rounded-t-sm bg-[#b9b9b9]" />
+                              <span className="relative h-3.5 w-6 rounded-[4px] bg-gradient-to-b from-[#b4b4b4] to-[#737373]" />
                             </span>
                             <span className="truncate font-medium">{entry.name}</span>
                           </span>
@@ -7138,7 +7138,7 @@ function FilesView({
                         onClick={() => setSelectedId(artifact.id)}
                         className={cn(
                           "grid min-h-11 w-full grid-cols-[minmax(0,1fr)_88px_88px] items-center gap-3 border-b border-zinc-100 px-3 text-left text-[12px] last:border-b-0 dark:border-white/5 sm:grid-cols-[minmax(0,1fr)_110px_100px_84px]",
-                          active ? "bg-[#0a84ff] text-white" : "hover:bg-zinc-100 dark:hover:bg-white/8",
+                          active ? "bg-[#737373] text-white" : "hover:bg-zinc-100 dark:hover:bg-white/8",
                         )}
                         title={artifact.path}
                       >
@@ -7158,8 +7158,8 @@ function FilesView({
               {explorerEntries.length === 0 ? (
                 <div className="flex min-h-[340px] flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-white/55 text-center dark:border-zinc-700 dark:bg-white/5">
                   <span className="relative flex h-16 w-20 items-end">
-                    <span className="absolute left-2 top-2 h-4 w-9 rounded-t-lg bg-[#74c7ff]" />
-                    <span className="relative h-12 w-20 rounded-xl bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-lg" />
+                    <span className="absolute left-2 top-2 h-4 w-9 rounded-t-lg bg-[#b9b9b9]" />
+                    <span className="relative h-12 w-20 rounded-xl bg-gradient-to-b from-[#b4b4b4] to-[#737373] shadow-lg" />
                   </span>
                   <p className="mt-4 text-sm font-semibold">No hay resultados</p>
                   <p className="mt-1 max-w-sm text-xs text-zinc-500">
@@ -7212,7 +7212,7 @@ function FilesView({
                           <div className="flex flex-col gap-3 px-3 py-3">
                             <button
                               type="button"
-                              className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
+                              className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#737373]"
                               onClick={() => setExpandedRecordId(expanded ? null : record.id)}
                               aria-expanded={expanded}
                             >
@@ -7355,7 +7355,7 @@ function FilesView({
                 <div className="mt-5 flex flex-col items-center border-b border-zinc-200 pb-5 dark:border-white/10">
                   <span className="relative flex h-24 w-20 items-center justify-center rounded-[16px] border border-zinc-200 bg-white shadow-[0_18px_32px_-24px_rgba(15,23,42,0.85)] dark:border-white/10 dark:bg-zinc-950">
                     <span className="absolute right-0 top-0 h-6 w-6 rounded-bl-lg border-b border-l border-zinc-200 bg-zinc-100 dark:border-white/10 dark:bg-zinc-800" />
-                    {React.createElement(artifactIcon(selected.extension, selected.kind), { className: cn("h-10 w-10", selected.kind === "report" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-300") })}
+                    {React.createElement(artifactIcon(selected.extension, selected.kind), { className: cn("h-10 w-10", selected.kind === "report" ? "text-[#737373]" : "text-zinc-500 dark:text-zinc-300") })}
                   </span>
                   <span className="mt-3 rounded-md bg-zinc-200/70 px-2 py-1 text-[10px] font-semibold uppercase text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{selected.extension}</span>
                 </div>
@@ -7379,8 +7379,8 @@ function FilesView({
             ) : (
               <div className="flex h-full min-h-[260px] flex-col items-center justify-center text-center">
                 <span className="relative flex h-20 w-24 items-end">
-                  <span className="absolute left-2 top-2 h-5 w-12 rounded-t-xl bg-[#74c7ff]" />
-                  <span className="relative h-14 w-24 rounded-2xl bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-lg" />
+                  <span className="absolute left-2 top-2 h-5 w-12 rounded-t-xl bg-[#b9b9b9]" />
+                  <span className="relative h-14 w-24 rounded-2xl bg-gradient-to-b from-[#b4b4b4] to-[#737373] shadow-lg" />
                 </span>
                 <h2 className="mt-5 text-sm font-semibold">Archivos</h2>
                 <p className="mt-1 text-xs text-zinc-500">{artifacts.length} elementos disponibles</p>

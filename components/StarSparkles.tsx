@@ -12,7 +12,7 @@ import { useEffect, useRef } from "react"
  * que no captura eventos y desactivado con `prefers-reduced-motion`.
  */
 
-const PALETTE = ["#2563eb", "#3b82f6", "#60a5fa", "#93c5fd"]
+const PALETTE = ["#606060", "#7b7b7b", "#9c9c9c", "#bebebe"]
 const ACCENT = "#FF0000"
 const ACCENT_RATIO = 0.22 // fracción de estrellas rojas
 const MAX_STARS = 140

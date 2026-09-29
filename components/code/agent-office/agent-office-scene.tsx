@@ -2358,7 +2358,7 @@ export function AgentOfficeScene({
       ref={hostRef}
       className={cn(
         "relative h-full min-h-0 w-full overflow-hidden",
-        timeOfDay === "night" ? "bg-[#173047]" : "bg-[#b9d8e2]",
+        timeOfDay === "night" ? "bg-[#2c2c2c]" : "bg-[#d2d2d2]",
         className,
       )}
       data-testid={variant === "thumbnail" ? "agent-office-thumbnail" : "agent-office-scene"}

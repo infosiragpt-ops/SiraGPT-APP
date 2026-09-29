@@ -523,7 +523,7 @@ function AppProjectRow({
         <h2 className="text-[23px] font-semibold text-[#343436]">{project.name}</h2>
         <p className="mt-1 line-clamp-1 text-[15px] text-[#70737b]">{project.description}</p>
         <div className="mt-2 flex items-center gap-2 text-[15px] font-medium text-[#797d86]">
-          {inTrash ? <CalendarClock className="h-4 w-4 text-[#ff0000]" strokeWidth={2} /> : <Globe2 className="h-4 w-4 text-[#2fbd73]" strokeWidth={2} />}
+          {inTrash ? <CalendarClock className="h-4 w-4 text-[#ff0000]" strokeWidth={2} /> : <Globe2 className="h-4 w-4 text-[#999999]" strokeWidth={2} />}
           <span>·</span>
           <span>{statusLabel(project, false, restoring)}</span>
         </div>

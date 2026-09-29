@@ -134,11 +134,11 @@ function gptToStoreCard(gpt: CustomGPT): StoreCard {
 
 function CuratedIconShell({ card }: { card: StoreCard }) {
   const palette = card.id.includes("expedia")
-    ? "bg-[#ffe45c] text-[#171a3f]"
+    ? "bg-[#e0e0e0] text-[#1c1c1c]"
     : card.id.includes("canva")
       ? "bg-[radial-gradient(circle_at_25%_20%,#65e0dc,#5145f6_74%)]"
       : card.id.includes("scholar")
-        ? "bg-[#6c2df4]"
+        ? "bg-[#494949]"
         : card.id.includes("fitness")
           ? "bg-black ring-4 ring-sky-300/60"
           : card.id.includes("code")

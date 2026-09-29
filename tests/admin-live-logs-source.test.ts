@@ -36,11 +36,31 @@ test("backend mounts the three admin log routes and captures from the first line
 
 test("live rows carry a selection checkbox before the time and copy only the selected lines", () => {
   const panel = read("components/admin/live-logs/live-logs-panel.tsx")
-  assert.match(panel, /data-testid="live-logs-select-all"/)
-  assert.match(panel, /data-testid="live-log-select"/)
-  assert.match(panel, /data-testid="live-logs-copy-selected"/)
-  assert.match(panel, /copyLines\(selectedLines\)/)
-  assert.match(panel, /toggleLine\(line\.id, e\.shiftKey\)/)
+  assert.match(panel, /testId="live-logs-select-all"/)
+  assert.match(panel, /testId="live-log-select"/)
+  assert.match(panel, /testIdPrefix="live-logs"/)
+  assert.match(panel, /useLogSelection\(\{/)
+  assert.match(panel, /selection\.toggle\(line\.id, e\.shiftKey\)/)
+  assert.match(panel, /texto: formatLinesAsText/, "live lines keep their exact export layout when copied as text")
   // The checkbox column comes first, before «Hora».
   assert.match(panel, /grid-cols-\[18px_92px_/)
+})
+
+// Luis (2026-09-29): the same selection + copy on the four Logs tabs.
+test("every Admin → Logs tab uses the shared selection bar and fallback-safe clipboard", () => {
+  const files = [
+    "app/admin/logs/page.tsx",
+    "components/admin/turn-failures/turn-failures-panel.tsx",
+    "components/admin/system-issues/system-issues-panel.tsx",
+    "components/admin/live-logs/live-logs-panel.tsx",
+  ]
+  for (const file of files) {
+    const src = read(file)
+    assert.match(src, /useLogSelection\(\{/, file)
+    assert.match(src, /<LogSelectionBar/, file)
+    assert.match(src, /hasTextSelection\(\)/, `${file}: highlighting text must not open the detail`)
+    assert.doesNotMatch(src, /navigator\.clipboard/, `${file}: use copyText (fallback) instead`)
+  }
+  const copy = read("lib/admin/log-copy.ts")
+  assert.match(copy, /document\.execCommand\("copy"\)/)
 })

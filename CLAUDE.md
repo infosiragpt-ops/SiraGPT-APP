@@ -1383,6 +1383,63 @@ dirige el tier del turno.
   mapeo de familias, escalación/veto/advisory/guardas/no-op ante judgement
   deforme). Registrado en `backend/package.json`.
 
+## Sistema visual monocromo + copia en Logs (added 2026-09-29)
+
+Pedido de Luis: interfaz solo en blanco y negro, con acabados más finos, y una
+selección/copia de registros consistente en los cuatro tabs de Admin → Logs.
+
+### Monocromo (UI lock re-baselineado para los archivos tocados)
+- **Tokens** (`app/globals.css`): `:root`, `.dark` y `.dark.midnight` en grises
+  puros (hue 0, sat 0%). Tinta `--foreground` #0A0A0A / #F5F5F5; `--brand`,
+  `--accent-violet` (nombre histórico, ahora tinta), `--sidebar-*`, `--chart-*`
+  y `--ring` neutros. **El color queda reservado a un solo significado:**
+  `--destructive` (errores y acciones irreversibles) — `red`/`rose` no se
+  remapean. `--radius` 0.625rem. Escala de sombras en capas `--shadow-{xs,sm,
+  md,lg,xl,hairline}` por tema (en oscuro, hairline claro en vez de sombra).
+- **Tailwind** (`tailwind.config.js`): `MONOCHROME_PALETTES` remapea
+  emerald/green/lime/teal/cyan/sky/blue/indigo/violet/purple/fuchsia/pink/
+  amber/yellow/orange/slate/gray/zinc/stone a `neutral` tono a tono → las ~2.400
+  clases cromáticas fijas siguen el sistema sin editar cada componente.
+  `fontFamily.sans/mono` apuntan a Geist (`var(--font-sans|mono)`); antes
+  `font-sans` caía en la fuente del sistema y `font-mono` en JetBrains Mono.
+  `boxShadow` usa los tokens de sombra.
+- **Acabado global**: selección de texto invertida, anillo de foco nítido,
+  scrollbars finas neutras, cifras tabulares en tablas (bloque «Monochrome
+  finish» al final de globals.css). Primitivos refinados: button (sombra sm,
+  press 0.985), card (rounded-xl), tabs, input, badge, overlays de dialog/
+  sheet/alert/drawer (negro 55% + blur 3px).
+- **Literales**: los hex/rgb/hsl cromáticos de globals.css y de las clases
+  arbitrarias `-[#hex]` de app/ y components/ se convirtieron a su gris de igual
+  luminancia; el verde trébol del login/logo/marca pasó a tinta. **No** se
+  tocaron colores de contenido o funcionales: plantillas HTML generadas
+  (message-component), celdas de Excel, gráficos de datos, logos de terceros
+  (Google, fal), ni el icono PWA/manifest/emails/documentos (siguen trébol).
+- `lib/settings-context.tsx` ya no inyecta `--primary` inline (pisaba `.dark` y
+  pintaba botones casi negros sobre el lienzo negro); el selector «Color de
+  acento» se quitó de Ajustes.
+- Tests fijados actualizados: `brand-clover-source`, `claude-thinking-surface-
+  source`, `chat-composer-professional-surface-source` (grises puros, botón de
+  parar y rayo «rápido» en tinta). El e2e del compositor (fondo blanco, radio
+  20px) sigue intacto.
+
+### Admin → Logs: selección y copia comunes
+- `lib/admin/log-copy.ts` (puro): `formatRecords(records, formato)` con
+  formatos **Texto · Solo mensaje · Markdown · JSON · Tabla (Excel/TSV)** sobre
+  un `CopyRecord` común; `toggleSelection` (Mayús+clic = rango);
+  `copyText` con respaldo `execCommand("copy")` si el Clipboard API falla;
+  `hasTextSelection` (resaltar texto con el mouse ya no abre el detalle).
+- `lib/admin/use-log-selection.ts`: hook por tab — poda la selección cuando las
+  filas salen (filtros, en vivo, paginación), **Ctrl/⌘+C** copia la selección
+  (salvo que haya texto resaltado o se esté escribiendo), **Esc** la quita, el
+  formato se recuerda por navegador.
+- `components/admin/log-selection-bar.tsx`: barra + casillas nativas
+  compartidas, usadas por «Fallos de respuesta», «Errores del sistema»,
+  «Registros en vivo» (conserva sus testids y su formato de texto exacto) y
+  «Auditoría». Los diálogos de detalle usan `copyText`.
+- Tests: `tests/lib/admin-log-copy.test.ts` (formatos, rango, respaldo) +
+  casos nuevos en los tests de componente de los paneles +
+  `tests/admin-live-logs-source.test.ts` (los 4 tabs usan la barra común).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

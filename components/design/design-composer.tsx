@@ -211,7 +211,7 @@ export function DesignComposer({
                 type="button"
                 disabled={disabled || running}
                 className={cn(
-                  "inline-flex items-center h-8 rounded-md px-1.5 text-[#C05621] hover:bg-muted/40 transition-colors",
+                  "inline-flex items-center h-8 rounded-md px-1.5 text-[#696969] hover:bg-muted/40 transition-colors",
                   (disabled || running) && "opacity-50 cursor-not-allowed",
                 )}
                 aria-label="Visibility"
@@ -452,7 +452,7 @@ function providerFor(modelName: string): "openai" | "anthropic" | "gemini" | "op
 
 function ProviderDot({ provider }: { provider: ReturnType<typeof providerFor> }) {
   const color =
-    provider === "anthropic" ? "bg-[#C05621]" :
+    provider === "anthropic" ? "bg-[#696969]" :
     provider === "openai"    ? "bg-emerald-500" :
     provider === "gemini"    ? "bg-sky-500" :
     provider === "openrouter"? "bg-violet-500" :

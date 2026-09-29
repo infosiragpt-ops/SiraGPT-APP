@@ -410,7 +410,7 @@
 }
 
 .cardTime svg {
-  color: #2fbd73;
+  color: #999999;
   height: 15px;
   width: 15px;
 }
@@ -515,7 +515,7 @@
 }
 
 .previewMarkLines span {
-  background: #d8e900;
+  background: #d5d5d5;
   border-radius: 999px;
   display: block;
   height: 2px;
@@ -573,7 +573,7 @@
 }
 
 .previewCanvas nav > div:last-child span:last-child {
-  background: #352dff;
+  background: #3e3e3e;
   border-radius: 999px;
   color: #fff;
   padding: 6px 16px;
@@ -589,7 +589,7 @@
 .previewCanvas nav + div > span {
   background: #f1e9ff;
   border-radius: 999px;
-  color: #7b43d8;
+  color: #5a5a5a;
   display: inline-flex;
   font-size: 10px;
   font-weight: 700;
@@ -606,7 +606,7 @@
 }
 
 .previewCanvas h3 span {
-  color: #9b4dff;
+  color: #6a6a6a;
 }
 
 .previewCanvas p {
@@ -649,7 +649,7 @@
 }
 
 .previewCanvas > div:last-child {
-  background: #f0d5ff;
+  background: #dedede;
   border-radius: 999px;
   filter: blur(24px);
   height: 64px;

@@ -42,12 +42,12 @@ export default function ProcessingGmailCard() {
       className="relative mt-4 inline-flex items-center gap-4 px-6 py-5 rounded-2xl
       border border-blue-100 dark:border-blue-900/60
       bg-gradient-to-br from-white/95 via-white/90 to-slate-50/80 
-      dark:from-[#0b1120] dark:via-[#0f172a] dark:to-[#1e293b]
+      dark:from-[#0b1120] dark:via-[#171717] dark:to-[#282828]
       shadow-[0_4px_25px_rgba(0,0,0,0.08)]
-      dark:shadow-[0_0_25px_rgba(59,130,246,0.35)]
+      dark:shadow-[0_0_25px_rgba(123,123,123,0.35)]
       backdrop-blur-xl transition-all duration-500 ease-out
-      hover:shadow-[0_8px_28px_rgba(59,130,246,0.15)]
-      dark:hover:shadow-[0_0_40px_rgba(59,130,246,0.45)]
+      hover:shadow-[0_8px_28px_rgba(123,123,123,0.15)]
+      dark:hover:shadow-[0_0_40px_rgba(123,123,123,0.45)]
       hover:scale-[1.02]
       overflow-hidden min-h-[90px] min-w-[260px]"
     >
@@ -56,7 +56,7 @@ export default function ProcessingGmailCard() {
         <div
           className={`w-12 h-12 rounded-full bg-gradient-to-tr ${colorMap[stage]} ${
             done ? "animate-glow" : "animate-pulse"
-          } shadow-[0_0_25px_rgba(59,130,246,0.3)] dark:shadow-[0_0_40px_rgba(59,130,246,0.5)] transition-all duration-1000`}
+          } shadow-[0_0_25px_rgba(123,123,123,0.3)] dark:shadow-[0_0_40px_rgba(123,123,123,0.5)] transition-all duration-1000`}
         >
           {/* Inner reflection */}
           <div className="absolute inset-[3px] rounded-full bg-gradient-to-b from-white/60 to-transparent blur-[2px] dark:from-white/20" />

@@ -162,18 +162,6 @@ export const DEFAULT_SETTINGS: SettingsShape = {
   builderProfile: { name: "", website: "", linkedin: "", github: "", email: "" },
 }
 
-// Accent color → CSS variable payload. Values are HSL triplets so they
-// plug into tailwind's `hsl(var(--primary))` pattern without edits to
-// globals.css.
-const ACCENT_HSL: Record<AccentColor, string> = {
-  default: "0 0% 9%",
-  blue:    "217 91% 60%",
-  green:   "142 71% 45%",
-  purple:  "271 81% 56%",
-  orange:  "25 95% 53%",
-  red:     "0 84% 60%",
-}
-
 const FONT_SIZE_PX: Record<FontSize, string> = {
   small: "14px",
   medium: "16px",
@@ -197,10 +185,12 @@ function applyPreviewVars(s: SettingsShape) {
   // left `light` and `dark` both applied), so settings.theme is now just a
   // persisted mirror and next-themes is the single source of truth.
 
-  // Accent — drives --primary for tailwind/shadcn tokens.
-  root.style.setProperty("--primary", ACCENT_HSL[s.accent])
-  const primaryFgHsl = s.accent === "default" ? "0 0% 98%" : "0 0% 100%"
-  root.style.setProperty("--primary-foreground", primaryFgHsl)
+  // Accent — the interface is monochrome: --primary comes from the light /
+  // dark tokens in globals.css. An inline value here used to beat the
+  // `.dark` class and paint near-black buttons on the black canvas, so any
+  // stored accent is ignored and a stale inline override is cleared.
+  root.style.removeProperty("--primary")
+  root.style.removeProperty("--primary-foreground")
 
   // Font size — base html font-size, everything else scales via rem.
   root.style.fontSize = FONT_SIZE_PX[s.fontSize]

@@ -220,17 +220,17 @@ const downloadAsHtml = async () => {
             box-shadow: 0 4px 20px rgba(0,0,0,0.1); 
         }
         .header { 
-            border-bottom: 3px solid #007bff; 
+            border-bottom: 3px solid #6a6a6a;
             padding-bottom: 25px; 
             margin-bottom: 35px; 
             text-align: center;
         }
         .meta-info { 
-            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            background: linear-gradient(135deg, #f0f0f0 0%, #f3e5f5 100%);
             padding: 25px; 
             border-radius: 10px; 
             margin: 25px 0; 
-            border-left: 5px solid #2196f3;
+            border-left: 5px solid #848484;
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 20px;
@@ -247,7 +247,7 @@ const downloadAsHtml = async () => {
         }
         .item-card {
             background: linear-gradient(135deg, #ffffff 0%, #f8f9ff 100%);
-            border: 2px solid #e3e8ff;
+            border: 2px solid #e9e9e9;
             border-radius: 16px;
             padding: 24px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.08);
@@ -265,17 +265,17 @@ const downloadAsHtml = async () => {
             background: linear-gradient(135deg, #ffffff 0%, #f0fff0 100%);
         }
         .job-card:hover {
-            border-color: #4caf50;
+            border-color: #404040;
         }
         .item-description, .item-name {
             font-weight: 600;
             font-size: 1.15em;
             margin-bottom: 12px;
-            color: #2c3e50;
+            color: #3b3b3b;
             line-height: 1.4;
         }
         .job-title {
-            background: linear-gradient(135deg, #1976d2 0%, #42a5f5 100%);
+            background: linear-gradient(135deg, #1976d2 0%, #969696 100%);
             color: white;
             font-size: 1.2em;
             font-weight: 700;
@@ -295,57 +295,57 @@ const downloadAsHtml = async () => {
             text-shadow: 0 1px 2px rgba(0,0,0,0.2);
         }
         .company {
-            color: #1565c0;
+            color: #5b5b5b;
             margin: 12px 0;
             padding: 10px 15px;
-            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            background: linear-gradient(135deg, #f0f0f0 0%, #f3e5f5 100%);
             border-radius: 8px;
             font-weight: 500;
             border-left: 4px solid #1976d2;
         }
         .location {
-            color: #2e7d32;
+            color: #0A0A0A;
             margin: 12px 0;
             padding: 10px 15px;
             background: linear-gradient(135deg, #e8f5e8 0%, #f1f8e9 100%);
             border-radius: 8px;
             font-weight: 500;
-            border-left: 4px solid #4caf50;
+            border-left: 4px solid #404040;
         }
         .salary {
-            color: #f57c00;
+            color: #8d8d8d;
             margin: 12px 0;
             padding: 12px 15px;
-            background: linear-gradient(135deg, #fff3e0 0%, #ffe8cc 100%);
+            background: linear-gradient(135deg, #f4f4f4 0%, #ebebeb 100%);
             border-radius: 8px;
             font-weight: 600;
             font-size: 1.05em;
-            border-left: 4px solid #ff9800;
+            border-left: 4px solid #a3a3a3;
         }
         .experience {
-            color: #7b1fa2;
+            color: #3c3c3c;
             margin: 12px 0;
             padding: 10px 15px;
             background: linear-gradient(135deg, #f3e5f5 0%, #fce4ec 100%);
             border-radius: 8px;
             font-weight: 500;
-            border-left: 4px solid #9c27b0;
+            border-left: 4px solid #4a4a4a;
         }
         .features {
             color: #1976d2;
             margin: 12px 0;
             padding: 12px 15px;
-            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            background: linear-gradient(135deg, #f0f0f0 0%, #f3e5f5 100%);
             border-radius: 8px;
             font-size: 0.95em;
             line-height: 1.5;
-            border-left: 4px solid #2196f3;
+            border-left: 4px solid #848484;
         }
         .rating {
-            color: #f57c00;
+            color: #8d8d8d;
             margin: 12px 0;
             padding: 10px 15px;
-            background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%);
+            background: linear-gradient(135deg, #f8f8f8 0%, #ececec 100%);
             border-radius: 8px;
             font-weight: 600;
             border-left: 4px solid #ffc107;
@@ -356,7 +356,7 @@ const downloadAsHtml = async () => {
         }
         .interactive-btn {
             display: inline-block;
-            background: linear-gradient(135deg, #1976d2 0%, #42a5f5 100%);
+            background: linear-gradient(135deg, #1976d2 0%, #969696 100%);
             color: white !important;
             text-decoration: none;
             padding: 12px 20px;
@@ -364,7 +364,7 @@ const downloadAsHtml = async () => {
             font-weight: 600;
             font-size: 0.95em;
             transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(25, 118, 210, 0.3);
+            box-shadow: 0 4px 15px rgba(105, 105, 105, 0.3);
             position: relative;
             overflow: hidden;
             min-width: 160px;
@@ -373,8 +373,8 @@ const downloadAsHtml = async () => {
         }
         .interactive-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(25, 118, 210, 0.4);
-            background: linear-gradient(135deg, #1565c0 0%, #1976d2 100%);
+            box-shadow: 0 6px 20px rgba(105, 105, 105, 0.4);
+            background: linear-gradient(135deg, #5b5b5b 0%, #1976d2 100%);
             text-decoration: none;
         }
         .interactive-btn .btn-text {
@@ -389,7 +389,7 @@ const downloadAsHtml = async () => {
             font-weight: 600;
             margin: 20px 0 15px 0;
             padding-bottom: 8px;
-            border-bottom: 2px solid #e3f2fd;
+            border-bottom: 2px solid #f0f0f0;
         }
         .content-text {
             margin: 12px 0;
@@ -414,7 +414,7 @@ const downloadAsHtml = async () => {
         }
         .url-link:hover { text-decoration: underline; }
         .badge { 
-            background: #4caf50; 
+            background: #404040;
             color: white; 
             padding: 8px 16px; 
             border-radius: 25px; 

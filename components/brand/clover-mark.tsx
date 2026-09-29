@@ -88,13 +88,13 @@ export function CloverBadge({ size = 40, className, title = "SiraGPT", style }: 
         width: size,
         height: size,
         borderRadius: radius,
-        background: "var(--brand, #2E7D32)",
+        background: "var(--brand, #0A0A0A)",
         color: "#ffffff",
         flexShrink: 0,
         ...style,
       }}
     >
-      <CloverMark size={Math.round(size * 0.72)} title={title} style={{ ["--clover-vein" as string]: "var(--brand, #2E7D32)" }} />
+      <CloverMark size={Math.round(size * 0.72)} title={title} style={{ ["--clover-vein" as string]: "var(--brand, #0A0A0A)" }} />
     </span>
   )
 }

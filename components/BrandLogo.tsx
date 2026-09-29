@@ -17,7 +17,7 @@ export function BrandLogo() {
             rotate: 360,
             scale: 1.08,
             filter:
-              "drop-shadow(0 0 12px rgba(46,125,50,0.55)) drop-shadow(0 0 2px rgba(102,187,106,0.35))",
+              "drop-shadow(0 0 12px rgba(255,255,255,0.28)) drop-shadow(0 0 2px rgba(255,255,255,0.22))",
           }}
           transition={{
             rotate: { duration: 0.9, ease: [0.22, 1, 0.36, 1] },
@@ -36,7 +36,7 @@ export function BrandLogo() {
             className="dark:hidden bg-clip-text text-transparent"
             style={{
               backgroundImage:
-                "linear-gradient(90deg, #0f172a 0%, #0f172a 40%, rgba(255,255,255,0.95) 49%, rgba(255,255,255,1) 51%, #0f172a 60%, #0f172a 100%)",
+                "linear-gradient(90deg, #171717 0%, #171717 40%, rgba(255,255,255,0.95) 49%, rgba(255,255,255,1) 51%, #171717 60%, #171717 100%)",
               backgroundSize: "220% 100%",
               animation: "brand-wave 4s ease-in-out infinite",
             }}
@@ -49,7 +49,7 @@ export function BrandLogo() {
             className="hidden dark:inline-block bg-clip-text text-transparent"
             style={{
               backgroundImage:
-                "linear-gradient(90deg, #ffffff 0%, #ffffff 38%, #a5d6a7 48%, #81c784 52%, #ffffff 62%, #ffffff 100%)",
+                "linear-gradient(90deg, #ffffff 0%, #ffffff 38%, #E5E5E5 48%, #D4D4D4 52%, #ffffff 62%, #ffffff 100%)",
               backgroundSize: "220% 100%",
               animation: "brand-wave 4s ease-in-out infinite",
             }}

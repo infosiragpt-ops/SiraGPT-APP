@@ -19,7 +19,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowDownToLine, Copy, Download, Pause, Play, Search, Trash2, X } from "lucide-react"
-import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -34,6 +33,9 @@ import {
   type LiveLogLine,
   type LiveLogStats,
 } from "@/lib/admin/live-logs-service"
+import { hasTextSelection, type CopyRecord } from "@/lib/admin/log-copy"
+import { useLogSelection } from "@/lib/admin/use-log-selection"
+import { HeaderCheckbox, LogSelectionBar, RowCheckbox } from "@/components/admin/log-selection-bar"
 import { cn } from "@/lib/utils"
 import { LiveLogDetail } from "./live-log-detail"
 import { appendLines, applyRepeats, MAX_CLIENT_LINES } from "./live-logs-buffer"
@@ -51,6 +53,26 @@ const STALE_MS = 45_000
 const GRID = "grid grid-cols-[18px_92px_64px_minmax(90px,150px)_52px_minmax(0,1fr)] md:grid-cols-[18px_104px_72px_minmax(110px,170px)_56px_minmax(120px,200px)_minmax(0,1fr)] items-center gap-2"
 
 type ConnState = "connecting" | "live" | "reconnecting" | "error"
+
+const LINE_NOUN = { one: "línea", many: "líneas", feminine: true }
+const lineId = (line: LiveLogLine) => line.id
+const lineToRecord = (line: LiveLogLine): CopyRecord => ({
+  id: line.id,
+  at: line.ts,
+  headline: line.msg,
+  fields: [
+    ["Nivel", line.level.toUpperCase()],
+    ["Fuente", line.source],
+    ["Usuario", line.email || line.userId],
+    ["Petición", line.reqId],
+    ["Chat", line.chatId],
+    ["Versión", line.commit],
+    ["Repeticiones", line.repeat && line.repeat > 1 ? line.repeat : null],
+    ["Detalle", line.body && line.body !== line.msg ? line.body : null],
+  ],
+  raw: line,
+})
+const LINE_FORMAT_OVERRIDE = { texto: formatLinesAsText }
 
 type Props = {
   onNewErrors?: (lines: LiveLogLine[]) => void
@@ -84,10 +106,6 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
   const [reqId, setReqId] = useState<string>("")
   const [selected, setSelected] = useState<LiveLogLine | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
-  // Checked line ids. Lines leave the buffer (filter change, «Limpiar», the
-  // client cap), so the selection is always re-derived from `lines`.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
-  const lastPickRef = useRef<string | null>(null)
   const q = useDebounced(draftQ.trim(), 400)
   const user = useDebounced(draftUser.trim(), 400)
 
@@ -133,8 +151,6 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
     setLines([])
     pendingRef.current = []
     setPendingCount(0)
-    setSelectedIds(new Set())
-    lastPickRef.current = null
     setConn("connecting")
     setConnError(null)
 
@@ -283,85 +299,18 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
     return Array.from(set).sort().slice(0, 40)
   }, [lines, source])
 
-  const downloadLines = useCallback((list: LiveLogLine[], suffix = "") => {
-    if (!list.length) return
-    const blob = new Blob([formatLinesAsText(list)], { type: "text/plain;charset=utf-8" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `registros-siragpt${suffix}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }, [])
-
-  const copyLines = useCallback(async (list: LiveLogLine[]) => {
-    if (!list.length) return
-    try {
-      await navigator.clipboard.writeText(formatLinesAsText(list))
-      toast.success(`${list.length} ${list.length === 1 ? "línea copiada" : "líneas copiadas"}`)
-    } catch {
-      toast.error("No se pudo copiar")
-    }
-  }, [])
-
-  const exportLines = useCallback(() => downloadLines(lines), [downloadLines, lines])
-  const copyAll = useCallback(() => copyLines(lines), [copyLines, lines])
-
-  // ── Selection ───────────────────────────────────────────────────────
-  const selectedLines = useMemo(
-    () => (selectedIds.size ? lines.filter((l) => selectedIds.has(l.id)) : []),
-    [lines, selectedIds],
-  )
-  useEffect(() => {
-    // Drop ids whose lines are gone so the count and «select all» stay exact.
-    if (selectedIds.size && selectedIds.size !== selectedLines.length) {
-      setSelectedIds(new Set(selectedLines.map((l) => l.id)))
-    }
-  }, [selectedIds, selectedLines])
-
-  const toggleLine = useCallback((id: string, shiftKey = false) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      const anchor = lastPickRef.current
-      if (shiftKey && anchor && anchor !== id) {
-        const ids = lines.map((l) => l.id)
-        const a = ids.indexOf(anchor)
-        const b = ids.indexOf(id)
-        if (a >= 0 && b >= 0) {
-          const select = !prev.has(id)
-          for (let i = Math.min(a, b); i <= Math.max(a, b); i += 1) {
-            if (select) next.add(ids[i])
-            else next.delete(ids[i])
-          }
-          lastPickRef.current = id
-          return next
-        }
-      }
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      lastPickRef.current = id
-      return next
-    })
-  }, [lines])
-
-  const allSelected = total > 0 && selectedLines.length === total
-  const someSelected = selectedLines.length > 0 && !allSelected
-  const toggleAll = useCallback(() => {
-    setSelectedIds(allSelected ? new Set() : new Set(lines.map((l) => l.id)))
-    lastPickRef.current = null
-  }, [allSelected, lines])
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set())
-    lastPickRef.current = null
-  }, [])
-  const headCheckRef = useRef<HTMLInputElement | null>(null)
-  useEffect(() => {
-    if (headCheckRef.current) headCheckRef.current.indeterminate = someSelected
-  }, [someSelected])
-  const copySelected = useCallback(() => copyLines(selectedLines), [copyLines, selectedLines])
-  const exportSelected = useCallback(() => downloadLines(selectedLines, "-seleccion"), [downloadLines, selectedLines])
+  // Lines leave the buffer (filter change, «Limpiar», the client cap); the
+  // hook re-derives the selection from `lines`, so counts stay exact.
+  const selection = useLogSelection({
+    rows: lines,
+    getId: lineId,
+    toRecord: lineToRecord,
+    formatOverride: LINE_FORMAT_OVERRIDE,
+    noun: LINE_NOUN,
+    filePrefix: "registros-siragpt",
+  })
+  const copyAll = useCallback(() => { void selection.copyRows(lines) }, [selection, lines])
+  const exportLines = useCallback(() => selection.exportRows(lines), [selection, lines])
 
   const statusDot =
     conn === "live" && !paused ? "bg-emerald-500" : conn === "error" ? "bg-red-500" : paused ? "bg-amber-500" : "bg-slate-400 animate-pulse"
@@ -433,7 +382,7 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
           <Button size="sm" variant="ghost" onClick={exportLines} disabled={!total} title="Exportar">
             <Download className="h-3.5 w-3.5" />
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => { setLines([]); pendingRef.current = []; setPendingCount(0); clearSelection() }} disabled={!total} title="Limpiar pantalla">
+          <Button size="sm" variant="ghost" onClick={() => { setLines([]); pendingRef.current = []; setPendingCount(0); selection.clear() }} disabled={!total} title="Limpiar pantalla">
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -443,42 +392,27 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
         <div className="rounded-md border border-red-200 bg-red-50/70 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">{connError}</div>
       )}
 
-      {selectedLines.length > 0 && (
-        <div
-          className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50/70 px-3 py-1.5 text-xs dark:border-emerald-900 dark:bg-emerald-950/30"
-          data-testid="live-logs-selection"
-          role="status"
-        >
-          <span className="font-medium">
-            {selectedLines.length} {selectedLines.length === 1 ? "línea seleccionada" : "líneas seleccionadas"}
-          </span>
-          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={copySelected} data-testid="live-logs-copy-selected">
-            <Copy className="mr-1.5 h-3.5 w-3.5" /> Copiar seleccionadas
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={exportSelected} data-testid="live-logs-export-selected">
-            <Download className="mr-1.5 h-3.5 w-3.5" /> Exportar seleccionadas
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={clearSelection} data-testid="live-logs-clear-selection">
-            <X className="mr-1.5 h-3.5 w-3.5" /> Quitar selección
-          </Button>
-          <span className="text-muted-foreground">Mayús + clic selecciona un rango.</span>
-        </div>
-      )}
+      <LogSelectionBar
+        count={selection.count}
+        noun={LINE_NOUN}
+        format={selection.format}
+        onFormatChange={selection.setFormat}
+        onCopy={() => void selection.copySelected()}
+        onExport={() => selection.exportSelected()}
+        onClear={selection.clear}
+        testIdPrefix="live-logs"
+      />
 
       <div className="overflow-hidden rounded-lg border border-border/70">
         <div className={cn(GRID, "border-b border-border/70 bg-muted/40 px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground")} role="row">
-          <span className="flex items-center">
-            <input
-              ref={headCheckRef}
-              type="checkbox"
-              className="h-3.5 w-3.5 cursor-pointer accent-emerald-600 disabled:cursor-default"
-              checked={allSelected}
-              onChange={toggleAll}
-              disabled={!total}
-              aria-label="Seleccionar todas las líneas cargadas"
-              data-testid="live-logs-select-all"
-            />
-          </span>
+          <HeaderCheckbox
+            allSelected={selection.allSelected}
+            someSelected={selection.someSelected}
+            disabled={!total}
+            onToggle={selection.toggleAll}
+            label="Seleccionar todas las líneas cargadas"
+            testId="live-logs-select-all"
+          />
           <span>Hora</span>
           <span>Versión</span>
           <span>Fuente</span>
@@ -506,33 +440,27 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
                   tabIndex={0}
                   data-level={line.level}
                   data-testid="live-log-row"
-                  aria-selected={selectedIds.has(line.id)}
-                  onClick={() => setSelected(line)}
+                  aria-selected={selection.isSelected(line.id)}
+                  onClick={() => { if (!hasTextSelection()) setSelected(line) }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") setSelected(line)
-                    else if (e.key === " ") { e.preventDefault(); toggleLine(line.id, e.shiftKey) }
+                    else if (e.key === " ") { e.preventDefault(); selection.toggle(line.id, e.shiftKey) }
                   }}
                   className={cn(
                     GRID,
                     "absolute left-0 right-0 cursor-pointer border-b border-border/40 px-3 outline-none focus-visible:ring-1 focus-visible:ring-ring",
                     levelRowClass(line.level),
-                    selectedIds.has(line.id) && "shadow-[inset_3px_0_0_0_theme(colors.emerald.500)]",
+                    selection.isSelected(line.id) && "bg-foreground/[0.06] shadow-[inset_2px_0_0_0_hsl(var(--foreground))]",
                   )}
                   style={{ top: (start + i) * ROW_H, height: ROW_H }}
                   title={line.msg}
                 >
-                  <span className="flex items-center" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 cursor-pointer accent-emerald-600"
-                      checked={selectedIds.has(line.id)}
-                      onChange={() => undefined}
-                      onClick={(e) => { e.stopPropagation(); toggleLine(line.id, e.shiftKey) }}
-                      onKeyDown={(e) => { if (e.key === " ") e.stopPropagation() }}
-                      aria-label={`Seleccionar la línea de las ${formatLogTime(line.ts)}`}
-                      data-testid="live-log-select"
-                    />
-                  </span>
+                  <RowCheckbox
+                    checked={selection.isSelected(line.id)}
+                    onToggle={(range) => selection.toggle(line.id, range)}
+                    label={`Seleccionar la línea de las ${formatLogTime(line.ts)}`}
+                    testId="live-log-select"
+                  />
                   <span className="tabular-nums text-muted-foreground">{formatLogTime(line.ts)}</span>
                   <span className="truncate text-muted-foreground">{line.commit || "—"}</span>
                   <span className="truncate">{sourceLabel(line)}</span>

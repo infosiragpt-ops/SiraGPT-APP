@@ -270,7 +270,7 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
                     className="shrink-0 text-[#b8b8b8] opacity-0 transition-opacity hover:text-white group-hover:opacity-100"
                     aria-label="Copy line"
                   >
-                    {copiedKey === key ? <Check className="h-3.5 w-3.5 text-[#a7f3b0]" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copiedKey === key ? <Check className="h-3.5 w-3.5 text-[#dedede]" /> : <Copy className="h-3.5 w-3.5" />}
                   </button>
                 </div>
               </div>
@@ -307,13 +307,13 @@ export function LogsTab({ deploymentId }: { deploymentId: string }) {
             className={cn(
               "h-2 w-2 rounded-full",
               connection === "live"
-                ? "bg-[#37c96b]"
+                ? "bg-[#a3a3a3]"
                 : connection === "connecting"
-                  ? "bg-[#d6a944]"
+                  ? "bg-[#ababab]"
                   : "bg-[#6b6b6b]",
             )}
           />
-          <span className={connection === "live" ? "text-[#9df0b6]" : "text-[#a6a6a6]"}>
+          <span className={connection === "live" ? "text-[#dadada]" : "text-[#a6a6a6]"}>
             {connection === "live" ? "Live" : connection === "connecting" ? "Connecting" : "Offline"}
           </span>
         </div>

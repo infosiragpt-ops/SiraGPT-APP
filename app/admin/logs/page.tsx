@@ -31,7 +31,6 @@ import { Copy, Download, RefreshCw, Search, Sparkles, Volume2, VolumeX } from "l
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import {
@@ -51,6 +50,9 @@ import { useTurnFailureAlerts } from "@/lib/admin/turn-failure-alerts"
 import { TurnFailuresPanel } from "@/components/admin/turn-failures/turn-failures-panel"
 import { SystemIssuesPanel } from "@/components/admin/system-issues/system-issues-panel"
 import { LiveLogsPanel } from "@/components/admin/live-logs/live-logs-panel"
+import { HeaderCheckbox, LogSelectionBar, RowCheckbox } from "@/components/admin/log-selection-bar"
+import { copyText, hasTextSelection, type CopyRecord } from "@/lib/admin/log-copy"
+import { useLogSelection } from "@/lib/admin/use-log-selection"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -133,6 +135,31 @@ function metadataFull(metadata: Record<string, unknown> | null | undefined): str
   }
 }
 
+const AUDIT_NOUN = { one: "evento", many: "eventos" }
+const auditId = (row: AuditLogRow) => row.id
+function auditToRecord(row: AuditLogRow): CopyRecord {
+  const summary = metadataSummary(row.metadata)
+  return {
+    id: row.id,
+    at: row.createdAt,
+    headline: summary ? `${row.action} · ${summary}` : row.action,
+    fields: [
+      ["Acción", row.action],
+      ["Actor", row.actorName || row.actorId || row.actorType],
+      ["Recurso", [row.resourceType, row.resourceId].filter(Boolean).join(":")],
+      ["Detalle", metadataFull(row.metadata)],
+    ],
+    raw: {
+      id: row.id,
+      createdAt: row.createdAt,
+      action: row.action,
+      actor: { type: row.actorType ?? null, id: row.actorId ?? null, name: row.actorName ?? null },
+      resource: { type: row.resourceType ?? null, id: row.resourceId ?? null },
+      metadata: row.metadata ?? null,
+    },
+  }
+}
+
 // Convert a <input type="date"> value (YYYY-MM-DD) into an inclusive ISO bound.
 function dayBoundIso(date: string, end: boolean): string | undefined {
   if (!date) return undefined
@@ -177,7 +204,6 @@ export default function AdminLogsPage() {
   const [fromDate, setFromDate] = useState("")
   const [toDate, setToDate] = useState("")
   const [errorsOnly, setErrorsOnly] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
   const [detailRow, setDetailRow] = useState<AuditLogRow | null>(null)
 
@@ -361,26 +387,13 @@ export default function AdminLogsPage() {
     [rows, errorsOnly, showWarnings],
   )
 
-  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.id))
-  const someSelected = selected.size > 0
-
-  const toggleRow = (id: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const toggleAllVisible = () => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (allVisibleSelected) visibleRows.forEach((r) => next.delete(r.id))
-      else visibleRows.forEach((r) => next.add(r.id))
-      return next
-    })
-  }
+  const selection = useLogSelection({
+    rows: visibleRows,
+    getId: auditId,
+    toRecord: auditToRecord,
+    noun: AUDIT_NOUN,
+    filePrefix: "auditoria-siragpt",
+  })
 
   const handleSearch = () => {
     setPage(1)
@@ -389,27 +402,8 @@ export default function AdminLogsPage() {
     void load(1)
   }
 
-  const handleCopy = async () => {
-    const source = someSelected ? visibleRows.filter((r) => selected.has(r.id)) : visibleRows
-    if (source.length === 0) {
-      toast.error("No hay filas para copiar")
-      return
-    }
-    const header = ["Fecha", "Acción", "Actor", "Recurso", "Detalle"].join("\t")
-    const lines = source.map((r) => [
-      formatTimestamp(r.createdAt),
-      r.action,
-      r.actorName || r.actorId || r.actorType || "—",
-      [r.resourceType, r.resourceId].filter(Boolean).join(":") || "—",
-      (metadataFull(r.metadata) || metadataSummary(r.metadata) || "—").replace(/\s+/g, " "),
-    ].join("\t"))
-    const text = [header, ...lines].join("\n")
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.success(`${source.length} ${source.length === 1 ? "evento copiado" : "eventos copiados"} al portapapeles`)
-    } catch {
-      toast.error("No se pudo copiar al portapapeles")
-    }
+  const handleCopy = () => {
+    void selection.copyRows(selection.count ? selection.selectedRows : visibleRows)
   }
 
   const eventToJson = (row: AuditLogRow): string => {
@@ -430,7 +424,7 @@ export default function AdminLogsPage() {
 
   const copyDetail = async (row: AuditLogRow) => {
     try {
-      await navigator.clipboard.writeText(eventToJson(row))
+      if (!(await copyText(eventToJson(row)))) throw new Error("copy_failed")
       toast.success("Evento copiado (JSON) al portapapeles")
     } catch {
       toast.error("No se pudo copiar al portapapeles")
@@ -509,7 +503,7 @@ Devuelve:
     }
   }
 
-  const connDot = connState === "live" ? "#22c55e" : connState === "reconnecting" ? "#f59e0b" : "#9ca3af"
+  const connDot = connState === "live" ? "hsl(var(--foreground))" : connState === "reconnecting" ? "#a3a3a3" : "#d4d4d4"
   const connLabel = connState === "live"
     ? `En vivo${lastUpdated ? ` · ${lastUpdated}` : ""}`
     : connState === "reconnecting"
@@ -630,17 +624,25 @@ Devuelve:
             ) : null}
 
             <div className="ml-auto flex items-center gap-2">
-              {someSelected && (
-                <span className="text-xs text-muted-foreground">{selected.size} seleccionados</span>
-              )}
-              <Button variant="outline" size="sm" onClick={() => void handleCopy()} disabled={visibleRows.length === 0}>
+              <Button variant="outline" size="sm" onClick={handleCopy} disabled={visibleRows.length === 0}>
                 <Copy className="mr-1.5 h-3.5 w-3.5" />
-                {someSelected ? `Copiar (${selected.size})` : "Copiar todo"}
+                {selection.count ? `Copiar (${selection.count})` : "Copiar todo"}
               </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent>
+          <LogSelectionBar
+            count={selection.count}
+            noun={AUDIT_NOUN}
+            format={selection.format}
+            onFormatChange={selection.setFormat}
+            onCopy={() => void selection.copySelected()}
+            onExport={() => selection.exportSelected()}
+            onClear={selection.clear}
+            testIdPrefix="audit-logs"
+            className="mb-3"
+          />
           {error ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-6 text-center text-sm text-destructive">
               {error}
@@ -657,10 +659,13 @@ Devuelve:
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10">
-                    <Checkbox
-                      checked={allVisibleSelected}
-                      onCheckedChange={toggleAllVisible}
-                      aria-label="Seleccionar todos"
+                    <HeaderCheckbox
+                      allSelected={selection.allSelected}
+                      someSelected={selection.someSelected}
+                      disabled={!visibleRows.length}
+                      onToggle={selection.toggleAll}
+                      label="Seleccionar todos"
+                      testId="audit-logs-select-all"
                     />
                   </TableHead>
                   <TableHead className="w-44">Fecha</TableHead>
@@ -673,22 +678,23 @@ Devuelve:
               <TableBody>
                 {visibleRows.map((row) => {
                   const isErr = isErrorAction(row.action)
-                  const isChecked = selected.has(row.id)
+                  const isChecked = selection.isSelected(row.id)
                   const isNew = recentlyNew.has(row.id)
                   return (
                     <TableRow
                       key={row.id}
                       data-state={isChecked ? "selected" : undefined}
-                      className={cn("cursor-pointer", isErr && "bg-destructive/5")}
-                      style={isNew ? { boxShadow: "inset 3px 0 0 #f59e0b", backgroundColor: "rgba(245,158,11,0.08)" } : undefined}
-                      onClick={() => setDetailRow(row)}
+                      className={cn("cursor-pointer", isErr && "bg-destructive/5", isChecked && "bg-foreground/[0.05]")}
+                      style={isNew ? { boxShadow: "inset 2px 0 0 hsl(var(--foreground))", backgroundColor: "hsl(var(--foreground) / 0.05)" } : undefined}
+                      onClick={() => { if (!hasTextSelection()) setDetailRow(row) }}
                       title="Ver detalle del evento"
                     >
                       <TableCell className="align-middle" onClick={(e) => e.stopPropagation()}>
-                        <Checkbox
+                        <RowCheckbox
                           checked={isChecked}
-                          onCheckedChange={() => toggleRow(row.id)}
-                          aria-label="Seleccionar evento"
+                          onToggle={(range) => selection.toggle(row.id, range)}
+                          label="Seleccionar evento"
+                          testId="audit-log-select"
                         />
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
@@ -720,23 +726,22 @@ Devuelve:
             <div className="space-y-2 md:hidden">
               {visibleRows.map((row) => {
                 const isErr = isErrorAction(row.action)
-                const isChecked = selected.has(row.id)
+                const isChecked = selection.isSelected(row.id)
                 const isNew = recentlyNew.has(row.id)
                 return (
                   <div
                     key={row.id}
-                    onClick={() => setDetailRow(row)}
-                    className={cn("cursor-pointer rounded-lg border bg-card p-3", isErr && "bg-destructive/5")}
-                    style={isNew ? { boxShadow: "inset 3px 0 0 #f59e0b", backgroundColor: "rgba(245,158,11,0.08)" } : undefined}
+                    onClick={() => { if (!hasTextSelection()) setDetailRow(row) }}
+                    className={cn("cursor-pointer rounded-lg border bg-card p-3", isErr && "bg-destructive/5", isChecked && "border-foreground/40")}
+                    style={isNew ? { boxShadow: "inset 2px 0 0 hsl(var(--foreground))", backgroundColor: "hsl(var(--foreground) / 0.05)" } : undefined}
                   >
                     <div className="flex items-start gap-2">
-                      <span className="pt-0.5" onClick={(e) => e.stopPropagation()}>
-                        <Checkbox
-                          checked={isChecked}
-                          onCheckedChange={() => toggleRow(row.id)}
-                          aria-label="Seleccionar evento"
-                        />
-                      </span>
+                      <RowCheckbox
+                        checked={isChecked}
+                        onToggle={(range) => selection.toggle(row.id, range)}
+                        label="Seleccionar evento"
+                        className="pt-0.5"
+                      />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
                           <Badge variant={actionBadgeVariant(row.action)} className="font-mono text-[11px]">
@@ -899,7 +904,7 @@ Devuelve:
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => { void navigator.clipboard.writeText(diagnosis).then(() => toast.success("Diagnóstico copiado")) }}
+                    onClick={() => { void copyText(diagnosis).then((ok) => (ok ? toast.success("Diagnóstico copiado") : toast.error("No se pudo copiar"))) }}
                   >
                     <Copy className="mr-1.5 h-3.5 w-3.5" />
                     Copiar diagnóstico

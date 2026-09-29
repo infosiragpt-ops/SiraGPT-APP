@@ -67,7 +67,7 @@ export function DeploymentDetail({
           <div className={contentClassName}>
             {tab === "overview" && isSuspended ? (
               <div className="px-4 pt-2">
-                <WarningBanner className="border-[#6c5619] bg-[#332c12] text-[#f4e7a8]">{PENDING_PAYMENT_BANNER}</WarningBanner>
+                <WarningBanner className="border-[#565656] bg-[#2c2c2c] text-[#e5e5e5]">{PENDING_PAYMENT_BANNER}</WarningBanner>
               </div>
             ) : null}
 
@@ -121,7 +121,7 @@ function DeploymentTab({
       className={cn(
         "relative h-[46px] rounded-none border-b-2 border-transparent bg-transparent px-4 text-[14px] font-medium shadow-none",
         "gap-2 text-white hover:bg-[#262626] data-[state=active]:shadow-none",
-        active ? "border-[#0f7bea] bg-[#17345a] text-white" : "text-[#dcdcdc]",
+        active ? "border-[#6c6c6c] bg-[#313131] text-white" : "text-[#dcdcdc]",
       )}
     >
       {icon}

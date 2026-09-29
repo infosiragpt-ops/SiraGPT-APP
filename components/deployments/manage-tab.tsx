@@ -281,7 +281,7 @@ export function ManageTab({
           <button
             type="button"
             onClick={() => toast.message("Resource limits are managed by your connected provider.")}
-            className="mt-1 text-[13px] font-medium text-[#0b72e7] hover:opacity-80"
+            className="mt-1 text-[13px] font-medium text-[#656565] hover:opacity-80"
           >
             View account resource limits
           </button>

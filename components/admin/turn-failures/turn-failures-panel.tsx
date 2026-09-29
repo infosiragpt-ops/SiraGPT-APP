@@ -23,6 +23,9 @@ import type {
   AdminTurnFailureItem,
   AdminTurnFailureStats,
 } from "@/lib/admin/turn-failures-types"
+import { hasTextSelection, type CopyRecord } from "@/lib/admin/log-copy"
+import { useLogSelection } from "@/lib/admin/use-log-selection"
+import { HeaderCheckbox, LogSelectionBar, RowCheckbox } from "@/components/admin/log-selection-bar"
 import { cn } from "@/lib/utils"
 import { TopCausesPanel, type CauseWindow } from "./top-causes-panel"
 import { TurnFailureDetailDialog } from "./turn-failure-detail"
@@ -47,6 +50,34 @@ type Filters = {
   q: string
   from: string
   to: string
+}
+
+const FAILURE_NOUN = { one: "fallo", many: "fallos" }
+const failureId = (it: AdminTurnFailureItem) => it.id
+function failureToRecord(it: AdminTurnFailureItem): CopyRecord {
+  const m = it.metadata || {}
+  return {
+    id: it.id,
+    at: it.createdAt,
+    headline: `${categoryLabel(it.category, it.categoryLabel)}: ${it.cause || "sin causa"}`,
+    fields: [
+      ["Severidad", it.severity],
+      ["Usuario", it.userEmail || it.userId],
+      ["Modelo", it.model],
+      ["Pregunta", it.prompt],
+      ["Qué vio el usuario", it.whatUserSaw],
+      ["Duración", formatDuration(it.totalMs)],
+      ["Error", [m.errorCode, m.errorMessage].filter((v) => v != null && v !== "").join(" · ") || null],
+      ["Ruta", it.route],
+      ["Chat", it.chatId],
+      ["Enlace", m.openLink],
+      ["Peticiones", m.reqIds],
+      ["Versión", m.commit],
+      ["Ocurrencias", it.occurrences > 1 ? it.occurrences : null],
+      ["Huella", it.fingerprint],
+    ],
+    raw: it,
+  }
 }
 
 const EMPTY_FILTERS: Filters = { category: "all", model: "all", user: "", q: "", from: "", to: "" }
@@ -209,6 +240,14 @@ export function TurnFailuresPanel() {
     }
   }
 
+  const selection = useLogSelection({
+    rows: items,
+    getId: failureId,
+    toRecord: failureToRecord,
+    noun: FAILURE_NOUN,
+    filePrefix: "fallos-de-respuesta",
+  })
+
   const rate = stats?.failureRate24h
   const rateText = rate && rate.total ? `${rate.failed} de ${rate.total} preguntas` : `${rate?.failed ?? 0} fallos`
   const hasFilters = JSON.stringify(filters) !== JSON.stringify(EMPTY_FILTERS)
@@ -351,6 +390,17 @@ export function TurnFailuresPanel() {
         )}
       </div>
 
+      <LogSelectionBar
+        count={selection.count}
+        noun={FAILURE_NOUN}
+        format={selection.format}
+        onFormatChange={selection.setFormat}
+        onCopy={() => void selection.copySelected()}
+        onExport={() => selection.exportSelected()}
+        onClear={selection.clear}
+        testIdPrefix="turn-failures"
+      />
+
       {/* Table */}
       <div className="rounded-lg border border-border/70 bg-background">
         {error ? (
@@ -365,6 +415,16 @@ export function TurnFailuresPanel() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8">
+                      <HeaderCheckbox
+                        allSelected={selection.allSelected}
+                        someSelected={selection.someSelected}
+                        disabled={!items.length}
+                        onToggle={selection.toggleAll}
+                        label="Seleccionar todos los fallos de la página"
+                        testId="turn-failures-select-all"
+                      />
+                    </TableHead>
                     <TableHead className="w-36">Fecha</TableHead>
                     <TableHead className="w-44">Tipo</TableHead>
                     <TableHead className="w-44">Usuario</TableHead>
@@ -378,11 +438,20 @@ export function TurnFailuresPanel() {
                   {items.map((it) => (
                     <TableRow
                       key={it.id}
-                      className={cn("cursor-pointer", recentlyNew.has(it.id) && "bg-amber-50")}
-                      style={recentlyNew.has(it.id) ? { boxShadow: "inset 3px 0 0 #f59e0b" } : undefined}
-                      onClick={() => setDetail(it)}
+                      className={cn("cursor-pointer", recentlyNew.has(it.id) && "bg-amber-50", selection.isSelected(it.id) && "bg-foreground/[0.05]")}
+                      style={recentlyNew.has(it.id) ? { boxShadow: "inset 2px 0 0 hsl(var(--foreground))" } : undefined}
+                      data-state={selection.isSelected(it.id) ? "selected" : undefined}
+                      onClick={() => { if (!hasTextSelection()) setDetail(it) }}
                       data-testid="turn-failure-row"
                     >
+                      <TableCell className="w-8 align-middle">
+                        <RowCheckbox
+                          checked={selection.isSelected(it.id)}
+                          onToggle={(range) => selection.toggle(it.id, range)}
+                          label="Seleccionar este fallo"
+                          testId="turn-failure-select"
+                        />
+                      </TableCell>
                       <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" title={formatDateTime(it.createdAt)}>
                         {formatDateTime(it.createdAt)}
                         <div className="text-[11px]">{formatRelative(it.createdAt)}</div>
@@ -405,22 +474,31 @@ export function TurnFailuresPanel() {
             </div>
             <div className="space-y-2 p-2 md:hidden">
               {items.map((it) => (
-                <button
+                <div
                   key={it.id}
-                  type="button"
-                  onClick={() => setDetail(it)}
-                  className={cn("w-full rounded-lg border bg-card p-3 text-left", recentlyNew.has(it.id) && "border-amber-300 bg-amber-50")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => { if (!hasTextSelection()) setDetail(it) }}
+                  onKeyDown={(e) => { if (e.key === "Enter") setDetail(it) }}
+                  className={cn("w-full cursor-pointer rounded-lg border bg-card p-3 text-left", recentlyNew.has(it.id) && "border-amber-300 bg-amber-50", selection.isSelected(it.id) && "border-foreground/40")}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium", severityBadgeClass(it.severity))}>
-                      {categoryLabel(it.category, it.categoryLabel)}
+                    <span className="flex min-w-0 items-center gap-2">
+                      <RowCheckbox
+                        checked={selection.isSelected(it.id)}
+                        onToggle={(range) => selection.toggle(it.id, range)}
+                        label="Seleccionar este fallo"
+                      />
+                      <span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium", severityBadgeClass(it.severity))}>
+                        {categoryLabel(it.category, it.categoryLabel)}
+                      </span>
                     </span>
                     <span className="text-[11px] text-muted-foreground">{formatRelative(it.createdAt)}</span>
                   </div>
                   <div className="mt-1 truncate text-sm font-medium">{it.cause}</div>
                   <div className="truncate text-xs text-muted-foreground">{it.userEmail || it.userId} · {it.model || "—"}</div>
                   <div className="mt-1 line-clamp-2 text-xs">{it.prompt}</div>
-                </button>
+                </div>
               ))}
             </div>
           </>

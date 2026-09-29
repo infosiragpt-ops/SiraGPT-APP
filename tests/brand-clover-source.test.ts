@@ -53,16 +53,19 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     }
   })
 
-  it("uses the clover green as the brand accent in both themes; the thinking glyph is monochrome", () => {
+  // Luis (2026-09-29): the interface is black & white — the in-app brand ink
+  // is near-black on light and near-white on dark (the PWA icon, emails and
+  // generated documents keep the clover green asset).
+  it("uses a monochrome ink as the in-app brand accent in both themes; the thinking glyph is monochrome", () => {
     const css = source("app/globals.css")
-    assert.match(css, /--brand: #2E7D32;/)
-    assert.match(css, /--brand: #66BB6A;/)
+    assert.match(css, /--brand: #0A0A0A;/)
+    assert.match(css, /--brand: #FAFAFA;/)
     // The thinking glyph is the foreground (black on light, white on dark), in both themes.
     assert.equal((css.match(/--think-accent: hsl\(var\(--foreground\)\);/g) || []).length, 2)
     assert.doesNotMatch(css, /--think-accent: #(2E7D32|66BB6A);/i)
     assert.match(css, /--clover-vein: #ffffff;/)
-    assert.match(css, /--accent-violet: 123 46% 34%;/)
-    assert.match(css, /--accent-violet: 122 39% 49%;/)
+    assert.match(css, /--accent-violet: 0 0% 4%;/)
+    assert.match(css, /--accent-violet: 0 0% 96%;/)
     assert.doesNotMatch(css, /--brand: #(7c5cff|5b4dff);/i)
     assert.match(source("lib/thinking-loaders.ts"), /export const CLAUDE_THINK_ACCENT = "currentColor"/)
     // The thinking glyph is the ThinkingCore (not the clover), drawn in the monochrome think accent.

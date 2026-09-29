@@ -76,7 +76,7 @@ export function CreatePanel() {
     <div className="w-full lg:w-80 shrink-0 space-y-4">
       {/* Brand header */}
       <header className="flex items-center gap-2.5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#C05621]/12 text-[#C05621]">
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#696969]/12 text-[#696969]">
           <Palette className="h-4 w-4" />
         </div>
         <div className="leading-tight">
@@ -189,7 +189,7 @@ export function CreatePanel() {
         </p>
         <Button
           onClick={() => toast.info("Design systems · próximamente")}
-          className="mt-3 w-full bg-[#C05621] hover:bg-[#A8481C] text-white"
+          className="mt-3 w-full bg-[#696969] hover:bg-[#A8481C] text-white"
         >
           Set up design system
         </Button>
@@ -231,7 +231,7 @@ function FidelityPicker({
       className={cn(
         "flex flex-col items-center gap-2 rounded-lg border-2 p-3 transition-all",
         value === v
-          ? "border-[#C05621] bg-[#C05621]/5"
+          ? "border-[#696969] bg-[#696969]/5"
           : "border-border/60 hover:border-foreground/30",
         disabled && "opacity-50 cursor-not-allowed",
       )}

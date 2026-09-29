@@ -77,7 +77,7 @@ function ForgotPasswordPageContent() {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(55% 45% at 12% 12%, rgba(124,58,237,0.28), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(79,70,229,0.20), transparent 70%)",
+              "radial-gradient(55% 45% at 12% 12%, rgba(85,85,85,0.28), transparent 70%), radial-gradient(50% 45% at 100% 100%, rgba(83,83,83,0.20), transparent 70%)",
           }}
         />
         <div className="relative flex items-center gap-3">

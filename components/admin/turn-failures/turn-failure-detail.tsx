@@ -17,6 +17,7 @@ import {
   severityBadgeClass,
   severityLabel,
 } from "./turn-failure-labels"
+import { copyText } from "@/lib/admin/log-copy"
 
 const SUBTYPE_LABELS: Record<string, string> = {
   generacion_imagen: "Generación de imagen",
@@ -98,7 +99,7 @@ export function TurnFailureDetailDialog({
   const copy = async () => {
     if (!item) return
     try {
-      await navigator.clipboard.writeText(turnFailureToJson(item))
+      if (!(await copyText(turnFailureToJson(item)))) throw new Error("copy_failed")
       toast.success("Fallo copiado (JSON) al portapapeles")
     } catch {
       toast.error("No se pudo copiar al portapapeles")

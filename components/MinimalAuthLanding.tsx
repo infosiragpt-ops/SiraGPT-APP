@@ -7,7 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 
 function PrimumMark() {
   return (
-    <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-white dark:bg-zinc-800 shadow-[0_18px_45px_-18px_rgba(124,58,237,0.75)] ring-1 ring-purple-200 dark:ring-purple-900">
+    <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-white dark:bg-zinc-800 shadow-[0_18px_45px_-18px_rgba(85,85,85,0.75)] ring-1 ring-purple-200 dark:ring-purple-900">
       <div className="absolute inset-[3px] rounded-[14px] bg-[linear-gradient(135deg,#7c3aed_0%,#fff_48%,#f97316_100%)] dark:bg-[linear-gradient(135deg,#7c3aed_0%,#27272a_48%,#f97316_100%)] opacity-95" />
       <div className="relative flex h-7 w-7 items-center justify-center rounded-xl bg-white/90 dark:bg-zinc-700/90 text-[16px] font-black text-slate-950 dark:text-zinc-100 shadow-inner">
         S
@@ -21,13 +21,13 @@ function AuthActions() {
     <div className="flex items-center gap-3">
       <Link
         href="/auth/login"
-        className="inline-flex h-11 items-center justify-center rounded-full border border-purple-200 dark:border-purple-800 bg-white dark:bg-zinc-800 px-5 text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.8)] transition hover:border-purple-300 dark:hover:border-purple-700"
+        className="inline-flex h-11 items-center justify-center rounded-full border border-purple-200 dark:border-purple-800 bg-white dark:bg-zinc-800 px-5 text-[13.5px] font-semibold text-slate-900 dark:text-zinc-100 shadow-[0_18px_50px_-34px_rgba(23,23,23,0.8)] transition hover:border-purple-300 dark:hover:border-purple-700"
       >
         Iniciar sesión
       </Link>
       <Link
         href="/auth/register"
-        className="group relative inline-flex h-11 items-center justify-center overflow-hidden rounded-full bg-slate-950 px-6 text-[13.5px] font-semibold text-white shadow-[0_20px_45px_-18px_rgba(124,58,237,0.9)] transition hover:-translate-y-0.5"
+        className="group relative inline-flex h-11 items-center justify-center overflow-hidden rounded-full bg-slate-950 px-6 text-[13.5px] font-semibold text-white shadow-[0_20px_45px_-18px_rgba(85,85,85,0.9)] transition hover:-translate-y-0.5"
       >
         <span className="absolute inset-0 bg-[linear-gradient(135deg,#7c3aed_0%,#f97316_100%)]" />
         <span className="absolute inset-y-0 left-0 w-1/2 -translate-x-full bg-white/25 blur-xl transition duration-700 group-hover:translate-x-[240%]" />
@@ -48,7 +48,7 @@ function HeroChatBar() {
   return (
     <form
       action="/auth/login"
-      className="composer-liquid-surface relative mx-auto flex h-[74px] w-full max-w-[1180px] items-center gap-3 overflow-hidden rounded-full border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-5 shadow-[0_18px_52px_-30px_rgba(15,23,42,0.78)] ring-1 ring-black/5 dark:ring-white/5 sm:h-[86px] sm:px-7"
+      className="composer-liquid-surface relative mx-auto flex h-[74px] w-full max-w-[1180px] items-center gap-3 overflow-hidden rounded-full border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-5 shadow-[0_18px_52px_-30px_rgba(23,23,23,0.78)] ring-1 ring-black/5 dark:ring-white/5 sm:h-[86px] sm:px-7"
     >
       <button
         type="button"

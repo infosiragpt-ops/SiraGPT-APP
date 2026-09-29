@@ -12,6 +12,7 @@ import { RequestLogsSection } from "../turn-failures/turn-failure-detail"
 import { formatDateTime, formatRelative } from "../turn-failures/turn-failure-labels"
 import { IssueSparkline } from "./issue-sparkline"
 import { formatCount, issueStatusClass, issueStatusLabel, kindLabel, levelClass, levelLabel } from "./system-issue-labels"
+import { copyText } from "@/lib/admin/log-copy"
 
 function Field({ label, children, mono = false }: { label: string; children: React.ReactNode; mono?: boolean }) {
   return (
@@ -86,7 +87,7 @@ export function SystemIssueDetailSheet({
   const copy = async () => {
     if (!detail) return
     try {
-      await navigator.clipboard.writeText(JSON.stringify(detail, null, 2))
+      if (!(await copyText(JSON.stringify(detail, null, 2)))) throw new Error("copy_failed")
       toast.success("Error copiado (JSON) al portapapeles")
     } catch {
       toast.error("No se pudo copiar al portapapeles")

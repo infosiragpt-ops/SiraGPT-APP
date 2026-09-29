@@ -1,4 +1,21 @@
 /** @type {import('tailwindcss').Config} */
+const tailwindColors = require("tailwindcss/colors")
+
+// Monochrome identity: every decorative hue resolves to the neutral grey
+// ramp shade-for-shade (emerald-500 → neutral-500, sky-50 → neutral-50…), so
+// hundreds of hardcoded utility classes follow the black & white system
+// without touching each component and light/dark contrast is preserved.
+// `red` and `rose` stay chromatic: they carry one meaning — errors and
+// irreversible actions.
+const MONOCHROME_PALETTES = [
+  "emerald", "green", "lime", "teal", "cyan", "sky", "blue", "indigo",
+  "violet", "purple", "fuchsia", "pink", "amber", "yellow", "orange",
+  "slate", "gray", "zinc", "stone",
+]
+const monochromePalettes = Object.fromEntries(
+  MONOCHROME_PALETTES.map((name) => [name, tailwindColors.neutral]),
+)
+
 module.exports = {
   darkMode: ["class"],
   content: [
@@ -19,6 +36,7 @@ module.exports = {
     },
     extend: {
       colors: {
+        ...monochromePalettes,
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -139,8 +157,8 @@ module.exports = {
         'heartbeat': 'heartbeat 1s ease-in-out infinite',
       },
       fontFamily: {
-        sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
-        mono: ["JetBrains Mono", "Consolas", "monospace"],
+        sans: ["var(--font-sans)", "Geist", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
+        mono: ["var(--font-mono)", "Geist Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
         serif: ["var(--font-serif)", "Georgia", "serif"],
       },
       fontSize: {
@@ -154,6 +172,19 @@ module.exports = {
         "4xl": ["2.25rem", { lineHeight: "2.5rem" }],
         "5xl": ["3rem", { lineHeight: "1" }],
         "6xl": ["3.75rem", { lineHeight: "1" }],
+      },
+      // Layered monochrome depth (hairline + ambient), defined per theme in
+      // globals.css so dark mode gets a light hairline instead of a
+      // shadow that would vanish on black.
+      boxShadow: {
+        xs: "var(--shadow-xs)",
+        sm: "var(--shadow-sm)",
+        DEFAULT: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
+        xl: "var(--shadow-xl)",
+        "2xl": "var(--shadow-xl)",
+        hairline: "var(--shadow-hairline)",
       },
       spacing: {
         18: "4.5rem",
