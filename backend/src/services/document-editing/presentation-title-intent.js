@@ -49,6 +49,11 @@ function maskDocumentFilenames(value) {
 function resolveSlideScope(value) {
   // Resolve locations from instructions, never from the new title or a source.
   const text = normalize(documentReferenceText(maskDocumentFilenames(value)));
+  // A title assignment can contain "diapositivas 1 a 3 a Nuevo": the first
+  // "a" belongs to its range, not to the new title. Check lists/ranges before
+  // assignment suffix removal can hide part of the requested scope.
+  const fullScope = normalize(maskDocumentFilenames(value)
+    .replace(/"[^"\r\n]*"|“[^”\r\n]*”|«[^»\r\n]*»|'[^'\r\n]*'|‘[^’\r\n]*’|`[^`\r\n]*`/gu, ' '));
   const ordinals = Object.keys(ORDINALS).join('|');
   const numbers = [
     ...Array.from(text.matchAll(new RegExp(`\\b${NUMERIC_SLIDE}`, 'g')), match => Number(match[1])),
@@ -58,9 +63,9 @@ function resolveSlideScope(value) {
   const distinct = [...new Set(numbers)];
   // Elliptical lists/ranges have a single unit noun, so ordinary location
   // matches alone would accidentally select only their first/last member.
-  const list = new RegExp(`\\b(?:${ordinals})\\s*(?:,|y|e|and|a|hasta)\\s*(?:(?:la|el)\\s+)?(?:${ordinals})\\s+${UNIT}\\b`).test(text)
-    || new RegExp(`\\b${UNIT}\\s+\\d{1,3}\\s*(?:,|y|e|and|a|al|hasta|-)\\s*\\d{1,3}\\b`).test(text)
-    || new RegExp(`\\b(?:ambas|ambos)\\s+(?:(?:las|los)\\s+)?${UNIT}\\b`).test(text);
+  const list = new RegExp(`\\b(?:${ordinals})\\s*(?:,|y|e|and|a|hasta)\\s*(?:(?:la|el)\\s+)?(?:${ordinals})\\s+${UNIT}\\b`).test(fullScope)
+    || new RegExp(`\\b${UNIT}\\s+\\d{1,3}\\s*(?:,|y|e|and|a|al|hasta|-)\\s*\\d{1,3}\\b`).test(fullScope)
+    || new RegExp(`\\b(?:ambas|ambos)\\s+(?:(?:las|los)\\s+)?${UNIT}\\b`).test(fullScope);
   // An explicit whole-deck operation remains supported by the generic/style
   // editors, but never by the single-slide title fast path.
   const allSlides = new RegExp(`\\b(?:cada|todas|todos)\\s+(?:(?:las|los)\\s+)?${UNIT}\\b`).test(text);

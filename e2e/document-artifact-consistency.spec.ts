@@ -9,7 +9,8 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 /**
  * Browser UI regression, NOT an editing-engine/conversion acceptance test.
  * Auth, API responses and Office-to-PDF conversion are intercepted. PDF.js
- * renders real three-page PDF bytes; downloads retain real synthetic Office
+ * renders real three-page PDF bytes for paginated documents; Excel uses real
+ * workbook bytes in its native grid. Downloads retain real synthetic Office
  * bytes. No backend, account, provider, production URL or new dependency.
  */
 test.describe.configure({ timeout: 180_000 })
@@ -50,7 +51,18 @@ async function buildOffice(format: Format, edition: Edition): Promise<Buffer> {
   if (format === "docx") return Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph(title), new Paragraph("Contenido sintetico sin datos de usuarios.")] }] }))
   if (format === "xlsx") {
     const workbook = new ExcelJS.Workbook()
-    workbook.addWorksheet("QA").addRows([[title], ["Dato", "Valor"], ["Prueba", 2027]])
+    const data = workbook.addWorksheet("Respuestas")
+    data.addRow([title])
+    data.addRow(["ID", ...Array.from({ length: 20 }, (_, i) => `P${String(i + 1).padStart(2, "0")}`), "Proporción", "Total"])
+    for (let id = 1; id <= 125; id++) data.addRow([id, ...Array(20).fill(3), 0.125, { formula: `SUM(B${id + 2}:U${id + 2})`, result: 60 }])
+    data.getCell("U2").font = { bold: true, color: { argb: "FF17365D" } }
+    data.getCell("U2").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCCE8FF" } }
+    data.getCell("V3").numFmt = "0.0%"
+    const summary = workbook.addWorksheet("Resumen")
+    summary.mergeCells("A1:C2")
+    summary.getCell("A1").value = `Resumen ${edition}`
+    summary.getCell("A3").value = "Participantes"
+    summary.getCell("B3").value = 125
     return Buffer.from(await workbook.xlsx.writeBuffer())
   }
   if (format === "pptx") {
@@ -193,8 +205,51 @@ async function verifyViewer(page: Page, fixture: Fixture, options: { keepOpen?: 
   await cardFor(page, fixture).getByRole("button", { name: `Ver documento: ${fixture.filename}`, exact: true }).click()
   const shell = page.getByTestId("document-preview-shell")
   await expect(shell).toBeVisible()
-  await expect(shell.locator("canvas").first()).toBeVisible({ timeout: 60_000 })
   const header = shell.getByTestId("document-preview-header")
+  if (fixture.format === "xlsx") {
+    const grid = shell.getByTestId("spreadsheet-preview")
+    await expect(grid).toBeVisible()
+    await expect(header.getByRole("heading", { name: fixture.filename, exact: true })).toBeVisible()
+    if (await shell.getAttribute("data-presentation") === "desktop-split") await expect(header.getByRole("img", { name: "Excel", exact: true })).toBeVisible()
+    await expect(shell.locator("canvas")).toHaveCount(0)
+    await expect(shell.getByTestId("pdf-preview-controls")).toHaveCount(0)
+    let table = grid.getByRole("table", { name: "Hoja Respuestas" })
+    await expect(table.getByRole("columnheader")).toHaveCount(24)
+    await expect(table.getByRole("cell", { name: `A1: QA XLSX ${fixture.edition}`, exact: true })).toBeVisible()
+    await expect(table.getByRole("cell", { name: "A2: ID", exact: true })).toBeVisible()
+    const lastQuestion = table.getByRole("cell", { name: "U2: P20", exact: true })
+    await expect(lastQuestion).toBeVisible()
+    await expect(lastQuestion).toHaveCSS("font-weight", "700")
+    await expect(lastQuestion).toHaveCSS("color", "rgb(23, 54, 93)")
+    await expect(lastQuestion).toHaveCSS("background-color", "rgb(204, 232, 255)")
+    await expect(table.getByRole("cell", { name: "V3: 12.5%", exact: true })).toBeVisible()
+    await table.getByRole("cell", { name: "W3: 60", exact: true }).click()
+    await expect(grid.getByLabel("Contenido de la celda")).toHaveText(/W3.*=SUM\(B3:U3\)/)
+    await expect(grid.getByText("127 filas · 23 columnas", { exact: true })).toBeVisible()
+    await expect(grid.getByRole("button", { name: "Filas anteriores", exact: true })).toBeDisabled()
+    await grid.getByRole("button", { name: "Filas siguientes", exact: true }).click()
+    await expect(table.getByRole("cell", { name: "A101: 99", exact: true })).toBeVisible()
+    await expect(table.getByRole("cell", { name: "U127: 3", exact: true })).toBeVisible()
+    await expect(grid.getByText("101–127", { exact: true })).toBeVisible()
+    await expect(grid.getByRole("button", { name: "Filas siguientes", exact: true })).toBeDisabled()
+    await grid.getByRole("tab", { name: "Resumen", exact: true }).click()
+    table = grid.getByRole("table", { name: "Hoja Resumen" })
+    const merged = table.getByRole("cell", { name: `A1: Resumen ${fixture.edition}`, exact: true })
+    await expect(merged).toHaveAttribute("colspan", "3")
+    await expect(merged).toHaveAttribute("rowspan", "2")
+    await expect(table.getByRole("cell", { name: "B3: 125", exact: true })).toBeVisible()
+    // The return tab also verifies real keyboard activation, alongside the
+    // pointer-based switch to Resumen above.
+    await grid.getByRole("tab", { name: "Respuestas", exact: true }).press("Enter")
+    await expect(grid.getByText("1–100", { exact: true })).toBeVisible()
+    await expect(grid.getByLabel("Contenido de la celda")).toHaveText(new RegExp(`A1.*QA XLSX ${fixture.edition}`))
+    if (!options.keepOpen) {
+      await header.getByRole("button", { name: "Cerrar previsualización", exact: true }).click()
+      await expect(shell).toHaveCount(0)
+    }
+    return
+  }
+  await expect(shell.locator("canvas").first()).toBeVisible({ timeout: 60_000 })
   await expect(header.getByTestId("pdf-preview-controls")).toBeVisible()
   await expect(shell.getByTestId("pdf-preview-controls")).toHaveCount(1)
   await expect(shell.getByText(`QA ${fixture.format.toUpperCase()} ${fixture.edition}`, { exact: true }).first()).toBeVisible()
@@ -227,7 +282,7 @@ async function verifyViewer(page: Page, fixture: Fixture, options: { keepOpen?: 
 }
 
 for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["mobile", { width: 390, height: 844 }]] as const) {
-  test(`${name}: original and edited document cards share icons; PDF controls navigate and zoom from the header`, async ({ context, page, baseURL }) => {
+  test(`${name}: original and edited cards share icons; Excel shows its workbook and PDF controls navigate and zoom from the header`, async ({ context, page, baseURL }) => {
     expect(baseURL).toBeTruthy()
     const fixtures = await buildFixtures()
     const evidence = await installFixture(context, baseURL!, fixtures)
@@ -259,9 +314,9 @@ for (const [name, viewport] of [["desktop", { width: 1440, height: 1000 }], ["mo
       if (name === "desktop") await verifyDownload(page, card, fixture)
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
-    // Original and edited Office previews plus native PDFs use actual PDF.js.
-    // Mobile repeats portrait/landscape previews; desktop covers every format.
-    for (const fixture of fixtures.filter(f => name === "desktop" || f.format === "pptx" || f.format === "pdf")) await verifyViewer(page, fixture)
+    // Excel must retain its cells/sheets; paginated documents use PDF.js.
+    // Mobile covers native workbooks and portrait/landscape PDF previews too.
+    for (const fixture of fixtures.filter(f => name === "desktop" || f.format !== "docx")) await verifyViewer(page, fixture)
     if (name === "desktop") {
       // Change an open three-page document after navigation+manual zoom. The
       // replacement must reset to its own bytes/page 1, not retain stale state.

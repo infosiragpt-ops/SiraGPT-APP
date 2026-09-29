@@ -122,6 +122,68 @@ test('title fast path never hijacks Word/Excel/PDF edits or silently completes o
     assert.equal(trySurgicalPresentationFollowup({ instruction, files: [{ name: 'historia.pptx', buffer: original }] }), null);
   }
 });
+test('the mixed Word Excel PPTX acceptance request declines the title shortcut before its plural-source guard', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'fixtures', 'office', 'defensa_demo.pptx'));
+  const instruction = 'Prueba de aceptación con tres documentos de ejemplo y datos sintéticos. Edita los tres archivos adjuntos, conservando su estructura y formato. 1) En tesis_demo.docx cambia solo «Lima, 2024» por «Lima, 2026» en la portada y «vías rurales» por «vías rurales locales» en el párrafo de introducción. 2) En presupuesto_demo.xlsx, hoja Presupuesto, cambia B4 a 15 y aplica relleno amarillo claro y negrita únicamente a C3. Conserva las fórmulas y recalcula sus resultados. 3) En defensa_demo.pptx cambia «Sustentación 2024» por «Sustentación 2026» en la primera diapositiva y el título «Resultados» por «Resultados verificados» en la segunda. Devuelve exactamente tres archivos editados .docx, .xlsx y .pptx descargables. Reabre cada salida y verifica los cambios; comprueba que el resto del contenido, estilos, tamaños, posiciones y hojas o diapositivas permanezca igual. No añadas anexos ni rehagas los archivos desde cero.';
+  const scope = 'Este paso edita únicamente "defensa_demo.pptx" del conjunto ["tesis_demo.docx","presupuesto_demo.xlsx","defensa_demo.pptx"]. Los demás archivos se procesan en pasos separados y se entregan juntos; no afirmes que faltan ni pidas volver a adjuntarlos. Aplica solo los cambios autorizados para este archivo.';
+  const files = [{ name: 'defensa_demo.pptx', buffer: source }];
+  for (const task of [instruction, `${instruction}\n\nAlcance del paso: ${scope}`]) {
+    assert.equal(trySurgicalPresentationFollowup({ instruction: task, files }), null,
+      'the entire compound request must reach the selected-model office engine');
+  }
+  assert.deepEqual(files[0].buffer, source, 'declining the shortcut never changes the original');
+});
+test('a mixed batch with multiple slide changes or a slide range reaches the canonical editor intact', async () => {
+  const source = await deck();
+  for (const task of [
+    'Edita los tres archivos adjuntos. En historia.pptx cambia el título de la primera diapositiva a "Nuevo" y el de la segunda a "Resultados".',
+    'En ambos documentos cambia el título de las diapositivas 1 a 3 a "Nuevo".',
+  ]) assert.equal(trySurgicalPresentationFollowup({ instruction: task, files: [{ name: 'historia.pptx', buffer: source }] }), null);
+});
+test('a proved exact PPTX edit is downloadable through the chat editor contract without a model or sandbox call', async () => {
+  const { runChatDocumentEdit } = require('../src/services/document-editor/chat-document-editor');
+  const { runOfficeEditorEngine } = require('../src/services/document-editor/office-engine');
+  const original = await deck(); const saved = [];
+  const row = { id: 'ppt-source', originalName: 'historia.pptx' };
+  const result = await runChatDocumentEdit({
+    prisma: { file: { findMany: async () => [row] }, message: { findMany: async () => [] } },
+    userId: 'owner', chatId: 'chat', fileIds: [row.id], instruction: PROMPT,
+    llm: { model: 'selected-model', client: { chat: { completions: { create() { assert.fail('no model call for this proved exact edit'); } } } } },
+    deps: {
+      readSourceBuffer: async () => ({ buffer: original, cleanup: async () => {} }),
+      tryDeterministicEdit: async () => null,
+      runDocumentAgent: runOfficeEditorEngine,
+      saveArtifact: (input) => {
+        saved.push(input);
+        return { id: 'aabb00', filename: input.filename, format: 'pptx', mime: input.mime,
+          sizeBytes: Buffer.from(input.base64, 'base64').length, downloadUrl: '/api/agent/artifact/aabb00' };
+      },
+    },
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(result.artifacts.length, 1);
+  assert.equal(saved.length, 1);
+  assert.equal(result.artifacts[0].downloadUrl, '/api/agent/artifact/aabb00');
+  const edited = Buffer.from(saved[0].base64, 'base64');
+  assert.equal(adapter.listPptxSlides(edited)[0].title, NEW_TITLE);
+  assert.deepEqual(changedParts(original, edited), ['ppt/slides/slide1.xml']);
+  assert.equal(saved[0].validation.documentEdit.sourceFileId, row.id);
+});
+test('the office editor never normalizes an incomplete or unproved shortcut into successful completion', async () => {
+  const { runOfficeEditorEngine } = require('../src/services/document-editor/office-engine');
+  const valid = { name: 'editado.pptx', buffer: await deck(), valid: true, validation: { passed: true } };
+  for (const run of [
+    { stoppedReason: 'edit_not_applied', outputs: [] },
+    { stoppedReason: 'surgical_edit', outputs: [{ ...valid, validation: {} }] },
+    { stoppedReason: 'surgical_edit', outputs: [{ ...valid, valid: false }] },
+    { stoppedReason: 'surgical_edit', outputs: [{ ...valid, buffer: Buffer.alloc(0) }] },
+    { stoppedReason: 'surgical_edit', outputs: [valid, { ...valid, validation: { passed: false } }] },
+  ]) {
+    const out = await runOfficeEditorEngine({ runAgentRunner: async () => ({ ...run, steps: [] }) });
+    assert.equal(out.stoppedReason, run.stoppedReason);
+    assert.notEqual(out.stoppedReason, 'final');
+  }
+});
 test('same exact instruction works through the source-preserving document entry with real saved bytes', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-followup-source-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const original = await deck(); const filePath = path.join(dir, 'historia_dinosaurios.pptx'); fs.writeFileSync(filePath, original);

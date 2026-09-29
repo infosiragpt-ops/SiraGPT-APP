@@ -17,8 +17,9 @@
  *      URL). While uploading/converting, show the professional loading
  *      skeleton + composer-synced %.
  *   2. Server LibreOffice/Gotenberg PDF (`/api/files/:id/render`) for
- *      DOCX/DOC/PPTX/XLSX — page size and margins preserved via
- *      writer/impress/calc PDF export filters. Native PDFs pass through.
+ *      DOCX/DOC/PPTX — page size and margins preserved via
+ *      writer/impress PDF export filters. XLSX keeps its native grid.
+ *      Native PDFs pass through.
  *   3. `url` (server-backed /uploads/…) then `file` as fallback only
  *      after the object is ready and conversion is unavailable.
  *
@@ -1013,7 +1014,7 @@ export function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
   if (typeof window === "undefined") return
   const kind = detectKind(a)
 
-  if (["doc", "docx", "xlsx", "pptx"].includes(kind) && canUseServerPdfConversion(a)) {
+  if (["doc", "docx", "pptx"].includes(kind) && canUseServerPdfConversion(a)) {
     void fetchServerConvertedPdfAttachment(a).catch(() => null)
   }
 
