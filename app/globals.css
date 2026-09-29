@@ -1849,7 +1849,7 @@ details[open] > summary .think-chevron,
 }
 
 .model-logo-chip[data-model-brand="openai"] {
-  color: hsl(0 0% 32%);
+  color: hsl(162 48% 32%);
 }
 
 .model-logo-chip[data-model-brand="openai"] img {
@@ -1857,15 +1857,15 @@ details[open] > summary .think-chevron,
 }
 
 .model-logo-chip[data-model-brand="anthropic"] {
-  color: hsl(0 0% 42%);
+  color: hsl(18 64% 42%);
 }
 
 .model-logo-chip[data-model-brand="google"] {
-  color: hsl(0 0% 44%);
+  color: hsl(220 72% 44%);
 }
 
 .model-logo-chip[data-model-brand="deepseek"] {
-  color: hsl(0 0% 52%);
+  color: hsl(232 74% 52%);
 }
 
 .model-logo-chip[data-model-brand="xai"],
@@ -1875,7 +1875,7 @@ details[open] > summary .think-chevron,
 
 .model-logo-chip[data-model-brand="moonshot"],
 .model-logo-chip[data-model-brand="zai"] {
-  color: hsl(0 0% 48%);
+  color: hsl(232 62% 48%);
 }
 
 .model-logo-chip[data-model-brand="qwen"],
@@ -1883,7 +1883,7 @@ details[open] > summary .think-chevron,
 .model-logo-chip[data-model-brand="bytedance"],
 .model-logo-chip[data-model-brand="kling"],
 .model-logo-chip[data-model-brand="ltx"] {
-  color: hsl(0 0% 44%);
+  color: hsl(28 78% 44%);
 }
 
 .model-logo-chip[data-model-brand="meta"],
@@ -1895,7 +1895,7 @@ details[open] > summary .think-chevron,
 .model-logo-chip[data-model-brand="pixverse"],
 .model-logo-chip[data-model-brand="minimax"],
 .model-logo-chip[data-model-brand="wan"] {
-  color: hsl(0 0% 38%);
+  color: hsl(198 72% 38%);
 }
 
 .dark .model-logo-chip {
@@ -1905,7 +1905,7 @@ details[open] > summary .think-chevron,
 }
 
 .dark .model-logo-chip[data-model-brand="openai"] {
-  color: hsl(0 0% 66%);
+  color: hsl(162 62% 66%);
 }
 
 .model-row-check {
@@ -9481,11 +9481,4 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   hr {
     border-color: hsl(var(--border));
   }
-}
-
-/* Model/vendor marks in the picker follow the black & white system too
-   (same specificity as the per-brand overrides above, declared later). */
-.model-logo-chip[data-model-brand] :is(img, svg),
-.model-logo-chip.chat-model-icon :is(img, svg) {
-  filter: grayscale(1) !important;
 }
