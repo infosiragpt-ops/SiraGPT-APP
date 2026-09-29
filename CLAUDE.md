@@ -1383,6 +1383,22 @@ dirige el tier del turno.
   mapeo de familias, escalación/veto/advisory/guardas/no-op ante judgement
   deforme). Registrado en `backend/package.json`.
 
+## Imágenes con el modelo elegido (added 2026-09-29)
+
+Pedido de Luis: un turno con imagen usa SOLO el modelo que el usuario eligió.
+- `ai/vision-runtime.js` `modelSupportsVision` reconoce GPT-6 Sol/Luna (`gpt-[5-9]`,
+  directo y vía OpenRouter); antes caían como «no ve imágenes» y la imagen se
+  desviaba a Gemini → Meta Muse Spark → xAI (fallos «sin saldo»/«no responde»).
+- `agent-harness/model-capabilities.js`: familia `openai-gpt6` (`supportsImages`,
+  contexto 200k; transporte de tools y razonamiento siguen conservadores).
+- `ai-service.generateStream`: un modelo elegido que ve imágenes no recorre otros
+  runtimes de visión, ni siquiera ante un rechazo del formato de imagen; el turno
+  termina con su error transparente. Solo un modelo elegido que NO ve imágenes
+  (p. ej. DeepSeek V4) usa un runtime de visión para leerlas.
+- Tests: `ai-service-provider-failure` (GPT-6 Sol lee la imagen sin cambio de
+  modelo; rechazo de imagen no llama a otro runtime), `ai-service-vision-runtime`,
+  `agent-harness-core`.
+
 ## Sistema visual monocromo + copia en Logs (added 2026-09-29)
 
 Pedido de Luis: interfaz solo en blanco y negro, con acabados más finos, y una

@@ -41,6 +41,15 @@ test('capabilities: known families resolve native tools + reasoning + sane windo
   const gemini = resolveModelCapabilities('gemini-2.5-pro', { provider: 'gemini' });
   assert.equal(gemini.supportsNativeTools, true);
   assert.equal(gemini.supportsImages, true);
+
+  // GPT-6 Sol/Luna see images and keep a long context; the tool transport
+  // stays conservative (function calls only work at effort "none").
+  const gpt6 = resolveModelCapabilities('gpt-6-sol', { provider: 'OpenAI' });
+  assert.equal(gpt6.family, 'openai-gpt6');
+  assert.equal(gpt6.supportsImages, true);
+  assert.ok(gpt6.contextWindow >= 200_000);
+  assert.equal(gpt6.supportsNativeTools, false);
+  assert.equal(resolveModelCapabilities('openai/gpt-6-luna').supportsImages, true);
 });
 
 test('capabilities: unknown models get conservative defaults (prompted ladder)', () => {

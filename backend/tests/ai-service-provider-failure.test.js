@@ -2,8 +2,8 @@
 
 /**
  * generateStream provider failures (owner policy, confirmed 2026-09-28):
- * - A model picked by the user never switches provider (nor walks the other
- *   vision runtimes on a provider-level failure). Its failure feeds the memo
+ * - A model picked by the user never switches provider, and a picked model
+ *   that can see never walks the other vision runtimes (owner, 2026-09-29). Its failure feeds the memo
  *   (no credit → «sin saldo», 401 → rejected key) and the user is told
  *   exactly what happened, in Spanish: which model and which cause, with the
  *   wait in seconds for a per-minute limit.
@@ -374,20 +374,45 @@ test('pinned image turn: a vision-capable pick with no credit keeps its provider
   assert.equal(errorFrame(r.frames).message, `Grok 4.7 no pudo responder: su proveedor no tiene saldo ahora. ${TAIL}`);
 });
 
-test('pinned image turn: an image-specific rejection still walks the other vision runtimes', async () => {
+test('pinned image turn: an image-specific rejection keeps the picked model — no other vision runtime is called', async () => {
   process.env.XAI_API_KEY = 'xai-test-key';
   process.env.GEMINI_API_KEY = 'g-test-key';
   const seen = [];
   const r = await runGenerate({
     provider: 'xAI',
     model: 'grok-4.7',
+    modelLabel: 'Grok 4.7',
     files: IMAGE_FILES,
     primaryError: httpError(400, 'Invalid image: unsupported image format'),
     getClient: (p) => { seen.push(p); return { chat: { completions: { create: async () => streamOf('Veo un gato.') } } }; },
   });
   assert.equal(r.primaryCalls, 1);
-  assert.deepEqual(seen, ['Gemini']);
-  assert.equal(r.out, 'Veo un gato.');
+  assert.deepEqual(seen, [], 'Gemini (or any other vision runtime) is never called for a picked model');
+  assert.doesNotMatch(r.out || '', /Veo un gato/);
+  assert.ok(errorFrame(r.frames), 'the turn ends with the picked model\'s own error');
+});
+
+test('pinned image turn on GPT-6 Sol: the picked model reads the image itself (no vision switch, no other runtime)', async () => {
+  process.env.OPENAI_API_KEY = 'sk-test-openai';
+  process.env.GEMINI_API_KEY = 'g-test-key';
+  process.env.MODEL_API_KEY = 'meta-test-key';
+  let sentImage = false;
+  const r = await runGenerate({
+    provider: 'OpenAI',
+    model: 'gpt-6-sol',
+    modelLabel: 'GPT-6 Sol',
+    files: IMAGE_FILES,
+    primaryCreate: async (payload) => {
+      const last = payload.messages[payload.messages.length - 1];
+      sentImage = Array.isArray(last.content) && last.content.some((part) => part && part.type === 'image_url');
+      return streamOf('Es un RUC de Everest Cargo.');
+    },
+  });
+  assert.equal(r.primaryCalls, 1);
+  assert.equal(sentImage, true, 'the image pixels reach GPT-6 Sol');
+  assert.deepEqual(r.clientCalls, [], 'no Gemini / Meta vision runtime was called');
+  assert.doesNotMatch(r.frames, /vision_switch/);
+  assert.match(r.out, /Everest Cargo/);
 });
 
 // ── Internal requests without a picked model (dormant path for the chat) ──

@@ -962,14 +962,18 @@ class AIService {
                                 visionFallbackModels = (visionRuntime.fallbacks || []).map((c) => c.model);
                             } else {
                                 console.log(`[vision] Using selected vision-capable runtime: ${provider}:${model}`);
-                                // The selected model can see, but if it fails before
-                                // streaming (timeout, 4xx on the image, empty answer)
-                                // the image turn walks the other vision runtimes
-                                // instead of ending in a canned "no text" fallback.
-                                visionFallbackModels = imageAttachmentVision
-                                    .visionRuntimesForTurn(provider, model)
-                                    .map((c) => c.model)
-                                    .filter((m) => m && m !== model);
+                                // A model the user picked that can see answers the
+                                // image itself and only itself (owner policy: a
+                                // picked model is never switched); if it fails, the
+                                // turn ends with its transparent error. Internal
+                                // turns without a pick still walk the other vision
+                                // runtimes instead of a canned "no text" fallback.
+                                visionFallbackModels = isPinnedUserGenerate(provider, model)
+                                    ? []
+                                    : imageAttachmentVision
+                                        .visionRuntimesForTurn(provider, model)
+                                        .map((c) => c.model)
+                                        .filter((m) => m && m !== model);
                             }
                             lastMessage.content = contentArray;
                             visionReady(0);
@@ -1047,10 +1051,6 @@ class AIService {
             // Live progress: why the previous rung failed (for the failover
             // row) and which model the last attempt ran on.
             let lastFailCategory = null;
-            // Causes that are about the provider, not the image: a picked
-            // model failing for one of them keeps its provider, the other
-            // vision runtimes are not walked.
-            const PROVIDER_LEVEL_CAUSES = new Set(['billing', 'auth', 'forbidden', 'breaker', 'rate_limit', 'unavailable', 'unconfigured']);
             // Every failure feeds the «sin saldo» / rejected-key memo that
             // the picker reads. Internal unpinned requests may recover on
             // another provider; a selected model keeps its own API and
@@ -1579,20 +1579,6 @@ class AIService {
                             status: 503,
                             cause: lastError,
                         });
-                    }
-                }
-
-                // Pinned image turn on a vision-capable pick: the remaining
-                // vision runtimes are only for image-specific rejections (a
-                // 400 on the image payload, an empty answer). No credit, a
-                // rejected key, a down provider or a per-minute limit keep
-                // the picked model: the user is told why instead.
-                if (m === 0 && !failoverAllowed && !visionSwitched && modelChain.length > 1 && firstFailure
-                    && !hasStreamedAnyContent && !(signal && signal.aborted)) {
-                    const pickedCause = firstFailure.timedOut ? 'unavailable' : billingFailoverMod.failureCauseFor(firstFailure.error);
-                    if (PROVIDER_LEVEL_CAUSES.has(pickedCause)) {
-                        console.warn(`[vision] ${currentProvider}:${currentRuntimeModel} no pudo responder (${pickedCause}); no se prueban otros modelos de visión`);
-                        break;
                     }
                 }
             }

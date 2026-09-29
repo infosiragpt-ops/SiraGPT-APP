@@ -54,6 +54,11 @@ describe('ai-service vision routing', () => {
       assert.equal(service.modelSupportsVision('OpenAI', 'gpt-4o'), true);
       assert.equal(service.modelSupportsVision('OpenAI', 'gpt-4o-mini'), true);
       assert.equal(service.modelSupportsVision('OpenAI', 'gpt-4.1'), true);
+      // GPT-6 Sol/Luna read images: an image turn must stay on the picked
+      // model instead of being routed to Gemini / Meta (live 2026-09-29).
+      assert.equal(service.modelSupportsVision('OpenAI', 'gpt-6-sol'), true);
+      assert.equal(service.modelSupportsVision('OpenAI', 'gpt-6-luna'), true);
+      assert.equal(service.modelSupportsVision('OpenRouter', 'openai/gpt-6-sol'), true);
       assert.equal(service.modelSupportsVision('Gemini', 'gemini-2.5-flash'), true);
       assert.equal(service.modelSupportsVision('OpenRouter', 'anthropic/claude-3.5-sonnet'), true);
       assert.equal(service.modelSupportsVision('OpenRouter', 'qwen/qwen2-vl-7b-instruct'), true);

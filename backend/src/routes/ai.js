@@ -1235,8 +1235,8 @@ function routeSupportsVision(provider, model) {
   if (p === 'deepseek') return false;
   if (isLocalVisionModel(m)) return true;
   if (p === 'gemini') return /^gemini/.test(m);
-  if (p === 'openai') return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/.test(m);
-  if (p === 'openrouter') return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/.test(m);
+  if (p === 'openai') return /(gpt-4o|gpt-4\.1|gpt-[5-9]|o3|o4|vision)/.test(m);
+  if (p === 'openrouter') return /(gpt-4o|gpt-4\.1|gpt-[5-9]|gemini|claude|qwen.*vl|vision|llava|pixtral)/.test(m);
   return false;
 }
 
