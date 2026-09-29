@@ -34,6 +34,19 @@ async function acquireProactiveLease({
   });
   if (reclaimed?.count) return { projectId, token, expiresAt, local: false };
 
+  // A live lease held by another sweep is the normal contended case, not an
+  // error: INSERT … ON CONFLICT DO NOTHING (createMany + skipDuplicates)
+  // reports it as count 0. A create() that loses the race throws P2002, and
+  // Prisma's error log prints «prisma:error … Unique constraint failed on
+  // the fields: (`projectId`)» to the Logs panel before any catch runs.
+  if (typeof model.createMany === 'function') {
+    const inserted = await model.createMany({
+      data: [{ projectId, token, expiresAt }],
+      skipDuplicates: true,
+    });
+    return inserted?.count ? { projectId, token, expiresAt, local: false } : null;
+  }
+
   try {
     await model.create({ data: { projectId, token, expiresAt } });
     return { projectId, token, expiresAt, local: false };
