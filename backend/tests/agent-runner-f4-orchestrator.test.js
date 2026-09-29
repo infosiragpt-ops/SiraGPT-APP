@@ -166,6 +166,12 @@ test('F4: simple create-ppt and style/color follow-ups NEVER orchestrate', () =>
   }
 });
 
+test('F4: a multi-step request to edit SAV and XLSX stays in one atomic runner', () => {
+  assert.equal(shouldOrchestrate(
+    'Analiza los datos del SAV y XLSX anteriores y luego edita P01 en ambos archivos y genera un informe de cambios.',
+  ), false);
+});
+
 test('F4: genuinely multi-step goals DO orchestrate', () => {
   const multiStepPhrases = [
     'investiga las tendencias del mercado inmobiliario y luego crea un informe word con las conclusiones',

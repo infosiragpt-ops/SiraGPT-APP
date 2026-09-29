@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const { hasVerifiedSavBytes } = require('./sav-validation');
 
 /**
@@ -166,12 +168,66 @@ async function resolveTurnFiles({
   attachedFiles = [],
   objectStorage,
   instruction = '',
+  artifactDir,
 } = {}) {
   const attached = Array.isArray(attachedFiles) ? attachedFiles.filter((f) => f && f.buffer) : [];
+  const generatedFollowup = require('../agents/generated-artifact-followup');
+  const pairEdit = generatedFollowup.isSavXlsxPairEditRequest(instruction);
+  // A newly uploaded pair is the complete source for this turn. Do not seed
+  // an unrelated third file from the chat's earlier generated artifacts.
+  if (pairEdit && attached.length) {
+    if (attached.length === 2
+      && new Set(attached.map((file) => mimeToExt(file.mime, file.name))).size === 2
+      && attached.some((file) => mimeToExt(file.mime, file.name) === 'sav')
+      && attached.some((file) => mimeToExt(file.mime, file.name) === 'xlsx')) {
+      return { files: attached, priorArtifacts: [], latest: null };
+    }
+    throw new Error('La edición conjunta requiere los dos originales SAV y Excel legibles. No usé archivos anteriores ni entregué una edición parcial.');
+  }
+  if (pairEdit && generatedFollowup.isGeneratedSavXlsxEditFollowup(instruction)) {
+    const refs = await generatedFollowup.resolveChatGeneratedArtifactFollowup(prisma, {
+      userId,
+      chatId,
+      goal: instruction,
+      allowGeneratedPairEdit: true,
+      ...(artifactDir ? { artifactDir } : {}),
+    });
+    // A pair is one delivery. Never edit only the newest workbook or borrow a
+    // SAV from an older task when the last delivery is incomplete/corrupt.
+    const byFormat = new Map(refs.map((ref) => [ref.format, ref]));
+    if (refs.length !== 2 || byFormat.size !== 2 || !byFormat.has('sav') || !byFormat.has('xlsx')) {
+      throw new Error('No pude recuperar juntos el SAV y el Excel de la última entrega. No edité ninguno; vuelve a adjuntar ambos archivos.');
+    }
+    const prior = [];
+    for (const format of ['sav', 'xlsx']) {
+      const ref = byFormat.get(format);
+      const buffer = await loadArtifactBuffer({
+        id: ref.id,
+        filename: ref.filename,
+        userId,
+        chatId,
+        path: null,
+      }, { objectStorage, artifactDir });
+      if (!buffer) {
+        throw new Error('No pude abrir ambos archivos de la última entrega. No edité ninguno; vuelve a adjuntar el SAV y el Excel.');
+      }
+      prior.push({
+        name: ref.filename,
+        buffer,
+        mime: format === 'sav' ? 'application/x-spss-sav' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        artifactId: ref.id,
+        isPriorArtifact: true,
+      });
+    }
+    return { files: prior, priorArtifacts: prior, latest: { id: prior[0].artifactId } };
+  }
+  if (pairEdit) {
+    throw new Error('Adjunta ambos originales SAV y Excel para esta edición conjunta. No se usó un archivo anterior ni se inició una edición parcial.');
+  }
   const latest = await getLatestConversationArtifact(prisma, { userId, chatId, instruction });
   const prior = [];
   if (latest) {
-    const buffer = await loadArtifactBuffer({ ...latest, userId, chatId }, { objectStorage });
+    const buffer = await loadArtifactBuffer({ ...latest, userId, chatId }, { objectStorage, artifactDir });
     if (buffer) {
       prior.push({
         name: latest.filename || `artifact.${mimeToExt(latest.mime, latest.filename)}`,
@@ -203,6 +259,17 @@ async function resolveTurnFiles({
   return { files: [...prior, ...otherAttachments], priorArtifacts: prior, latest };
 }
 
+/** An explicit selection must not silently become a previous chat delivery. */
+function assertSelectedSavXlsxInputs({ instruction = '', fileIds = [], loadedFiles = [] } = {}) {
+  if (!require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(instruction)) return;
+  const selected = [...new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))];
+  if (!selected.length) return;
+  const loaded = new Set((Array.isArray(loadedFiles) ? loadedFiles : []).map((file) => String(file?.fileId || '')).filter(Boolean));
+  if (selected.length !== 2 || loaded.size !== 2 || selected.some((id) => !loaded.has(id))) {
+    throw new Error('No pude abrir los dos archivos SAV y Excel seleccionados. No usé versiones anteriores; vuelve a adjuntar ambos originales.');
+  }
+}
+
 async function persistOutputs({
   outputs = [],
   userId,
@@ -210,9 +277,12 @@ async function persistOutputs({
   saveArtifact,
   prisma,
   onEvent = () => {},
+  atomicSavXlsxPair = false,
 } = {}) {
-  const save = saveArtifact || require('../agents/task-tools').saveArtifact;
+  const taskTools = require('../agents/task-tools');
+  const save = saveArtifact || taskTools.saveArtifact;
   const artifacts = [];
+  const eligible = [];
   for (const out of outputs) {
     if (!out || !Buffer.isBuffer(out.buffer) || !out.buffer.length) continue;
     if (out.valid === false) continue;
@@ -224,6 +294,71 @@ async function persistOutputs({
       try { onEvent({ type: 'output_invalid', name: out.name, reason: 'sav_unverified' }); } catch { /* trace only */ }
       continue;
     }
+    eligible.push({ out, ext });
+  }
+  if (atomicSavXlsxPair && (eligible.length !== 2
+    || new Set(eligible.map((item) => item.ext)).size !== 2
+    || !eligible.some((item) => item.ext === 'sav')
+    || !eligible.some((item) => item.ext === 'xlsx'))) {
+    try { onEvent({ type: 'output_invalid', name: 'SAV/Excel', reason: 'artifact_pair_incomplete' }); } catch { /* trace only */ }
+    return [];
+  }
+
+  // saveArtifact writes the binary and its listing metadata synchronously.
+  // Record the deterministic paths before saving so a failed second save can
+  // remove only files created by this pair, preserving an earlier identical
+  // artifact with the same content-derived id.
+  const rollback = [];
+  if (atomicSavXlsxPair) {
+    const scope = `${userId || 'anonymous'}:${chatId || 'no-chat'}:`;
+    for (const { out } of eligible) {
+      const clean = taskTools.INTERNAL.sanitizeArtifactFilename(out.name);
+      const id = taskTools.INTERNAL.artifactIdFor(Buffer.concat([Buffer.from(clean), out.buffer]), scope);
+      const metadataPath = taskTools.INTERNAL.metadataPathFor(id);
+      const binaryPath = path.join(taskTools.ARTIFACT_DIR, `${id}-${clean}`);
+      const readIfPresent = async (file) => {
+        try { return await fs.readFile(file); }
+        catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
+      };
+      const previousMetadata = await readIfPresent(metadataPath);
+      const binaryExisted = await fs.stat(binaryPath).then(() => true, (error) => {
+        if (error?.code === 'ENOENT') return false;
+        throw error;
+      });
+      rollback.push({ id, metadataPath, binaryPath, previousMetadata, binaryExisted });
+    }
+  }
+
+  const rollbackPair = async () => {
+    for (const item of rollback) {
+      let remoteRef = null;
+      if (item.previousMetadata === null) {
+        try {
+          const metadata = JSON.parse(await fs.readFile(item.metadataPath, 'utf8'));
+          remoteRef = metadata?.storageRef || null;
+        } catch { /* metadata may not have been written */ }
+        try { await fs.unlink(item.metadataPath); } catch (error) {
+          if (error?.code !== 'ENOENT') console.warn('[agent-runner] artifact metadata rollback failed:', error?.message);
+        }
+      } else {
+        try { await fs.writeFile(item.metadataPath, item.previousMetadata); } catch (error) {
+          console.warn('[agent-runner] artifact metadata restore failed:', error?.message);
+        }
+      }
+      if (!item.binaryExisted) {
+        try { await fs.unlink(item.binaryPath); } catch (error) {
+          if (error?.code !== 'ENOENT') console.warn('[agent-runner] artifact binary rollback failed:', error?.message);
+        }
+      }
+      if (remoteRef) {
+        // The mirror starts asynchronously inside saveArtifact. Removal is
+        // best effort: an upload still in flight can finish after this call.
+        try { await require('../object-storage').remove(remoteRef); } catch { /* best effort */ }
+      }
+    }
+  };
+
+  for (const { out, ext } of eligible) {
     const mime = (
       ext === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
       : ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -235,7 +370,7 @@ async function persistOutputs({
     let saved;
     const validation = out.validation || { ok: true, passed: true, engine: 'agent_runner', scope: 'file_structure_only' };
     try {
-      saved = save({
+      saved = await save({
         filename: out.name,
         base64: out.buffer.toString('base64'),
         mime,
@@ -247,6 +382,10 @@ async function persistOutputs({
       if (!saved?.id || !saved?.filename || !saved?.downloadUrl) throw new Error('artifact_persistence_incomplete');
     } catch (err) {
       try { onEvent({ type: 'output_invalid', name: out.name, reason: 'artifact_persistence_failed' }); } catch { /* non-fatal UI event */ }
+      if (atomicSavXlsxPair) {
+        await rollbackPair();
+        return [];
+      }
       continue;
     }
     const artifact = {
@@ -260,7 +399,7 @@ async function persistOutputs({
       previewHtml: null,
       validation,
     };
-    if (prisma?.generatedArtifact && userId && saved.id) {
+    if (!atomicSavXlsxPair && prisma?.generatedArtifact && userId && saved.id) {
       try {
         await prisma.generatedArtifact.upsert({
           where: { id: String(saved.id) },
@@ -284,8 +423,52 @@ async function persistOutputs({
         });
       } catch (_) { /* follow-ups can still use disk metadata */ }
     }
-    try { onEvent({ type: 'file_artifact', artifact }); } catch (_) { /* UI must never fail the run */ }
+    if (!atomicSavXlsxPair) {
+      try { onEvent({ type: 'file_artifact', artifact }); } catch (_) { /* UI must never fail the run */ }
+    }
     artifacts.push(artifact);
+  }
+
+  if (atomicSavXlsxPair) {
+    if (prisma?.generatedArtifact && userId) {
+      const upsertPair = async (database) => {
+        for (const artifact of artifacts) {
+          await database.generatedArtifact.upsert({
+            where: { id: String(artifact.id) },
+            create: {
+              id: String(artifact.id), userId: String(userId), chatId: chatId ? String(chatId) : null,
+              filename: artifact.filename, mime: artifact.mime, format: artifact.format,
+              path: artifact.path, sizeBytes: Number(artifact.sizeBytes) || 0,
+              validation: artifact.validation,
+            },
+            update: {
+              filename: artifact.filename, path: artifact.path || undefined,
+              sizeBytes: Number(artifact.sizeBytes) || 0, validation: artifact.validation,
+            },
+          });
+        }
+      };
+      try {
+        // PostgreSQL rows appear together. The on-disk metadata is already
+        // staged, and neither download card is emitted until this commits.
+        if (typeof prisma.$transaction === 'function') await prisma.$transaction(upsertPair);
+        else await upsertPair(prisma);
+      } catch (error) {
+        if (typeof prisma.$transaction !== 'function' && typeof prisma.generatedArtifact.deleteMany === 'function') {
+          const newIds = rollback.filter((item) => item.previousMetadata === null).map((item) => item.id);
+          if (newIds.length) {
+            try { await prisma.generatedArtifact.deleteMany({ where: { id: { in: newIds } } }); }
+            catch (rollbackError) { console.warn('[agent-runner] artifact database rollback failed:', rollbackError?.message); }
+          }
+        }
+        await rollbackPair();
+        try { onEvent({ type: 'output_invalid', name: 'SAV/Excel', reason: 'artifact_persistence_failed' }); } catch { /* trace only */ }
+        return [];
+      }
+    }
+    for (const artifact of artifacts) {
+      try { onEvent({ type: 'file_artifact', artifact }); } catch (_) { /* UI must never fail the run */ }
+    }
   }
   return artifacts;
 }
@@ -297,6 +480,7 @@ module.exports = {
   getConversationArtifactFormat,
   loadArtifactBuffer,
   resolveTurnFiles,
+  assertSelectedSavXlsxInputs,
   persistOutputs,
   mimeToExt,
   sanitizeUploadName,

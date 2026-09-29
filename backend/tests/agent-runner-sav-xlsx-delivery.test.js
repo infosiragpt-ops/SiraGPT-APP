@@ -12,6 +12,7 @@ const {
 } = require('../src/services/agent-runner/sav-xlsx-delivery');
 const { persistOutputs } = require('../src/services/agent-runner/artifacts');
 const { needsVerification } = require('../src/services/agent-runner/verify');
+const { completedSavExcelSummary } = require('../src/services/agent-runner');
 
 const PROMPT = 'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel. Usa solo datos sintéticos.';
 const GENERATE_PAIR = [
@@ -322,4 +323,171 @@ test('AgentRunner emits no downloadable Excel card when the requested SAV is mis
     assert.deepEqual(artifacts, []);
     assert.equal(events.some((event) => event.type === 'file_artifact'), false);
   }
+});
+
+const PRECISE_EDIT_PROMPT = 'En los dos archivos que acabas de entregar, cambia únicamente la respuesta P01 del participante con ID=1 de 4 a 5. Devuelve nuevos archivos .sav y .xlsx conservando los 20 participantes, las 20 preguntas, las etiquetas y las otras 399 respuestas. Reabre ambos archivos y comprueba que las 400 respuestas coincidan y que el único cambio frente a los originales sea esa celda.';
+const GENERATE_PRECISE_EDIT = [
+  'import os, sys, pandas as pd, pyreadstat',
+  'from openpyxl import Workbook',
+  'root, mode = sys.argv[1], sys.argv[2]',
+  'headers = ["ID", *[f"P{i:02d}" for i in range(1, 21)]]',
+  'rows = [[r + 1, *[1 + ((r + q) % 5) for q in range(20)]] for r in range(20)]',
+  'rows[0][1] = 4',
+  'labels = [None, *[f"Pregunta {i:02d}" for i in range(1, 21)]]',
+  'def write_pair(prefix, values, variable_labels):',
+  '    pyreadstat.write_sav(pd.DataFrame(values, columns=headers), os.path.join(root, prefix + ".sav"), column_labels=variable_labels)',
+  '    book = Workbook()',
+  '    sheet = book.active',
+  '    sheet.append(headers)',
+  '    for row in values: sheet.append(row)',
+  '    book.save(os.path.join(root, prefix + ".xlsx"))',
+  'write_pair("source", rows, labels)',
+  'edited = [row.copy() for row in rows]',
+  'edited[0][1] = 5',
+  'if mode == "extra-cell": edited[1][2] = 99',
+  'output_labels = labels.copy()',
+  'if mode == "changed-label": output_labels[3] = "Etiqueta reemplazada"',
+  'write_pair("muestra", edited, output_labels)',
+].join('\n');
+
+for (const [mode, expectedOk] of [['exact', true], ['extra-cell', false], ['changed-label', false]]) {
+  test(`AgentRunner precise SAV/XLSX edit source proof ${mode}`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-edit-proof-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const generated = spawnSync('python3', ['-c', GENERATE_PRECISE_EDIT, root, mode], { encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
+    const sources = ['sav', 'xlsx'].map((format) => ({
+      name: `source.${format}`,
+      buffer: fs.readFileSync(path.join(root, `source.${format}`)),
+    }));
+    const gated = await applySavXlsxDeliveryGate({
+      instruction: PRECISE_EDIT_PROMPT,
+      sources,
+      outputs: pairOutputs(root),
+      result: { stoppedReason: 'final', finalText: 'Listo.' },
+      sandbox: makeSandbox(root),
+    });
+    assert.equal(gated.active, true);
+    assert.equal(gated.ok, expectedOk, gated.result.errorMessage);
+    if (expectedOk) {
+      assert.equal(gated.result.savXlsxVerification.comparedCells, 400);
+      assert.equal(gated.result.savXlsxVerification.sourceChangedCells, 1);
+      const summary = completedSavExcelSummary(
+        [{ filename: 'muestra.sav' }, { filename: 'muestra.xlsx' }],
+        gated.result.savXlsxVerification,
+      );
+      assert.match(summary, /400 valores idénticos entre SAV y Excel/);
+      assert.match(summary, /solo cambió la celda indicada/);
+      assert.doesNotMatch(summary, /todavía no he comparado/);
+    }
+    if (!expectedOk) {
+      assert.equal(gated.result.stoppedReason, 'verification_failed');
+      assert.equal(gated.outputs.filter((output) => output.valid !== false).length, 0);
+    }
+  });
+}
+
+test('AgentRunner precise SAV/XLSX edit accepts ID 1 without punctuation', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-id-space-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const generated = spawnSync('python3', ['-c', GENERATE_PRECISE_EDIT, root, 'exact'], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const sources = ['sav', 'xlsx'].map((format) => ({
+    name: `source.${format}`,
+    buffer: fs.readFileSync(path.join(root, `source.${format}`)),
+  }));
+  const gated = await applySavXlsxDeliveryGate({
+    instruction: PRECISE_EDIT_PROMPT.replace('ID=1', 'ID 1'),
+    sources,
+    outputs: pairOutputs(root),
+    result: { stoppedReason: 'final', finalText: 'Listo.' },
+    sandbox: makeSandbox(root),
+  });
+  assert.equal(gated.ok, true, gated.result.errorMessage);
+});
+
+test('AgentRunner precise SAV/XLSX edit cannot claim success without both original binaries', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-edit-source-missing-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const generated = spawnSync('python3', ['-c', GENERATE_PRECISE_EDIT, root, 'exact'], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const gated = await applySavXlsxDeliveryGate({
+    instruction: PRECISE_EDIT_PROMPT,
+    sources: [{ name: 'source.xlsx', buffer: fs.readFileSync(path.join(root, 'source.xlsx')) }],
+    outputs: pairOutputs(root),
+    result: { stoppedReason: 'final', finalText: 'Listo.' },
+    sandbox: makeSandbox(root),
+  });
+  assert.equal(gated.active, true);
+  assert.equal(gated.ok, false);
+  assert.equal(gated.outputs.filter((output) => output.valid !== false).length, 0);
+});
+
+const GENERATE_LABEL_EDIT = [
+  'import os, sys, pandas as pd, pyreadstat',
+  'from openpyxl import Workbook',
+  'root, mode = sys.argv[1], sys.argv[2]',
+  'headers = ["ID", *[f"P{i:02d}" for i in range(1, 21)]]',
+  'rows = [[r + 1, *[1 + ((r + q) % 5) for q in range(20)]] for r in range(20)]',
+  'labels = [None, *[f"Pregunta {i:02d}" for i in range(1, 21)]]',
+  'def write_pair(prefix, values, variable_labels):',
+  '    pyreadstat.write_sav(pd.DataFrame(values, columns=headers), os.path.join(root, prefix + ".sav"), column_labels=variable_labels)',
+  '    book = Workbook()',
+  '    sheet = book.active',
+  '    sheet.append(headers)',
+  '    for row in values: sheet.append(row)',
+  '    book.save(os.path.join(root, prefix + ".xlsx"))',
+  'write_pair("source", rows, labels)',
+  'edited = [row.copy() for row in rows]',
+  'if mode == "extra-cell": edited[3][4] = 99',
+  'new_labels = labels.copy()',
+  'if mode != "unchanged": new_labels[1] = "Pregunta 01 revisada"',
+  'write_pair("muestra", edited, new_labels)',
+].join('\n');
+
+for (const [mode, expectedOk] of [['label-change', true], ['extra-cell', false], ['unchanged', false]]) {
+  test(`AgentRunner labels-only SAV/XLSX edit ${mode} preserves original responses`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-label-edit-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const generated = spawnSync('python3', ['-c', GENERATE_LABEL_EDIT, root, mode], { encoding: 'utf8' });
+    assert.equal(generated.status, 0, generated.stderr);
+    const sources = ['sav', 'xlsx'].map((format) => ({ name: `source.${format}`, buffer: fs.readFileSync(path.join(root, `source.${format}`)) }));
+    const gated = await applySavXlsxDeliveryGate({
+      instruction: 'Edita solo las etiquetas de los archivos SAV y XLSX adjuntos y devuelve ambos archivos.',
+      sources,
+      outputs: pairOutputs(root),
+      result: { stoppedReason: 'final', finalText: 'Listo.' },
+      sandbox: makeSandbox(root),
+    });
+    assert.equal(gated.active, true);
+    assert.equal(gated.ok, expectedOk, gated.result.errorMessage);
+    if (expectedOk) {
+      assert.equal(gated.result.savXlsxVerification.comparedCells, 400);
+      assert.equal(gated.result.savXlsxVerification.responsesPreserved, true);
+      const summary = completedSavExcelSummary(
+        [{ filename: 'muestra.sav' }, { filename: 'muestra.xlsx' }],
+        gated.result.savXlsxVerification,
+      );
+      assert.match(summary, /respuestas se conservaron/);
+    }
+    assert.equal(gated.outputs.filter((output) => output.valid !== false).length, expectedOk ? 2 : 0);
+  });
+}
+
+test('AgentRunner conserve-responses SAV/XLSX edit rejects an extra cell change', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sav-xlsx-preserve-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const generated = spawnSync('python3', ['-c', GENERATE_LABEL_EDIT, root, 'extra-cell'], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const sources = ['sav', 'xlsx'].map((format) => ({ name: `source.${format}`, buffer: fs.readFileSync(path.join(root, `source.${format}`)) }));
+  const gated = await applySavXlsxDeliveryGate({
+    instruction: 'Edita las etiquetas de los archivos SAV y XLSX, pero conserva todas las respuestas originales.',
+    sources,
+    outputs: pairOutputs(root),
+    result: { stoppedReason: 'final', finalText: 'Listo.' },
+    sandbox: makeSandbox(root),
+  });
+  assert.equal(gated.active, true);
+  assert.equal(gated.ok, false);
+  assert.equal(gated.outputs.filter((output) => output.valid !== false).length, 0);
 });

@@ -103,6 +103,7 @@ const { runAgentLoop, MAX_ITERATIONS_DEFAULT, isLlmCreditError } = require('./lo
 const { logProviderFailure } = require('./provider-failure-diagnostics');
 const {
   resolveTurnFiles,
+  assertSelectedSavXlsxInputs,
   persistOutputs,
   hasConversationArtifacts,
   getConversationArtifactFormat,
@@ -773,6 +774,7 @@ function isExplicitPdfConversion(instruction, files = []) {
 
 function requestsSavExcelDelivery(instruction) {
   const request = String(instruction || '');
+  if (require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(request)) return true;
   return (CREATE_DOC_RE.test(request) || DIRECT_SAV_FILE_REQUEST_RE.test(request))
     && /(?:\bspss\b|\.sav\b)/i.test(request)
     && /(?:\bexcel\b|\.xlsx\b)/i.test(request);
@@ -788,8 +790,17 @@ function missingRequestedSavExcel(instruction, artifacts = []) {
 
 function completedSavExcelSummary(artifacts = [], verification = null) {
   const names = artifacts.map((artifact) => artifact.filename).filter(Boolean).join(', ');
-  if (verification?.comparedCells) {
-    return `Entregué ${names}. Verifiqué ${verification.rows} filas × ${verification.columns} preguntas en ambos archivos, ${verification.labelCount} etiquetas en el SAV y ${verification.comparedCells} valores idénticos.`;
+  if (Number.isSafeInteger(verification?.comparedCells) && verification.comparedCells > 0) {
+    const dimensions = Number.isSafeInteger(verification.rows) && Number.isSafeInteger(verification.columns)
+      ? `Verifiqué ${verification.rows} filas × ${verification.columns} preguntas en ambos archivos, ` : 'Comparé ambos archivos: ';
+    const labels = Number.isSafeInteger(verification.labelCount)
+      ? `${verification.labelCount} etiquetas en el SAV y ` : '';
+    const sourceProof = verification.sourceChangedCells === 1
+      ? ' Comparé ambos archivos con los originales y confirmé que solo cambió la celda indicada.'
+      : verification.responsesPreserved === true
+        ? ' Comparé ambos archivos con los originales y confirmé que las respuestas se conservaron.'
+        : '';
+    return `Entregué ${names}. ${dimensions}${labels}${verification.comparedCells} valores idénticos entre SAV y Excel.${sourceProof}`;
   }
   return `Entregué ${names}. El SAV se pudo abrir; todavía no he comparado sus valores con los del Excel, así que no puedo afirmar que coincidan.`;
 }
@@ -1128,8 +1139,9 @@ async function runAgentRunner({
     const f8 = await prepareF8Extras({
       userId, chatId, instruction: task, prisma, memoryStore, mcpToolLoader,
     });
-    const isCreateRequest = (CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
-      || requestsSavExcelDelivery(task);
+    const pairEdit = require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(task);
+    const isCreateRequest = !pairEdit && ((CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
+      || requestsSavExcelDelivery(task));
     const creatingNewFile = isCreateRequest && !SOURCE_COPY_RE.test(task);
     // «agrégale más diseño / hazla más profesional» on an existing Office
     // file: the prompt switches to the DESIGN WORKFLOW (restyle the same
@@ -1397,7 +1409,7 @@ async function runAgentRunner({
     // Compare the exact output bytes before persistence or file_artifact SSE.
     // A readable SAV plus an OOXML workbook is insufficient for an explicit
     // 20 × 20 request unless all 400 values and 20 SAV labels agree.
-    const pairGate = await applySavXlsxDeliveryGate({ instruction: task, outputs, result, sandbox });
+    const pairGate = await applySavXlsxDeliveryGate({ instruction: task, sources: files, outputs, result, sandbox });
     result = pairGate.result;
     outputs = pairGate.outputs;
     if (pairGate.active && !pairGate.ok && result.stoppedReason === 'verification_failed') {
@@ -1480,10 +1492,27 @@ async function runAgentRunnerForChat({
   maxIterations,
   saveArtifact,
 } = {}) {
+  const requestedPair = requestsSavExcelDelivery(instruction);
+  const pendingPairCompletionEvents = [];
+  const runnerEvent = requestedPair ? (event) => {
+    // The runner verifies bytes before this entry point stores them. Delay a
+    // successful final/output announcement until both downloads exist.
+    if (event && ((event.type === 'final' && event.verified !== false && event.label !== 'Sin verificar')
+      || (event.type === 'outputs' && event.count > 0 && event.label === 'Listo'))) {
+      pendingPairCompletionEvents.push(event);
+      return;
+    }
+    onEvent(event);
+  } : onEvent;
   let loaded = attachedFiles;
-  if ((!loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
+  const selectedPair = require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(instruction)
+    && Array.isArray(fileIds) && fileIds.length > 0;
+  // Resolve explicit pair IDs from their owner-scoped records even if an
+  // in-memory attachment array was supplied without fileId metadata.
+  if ((selectedPair || !loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
     loaded = await loadFilesByIds({ prisma, userId, fileIds });
   }
+  assertSelectedSavXlsxInputs({ instruction, fileIds, loadedFiles: loaded });
   const resolved = await resolveTurnFiles({
     prisma,
     userId,
@@ -1497,7 +1526,7 @@ async function runAgentRunnerForChat({
     model,
     pickedModel,
     client,
-    onEvent,
+    onEvent: runnerEvent,
     driver,
     maxIterations,
     signal,
@@ -1520,9 +1549,9 @@ async function runAgentRunnerForChat({
     prisma,
     onEvent,
     saveArtifact,
+    atomicSavXlsxPair: requestedPair,
   });
   const artifacts = persisted.filter((artifact) => artifact?.id && artifact?.downloadUrl && !artifact.error);
-  const requestedPair = requestsSavExcelDelivery(instruction);
   // A missing format is an incomplete *partial* delivery. With no delivered
   // files, preserve the loop's real failure (provider, quota, timeout, etc.).
   const missingFormats = artifacts.length ? missingRequestedSavExcel(instruction, artifacts) : [];
@@ -1540,6 +1569,16 @@ async function runAgentRunnerForChat({
     : artifacts.length ? (String(run.finalText || '').trim() || `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`)
       : run.stoppedReason === 'edit_not_applied' ? String(run.finalText || 'No se aplicó la edición.')
         : 'No pude producir un archivo verificado. No entregué un resultado sin comprobar.';
+  if (requestedPair && pendingPairCompletionEvents.length) {
+    const completePair = !delivery.blocked && artifacts.length === 2 && missingFormats.length === 0;
+    for (const event of pendingPairCompletionEvents) {
+      try {
+        onEvent(completePair ? event : event.type === 'outputs'
+          ? { ...event, count: 0, names: [], label: 'Sin verificar' }
+          : { ...event, text: summary, label: 'Sin verificar', verified: false });
+      } catch { /* UI must never fail the run */ }
+    }
+  }
   // A loop that "finished" without a deliverable is a no_output failure for
   // the caller — 'final'/'fast_path' only describe HOW the loop stopped.
   let failReason = persistenceFailed ? 'artifact_persistence_failed' : run.stoppedReason || 'no_output';

@@ -25,7 +25,7 @@ const { composeAbortSignals, throwIfAborted } = require('../../../utils/abort-si
 const { resolveMaxRuntimeMs } = require('../../doc-agent');
 const { isLlmCreditError } = require('../loop');
 const { logProviderFailure } = require('../provider-failure-diagnostics');
-const { resolveTurnFiles, persistOutputs } = require('../artifacts');
+const { resolveTurnFiles, assertSelectedSavXlsxInputs, persistOutputs } = require('../artifacts');
 const { createBlackboard } = require('./blackboard');
 const { rolePrompt, roleLabel, HIGH_STAKES_ROLES, CREATION_BUDGET_ROLES } = require('./roles');
 const {
@@ -81,6 +81,10 @@ const SECOND_IMPERATIVE_SIGNAL = /\by\b\s+(?:me\s+)?(?:crea|cr[eé]ame|genera|re
 function shouldOrchestrate(text, _ctx = {}) {
   const t = String(text || '').trim();
   if (!t) return false;
+  // An edit of the SAV/XLSX pair has one atomic source and one atomic output.
+  // Splitting it into specialist nodes would ask intermediate nodes to
+  // deliver a full pair before they can finish, or mix different versions.
+  if (require('../../agents/generated-artifact-followup').isSavXlsxPairEditRequest(t)) return false;
   const { CREATE_DOC_RE, DOC_NOUN_RE } = runnerModule();
   const roles = new Set();
   if (RESEARCH_SIGNAL.test(t)) roles.add('researcher');
@@ -537,14 +541,18 @@ async function runOrchestratorForChat({
 } = {}) {
   const runner = runnerModule();
   let loaded = attachedFiles;
-  if ((!loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
+  const selectedPair = require('../../agents/generated-artifact-followup').isSavXlsxPairEditRequest(instruction)
+    && Array.isArray(fileIds) && fileIds.length > 0;
+  if ((selectedPair || !loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
     loaded = await runner.loadFilesByIds({ prisma, userId, fileIds });
   }
+  assertSelectedSavXlsxInputs({ instruction, fileIds, loadedFiles: loaded });
   const resolved = await resolveTurnFiles({
     prisma,
     userId,
     chatId,
     attachedFiles: loaded,
+    instruction,
   });
   const run = await runOrchestrator({
     files: resolved.files,
