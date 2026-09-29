@@ -346,13 +346,25 @@ function cutOscillatingToolPair(history, opts = {}) {
   const list = Array.isArray(history) ? history : [];
   const min = Math.max(4, Number(opts.min) || OSCILLATION_MIN);
   if (list.length < min) return { cut: false, pair: null, code: null };
-  const names = list.slice(-min).map(fingerprintName);
+  const recent = list.slice(-min);
+  const names = recent.map(fingerprintName);
   if (names.some((n) => !n)) return { cut: false, pair: null, code: null };
   const a = names[0];
   const b = names[1];
   if (!a || !b || a === b) return { cut: false, pair: null, code: null };
   for (let i = 0; i < names.length; i += 1) {
     if (names[i] !== (i % 2 === 0 ? a : b)) return { cut: false, pair: [a, b], code: null };
+  }
+  // A different Python repair after a failed Office visual check is progress:
+  // let the next check run. The unchanged repair still cuts, and the general
+  // A-B-A-B guard remains unchanged for all other tool pairs.
+  if ([a, b].includes('verify_visual') && [a, b].includes('execute_python')) {
+    const repairArgs = recent.filter((entry) => fingerprintName(entry) === 'execute_python').map((entry) => {
+      const raw = callArgsOf(entry);
+      if (typeof raw !== 'string') return stableJson(raw);
+      try { return stableJson(JSON.parse(raw)); } catch (_) { return raw.trim(); }
+    });
+    if (new Set(repairArgs).size > 1) return { cut: false, pair: [a, b], code: null };
   }
   return { cut: true, pair: [a, b], count: names.length, code: 'loop_oscillation_cut' };
 }

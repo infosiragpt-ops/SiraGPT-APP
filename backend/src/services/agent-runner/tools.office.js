@@ -436,12 +436,14 @@ function makeOfficeToolExecutors(sandbox, {
       }
       let text = res.summary;
       let visionOk = null;
+      let visionVeto = '';
       if (typeof visionVerifier === 'function' && Array.isArray(res.composites) && res.composites.length) {
         try {
           const images = [];
           for (const p of res.composites.slice(0, 3)) images.push(await readImage(sandbox, p));
           const v = await visionVerifier({ images, checklist, summary: res.summary, signal: ctx.signal });
           visionOk = v ? v.ok : null;
+          if (visionOk === false) visionVeto = String(v?.text || '').replace(/\s+/g, ' ').trim().slice(0, 240);
           text += `\n• Revisión visual (modelo de visión): ${v ? v.text : 'sin respuesta'}`;
         } catch (err) {
           if (ctx.signal?.aborted) throw err;
@@ -464,7 +466,11 @@ function makeOfficeToolExecutors(sandbox, {
         } catch (_) { /* observer only */ }
       }
       text += `\nVEREDICTO: ${passed ? 'VERIFICADO' : 'NO VERIFICADO — corrige lo marcado con ✗ y vuelve a verificar'}`;
-      const body = passed ? text : `ERROR: verificación fallida\n${text}`;
+      const failureReasons = [
+        ...(res.ok !== true ? ['controles automáticos fallidos'] : []),
+        ...(visionOk === false ? [`revisión visual: ${visionVeto || 'rechazada sin detalle'}`] : []),
+      ];
+      const body = passed ? text : `ERROR: verificación fallida\n• Motivo: ${failureReasons.join('; ') || 'verificación no concluyente'}\n${text}`;
       return withImages(cap(body), res.composites && res.composites[0], res.thumbs && res.thumbs[0]);
     },
   };

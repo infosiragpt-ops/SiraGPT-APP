@@ -70,6 +70,22 @@ test('3H60-C-001 oscillation cut + inherited subagent steps', () => {
   assert.equal(gone.code, 'subagent_parent_budget');
 });
 
+test('3H60-C-001 Office repair may change its Python arguments before the next visual check', () => {
+  const call = (name, args) => ({ function: { name, arguments: JSON.stringify(args) } });
+  const verify = () => call('verify_visual', {
+    after: 'outputs/encuesta.xlsx', checklist: ['Los encabezados son legibles'],
+  });
+  const firstRepair = call('execute_python', { code: 'set_column_widths(20)' });
+  const differentRepair = call('execute_python', { code: 'set_column_widths(32)' });
+
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), differentRepair,
+  ]).cut, false, 'a different Office repair must execute before deciding whether it works');
+  assert.equal(w.cutOscillatingToolPair([
+    verify(), firstRepair, verify(), firstRepair,
+  ]).cut, true, 'the same ineffective Office repair must still be cut');
+});
+
 test('3H60-D-001 faithful compact + prune + last user + memory recover', () => {
   const original = [
     { role: 'system', content: 'rules' },

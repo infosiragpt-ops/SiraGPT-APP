@@ -272,6 +272,43 @@ test('loop: a successful visual repair allows the SAV/Excel readback to finish',
   assert.equal(events.some((event) => event.code === 'loop_oscillation_cut'), false);
 });
 
+test('loop: a distinct second Excel repair can pass the next visual check', async () => {
+  const outputPath = 'outputs/encuesta_20x20.xlsx';
+  const verifyArgs = { after: outputPath, checklist: ['Los encabezados son legibles'] };
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'set_column_widths(20)' } }] },
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'execute_python', args: { code: 'set_column_widths(32)' } }] },
+    { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+    { toolCalls: [{ name: 'inspect_document', args: { path: outputPath } }] },
+    { content: 'Creé y verifiqué el Excel.' },
+  ]);
+  let verifies = 0;
+  const repairs = [];
+  const events = [];
+  const result = await runAgentLoop({
+    client, model: 'x', messages: [{ role: 'user', content: 'corrige la legibilidad del Excel' }],
+    tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+    executors: {
+      async verify_visual() {
+        verifies += 1;
+        return verifies < 3
+          ? 'ERROR: verificación fallida: encabezados cortados'
+          : '• Revisión visual: encabezados completos y legibles\nVEREDICTO: VERIFICADO';
+      },
+      async execute_python(args) { repairs.push(args.code); return 'ok\n[exit 0]'; },
+      async inspect_document() { return '{"sheets":[{"name":"Datos","range":"A1:W21"}]}'; },
+    },
+    maxIterations: 10,
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.deepEqual(repairs, ['set_column_widths(20)', 'set_column_widths(32)']);
+  assert.equal(verifies, 3);
+  assert.equal(events.some((event) => event.code === 'loop_oscillation_cut'), false);
+});
+
 test('loop: two failed visual checks still cut a repeated repair cycle', async () => {
   const verifyArgs = { after: 'outputs/encuesta_20x20.xlsx', checklist: ['Encabezados completos'] };
   const repairArgs = { code: 'adjust_column_widths()' };

@@ -105,6 +105,40 @@ test('verify_visual hands checks-vs-vision and pagination facts to onVerify', as
   );
 });
 
+test('verify_visual exposes a vision veto before the 400-character stage preview is cut', async () => {
+  const report = {
+    ok: true,
+    summary: 'Verificación: datos.xlsx (documento nuevo)\n• Checks: ✓ 20 filas y 20 preguntas\n• Resultado: OK\n'
+      + `• Imagen antes/después: ${'previews/verify-datos/contact.png, '.repeat(30)}`,
+    composites: ['previews/verify-datos/contact.png'],
+    visual: { pagination_changed: false },
+  };
+  assert.ok(report.summary.length > 400, 'the automatic report must hide the later vision note in the old preview');
+  const sandbox = {
+    async writeFile() {},
+    async readFile() { return Buffer.from([0xff, 0xd8, 0xff]); },
+    async exec(cmd) {
+      if (/sira_office\.py verify/.test(cmd)) return { exitCode: 0, stdout: JSON.stringify(report) };
+      return { exitCode: 0, stdout: '' };
+    },
+  };
+  const seen = [];
+  const ex = makeOfficeToolExecutors(sandbox, {
+    visionVerifier: async () => ({ ok: false, text: '✗ encabezados cortados en la hoja de datos' }),
+    onVerify: (value) => seen.push(value),
+  });
+  const out = await ex.verify_visual({
+    after: 'outputs/datos.xlsx', checklist: ['20 filas y 20 preguntas'],
+    expect: { cells: { 'Datos!A1': 'ID' } },
+  });
+  const preview = String(out).slice(0, 400);
+  assert.match(preview, /^ERROR: verificación fallida/);
+  assert.match(preview, /encabezados cortados en la hoja de datos/, 'the stage must show why vision vetoed otherwise passing checks');
+  assert.match(String(out), /• Resultado: OK/);
+  assert.deepEqual(seen.map(({ passed, checksOk, visionOk }) => ({ passed, checksOk, visionOk })),
+    [{ passed: false, checksOk: true, visionOk: false }], 'the diagnostic must not turn the veto into success');
+});
+
 test('loop steps carry durationMs (per-tool latency)', async () => {
   let i = 0;
   const script = [
